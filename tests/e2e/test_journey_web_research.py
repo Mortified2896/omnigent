@@ -58,7 +58,9 @@ def test_multi_turn_research_workflow(
             "have received this information."
         ),
     )
-    result_1 = poll_session_until_terminal(http_client, session_id, resp_id_1, timeout=120)
+    result_1 = poll_session_until_terminal(
+        http_client, session_id=session_id, response_id=resp_id_1, timeout=120
+    )
     text_1 = final_assistant_text(result_1).lower()
     assert "quuxville" in text_1 or "1847" in text_1, (
         f"Turn 1: agent did not acknowledge the fact. Text: {text_1[:500]!r}"
@@ -70,7 +72,9 @@ def test_multi_turn_research_workflow(
         session_id=session_id,
         content="When was the capital of Freedonia founded? Answer with just the year.",
     )
-    result_2 = poll_session_until_terminal(http_client, session_id, resp_id_2, timeout=120)
+    result_2 = poll_session_until_terminal(
+        http_client, session_id=session_id, response_id=resp_id_2, timeout=120
+    )
     text_2 = final_assistant_text(result_2).lower()
     assert "1847" in text_2, (
         "Turn 2 did not reference '1847' from turn 1 — "
