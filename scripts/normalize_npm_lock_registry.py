@@ -80,9 +80,7 @@ def normalize_text(text: str) -> str:
         parts = urlsplit(m.group(2))
         if _PROXY_HOST_MARKER not in (parts.hostname or ""):
             return m.group(0)
-        fixed = urlunsplit(
-            ("https", _CANONICAL_HOST, parts.path, parts.query, parts.fragment)
-        )
+        fixed = urlunsplit(("https", _CANONICAL_HOST, parts.path, parts.query, parts.fragment))
         return f"{m.group(1)}{fixed}{m.group(3)}"
 
     return _RESOLVED_RE.sub(_sub, text)
