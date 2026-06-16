@@ -22,9 +22,11 @@ Streaming model:
   ``status``, ``usage_metadata``), ending once the turn goes idle. A producer
   task drives ``send()`` + ``receive_steps()`` and feeds a per-turn
   :class:`asyncio.Queue`; :meth:`run_turn` drains it and yields mapped events.
-- Tool *requests* derive from ``Step.tool_calls`` (deduped by call id); tool
-  *completions* (with payload, error, duration) arrive via a registered
-  ``PostToolCallHook`` and pair back by call id.
+- Tool *requests* derive from ``Step.tool_calls`` (an id'd call deduped by its
+  id, an id-less call deduped only while in flight); tool *completions* (with
+  payload, error, duration) arrive via a registered ``PostToolCallHook`` and
+  pair back by call id, or — for an id-less result — to the oldest in-flight
+  id-less call of the same name.
 - Cancellation: :meth:`interrupt_session` -> ``conversation.cancel()``, which
   surfaces ``TurnCancelled``.
 
@@ -274,10 +276,16 @@ class _PendingTool:
     :param name: The tool's wire name, e.g. ``"sys_shell"``.
     :param started: ``time.monotonic()`` at :class:`ToolCallRequest` emit,
         used to compute ``ToolCallComplete.duration_ms``.
+    :param surrogate: For an *id-less* call, the content surrogate (tool name +
+        canonical args) holding its in-flight dedupe slot in
+        ``_AntigravitySessionState.active_idless``; ``None`` for an id'd call.
+        On completion the slot is freed so a genuinely new id-less call with
+        identical name + args later in the turn is not swallowed as a repeat.
     """
 
     name: str
     started: float
+    surrogate: str | None = None
 
 
 @dataclass
@@ -296,8 +304,16 @@ class _AntigravitySessionState:
     :param agent_signature: ``(model, system_prompt, tool_signature)`` key; a
         change forces an agent rebuild. A model change thus resets the SDK
         conversation — fine since mid-session model switches are rare.
-    :param pending_tools: Open tool calls keyed by call id, populated on
-        :class:`ToolCallRequest` and drained by the ``PostToolCallHook``.
+    :param pending_tools: Open tool calls keyed by call id (real id for id'd
+        calls, synthetic id for id-less ones), populated on
+        :class:`ToolCallRequest` and drained by the ``PostToolCallHook`` (or the
+        terminal-step fallback).
+    :param active_idless: In-flight id-less calls, mapping the content surrogate
+        (tool name + canonical args) to the synthetic call id assigned on first
+        sight. An id-less call's dedupe slot lives here only while the call is
+        in flight; its completion frees the slot, so repeated step emissions of
+        the *same* in-flight call collapse to one request while a genuinely new
+        id-less call with identical name + args later in the turn still emits.
     :param active_queue: The current turn's event queue (the
         ``PostToolCallHook`` enqueues completions here), or ``None`` between
         turns.
@@ -311,6 +327,7 @@ class _AntigravitySessionState:
     conversation: SDKConversation = None
     agent_signature: tuple[str, str, str] | None = field(default=None)
     pending_tools: dict[str, _PendingTool] = field(default_factory=dict)
+    active_idless: dict[str, str] = field(default_factory=dict)
     active_queue: _EventQueue | None = field(default=None)
     last_usage: SDKUsage = None
     interrupt_requested: bool = False
@@ -526,6 +543,7 @@ class AntigravityExecutor(Executor):
         event_queue: _EventQueue = asyncio.Queue()
         state.active_queue = event_queue
         state.pending_tools.clear()
+        state.active_idless.clear()
         state.last_usage = None
         state.interrupt_requested = False
 
@@ -591,6 +609,9 @@ class AntigravityExecutor(Executor):
         queue = state.active_queue
         assert queue is not None  # set by run_turn before spawning this task
         conversation = state.conversation
+        # Real ids already emitted this turn, deduping an id'd call re-emitted
+        # across step transitions. Id-less calls dedupe separately (and only
+        # while in flight) via ``state.active_idless``.
         seen_tool_ids: set[str] = set()
         try:
             await conversation.send(prompt)
@@ -670,17 +691,32 @@ class AntigravityExecutor(Executor):
     ) -> None:
         """Enqueue a :class:`ToolCallRequest` for each new tool call in *step*.
 
-        Calls repeat across step transitions, so each is emitted once. An id'd
-        call dedupes on its id; an id-less call dedupes on a stable surrogate
-        (tool name + canonical JSON of its args) and is assigned a synthetic id
-        on first sight, so a repeated id-less call reuses that id rather than
-        emitting a duplicate request. The start time is recorded for the
+        The SDK re-emits the same call across step transitions (dispatch →
+        execution → result), so each logical call is emitted once. An id'd call
+        dedupes on (and pairs by) its real id via *seen_tool_ids*.
+
+        An id-less call (``ToolCall.id is None`` — e.g. the SDK's sub-agent
+        completions) has no id to dedupe on, so it gets a synthetic id and its
+        content surrogate (tool name + canonical args) is recorded in
+        ``state.active_idless`` *only while it is in flight*. A repeat emission
+        of that same in-flight call finds its surrogate still live and is
+        skipped; the surrogate is freed the moment the call completes (see
+        :meth:`_match_idless_pending`, used by both completion paths). This
+        deliberately mirrors how far the SDK's own ``receive_chunks`` dedupes —
+        it never collapses *distinct* id-less calls — so a genuinely new id-less
+        call with identical name + args later in the turn still emits its own
+        request and keeps a paired completion, rather than being swallowed by a
+        turn-wide ``name + args`` key. (Two distinct id-less calls with
+        identical args that overlap *before* the first completes still collapse;
+        the SDK gives no id to tell them apart mid-flight, so the in-flight slot
+        is the tightest unambiguous scope.) The start time is recorded for the
         matching :class:`ToolCallComplete`.
 
         :param step: The current SDK :class:`Step`.
-        :param state: The session state (records pending tools by call id).
-        :param seen_tool_ids: Surrogate keys already emitted this turn (mutated)
-            — a real call id for id'd calls, or ``name + args`` for id-less ones.
+        :param state: The session state (records pending tools by call id and
+            in-flight id-less surrogates).
+        :param seen_tool_ids: Real call ids already emitted this turn (mutated);
+            id-less calls dedupe via ``state.active_idless`` instead.
         """
         queue = state.active_queue
         if queue is None:
@@ -692,32 +728,39 @@ class AntigravityExecutor(Executor):
             raw_args = getattr(call, "args", None)
             args: ToolArgs = raw_args if isinstance(raw_args, dict) else {}
             raw_id = getattr(call, "id", None)
-            # An id'd call dedupes on (and pairs by) its real id; an id-less call
-            # dedupes on a content surrogate and gets a synthetic id so the
-            # completion hook can still pair it.
             if isinstance(raw_id, str) and raw_id:
-                surrogate = raw_id
+                # An id'd call dedupes on (and pairs by) its real id.
+                if raw_id in seen_tool_ids:
+                    continue
+                seen_tool_ids.add(raw_id)
+                surrogate: str | None = None
                 call_id = raw_id
             else:
+                # An id-less call dedupes on its content surrogate, but only
+                # while in flight — skip a repeat of a still-open call, else
+                # treat it as a new call and reopen the slot.
                 surrogate = self._idless_surrogate(name, args)
+                if surrogate in state.active_idless:
+                    continue
                 call_id = uuid.uuid4().hex
-            # Skip a repeat of an already-seen call (same id, or same name+args
-            # for the id-less case) rather than re-emitting the request.
-            if surrogate in seen_tool_ids:
-                continue
-            seen_tool_ids.add(surrogate)
-            state.pending_tools[call_id] = _PendingTool(name=name, started=time.monotonic())
+                state.active_idless[surrogate] = call_id
+            state.pending_tools[call_id] = _PendingTool(
+                name=name, started=time.monotonic(), surrogate=surrogate
+            )
             queue.put_nowait(ToolCallRequest(name=name, args=args, metadata={"call_id": call_id}))
 
     @staticmethod
     def _idless_surrogate(name: str, args: ToolArgs) -> str:
-        """Build a stable dedupe key for an id-less tool call.
+        """Build the in-flight dedupe key for an id-less tool call.
 
         The SDK re-emits the same call across step transitions; without an id
-        to dedupe on, repeated emissions of the same call (same tool name and
-        arguments) would each surface a :class:`ToolCallRequest`. This pairs
-        the name with a canonical (key-sorted) JSON render of the args so two
-        emissions of the same logical call collapse to one key.
+        to dedupe on, repeated emissions of the same in-flight call (same tool
+        name and arguments) would each surface a :class:`ToolCallRequest`. This
+        pairs the name with a canonical (key-sorted) JSON render of the args so
+        repeated emissions of one logical call collapse to one key. The key is
+        only treated as "seen" while the call is in flight (it lives in
+        ``state.active_idless`` and is freed on completion), so a later distinct
+        id-less call with identical name + args is not mistaken for a repeat.
 
         :param name: The tool's wire name.
         :param args: The call's argument dict.
@@ -729,19 +772,53 @@ class AntigravityExecutor(Executor):
             args_json = repr(args)
         return f"{name}:{args_json}"
 
+    @staticmethod
+    def _match_idless_pending(
+        state: _AntigravitySessionState, name: str
+    ) -> tuple[str, _PendingTool] | None:
+        """Pop the oldest in-flight id-less pending call of *name* and free it.
+
+        An id-less completion (a ``ToolResult`` with no id — e.g. a sub-agent
+        result) carries no id to pair on, so it's matched to the earliest-opened
+        in-flight id-less call of the same tool name (FIFO). Removes that entry
+        from ``state.pending_tools`` and frees its surrogate slot in
+        ``state.active_idless``, so a later id-less call with identical name +
+        args is treated as new rather than a repeat.
+
+        Relies on ``dict`` preserving insertion order: ``pending_tools`` is
+        populated in emit order, so the first id-less match of *name* is the
+        oldest open call.
+
+        :param state: The session state (its ``pending_tools`` / ``active_idless``
+            are drained).
+        :param name: The completing tool's wire name.
+        :returns: The popped ``(call_id, _PendingTool)``, or ``None`` when no
+            in-flight id-less call of that name remains (already completed).
+        """
+        for call_id, pending in state.pending_tools.items():
+            if pending.surrogate is not None and pending.name == name:
+                state.pending_tools.pop(call_id, None)
+                state.active_idless.pop(pending.surrogate, None)
+                return call_id, pending
+        return None
+
     def _complete_pending_from_step(
         self, step: SDKStep, state: _AntigravitySessionState, status: str
     ) -> None:
         """Close any still-pending tool calls in a terminal ``TOOL_CALL`` step.
 
         Fallback for when the ``PostToolCallHook`` doesn't fire for a call. The
-        hook pops a completed call from ``state.pending_tools``, so an id still
+        hook pops a completed call from ``state.pending_tools``, so a call still
         present here wasn't completed by it — emit a :class:`ToolCallComplete`
-        (without the payload, which only the hook carries). Popping here makes
-        a later hook fire for the same id a no-op, so it completes once.
+        (without the payload, which only the hook carries). An id'd call is
+        matched by its real id; an id-less call is matched to the oldest
+        in-flight id-less call of the same name (and its surrogate freed) via
+        :meth:`_match_idless_pending`. Popping here makes a later hook fire for
+        the same call a no-op, so it completes once.
 
         :param step: The terminal ``TOOL_CALL`` step.
-        :param state: The session state (its ``pending_tools`` is drained).
+        :param state: The session state (its ``pending_tools`` / ``active_idless``
+            are drained).
         :param status: The step's status name, e.g. ``"ERROR"`` / ``"DONE"``.
         """
         queue = state.active_queue
@@ -758,11 +835,17 @@ class AntigravityExecutor(Executor):
             error = None
         for call in getattr(step, "tool_calls", None) or []:
             raw_id = getattr(call, "id", None)
-            # id-less calls can't be matched to a pending entry; the hook is
-            # their only completion path.
-            if not (isinstance(raw_id, str) and raw_id):
-                continue
-            pending = state.pending_tools.pop(raw_id, None)
+            if isinstance(raw_id, str) and raw_id:
+                call_id = raw_id
+                pending = state.pending_tools.pop(raw_id, None)
+            else:
+                # No id to pair on: match the oldest in-flight id-less call of
+                # this name (FIFO), freeing its in-flight surrogate slot.
+                name = _tool_name(getattr(call, "name", None))
+                matched = self._match_idless_pending(state, name) if name else None
+                if matched is None:
+                    continue  # already completed by the PostToolCallHook
+                call_id, pending = matched
             if pending is None:
                 continue  # already completed by the PostToolCallHook
             duration_ms = (time.monotonic() - pending.started) * 1000
@@ -773,7 +856,7 @@ class AntigravityExecutor(Executor):
                     result=None,
                     error=error,
                     duration_ms=duration_ms,
-                    metadata={"call_id": raw_id},
+                    metadata={"call_id": call_id},
                 )
             )
 
@@ -891,10 +974,12 @@ class AntigravityExecutor(Executor):
         """Build a ``PostToolCallHook`` that emits :class:`ToolCallComplete`.
 
         The SDK invokes this after every tool call with a ``ToolResult``; the
-        hook pairs it to the originating :class:`ToolCallRequest` via
-        ``state.pending_tools[id]`` (for duration) and enqueues a
-        :class:`ToolCallComplete`. Defined inline because its base only exists
-        once the SDK is imported.
+        hook pairs it to the originating :class:`ToolCallRequest` (for duration
+        and call id) and enqueues a :class:`ToolCallComplete`. An id'd result
+        pairs by its real id; an id-less result (e.g. a sub-agent completion)
+        pairs to the oldest in-flight id-less call of the same name (FIFO) via
+        :meth:`_match_idless_pending`. Defined inline because its base only
+        exists once the SDK is imported.
 
         :param antigravity: The imported ``google.antigravity`` module.
         :param state: The session state (queue + pending-tool table) the hook
@@ -915,19 +1000,39 @@ class AntigravityExecutor(Executor):
                 if queue is None:
                     return
                 raw_id = getattr(data, "id", None)
-                call_id = raw_id if isinstance(raw_id, str) and raw_id else None
-                pending = state.pending_tools.pop(call_id, None) if call_id else None
-                # For an id'd call, a missing pending entry means the step-stream
-                # fallback already completed it — skip to avoid a double emit.
-                if call_id is not None and pending is None:
-                    return
-                name = _tool_name(getattr(data, "name", None)) or (pending.name if pending else "")
-                duration_ms = (time.monotonic() - pending.started) * 1000 if pending else 0.0
+                result_name = _tool_name(getattr(data, "name", None))
+                if isinstance(raw_id, str) and raw_id:
+                    call_id: str | None = raw_id
+                    pending = state.pending_tools.pop(raw_id, None)
+                    # For an id'd call, a missing pending entry means the
+                    # step-stream fallback already completed it — skip the
+                    # double emit.
+                    if pending is None:
+                        return
+                else:
+                    # An id-less result carries no id to pair on; match it to the
+                    # oldest in-flight id-less call of the same name (FIFO),
+                    # freeing its surrogate so a later identical call re-emits.
+                    matched = (
+                        AntigravityExecutor._match_idless_pending(state, result_name)
+                        if result_name
+                        else None
+                    )
+                    # A missing match means the step-stream fallback already
+                    # closed it — skip to avoid a double emit.
+                    if matched is None:
+                        return
+                    call_id, pending = matched
+                name = result_name or pending.name
+                duration_ms = (time.monotonic() - pending.started) * 1000
                 result = getattr(data, "result", None)
                 error = getattr(data, "error", None)
                 classification = classify_tool_result(result)
                 status = ToolCallStatus.ERROR if error else classification.status
                 message = error or (classification.error or None)
+                # call_id is always set here (both branches above return early
+                # when no pending call matches), so the completion is paired —
+                # an id-less call to its synthetic id, an id'd call to its id.
                 queue.put_nowait(
                     ToolCallComplete(
                         name=name,
@@ -935,7 +1040,7 @@ class AntigravityExecutor(Executor):
                         result=result,
                         error=message,
                         duration_ms=duration_ms,
-                        metadata={"call_id": call_id} if call_id else {},
+                        metadata={"call_id": call_id},
                     )
                 )
 

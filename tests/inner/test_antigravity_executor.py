@@ -558,7 +558,7 @@ async def test_tool_result_payload_error_classified_error(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_tool_call_without_id_still_completes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An id-less tool call still emits one request and one (unpaired) completion."""
+    """An id-less tool call emits one request and one completion paired by name."""
     script: list[_TurnAction] = [
         _tool_call_step(_FakeToolCall("sys_shell", {"cmd": "ls"}, call_id=None)),
         _FireToolResult(_FakeToolResult("sys_shell", result={"ok": True}, call_id=None)),
@@ -570,14 +570,17 @@ async def test_tool_call_without_id_still_completes(monkeypatch: pytest.MonkeyPa
 
     requests = [e for e in events if isinstance(e, ToolCallRequest)]
     completes = [e for e in events if isinstance(e, ToolCallComplete)]
-    # Exactly one of each: the request gets a synthetic id (so it's still shown);
-    # the id-less completion can't pair back, so its metadata is empty and it
-    # falls back to the ToolResult's own name. The tool must still "close".
+    # Exactly one of each. The id-less request gets a synthetic id; the id-less
+    # completion (no ToolResult.id) pairs back to the only in-flight id-less call
+    # of that name, so it carries that synthetic call_id and a real duration.
     assert len(requests) == 1
     assert len(completes) == 1
     assert completes[0].name == "sys_shell"
-    assert completes[0].metadata == {}
-    assert completes[0].duration_ms == 0.0
+    synthetic_id = requests[0].metadata["call_id"]
+    assert synthetic_id  # a synthetic id was assigned
+    assert completes[0].metadata == {"call_id": synthetic_id}
+    assert completes[0].result == {"ok": True}
+    assert completes[0].duration_ms >= 0.0
 
 
 @pytest.mark.asyncio
@@ -696,6 +699,89 @@ async def test_idless_tool_requests_distinct_args_not_deduped(
     requests = [e for e in events if isinstance(e, ToolCallRequest)]
     assert len(requests) == 2
     assert {r.args["cmd"] for r in requests} == {"ls", "pwd"}
+
+
+@pytest.mark.asyncio
+async def test_idless_distinct_calls_identical_args_each_paired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two distinct id-less calls with identical name + args each emit a paired request.
+
+    Regression for the over-dedupe the review flagged: the id-less surrogate was
+    turn-scoped on ``name + args``, so a *second* genuinely-distinct id-less call
+    with identical name and args later in the same turn was swallowed — one
+    request would show while the second completion was left unpaired. Scoping the
+    surrogate to the in-flight lifecycle (freed on completion) lets the model
+    legitimately call ``sys_shell(cmd="ls")`` twice in one turn: each call's
+    dispatch reopens the freed slot, so two requests surface and each pairs to its
+    own completion. (The SDK's own ``receive_chunks`` likewise never collapses
+    distinct id-less calls.)
+    """
+    ls = {"cmd": "ls"}
+    script: list[_TurnAction] = [
+        # First call: dispatched (re-emitted across two steps → still one
+        # request), then completed by the hook — which frees the surrogate.
+        _tool_call_step(_FakeToolCall("sys_shell", ls, call_id=None)),
+        _tool_call_step(_FakeToolCall("sys_shell", ls, call_id=None)),
+        _FireToolResult(_FakeToolResult("sys_shell", result={"n": 1}, call_id=None)),
+        # Second, genuinely-distinct call with identical name + args, issued
+        # after the first finished. The freed slot must let it through.
+        _tool_call_step(_FakeToolCall("sys_shell", ls, call_id=None)),
+        _FireToolResult(_FakeToolResult("sys_shell", result={"n": 2}, call_id=None)),
+    ]
+    _install_fake_sdk(monkeypatch, scripts=[script])
+    executor = AntigravityExecutor()
+
+    events = await _drain(executor, [{"role": "user", "content": "go", "session_id": "s1"}])
+
+    requests = [e for e in events if isinstance(e, ToolCallRequest)]
+    completes = [e for e in events if isinstance(e, ToolCallComplete)]
+    # TWO requests, not one: the repeated in-flight emission of the first call is
+    # still deduped (two dispatch steps → one request), but the second distinct
+    # call after completion is NOT swallowed.
+    assert len(requests) == 2
+    assert all(r.name == "sys_shell" and r.args == ls for r in requests)
+    # Each request got its own synthetic id.
+    req_ids = [r.metadata["call_id"] for r in requests]
+    assert req_ids[0] != req_ids[1]
+    # TWO completions, each paired (by synthetic id) to its originating request —
+    # FIFO by name, so the first completion pairs to the first request. Pre-fix,
+    # the second completion was unpaired (empty metadata) since its request never
+    # emitted.
+    assert len(completes) == 2
+    assert [c.metadata["call_id"] for c in completes] == req_ids
+    assert [c.result for c in completes] == [{"n": 1}, {"n": 2}]
+
+
+@pytest.mark.asyncio
+async def test_idless_surrogate_freed_for_next_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An id-less call's surrogate doesn't leak across turns on the same session.
+
+    The in-flight surrogate table is cleared per turn, so an identical id-less
+    call on a later turn of the same session still emits its own request even if
+    the prior turn's call was never explicitly completed.
+    """
+    ls = {"cmd": "ls"}
+    turn_one: list[_TurnAction] = [
+        _tool_call_step(_FakeToolCall("sys_shell", ls, call_id=None)),
+        # No completion this turn — the surrogate stays "in flight" until the
+        # per-turn reset clears it.
+        _text_step("one"),
+    ]
+    turn_two: list[_TurnAction] = [
+        _tool_call_step(_FakeToolCall("sys_shell", ls, call_id=None)),
+        _text_step("two"),
+    ]
+    _install_fake_sdk(monkeypatch, scripts=[turn_one, turn_two])
+    executor = AntigravityExecutor()
+
+    events_one = await _drain(executor, [{"role": "user", "content": "a", "session_id": "s1"}])
+    events_two = await _drain(executor, [{"role": "user", "content": "b", "session_id": "s1"}])
+
+    # One request per turn: clearing active_idless at turn start means the second
+    # turn's identical call isn't mistaken for the first turn's still-open one.
+    assert len([e for e in events_one if isinstance(e, ToolCallRequest)]) == 1
+    assert len([e for e in events_two if isinstance(e, ToolCallRequest)]) == 1
 
 
 @pytest.mark.asyncio
