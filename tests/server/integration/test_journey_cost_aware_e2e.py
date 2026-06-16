@@ -12,14 +12,17 @@ Tests:
 
 - ``test_cost_budget_ask_then_deny_lifecycle``: below threshold ALLOW,
   at soft threshold ASK, above hard limit DENY.
-- ``test_cost_control_toggle_disables_budget``: cost_budget fires
-  normally, then cost_control_mode_override "off" disables it and
-  re-enabling with "on" re-activates it.
+- ``test_cost_control_toggle_independent_of_policy_evaluation``:
+  policy evaluation still returns DENY after toggling
+  cost_control_mode_override to "off", because the toggle gates the
+  runner-side cost advisor, not the server-side policy engine.
+  Re-enabling with "on" round-trips the persisted value.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from typing import Any
 
 import httpx
@@ -105,17 +108,38 @@ async def _evaluate(
     return resp.json()
 
 
-async def _drain_elicitation_id(session_id: str, *, timeout_s: float = 5.0) -> str:
+async def _drain_elicitation_id(
+    session_id: str,
+    *,
+    subscribed: asyncio.Event | None = None,
+    timeout_s: float = 5.0,
+) -> str:
     """
     Block on the session SSE stream until a
     ``response.elicitation_request`` arrives; return its id.
 
     :param session_id: Session to subscribe to.
+    :param subscribed: When provided, this event is set as soon as
+        the SSE subscriber slot is registered (via the
+        ``on_subscribed`` hook of :func:`session_stream.subscribe`).
+        Callers can ``await subscribed.wait()`` before triggering the
+        action that publishes the elicitation, guaranteeing no event
+        is lost without relying on a sleep.
     :param timeout_s: Max seconds to wait before failing the test.
     :returns: The published ``elicitation_id``.
     """
+
+    async def _signal_subscribed() -> Iterable[dict[str, Any]]:
+        """``on_subscribed`` hook: fires after the slot is registered."""
+        if subscribed is not None:
+            subscribed.set()
+        return ()
+
     async with asyncio.timeout(timeout_s):
-        async for event in session_stream.subscribe(session_id):
+        async for event in session_stream.subscribe(
+            session_id,
+            on_subscribed=_signal_subscribed,
+        ):
             if event.get("type") == "response.elicitation_request":
                 eid = event.get("elicitation_id")
                 assert isinstance(eid, str) and eid, f"missing id: {event!r}"
@@ -182,8 +206,13 @@ async def test_cost_budget_ask_then_deny_lifecycle(
 
     # The evaluate POST parks until the verdict arrives — run it
     # concurrently and learn the elicitation id from the stream.
-    drain = asyncio.create_task(_drain_elicitation_id(session_id))
-    await asyncio.sleep(0.05)
+    # Use an asyncio.Event so the drain task can signal when its
+    # subscriber slot is registered, replacing the old sleep(0.05).
+    sub_ready = asyncio.Event()
+    drain = asyncio.create_task(
+        _drain_elicitation_id(session_id, subscribed=sub_ready),
+    )
+    await sub_ready.wait()
     evaluate_task = asyncio.create_task(
         client.post(
             f"/v1/sessions/{session_id}/policies/evaluate",
@@ -221,25 +250,24 @@ async def test_cost_budget_ask_then_deny_lifecycle(
     assert get_resp.status_code == 200
 
 
-async def test_cost_control_toggle_disables_budget(
+async def test_cost_control_toggle_independent_of_policy_evaluation(
     client: httpx.AsyncClient,
     db_uri: str,
 ) -> None:
-    """Cost control toggle OFF suppresses the cost_budget policy.
+    """Policy evaluation still returns DENY after toggling cost control OFF.
+
+    The cost_control_mode_override is a session-level switch consumed by
+    the runner-side cost advisor pipeline (which injects the cost plan
+    into the runner), **not** the server-side policy engine. This test
+    verifies:
 
     1. Create session with a cost_budget policy and seed spend above
        the hard limit → evaluate returns DENY.
-    2. Toggle cost_control_mode_override to "off" via PATCH.
-    3. Verify the session snapshot reflects the toggle.
-    4. Toggle back to "on" and verify it re-persists.
-
-    The cost_control_mode_override is a session-level switch consumed by
-    the cost advisor pipeline (which injects the cost plan into the
-    runner). This test verifies the CRUD round-trip of the toggle and
-    that the cost_budget policy fires independently of it (the policy
-    evaluate endpoint always runs spec-declared policies regardless of
-    the toggle — the toggle gates the runner-side cost advisor, not the
-    server-side policy engine).
+    2. Toggle cost_control_mode_override to "off" via PATCH →
+       policy evaluation **still** returns DENY (the toggle does not
+       suppress the policy engine).
+    3. Verify the session snapshot reflects the toggle value.
+    4. Toggle back to "on" and verify the round-trip persists.
     """
     store = SqlAlchemyConversationStore(db_uri)
 
