@@ -11,7 +11,6 @@ tests pass without the package installed.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -44,62 +43,92 @@ def test_create_app_returns_fastapi_with_required_routes() -> None:
     assert "/v1/sessions/{conversation_id}/events" in paths
 
 
+_ALL_ANTIGRAVITY_ENV = (
+    "HARNESS_ANTIGRAVITY_MODEL",
+    "HARNESS_ANTIGRAVITY_API_KEY",
+    "HARNESS_ANTIGRAVITY_VERTEX",
+    "HARNESS_ANTIGRAVITY_PROJECT",
+    "HARNESS_ANTIGRAVITY_LOCATION",
+)
+
+
+def _capture_factory_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Build the executor with ``__init__`` stubbed and return its kwargs.
+
+    :param monkeypatch: pytest monkeypatch fixture.
+    :returns: The kwargs the factory passed to ``AntigravityExecutor.__init__``.
+    """
+    captured: dict[str, Any] = {}
+
+    def _fake_init(self: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "omnigent.inner.antigravity_harness.AntigravityExecutor.__init__", _fake_init
+    )
+    antigravity_harness._build_antigravity_executor()
+    return captured
+
+
 def test_executor_factory_threads_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ``HARNESS_ANTIGRAVITY_*`` env vars thread into the executor ctor.
 
-    Locks in the canonical env-var contract the spawn-env builder
-    (``_build_antigravity_spawn_env`` in workflow.py) emits.
+    Locks in the canonical Gemini-native env-var contract the spawn-env builder
+    (``_build_antigravity_spawn_env`` in workflow.py) emits. There are no
+    ``*_GATEWAY_*`` vars — the SDK has no OpenAI-compatible base_url.
     """
     monkeypatch.setenv("HARNESS_ANTIGRAVITY_MODEL", "gemini-3-pro")
     monkeypatch.setenv("HARNESS_ANTIGRAVITY_API_KEY", "ag-test-key")
-    monkeypatch.setenv("HARNESS_ANTIGRAVITY_GATEWAY_BASE_URL", "https://openrouter.ai/api/v1")
-    monkeypatch.setenv("HARNESS_ANTIGRAVITY_GATEWAY_HOST", "https://openrouter.ai")
-    monkeypatch.setenv("HARNESS_ANTIGRAVITY_GATEWAY_AUTH_COMMAND", "printf token")
-    monkeypatch.setenv("HARNESS_ANTIGRAVITY_DATABRICKS_PROFILE", "my-profile")
+    monkeypatch.setenv("HARNESS_ANTIGRAVITY_VERTEX", "true")
+    monkeypatch.setenv("HARNESS_ANTIGRAVITY_PROJECT", "my-proj")
+    monkeypatch.setenv("HARNESS_ANTIGRAVITY_LOCATION", "us-central1")
 
-    captured: dict[str, Any] = {}
-
-    def _fake_init(self: Any, **kwargs: Any) -> None:
-        captured.update(kwargs)
-
-    with patch(
-        "omnigent.inner.antigravity_harness.AntigravityExecutor.__init__",
-        _fake_init,
-    ):
-        antigravity_harness._build_antigravity_executor()
+    captured = _capture_factory_kwargs(monkeypatch)
 
     assert captured["model"] == "gemini-3-pro"
     assert captured["api_key"] == "ag-test-key"
-    assert captured["base_url_override"] == "https://openrouter.ai/api/v1"
-    assert captured["gateway_host"] == "https://openrouter.ai"
-    assert captured["gateway_auth_command"] == "printf token"
-    assert captured["profile"] == "my-profile"
+    assert captured["vertex"] is True
+    assert captured["project"] == "my-proj"
+    assert captured["location"] == "us-central1"
 
 
-def test_executor_factory_defaults_to_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unset env vars resolve to ``None`` (SDK falls back to ambient creds)."""
-    for var in (
-        "HARNESS_ANTIGRAVITY_MODEL",
-        "HARNESS_ANTIGRAVITY_API_KEY",
-        "HARNESS_ANTIGRAVITY_GATEWAY_BASE_URL",
-        "HARNESS_ANTIGRAVITY_GATEWAY_HOST",
-        "HARNESS_ANTIGRAVITY_GATEWAY_AUTH_COMMAND",
-        "HARNESS_ANTIGRAVITY_DATABRICKS_PROFILE",
-    ):
+def test_executor_factory_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset env vars resolve to ``None`` / ``False`` (SDK uses ambient creds)."""
+    for var in _ALL_ANTIGRAVITY_ENV:
         monkeypatch.delenv(var, raising=False)
 
-    captured: dict[str, Any] = {}
-
-    def _fake_init(self: Any, **kwargs: Any) -> None:
-        captured.update(kwargs)
-
-    with patch(
-        "omnigent.inner.antigravity_harness.AntigravityExecutor.__init__",
-        _fake_init,
-    ):
-        antigravity_harness._build_antigravity_executor()
+    captured = _capture_factory_kwargs(monkeypatch)
 
     assert captured["model"] is None
     assert captured["api_key"] is None
-    assert captured["base_url_override"] is None
-    assert captured["profile"] is None
+    # vertex is a bool flag, so its "unset" value is False (not None).
+    assert captured["vertex"] is False
+    assert captured["project"] is None
+    assert captured["location"] is None
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1", True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("", False),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+    ],
+)
+def test_vertex_flag_parsing(monkeypatch: pytest.MonkeyPatch, value: str, expected: bool) -> None:
+    """The Vertex flag accepts the documented truthy spellings, else False."""
+    for var in _ALL_ANTIGRAVITY_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HARNESS_ANTIGRAVITY_VERTEX", value)
+
+    captured = _capture_factory_kwargs(monkeypatch)
+
+    # A wrong parse here would silently send Gemini traffic down the wrong auth
+    # path (API key vs Vertex ADC), so the boolean must be exact.
+    assert captured["vertex"] is expected

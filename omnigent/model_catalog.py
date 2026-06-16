@@ -355,9 +355,11 @@ def _provider_from_legacy_auth(spec: Any, harness_type: str) -> ResolvedModelPro
     if harness_type == "claude-sdk":
         return _legacy_claude_sdk_provider(spec)
     if harness_type in ("openai-agents-sdk", "antigravity"):
-        # The antigravity spawn-env builder mirrors openai-agents: it reads
-        # spec/global ``auth:`` blocks AND ``config["profile"]``, so its
-        # readout uses the same (auth-aware) legacy branch.
+        # Both resolve spec/global ``auth:`` api-key blocks via this branch.
+        # NB: the antigravity spawn-env builder (unlike openai-agents) ignores
+        # ``config["profile"]`` — it's Gemini-native with no Databricks/gateway
+        # path — so for a profile-only antigravity spec this readout can
+        # over-report; api-key (and Vertex) specs resolve correctly.
         return _legacy_openai_agents_provider(spec)
     return _legacy_profile_only_provider(spec, harness_type)
 

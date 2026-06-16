@@ -70,15 +70,15 @@ id (e.g. `auto`, `gpt-5`) rather than a `databricks-*` id.
 
 `harness: antigravity` runs the agent through Google's
 [Antigravity SDK](https://pypi.org/project/google-antigravity/)
-(`pip install "omnigent[antigravity]"`). It defaults to **Gemini 3 Pro**
+(`pip install "omnigent[antigravity]"`). It defaults to **Gemini 3.5 Flash**
 and can also drive Claude / GPT-OSS. Authenticate with an Antigravity /
-Gemini API key, or — like the other SDK harnesses — route through an
-OpenAI-compatible gateway (OpenRouter / LiteLLM) or a Databricks profile.
+Gemini API key, or Vertex AI (`project` / `location`) — the SDK is
+Gemini-native and has no OpenAI-compatible gateway / Databricks path.
 
 ```yaml
 executor:
   harness: antigravity         # aliases: agy, google-antigravity
-  model: gemini-3-pro
+  model: gemini-3.5-flash
   auth:
     type: api_key
     api_key: ${GEMINI_API_KEY}     # or ANTIGRAVITY_API_KEY

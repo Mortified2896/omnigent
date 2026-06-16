@@ -1,44 +1,32 @@
 """``harness: antigravity`` wrap.
 
-Thin module exposing :func:`create_app` — the entrypoint the shared
-:mod:`omnigent.runtime.harnesses._runner` invokes after the parent
-process resolves ``"antigravity"`` to this module via
-:data:`omnigent.runtime.harnesses._HARNESS_MODULES`.
+Exposes :func:`create_app`, the entrypoint the shared
+:mod:`omnigent.runtime.harnesses._runner` invokes after the parent resolves
+``"antigravity"`` via :data:`omnigent.runtime.harnesses._HARNESS_MODULES`. It
+wraps a :class:`~omnigent.inner.antigravity_executor.AntigravityExecutor` in an
+:class:`~omnigent.runtime.harnesses._executor_adapter.ExecutorAdapter`,
+configured from env vars the parent sets before spawning. Mirrors the
+openai-agents wrap; see the claude-sdk module for the config-flow rationale.
 
-Internally, instantiates
-:class:`omnigent.runtime.harnesses._executor_adapter.ExecutorAdapter`
-around a :class:`omnigent.inner.antigravity_executor.AntigravityExecutor`
-configured from env vars the parent process sets before spawning. Mirrors
-the openai-agents wrap (``openai_agents_sdk_harness.py``); see the
-claude-sdk module's docstring for the v1 config-flow rationale (env vars
-vs per-request).
-
-Like the OpenAI-Agents SDK wrap, Antigravity is a pure-Python SDK harness:
-no CLI binary, no sandbox subprocess, and the model is a simple
-constructor override from the spawn env.
+Like that wrap, this is an in-process SDK harness (no CLI/sandbox subprocess),
+though the SDK itself launches a native ``localharness`` binary needing a
+recent glibc (see the executor note). Auth is Gemini-native (API key or
+Vertex AI), so there are no ``*_GATEWAY_*`` env vars.
 
 Env vars read at startup:
 
-- ``HARNESS_ANTIGRAVITY_MODEL``: model identifier the inner executor pins
-  for every turn, e.g. ``"gemini-3-pro"``. Constructor-level override —
-  wins over the per-turn ``request.model`` (which carries the agent NAME,
-  not an LLM identifier under the harness contract). ``None`` falls back
-  to the executor's built-in default.
-- ``HARNESS_ANTIGRAVITY_API_KEY``: direct Antigravity / Gemini API key
-  (``ANTIGRAVITY_API_KEY`` / ``GEMINI_API_KEY``), or an OpenAI-compatible
-  gateway key when ``HARNESS_ANTIGRAVITY_GATEWAY_BASE_URL`` is also set.
-  Written when the agent spec declares ``executor.auth: {type: api_key,
-  …}`` or a generic key/gateway provider resolves. Takes precedence over
-  the SDK's ambient credential lookup.
-- ``HARNESS_ANTIGRAVITY_GATEWAY_BASE_URL``: OpenAI-compatible gateway base
-  URL for OpenRouter / LiteLLM / Databricks routing, e.g.
-  ``"https://openrouter.ai/api/v1"``.
-- ``HARNESS_ANTIGRAVITY_GATEWAY_HOST``: gateway workspace host origin
-  (Databricks path), paired with the auth command for token refresh.
-- ``HARNESS_ANTIGRAVITY_GATEWAY_AUTH_COMMAND``: shell command that prints
-  a bearer token (Databricks token refresh), used instead of a static key.
-- ``HARNESS_ANTIGRAVITY_DATABRICKS_PROFILE``: ``~/.databrickscfg`` profile
-  name for the Databricks fallback path.
+- ``HARNESS_ANTIGRAVITY_MODEL``: model the executor pins for every turn, e.g.
+  ``"gemini-3.5-flash"``. Wins over per-turn ``request.model`` (which carries
+  the agent NAME, not an LLM id). ``None`` falls back to the built-in default.
+- ``HARNESS_ANTIGRAVITY_API_KEY``: direct Antigravity / Gemini API key. Set
+  when the spec declares ``executor.auth: {type: api_key, …}`` or a global
+  API-key auth resolves. Takes precedence over ambient credential lookup.
+- ``HARNESS_ANTIGRAVITY_VERTEX``: ``"1"`` / ``"true"`` / ``"yes"`` to use
+  Vertex AI (GCP ADC) instead of an API key.
+- ``HARNESS_ANTIGRAVITY_PROJECT``: GCP project id for the Vertex AI path,
+  e.g. ``"my-gcp-project"``.
+- ``HARNESS_ANTIGRAVITY_LOCATION``: GCP region for the Vertex AI path,
+  e.g. ``"us-central1"``.
 """
 
 from __future__ import annotations
@@ -54,15 +42,16 @@ from omnigent.runtime.harnesses._executor_adapter import ExecutorAdapter
 
 _logger = logging.getLogger(__name__)
 
-# Env-var keys the wrap reads at executor construction time. See the module
-# docstring for semantics. Centralizing as constants so misconfigurations
-# surface as a single grep target.
+# Env-var keys read at construction time (semantics in the module docstring);
+# centralized as constants for a single grep target.
 _ENV_MODEL = "HARNESS_ANTIGRAVITY_MODEL"
 _ENV_API_KEY = "HARNESS_ANTIGRAVITY_API_KEY"
-_ENV_GATEWAY_BASE_URL = "HARNESS_ANTIGRAVITY_GATEWAY_BASE_URL"
-_ENV_GATEWAY_HOST = "HARNESS_ANTIGRAVITY_GATEWAY_HOST"
-_ENV_GATEWAY_AUTH_COMMAND = "HARNESS_ANTIGRAVITY_GATEWAY_AUTH_COMMAND"
-_ENV_DATABRICKS_PROFILE = "HARNESS_ANTIGRAVITY_DATABRICKS_PROFILE"
+_ENV_VERTEX = "HARNESS_ANTIGRAVITY_VERTEX"
+_ENV_PROJECT = "HARNESS_ANTIGRAVITY_PROJECT"
+_ENV_LOCATION = "HARNESS_ANTIGRAVITY_LOCATION"
+
+# Truthy spellings accepted for the boolean Vertex flag.
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 def _build_antigravity_executor() -> Executor:
@@ -77,20 +66,17 @@ def _build_antigravity_executor() -> Executor:
     return AntigravityExecutor(
         model=os.environ.get(_ENV_MODEL) or None,
         api_key=os.environ.get(_ENV_API_KEY) or None,
-        base_url_override=os.environ.get(_ENV_GATEWAY_BASE_URL) or None,
-        gateway_host=os.environ.get(_ENV_GATEWAY_HOST) or None,
-        gateway_auth_command=os.environ.get(_ENV_GATEWAY_AUTH_COMMAND) or None,
-        profile=os.environ.get(_ENV_DATABRICKS_PROFILE) or None,
+        vertex=os.environ.get(_ENV_VERTEX, "").strip().lower() in _TRUTHY,
+        project=os.environ.get(_ENV_PROJECT) or None,
+        location=os.environ.get(_ENV_LOCATION) or None,
     )
 
 
 def create_app() -> FastAPI:
     """Build the antigravity harness's FastAPI app.
 
-    Required entry point per the harness contract — the runner imports this
-    module (resolved from
-    :data:`omnigent.runtime.harnesses._HARNESS_MODULES`) and invokes
-    ``create_app()`` to get the app it serves. The wrapped
+    Required entry point per the harness contract: the runner imports this
+    module and calls ``create_app()`` to get the app it serves. The wrapped
     :class:`AntigravityExecutor` is constructed lazily on the first turn.
 
     :returns: The FastAPI app from :class:`ExecutorAdapter`'s
