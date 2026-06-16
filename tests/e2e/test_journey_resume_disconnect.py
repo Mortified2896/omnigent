@@ -8,7 +8,7 @@ conversation with full context preserved.
 
 Usage::
 
-    pytest tests/e2e/test_journey_resume_disconnect.py \
+    pytest tests/e2e/test_journey_resume_disconnect.py \\
         --llm-api-key $LLM_API_KEY -v
 """
 
@@ -68,7 +68,7 @@ def test_resume_session_after_disconnect(
     8. Verify the agent reproduces the codeword, proving history
        survived the disconnect.
     """
-    # ── Setup: two turns with a codeword ──────────────────────
+    # ── Setup: two turns with a codeword ─────────────────
     session_id = create_runner_bound_session(
         http_client, agent_name=coder_agent, runner_id=live_runner_id
     )
@@ -137,10 +137,27 @@ def test_resume_session_after_disconnect(
         )
         assert body_3["status"] == "completed", f"resume turn failed: {body_3.get('error')}"
 
-        # The agent should recall the codeword from history
-        text = _extract_all_text(body_3)
-        assert _CODEWORD in text, (
-            f"agent should recall {_CODEWORD!r} after disconnect/resume, got: {text!r}"
+        # The agent should recall the codeword — verify using only the
+        # latest assistant message (not cumulative session text).
+        latest_items_resp = new_client.get(
+            f"/v1/sessions/{session_id}/items",
+            params={"order": "desc", "limit": 5},
+        )
+        latest_items_resp.raise_for_status()
+        latest_items = latest_items_resp.json()["data"]
+
+        # Find the first assistant message (most recent due to desc)
+        latest_assistant_text = ""
+        for item in latest_items:
+            if item.get("type") == "message" and item.get("role") == "assistant":
+                latest_assistant_text = " ".join(
+                    block.get("text", "") for block in item.get("content", [])
+                )
+                break
+
+        assert _CODEWORD in latest_assistant_text, (
+            f"agent should recall {_CODEWORD!r} after "
+            f"disconnect/resume, got: {latest_assistant_text!r}"
         )
 
 
