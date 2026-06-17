@@ -585,14 +585,41 @@ async def test_cleanup_session_clears_status_memo(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_transfer_terminal_moves_status_memo(tmp_path: Path) -> None:
+async def test_transfer_terminal_moves_status_memo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Transferring a terminal moves its PTY-status memo to the new owner.
 
+    Fakes the launch (no real tmux/process) and the conversation-link update,
+    mirroring ``test_terminal_resource_role_moves_on_transfer``.
+
     :param tmp_path: Temporary directory for fake terminal paths.
+    :param monkeypatch: Pytest monkeypatch fixture.
     """
     terminal_registry = TerminalRegistry()
     registry = SessionResourceRegistry(terminal_registry=terminal_registry)
-    view = await registry.launch_required_terminal(
+    instance = make_test_terminal_instance("codex", "main", tmp_path)
+
+    async def _fake_launch(
+        conversation_id: str,
+        terminal_name: str,
+        session_key: str,
+        spec: TerminalEnvSpec,
+        **kwargs: object,
+    ) -> TerminalInstance:
+        del spec, kwargs
+        terminal_registry._by_conversation.setdefault(conversation_id, {})[
+            (terminal_name, session_key)
+        ] = instance
+        return instance
+
+    async def _no_status_link(_link: str) -> None:
+        """Avoid tmux calls while transfer updates the conversation link."""
+
+    monkeypatch.setattr(terminal_registry, "launch", _fake_launch)
+    monkeypatch.setattr(instance, "set_conversation_link", _no_status_link)
+
+    view = await registry.launch_auxiliary_terminal(
         "conv_src",
         "codex",
         "main",
