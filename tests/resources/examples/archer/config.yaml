@@ -45,35 +45,11 @@ os_env:
   cwd: .
 
 tools:
+  agents:
+    - fact_checker
+    - summarizer
+
   builtins:
     - upload_file
     - list_files
     - download_file
-
-  fact_checker:
-    type: agent
-    description: Verifies claims by searching for corroborating or contradicting evidence.
-    executor:
-      type: omnigent
-      model: databricks-gpt-5-4
-      config:
-        harness: openai-agents
-    prompt: |
-      You are a fact-checker. When given a claim or statement, search the web
-      to find evidence that supports or contradicts it. Return a brief verdict
-      (supported, contradicted, or mixed) with the key sources you found.
-      Be precise and cite URLs.
-
-  summarizer:
-    type: agent
-    description: Condenses long content into concise, structured summaries.
-    executor:
-      type: omnigent
-      model: databricks-gpt-5-4
-      config:
-        harness: openai-agents
-    prompt: |
-      You are a summarizer. When given a topic or long text, produce a concise
-      summary that captures the key points. Use bullet points for clarity.
-      If given a topic instead of text, search the web first to gather
-      information, then summarize your findings.

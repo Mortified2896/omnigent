@@ -19,13 +19,14 @@ import httpx
 
 from tests.e2e.conftest import (
     create_runner_bound_session,
-    poll_until_terminal,
+    poll_session_until_terminal,
     send_user_message_to_session,
 )
 
 
 def _wait_for_spawn(
     client: httpx.Client,
+    session_id: str,
     response_id: str,
     timeout: float = 120,
 ) -> None:
@@ -41,16 +42,21 @@ def _wait_for_spawn(
     :param timeout: Max seconds to wait.
     :raises AssertionError: If no spawn call within timeout.
     """
+    del response_id
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        resp = client.get(f"/v1/responses/{response_id}")
+        resp = client.get(f"/v1/sessions/{session_id}")
+        resp.raise_for_status()
         body = resp.json()
-        for item in body.get("output", []):
+        for item in body.get("items", []):
+            data = item.get("data") if isinstance(item.get("data"), dict) else {}
             if item.get("type") == "function_call" and item.get("name") == "sys_session_send":
                 return
-        if body["status"] in ("completed", "failed"):
+            if item.get("type") == "function_call" and data.get("name") == "sys_session_send":
+                return
+        if body["status"] in ("idle", "failed"):
             raise AssertionError(
-                f"Response completed without spawning a sub-agent. Output: {body.get('output')}"
+                f"Response completed without spawning a sub-agent. Items: {body.get('items')}"
             )
         time.sleep(0.5)
     raise AssertionError(f"sys_session_send not found in output within {timeout}s")
@@ -104,7 +110,7 @@ def test_steering_during_auto_collect(
     )
 
     # Step 2: wait for spawn to happen.
-    _wait_for_spawn(http_client, response_id, timeout=120)
+    _wait_for_spawn(http_client, session_id, response_id, timeout=120)
 
     # Step 3: steer through the same session.
     final_id = send_user_message_to_session(
@@ -119,7 +125,12 @@ def test_steering_during_auto_collect(
     steered_into_running = final_id == response_id
 
     # Step 4: wait for the task to complete (whichever ID).
-    final = poll_until_terminal(http_client, final_id, timeout=300)
+    final = poll_session_until_terminal(
+        http_client,
+        session_id=session_id,
+        response_id=final_id,
+        timeout=300,
+    )
 
     # Step 5: assert.
     assert final["status"] == "completed", (

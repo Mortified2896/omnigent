@@ -108,6 +108,13 @@ def test_archer_calls_word_count_tool(
         f"the ftfy dependency): {tool_output!r}"
     )
     tool_data = json.loads(tool_output)
+    if "content" in tool_data:
+        tool_text = "\n".join(
+            block.get("text", "")
+            for block in tool_data["content"]
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+        tool_data = json.loads(tool_text)
     assert tool_data["word_count"] == 7, (
         f"Expected word_count=7, got {tool_data}. Tool may have failed or returned wrong result."
     )

@@ -2878,6 +2878,11 @@ def _resolved_spec_workdir(entry: Any) -> Path | None:
     return entry.workdir if isinstance(entry, ResolvedSpec) else None
 
 
+def _resolved_workdir_for_spec(spec: Any, fallback: Path | None) -> Path | None:
+    """Return the bundle workdir for a possibly wrapped spec entry."""
+    return _resolved_spec_workdir(spec) or fallback
+
+
 @dataclasses.dataclass(frozen=True)
 class _SessionSnapshot:
     """One ``GET /v1/sessions/{id}`` projected for all runner readers.
@@ -8735,6 +8740,7 @@ def create_runner_app(
         _turn_agent_id = dispatch.agent_id if dispatch else body.get("agent_id")
         _has_mcp_hint = dispatch.has_mcp_servers if dispatch else body.get("has_mcp_servers")
         _turn_spec: Any = None
+        _turn_spec_entry: Any = None
         _turn_spec_resolved = False
         _mcp_schemas: list[dict[str, Any]] = []
         _mcp_tool_names: set[str] = set()
@@ -8746,6 +8752,7 @@ def create_runner_app(
             _turn_spec = _unwrap_resolved_spec(_turn_spec_entry)
             if _turn_spec is None:
                 _session_entry = _session_spec_cache.get(conv_id)
+                _turn_spec_entry = _session_entry
                 _turn_spec = _unwrap_resolved_spec(_session_entry)
             if _turn_spec is None and spec_resolver is not None:
                 try:
@@ -8769,6 +8776,7 @@ def create_runner_app(
                 else:
                     if _turn_spec is not None:
                         _spec_cache[_turn_agent_id] = _resolved_turn_spec
+                        _turn_spec_entry = _resolved_turn_spec
             _turn_spec_resolved = True
             _turn_mcp: Any = ProxyMcpManager(conv_id, server_client)
             if _eager_spec_error is None and _turn_spec is not None:
@@ -8789,9 +8797,9 @@ def create_runner_app(
             (typically ``_response_failed_event`` from inside the SSE
             generator).
             """
-            nonlocal _turn_spec, _turn_spec_resolved
+            nonlocal _turn_spec, _turn_spec_entry, _turn_spec_resolved
             if _turn_spec_resolved:
-                return _turn_spec, None
+                return _turn_spec_entry or _turn_spec, None
             _turn_spec_resolved = True
             # Session-level cache has the sub-agent's resolved spec
             # (set by _run_turn_bg) for child sessions. Check it
@@ -8799,14 +8807,16 @@ def create_runner_app(
             # sub-spec, not the root spec.
             session_cached = _session_spec_cache.get(conv_id)
             if session_cached is not None:
+                _turn_spec_entry = session_cached
                 _turn_spec = _unwrap_resolved_spec(session_cached)
-                return _turn_spec, None
+                return session_cached, None
             if not _turn_agent_id or spec_resolver is None:
                 return None, None
             cached = _spec_cache.get(_turn_agent_id)
             if cached is not None:
+                _turn_spec_entry = cached
                 _turn_spec = _unwrap_resolved_spec(cached)
-                return _turn_spec, None
+                return cached, None
             try:
                 resolved = await spec_resolver(_turn_agent_id, conv_id)
             except (httpx.HTTPError, RuntimeError) as exc:
@@ -8822,8 +8832,10 @@ def create_runner_app(
                 )
             if resolved is not None:
                 _spec_cache[_turn_agent_id] = resolved
+                _turn_spec_entry = resolved
                 _turn_spec = _unwrap_resolved_spec(resolved)
-            return _turn_spec, None
+                return resolved, None
+            return None, None
 
         async def proxy_stream():
             # If eager spec resolution failed (MCP path), emit the
@@ -9076,6 +9088,32 @@ def create_runner_app(
                                             _spec_for_dispatch_hint, "local_tools", []
                                         )
                                     )
+                                    if (
+                                        not _is_spec_local
+                                        and not is_mcp
+                                        and not should_dispatch_locally(tool_name)
+                                    ):
+                                        (
+                                            _spec_for_dispatch_hint_entry,
+                                            _lazy_hint_err,
+                                        ) = await _resolve_turn_spec_lazy()
+                                        if _lazy_hint_err is not None:
+                                            _err_type, _err_msg = _lazy_hint_err
+                                            yield _response_failed_event(
+                                                {"message": _err_msg, "type": _err_type}
+                                            )
+                                            return
+                                        _spec_for_dispatch_hint = _unwrap_resolved_spec(
+                                            _spec_for_dispatch_hint_entry
+                                        )
+                                        _is_spec_local = any(
+                                            getattr(info, "name", None) == tool_name
+                                            and getattr(info, "language", None)
+                                            in ("python", "omnigent-python-callable")
+                                            for info in getattr(
+                                                _spec_for_dispatch_hint, "local_tools", []
+                                            )
+                                        )
                                     _should_dispatch = _should_dispatch_tool_locally(
                                         tool_name,
                                         dispatch=dispatch,
@@ -9090,7 +9128,7 @@ def create_runner_app(
                                         # failures surface as response.failed
                                         # SSE (see the response.failed contract).
                                         (
-                                            _spec_for_dispatch,
+                                            _spec_for_dispatch_entry,
                                             _lazy_err,
                                         ) = await _resolve_turn_spec_lazy()
                                         if _lazy_err is not None:
@@ -9099,6 +9137,13 @@ def create_runner_app(
                                                 {"message": _err_msg, "type": _err_type}
                                             )
                                             return
+                                        _dispatch_workdir = _resolved_workdir_for_spec(
+                                            _spec_for_dispatch_entry,
+                                            runner_workspace,
+                                        )
+                                        _spec_for_dispatch = _unwrap_resolved_spec(
+                                            _spec_for_dispatch_entry
+                                        )
                                         # All tool calls go through AP:/mcp
                                         # (ProxyMcpManager in Omnigent mode), which
                                         # enforces TOOL_CALL + TOOL_RESULT
@@ -9128,7 +9173,7 @@ def create_runner_app(
                                                     task_id=_omnigent_task_id or _response_id,
                                                     agent_id=_agent_id_for_dispatch,
                                                     agent_name=body.get("model"),
-                                                    runner_workspace=runner_workspace,
+                                                    runner_workspace=_dispatch_workdir,
                                                     mcp_manager=_dispatch_mcp,
                                                     session_inbox=_session_inboxes.get(conv_id),
                                                     session_async_tasks=_session_async_tasks.get(
@@ -11811,12 +11856,14 @@ def create_runner_app(
                         },
                     )
                 spec_entry = _session_spec_cache.get(session_id)
+                spec_workdir = _resolved_spec_workdir(spec_entry)
                 spec = _unwrap_resolved_spec(spec_entry)
                 if spec is None and spec_resolver is not None:
                     _agent_id = _session_agent_ids.get(session_id)
                     if _agent_id:
                         try:
                             resolved = await spec_resolver(_agent_id, session_id)
+                            spec_workdir = _resolved_spec_workdir(resolved)
                             spec = _unwrap_resolved_spec(resolved)
                         except Exception:  # noqa: BLE001
                             pass
@@ -11890,12 +11937,14 @@ def create_runner_app(
                 # any name without ``__`` is definitively a runner-local tool.
                 # Policy enforcement is handled by the AP server.
                 spec_entry = _session_spec_cache.get(session_id)
+                spec_workdir = _resolved_spec_workdir(spec_entry)
                 spec = _unwrap_resolved_spec(spec_entry)
                 if spec is None and spec_resolver is not None:
                     _agent_id = _session_agent_ids.get(session_id)
                     if _agent_id:
                         try:
                             resolved = await spec_resolver(_agent_id, session_id)
+                            spec_workdir = _resolved_spec_workdir(resolved)
                             spec = _unwrap_resolved_spec(resolved)
                         except Exception:  # noqa: BLE001
                             pass
@@ -11912,7 +11961,7 @@ def create_runner_app(
                         task_id=session_id,
                         agent_id=_agent_id_local,
                         agent_name=getattr(spec, "name", None),
-                        runner_workspace=runner_workspace,
+                        runner_workspace=spec_workdir or runner_workspace,
                         mcp_manager=None,
                         session_inbox=_session_inboxes.get(session_id),
                         session_async_tasks=_session_async_tasks.get(session_id),
