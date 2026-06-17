@@ -7,6 +7,7 @@ import socket
 from urllib.parse import urlparse
 
 DEV_PORTS = frozenset({6767, 8000, 5173})
+# Literal hostnames are a fast path; resolved IPs are classified by _dev_address_reason.
 DEV_HOSTNAMES = frozenset({"localhost", "0.0.0.0"})
 
 
@@ -26,7 +27,8 @@ def unsafe_ui_base_url_reason(base_url: str) -> str | None:
         port = parsed.port
     except ValueError:
         return "it has an invalid port"
-    if port in DEV_PORTS:
+    # No explicit port is not itself unsafe; host checks below still apply.
+    if port is not None and port in DEV_PORTS:
         return f"port {port} is a known Omnigent/Vite dev port"
     if host in DEV_HOSTNAMES:
         return f"host {host!r} is a local dev host"
@@ -67,8 +69,8 @@ def _dev_address_reason(address: ipaddress.IPv4Address | ipaddress.IPv6Address) 
         return "a loopback address"
     if address.is_unspecified:
         return "an unspecified local address"
-    if address.is_private:
-        return "a private-network address"
     if address.is_link_local:
         return "a link-local address"
+    if address.is_private:
+        return "a private-network address"
     return None

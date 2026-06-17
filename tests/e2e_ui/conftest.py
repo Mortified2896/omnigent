@@ -381,12 +381,17 @@ def _find_free_port() -> int:
 
     :returns: An available port number.
     """
-    while True:
+    max_attempts = 100
+    for _ in range(max_attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
         if port not in DEV_PORTS:
             return port
+    raise RuntimeError(
+        f"Could not find a free e2e UI port outside dev ports "
+        f"{sorted(DEV_PORTS)} after {max_attempts} attempts"
+    )
 
 
 @pytest.fixture(scope="session")
