@@ -41,10 +41,13 @@ def test_share_and_second_user_continues(
     token = f"SHARED-{uuid.uuid4().hex[:8]}"
 
     # In mock mode: owner turn returns "ok", Bob's turn returns the token.
-    configure_mock_llm(mock_llm_server_url, [
-        {"text": "ok"},
-        {"text": token},
-    ])
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            {"text": "ok"},
+            {"text": token},
+        ],
+    )
     with (
         httpx.Client(base_url=live_server, timeout=300) as owner,
         httpx.Client(

@@ -172,19 +172,22 @@ def test_client_tool_result_recalled_across_turns(
     # The first response is a tool call; after the test posts the tool
     # result, the second response includes the marker; the third
     # response (turn 2) recalls from transcript.
-    configure_mock_llm(mock_llm_server_url, [
-        {
-            "tool_calls": [
-                {
-                    "call_id": call_id,
-                    "name": "lookup_widget",
-                    "arguments": json.dumps({"widget_id": 42}),
-                },
-            ],
-        },
-        {"text": f"The widget color is {marker}."},
-        {"text": f"The color was {marker}."},
-    ])
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            {
+                "tool_calls": [
+                    {
+                        "call_id": call_id,
+                        "name": "lookup_widget",
+                        "arguments": json.dumps({"widget_id": 42}),
+                    },
+                ],
+            },
+            {"text": f"The widget color is {marker}."},
+            {"text": f"The color was {marker}."},
+        ],
+    )
 
     text_1 = _turn_with_tool(
         live_server,

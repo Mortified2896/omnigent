@@ -29,11 +29,14 @@ def test_three_turn_context_retention(
 
     # Configure all 3 turns up front: the mock server serves them
     # sequentially. With a real LLM the configure call is a no-op.
-    configure_mock_llm(mock_llm_server_url, [
-        {"text": "ok"},
-        {"text": "ok"},
-        {"text": f"{token_a} {token_b}"},
-    ])
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            {"text": "ok"},
+            {"text": "ok"},
+            {"text": f"{token_a} {token_b}"},
+        ],
+    )
 
     body_1 = run_turn(
         http_client,

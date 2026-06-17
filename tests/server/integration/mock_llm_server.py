@@ -114,16 +114,17 @@ def sse_text_response(text: str, model: str = "mock-model") -> str:
     def _add(evt_type: str, **extra: object) -> None:
         nonlocal seq
         data = {"type": evt_type, "sequence_number": seq, **extra}
-        events.append(
-            f"event: {evt_type}\ndata: {json.dumps(data)}\n\n"
-        )
+        events.append(f"event: {evt_type}\ndata: {json.dumps(data)}\n\n")
         seq += 1
 
     _add("response.created", response=created_response)
     _add("response.output_item.added", output_index=0, item=message_item)
     _add(
         "response.output_text.done",
-        output_index=0, item_id=msg_id, content_index=0, text=text,
+        output_index=0,
+        item_id=msg_id,
+        content_index=0,
+        text=text,
     )
     _add("response.output_item.done", output_index=0, item=message_item)
     _add("response.completed", response=response_obj)
@@ -183,9 +184,7 @@ def sse_tool_call_response(
     def _add(evt_type: str, **extra: object) -> None:
         nonlocal seq
         data = {"type": evt_type, "sequence_number": seq, **extra}
-        events.append(
-            f"event: {evt_type}\ndata: {json.dumps(data)}\n\n"
-        )
+        events.append(f"event: {evt_type}\ndata: {json.dumps(data)}\n\n")
         seq += 1
 
     _add("response.created", response=created_response)
@@ -363,10 +362,7 @@ async def get_requests() -> dict[str, list]:
 @app.get("/gate/pending")
 async def gate_pending() -> dict[str, bool]:
     """Check if any request is waiting on a gate."""
-    pending = any(
-        qr._pending.is_set() and not qr._gate.is_set()
-        for qr in _state.pending_gates
-    )
+    pending = any(qr._pending.is_set() and not qr._gate.is_set() for qr in _state.pending_gates)
     return {"pending": pending}
 
 
