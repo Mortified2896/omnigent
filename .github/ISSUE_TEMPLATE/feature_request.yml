@@ -11,22 +11,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: component
-    attributes:
-      label: Component
-      description: Which part of the system is this feature for?
-      options:
-        - Server
-        - Runner
-        - Repr / Serialization
-        - Web UI
-        - Policies
-        - Harnesses
-        - Other / Not sure
-    validations:
-      required: false
-
   - type: textarea
     id: proposed-solution
     attributes:
