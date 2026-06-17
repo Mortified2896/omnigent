@@ -33,7 +33,7 @@
 /.github/                    @PattaraS @serena-ruan @dhruv0811 @TomeHirata
 
 # Web UI
-/ap-web/                     @SabhyaC26 @serena-ruan @daniellok-db @dbczumar
+/ap-web/                     @SabhyaC26 @serena-ruan @daniellok-db @dbczumar @hzub
 
 # Core agent runtime & harnesses
 /omnigent/inner/             @SabhyaC26 @TomeHirata @dhruv0811 @dbczumar
@@ -44,15 +44,15 @@
 /omnigent/policies/          @TomeHirata @SabhyaC26 @dhruv0811 @PattaraS
 /omnigent/spec/              @SabhyaC26 @dhruv0811 @ckcuslife-source
 /omnigent/llms/              @PattaraS @ckcuslife-source
-/omnigent/host/              @fanzeyi @dhruv0811 @dbczumar @TomeHirata
+/omnigent/host/              @fanzeyi @dhruv0811 @dbczumar
 /omnigent/sandbox/           @SabhyaC26
-/omnigent/db/                @SabhyaC26 @fanzeyi
-/omnigent/stores/            @serena-ruan @SabhyaC26 @TomeHirata @fanzeyi
-/omnigent/terminals/         @SabhyaC26 @dbczumar @Edwinhe03
-/omnigent/tools/             @dbczumar @SabhyaC26 @PattaraS
-/omnigent/entities/          @SabhyaC26 @daniellok-db @TomeHirata
-/omnigent/repl/              @dhruv0811 @SabhyaC26 @dbczumar @TomeHirata
-/omnigent/resources/         @SabhyaC26 @fanzeyi @serena-ruan
+/omnigent/db/                @fanzeyi
+/omnigent/stores/            @serena-ruan @TomeHirata @fanzeyi
+/omnigent/terminals/         @dbczumar @Edwinhe03
+/omnigent/tools/             @dbczumar @PattaraS
+/omnigent/entities/          @daniellok-db @TomeHirata
+/omnigent/repl/              @dhruv0811 @dbczumar @TomeHirata
+/omnigent/resources/         @fanzeyi @serena-ruan
 
 # Deploy targets
 /deploy/                     @dhruv0811 @PattaraS @dbczumar @SabhyaC26
