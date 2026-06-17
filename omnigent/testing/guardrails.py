@@ -1,15 +1,15 @@
-"""Warn-mode test-environment guardrails.
+"""Test-environment guardrails.
 
 A small, additive safety net that checks a test run is pointed at
 throwaway resources — running under pytest, against a tmp/in-memory
 SQLite DB, and not aimed at a known dev/prod host or port — *before*
 the suite starts mutating state.
 
-Today every check is **warn-only**: a violation logs a clear
-``TEST GUARDRAIL:`` ``WARNING`` and the run continues. The design keeps
-a single ``warn_only`` switch so a future PR can flip the default to
-``False`` and have the same checks hard-fail (raise
-:class:`TestGuardrailError`) with no other code change.
+When checks hard-fail, a violation raises :class:`TestGuardrailError`
+before the suite can mutate real resources. Set
+``OMNIGENT_DISABLE_TEST_GUARDRAILS`` to a truthy value (``1``, ``true``,
+``yes``, or ``on``) to temporarily downgrade violations to warn-only for
+deliberate integration runs that target non-test resources.
 
 Entry point: :func:`check_test_environment`.
 """
@@ -24,8 +24,8 @@ from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
-# Prefix on every guardrail log line so violations are greppable and so a
-# future hard-fail mode can reuse the identical message.
+# Prefix on every guardrail log line so violations are greppable and
+# hard-fail exceptions reuse the identical message.
 _WARN_PREFIX = "TEST GUARDRAIL:"
 
 # Ports we never want a test to drive: the local server default (6767),
@@ -53,15 +53,16 @@ DEV_HOSTS: frozenset[str] = frozenset(
 # set per-test, not at session configure time). OMNIGENT_TEST_MODE is
 # introduced by this module as the canonical, settable flag.
 _TEST_MODE_ENV_VARS = ("OMNIGENT_TEST_MODE", "OMNIGENT_ENV")
-_TEST_MODE_ENV_VALUES = frozenset({"1", "true", "test", "testing", "yes", "on"})
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+_TEST_MODE_ENV_VALUES = _TRUTHY_ENV_VALUES | {"test", "testing"}
+_DISABLE_GUARDRAILS_ENV_VAR = "OMNIGENT_DISABLE_TEST_GUARDRAILS"
 
 
 class TestGuardrailError(AssertionError):
     """Raised by :func:`check_test_environment` when ``warn_only=False``.
 
-    Subclasses :class:`AssertionError` so a future hard-fail mode reads
-    naturally as a failed test precondition. Unused while the default is
-    warn-only, but defined now so the hard-fail flip is a one-line change.
+    Subclasses :class:`AssertionError` so hard-fail mode reads naturally
+    as a failed test precondition.
     """
 
     # Tell pytest this is not a test class despite the ``Test`` prefix.
@@ -102,10 +103,10 @@ def _imported_modules() -> frozenset[str]:
 def looks_like_test_db(db_uri: str) -> bool:
     """Return whether *db_uri* looks like a throwaway test database.
 
-    Accepts in-memory SQLite, file SQLite under a system temp dir, or any
-    URI whose path/name contains ``test``. Everything else (a real
-    ``~/.omnigent/chat.db``, a Postgres ``DATABASE_URL``) is treated as a
-    non-test DB.
+    Accepts in-memory SQLite, file SQLite under a system temp dir, or a
+    file-backed SQLite path with ``test`` as a delimited path/name token.
+    Everything else (a real ``~/.omnigent/chat.db``, a Postgres
+    ``DATABASE_URL``) is treated as a non-test DB.
 
     :param db_uri: A SQLAlchemy-style URI, e.g. ``sqlite:///…`` .
     :returns: ``True`` if the URI looks like a test DB.
@@ -120,10 +121,13 @@ def looks_like_test_db(db_uri: str) -> bool:
     if lowered in ("sqlite://", "sqlite:///"):
         return True
 
-    if "test" in lowered:
-        return True
-
     path = _sqlite_path(db_uri)
+    # Only treat a ``test`` token as proof for file-backed SQLite paths.
+    # Non-SQLite authorities such as ``postgresql://prod-test-cluster/app``
+    # may contain ``test`` in a real host name and must not be silently
+    # accepted as throwaway DBs.
+    if path is not None and _sqlite_path_has_test_token(path):
+        return True
     if path is not None and _under_temp_dir(path):
         return True
 
@@ -145,6 +149,18 @@ def _sqlite_path(db_uri: str) -> Path | None:
     if not raw or raw == ":memory:":
         return None
     return Path(raw)
+
+
+def _sqlite_path_has_test_token(path: Path) -> bool:
+    """Return whether a SQLite path has ``test`` as a delimited token."""
+    return any(_has_test_token(part) for part in path.parts)
+
+
+def _has_test_token(value: str) -> bool:
+    """Return whether ``test`` appears between non-alphanumeric separators."""
+    import re
+
+    return re.search(r"(?<![a-z0-9])test(?![a-z0-9])", value.lower()) is not None
 
 
 def _under_temp_dir(path: Path) -> bool:
@@ -195,6 +211,10 @@ def base_url_violation(base_url: str) -> str | None:
         # A named dev host with no explicit port (default 80/443) still
         # smells like a real instance rather than an ephemeral fixture.
         return f"base_url {base_url!r} targets dev host {host!r}"
+    # A dev host with an explicit random/non-dev port is intentionally
+    # clean: fixture servers legitimately bind localhost on ephemeral
+    # free ports. Only known dev/prod ports, or named dev hosts with no
+    # explicit port, are flagged.
     return None
 
 
@@ -214,14 +234,16 @@ def check_test_environment(
     c. *base_url*, when given, does not target a dev/prod host or port
        (:func:`base_url_violation`).
 
-    When ``warn_only`` is ``True`` (the default today) each violation is
-    logged as a ``WARNING`` prefixed with ``TEST GUARDRAIL:`` and the
-    function returns the list of reasons. When ``warn_only`` is ``False``
-    the same set of violations raises :class:`TestGuardrailError` — this
-    is the future hard-fail mode and is not used by the suite yet.
+    When ``warn_only`` is ``True`` each violation is logged as a
+    ``WARNING`` prefixed with ``TEST GUARDRAIL:`` and the function
+    returns the list of reasons. When ``warn_only`` is ``False`` the same
+    set of violations raises :class:`TestGuardrailError`, unless
+    ``OMNIGENT_DISABLE_TEST_GUARDRAILS`` is truthy, in which case
+    violations are logged and returned instead.
 
     :param env: Environment mapping; defaults to ``os.environ``.
-    :param db_uri: The resolved store DB URI for this run.
+    :param db_uri: The resolved store DB URI for this run; empty values
+        skip the DB check.
     :param base_url: Optional base URL the test will drive.
     :param warn_only: Log instead of raise on violation (default ``True``).
     :returns: The list of violation reason strings (empty when clean).
@@ -238,10 +260,10 @@ def check_test_environment(
             "(no PYTEST_CURRENT_TEST / OMNIGENT_TEST_MODE and pytest not imported)"
         )
 
-    if not looks_like_test_db(db_uri):
+    if db_uri.strip() and not looks_like_test_db(db_uri):
         violations.append(
             f"db_uri {db_uri!r} does not look like a test DB "
-            "(expected an in-memory/tmp SQLite or a URI containing 'test')"
+            "(expected an in-memory/tmp SQLite or a SQLite path with 'test')"
         )
 
     if base_url is not None:
@@ -252,9 +274,14 @@ def check_test_environment(
     if not violations:
         return violations
 
-    if warn_only:
+    if warn_only or _guardrails_disabled(env):
         for reason in violations:
             _logger.warning("%s %s", _WARN_PREFIX, reason)
         return violations
 
     raise TestGuardrailError(f"{_WARN_PREFIX} " + "; ".join(violations))
+
+
+def _guardrails_disabled(env: Mapping[str, str]) -> bool:
+    """Return whether the global test-guardrail escape hatch is enabled."""
+    return env.get(_DISABLE_GUARDRAILS_ENV_VAR, "").strip().lower() in _TRUTHY_ENV_VALUES
