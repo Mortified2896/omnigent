@@ -51,6 +51,7 @@ from tests.e2e.conftest import (
     create_runner_bound_session,
     poll_session_until_terminal,
     register_inline_agent,
+    reset_mock_llm,
     send_user_message_to_session,
 )
 
@@ -72,6 +73,16 @@ _COMPUTE_TOOL: dict[str, Any] = {
 
 _TERMINAL_COUNT = 10
 _FAN_OUT = 3
+
+
+@pytest.fixture(autouse=True)
+def _isolated_mock_llm(mock_llm_server_url: str | None) -> Iterator[None]:
+    """Keep this file's keyed mock queues from leaking across the shard."""
+    reset_mock_llm(mock_llm_server_url)
+    try:
+        yield
+    finally:
+        reset_mock_llm(mock_llm_server_url)
 
 
 def _iter_sse(response: httpx.Response) -> Iterator[dict[str, Any]]:
