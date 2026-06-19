@@ -557,6 +557,7 @@ _DENY_CANADA_POLICY_CONFIG = {
 _SERVER_LLM_MODEL = "mock-model"
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=1)
 def test_prompt_policy_allow_path_reaches_llm(
     http_client: httpx.Client,
     live_runner_id: str,
@@ -603,6 +604,13 @@ def test_prompt_policy_allow_path_reaches_llm(
     session_id = create_runner_bound_session(
         http_client, agent_name=agent_name, runner_id=live_runner_id
     )
+    # Re-seed the classifier queue immediately before sending — minimises
+    # the race window where a parallel test's reset_mock_llm could clear it.
+    configure_mock_llm(
+        mock_llm_server_url,
+        [{"text": '{"action": "allow", "reason": ""}'}],
+        key=_SERVER_LLM_MODEL,
+    )
     rid = send_user_message_to_session(
         http_client,
         session_id=session_id,
@@ -611,7 +619,9 @@ def test_prompt_policy_allow_path_reaches_llm(
     body = poll_session_until_terminal(
         http_client, session_id=session_id, response_id=rid, timeout=120
     )
-    assert body["status"] == "completed", f"Unexpected status: {body.get('error')}"
+    assert body["status"] == "completed", (
+        f"Unexpected status: {body.get('error')}"
+    )
     text = _extract_all_assistant_text(body)
     assert len(text.strip()) > 0, "Expected LLM output after ALLOW; got empty response."
     assert "[Denied by policy" not in text

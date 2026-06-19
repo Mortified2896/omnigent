@@ -83,6 +83,13 @@ def test_coding_supervisor_with_forks_one_shot(
             )
     elif harness == "codex":
         require_codex_cli()
+        # CodexExecutor(gateway=True) also reads ~/.databrickscfg.
+        if not (Path.home() / ".databrickscfg").exists():
+            pytest.skip(
+                "codex harness prerequisite missing: no "
+                "~/.databrickscfg — CodexExecutor(gateway=True) "
+                "needs Databricks gateway credentials."
+            )
     elif harness == "pi":
         if which("pi") is None:
             pytest.skip("pi harness prerequisite missing: 'pi' CLI not on PATH.")
