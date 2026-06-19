@@ -2274,7 +2274,7 @@ async def _query_sessions_once(
     _LOOP_TIMEOUT_S = 1800.0
 
     async def _drain_extra_turns() -> None:
-        for iteration in range(_MAX_EXTRA_TURNS):
+        for _ in range(_MAX_EXTRA_TURNS):
             extra = await chat.await_turn(timeout=_PER_TURN_TIMEOUT_S)
             await chat.refresh()
             if extra.text:
