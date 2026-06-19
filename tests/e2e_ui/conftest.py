@@ -91,7 +91,7 @@ _BUILD_OUTPUT = _REPO_ROOT / "omnigent" / "server" / "static" / "web-ui"
 # YAML must carry an explicit ``executor`` block — otherwise the
 # server rejects with ``executor.config.harness: required when
 # executor.type is 'omnigent'``. The mock LLM server handles
-# The model name (databricks-gpt-5-4) is used for harness routing only;
+# ``model: mock-model`` via the OpenAI-compatible endpoint, so the
 # harness auto-picks ``openai-agents`` and routes requests to the
 # in-process mock rather than a real provider.
 _TEST_AGENT_YAML = """\
