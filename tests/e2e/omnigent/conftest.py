@@ -499,4 +499,3 @@ def reset_mock_llm(mock_llm_server_url: str) -> None:
     """Clear all keyed queues, captured requests, and gates."""
     resp = httpx.post(f"{mock_llm_server_url}/mock/reset", timeout=5.0)
     resp.raise_for_status()
-
