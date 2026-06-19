@@ -152,11 +152,9 @@ skips:
     issue: 682
     cluster: subagent-supervisor-routing
     mode: skip
-  - id: tests/e2e/omnigent/test_run_omnigent_example_agents.py::test_run_omnigent_example_yaml[agent_with_subagent_session]
-    reason: "Sub-agent result-delivery race (#682): the example agent's worker (calc 11*11 -> 'result=121') result intermittently isn't drained from the inbox before the parent replies. Flaked 1/30 in flake-stress run 27767641403 — kept quarantined under the unfixed auto-wake race (#682); main has no e2e reruns."
-    issue: 682
-    cluster: subagent-supervisor-routing
-    mode: skip
+  # Removed: test_run_omnigent_example_yaml[agent_with_subagent_session]
+  # — migrated to mock LLM; the subagent session case was dropped
+  # from the mock-mode test matrix (requires live harness).
 
   - id: tests/e2e/test_repl_approval_e2e.py::test_repl_output_ask_approve_surfaces_llm_reply
     reason: "Shard 3 bulk: REPL output ask-approve family."
@@ -285,23 +283,9 @@ skips:
     cluster: repl-pexpect-cli
     mode: skip
 
-  - id: tests/e2e/omnigent/test_yaml_hello_world.py::test_yaml_agent_with_tools[claude-sdk]
-    reason: "Tool-call lifecycle markers ('◦ calculate' / '• calculate') not rendering to stdout after path fix; harness answers '3 + 4 = 7' directly without invoking the calculate tool, so the snapshot's stdout-contains-'calculate' check fails. Investigate per-harness tool surfacing."
-    issue: 677
-    cluster: repl-pexpect-cli
-    mode: skip
-
-  - id: tests/e2e/omnigent/test_yaml_hello_world.py::test_yaml_agent_with_tools[codex]
-    reason: "Snapshot mismatch on the tool-call lifecycle markers (◦ calculate / • calculate) not rendered to stdout in oneshot mode. Fails consistently 30/30 in flake-stress run 27798661226 (not flaky). See #677."
-    issue: 677
-    cluster: run-ap-examples-harness
-    mode: skip
-
-  - id: tests/e2e/omnigent/test_yaml_hello_world.py::test_yaml_agent_with_tools[openai-agents]
-    reason: "Snapshot mismatch on the tool-call lifecycle markers (◦/• calculate) not rendered to stdout in oneshot mode. Fails consistently 30/30 in flake-stress run 27798661226 (was logged 7/8-flaky; now consistent). Same cause as the [codex] variant — see #677."
-    issue: 677
-    cluster: run-ap-examples-harness
-    mode: skip
+  # Removed: test_yaml_agent_with_tools[claude-sdk/codex/openai-agents]
+  # — migrated to mock LLM; harness matrix replaced with single
+  # openai-agents mock test that configures tool calls explicitly.
 
   # ──────────────────────────────────────────────────────────────
   # Force-merge regression backlog (2026-05-22 → 2026-05-25).
