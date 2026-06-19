@@ -4,15 +4,15 @@ A policy ASK can be answered three ways: the in-chat ``ApprovalCard``
 (``test_approval_card.py``), the ``/inbox`` page (``test_inbox_approval.py``),
 and the standalone approval page (``pages/ApprovePage.tsx``) — the URL the REPL
 prints when a policy returns ASK in URL mode, openable by anyone with the link
-and no surrounding app shell. This suite covers that third surface: park a real
-gated-push ASK, navigate straight to ``/approve/<sid>/<eid>``, and resolve it
-there.
+and no surrounding app shell. This suite covers that third surface: park a
+mock-LLM-driven gated-push ASK, navigate straight to ``/approve/<sid>/<eid>``,
+and resolve it there.
 
 The page fetches the elicitation from ``GET /v1/sessions/<sid>/elicitations/<eid>``
 and posts the verdict to the matching ``/resolve`` endpoint — the same backing
 calls the inline card uses, just on a bare route. Driven by the same
-``approval_session`` fixture as the in-chat card test (real LLM emits the gated
-``git push``), so it carries a generous per-test timeout.
+``approval_session`` fixture as the in-chat card test with a mock LLM, so the
+suite runs fast and deterministically.
 
 The load-bearing assertion is that the server's parked prompt drains after the
 page's Approve / Reject — proof the standalone route resolves the *same*
@@ -27,11 +27,13 @@ import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm, reset_mock_llm
+
 _COMPOSER = "Ask the agent anything…"
 _APPROVAL_CARD = '[data-testid="approval-card"]'
-# The agent must boot, take a turn, and emit the gated tool call before the
-# elicitation parks — cold-start can be slow, under the test's 600s ceiling.
-_AGENT_TURN_TIMEOUT_MS = 120_000
+# With the mock LLM the tool call arrives almost immediately; 10 s is
+# generous enough to cover the SSE publish + React render cycle.
+_AGENT_TURN_TIMEOUT_MS = 10_000
 
 
 def _pending_elicitations(base_url: str, session_id: str) -> list[dict]:
@@ -52,22 +54,43 @@ def _wait_for(predicate, *, timeout_s: float = 30.0, interval_s: float = 0.25):
     raise AssertionError("condition not met within timeout")
 
 
-def _park_elicitation(page: Page, base_url: str, session_id: str) -> str:
+def _park_elicitation(
+    page: Page,
+    base_url: str,
+    session_id: str,
+    mock_llm_server_url: str,
+) -> str:
     """Drive the agent to a parked gated-push ASK and return its elicitation id.
 
-    Sends the deterministic "run the command" turn the ``approval_session``
-    agent answers with a gated ``git push``, waits for the in-chat pending card
-    (proof the gate fired), then reads the elicitation id from the session
-    snapshot's ``pending_elicitations`` (each event carries ``elicitation_id``).
+    Configures the mock LLM to return a ``sys_os_shell git push`` tool call
+    (which the ``blast_radius`` guardrail ASKs about), sends a turn, waits for
+    the in-chat pending card (proof the gate fired), then reads the elicitation
+    id from the session snapshot's ``pending_elicitations``.
 
     :param page: Playwright page used to send the chat turn.
     :param base_url: Spawned server base URL.
     :param session_id: The approval session id.
+    :param mock_llm_server_url: Mock LLM server URL for configuration.
     :returns: The parked elicitation's id, e.g. ``"elicit_ab12..."``.
     """
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            {
+                "tool_calls": [
+                    {
+                        "call_id": "c1",
+                        "name": "sys_os_shell",
+                        "arguments": '{"command": "git push origin main"}',
+                    }
+                ]
+            }
+        ],
+    )
     page.goto(f"{base_url}/c/{session_id}")
     composer = page.get_by_placeholder(_COMPOSER)
-    expect(composer).to_be_visible(timeout=30_000)
+    expect(composer).to_be_visible(timeout=10_000)
     composer.fill("Run the command now.")
     page.get_by_role("button", name="Send", exact=True).click()
 
@@ -80,46 +103,48 @@ def _park_elicitation(page: Page, base_url: str, session_id: str) -> str:
     return elicitation_id
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(60)
 def test_approve_page_approves(
     page: Page,
     approval_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Standalone page renders the pending prompt and Approve drains it."""
     base_url, session_id = approval_session
-    elicitation_id = _park_elicitation(page, base_url, session_id)
+    elicitation_id = _park_elicitation(page, base_url, session_id, mock_llm_server_url)
 
     page.goto(f"{base_url}/approve/{session_id}/{elicitation_id}")
-    expect(page.get_by_text("Approval required")).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("Approval required")).to_be_visible(timeout=10_000)
 
     page.get_by_role("button", name="Approve").click()
 
     # The page confirms the verdict and the server drains the parked prompt.
-    expect(page.get_by_text("Approved", exact=False).first).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("Approved", exact=False).first).to_be_visible(timeout=10_000)
     expect(page.get_by_text("You can close this page.")).to_be_visible()
     _wait_for(lambda: not _pending_elicitations(base_url, session_id))
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(60)
 def test_approve_page_rejects(
     page: Page,
     approval_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Reject on the standalone page also drains the parked prompt."""
     base_url, session_id = approval_session
-    elicitation_id = _park_elicitation(page, base_url, session_id)
+    elicitation_id = _park_elicitation(page, base_url, session_id, mock_llm_server_url)
 
     page.goto(f"{base_url}/approve/{session_id}/{elicitation_id}")
-    expect(page.get_by_text("Approval required")).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("Approval required")).to_be_visible(timeout=10_000)
 
     page.get_by_role("button", name="Reject").click()
 
-    expect(page.get_by_text("Rejected", exact=False).first).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("Rejected", exact=False).first).to_be_visible(timeout=10_000)
     expect(page.get_by_text("You can close this page.")).to_be_visible()
     _wait_for(lambda: not _pending_elicitations(base_url, session_id))
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(60)
 def test_approve_page_resolved_for_unknown_elicitation(
     page: Page,
     approval_session: tuple[str, str],
@@ -133,5 +158,5 @@ def test_approve_page_resolved_for_unknown_elicitation(
     base_url, session_id = approval_session
     page.goto(f"{base_url}/approve/{session_id}/elicit_does_not_exist")
 
-    expect(page.get_by_text("Elicitation resolved")).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("Elicitation resolved")).to_be_visible(timeout=10_000)
     expect(page.get_by_role("button", name="Approve")).to_have_count(0)

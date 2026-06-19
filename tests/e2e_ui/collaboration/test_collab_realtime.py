@@ -35,10 +35,13 @@ import uuid
 import httpx
 from playwright.sync_api import Browser, expect
 
+from tests.e2e.conftest import configure_mock_llm, reset_mock_llm
+
 
 def test_two_browser_contexts_sync_message_realtime(
     browser: Browser,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Owner's sent message appears live in a second context, no reload.
 
@@ -53,15 +56,17 @@ def test_two_browser_contexts_sync_message_realtime(
       at the empty-FIFO fallback).
     - The collaborator never subscribed to the live stream on session
       bind (``chatStore.switchTo`` regression).
-    - The LLM never responded (Databricks credentials / model
-      availability), which only affects the assistant-bubble checks.
 
     :param browser: Playwright session-scoped browser; two independent
         contexts stand in for two users sharing the session URL.
     :param seeded_session: ``(base_url, session_id)`` for a runner-bound
         session, created by the fixture.
+    :param mock_llm_server_url: Mock LLM server URL.
     """
     base_url, session_id = seeded_session
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(mock_llm_server_url, [{"text": "pong"}])
+
     # Unique per run so the bubble locator can't match leftover or
     # streamed-reply text — it has to be the user message we sent.
     marker = f"collab-sync-{uuid.uuid4().hex[:8]}"
@@ -105,17 +110,15 @@ def test_two_browser_contexts_sync_message_realtime(
         )
         expect(collab_user).to_be_visible(timeout=30_000)
 
-        # The streamed assistant reply reaches both subscribers. Match
-        # any non-whitespace so an empty bubble (reducer fired, produced
-        # no text) still fails. 60s covers LLM latency, as in test_smoke.
+        # The mock LLM reply reaches both subscribers.
         owner_assistant = owner.locator(
             '[data-testid="message-bubble"][data-role="assistant"]'
         ).first
         collab_assistant = collab.locator(
             '[data-testid="message-bubble"][data-role="assistant"]'
         ).first
-        expect(owner_assistant).to_have_text(re.compile(r"\S"), timeout=60_000)
-        expect(collab_assistant).to_have_text(re.compile(r"\S"), timeout=60_000)
+        expect(owner_assistant).to_have_text(re.compile(r"\S"), timeout=10_000)
+        expect(collab_assistant).to_have_text(re.compile(r"\S"), timeout=10_000)
     finally:
         owner_ctx.close()
         collab_ctx.close()

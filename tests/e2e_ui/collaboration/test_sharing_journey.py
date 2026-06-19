@@ -32,6 +32,7 @@ import httpx
 import pytest
 from playwright.sync_api import Browser, BrowserContext, Page, expect
 
+from tests.e2e.conftest import configure_mock_llm, reset_mock_llm
 from tests.e2e_ui.conftest import (
     _build_hello_world_bundle,
     _ensure_runner_online,
@@ -159,9 +160,14 @@ def test_share_grant_downgrade_revoke_journey(
     browser: Browser,
     live_server: str,
     shared: _SharedFixture,
+    mock_llm_server_url: str,
 ) -> None:
     sid = shared.session_id
     marker = f"bob-turn-{uuid.uuid4().hex[:8]}"
+
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(mock_llm_server_url, [{"text": marker}])
+
     # The owner context is headerless (the ``local`` identity), same
     # as every other e2e_ui browser context.
     owner_ctx = browser.new_context()
@@ -187,9 +193,9 @@ def test_share_grant_downgrade_revoke_journey(
         expect(composer).to_be_visible()
         composer.fill(f"Reply with exactly this token and nothing else: {marker}")
         bob_page.get_by_role("button", name="Send", exact=True).click()
-        # Bob's own surfaces: his user bubble, then a real reply.
+        # Bob's own surfaces: his user bubble, then a mock reply.
         expect(bob_page.locator(_BUBBLE, has_text=marker).first).to_be_visible(timeout=15_000)
-        expect(bob_page.locator(_ASSISTANT).first).to_be_visible(timeout=60_000)
+        expect(bob_page.locator(_ASSISTANT).first).to_be_visible(timeout=10_000)
         # The owner's already-open tab receives Bob's message over the
         # live stream (no reload): the collab-realtime broadcast path.
         expect(owner_page.locator(_BUBBLE, has_text=marker).first).to_be_visible(timeout=30_000)

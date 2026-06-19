@@ -32,9 +32,10 @@ Scenario 3 – terminal-typed message (``external_conversation_item``):
   Posted as Alice, viewed by Bob — the badge must appear, pinning the
   ``_persist_external_conversation_item`` ``created_by`` fix.
 
-These tests drive the full browser → SPA → server stack against a real
-LLM.  They are excluded from the default ``pytest`` run and gated to
-``workflow_dispatch`` CI, like the rest of the e2e_ui suite.
+These tests drive the full browser → SPA → server stack against a mock
+LLM.  They are excluded from the default ``pytest`` run via
+``--ignore=tests/e2e_ui`` in ``pyproject.toml`` and gated to
+``workflow_dispatch`` CI for now.
 
 Selectors:
   - user bubbles: ``data-testid="message-bubble"`` + ``data-role="user"``
@@ -50,6 +51,8 @@ import uuid
 
 import httpx
 from playwright.sync_api import Browser, Page, expect
+
+from tests.e2e.conftest import configure_mock_llm, reset_mock_llm
 
 # Unique per test run to avoid cross-test pollution in a long-lived
 # server process.
@@ -110,6 +113,7 @@ def _user_bubble(page: Page, text: str):
 def test_author_badge_hidden_in_solo_session(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Author badge is never rendered when there is no user identity.
 
@@ -128,8 +132,12 @@ def test_author_badge_hidden_in_solo_session(
     :param page: Playwright page (no extra headers — default local identity).
     :param seeded_session: ``(base_url, session_id)`` for a runner-bound
         session created by the fixture.
+    :param mock_llm_server_url: Mock LLM server URL.
     """
     base_url, session_id = seeded_session
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(mock_llm_server_url, [{"text": "ack"}])
+
     page.goto(f"{base_url}/c/{session_id}")
 
     marker = f"solo-author-{uuid.uuid4().hex[:8]}"
@@ -147,7 +155,7 @@ def test_author_badge_hidden_in_solo_session(
     # Wait for the turn to complete so session.input.consumed fired and
     # the bubble is now committed.
     assistant = page.locator('[data-testid="message-bubble"][data-role="assistant"]').first
-    expect(assistant).to_have_text(re.compile(r"\S"), timeout=60_000)
+    expect(assistant).to_have_text(re.compile(r"\S"), timeout=10_000)
 
     # Still no badge on the committed bubble.
     expect(_user_bubble(page, marker).get_by_test_id("message-author")).to_have_count(0)
@@ -156,6 +164,7 @@ def test_author_badge_hidden_in_solo_session(
 def test_author_badge_skips_own_messages_and_marks_peers(
     browser: Browser,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Own messages carry no badge; a peer sees the author's avatar.
 
@@ -177,10 +186,14 @@ def test_author_badge_skips_own_messages_and_marks_peers(
         with Alice's and Bob's headers are created and closed here.
     :param seeded_session: ``(base_url, session_id)`` from the pre-created
         session fixture.
+    :param mock_llm_server_url: Mock LLM server URL.
     """
     base_url, session_id = seeded_session
     _grant_edit(base_url, session_id, _ALICE)
     _grant_edit(base_url, session_id, _BOB)
+
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(mock_llm_server_url, [{"text": "ack"}])
 
     marker = f"shared-author-{uuid.uuid4().hex[:8]}"
     alice_ctx = browser.new_context(extra_http_headers={"X-Forwarded-Email": _ALICE})
@@ -197,7 +210,7 @@ def test_author_badge_skips_own_messages_and_marks_peers(
         # Wait for the turn to complete so session.input.consumed fired
         # and the optimistic bubble was promoted to committed history.
         assistant = alice.locator('[data-testid="message-bubble"][data-role="assistant"]').first
-        expect(assistant).to_have_text(re.compile(r"\S"), timeout=60_000)
+        expect(assistant).to_have_text(re.compile(r"\S"), timeout=10_000)
 
         # Still no badge on Alice's own committed bubble.
         expect(_user_bubble(alice, marker).get_by_test_id("message-author")).to_have_count(0)
@@ -235,6 +248,9 @@ def test_terminal_typed_message_shows_author_badge_to_peers(
 
     Bob (not Alice) is the viewer: the badge marks OTHER contributors,
     so the author's own view would render nothing by design.
+
+    No LLM call is involved — this test uses the REST API to post the
+    external event directly.
 
     :param browser: Playwright browser session; a dedicated context with
         Bob's header is created and closed inside this test.

@@ -10,8 +10,8 @@ its "Approved" responded state and the server clears the pending prompt.
 
 The ``approval_session`` fixture (conftest) supplies an agent whose
 ``blast_radius`` guardrail gates pushes; the gate fires on the *tool call*,
-so the push never has to succeed. Real LLM in the loop → nightly + a
-generous timeout, matching the other agent-driven UI suites.
+so the push never has to succeed. Mock LLM in the loop so the suite is
+deterministic and fast.
 """
 
 from __future__ import annotations
@@ -22,13 +22,14 @@ import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm, reset_mock_llm
+
 _COMPOSER = "Ask the agent anything…"
 _APPROVAL_CARD = '[data-testid="approval-card"]'
 
-# The agent must boot, take a turn, and emit the gated tool call before the
-# card appears — cold-start can be slow, so allow well past the streaming
-# default but under the test's 600s ceiling.
-_AGENT_TURN_TIMEOUT_MS = 120_000
+# With the mock LLM the tool call arrives almost immediately; 10 s is
+# generous enough to cover the SSE publish + React render cycle.
+_AGENT_TURN_TIMEOUT_MS = 10_000
 
 
 def _pending_elicitations(base_url: str, session_id: str) -> list[dict]:
@@ -38,18 +39,34 @@ def _pending_elicitations(base_url: str, session_id: str) -> list[dict]:
     return resp.json().get("pending_elicitations") or []
 
 
-@pytest.mark.nightly
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(60)
 def test_approval_card_renders_and_approves(
     page: Page,
     approval_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Gated tool call → pending approval card → Approve → resolved."""
     base_url, session_id = approval_session
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            {
+                "tool_calls": [
+                    {
+                        "call_id": "c1",
+                        "name": "sys_os_shell",
+                        "arguments": '{"command": "git push origin main"}',
+                    }
+                ]
+            }
+        ],
+    )
+
     page.goto(f"{base_url}/c/{session_id}")
 
     composer = page.get_by_placeholder(_COMPOSER)
-    expect(composer).to_be_visible(timeout=30_000)
+    expect(composer).to_be_visible(timeout=10_000)
     composer.fill("Run the command now.")
     page.get_by_role("button", name="Send", exact=True).click()
 
@@ -65,23 +82,39 @@ def test_approval_card_renders_and_approves(
     # Card transitions to the responded "Approved" state and the parked
     # server-side prompt drains.
     responded = page.locator(f'{_APPROVAL_CARD}[data-state="responded"]').first
-    expect(responded).to_be_visible(timeout=30_000)
+    expect(responded).to_be_visible(timeout=10_000)
     expect(responded.get_by_text("Approved", exact=False).first).to_be_visible()
     _wait_for(lambda: not _pending_elicitations(base_url, session_id))
 
 
-@pytest.mark.nightly
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(60)
 def test_approval_card_reject(
     page: Page,
     approval_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Rejecting a pending approval flips the card to the rejected state."""
     base_url, session_id = approval_session
+    reset_mock_llm(mock_llm_server_url)
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            {
+                "tool_calls": [
+                    {
+                        "call_id": "c1",
+                        "name": "sys_os_shell",
+                        "arguments": '{"command": "git push origin main"}',
+                    }
+                ]
+            }
+        ],
+    )
+
     page.goto(f"{base_url}/c/{session_id}")
 
     composer = page.get_by_placeholder(_COMPOSER)
-    expect(composer).to_be_visible(timeout=30_000)
+    expect(composer).to_be_visible(timeout=10_000)
     composer.fill("Run the command now.")
     page.get_by_role("button", name="Send", exact=True).click()
 
@@ -90,7 +123,7 @@ def test_approval_card_reject(
     card.get_by_role("button", name="Reject").click()
 
     responded = page.locator(f'{_APPROVAL_CARD}[data-state="responded"]').first
-    expect(responded).to_be_visible(timeout=30_000)
+    expect(responded).to_be_visible(timeout=10_000)
     expect(responded.get_by_text("Rejected", exact=False).first).to_be_visible()
     _wait_for(lambda: not _pending_elicitations(base_url, session_id))
 
