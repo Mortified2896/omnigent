@@ -625,6 +625,8 @@ def _registered_runner(
     repo_root: Path,
     yaml_path: Path,
     tmp_path: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> Iterator[str]:
     """
     Register one runner against a remote-style test server.
@@ -633,6 +635,8 @@ def _registered_runner(
     :param repo_root: Workspace root exposed to runner-local tools.
     :param yaml_path: Spec path to prewarm on the runner.
     :param tmp_path: Per-test temporary directory.
+    :param extra_env: Optional extra environment variables for the
+        runner subprocess, e.g. mock LLM credentials.
     :yields: Registered runner id.
     """
     from omnigent.cli import _start_cli_runner_process, _stop_cli_runner_process
@@ -643,6 +647,7 @@ def _registered_runner(
         capture_logs=True,
         log_dir=tmp_path / "logs",
         prewarm_spec_path=yaml_path,
+        extra_env=extra_env,
     )
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -960,6 +965,11 @@ async def test_repl_reasoning_effort_threads_through(
             omnigent_repo_root,
             yaml_path,
             tmp_path,
+            extra_env={
+                k: env[k]
+                for k in ("OPENAI_BASE_URL", "OPENAI_API_KEY")
+                if k in env
+            },
         ) as runner_id:
             async with OmnigentClient(base_url=server.base_url) as client:
                 created = await client.sessions.create(bundle, reasoning_effort="high")
