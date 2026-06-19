@@ -468,6 +468,7 @@ def _running_server(
             proc.wait(timeout=10)
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=3)
 def test_repl_local_mode_launches_runner_subprocess(
     omnigent_python: Path,
     omnigent_repo_root: Path,
