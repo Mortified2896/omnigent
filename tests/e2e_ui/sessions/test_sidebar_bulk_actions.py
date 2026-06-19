@@ -21,9 +21,20 @@ import httpx
 from playwright.sync_api import Locator, Page, expect
 
 
-def _row_link(page: Page, session_id: str) -> Locator:
-    """Locate the sidebar row link for *session_id* by its href."""
-    return page.locator(f'a[href="/c/{session_id}"]')
+def _row_link(page: Page, title: str) -> Locator:
+    """Locate the sidebar row link by its unique *title* attribute.
+
+    Keying on the title (which is ``conversation.title`` and stays stable
+    in both normal and selection mode) is required rather than the href:
+    in selection mode every row's ``Link`` ``to`` becomes ``"#"``, which
+    react-router resolves against the active ``/c/{id}`` route, so *all*
+    rows collapse to the same href. An ``a[href="/c/{id}"]`` locator is
+    therefore non-unique the moment the sidebar holds more than one
+    session (e.g. leftover fork/clone sessions on the shared CI server),
+    triggering a Playwright strict-mode violation. The per-test title is
+    unique, so it identifies exactly one row.
+    """
+    return page.locator(f'a[title="{title}"]')
 
 
 def _set_title(base_url: str, session_id: str, title: str) -> None:
@@ -60,7 +71,7 @@ def test_selection_mode_toggle(
 
     page.goto(f"{base_url}/c/{session_id}")
 
-    row = _row_link(page, session_id)
+    row = _row_link(page, title)
     expect(row).to_be_visible()
 
     toggle = page.get_by_test_id("toggle-selection-mode")
@@ -120,7 +131,7 @@ def test_bulk_archive_moves_session_to_archived(
 
     page.goto(f"{base_url}/c/{session_id}")
 
-    row = _row_link(page, session_id)
+    row = _row_link(page, title)
     expect(row).to_be_visible()
 
     # Enter selection mode and select the row.
@@ -177,7 +188,7 @@ def test_bulk_delete_removes_sessions(
 
     page.goto(f"{base_url}/c/{session_id}")
 
-    row = _row_link(page, session_id)
+    row = _row_link(page, title)
     expect(row).to_be_visible()
 
     # Enter selection mode and select the row.
@@ -198,7 +209,7 @@ def test_bulk_delete_removes_sessions(
     dialog.get_by_role("button", name="Delete 1 session(s)").click()
 
     # The row drops out of the sidebar.
-    expect(page.locator(f'a[href="/c/{session_id}"]')).to_have_count(0)
+    expect(_row_link(page, title)).to_have_count(0)
 
     # And the deletion is durable on the server.
     deadline = time.monotonic() + 15.0
@@ -233,7 +244,7 @@ def test_select_all_and_deselect_all(
 
     page.goto(f"{base_url}/c/{session_id}")
 
-    row = _row_link(page, session_id)
+    row = _row_link(page, title)
     expect(row).to_be_visible()
 
     # Enter selection mode.
