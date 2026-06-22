@@ -920,10 +920,13 @@ async def _auto_create_cursor_terminal(
     if "--approve-mcps" not in cursor_args:
         cursor_args.append("--approve-mcps")
     # Honor the spec's pinned model (``--model`` flag / config.yaml ``model:``)
-    # by launching cursor-agent with ``--model <model>``. An explicit ``--model``
-    # / ``-m`` in the passthrough launch args (``omnigent cursor -- --model X``)
-    # wins, so only inject when the user did not already pin one.
-    if not any(arg in ("--model", "-m") for arg in cursor_args):
+    # by launching cursor-agent with ``--model <model>``. An explicit model in
+    # the passthrough launch args (``omnigent cursor -- --model X`` or the joined
+    # ``--model=X`` form) wins, so only inject when the user did not already pin
+    # one — otherwise cursor-agent would see two ``--model`` values.
+    if not any(
+        arg in ("--model", "-m") or arg.startswith("--model=") for arg in cursor_args
+    ):
         spec_model = _cursor_native_model_from_spec(agent_spec)
         if spec_model is not None:
             cursor_args.extend(["--model", spec_model])
@@ -11081,7 +11084,13 @@ def create_runner_app(
                         content=session_resource_view_to_dict(existing),
                     )
                 try:
-                    cursor_agent_spec = await _resolve_session_agent_spec(session_id)
+                    # The spec only feeds optional ``--model`` injection, so a
+                    # resolution failure must not block launching the terminal —
+                    # fall back to None like the Pi ensure path above.
+                    try:
+                        cursor_agent_spec = await _resolve_session_agent_spec(session_id)
+                    except OmnigentError:
+                        cursor_agent_spec = None
                     terminal_view = await _auto_create_cursor_terminal(
                         session_id,
                         resource_registry,

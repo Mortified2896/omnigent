@@ -19,7 +19,7 @@ from omnigent.spec.types import AgentSpec, ExecutorSpec
 
 def _spec(model: str | None) -> AgentSpec:
     """Build a minimal agent spec carrying *model* on its executor block."""
-    return AgentSpec(spec_version="1", name="cursor", executor=ExecutorSpec(model=model))
+    return AgentSpec(spec_version=1, name="cursor", executor=ExecutorSpec(model=model))
 
 
 @pytest.mark.parametrize(
