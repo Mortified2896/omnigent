@@ -12,53 +12,49 @@ function readConfig() {
   }
 }
 
-function readPolicyConfig(config) {
-  if (!config || !config.bridgeDir) return null;
-  const policyPath = path.join(config.bridgeDir, "policy_server.json");
+/**
+ * Evaluate a TOOL_CALL policy for a native Pi tool via the Omnigent server's
+ * session-level HTTP endpoint (POST /v1/sessions/{sessionId}/policies/evaluate).
+ *
+ * This is the same endpoint used by the Claude Code and Codex native hooks.
+ * It does NOT require an active Omnigent turn context on the harness side —
+ * the endpoint evaluates against the session's full policy set directly.
+ * Fail-open (null) on any transport or parse error so a transient server
+ * outage never wedges Pi mid-turn.
+ */
+async function evalNativePolicyHttp(config, toolName, args) {
+  if (
+    !config ||
+    !config.serverUrl ||
+    !config.sessionId ||
+    typeof fetch !== "function"
+  )
+    return null;
+  const url = `${config.serverUrl}/v1/sessions/${encodeURIComponent(config.sessionId)}/policies/evaluate`;
+  const body = JSON.stringify({
+    event: {
+      type: "PHASE_TOOL_CALL",
+      target: "",
+      data: { name: toolName, arguments: args },
+      context: {},
+    },
+  });
   try {
-    return JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(config.authHeaders || {}) },
+      body,
+    });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    if (json.result === "POLICY_ACTION_DENY") {
+      return { block: true, reason: json.reason || "blocked by Omnigent policy" };
+    }
+    return { block: false, reason: "" };
   } catch (_err) {
+    // Keep Pi responsive if Omnigent is temporarily unavailable.
     return null;
   }
-}
-
-function evalNativePolicy(policyConfig, toolName, args) {
-  if (!policyConfig || !policyConfig.port || !policyConfig.token) {
-    return Promise.resolve(null);
-  }
-  const net = require("net");
-  return new Promise((resolve) => {
-    const client = net.createConnection(
-      { port: policyConfig.port, host: "127.0.0.1" },
-      () => {
-        const id = Math.random().toString(36).slice(2);
-        const frame = {
-          id,
-          token: policyConfig.token,
-          kind: "policy_eval",
-          tool: toolName,
-          args,
-        };
-        let buf = "";
-        client.on("data", (chunk) => {
-          buf += chunk.toString();
-          const nl = buf.indexOf("\n");
-          if (nl !== -1) {
-            client.end();
-            try {
-              const resp = JSON.parse(buf.slice(0, nl));
-              resolve(resp && resp.verdict ? resp.verdict : null);
-            } catch (_e) {
-              resolve(null);
-            }
-          }
-        });
-        client.on("error", () => resolve(null));
-        client.write(JSON.stringify(frame) + "\n");
-      },
-    );
-    client.on("error", () => resolve(null));
-  });
 }
 
 function textFromContent(content) {
@@ -580,19 +576,18 @@ module.exports = function (pi) {
     if (blocked) {
       return { block: true, reason: "Interrupted by user" };
     }
-    // Evaluate TOOL_CALL policy via the local policy server written by
-    // the Omnigent harness process. Fail-open (null) when the server is
-    // absent (e.g. single-process tests or a turn that hasn't started yet).
-    const policyConfig = readPolicyConfig(config);
-    if (policyConfig) {
-      const verdict = await evalNativePolicy(
-        policyConfig,
-        (event && event.toolName) || "",
-        (event && event.input) || {},
-      );
-      if (verdict && verdict.block) {
-        return { block: true, reason: verdict.reason || "blocked by Omnigent policy" };
-      }
+    // Evaluate TOOL_CALL policy via the Omnigent server's session-level HTTP
+    // endpoint. This works even after the harness turn has completed (which
+    // happens immediately for pi-native — just enqueue + TurnComplete), so
+    // the verdict is always evaluated against live session policies regardless
+    // of whether an Omnigent turn is currently in flight.
+    const verdict = await evalNativePolicyHttp(
+      config,
+      (event && event.toolName) || "",
+      (event && event.input) || {},
+    );
+    if (verdict && verdict.block) {
+      return { block: true, reason: verdict.reason || "blocked by Omnigent policy" };
     }
   });
 

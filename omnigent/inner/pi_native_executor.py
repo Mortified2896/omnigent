@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import hmac
-import json
-import logging
 import os
-import secrets
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -25,83 +20,8 @@ from omnigent.inner.native_attachments import materialize_attachment
 from omnigent.pi_native_bridge import (
     PI_NATIVE_BRIDGE_DIR_ENV_VAR,
     PI_NATIVE_REQUEST_SESSION_ID_ENV_VAR,
-    clear_policy_server_config,
     enqueue_user_message,
-    write_policy_server_config,
 )
-
-logger = logging.getLogger(__name__)
-
-
-class _PolicyServer:
-    """Minimal TCP server for TOOL_CALL policy evaluation from the Pi native extension."""
-
-    def __init__(self) -> None:
-        self._server: asyncio.Server | None = None
-        self.port: int = 0
-        self.token: str = secrets.token_urlsafe(32)
-        self._policy_gate: Any = None
-
-    async def start(self) -> int:
-        self._server = await asyncio.start_server(self._handle_client, "127.0.0.1", 0)
-        self.port = self._server.sockets[0].getsockname()[1]
-        return self.port
-
-    async def stop(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
-
-    async def _handle_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        try:
-            raw = await reader.readline()
-            if not raw:
-                return
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line:
-                return
-            try:
-                request = json.loads(line)
-            except json.JSONDecodeError:
-                return
-            token = request.get("token")
-            if not isinstance(token, str) or not hmac.compare_digest(token, self.token):
-                writer.write(
-                    json.dumps({"id": request.get("id"), "error": "unauthorized"}).encode() + b"\n"
-                )
-                await writer.drain()
-                return
-            req_id = request.get("id")
-            tool_name = request.get("tool")
-            if not isinstance(req_id, str) or not isinstance(tool_name, str):
-                return
-            tool_args = request.get("args", {})
-            verdict = await self._evaluate_policy(tool_name, tool_args)
-            writer.write((json.dumps({"id": req_id, "verdict": verdict}) + "\n").encode())
-            await writer.drain()
-        except (asyncio.CancelledError, ConnectionError):
-            pass
-        finally:
-            writer.close()
-
-    async def _evaluate_policy(self, name: str, args: dict) -> dict:
-        if self._policy_gate is None:
-            return {"block": False, "reason": ""}
-        try:
-            raw = self._policy_gate(name, args)
-            resolved = await raw if asyncio.iscoroutine(raw) or asyncio.isfuture(raw) else raw
-            if isinstance(resolved, dict):
-                return {
-                    "block": bool(resolved.get("block")),
-                    "reason": str(resolved.get("reason") or ""),
-                }
-            return {"block": False, "reason": ""}
-        except Exception as exc:  # noqa: BLE001 — fail-open; the verdict path must never wedge Pi
-            logger.warning("Pi native policy eval failed for %r: %s", name, exc)
-            return {"block": False, "reason": ""}
 
 
 class PiNativeExecutor(Executor):
@@ -112,12 +32,20 @@ class PiNativeExecutor(Executor):
     the Omnigent Pi extension loaded. Each turn queues the latest user
     message into the bridge inbox; the extension consumes it and calls
     ``pi.sendUserMessage`` inside the TUI process.
+
+    Policy enforcement for native Pi tool calls is handled entirely by the
+    extension: on each ``tool_call`` event the extension POSTs to
+    ``POST /v1/sessions/{sessionId}/policies/evaluate`` using the server URL
+    and auth headers from its config file. This bypasses the turn-scoped
+    ``_policy_evaluator`` round-trip (which would fail because
+    ``_current_ctx`` is cleared before Pi ever processes the message) and
+    instead routes directly through the same session-level HTTP endpoint that
+    the Claude Code native hook uses.
     """
 
     def __init__(self, bridge_dir: Path | None = None) -> None:
         self._bridge_dir = bridge_dir or _bridge_dir_from_env()
         self._request_session_id = _request_session_id_from_env()
-        self._policy_server: _PolicyServer | None = None
 
     def supports_streaming(self) -> bool:
         """:returns: ``False`` because output is emitted by the Pi extension."""
@@ -143,43 +71,6 @@ class PiNativeExecutor(Executor):
         enqueue_user_message(self._bridge_dir, text)
         return True
 
-    async def _gate_native_tool(self, name: str, args: dict) -> dict:
-        evaluator = getattr(self, "_policy_evaluator", None)
-        if evaluator is None:
-            return {"block": False, "reason": ""}
-        verdict = await evaluator("PHASE_TOOL_CALL", {"name": name, "arguments": args})
-        if verdict.action == "POLICY_ACTION_DENY":
-            return {"block": True, "reason": verdict.reason or "blocked by policy"}
-        return {"block": False, "reason": ""}
-
-    async def _ensure_policy_server(self) -> None:
-        if self._policy_server is not None:
-            return
-        server = _PolicyServer()
-        await server.start()
-        server._policy_gate = self._gate_native_tool
-        self._policy_server = server
-        write_policy_server_config(self._bridge_dir, server.port, server.token)
-
-    async def close_session(self, session_key: str) -> None:
-        """
-        Stop the policy server and remove its config file.
-
-        :param session_key: Adapter session key. Unused.
-        """
-        del session_key
-        if self._policy_server is not None:
-            await self._policy_server.stop()
-            self._policy_server = None
-        clear_policy_server_config(self._bridge_dir)
-
-    async def close(self) -> None:
-        """Stop the policy server and remove its config file."""
-        if self._policy_server is not None:
-            await self._policy_server.stop()
-            self._policy_server = None
-        clear_policy_server_config(self._bridge_dir)
-
     async def run_turn(
         self,
         messages: list[Message],
@@ -200,7 +91,6 @@ class PiNativeExecutor(Executor):
             :class:`ExecutorError` when no user text can be sent.
         """
         del tools, system_prompt, config
-        await self._ensure_policy_server()
         text = _latest_user_text(messages, self._bridge_dir)
         if not text:
             yield ExecutorError(message="Pi native turn had no user text to send")

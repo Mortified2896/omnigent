@@ -227,25 +227,6 @@ def _extension_source() -> str:
     return resource.read_text(encoding="utf-8")
 
 
-_POLICY_SERVER_FILE = "policy_server.json"
-
-
-def policy_server_config_path(bridge_dir: Path) -> Path:
-    """Return the policy server config path for *bridge_dir*."""
-    return bridge_dir / _POLICY_SERVER_FILE
-
-
-def write_policy_server_config(bridge_dir: Path, port: int, token: str) -> None:
-    """Write policy server port and token to the bridge dir."""
-    _atomic_json(policy_server_config_path(bridge_dir), {"port": port, "token": token})
-
-
-def clear_policy_server_config(bridge_dir: Path) -> None:
-    """Remove the policy server config file."""
-    with contextlib.suppress(OSError):
-        policy_server_config_path(bridge_dir).unlink()
-
-
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
