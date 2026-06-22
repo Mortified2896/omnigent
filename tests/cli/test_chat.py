@@ -3278,17 +3278,6 @@ def _fake_sessions_chat_cls(
     class _FakeSessionsChat:
         def __init__(self, **_kwargs: object) -> None:
             self._pending = list(_extra)
-            self._last_turn_saw_waiting: bool = False
-            # The first await_turn call is the probe. It returns empty text
-            # and sets last_turn_saw_waiting=True when sub-agents are pending
-            # (simulating the session.status:waiting event that arrives after
-            # the first turn's CompletedEvent). Subsequent calls return the
-            # synthesis text and reset the flag.
-            self._probe_done: bool = False
-
-        @property
-        def last_turn_saw_waiting(self) -> bool:
-            return self._last_turn_saw_waiting
 
         @property
         def status(self) -> str:
@@ -3304,19 +3293,8 @@ def _fake_sessions_chat_cls(
             return await query_impl(prompt)  # type: ignore[return-value]
 
         async def await_turn(self, *, timeout: float | None = None) -> QueryResult:
-            self._last_turn_saw_waiting = False
-            if not self._probe_done:
-                self._probe_done = True
-                # Probe: signal dispatch if sub-agents are pending, but return
-                # no text (they haven't completed yet).
-                if self._pending:
-                    self._last_turn_saw_waiting = True
-                return QueryResult(text="", files=[])
-            # Synthesis turns: pop and return text; signal further dispatch if
-            # more turns remain.
             if self._pending:
                 text = self._pending.pop(0)
-                self._last_turn_saw_waiting = bool(self._pending)
                 return QueryResult(text=text, files=[])
             return QueryResult(text="", files=[])
 
