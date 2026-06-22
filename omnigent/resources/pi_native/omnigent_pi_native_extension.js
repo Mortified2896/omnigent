@@ -12,6 +12,55 @@ function readConfig() {
   }
 }
 
+function readPolicyConfig(config) {
+  if (!config || !config.bridgeDir) return null;
+  const policyPath = path.join(config.bridgeDir, "policy_server.json");
+  try {
+    return JSON.parse(fs.readFileSync(policyPath, "utf8"));
+  } catch (_err) {
+    return null;
+  }
+}
+
+function evalNativePolicy(policyConfig, toolName, args) {
+  if (!policyConfig || !policyConfig.port || !policyConfig.token) {
+    return Promise.resolve(null);
+  }
+  const net = require("net");
+  return new Promise((resolve) => {
+    const client = net.createConnection(
+      { port: policyConfig.port, host: "127.0.0.1" },
+      () => {
+        const id = Math.random().toString(36).slice(2);
+        const frame = {
+          id,
+          token: policyConfig.token,
+          kind: "policy_eval",
+          tool: toolName,
+          args,
+        };
+        let buf = "";
+        client.on("data", (chunk) => {
+          buf += chunk.toString();
+          const nl = buf.indexOf("\n");
+          if (nl !== -1) {
+            client.end();
+            try {
+              const resp = JSON.parse(buf.slice(0, nl));
+              resolve(resp && resp.verdict ? resp.verdict : null);
+            } catch (_e) {
+              resolve(null);
+            }
+          }
+        });
+        client.on("error", () => resolve(null));
+        client.write(JSON.stringify(frame) + "\n");
+      },
+    );
+    client.on("error", () => resolve(null));
+  });
+}
+
 function textFromContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -530,6 +579,20 @@ module.exports = function (pi) {
     );
     if (blocked) {
       return { block: true, reason: "Interrupted by user" };
+    }
+    // Evaluate TOOL_CALL policy via the local policy server written by
+    // the Omnigent harness process. Fail-open (null) when the server is
+    // absent (e.g. single-process tests or a turn that hasn't started yet).
+    const policyConfig = readPolicyConfig(config);
+    if (policyConfig) {
+      const verdict = await evalNativePolicy(
+        policyConfig,
+        (event && event.toolName) || "",
+        (event && event.input) || {},
+      );
+      if (verdict && verdict.block) {
+        return { block: true, reason: verdict.reason || "blocked by Omnigent policy" };
+      }
     }
   });
 
