@@ -1395,7 +1395,7 @@ async def test_ensure_session_writes_hooks_json(
     assert "preToolUse" in config["hooks"]
     hooks = config["hooks"]["preToolUse"]
     assert len(hooks) == 1
-    assert hooks[0]["timeout"] == 30
+    assert hooks[0]["timeout"] == 86400
     cmd = hooks[0]["command"]
     # The command points to the wrapper shell script, not the Python hook directly.
     assert "omnigent-hook.sh" in cmd
@@ -1462,6 +1462,16 @@ async def test_hooks_json_cleaned_up_on_close(
 # ---------------------------------------------------------------------------
 
 
+def _fake_evaluate_response(result_action: str, reason: str = "") -> Any:
+    """Build a fake httpx.Response-like object for post_evaluate_with_retry mocks."""
+    payload = {"result": result_action}
+    if reason:
+        payload["reason"] = reason
+    resp = SimpleNamespace()
+    resp.json = lambda: payload
+    return resp
+
+
 def test_cursor_policy_hook_allow(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hook script returns allow when the server responds with ALLOW."""
     import io
@@ -1471,20 +1481,17 @@ def test_cursor_policy_hook_allow(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("_OMNIGENT_SESSION_ID", "conv_test")
 
     stdin_data = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
-    server_response = json.dumps({"result": "POLICY_ACTION_ALLOW", "reason": ""}).encode()
 
     from omnigent.inner import cursor_policy_hook
-
-    fake_resp = io.BytesIO(server_response)
-    fake_resp.read = fake_resp.read  # type: ignore[assignment]
-    fake_resp.__enter__ = lambda s: s  # type: ignore[attr-defined]
-    fake_resp.__exit__ = lambda s, *a: None  # type: ignore[attr-defined]
 
     stdout = io.StringIO()
     with (
         patch.object(sys, "stdin", io.StringIO(stdin_data)),
         patch.object(sys, "stdout", stdout),
-        patch("urllib.request.urlopen", return_value=fake_resp),
+        patch(
+            "omnigent.native_policy_hook.post_evaluate_with_retry",
+            return_value=_fake_evaluate_response("POLICY_ACTION_ALLOW"),
+        ),
     ):
         cursor_policy_hook.main()
 
@@ -1501,21 +1508,17 @@ def test_cursor_policy_hook_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("_OMNIGENT_SESSION_ID", "conv_test")
 
     stdin_data = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
-    server_response = json.dumps(
-        {"result": "POLICY_ACTION_DENY", "reason": "dangerous command"}
-    ).encode()
 
     from omnigent.inner import cursor_policy_hook
-
-    fake_resp = io.BytesIO(server_response)
-    fake_resp.__enter__ = lambda s: s  # type: ignore[attr-defined]
-    fake_resp.__exit__ = lambda s, *a: None  # type: ignore[attr-defined]
 
     stdout = io.StringIO()
     with (
         patch.object(sys, "stdin", io.StringIO(stdin_data)),
         patch.object(sys, "stdout", stdout),
-        patch("urllib.request.urlopen", return_value=fake_resp),
+        patch(
+            "omnigent.native_policy_hook.post_evaluate_with_retry",
+            return_value=_fake_evaluate_response("POLICY_ACTION_DENY", "dangerous command"),
+        ),
     ):
         cursor_policy_hook.main()
 
@@ -1526,7 +1529,7 @@ def test_cursor_policy_hook_deny(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cursor_policy_hook_network_error_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On network error, the hook script fails open (allows)."""
+    """When post_evaluate_with_retry returns None (network error / retry exhausted), the hook fails open."""
     import io
     from unittest.mock import patch
 
@@ -1541,7 +1544,10 @@ def test_cursor_policy_hook_network_error_fails_open(monkeypatch: pytest.MonkeyP
     with (
         patch.object(sys, "stdin", io.StringIO(stdin_data)),
         patch.object(sys, "stdout", stdout),
-        patch("urllib.request.urlopen", side_effect=OSError("connection refused")),
+        patch(
+            "omnigent.native_policy_hook.post_evaluate_with_retry",
+            return_value=None,
+        ),
     ):
         cursor_policy_hook.main()
 
@@ -1571,7 +1577,7 @@ def test_cursor_policy_hook_no_env_fails_open(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_cursor_policy_hook_ask_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ASK verdict (unresolved approval) fails closed with deny."""
+    """ASK verdict (server couldn't resolve via the gate) fails closed with deny."""
     import io
     from unittest.mock import patch
 
@@ -1579,24 +1585,47 @@ def test_cursor_policy_hook_ask_fails_closed(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("_OMNIGENT_SESSION_ID", "conv_test")
 
     stdin_data = json.dumps({"tool_name": "Write", "tool_input": {}})
-    server_response = json.dumps(
-        {"result": "POLICY_ACTION_ASK", "reason": "needs approval"}
-    ).encode()
 
     from omnigent.inner import cursor_policy_hook
-
-    fake_resp = io.BytesIO(server_response)
-    fake_resp.__enter__ = lambda s: s  # type: ignore[attr-defined]
-    fake_resp.__exit__ = lambda s, *a: None  # type: ignore[attr-defined]
 
     stdout = io.StringIO()
     with (
         patch.object(sys, "stdin", io.StringIO(stdin_data)),
         patch.object(sys, "stdout", stdout),
-        patch("urllib.request.urlopen", return_value=fake_resp),
+        patch(
+            "omnigent.native_policy_hook.post_evaluate_with_retry",
+            return_value=_fake_evaluate_response("POLICY_ACTION_ASK", "needs approval"),
+        ),
     ):
         cursor_policy_hook.main()
 
     result = json.loads(stdout.getvalue())
     assert result["permission"] == "deny"
     assert "requires approval" in result["agent_message"]
+
+
+def test_cursor_policy_hook_uses_long_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """post_evaluate_with_retry is called with an 86400s read_timeout so the hook stays alive while the human responds."""
+    import io
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setenv("_OMNIGENT_SERVER_URL", "http://localhost:6767")
+    monkeypatch.setenv("_OMNIGENT_SESSION_ID", "conv_test")
+
+    stdin_data = json.dumps({"tool_name": "Bash", "tool_input": {}})
+
+    from omnigent.inner import cursor_policy_hook
+
+    mock_fn = MagicMock(return_value=_fake_evaluate_response("POLICY_ACTION_ALLOW"))
+    stdout = io.StringIO()
+    with (
+        patch.object(sys, "stdin", io.StringIO(stdin_data)),
+        patch.object(sys, "stdout", stdout),
+        patch("omnigent.native_policy_hook.post_evaluate_with_retry", mock_fn),
+    ):
+        cursor_policy_hook.main()
+
+    mock_fn.assert_called_once()
+    _call_kwargs = mock_fn.call_args
+    read_timeout = _call_kwargs.kwargs.get("read_timeout") or _call_kwargs.args[3]
+    assert read_timeout == 86400.0

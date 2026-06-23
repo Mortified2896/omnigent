@@ -88,6 +88,11 @@ _DEFAULT_CURSOR_MODEL = "auto"
 # can run for minutes) but finite, so a wedged tool surfaces a timeout error
 # instead of blocking the SDK's daemon callback thread forever.
 _TOOL_CALL_TIMEOUT_S = 1800.0
+# Maximum time (seconds) Cursor will wait for the preToolUse hook subprocess
+# to return.  Held at one day so the hook stays alive while the human responds
+# to the web-UI approval card — mirrors the server-side ``ask_timeout`` default
+# and the ``read_timeout`` used by ``cursor_policy_hook.py``.
+_HOOK_APPROVAL_TIMEOUT_S = 86400
 
 
 def _resolve_model(model: str | None) -> str:
@@ -417,7 +422,7 @@ def _write_cursor_hooks(cwd: str, hook_script_path: str, server_url: str, sessio
             "preToolUse": [
                 {
                     "command": command,
-                    "timeout": 30,
+                    "timeout": _HOOK_APPROVAL_TIMEOUT_S,
                 }
             ]
         },
