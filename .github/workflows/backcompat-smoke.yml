@@ -3,10 +3,11 @@ name: Backcompat Smoke
 # Pre-merge backwards-compat SMOKE: run main's e2e + integration suites against
 # the PREVIOUS release only (not the full version matrix the scheduled
 # Backwards-Compat sweep covers). The version set is {main, <latest non-rc tag>}
-# crossed pairwise, so the cells are: old server + main runner (Config 1), main
-# server + old runner (Config 2), and old server + old runner. Each cell pins
-# the server and/or runner subprocess to the old build; client + tests stay on
-# the PR. Reuses the SAME composite actions and matrix script as the gates and
+# and we test main against that release on each axis: old server + main runner
+# (Config 1) and main server + old runner (Config 2) — 2 cells. (No old×old
+# cell: both sides already shipped together.) Each cell pins the server and/or
+# runner subprocess to the old build; client + tests stay on the PR. Reuses the
+# SAME composite actions and matrix script as the gates and
 # the scheduled sweep (.github/actions/{e2e,integration}-run,
 # .github/scripts/ci/backcompat-pairwise-matrix.sh), so there's no drift.
 #
@@ -51,11 +52,11 @@ jobs:
             echo "Previous release: $prev"
             echo "prev=$prev" >> "$GITHUB_OUTPUT"
           fi
-      - name: Compute smoke matrices (main + previous release, pairwise)
+      - name: Compute smoke matrices (main vs previous release, both axes)
         id: matrix
         env:
-          # {main, <prev>} crossed pairwise -> 3 cells (main/main excluded):
-          # old-server+main-runner, main-server+old-runner, old-server+old-runner.
+          # {main, <prev>}, main-vs-release on each axis -> 2 cells:
+          # old-server+main-runner (Config 1), main-server+old-runner (Config 2).
           VERSIONS: ${{ steps.prev.outputs.prev != '' && format('main,{0}', steps.prev.outputs.prev) || 'main' }}
           # 4 shards (matches the e2e gate). 2 shards put ~2x the gate's per-job
           # load on each runner and crashed the xdist workers under contention.
