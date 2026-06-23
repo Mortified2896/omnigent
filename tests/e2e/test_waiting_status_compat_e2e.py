@@ -45,10 +45,13 @@ from tests.e2e.conftest import (
     send_user_message_to_session,
 )
 
-# Statuses a server may legitimately report. ``"waiting"`` is accepted because a
-# CURRENT server serializes it natively; the guard is the HTTP 200, not the
-# absence of ``"waiting"`` (an old server WITH the runner fix never sees it,
-# because the runner downgrades it to ``"running"`` before publishing).
+# Statuses a GET may legitimately return. The guard is the HTTP 200 (no
+# serialization 500), not the specific status value. In practice GET never
+# returns "waiting": a current server collapses cached "waiting"->"running" when
+# building the response (server ``_session_status_from_cache``), and the runner
+# downgrades "waiting"->"running" for old servers before publishing. "waiting"
+# is kept here only defensively — a server that serialized it natively would
+# also be a valid 200.
 _SERIALIZABLE_STATUSES = {"idle", "running", "failed", "waiting"}
 
 
@@ -146,11 +149,18 @@ def test_runner_does_not_500_old_server_emitting_waiting_status(
         content="Dispatch the researcher sub-agent.",
     )
 
-    # Poll the snapshot across the dispatch + waiting window. The parent runs its
-    # dispatch turn (running), then goes ``waiting`` once the sub-agent is live.
-    # Every response must be 200 with a serializable status — never a 500. Mirror
-    # the suite's poll-with-sleep convention (see poll_session_until_terminal).
+    # Poll the parent snapshot across the dispatch + waiting window. Every GET
+    # must stay 200 (the regression: a pre-0.3.0 server 500s on an un-downgraded
+    # "waiting"). The parent runs its dispatch turn, then — once the sub-agent is
+    # live and its turn ends — enters "waiting"; against an un-fixed old server
+    # that is sustained (auto-wake never lands), so any GET in the window 500s.
+    # Poll the full window (no early break) so that sustained 500 is reliably hit.
+    # Separately confirm the sub-agent actually dispatched (a child session
+    # exists): otherwise an all-200 result is vacuous — a silently-failed dispatch
+    # leaves the parent idle, never entering "waiting", and the test would pass
+    # without ever exercising the regression it guards.
     deadline = time.monotonic() + 30.0
+    dispatched = False
     polls = 0
     while time.monotonic() < deadline:
         resp = http_client.get(f"/v1/sessions/{session_id}")
@@ -163,6 +173,17 @@ def test_runner_does_not_500_old_server_emitting_waiting_status(
         status = resp.json().get("status")
         assert status in _SERIALIZABLE_STATUSES, f"unexpected session status {status!r}"
         polls += 1
+        children = http_client.get(f"/v1/sessions/{session_id}/child_sessions")
+        assert children.status_code == 200, (
+            f"GET child_sessions returned {children.status_code}: {children.text[:200]}"
+        )
+        if children.json().get("data"):
+            dispatched = True
         time.sleep(1.0)
 
     assert polls >= 5, f"expected a sustained poll of the waiting window; got {polls} polls"
+    assert dispatched, (
+        "sub-agent was never dispatched (no child session) during the window — the "
+        "parent never entered 'waiting', so the all-200 result would be vacuous. "
+        "Check the agent / mock-LLM wiring."
+    )

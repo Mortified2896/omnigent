@@ -89,11 +89,10 @@ _logger = logging.getLogger(__name__)
 # (``_version_supports_waiting_status``). An unknown version — unprobed or a
 # probe failure — downgrades too, so an old server is never 500'd.
 _WAITING_STATUS_MIN_SERVER_VERSION = "0.3.0"
-# Cached server version from the one-time /api/version probe. ``_probed`` guards
-# the memoization: a failed probe leaves the version ``None`` but still probed,
-# so it is not retried on every session-create.
+# Cached server version from the /api/version probe; ``None`` until a probe
+# succeeds. A failed probe stays ``None`` and is retried on the next
+# session-create — the GET is cheap and self-heals a transient failure.
 _server_version: str | None = None
-_server_version_probed = False
 
 
 def _version_supports_waiting_status(server_version: str) -> bool:
@@ -114,16 +113,16 @@ async def _get_server_version(server_client: httpx.AsyncClient) -> str | None:
     """
     Resolve the server's version via a one-time ``GET /api/version`` probe.
 
-    Memoized — the probe runs at most once per runner; later calls return the
-    cached value. Returns ``None`` if the probe failed, so callers fail safe
+    Memoized once it succeeds: later calls return the cached version. A failed
+    probe returns ``None`` and is retried on the next call, so callers fail safe
     (treat an unknown version as not supporting newer behavior).
 
     :param server_client: The runner's httpx client pointed at the server.
     :returns: The server's reported version (e.g. ``"0.2.0"``), or ``None`` when
-        the probe has not succeeded.
+        the probe has not yet succeeded.
     """
-    global _server_version, _server_version_probed
-    if _server_version_probed:
+    global _server_version
+    if _server_version is not None:
         return _server_version
     try:
         resp = await server_client.get("/api/version")
@@ -131,9 +130,7 @@ async def _get_server_version(server_client: httpx.AsyncClient) -> str | None:
         _server_version = resp.json()["version"]
         _logger.info("resolved server version: %s", _server_version)
     except Exception as exc:  # noqa: BLE001 — degrade gracefully; never 500 an old server
-        _server_version = None
         _logger.warning("could not probe server /api/version (%s); treating as unknown", exc)
-    _server_version_probed = True
     return _server_version
 
 
