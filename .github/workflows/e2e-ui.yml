@@ -84,10 +84,10 @@ jobs:
     uses: ./.github/workflows/security-gate.yml
 
   # Compute both shard matrices once. A skipped leg yields an EMPTY matrix ->
-  # zero shard jobs -> no skipped placeholder check. The mock leg sets
-  # ALLOW_FORK_PR=true so fork PRs run it directly (no secrets); the native leg
-  # omits it, so fork PRs skip and run via the fork-e2e/** mirror. Shared with
-  # e2e.yml via e2e-shard-matrix.sh.
+  # zero shard jobs -> no skipped placeholder check. The mock leg runs fork PRs
+  # directly (no secrets); the native leg sets REQUIRES_SECRETS=true, so its fork
+  # PRs skip and run via the fork-e2e/** mirror. Shared with e2e.yml via
+  # e2e-shard-matrix.sh.
   setup:
     name: setup
     needs: gate
@@ -110,8 +110,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          # Mock-LLM only, no secrets, so fork PRs run directly (like CI).
-          ALLOW_FORK_PR: "true"
+          # Mock-LLM only -- no REQUIRES_SECRETS, so fork PRs run directly (like CI).
           NUM_SHARDS: "3"
         run: bash .github/scripts/ci/e2e-shard-matrix.sh
       - name: Compute native shard matrix
@@ -120,8 +119,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          # No ALLOW_FORK_PR: native tests need the gateway secret, so fork PRs
-          # skip here and run via the fork-e2e/** mirror push after approval.
+          # Native tests need the gateway secret, so fork PRs skip here
+          # (REQUIRES_SECRETS) and run via the fork-e2e/** mirror after approval.
+          REQUIRES_SECRETS: "true"
           NUM_SHARDS: "2"
         run: bash .github/scripts/ci/e2e-shard-matrix.sh
 

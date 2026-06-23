@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 # Emits the e2e shard matrix as `matrix=<json>` on $GITHUB_OUTPUT. Shared by
-# e2e.yml and e2e-ui.yml (they differ in NUM_SHARDS and ALLOW_FORK_PR).
+# e2e.yml and e2e-ui.yml (they differ in NUM_SHARDS and REQUIRES_SECRETS).
 #
 # Returns an EMPTY matrix ({"include":[]}) when the run should be skipped:
 #   - draft PRs, or
-#   - a fork's pull_request UNLESS the caller opts in via ALLOW_FORK_PR=true.
-#     e2e no longer needs secrets, so it runs fork PRs directly on
-#     `pull_request` (ALLOW_FORK_PR=true), just like CI. e2e-ui still needs the
-#     gateway secret, leaves ALLOW_FORK_PR unset, and runs forks via the
-#     fork-e2e/** mirror push after a maintainer approves.
+#   - a fork's pull_request WHEN the caller sets REQUIRES_SECRETS=true.
+#     These suites default to running fork PRs directly on `pull_request`, just
+#     like CI -- they use the mock LLM and need no secrets. The one exception is
+#     a secret-bearing leg (the e2e-ui native render-parity job), which sets
+#     REQUIRES_SECRETS=true so its fork PRs skip here and run via the
+#     fork-e2e/** mirror push after a maintainer approves (fork PRs can't read
+#     the gateway secret).
 # An empty matrix yields zero jobs and therefore NO check-runs. This is the
 # whole reason for the indirection: a job-level `if:` skip of a matrixed job
 # would instead leave one check-run with an unexpanded
 # `E2E Tests (shard ${{ matrix.shard_id }}/...)` name.
 #
 # Env in:  EVENT_NAME (github.event_name), IS_DRAFT, IS_FORK (both may be empty
-#          on non-PR events), ALLOW_FORK_PR (optional, default false), NUM_SHARDS.
+#          on non-PR events), REQUIRES_SECRETS (optional, default false), NUM_SHARDS.
 # Out:     matrix={"include":[{"shard_id":0,"num_shards":N}, ...]}  (or [] empty)
 
 set -euo pipefail
@@ -25,7 +27,7 @@ if [[ "${IS_DRAFT:-false}" == "true" ]]; then
   skip=true
 fi
 if [[ "$EVENT_NAME" == "pull_request" && "${IS_FORK:-false}" == "true" \
-      && "${ALLOW_FORK_PR:-false}" != "true" ]]; then
+      && "${REQUIRES_SECRETS:-false}" == "true" ]]; then
   skip=true
 fi
 

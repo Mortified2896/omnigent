@@ -58,9 +58,10 @@ jobs:
     uses: ./.github/workflows/security-gate.yml
 
   # Compute the shard matrix once. A skipped run (draft PR) yields an EMPTY
-  # matrix -> zero shard jobs -> no skipped placeholder check. ALLOW_FORK_PR
-  # keeps fork PRs in (mock LLM, no secrets); e2e-ui.yml omits it so forks skip
-  # there and run via the mirror. Shared with e2e-ui.yml via e2e-shard-matrix.sh.
+  # matrix -> zero shard jobs -> no skipped placeholder check. Fork PRs run by
+  # default (mock LLM, no secrets); only a secret-bearing leg sets
+  # REQUIRES_SECRETS to skip them (the e2e-ui native job). Shared with e2e-ui.yml
+  # via e2e-shard-matrix.sh.
   setup:
     name: setup
     needs: gate
@@ -82,9 +83,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          # e2e is mock-LLM only, so fork PRs run directly here (like CI), no
-          # mirror needed. e2e-ui still needs the gateway secret and omits this.
-          ALLOW_FORK_PR: "true"
+          # e2e is mock-LLM only -- no REQUIRES_SECRETS, so fork PRs run directly
+          # here (like CI), no mirror needed.
           NUM_SHARDS: "4"
         run: bash .github/scripts/ci/e2e-shard-matrix.sh
 

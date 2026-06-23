@@ -3,8 +3,11 @@
 #
 # Returns an EMPTY matrix ({"include":[]}) when the run should be skipped:
 #   - draft PRs, or
-#   - a fork's pull_request (no secrets there; forks run via the fork-e2e/**
-#     mirror push instead).
+#   - a fork's pull_request WHEN the caller sets REQUIRES_SECRETS=true.
+#     Integration runs entirely against the mock LLM (no secrets), so it never
+#     sets REQUIRES_SECRETS and runs fork PRs directly on `pull_request`, like
+#     CI/e2e -- no fork-e2e/** mirror needed. (The flag exists for parity with
+#     e2e-shard-matrix.sh, where the secret-bearing e2e-ui native leg uses it.)
 # An empty matrix yields zero jobs and therefore NO check-runs. This is the
 # whole reason for the indirection (mirrors e2e-shard-matrix.sh): a job-level
 # `if:` skip of a matrixed job would instead leave one check-run with an
@@ -17,7 +20,7 @@
 # in mock mode (model_name fixture returns "mock-model" regardless).
 #
 # Env in:  EVENT_NAME (github.event_name), IS_DRAFT, IS_FORK (both may be empty
-#          on non-PR events).
+#          on non-PR events), REQUIRES_SECRETS (optional, default false).
 # Out:     matrix={"include":[{"name":..,"harness":..,"model":..,"workers":..}, ...]}
 #          (or {"include":[]} when skipped).
 
@@ -27,7 +30,8 @@ skip=false
 if [[ "${IS_DRAFT:-false}" == "true" ]]; then
   skip=true
 fi
-if [[ "$EVENT_NAME" == "pull_request" && "${IS_FORK:-false}" == "true" ]]; then
+if [[ "$EVENT_NAME" == "pull_request" && "${IS_FORK:-false}" == "true" \
+      && "${REQUIRES_SECRETS:-false}" == "true" ]]; then
   skip=true
 fi
 
