@@ -5869,8 +5869,9 @@ def host(ctx: click.Context, server: str | None) -> None:
     if server is None:
         server = cfg.get("server")
     if server:
-        # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-        server = _workspace_api_server_url(server)
+        # A schemeless or /omnigent web-UI workspace URL is normalized to the
+        # /api/2.0/omnigent mount (matches `omnigent login`).
+        server = _workspace_api_server_url(_with_default_scheme(server))
 
     from omnigent.host.connect import run_host_process
 
@@ -5942,8 +5943,9 @@ def _resolve_host_server(server: str | None) -> str | None:
     if server is None:
         configured = _load_effective_config().get("server")
         server = str(configured) if configured else None
-    # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-    return _workspace_api_server_url(server.rstrip("/")) if server else None
+    # A schemeless or /omnigent web-UI workspace URL is normalized to the
+    # /api/2.0/omnigent mount (matches `omnigent login`).
+    return _workspace_api_server_url(_with_default_scheme(server.rstrip("/"))) if server else None
 
 
 def _daemon_base_url(record: _HostDaemonRecord) -> str | None:

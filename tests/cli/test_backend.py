@@ -1552,6 +1552,56 @@ def test_resolve_host_server_none_stays_local(monkeypatch: pytest.MonkeyPatch) -
     assert _resolve_host_server(None) is None
 
 
+def test_resolve_host_server_defaults_scheme_and_accepts_omnigent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``host`` subcommands accept a schemeless ``/omnigent`` workspace URL.
+
+    The internal user guide's web URL omits the scheme and ends in
+    ``/omnigent``; host must default it to https before expansion, just
+    like ``omnigent login``.
+    """
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "_workspace_api_server_url", _recording_expander(seen))
+
+    result = _resolve_host_server("dbc-x.cloud.databricks.com/omnigent")
+
+    # Scheme defaulted to https before the expansion saw the URL.
+    assert seen == ["https://dbc-x.cloud.databricks.com/omnigent"]
+    assert result == _expand_marker("https://dbc-x.cloud.databricks.com/omnigent")
+
+
+def test_host_command_defaults_scheme_and_accepts_omnigent_web_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``omnigent host --server <ws>/omnigent`` (no scheme) normalizes before connect.
+
+    Pasting the guide's web URL (schemeless, ``/omnigent`` suffix) must
+    default to https and expand to the API mount, not connect to the raw
+    input.
+    """
+    monkeypatch.setattr(cli, "_HOST_PID_PATH", tmp_path / "host.pid")
+    monkeypatch.setattr(cli, "_load_effective_config", dict)
+    monkeypatch.setattr(cli, "_load_or_create_host_id", lambda: "host_abc")
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "_workspace_api_server_url", _recording_expander(seen))
+    observed: list[str] = []
+    monkeypatch.setattr(
+        "omnigent.host.connect.run_host_process",
+        lambda server_url: observed.append(server_url),
+    )
+
+    result = CliRunner().invoke(
+        cli_group, ["host", "--server", "dbc-x.cloud.databricks.com/omnigent"]
+    )
+
+    assert result.exit_code == 0, result.output
+    # Scheme defaulted to https before the workspace expansion ran.
+    assert seen == ["https://dbc-x.cloud.databricks.com/omnigent"]
+    # The foreground connect targeted the expanded API-mount URL.
+    assert observed == [_expand_marker("https://dbc-x.cloud.databricks.com/omnigent")]
+
+
 def test_resume_command_expands_server_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """``omnigent resume <id> --server <workspace>`` expands before dispatch.
 
