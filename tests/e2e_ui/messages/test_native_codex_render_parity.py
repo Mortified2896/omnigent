@@ -124,9 +124,11 @@ def test_native_codex_message_render_parity(
     ]
     reset_mock_llm(mock_llm_server_url)
     for user_marker, assistant_token in turns:
+        # Use multiple copies so retries / continuation calls that carry the
+        # same user text don't exhaust the queue before the real turn fires.
         configure_mock_llm(
             mock_llm_server_url,
-            [{"text": assistant_token}],
+            [{"text": assistant_token}] * 5,
             key=user_marker,
             match=user_marker,
         )
