@@ -9748,12 +9748,17 @@ def _set_opencode_default_model(current: str | None) -> str | None:
         clear_index = len(options)
         options.append("Clear default (use OpenCode's own default)")
     default = models.index(current) if current in models else 0
+    # Even filtered to reachable providers the list can exceed the screen, so
+    # bound the picker to a scrolling viewport sized to the terminal (leaving
+    # room for the title / status / footer / "N more" markers).
+    rows = shutil.get_terminal_size(fallback=(80, 24)).lines
     idx = select(
         "Pick OpenCode's default model",
         options,
         default=default,
         clear_on_exit=True,
         status=f"current: {current}" if current else None,
+        max_visible=max(5, rows - 8),
     )
     if idx < 0:
         return None
