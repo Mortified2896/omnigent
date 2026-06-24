@@ -523,6 +523,10 @@ function SessionMcpSection({
   const [submitting, setSubmitting] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The runner caches the agent spec for the session's lifetime and
+  // does not re-fetch on bundle PUT. Changes only take effect after
+  // reconnecting the session.
+  const [pendingReconnect, setPendingReconnect] = useState(false);
 
   async function handleAdd(server: McpServerFormResult) {
     setSubmitting(true);
@@ -531,6 +535,7 @@ function SessionMcpSection({
       await addMcpServerToSession(sessionId, server);
       await queryClient.invalidateQueries({ queryKey: ["session-agent", sessionId] });
       setAddOpen(false);
+      setPendingReconnect(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add MCP server");
     } finally {
@@ -544,6 +549,7 @@ function SessionMcpSection({
     try {
       await removeMcpServerFromSession(sessionId, serverName);
       await queryClient.invalidateQueries({ queryKey: ["session-agent", sessionId] });
+      setPendingReconnect(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to remove MCP server");
     } finally {
@@ -627,6 +633,14 @@ function SessionMcpSection({
       {error && (
         <p className="text-xs text-destructive" data-testid="mcp-error">
           {error}
+        </p>
+      )}
+      {pendingReconnect && (
+        <p
+          className="text-[10px] text-amber-600 dark:text-amber-400"
+          data-testid="mcp-reconnect-hint"
+        >
+          Reconnect the session for changes to take effect
         </p>
       )}
       <AddMcpServerDialog
