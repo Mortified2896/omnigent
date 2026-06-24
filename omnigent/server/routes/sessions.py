@@ -210,6 +210,8 @@ from omnigent.server.schemas import (
     PaginatedList,
     PermissionObject,
     PolicySummary,
+    ReasoningStartedEvent,
+    ReasoningTextDeltaEvent,
     ResponseObject,
     SandboxStatus,
     ServerStreamEvent,
@@ -323,6 +325,17 @@ _EXTERNAL_CONVERSATION_ITEM_TYPE: str = "external_conversation_item"
 # corresponding completed message still arrives later via
 # ``external_conversation_item``.
 _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE: str = "external_output_text_delta"
+
+# Internal input used by terminal-backed integrations to publish a transient
+# reasoning (chain-of-thought) delta observed before the completed message is
+# available — the reasoning analogue of ``external_output_text_delta``. Nothing
+# is persisted: it publishes ``response.reasoning_text.delta`` (preceded by a
+# single ``response.reasoning.started`` when ``data.started`` is true) so the SPA
+# paints a live reasoning block, matching the in-process executor's wire shape.
+# Reasoning has no completed conversation item; the block is finalized when the
+# assistant message arrives via ``external_conversation_item``. Payload:
+# ``{"delta": "...", "started": true|false}``.
+_EXTERNAL_OUTPUT_REASONING_DELTA_TYPE: str = "external_output_reasoning_delta"
 
 # Internal input used by terminal-backed integrations to publish an
 # explicit ``session.interrupted`` edge observed outside the Omnigent
@@ -683,6 +696,10 @@ def _claude_native_remember_host(tool_name: str, tool_input: Any) -> str | None:
 # any prompt a headless sub-agent left unanswered for >5 minutes.
 _CODEX_NATIVE_ELICITATION_HOOK_TIMEOUT_S = 86400.0
 
+# Antigravity (agy) elicitation hook wait budget. Same 24-hour cap as
+# Codex: a terminal-side verdict (or agy's own WAITING timeout) ends the
+# wait early, so the long park never blocks native-TUI paths.
+_ANTIGRAVITY_NATIVE_ELICITATION_HOOK_TIMEOUT_S = 86400.0
 # Same one-day park budget for cursor-native tool-approval prompts mirrored
 # from the TUI: a terminal-side answer ends the wait early via
 # ``external_elicitation_resolved`` (posted by the runner-side approval mirror),
@@ -760,6 +777,7 @@ _ALLOWED_EVENT_TYPES: frozenset[str] = frozenset(ITEM_TYPE_TO_DATA_CLS.keys()) |
     _EXTERNAL_ASSISTANT_MESSAGE_TYPE,
     _EXTERNAL_CONVERSATION_ITEM_TYPE,
     _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE,
+    _EXTERNAL_OUTPUT_REASONING_DELTA_TYPE,
     _EXTERNAL_SESSION_INTERRUPTED_TYPE,
     _EXTERNAL_ELICITATION_RESOLVED_TYPE,
     _EXTERNAL_SESSION_STATUS_TYPE,
@@ -1424,6 +1442,27 @@ async def _publish_and_wait_for_harness_elicitation(
                 )
 
 
+def _canonical_tool_input(tool_input: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Canonicalize a tool input for terminal-resolved correlation.
+
+    The park side records an absent / non-dict input as ``None`` (a
+    permission prompt whose hook payload carries no ``tool_input`` — see
+    the ``_publish_and_wait_for_harness_elicitation`` call sites), while
+    the mirror side normalizes the parsed transcript arguments to ``{}``
+    (see :func:`_drive_terminal_resolved_elicitation`). Both mean "no
+    input", so collapse them to ``{}`` before comparing — otherwise a
+    no-input prompt would never match its own mirrored result (``None ==
+    {}`` is ``False``) and, with no count-based fallback, would orphan
+    until the hook timeout.
+
+    :param tool_input: Parked or mirrored tool input, e.g.
+        ``{"command": "ls"}``, ``{}``, or ``None``.
+    :returns: The dict unchanged, or ``{}`` when it is ``None``.
+    """
+    return tool_input if isinstance(tool_input, dict) else {}
+
+
 def _signal_terminal_resolved_harness_elicitation(
     session_id: str,
     tool_name: str,
@@ -1440,17 +1479,24 @@ def _signal_terminal_resolved_harness_elicitation(
     on reject the harness records a rejection result — so its arrival is
     a reliable "the terminal already resolved this" signal.
 
-    Correlation is by tool identity, never positional: a result only
-    resolves a parked prompt for the SAME ``tool_name`` in the same
-    session. That is what stops an unrelated auto-allowed tool's output
-    from clearing a different tool's pending prompt. Among
-    same-named parked prompts it prefers an exact ``tool_input`` match;
-    if none match exactly but exactly one same-named prompt is parked it
-    resolves that one (the hook payload and the transcript can serialize
-    identical input differently, so a single unambiguous candidate is
-    treated as the match). If several same-named prompts are parked and
-    none match by input it stays conservative and resolves none — the
-    web verdict or timeout still applies.
+    Correlation is by exact tool identity, never positional: a result
+    resolves a parked prompt only when it has the SAME ``tool_name`` AND
+    the SAME ``tool_input`` in the same session. Claude Code's
+    ``PermissionRequest`` payload carries no ``tool_use_id`` (the id is
+    minted only when the tool call is emitted, after the permission
+    check), so ``(tool_name, tool_input)`` is the only correlation signal
+    available — and both sides are unmodified JSON round-trips of the
+    same input, so exact equality holds whenever they describe the same
+    call (absent input and empty input both canonicalize to ``{}`` via
+    :func:`_canonical_tool_input`, since the park and mirror sides spell
+    "no input" differently — ``None`` vs ``{}``). A non-matching or
+    ambiguous result resolves nothing; the web verdict or timeout still
+    applies. Exact-only matching is what stops
+    one prompt's result from clearing a different prompt: approving
+    ``Bash{ls}`` in the web UI un-parks it, and mirroring its own output
+    must not then clear a still-pending ``Bash{pwd}`` sibling (an
+    unrelated auto-allowed same-named tool's output is harmless for the
+    same reason).
 
     Best-effort and idempotent: a no-op when no parked prompt matches
     (e.g. the web UI already resolved it, the tool needed no permission,
@@ -1473,12 +1519,28 @@ def _signal_terminal_resolved_harness_elicitation(
     ]
     if not candidates:
         return
+    mirrored_input = _canonical_tool_input(tool_input)
     for parked in candidates:
-        if parked.tool_input == tool_input:
+        if _canonical_tool_input(parked.tool_input) == mirrored_input:
             parked.resolved_elsewhere.set()
             return
-    if len(candidates) == 1:
-        candidates[0].resolved_elsewhere.set()
+    # No exact input match. Correlation is exact-only: resolving a
+    # same-named-but-different-input prompt here would clear the wrong
+    # card, so leave every candidate to its own result / web verdict /
+    # timeout. This branch is reached routinely and benignly — e.g. after
+    # a sibling prompt was web-approved and un-parked, its mirrored output
+    # finds only the still-pending different-input prompt — so it logs at
+    # debug, not warning. (A genuine match failing to compare equal would
+    # also land here, but is indistinguishable from the benign case inside
+    # this call; both inputs are unmodified JSON round-trips, so such drift
+    # is not expected.)
+    _logger.debug(
+        "Mirrored %s result in %s matched no parked prompt by input "
+        "(%d same-named prompt(s) pending); leaving them to web verdict/timeout.",
+        tool_name,
+        session_id,
+        len(candidates),
+    )
 
 
 # Strong refs so deferred card-clear tasks aren't GC'd mid-sleep.
@@ -3538,6 +3600,48 @@ def _publish_external_output_text_delta(session_id: str, body: SessionEventInput
         index=index,
         final=final,
     )
+    session_stream.publish(session_id, event.model_dump(exclude_none=True))
+
+
+def _publish_external_output_reasoning_delta(session_id: str, body: SessionEventInput) -> None:
+    """
+    Broadcast a terminal-observed reasoning (chain-of-thought) delta.
+
+    The reasoning analogue of :func:`_publish_external_output_text_delta`:
+    terminal-backed integrations (the antigravity-native reader) observe a
+    streaming ``thinking`` block before the completed assistant item exists. This
+    publishes the standard reasoning SSE events the SPA already renders —
+    ``response.reasoning.started`` once (when ``data.started`` is true, marking a
+    new reasoning block) followed by ``response.reasoning_text.delta`` — without
+    persisting anything. Reasoning has no completed conversation item; the block
+    is finalized when the assistant message is persisted via
+    ``external_conversation_item``.
+
+    :param session_id: Session/conversation identifier.
+    :param body: ``POST /events`` body whose type is
+        :data:`_EXTERNAL_OUTPUT_REASONING_DELTA_TYPE`.
+    :returns: None.
+    :raises OmnigentError: If ``data.delta`` is not a string, or ``data.started``
+        is provided with a non-boolean type.
+    """
+    delta = body.data.get("delta")
+    if not isinstance(delta, str):
+        raise OmnigentError(
+            "external_output_reasoning_delta requires string data.delta",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    started = body.data.get("started")
+    if started is not None and not isinstance(started, bool):
+        raise OmnigentError(
+            "external_output_reasoning_delta data.started must be a boolean",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    if started:
+        session_stream.publish(
+            session_id,
+            ReasoningStartedEvent(type="response.reasoning.started").model_dump(exclude_none=True),
+        )
+    event = ReasoningTextDeltaEvent(type="response.reasoning_text.delta", delta=delta)
     session_stream.publish(session_id, event.model_dump(exclude_none=True))
 
 
@@ -12368,6 +12472,44 @@ async def _handle_mcp_tools_call(
     )
 
 
+# Read uploads in 1 MiB chunks so an oversized body is aborted ~1 MiB past
+# the cap instead of being buffered whole (the previous unconditional
+# ``await file.read()`` was an OOM risk for very large uploads).
+_UPLOAD_READ_CHUNK_BYTES: int = 1024 * 1024
+
+
+async def _read_upload_capped(file: UploadFile, limit_bytes: int) -> bytes:
+    """
+    Read an uploaded file into memory, aborting if it exceeds *limit_bytes*.
+
+    Reads in :data:`_UPLOAD_READ_CHUNK_BYTES` chunks and raises HTTP 413 as
+    soon as the cap is crossed, so an oversized upload never buffers more
+    than one chunk past the limit.
+
+    :param file: The multipart upload.
+    :param limit_bytes: Maximum allowed size in bytes.
+    :returns: The full file content.
+    :raises HTTPException: 413 when the upload exceeds *limit_bytes*.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Attachment exceeds the {limit_bytes // (1024 * 1024)} MB "
+                    "limit for this file type."
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def create_sessions_router(
     conversation_store: ConversationStore,
     agent_store: AgentStore,
@@ -13929,16 +14071,14 @@ def create_sessions_router(
                 )
             base_agent = target_agent
 
-        # Clone the chosen agent's bundle into a fresh session-scoped row so
-        # the fork can be reconfigured without mutating the original.
+        # Clone params for the fork's session-scoped agent. Created inside
+        # fork_conversation's transaction (not agent_store.create): a
+        # pre-created row would survive a fork failure as an orphaned
+        # session_id=NULL built-in polluting the picker. Session-scoped rows
+        # are exempt from the unique built-in-name index, so the clone reuses
+        # the source's name verbatim — no "(fork …)" suffix needed.
         cloned_agent_id = generate_agent_id()
-        await asyncio.to_thread(
-            agent_store.create,
-            agent_id=cloned_agent_id,
-            name=f"{base_agent.name} (fork {cloned_agent_id[:10]})",
-            bundle_location=base_agent.bundle_location,
-            description=base_agent.description,
-        )
+        cloned_agent_name = base_agent.name
 
         # A model id is provider-bound, so the source's model_override /
         # reasoning_effort only carry over when the switch stays in the same
@@ -13989,6 +14129,9 @@ def create_sessions_router(
                 source_id,
                 title=body.title,
                 agent_id=cloned_agent_id,
+                cloned_agent_name=cloned_agent_name,
+                cloned_agent_bundle_location=base_agent.bundle_location,
+                cloned_agent_description=base_agent.description,
                 copy_model_settings=copy_model_settings,
                 carry_history_into_native=carry_history_into_native,
                 resume_source_native_session=resume_source_native_session,
@@ -14871,6 +15014,97 @@ def create_sessions_router(
         body = codex_request.build_response(result)
         return Response(
             content=json.dumps(body),
+            media_type="application/json",
+        )
+
+    # ── POST /sessions/{session_id}/hooks/antigravity-elicitation-request ──
+
+    @router.post(
+        "/sessions/{session_id}/hooks/antigravity-elicitation-request",
+        response_model=None,
+        # CSRF hardening: body is parsed via request.json(); require a JSON
+        # Content-Type so a cross-site text/plain request can't reach it.
+        dependencies=[Depends(require_json_content_type)],
+    )
+    async def antigravity_elicitation_request_hook(
+        request: Request,
+        session_id: str,
+    ) -> Response:
+        """
+        Antigravity (agy) elicitation request endpoint.
+
+        Receives ``{"elicitation_id": <str>, "params": <ElicitationRequestParams>}``
+        from the interaction bridge (Task 8), which POSTs here when it
+        surfaces an agy WAITING interaction for the web UI. Parks the call
+        on the shared harness elicitation registry, emits the standard
+        ``response.elicitation_request`` SSE event, waits for the session
+        ``approval`` verdict, then returns the raw
+        :class:`~omnigent.server.schemas.ElicitationResult` so the bridge
+        can forward it to agy via ``HandleCascadeUserInteraction``.
+
+        This is intentionally simpler than the Codex hook: the bridge
+        (not the endpoint) builds the agy interaction payload via
+        ``to_interaction_payload``, so this endpoint only passes back
+        the verdict as-is.  The body shape is minimal and symmetric:
+        ``elicitation_id`` from the bridge's deterministic id function
+        (``agy_elicitation_id``), ``params`` as an
+        :class:`~omnigent.server.schemas.ElicitationRequestParams` dict.
+
+        :param request: FastAPI request carrying the agy elicitation body.
+        :param session_id: Omnigent conversation id from the URL path.
+        :returns: ``ElicitationResult`` JSON on user verdict; ``200`` with
+            empty body on timeout/disconnect (bridge interprets as ``None``).
+        :raises OmnigentError: 404 if the session does not exist, 400 if
+            the request body is malformed.
+        """
+        user_id = _get_user_id(request, auth_provider)
+        await _require_access(
+            user_id, session_id, LEVEL_READ, permission_store, conversation_store
+        )
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise OmnigentError(
+                f"Invalid JSON in antigravity elicitation hook body: {exc}",
+                code=ErrorCode.INVALID_INPUT,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise OmnigentError(
+                "Antigravity elicitation hook body must be a JSON object.",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        elicitation_id = payload.get("elicitation_id")
+        if not isinstance(elicitation_id, str) or not elicitation_id:
+            raise OmnigentError(
+                "Antigravity elicitation hook body must include a non-empty"
+                " 'elicitation_id' string.",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        raw_params = payload.get("params")
+        if not isinstance(raw_params, dict):
+            raise OmnigentError(
+                "Antigravity elicitation hook body must include a 'params' object.",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        try:
+            params = ElicitationRequestParams.model_validate(raw_params)
+        except Exception as exc:
+            raise OmnigentError(
+                f"Invalid 'params' in antigravity elicitation hook body: {exc}",
+                code=ErrorCode.INVALID_INPUT,
+            ) from exc
+        result = await _publish_and_wait_for_harness_elicitation(
+            request,
+            session_id=session_id,
+            params=params,
+            timeout_s=_ANTIGRAVITY_NATIVE_ELICITATION_HOOK_TIMEOUT_S,
+            conversation_store=conversation_store,
+            elicitation_id=elicitation_id,
+        )
+        if result is None:
+            return Response(status_code=status.HTTP_200_OK)
+        return Response(
+            content=result.model_dump_json(),
             media_type="application/json",
         )
 
@@ -15807,14 +16041,44 @@ def create_sessions_router(
                 "filename is required",
                 code=ErrorCode.INVALID_INPUT,
             )
-        content = await file.read()
         from omnigent.runtime.content_resolver import (
+            MAX_ATTACHMENT_UPLOAD_BYTES,
             _resolve_content_type,
+            attachment_text_type_for_extension,
+            attachment_upload_limit,
         )
 
+        # Resolve the type from the declared MIME + filename BEFORE reading
+        # the body, so an unsupported or oversized upload is rejected without
+        # buffering it. Attachments are inlined into the model context as
+        # base64 (see content_resolver.resolve_content_references); only
+        # images, PDF, and text/code files are usable — others (pptx, docx,
+        # zip, …) would be garbled or blow the request size, so reject them.
         content_type = _resolve_content_type(
             file.content_type,
             file.filename,
+        )
+        type_limit = attachment_upload_limit(content_type)
+        if type_limit is None:
+            # The browser/OS can mislabel a text/code file as binary (e.g. a
+            # .csv reported as application/vnd.ms-excel on Windows). Fall back
+            # to the extension — matching the web client's allowlist — and
+            # normalize the type so the resolver inlines it as text.
+            ext_type = attachment_text_type_for_extension(file.filename)
+            if ext_type is not None:
+                content_type = ext_type
+                type_limit = attachment_upload_limit(content_type)
+        if type_limit is None:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    f"Unsupported attachment type '{content_type}'. Only images, "
+                    "PDF, and text/code files can be attached."
+                ),
+            )
+        content = await _read_upload_capped(
+            file,
+            min(type_limit, MAX_ATTACHMENT_UPLOAD_BYTES),
         )
         stored = file_store.create(
             session_id=session_id,
@@ -16523,6 +16787,11 @@ def create_sessions_router(
           ``response.output_text.delta`` event observed outside the
           Omnigent task runtime, without persisting an item or starting /
           steering a task.
+        - ``"external_output_reasoning_delta"`` publishes a transient
+          ``response.reasoning_text.delta`` event (preceded by one
+          ``response.reasoning.started`` when ``data.started`` is true)
+          observed outside the Omnigent task runtime, without persisting an
+          item or starting / steering a task.
         - ``"external_session_interrupted"`` publishes a
           ``session.interrupted`` event observed outside the Omnigent task
           runtime, without persisting an item or starting / steering a
@@ -16610,6 +16879,7 @@ def create_sessions_router(
             _EXTERNAL_ASSISTANT_MESSAGE_TYPE,
             _EXTERNAL_CONVERSATION_ITEM_TYPE,
             _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE,
+            _EXTERNAL_OUTPUT_REASONING_DELTA_TYPE,
             _EXTERNAL_SESSION_INTERRUPTED_TYPE,
             _EXTERNAL_ELICITATION_RESOLVED_TYPE,
             _EXTERNAL_SESSION_STATUS_TYPE,
@@ -16976,6 +17246,9 @@ def create_sessions_router(
             return {"queued": False, "item_id": item_id}
         if body.type == _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE:
             _publish_external_output_text_delta(session_id, body)
+            return {"queued": False}
+        if body.type == _EXTERNAL_OUTPUT_REASONING_DELTA_TYPE:
+            _publish_external_output_reasoning_delta(session_id, body)
             return {"queued": False}
         if body.type == _EXTERNAL_SESSION_INTERRUPTED_TYPE:
             response_id = body.data.get("response_id")
@@ -18745,28 +19018,33 @@ async def _get_session_snapshot(
                     if spec.name:
                         agent_name = spec.name
                     llm_model = spec.executor.model
-                    # Size the context ring against whatever the next turn
-                    # will actually run. spec.executor.context_window only
-                    # applies to spec.model, so it's bypassed when an
-                    # override is active.
-                    effective_model = (
-                        conv.model_override if conv.model_override is not None else llm_model
+                    from omnigent.llms.context_window import (
+                        resolve_effective_context_window,
                     )
-                    spec_cw = spec.executor.context_window
-                    if spec_cw is not None and conv.model_override is None:
-                        context_window = spec_cw
-                    elif effective_model is not None:
-                        from omnigent.llms.context_window import get_model_context_window
 
-                        # Offload to a worker thread: on a cache-cold
-                        # provider catalog this does a blocking HTTP fetch
-                        # (and litellm registry lookups are CPU-bound), so
-                        # running it inline would stall the single-worker
-                        # event loop and serialize every concurrent request
-                        # behind this snapshot.
-                        context_window = await asyncio.to_thread(
-                            get_model_context_window, effective_model
-                        )
+                    # Size the context ring against whatever the next turn will
+                    # actually run, using the SAME resolver the runner uses to
+                    # budget compaction. That makes the UI ring and the runner's
+                    # compaction trigger a single source of truth — computed by
+                    # one function — so they can't drift even though they run in
+                    # different processes at different times. (They previously
+                    # each inlined this rule and silently fell out of step; see
+                    # PR #769 review. Sharing the function removes the manual
+                    # sync.) spec.executor.context_window describes only the spec
+                    # model, so an active override bypasses it — the resolver
+                    # makes that decision from the spec model + override.
+                    #
+                    # Offload to a worker thread: an active override (or an
+                    # undeclared window) can trigger a cache-cold provider
+                    # catalog fetch (blocking HTTP / CPU-bound litellm) inside
+                    # the resolver, which would otherwise stall the single-worker
+                    # event loop and serialize every concurrent snapshot.
+                    context_window = await asyncio.to_thread(
+                        resolve_effective_context_window,
+                        spec.executor.context_window,
+                        llm_model,
+                        model_override=conv.model_override,
+                    )
         except Exception:  # noqa: BLE001 — best-effort; missing agent must not break session fetch
             pass
     # Skills are runner-owned: the bound runner discovers them against its

@@ -51,6 +51,7 @@ import {
   MessageContent,
 } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
 import { CompactionMarker } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
@@ -58,6 +59,7 @@ import { parseSystemMessage } from "@/lib/systemMessage";
 import { Button } from "@/components/ui/button";
 import { OttoIcon } from "@/components/icons/OttoIcon";
 import { cn } from "@/lib/utils";
+import { validateAttachments } from "@/lib/attachments";
 import { useSurfaceFrontmost } from "@/hooks/useNativeServerSwitcher";
 import {
   isIOSShell,
@@ -310,6 +312,51 @@ export function mergePendingBubbles(committed: Bubble[], pending: Bubble[]): Bub
   }
   if (insertAt === committed.length) return [...committed, ...pending];
   return [...committed.slice(0, insertAt), ...pending, ...committed.slice(insertAt)];
+}
+
+type ElicitationItem = Extract<RenderItem, { kind: "elicitation" }>;
+
+// A pending elicitation is unanswered — only these float to the bottom.
+function isPendingElicitation(item: RenderItem): item is ElicitationItem {
+  return item.kind === "elicitation" && item.status === "pending";
+}
+
+// Pending elicitation cards float to the bottom of the chat: lifted out of
+// their inline position and re-rendered as the last items in the scroll flow,
+// so stick-to-bottom keeps an outstanding question in view no matter how much
+// text the agent streams after it (otherwise the card scrolls up off the top
+// of the viewport). Collect them in document order — oldest first, so the
+// newest sits last, closest to the composer. Once answered, a card drops out
+// of this list (status flips to "responded") and stays inline at its natural
+// spot (it is no longer removed by `stripPendingElicitations`).
+export function collectPendingElicitations(bubbles: Bubble[]): ElicitationItem[] {
+  const pending: ElicitationItem[] = [];
+  for (const bubble of bubbles) {
+    if (bubble.kind !== "assistant") continue;
+    for (const item of bubble.items) {
+      if (isPendingElicitation(item)) pending.push(item);
+    }
+  }
+  return pending;
+}
+
+// Drop the pending elicitation cards from the transcript bubbles so they
+// don't render twice — once at the bottom, once inline. Only clones the
+// assistant bubbles that actually carry a pending card; every other bubble
+// keeps its reference so `BubbleView`'s memo holds. An assistant bubble left
+// with no items renders nothing (`AssistantBubble` returns null), so a
+// standalone elicitation bubble collapses cleanly while its gating user
+// message stays put. Returns the input array unchanged when nothing is
+// pending, so the memo stays stable.
+export function stripPendingElicitations(bubbles: Bubble[]): Bubble[] {
+  let result: Bubble[] | null = null;
+  for (let i = 0; i < bubbles.length; i += 1) {
+    const bubble = bubbles[i]!;
+    if (bubble.kind !== "assistant" || !bubble.items.some(isPendingElicitation)) continue;
+    if (result === null) result = [...bubbles];
+    result[i] = { ...bubble, items: bubble.items.filter((it) => !isPendingElicitation(it)) };
+  }
+  return result ?? bubbles;
 }
 
 // Whether a user bubble should carry the author's avatar badge (and the
@@ -1263,6 +1310,19 @@ function MainAgentSurface({
   );
   const nav = useUserMessageNav(userMessageIds);
 
+  // Pending elicitation cards float to the bottom of the chat: rendered as the
+  // last items in the scroll flow and removed from their inline position so
+  // they don't render twice. Stick-to-bottom then keeps an outstanding
+  // question in view instead of letting trailing text scroll it off the top.
+  // Answered cards stay inline at their natural spot. `streamBubbles` keeps
+  // `bubbles`' reference when nothing is pending, so the common case allocates
+  // nothing.
+  const pendingElicitations = useMemo(() => collectPendingElicitations(bubbles), [bubbles]);
+  const streamBubbles = useMemo(
+    () => (pendingElicitations.length === 0 ? bubbles : stripPendingElicitations(bubbles)),
+    [bubbles, pendingElicitations.length],
+  );
+
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) — guarded so the composer's
   // own unmodified ArrowUp/Down history-recall still works.
   useEffect(() => {
@@ -1426,8 +1486,29 @@ function MainAgentSurface({
               )
             ) : (
               <>
-                {bubbles.map((bubble) => (
+                {streamBubbles.map((bubble) => (
                   <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
+                ))}
+                {/* Pending elicitation cards, floated to the bottom of the
+                    chat so an outstanding question stays in view (stick-to-
+                    bottom) no matter how much text the agent streamed after
+                    it. Wrapped in an assistant Message so each matches an
+                    inline card's look; removed from their inline slot by
+                    `stripPendingElicitations`. Newest renders last, nearest
+                    the composer. Rendered ABOVE the Working… indicator so the
+                    card sits closest to the prompt and the shimmer stays the
+                    last thing in the flow. */}
+                {pendingElicitations.map((item) => (
+                  <Message
+                    key={item.elicitationId}
+                    from="assistant"
+                    className="max-w-full"
+                    data-testid="bottom-elicitation"
+                  >
+                    <MessageContent className="w-full">
+                      <ElicitationCard item={item} />
+                    </MessageContent>
+                  </Message>
                 ))}
                 {/* Working… shimmer between send and first rendered block.
                     Suppressed when the last bubble is a compaction spinner —
@@ -2764,11 +2845,13 @@ export function buildSlashCommandMap(
   skills: ReadonlyArray<{ name: string; description: string }>,
   showEffort: boolean,
   showModel: boolean,
+  showCompact: boolean = true,
 ): Record<string, string> {
   const m: Record<string, string> = {};
   for (const [name, description] of Object.entries(BUILTIN_SLASH_COMMANDS)) {
     if (name === "/effort" && !showEffort) continue;
     if (name === "/model" && !showModel) continue;
+    if (name === "/compact" && !showCompact) continue;
     m[name] = description;
   }
   for (const skill of skills) {
@@ -2927,11 +3010,17 @@ function ComposerStatusLine() {
   // alongside contextWindow — so the branch reads from the same store as
   // the other status-line values rather than a separate fetch.
   const gitBranch = useChatStore((s) => s.gitBranch);
+  // qwen/goose/cursor/pi/opencode native sessions pick their model inside the
+  // vendor TUI, so Omnigent's bound `llmModel` is just an unused default
+  // (it would read e.g. "claude-sonnet-4-6" on a Qwen session). Hide the
+  // model/effort label for them; claude-/codex-native keep it (real picker).
+  const nativeVendorOwnsModel = useChatStore((s) => s.nativeVendorOwnsModel);
 
   const showBranch = !!conversationId && !!gitBranch;
-  const modelEffortLabel = conversationId
-    ? formatModelEffortStatusLabel(selectedModel ?? llmModel, selectedEffort, codexModelOptions)
-    : null;
+  const modelEffortLabel =
+    conversationId && !nativeVendorOwnsModel
+      ? formatModelEffortStatusLabel(selectedModel ?? llmModel, selectedEffort, codexModelOptions)
+      : null;
   const showPlanMode = !!conversationId && codexPlanMode;
   // contextWindow > 0: the SSE path validates it but the snapshot path doesn't, and 0/0 → "NaN%".
   const showRing =
@@ -3101,6 +3190,7 @@ export function Composer({
 }: ComposerProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [planModeBusy, setPlanModeBusy] = useState(false);
   // Index of the highlighted item in the slash-command suggestions menu.
@@ -3212,9 +3302,13 @@ export function Composer({
   // it each turn; native wrappers expose it only when they have a picker
   // path that the runner can propagate without blocking the vendor TUI.
   const showModel = !isNativeWrapper || showModels;
+  // /compact is only functional for native wrappers (claude-native,
+  // codex-native) which inject the slash command into the terminal.
+  // SDK harnesses (openai-agents-sdk, claude-sdk) don't support it yet.
+  const showCompact = isNativeWrapper;
   const slashCommands = useMemo(
-    () => buildSlashCommandMap(skills, showEffort, showModel),
-    [skills, showEffort, showModel],
+    () => buildSlashCommandMap(skills, showEffort, showModel, showCompact),
+    [skills, showEffort, showModel, showCompact],
   );
   // Skills always need an optional argument fill-in so the user can
   // type extra context after the name; built-in commands keep their
@@ -3283,6 +3377,10 @@ export function Composer({
   const executeSlashCommand = (cmd: string, arg: string): boolean => {
     switch (cmd) {
       case "/compact":
+        if (!showCompact) {
+          setCommandError("/compact is not supported for this agent type");
+          return true;
+        }
         dirtyRef.current = true;
         setValue("");
         setCommandError(null);
@@ -3417,8 +3515,15 @@ export function Composer({
   const [isDragActive, setIsDragActive] = useState(false);
 
   const addFiles = (incoming: File[]) => {
-    setFiles((prev) => [...prev, ...incoming]);
-    dirtyRef.current = true;
+    // Reject unsupported types (only images, PDF, and text/code) and
+    // oversized files up front — before the upload — with a friendly
+    // message. The server enforces the same limits authoritatively.
+    const { accepted, errors } = validateAttachments(incoming);
+    if (accepted.length > 0) {
+      setFiles((prev) => [...prev, ...accepted]);
+      dirtyRef.current = true;
+    }
+    setAttachmentError(errors.length > 0 ? errors.join("\n") : null);
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -3451,6 +3556,7 @@ export function Composer({
 
   const removeFile = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
+    setAttachmentError(null);
     dirtyRef.current = true;
   };
 
@@ -3533,6 +3639,7 @@ export function Composer({
     dirtyRef.current = true;
     setValue("");
     setFiles([]);
+    setAttachmentError(null);
     onClearAllQuotes();
   };
 
@@ -3842,6 +3949,12 @@ export function Composer({
                 </button>
               </span>
             ))}
+          </div>
+        )}
+        {/* Rejected-attachment feedback: unsupported type or too large */}
+        {attachmentError !== null && (
+          <div className="px-4 pb-2 text-xs text-destructive whitespace-pre-wrap">
+            {attachmentError}
           </div>
         )}
         {/* Inline slash-command feedback: errors and /help output */}
