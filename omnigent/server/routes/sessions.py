@@ -8273,6 +8273,51 @@ def _resource_event_item_from_sse(
     )
 
 
+def _routing_decision_item_from_sse(
+    event: dict[str, Any],
+) -> NewConversationItem | None:
+    """
+    Build a ``routing_decision`` conversation item from a runner SSE event.
+
+    The runner's cost advisor emits a ``response.output_item.done`` with a
+    ``routing_decision`` item at the START of an advised turn (the
+    intelligent model router's pick). This produces the durable,
+    display-only transcript item so the pick survives reload at the right
+    position (BEFORE the turn's assistant output); the relay also
+    re-publishes a live event carrying the persisted item id so the live
+    chip and a turn-start snapshot refetch dedup by the same id (no
+    double render).
+
+    Returns ``None`` for every other event, and for a malformed routing
+    item (empty model / unknown tier) so a bad frame can't poison the
+    relay.
+
+    :param event: Parsed SSE event dict from the runner stream.
+    :returns: A ``routing_decision`` :class:`NewConversationItem`, or
+        ``None``.
+    """
+    if event.get("type") != "response.output_item.done":
+        return None
+    item = event.get("item")
+    if not isinstance(item, dict) or item.get("type") != "routing_decision":
+        return None
+    try:
+        data = parse_item_data("routing_decision", item)
+    except (ValueError, TypeError):
+        _logger.warning("Failed to parse routing_decision item from SSE")
+        return None
+    # No turn response_id exists yet (emitted before response.in_progress),
+    # so stamp a fresh routing id — the chip renders as its own standalone
+    # line at turn start.
+    import uuid
+
+    return NewConversationItem(
+        type="routing_decision",
+        response_id=f"routing_{uuid.uuid4().hex}",
+        data=data,
+    )
+
+
 def _error_item_from_sse(
     event: dict[str, Any],
     response_id: str | None = None,
@@ -8831,6 +8876,43 @@ async def _relay_runner_stream(
                             and _session_terminal_pending_cache.get(session_id, False)
                         ):
                             _publish_terminal_pending(session_id, False)
+
+                    # Intelligent-model-router decision emitted by the runner's
+                    # cost advisor at turn start. Persist as a display-only
+                    # transcript item (arrival order = BEFORE the assistant
+                    # output), then re-publish the live event carrying the
+                    # store-assigned id so the live chip and a turn-start
+                    # snapshot refetch dedup by the same id. Handled
+                    # exclusively here (persist + publish + continue) so the
+                    # raw, id-less runner event is not also forwarded below.
+                    routing_item = _routing_decision_item_from_sse(event)
+                    if routing_item is not None:
+                        # Persist failure must NOT suppress the live chip
+                        # (the owner's hard requirement: the pick shows the
+                        # moment the turn starts). On a store error, log and
+                        # still publish the live event — id-less, so a later
+                        # snapshot can't dedup it, but a missing reload chip
+                        # beats no chip at all.
+                        try:
+                            persisted = await asyncio.to_thread(
+                                conversation_store.append, session_id, [routing_item]
+                            )
+                            _persisted_id: str | None = persisted[0].id if persisted else None
+                        except Exception:
+                            _logger.exception(
+                                "Relay: routing_decision persist failed for session=%s; "
+                                "publishing the live chip without a durable id",
+                                session_id,
+                            )
+                            _persisted_id = None
+                        session_stream.publish(
+                            session_id,
+                            {
+                                **event,
+                                "item": {**event["item"], "id": _persisted_id},
+                            },
+                        )
+                        continue
 
                     # Accumulate LLM token usage from the harness
                     # response so policy callables can read

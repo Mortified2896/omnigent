@@ -52,7 +52,7 @@ import {
 } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
-import { CompactionMarker } from "@/components/blocks/StatusBlocks";
+import { CompactionMarker, RoutingDecisionChip } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
 import { Button } from "@/components/ui/button";
@@ -1994,6 +1994,7 @@ function bubbleKey(bubble: Bubble): string {
   if (bubble.kind === "user") return `user:${bubble.stableKey ?? bubble.itemId}`;
   if (bubble.kind === "compaction_loading") return `compaction_loading:${bubble.itemId}`;
   if (bubble.kind === "compaction") return `compaction:${bubble.itemId}`;
+  if (bubble.kind === "routing_decision") return `routing_decision:${bubble.itemId}`;
   return `assistant:${bubble.stableId}`;
 }
 
@@ -2435,6 +2436,16 @@ export const BubbleView = memo(
       );
     }
     if (bubble.kind === "compaction") return <CompactionMarker />;
+    if (bubble.kind === "routing_decision") {
+      return (
+        <RoutingDecisionChip
+          model={bubble.model}
+          tier={bubble.tier}
+          applied={bubble.applied}
+          rationale={bubble.rationale}
+        />
+      );
+    }
     return <AssistantBubble bubble={bubble} />;
   },
   (prev, next) => bubblesEqual(prev.bubble, next.bubble),
@@ -3896,8 +3907,7 @@ export function Composer({
           </div>
           {/* Cost toggle + agent picker + Send — right side */}
           <div className="flex min-w-0 items-center gap-0.5">
-            {/* Temporarily hidden (#3021): re-enable by removing the false gate. */}
-            {false && costRoutingEligible && (
+            {costRoutingEligible && (
               <IntelligentModelControl
                 value={costControlModeOverride}
                 onChange={(mode) =>

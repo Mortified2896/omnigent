@@ -297,6 +297,90 @@ def _advisor_note_item(verdict: AdvisorVerdict) -> dict[str, Any]:  # type: igno
     }
 
 
+def routing_decision_event(verdict: AdvisorVerdict) -> dict[str, Any]:  # type: ignore[explicit-any]  # JSON-shaped SSE event
+    """
+    Build the turn-start SSE event carrying the router's verdict.
+
+    Shaped as a ``response.output_item.done`` carrying a
+    ``routing_decision`` item so it rides the existing stream-relay
+    pipeline end to end: the AP server's relay persists it as a durable,
+    display-only transcript item (in arrival order, BEFORE the turn's
+    assistant output) and forwards the same event live, and the web UI's
+    block stream renders it as a muted chip the moment the turn begins.
+    The item type is in :data:`~omnigent.entities.conversation.NON_CONTENT_ITEM_TYPES`
+    and is not in the runner's harness-input allowlist, so the brain
+    never sees it.
+
+    The runner emits this at turn start, before any ``response.in_progress``,
+    so the relay has no turn response_id yet — it stamps a fresh
+    ``routing_*`` id, and the item renders as its own standalone line.
+
+    :param verdict: The (already applied/shadowed) verdict for the turn.
+    :returns: An SSE event dict, e.g.
+        ``{"type": "response.output_item.done", "item": {"type":
+        "routing_decision", "model": "...", "tier": "expensive",
+        "applied": true, "rationale": "..."}}``.
+    """
+    return {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "routing_decision",
+            "model": verdict.model,
+            "tier": verdict.tier,
+            "applied": verdict.applied,
+            "rationale": verdict.rationale,
+        },
+    }
+
+
+def _fallback_verdict(
+    *,
+    sticky_model: str | None,
+    tiers: Mapping[str, Sequence[str]],
+    turn_anchor: str,
+) -> AdvisorVerdict | None:
+    """
+    Build the announced verdict for a judge-null (conversational) turn.
+
+    A null verdict used to vanish silently, which reads as breakage in the
+    UI — every advised turn must surface a decision. Carrying the sticky
+    selection keeps the announcement truthful; with nothing to carry the
+    cheap tier is the honest answer for a conversational turn.
+
+    :param sticky_model: The advisor's currently applied model for this
+        session, or ``None`` (first turn, advise mode, or after a user pin).
+    :param tiers: The configured tier lists from the spec marker.
+    :param turn_anchor: ISO timestamp anchoring this turn's verdict.
+    :returns: The verdict to announce, or ``None`` when the cheap tier is
+        unconfigured and there is nothing to carry (stay silent).
+    """
+    if sticky_model is not None:
+        from omnigent.model_override import canonical_model_spelling
+
+        want = canonical_model_spelling(sticky_model)
+        tier = next(
+            (t for t, ms in tiers.items() if any(canonical_model_spelling(m) == want for m in ms)),
+            "cheap",
+        )
+        return AdvisorVerdict(
+            tier=tier,
+            model=sticky_model,
+            applied=False,  # _finalize_advised_turn recomputes per mode
+            rationale="Carried forward — conversational follow-up.",
+            turn_anchor=turn_anchor,
+        )
+    cheap = list(tiers.get("cheap") or ())
+    if not cheap:
+        return None
+    return AdvisorVerdict(
+        tier="cheap",
+        model=cheap[0],
+        applied=False,
+        rationale="Conversational or trivial turn — the cheap tier suffices.",
+        turn_anchor=turn_anchor,
+    )
+
+
 async def maybe_run_advisor(
     *,
     spec: Any,  # type: ignore[explicit-any]  # structural spec stubs in tests
@@ -308,6 +392,7 @@ async def maybe_run_advisor(
     user_model_override: str | None = None,
     cost_control_mode_override: str | None = None,
     judge: Judge | None = None,
+    sticky_model: str | None = None,
 ) -> AdvisorTurnResult | None:
     """
     Run the cost advisor for one turn when the spec opts in.
@@ -386,11 +471,19 @@ async def maybe_run_advisor(
         turn_anchor=turn_anchor,
     )
     if verdict is None:
-        _logger.info(
-            "cost_advisor: session %s conversational this turn; prior selection stays",
-            conversation_id,
+        # Null verdicts must still produce a VISIBLE decision: silence after
+        # a send reads as breakage. Carry the sticky selection forward, or —
+        # with nothing to carry (first turn / advise mode) — fall back cheap.
+        verdict = _fallback_verdict(
+            sticky_model=sticky_model, tiers=config.tiers, turn_anchor=turn_anchor
         )
-        return None
+        if verdict is None:
+            return None
+        _logger.info(
+            "cost_advisor: session %s conversational this turn; announcing %s",
+            conversation_id,
+            verdict.model,
+        )
     return await _finalize_advised_turn(
         verdict=verdict,
         mode=effective_mode,
@@ -424,8 +517,8 @@ async def _finalize_advised_turn(
         ``None``.
     :param conversation_id: Session id, e.g. ``"conv_abc123"``.
     :param server_client: HTTP client for the label-persist PATCH.
-    :returns: The turn result, or ``None`` when the label persist failed
-        (nothing applied — recorded and applied state never diverge).
+    :returns: The turn result; the telemetry-label persist is best-effort
+        (the chip + application carry the verdict even if it fails).
     """
     apply_model = _model_to_apply(
         verdict=verdict,
@@ -441,8 +534,10 @@ async def _finalize_advised_turn(
         rationale=verdict.rationale,
         turn_anchor=verdict.turn_anchor,
     )
-    if not await _persist_verdict_label(applied_verdict, conversation_id, server_client):
-        return None
+    # Best-effort: the label is telemetry; a failed persist must not kill
+    # the application, the transcript chip, or the note (it did once — one
+    # oversized rationale silently disabled the whole feature for the turn).
+    await _persist_verdict_label(applied_verdict, conversation_id, server_client)
     _logger.info(
         "cost_advisor: session %s verdict %s applied=%s",
         conversation_id,
@@ -550,10 +645,22 @@ async def _persist_verdict_label(
         )
         return False
     if resp.status_code >= 400:
+        # Log the response body too: the bare status code hid WHY a
+        # deployed multi-user server 500'd this persist (the chip no
+        # longer depends on it — it rides the routing_decision transcript
+        # item — but the telemetry label and its failure mode must stay
+        # diagnosable). Body is bounded so a large error page can't flood
+        # the log.
+        try:
+            _body = resp.text[:500]
+        except (UnicodeDecodeError, httpx.HTTPError):
+            _body = "<unreadable response body>"
         _logger.warning(
-            "cost_advisor: verdict label persist returned %d for %s; running turn unadvised",
+            "cost_advisor: verdict label persist returned %d for %s; "
+            "running turn unadvised. response body: %s",
             resp.status_code,
             conversation_id,
+            _body,
         )
         return False
     return True

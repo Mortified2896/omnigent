@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { relativeTime } from "@/lib/relativeTime";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Session } from "@/lib/types";
@@ -283,4 +284,11 @@ export function IntelligentModelControl({
       </Tooltip>
     </TooltipProvider>
   );
+}
+
+/** Relative display time for a verdict's turn anchor (null-safe, NaN-safe). */
+export function verdictRelativeTime(turnAnchor: string | null): string | null {
+  if (turnAnchor === null) return null;
+  const ms = Date.parse(turnAnchor);
+  return Number.isFinite(ms) ? relativeTime(ms) : null;
 }
