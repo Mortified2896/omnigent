@@ -225,6 +225,7 @@ async def _drive_create_and_submit(base_url: str, session_id: str) -> None:
             # Fill in agent details.
             await page.get_by_test_id("create-agent-name").fill("test-agent")
             await page.get_by_test_id("create-agent-description").fill("A test agent")
+            await page.get_by_test_id("create-agent-model").fill("claude-sonnet-4-20250514")
             await page.get_by_test_id("create-agent-instructions").fill(
                 "You are a test assistant."
             )
@@ -284,8 +285,9 @@ async def _drive_mcp_server(base_url: str, session_id: str) -> None:
             dialog = page.get_by_test_id("create-agent-dialog")
             await expect(dialog).to_be_visible(timeout=5_000)
 
-            # Fill in agent name (required).
+            # Fill in agent name and model (both required).
             await page.get_by_test_id("create-agent-name").fill("mcp-agent")
+            await page.get_by_test_id("create-agent-model").fill("claude-sonnet-4-20250514")
 
             # Add an MCP server.
             await page.get_by_test_id("create-agent-add-mcp").click()
