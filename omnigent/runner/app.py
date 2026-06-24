@@ -7199,36 +7199,40 @@ def create_runner_app(
                 exc_info=True,
             )
 
-        # Replace the in-memory history with a summary pair.
-        # The harness owns all context after compaction; the
-        # runner's mirror just needs the summary so a
-        # session-resume reload starts from the right boundary.
-        _session_histories[conv] = [
-            {
-                "type": "message",
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "[Automatically generated summary of prior "
-                            "conversation context.]\n\n"
-                            "Please provide a summary of our conversation so far."
-                        ),
-                    }
-                ],
-            },
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": summary,
-                    }
-                ],
-            },
-        ]
+        # Replace the in-memory history. When the harness provided
+        # its compacted messages, use those directly — they carry the
+        # full compacted state (including opaque compaction tokens for
+        # OpenAI). Otherwise fall back to a synthetic summary pair.
+        compacted_messages = event.get("compacted_messages")
+        if compacted_messages:
+            _session_histories[conv] = compacted_messages
+        else:
+            _session_histories[conv] = [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "[Automatically generated summary of prior "
+                                "conversation context.]\n\n"
+                                "Please provide a summary of our conversation so far."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": summary,
+                        }
+                    ],
+                },
+            ]
 
     _CANCELLATION_TOOL_OUTPUT = "[Cancelled — tool execution was interrupted.]"
     # Tells the model the prior request was abandoned, not just that the

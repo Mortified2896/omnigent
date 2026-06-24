@@ -1769,8 +1769,8 @@ class OpenAIAgentsSDKExecutor(Executor):
         # Emit CompactionComplete if the SDK compacted this turn.
         # OpenAI's compaction produces encrypted opaque tokens (not
         # a human-readable summary), so we emit a descriptive
-        # placeholder. The runner persists it as a compaction item
-        # boundary for session resume.
+        # placeholder. The compacted session items are included so
+        # the runner can persist them for session resume.
         if result is not None:
             for item in result.new_items:
                 if getattr(item, "type", None) == "compaction_item":
@@ -1779,10 +1779,21 @@ class OpenAIAgentsSDKExecutor(Executor):
                     _compaction_tokens = 0
                     if turn_usage is not None:
                         _compaction_tokens = turn_usage.get("context_tokens", 0) or 0
+                    # Read the compacted session items so the runner can
+                    # persist them for replay on session resume.
+                    _compacted: list[dict[str, Any]] | None = None
+                    try:
+                        _compacted = await state.sdk_session.get_items()
+                    except Exception:
+                        logger.warning(
+                            "Failed to read compacted session items",
+                            exc_info=True,
+                        )
                     yield CompactionComplete(
                         summary="[OpenAI Responses API compaction — context was automatically compacted]",
                         token_count=_compaction_tokens,
                         model=model,
+                        compacted_messages=_compacted,
                     )
                     break
 

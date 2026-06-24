@@ -2970,6 +2970,8 @@ def test_compaction_item_emits_compaction_complete() -> None:
         compaction_events = [e for e in events if isinstance(e, CompactionComplete)]
         assert len(compaction_events) == 1
         assert compaction_events[0].token_count == 150  # context_tokens = last total
+        # compacted_messages should contain the session items
+        assert compaction_events[0].compacted_messages is not None
         turn_completes = [e for e in events if isinstance(e, TurnComplete)]
         assert len(turn_completes) == 1
         # CompactionComplete must come before TurnComplete

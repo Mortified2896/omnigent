@@ -959,6 +959,7 @@ class ExecutorAdapter(HarnessApp):
                     total_tokens=event.token_count,
                     summary=event.summary,
                     summary_model=event.model,
+                    compacted_messages=event.compacted_messages,
                 )
             )
         # ExecutorError handled by the caller (re-raises so the

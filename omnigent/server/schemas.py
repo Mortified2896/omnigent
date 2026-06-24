@@ -3201,6 +3201,7 @@ class CompactionCompletedEvent(_SSEEventBase):
     total_tokens: int | None = None
     summary: str | None = None
     summary_model: str | None = None
+    compacted_messages: list[dict[str, Any]] | None = None
 
 
 class CompactionFailedEvent(_SSEEventBase):
