@@ -467,10 +467,12 @@ async def test_post_clear_supersession_notifies_old_session() -> None:
     """
     A /clear rotation notifies the superseded (old) conversation.
 
-    It POSTs, in order, (1) a persisted assistant ``message`` item linking
-    to the new conversation so a reload explains the clear, and (2) a
-    transient ``external_session_superseded`` redirect event so a live
-    viewer auto-follows. Both are addressed to the OLD conversation.
+    It POSTs, in order, (1) ``external_session_status: idle`` so the old
+    chat's spinner stops once its terminal moves away, (2) a persisted
+    assistant ``message`` item linking to the new conversation so a reload
+    explains the clear, and (3) a transient ``external_session_superseded``
+    redirect event so a live viewer auto-follows. All three are addressed
+    to the OLD conversation.
     """
     calls: list[tuple[str, str, dict[str, Any] | None]] = []
 
@@ -489,9 +491,19 @@ async def test_post_clear_supersession_notifies_old_session() -> None:
             agent_name="claude-native-ui",
         )
 
-    assert len(calls) == 2
-    method, path, notice_body = calls[0]
-    assert (method, path) == ("POST", "/v1/sessions/conv_old/events")
+    assert len(calls) == 3
+    # Every post is addressed to the OLD conversation.
+    assert all(
+        (method, path) == ("POST", "/v1/sessions/conv_old/events") for method, path, _ in calls
+    )
+
+    _, _, status_body = calls[0]
+    assert status_body == {
+        "type": "external_session_status",
+        "data": {"status": "idle"},
+    }
+
+    _, _, notice_body = calls[1]
     assert notice_body is not None
     assert notice_body["type"] == "external_conversation_item"
     assert notice_body["data"]["item_type"] == "message"
@@ -502,12 +514,38 @@ async def test_post_clear_supersession_notifies_old_session() -> None:
     assert "/clear" in notice_text
     assert "/c/conv_new" in notice_text
 
-    method, path, event_body = calls[1]
-    assert (method, path) == ("POST", "/v1/sessions/conv_old/events")
+    _, _, event_body = calls[2]
     assert event_body == {
         "type": "external_session_superseded",
         "data": {"target_conversation_id": "conv_new"},
     }
+
+
+@pytest.mark.asyncio
+async def test_post_clear_supersession_skips_when_old_equals_new() -> None:
+    """
+    The notify is a no-op when the old and new ids collapse to one.
+
+    A defensive guard: addressing the "you were cleared" banner + redirect
+    at the live session id would dump them onto the active chat.
+    """
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """Fail loudly — no POST should happen."""
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ap") as client:
+        await forwarder._post_clear_supersession(
+            client,
+            old_session_id="conv_same",
+            new_session_id="conv_same",
+            agent_name="claude-native-ui",
+        )
+
+    assert calls == []
 
 
 @pytest.mark.asyncio

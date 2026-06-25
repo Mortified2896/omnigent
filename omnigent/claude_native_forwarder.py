@@ -690,13 +690,17 @@ async def forward_claude_transcript_to_session(
                 if rotation is not None:
                     # Tell the superseded (old) conversation it was cleared:
                     # persist a notice linking to the rotated-to session and
-                    # emit a live redirect event. ``current_session_id`` is
-                    # still the old id here; ``rotation`` is the new one. The
-                    # call is fully best-effort (swallows its own errors) so
-                    # the state reset below always runs.
+                    # emit a live redirect event. Use the loop's ``session_id``
+                    # (the session being forwarded BEFORE this poll), NOT
+                    # ``current_session_id``: when the hook rotated the bridge's
+                    # active session synchronously, ``current_session_id`` already
+                    # reads the NEW id, whereas ``session_id`` is not reassigned
+                    # to ``rotation`` until below. The call is fully best-effort
+                    # (swallows its own errors) so the state reset below always
+                    # runs.
                     await _post_clear_supersession(
                         client,
-                        old_session_id=current_session_id,
+                        old_session_id=session_id,
                         new_session_id=rotation,
                         agent_name=agent_name,
                     )
@@ -3053,17 +3057,21 @@ async def _post_clear_supersession(
     """
     Notify the superseded session that a ``/clear`` rotated it away.
 
-    Posts two best-effort events to the OLD conversation, in order:
+    Posts three best-effort events to the OLD conversation, in order:
 
-    1. A persisted assistant ``message`` item linking to the new
+    1. An ``external_session_status: idle`` so the old conversation's
+       "Working…" spinner stops — its terminal moved to the new session,
+       so it will never receive the turn-end edge that would normally
+       clear it.
+    2. A persisted assistant ``message`` item linking to the new
        conversation, so a later reload of the cleared conversation
        explains what happened and offers the continuation link. This is
        the durable record — it survives reconnects.
-    2. A transient ``external_session_superseded`` event the server
+    3. A transient ``external_session_superseded`` event the server
        republishes as ``session.superseded``, so a client *actively*
        viewing the old conversation auto-redirects to the new one.
 
-    Both failures are logged and swallowed: the rotation has already
+    Each failure is logged and swallowed: the rotation has already
     completed and reset forwarder state, and a notification error must
     not disrupt the poll loop or stop the new session from forwarding.
 
@@ -3074,6 +3082,28 @@ async def _post_clear_supersession(
         assistant ``message`` item requires one.
     :returns: None.
     """
+    if old_session_id == new_session_id:
+        # Defensive: never address the notice/redirect at the live session.
+        # The caller resolves the old id from the pre-rotation forwarder
+        # state, but if that ever collapses to the new id, posting here
+        # would dump the "you were cleared" banner onto the active chat.
+        return
+    try:
+        status_resp = await client.post(
+            f"/v1/sessions/{url_component(old_session_id)}/events",
+            json={
+                "type": "external_session_status",
+                "data": {"status": "idle"},
+            },
+        )
+        status_resp.raise_for_status()
+    except httpx.HTTPError:
+        _logger.warning(
+            "Failed to post /clear supersession idle status; old_session=%s new_session=%s",
+            old_session_id,
+            new_session_id,
+            exc_info=True,
+        )
     notice = (
         "This conversation was ended by `/clear`. "
         f"Continue in [the new chat](/c/{new_session_id}). "
