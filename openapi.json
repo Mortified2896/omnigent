@@ -5398,15 +5398,15 @@
         "type": "apiKey"
       },
       "sessionCookieAuth": {
-        "description": "Signed session cookie minted after an interactive OIDC or accounts login (oidc / accounts auth modes).",
+        "description": "Signed session cookie minted after an interactive OIDC or accounts login (oidc / accounts auth modes). Named `ap_session` over HTTP (the advertised local default); under HTTPS the secure `__Host-ap_session` prefixed form is used instead.",
         "in": "cookie",
-        "name": "__Host-ap_session",
+        "name": "ap_session",
         "type": "apiKey"
       }
     }
   },
   "info": {
-    "description": "Omnigent is an open-source meta-harness for building and running AI agents. This is the REST API exposed by the Omnigent server: use it to create and drive **sessions**, manage **agents**, **hosts**, and **runners**, attach **contextual policies**, post **comments**, and work with session **resources** \u2014 files, terminals, and sandboxed environments.\n\n## Base URL\n\nOmnigent is self-hosted. The server binds `http://127.0.0.1:6767` by default (`omnigent server`); point the base URL at your own deployment.\n\n## Authentication\n\nThere is no API-key or bearer-token scheme. Identity is supplied by the deployment's configured auth provider (`OMNIGENT_AUTH_PROVIDER`):\n\n- **Trusted proxy header** (default) \u2014 an upstream proxy injects an identity header (`X-Forwarded-Email`, configurable). Single-user local runtimes fall back to a reserved `local` user.\n- **Session cookie** \u2014 a signed `__Host-ap_session` cookie minted after an interactive OIDC or accounts login.\n\nAuth is configured server-side; clients send the cookie or proxy header according to your deployment.\n\n## Streaming\n\n`GET /v1/sessions/{session_id}/stream` streams Server-Sent Events (`text/event-stream`). Each event conforms to the `ServerStreamEvent` schema documented below.\n",
+    "description": "Omnigent is an open-source meta-harness for building and running AI agents. This is the REST API exposed by the Omnigent server: use it to create and drive **sessions**, manage **agents**, **hosts**, and **runners**, attach **contextual policies**, post **comments**, and work with session **resources** \u2014 files, terminals, and sandboxed environments.\n\n## Base URL\n\nOmnigent is self-hosted. The server binds `http://127.0.0.1:6767` by default (`omnigent server`); point the base URL at your own deployment.\n\n## Authentication\n\nThere is no API-key or bearer-token scheme. Identity is supplied by the deployment's configured auth provider (`OMNIGENT_AUTH_PROVIDER`):\n\n- **Trusted proxy header** (default) \u2014 an upstream proxy injects an identity header (`X-Forwarded-Email`, configurable). Single-user local runtimes fall back to a reserved `local` user.\n- **Session cookie** \u2014 a signed session cookie minted after an interactive OIDC or accounts login. It is named `ap_session` over HTTP (the advertised local default) and `__Host-ap_session` under HTTPS, where the `__Host-` prefix guards against subdomain cookie-tossing.\n\nAuth is configured server-side; clients send the cookie or proxy header according to your deployment.\n\n## Streaming\n\n`GET /v1/sessions/{session_id}/stream` streams Server-Sent Events (`text/event-stream`). Each event conforms to the `ServerStreamEvent` schema documented below.\n",
     "title": "Omnigent Server",
     "version": "0.1.0"
   },

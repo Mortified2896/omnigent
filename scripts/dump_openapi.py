@@ -134,8 +134,10 @@ deployment's configured auth provider (`OMNIGENT_AUTH_PROVIDER`):
 - **Trusted proxy header** (default) — an upstream proxy injects an \
 identity header (`X-Forwarded-Email`, configurable). Single-user local \
 runtimes fall back to a reserved `local` user.
-- **Session cookie** — a signed `__Host-ap_session` cookie minted after \
-an interactive OIDC or accounts login.
+- **Session cookie** — a signed session cookie minted after an \
+interactive OIDC or accounts login. It is named `ap_session` over HTTP \
+(the advertised local default) and `__Host-ap_session` under HTTPS, where \
+the `__Host-` prefix guards against subdomain cookie-tossing.
 
 Auth is configured server-side; clients send the cookie or proxy header \
 according to your deployment.
@@ -169,10 +171,18 @@ _SECURITY_SCHEMES: dict[str, dict[str, str]] = {
     "sessionCookieAuth": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "__Host-ap_session",
+        # Named to match the advertised HTTP server. The ``__Host-``
+        # prefix requires HTTPS (browsers drop it on plain HTTP), so the
+        # cookie is ``ap_session`` for the default local deployment and
+        # ``__Host-ap_session`` only under HTTPS — see ``secure_cookies``
+        # in ``accounts_config.py`` / ``oidc.py``.
+        "name": "ap_session",
         "description": (
             "Signed session cookie minted after an interactive OIDC or "
-            "accounts login (oidc / accounts auth modes)."
+            "accounts login (oidc / accounts auth modes). Named "
+            "``ap_session`` over HTTP (the advertised local default); "
+            "under HTTPS the secure ``__Host-ap_session`` prefixed form "
+            "is used instead."
         ),
     },
 }
@@ -182,6 +192,13 @@ _SECURITY_SCHEMES: dict[str, dict[str, str]] = {
 # decorators use these snake_case values). ``x-displayName`` gives docs
 # tooling a readable label in place of the raw tag. Order here is the
 # order tags render in the reference sidebar.
+#
+# This intentionally covers only the stub-build surface that
+# ``generate_spec()`` emits: the ``terminals`` router is WebSocket-only
+# (no HTTP operations in the spec) and the ``auth`` router is mounted
+# only when an auth provider with a ``login_url`` is configured (absent
+# in the stub build). If either ever surfaces HTTP operations here, add
+# its tag below so the operation doesn't render without a description.
 _TAGS: list[dict[str, str]] = [
     {
         "name": "sessions",
