@@ -31,7 +31,8 @@ the vendor's tool-calling interface.
 | **Model override** | User can select a model via `--model` / config; some harnesses are vendor-locked (e.g. Claude-only, GPT-only, Gemini-only) |
 | **Auth** | How credentials are obtained — API key, gateway token, vendor CLI login, OAuth, etc. |
 | **Streaming** | Harness forwards token-level or delta-level streaming to the Omnigent forwarder |
-| **Policies / Elicitation (web)** | How the harness gates tool use — `canUseTool ASK`, `request_permission`, 2-stage cards, pre-tool hooks, or policy DENY |
+| **Omnigent policies** | Harness enforces Omnigent-side tool policies — policy DENY, pre-gated allow-lists, pre-tool hooks |
+| **Native elicitation (web)** | Harness surfaces tool-approval requests to the web UI — `canUseTool ASK`, `request_permission`, 2-stage cards |
 | **Interrupt** | User can cancel a running turn mid-stream |
 | **Live queue (concurrent)** | Multiple turns can be queued and processed concurrently |
 | **Tool-boundary steer** | Omnigent can inject steering text at tool-call boundaries |
@@ -53,16 +54,21 @@ the vendor's tool-calling interface.
 - **In-proc SDK MCP server** — the harness runs an MCP server in-process and the SDK connects to it directly (e.g. claude-sdk).
 - **Non-MCP bridges** — many harnesses use vendor-specific tool bridging: `dynamicTools` RPC (codex), SDK `custom_tools` (cursor), SDK `FunctionTool` (openai-agents), TCP socket (pi), shell hooks (hermes), SDK in-proc tools (antigravity), SDK tool handlers (copilot).
 
-### Policies / elicitation strategies
+### Omnigent policy strategies
 
 | Strategy | How it works |
 |---|---|
-| `canUseTool ASK` | Omnigent asks the model whether a tool call should proceed; model responds with ASK to surface to user |
-| `request_permission` | ACP-native permission request flow |
-| 2-stage + card | Two-phase approval with a UI card |
-| Pre-tool hook | Shell hook runs before each tool call; can DENY |
 | Policy DENY | Omnigent policy engine denies disallowed calls |
-| Pre-gated | Tools are pre-approved; native tools bypass gating |
+| Pre-gated | Tools are pre-approved via allow-lists; bypass gating |
+| Pre-tool hook | Shell hook runs before each tool call; can DENY |
+
+### Native elicitation strategies
+
+| Strategy | How it works |
+|---|---|
+| `canUseTool ASK` | Omnigent asks the model whether a tool call should proceed; model responds with ASK to surface approval to the web UI |
+| `request_permission` | ACP-native permission request flow surfaced to the web UI |
+| 2-stage + card | Two-phase approval with a UI card |
 
 ### Resume / fork strategies
 
@@ -92,7 +98,8 @@ All capabilities are **required** for a complete harness integration:
 - [ ] Model override works (or document vendor lock-in)
 - [ ] Auth is configured and documented (setup flow in `omni setup`)
 - [ ] Streaming forwards to the Omnigent forwarder
-- [ ] Policy / elicitation strategy is implemented for web UI
+- [ ] Omnigent policies enforce tool-use rules
+- [ ] Native elicitation surfaces tool-approval requests to web UI
 - [ ] Interrupt cancels the running turn
 - [ ] Live queue supports concurrent turns
 - [ ] Tool-boundary steering injects correctly
@@ -121,7 +128,8 @@ and relay the vendor's conversation into the Omnigent session.
 | **Model override** | User can select a model at launch or per-prompt |
 | **Auth** | Vendor login / config / token |
 | **Streaming (forwarder)** | `deltas` (token-level) vs `complete-only` (full response after completion) |
-| **Policies / Elicitation** | Whether the native harness can gate tool calls — mirror+reply, permission.v2+reply, hook DENY, or none |
+| **Omnigent policies** | Whether the native harness enforces Omnigent-side tool policies — hook DENY, policy engine |
+| **Native elicitation (web)** | Whether the native harness surfaces tool-approval requests to the web UI — mirror+reply, permission.v2+reply |
 | **Interrupt** | User can abort a running turn |
 | **Bidirectional sync (TUI->Omni)** | TUI output mirrors into the Omnigent conversation |
 | **In-harness session-cmd sync** | Supports `clear`, `fork`, `resume`, `switch` commands from Omnigent |
@@ -139,7 +147,8 @@ All capabilities are **required** for a complete native harness integration:
 - [ ] Model override works (or document vendor lock-in)
 - [ ] Auth configured (vendor login / config)
 - [ ] Streaming forwarder works (deltas preferred; complete-only acceptable)
-- [ ] Policy / elicitation strategy gates tool calls in web UI
+- [ ] Omnigent policies enforce tool-use rules
+- [ ] Native elicitation surfaces tool-approval requests to web UI
 - [ ] Interrupt aborts the running turn
 - [ ] Bidirectional sync mirrors TUI output into Omnigent conversation
 - [ ] Session commands (clear, fork, resume) work from Omnigent
