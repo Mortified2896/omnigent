@@ -695,18 +695,20 @@ def _run_turn_with_config(
     asyncio.run(run())
 
 
-def test_web_model_pick_propagates_into_turn_start(
+def test_web_model_pick_applied_via_thread_settings_update(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """
-    A web-picker model + reasoning effort ride along on ``turn/start``.
+    A web-picker model + reasoning effort apply via ``thread/settings/update``.
 
-    Codex's app-server has no ``setModel``; a model/effort change made in
-    the Omnigent web UI reaches the runner as ``ExecutorConfig.model`` /
-    ``extra["reasoning_effort"]`` and must be applied as a ``turn/start``
-    override or the picker silently does nothing (#1256). This pins both
-    overrides onto the started turn.
+    A model/effort change made in the Omnigent web UI reaches the runner
+    as ``ExecutorConfig.model`` / ``extra["reasoning_effort"]``. Codex's
+    ``turn/start`` takes no model/effort (input/context only), so the
+    override must ride a ``thread/settings/update`` request — whose
+    ``ThreadSettingsUpdateParams`` carries ``model`` and ``effort`` — or the
+    picker silently does nothing (#1256). The settings update precedes the
+    bare turn so the change is in effect for it.
     """
     _FakeCodexNativeClient.requests = []
     _FakeCodexNativeClient.created = []
@@ -726,28 +728,34 @@ def test_web_model_pick_propagates_into_turn_start(
 
     assert _FakeCodexNativeClient.requests == [
         (
+            "thread/settings/update",
+            {
+                "threadId": "thread_123",
+                "model": "gpt-5.3-codex",
+                "effort": "high",
+            },
+        ),
+        (
             "turn/start",
             {
                 "threadId": "thread_123",
                 "input": [{"type": "text", "text": "hello"}],
-                "model": "gpt-5.3-codex",
-                "effort": "high",
             },
-        )
+        ),
     ]
 
 
-def test_turn_start_omits_overrides_when_unset(
+def test_no_settings_update_when_overrides_unset(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """
-    With no model/effort pinned, ``turn/start`` carries no overrides.
+    With no model/effort pinned, no ``thread/settings/update`` is sent.
 
     A native thread that never touches the web picker must keep its
-    launch-pinned model — sending a stray ``model``/``effort`` could
-    clobber it. An empty/None config yields the bare ``{threadId, input}``
-    params.
+    launch-pinned model — a stray ``thread/settings/update`` could
+    clobber it. An empty/None config issues only the bare
+    ``{threadId, input}`` ``turn/start``.
     """
     _FakeCodexNativeClient.requests = []
     _FakeCodexNativeClient.created = []
@@ -767,7 +775,7 @@ def test_turn_start_omits_overrides_when_unset(
     ]
 
 
-def test_turn_start_drops_invalid_effort_keeps_model(
+def test_settings_update_drops_invalid_effort_keeps_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -776,7 +784,8 @@ def test_turn_start_drops_invalid_effort_keeps_model(
 
     A bad effort must not sink the turn (the bridge can't surface a
     validation error cleanly mid-dispatch), so it is logged and omitted
-    while a valid model override still rides along.
+    while a valid model override still rides along on
+    ``thread/settings/update``.
     """
     _FakeCodexNativeClient.requests = []
     _FakeCodexNativeClient.created = []
@@ -795,7 +804,7 @@ def test_turn_start_drops_invalid_effort_keeps_model(
     )
 
     method, params = _FakeCodexNativeClient.requests[0]
-    assert method == "turn/start"
+    assert method == "thread/settings/update"
     assert params["model"] == "gpt-5.3-codex"
     assert "effort" not in params
 
