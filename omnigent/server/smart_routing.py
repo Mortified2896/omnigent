@@ -171,7 +171,6 @@ class LLMRoutingClient:
                         ],
                     }
                 ],
-                max_tokens=256,
             )
             verdict = json.loads(response.output_text)
         except Exception:  # noqa: BLE001  # fail-open: any LLM/parse error skips routing
