@@ -15,10 +15,29 @@ from omnigent.opencode_native_provider import (
     OpenCodeGatewayResolution,
     _gateway_endpoint_for_model,
     build_opencode_model_default_config,
+    build_opencode_omnigent_mcp_server,
     build_opencode_provider_config,
     resolve_databricks_gateway,
     write_opencode_provider_config,
 )
+
+
+def test_build_omnigent_mcp_server_points_serve_mcp_at_bridge_dir() -> None:
+    block = build_opencode_omnigent_mcp_server(Path("/tmp/bridge-xyz"))
+    assert set(block) == {"omnigent"}
+    entry = block["omnigent"]
+    assert entry["type"] == "local"
+    assert entry["enabled"] is True
+    cmd = entry["command"]
+    # Launches the SHARED serve-mcp relay, pointed at THIS bridge dir.
+    assert cmd[-3:] == ["serve-mcp", "--bridge-dir", "/tmp/bridge-xyz"]
+    assert "omnigent.claude_native_bridge" in cmd
+    assert entry.get("environment", {}).get("PYTHONUNBUFFERED") == "1"
+
+
+def test_build_omnigent_mcp_server_honors_python_executable() -> None:
+    block = build_opencode_omnigent_mcp_server(Path("/tmp/b"), python_executable="/custom/python")
+    assert block["omnigent"]["command"][0] == "/custom/python"
 
 
 def test_build_model_default_config_pins_model_without_provider_block() -> None:

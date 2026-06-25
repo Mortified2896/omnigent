@@ -533,3 +533,111 @@ async def test_model_switched_mirrors_to_omnigent_and_dedupes() -> None:
     )
     after = len([b for _u, b in server.posts if b["type"] == "external_model_change"])
     assert after == before
+
+
+async def test_reasoning_part_streams_suffix_deltas() -> None:
+    """opencode reasoning parts → transient reasoning deltas (suffix-only)."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_1", "role": "assistant"}))
+    await fwd.handle_event(
+        _event(
+            "message.part.updated",
+            part={"id": "prt_r", "messageID": "msg_1", "type": "reasoning", "text": "Let me"},
+        )
+    )
+    await fwd.handle_event(
+        _event(
+            "message.part.updated",
+            part={
+                "id": "prt_r",
+                "messageID": "msg_1",
+                "type": "reasoning",
+                "text": "Let me think",
+            },
+        )
+    )
+    deltas = [
+        b["data"] for _u, b in server.posts if b["type"] == "external_output_reasoning_delta"
+    ]
+    # First snapshot opens the block (started); second posts only the new suffix.
+    assert deltas[0] == {"delta": "Let me", "started": True}
+    assert deltas[1] == {"delta": " think", "started": False}
+
+
+async def test_reasoning_part_no_repost_when_unchanged() -> None:
+    """A repeated identical reasoning snapshot posts no new delta."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_1", "role": "assistant"}))
+    part = {"id": "prt_r", "messageID": "msg_1", "type": "reasoning", "text": "stable"}
+    await fwd.handle_event(_event("message.part.updated", part=part))
+    await fwd.handle_event(_event("message.part.updated", part=dict(part)))
+    deltas = [b for _u, b in server.posts if b["type"] == "external_output_reasoning_delta"]
+    assert len(deltas) == 1
+
+
+async def test_image_file_part_posts_image_block() -> None:
+    """An image ``file`` part → an input/output_image content block."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_u", "role": "user"}))
+    await fwd.handle_event(
+        _event(
+            "message.part.updated",
+            part={
+                "id": "prt_f",
+                "messageID": "msg_u",
+                "type": "file",
+                "mime": "image/png",
+                "url": "data:image/png;base64,AAAA",
+            },
+        )
+    )
+    items = [b for _u, b in server.posts if b["type"] == "external_conversation_item"]
+    content = items[-1]["data"]["item_data"]["content"][0]
+    assert content == {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}
+    assert items[-1]["data"]["item_data"]["role"] == "user"
+
+
+async def test_non_image_file_part_text_flattened() -> None:
+    """A non-image ``file`` part → a short text reference (text-flattened)."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_a", "role": "assistant"}))
+    await fwd.handle_event(
+        _event(
+            "message.part.updated",
+            part={
+                "id": "prt_f2",
+                "messageID": "msg_a",
+                "type": "file",
+                "mime": "application/pdf",
+                "url": "file:///tmp/report.pdf",
+                "filename": "report.pdf",
+            },
+        )
+    )
+    items = [b for _u, b in server.posts if b["type"] == "external_conversation_item"]
+    block = items[-1]["data"]["item_data"]["content"][0]
+    assert block["type"] == "output_text"
+    assert "report.pdf" in block["text"]
+    assert items[-1]["data"]["item_data"]["agent"] == "opencode"
+
+
+async def test_file_part_dedupes_across_snapshots() -> None:
+    """A file part posts once even when the part updates repeatedly."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_u", "role": "user"}))
+    part = {
+        "id": "prt_f",
+        "messageID": "msg_u",
+        "type": "file",
+        "mime": "image/jpeg",
+        "url": "data:image/jpeg;base64,ZZZZ",
+    }
+    await fwd.handle_event(_event("message.part.updated", part=part))
+    await fwd.handle_event(_event("message.part.updated", part=dict(part)))
+    items = [b for _u, b in server.posts if b["type"] == "external_conversation_item"]
+    assert len(items) == 1

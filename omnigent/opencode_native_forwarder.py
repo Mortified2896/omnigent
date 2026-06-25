@@ -56,6 +56,10 @@ _EXTERNAL_SESSION_USAGE = "external_session_usage"
 # Mirrors a model switch typed in the opencode TUI (``/model`` or the picker)
 # back to Omnigent so the web model pill stays in sync (claude-native contract).
 _EXTERNAL_MODEL_CHANGE = "external_model_change"
+# Transient chain-of-thought delta — the reasoning analogue of the text delta
+# (same contract codex-native uses). The web paints a reasoning block; it is not
+# persisted, so on reload it is gone (acceptable, mirrors codex).
+_EXTERNAL_OUTPUT_REASONING_DELTA = "external_output_reasoning_delta"
 
 _STATUS_RUNNING = "running"
 _STATUS_IDLE = "idle"
@@ -164,6 +168,10 @@ class OpenCodeNativeForwarder:
         self._last_usage_signature: tuple[tuple[str, Any], ...] | None = None
         # Last model mirrored to Omnigent (provider/id), to dedupe switches.
         self._last_model: str | None = None
+        # reasoning part id -> chars already streamed as a delta. opencode sends
+        # the cumulative reasoning text on each ``part.updated``; we forward only
+        # the new suffix so the web reasoning block grows once, not duplicated.
+        self._reasoning_posted: dict[str, int] = {}
 
     async def seed_dedupe_from_history(self) -> None:
         """
@@ -400,6 +408,10 @@ class OpenCodeNativeForwarder:
     async def _end_turn(self) -> None:
         """Post ``idle`` and clear active state at turn end."""
         self.state.turn_active = False
+        # Reasoning deltas are per-turn; drop the per-part offsets so the map
+        # can't grow across a long-lived session (the next turn's reasoning
+        # parts carry fresh ids anyway).
+        self._reasoning_posted.clear()
         if self._bridge_dir is not None:
             update_active_message_id(self._bridge_dir, None, status="idle")
         await self._post_status(_STATUS_IDLE)
@@ -446,6 +458,10 @@ class OpenCodeNativeForwarder:
                 self._accumulate_text_part(part)
         elif part_type == "tool":
             await self._handle_tool_part(part)
+        elif part_type == "reasoning":
+            await self._handle_reasoning_part(part)
+        elif part_type == "file":
+            await self._handle_file_part(part)
         elif part_type == "step-start":
             await self._begin_turn_if_needed()
         elif part_type == "step-finish":
@@ -535,6 +551,88 @@ class OpenCodeNativeForwarder:
             await self._post_tool_output(
                 call_id, f"[error] {error}" if error else "[error]", message_id=response_message_id
             )
+
+    async def _handle_reasoning_part(self, part: Mapping[str, Any]) -> None:
+        """Forward an opencode ``reasoning`` part as transient reasoning deltas.
+
+        opencode carries the cumulative chain-of-thought text on each
+        ``part.updated`` (like text parts). We forward only the new suffix as an
+        ``external_output_reasoning_delta`` so the web paints one growing
+        reasoning block, with ``started`` set on the first chunk of each part
+        (the codex-native reasoning contract). Reasoning is transient — not
+        persisted as a chat item — so nothing is flushed on step end.
+        """
+        part_id = part.get("id")
+        text = part.get("text")
+        if not isinstance(part_id, str) or not isinstance(text, str):
+            return
+        # Only assistant reasoning is meaningful; opencode never tags reasoning
+        # to a user message, but guard anyway to match the text path.
+        if self._msg_role.get(str(part.get("messageID"))) == "user":
+            return
+        posted = self._reasoning_posted.get(part_id, 0)
+        if len(text) <= posted:
+            return
+        delta = text[posted:]
+        await self._begin_turn_if_needed()
+        await self._post_event(
+            _EXTERNAL_OUTPUT_REASONING_DELTA,
+            {"delta": delta, "started": posted == 0},
+        )
+        self._reasoning_posted[part_id] = len(text)
+
+    async def _handle_file_part(self, part: Mapping[str, Any]) -> None:
+        """Mirror an opencode ``file`` part — images as image blocks, else a note.
+
+        opencode emits ``{type:"file", mime, url, filename}`` parts for images
+        and other attachments. Image MIME types are forwarded as an
+        ``input_image`` / ``output_image`` content block (``image_url`` carries
+        the data URI / URL — the same shape the inbound transport reads);
+        non-image files are text-flattened to a short reference so they still
+        appear in the transcript. Deduped by part id.
+        """
+        part_id = part.get("id")
+        mime = part.get("mime")
+        url = part.get("url")
+        if not isinstance(part_id, str):
+            return
+        if not self.state.mark(self._key("file", part_id)):
+            return
+        message_id = part.get("messageID")
+        response_message_id = message_id if isinstance(message_id, str) else None
+        role = "user" if self._msg_role.get(str(message_id)) == "user" else "assistant"
+        await self._begin_turn_if_needed()
+        if isinstance(mime, str) and mime.startswith("image/") and isinstance(url, str) and url:
+            block_type = "input_image" if role == "user" else "output_image"
+            await self._post_message_content(
+                role, [{"type": block_type, "image_url": url}], message_id=response_message_id
+            )
+            return
+        # Non-image attachment → a short text reference (text-flattened).
+        filename = part.get("filename")
+        label = filename if isinstance(filename, str) and filename else (mime or "attachment")
+        block_type = "input_text" if role == "user" else "output_text"
+        await self._post_message_content(
+            role,
+            [{"type": block_type, "text": f"[attachment: {label}]"}],
+            message_id=response_message_id,
+        )
+
+    async def _post_message_content(
+        self, role: str, content: list[dict[str, Any]], *, message_id: str | None
+    ) -> None:
+        """Persist a message item with arbitrary content blocks (image / note)."""
+        item_data: dict[str, Any] = {"role": role, "content": content}
+        if role == "assistant":
+            item_data["agent"] = _AGENT_NAME
+        await self._post_event(
+            _EXTERNAL_ITEM,
+            {
+                "item_type": "message",
+                "item_data": item_data,
+                "response_id": self._response_id(message_id),
+            },
+        )
 
     async def _on_session_status(self, event: OpenCodeEvent) -> None:
         """Handle ``session.status`` — surface the running edge."""

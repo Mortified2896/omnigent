@@ -972,6 +972,7 @@ async def _auto_create_opencode_terminal(
     *,
     agent_spec: Any | None = None,
     server_client: httpx.AsyncClient | None = None,
+    ensure_comment_relay: Callable[..., Awaitable[None]] | None = None,
 ) -> SessionResourceView:
     """
     Auto-create an OpenCode terminal for an opencode-native session.
@@ -988,6 +989,10 @@ async def _auto_create_opencode_terminal(
     :param publish_event: Per-session SSE emitter for the new terminal.
     :param agent_spec: Optional resolved agent spec (os_env + model).
     :param server_client: Runner Omnigent server HTTP client.
+    :param ensure_comment_relay: Callback that starts the Omnigent builtin-tool
+        relay for this session's bridge dir (the nested
+        ``_ensure_comment_relay_started``). ``None`` skips wiring the Omnigent
+        MCP relay (tests / no server).
     :returns: The created terminal resource view.
     """
     from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
@@ -1002,6 +1007,7 @@ async def _auto_create_opencode_terminal(
         prepare_bridge_dir,
         seed_opencode_auth,
         write_bridge_state,
+        write_relay_bridge_config,
     )
     from omnigent.opencode_native_forwarder import OpenCodeNativeForwarder
 
@@ -1011,6 +1017,11 @@ async def _auto_create_opencode_terminal(
     )
     workspace = str(launch_config.workspace)
     bridge_dir = prepare_bridge_dir(session_id)
+    # Seed the token the shared ``serve-mcp`` reads at boot (idempotent) so the
+    # Omnigent builtin-tool relay (wired below) can start. Safe to call before
+    # the relay; ``start_tool_relay`` mints its own relay token in
+    # ``tool_relay.json``.
+    write_relay_bridge_config(bridge_dir)
     # Cancel any surviving forwarder first so its teardown closes the OLD
     # server, then clear stale bridge state so web injection waits for the
     # new launch's URL/session instead of a dead one.
@@ -1033,6 +1044,7 @@ async def _auto_create_opencode_terminal(
     from omnigent.opencode_native_provider import (
         build_opencode_mcp_block,
         build_opencode_model_default_config,
+        build_opencode_omnigent_mcp_server,
         build_opencode_provider_config,
         resolve_databricks_gateway,
         write_opencode_provider_config,
@@ -1058,12 +1070,18 @@ async def _auto_create_opencode_terminal(
         # auth.json, so no provider block is needed.
         config = dict(build_opencode_model_default_config(model_override))
 
-    # Make the agent's MCP servers available to opencode (translated into its
-    # own config), and force every tool call to prompt so it routes through
-    # Omnigent's policy engine via the forwarder's permission gate — opencode's
-    # enforcement is reactive (no pre-tool hook), so "ask" is what makes the
-    # policy verdicts apply to MCP (and other) tools.
+    # Build opencode's ``mcp`` block: the Omnigent builtin-tool relay (so the
+    # model can call sys_*/load_skill/web_fetch — the real "connects to Omnigent
+    # MCP") PLUS the agent's own declared MCP servers (translated into opencode's
+    # config). The relay is added only when we'll actually start it below
+    # (``ensure_comment_relay`` present), else serve-mcp would launch with no
+    # tool_relay.json to read. Force every tool call to prompt so it routes
+    # through Omnigent's policy engine via the forwarder's permission gate —
+    # opencode's enforcement is reactive (no pre-tool hook), so "ask" is what
+    # makes the policy verdicts apply to MCP (and other) tools.
     mcp_block = build_opencode_mcp_block(_opencode_native_mcp_servers_from_spec(agent_spec))
+    if server_client is not None and ensure_comment_relay is not None:
+        mcp_block.update(build_opencode_omnigent_mcp_server(bridge_dir))
     if mcp_block:
         config.setdefault("$schema", "https://opencode.ai/config.json")
         config["mcp"] = mcp_block
@@ -1077,6 +1095,17 @@ async def _auto_create_opencode_terminal(
     # their providers and falls back to the no-auth default model. No-op on a
     # remote runner (no local auth.json) / Databricks-gateway path.
     seed_opencode_auth(bridge_dir)
+
+    # Start the Omnigent builtin-tool relay BEFORE opencode boots, so
+    # ``tool_relay.json`` exists when opencode launches the ``serve-mcp`` MCP
+    # server and lists its tools (the sys_*/load_skill/web_fetch surface). The
+    # relay POSTs each call back through the Omnigent server (policy enforced).
+    if server_client is not None and ensure_comment_relay is not None:
+        await ensure_comment_relay(
+            session_id,
+            explicit_bridge_dir=bridge_dir,
+            await_notify=False,
+        )
 
     server = OpenCodeNativeServer(bridge_dir=bridge_dir, workspace=launch_config.workspace)
     await server.start()
@@ -8764,6 +8793,7 @@ def create_runner_app(
                             _publish_event,
                             agent_spec=_opencode_spec,
                             server_client=server_client,
+                            ensure_comment_relay=_ensure_comment_relay_started,
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -11181,6 +11211,83 @@ def create_runner_app(
             )
         finally:
             await client.aclose()
+        return Response(status_code=200)
+
+    async def _handle_opencode_native_model_change(conv_id: str, model: str | None) -> Response:
+        """
+        Apply an Omnigent-initiated model switch to an opencode-native session.
+
+        opencode has no session-level model setting — the model is a per-prompt
+        field, and the executor reads ``model_override`` from bridge state on
+        every web-injected turn. So a model switch is just a bridge-state write;
+        the NEXT injected turn uses it. (A model typed in the opencode TUI itself
+        is mirrored the other way by the forwarder's ``session.next.model.switched``
+        handler.) A blank/null model clears the override.
+
+        :param conv_id: Session/conversation identifier, e.g. ``"conv_abc123"``.
+        :param model: New qualified model id, or ``None`` / blank to clear.
+        :returns: 200 once the override is persisted; 204 when no bridge state
+            exists yet (server not launched — the next launch reads the spec).
+        """
+        from omnigent.opencode_native_bridge import (
+            bridge_dir_for_bridge_id,
+            update_model_override,
+        )
+
+        updated = await asyncio.to_thread(
+            update_model_override, bridge_dir_for_bridge_id(conv_id), model
+        )
+        return Response(status_code=200 if updated else 204)
+
+    async def _handle_opencode_native_clear(conv_id: str) -> Response:
+        """
+        Clear an opencode-native session by abandoning its opencode session.
+
+        opencode exposes no reset/clear endpoint (verified against 1.17.x: only
+        ``/summarize`` compacts; there is no message-wipe), so a true "clear" =
+        start a FRESH opencode session and rebind the live forwarder + TUI to it.
+        We do that by clearing the persisted ``external_session_id`` (so the next
+        launch can't resume the old context) and relaunching the opencode
+        terminal, which cancels the old forwarder/server and creates a brand-new
+        opencode session — the cleanest reset available without an opencode API.
+
+        :param conv_id: Session/conversation identifier, e.g. ``"conv_abc123"``.
+        :returns: 200 once the fresh session is launched; 204 when the session is
+            not an opencode-native session with a resolvable spec; 503 on
+            relaunch failure.
+        """
+        if _session_harness_name(conv_id) != "opencode-native":
+            return Response(status_code=204)
+        # Drop the persisted opencode session id so the relaunch starts fresh
+        # instead of resuming the just-cleared context (best effort).
+        if server_client is not None:
+            with contextlib.suppress(httpx.HTTPError):
+                await server_client.patch(
+                    f"/v1/sessions/{urllib.parse.quote(conv_id, safe='')}",
+                    json={"external_session_id": None},
+                    timeout=10.0,
+                )
+        try:
+            spec = await _resolve_session_agent_spec(conv_id)
+        except OmnigentError:
+            spec = None
+        try:
+            await _auto_create_opencode_terminal(
+                conv_id,
+                resource_registry,
+                _publish_event,
+                agent_spec=spec,
+                server_client=server_client,
+                ensure_comment_relay=_ensure_comment_relay_started,
+            )
+        except Exception as exc:  # noqa: BLE001 - report relaunch failure to caller.
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "opencode_native_clear_failed",
+                    "detail": _client_safe_error_detail(exc, context="opencode-native clear"),
+                },
+            )
         return Response(status_code=200)
 
     async def _handle_cursor_native_compact(conv_id: str) -> Response:
@@ -14147,7 +14254,7 @@ def create_runner_app(
             # update. Other harnesses pick up the persisted value on the
             # next turn and 204 here.
             harness = _session_harness_name(conversation_id)
-            if harness in ("claude-native", "codex-native", "cursor-native"):
+            if harness in ("claude-native", "codex-native", "cursor-native", "opencode-native"):
                 model = body.get("model") if isinstance(body, dict) else None
                 if model is not None and not isinstance(model, str):
                     return JSONResponse(
@@ -14166,6 +14273,11 @@ def create_runner_app(
                     )
                 if harness == "cursor-native":
                     return await _handle_cursor_native_model_change(
+                        conversation_id,
+                        model,
+                    )
+                if harness == "opencode-native":
+                    return await _handle_opencode_native_model_change(
                         conversation_id,
                         model,
                     )
@@ -14223,6 +14335,16 @@ def create_runner_app(
                 return await _handle_cursor_native_compact(conversation_id)
             if _session_harness_name(conversation_id) == "hermes-native":
                 return await _handle_hermes_native_compact(conversation_id)
+            return Response(status_code=204)
+
+        if body_type == "clear":
+            # Omnigent server forwards an explicit /clear here. opencode-native
+            # has no reset endpoint, so a true clear relaunches the opencode
+            # terminal on a brand-new session (see the handler). Other harnesses
+            # 204 no-op — their clear is an AP-side conversation reset the server
+            # performs without runner involvement.
+            if _session_harness_name(conversation_id) == "opencode-native":
+                return await _handle_opencode_native_clear(conversation_id)
             return Response(status_code=204)
 
         if body_type == "cost_approval_popup":
@@ -14742,6 +14864,7 @@ def create_runner_app(
                         _publish_event,
                         agent_spec=opencode_agent_spec,
                         server_client=server_client,
+                        ensure_comment_relay=_ensure_comment_relay_started,
                     )
                 except Exception as exc:
                     _logger.exception(

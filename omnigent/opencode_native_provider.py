@@ -185,6 +185,46 @@ def build_opencode_mcp_block(
     return block
 
 
+def build_opencode_omnigent_mcp_server(
+    bridge_dir: Path, *, python_executable: str | None = None
+) -> dict[str, dict[str, object]]:
+    """
+    Build the opencode ``mcp`` entry that connects opencode to Omnigent's MCP.
+
+    This is what makes opencode's model call the Omnigent builtin tools
+    (``sys_session_*``, ``sys_agent_*``, ``load_skill``, ``web_fetch``,
+    ``list_comments``/``update_comment``, policy tools, …). opencode launches the
+    SHARED ``omnigent.claude_native_bridge serve-mcp`` as a ``{type:"local"}``
+    stdio MCP server (the same relay codex/cursor/qwen use); ``serve-mcp`` reads
+    the relay URL+token from ``tool_relay.json`` in *bridge_dir* (written by the
+    runner's comment relay) and proxies each tool call back through the Omnigent
+    server, where policy is enforced. The command is sourced from
+    :func:`claude_native_bridge.build_mcp_config` so the invocation stays in one
+    place.
+
+    :param bridge_dir: OpenCode-native bridge directory (must hold ``bridge.json``
+        + ``tool_relay.json``).
+    :param python_executable: Python to run ``serve-mcp`` with; ``None`` uses the
+        runner interpreter (has ``omnigent`` importable).
+    :returns: A one-entry ``mcp`` block ``{"omnigent": {type:"local", …}}``.
+    """
+    from omnigent.claude_native_bridge import build_mcp_config
+
+    claude_cfg = build_mcp_config(bridge_dir, python_executable=python_executable)
+    # build_mcp_config returns {"mcpServers": {"<name>": {command, args, env}}};
+    # opencode wants a flat command list + ``environment``.
+    name, server = next(iter(claude_cfg["mcpServers"].items()))
+    entry: dict[str, object] = {
+        "type": "local",
+        "command": [server["command"], *server.get("args", [])],
+        "enabled": True,
+    }
+    env = dict(server.get("env", {}) or {})
+    if env:
+        entry["environment"] = env
+    return {str(name): entry}
+
+
 def _databricks_bearer_token(profile: str) -> str | None:
     """Resolve a bearer token for a ``~/.databrickscfg`` profile (best-effort)."""
     try:

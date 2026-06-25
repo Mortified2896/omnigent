@@ -51,6 +51,12 @@ _STATE_FILE = "state.json"
 _AUTH_SECRET_FILE = "auth.secret"
 _XDG_DATA_DIR = "xdg-data"
 _XDG_CONFIG_DIR = "xdg-config"
+# Token file the shared ``omnigent.claude_native_bridge serve-mcp`` reads to
+# boot (filename MUST match ``claude_native_bridge._CONFIG_FILE``). opencode
+# launches that serve-mcp as a ``{type:"local"}`` MCP server which relays the
+# Omnigent builtin tools (``sys_*``/``load_skill``/``web_fetch``) advertised in
+# ``tool_relay.json`` by the runner's comment relay.
+_MCP_BRIDGE_CONFIG_FILE = "bridge.json"
 _STATE_VERSION = 1
 _BRIDGE_ROOT = Path.home() / ".omnigent" / "opencode-native"
 _ID_HASH_CHARS = 32
@@ -171,6 +177,39 @@ def prepare_bridge_dir(bridge_id: str) -> Path:
     xdg_data_home_for_bridge_dir(bridge_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
     xdg_config_home_for_bridge_dir(bridge_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
     return bridge_dir
+
+
+def write_relay_bridge_config(bridge_dir: Path) -> None:
+    """
+    Write a minimal ``bridge.json`` so the shared ``serve-mcp`` can boot.
+
+    The shared ``omnigent.claude_native_bridge serve-mcp`` stdio server (which
+    opencode launches as a ``{type:"local"}`` MCP server) reads this file for an
+    auth token at startup; the relay tools themselves come from
+    ``tool_relay.json`` (written by the runner's comment relay), so this carries
+    only a token — no ``workspace`` key, so no ``sys_os_*`` tools are served
+    (opencode owns its own filesystem tools). Mirrors
+    ``codex_native_bridge.write_mcp_bridge_config``.
+
+    Idempotent: skips if a config already exists so a relaunch never rotates a
+    token the relay HTTP server was already started with.
+
+    :param bridge_dir: OpenCode-native bridge directory.
+    """
+    config_path = bridge_dir / _MCP_BRIDGE_CONFIG_FILE
+    if config_path.exists():
+        return
+    bridge_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {"token": secrets.token_urlsafe(32)}
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{_MCP_BRIDGE_CONFIG_FILE}.", dir=str(bridge_dir))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_name, config_path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def xdg_data_home_for_bridge_dir(bridge_dir: Path) -> Path:
@@ -441,3 +480,30 @@ def update_last_event_id(bridge_dir: Path, last_event_id: str) -> None:
     import dataclasses
 
     write_bridge_state(bridge_dir, dataclasses.replace(state, last_event_id=last_event_id))
+
+
+def update_model_override(bridge_dir: Path, model_override: str | None) -> bool:
+    """
+    Persist a new per-session model override (Omnigent→opencode model switch).
+
+    opencode has no session-level model setting — the model is a per-prompt
+    field — so the executor reads ``model_override`` from this bridge state on
+    every web-injected prompt (see
+    ``OpenCodeNativeExecutor._build_prompt_with_model_override``). Updating it
+    here makes the NEXT injected turn use the new model. A blank/whitespace
+    value clears the override (fall back to opencode's own default).
+
+    :param bridge_dir: Native OpenCode bridge directory.
+    :param model_override: New qualified model id (``provider/model``), or
+        ``None`` / blank to clear.
+    :returns: ``True`` when the state existed and was updated, ``False`` when
+        no bridge state is present (server not launched yet).
+    """
+    state = read_bridge_state(bridge_dir)
+    if state is None:
+        return False
+    import dataclasses
+
+    normalized = model_override.strip() if isinstance(model_override, str) else None
+    write_bridge_state(bridge_dir, dataclasses.replace(state, model_override=normalized or None))
+    return True

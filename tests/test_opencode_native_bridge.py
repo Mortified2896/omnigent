@@ -20,7 +20,9 @@ from omnigent.opencode_native_bridge import (
     read_bridge_state,
     update_active_message_id,
     update_last_event_id,
+    update_model_override,
     write_bridge_state,
+    write_relay_bridge_config,
     xdg_config_home_for_bridge_dir,
     xdg_data_home_for_bridge_dir,
 )
@@ -100,6 +102,37 @@ def test_update_active_message_id(bridge_dir: Path) -> None:
     assert loaded is not None
     assert loaded.active_message_id is None
     assert loaded.status == "idle"
+
+
+def test_update_model_override(bridge_dir: Path) -> None:
+    write_bridge_state(bridge_dir, _state(bridge_dir))
+    assert update_model_override(bridge_dir, "anthropic/claude-opus-4") is True
+    loaded = read_bridge_state(bridge_dir)
+    assert loaded is not None
+    assert loaded.model_override == "anthropic/claude-opus-4"
+    # Blank clears the override.
+    assert update_model_override(bridge_dir, "  ") is True
+    loaded = read_bridge_state(bridge_dir)
+    assert loaded is not None
+    assert loaded.model_override is None
+
+
+def test_update_model_override_no_state_returns_false(bridge_dir: Path) -> None:
+    # No bridge state written yet (server not launched).
+    assert update_model_override(bridge_dir, "x/y") is False
+
+
+def test_write_relay_bridge_config_writes_token_and_is_idempotent(bridge_dir: Path) -> None:
+    write_relay_bridge_config(bridge_dir)
+    config_path = bridge_dir / "bridge.json"
+    assert config_path.exists()
+    payload = json.loads(config_path.read_text())
+    token = payload["token"]
+    assert isinstance(token, str) and token
+    # Idempotent: a second call must NOT rotate the token (the relay HTTP server
+    # may already have been started with it).
+    write_relay_bridge_config(bridge_dir)
+    assert json.loads(config_path.read_text())["token"] == token
 
 
 def test_update_last_event_id(bridge_dir: Path) -> None:
