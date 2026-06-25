@@ -6,7 +6,11 @@ import json
 import signal
 from pathlib import Path
 
+import pytest
+
 from omnigent import codex_native_process_registry as registry
+
+fcntl = pytest.importorskip("fcntl")
 
 
 def _registry_payload(path: Path) -> list[dict[str, object]]:
@@ -219,3 +223,25 @@ def test_tmux_session_reaped_only_when_recorded_name_exists(tmp_path: Path, monk
 
     assert killed_tmux == ["omnigent-codex-live"]
     assert _registry_payload(path) == []
+
+
+def test_owner_lock_liveness_round_trip(tmp_path: Path, monkeypatch) -> None:
+    """A held owner lock reads as held; releasing it makes the entry reapable."""
+    monkeypatch.setattr(registry, "_codex_native_state_root", lambda: tmp_path)
+    lock = registry.acquire_codex_native_process_owner_lock()
+    assert lock is not None
+    assert registry._owner_lock_held(str(lock.path)) is True
+    lock.close()
+    assert registry._owner_lock_held(str(lock.path)) is False
+
+
+def test_registry_lock_serializes_read_modify_write(tmp_path: Path) -> None:
+    """The registry lock is exclusive across the read-modify-write window."""
+    path = tmp_path / "registry.json"
+    with registry._registry_lock(path):
+        fd = registry.os.open(str(path) + ".lock", registry.os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            registry.os.close(fd)

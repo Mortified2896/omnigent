@@ -9,9 +9,9 @@ import os
 import signal
 import subprocess
 import uuid
+from collections.abc import Generator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from omnigent.codex_native_state import _codex_native_state_root
 
@@ -105,7 +105,7 @@ def acquire_codex_native_process_owner_lock() -> CodexNativeProcessOwnerLock | N
     except OSError:
         _logger.warning("codex-native process owner lock create failed", exc_info=True)
         with contextlib.suppress(NameError, OSError):
-            os.close(fd)  # type: ignore[possibly-undefined]
+            os.close(fd)
         return None
     return CodexNativeProcessOwnerLock(path=path, fd=fd)
 
@@ -153,11 +153,12 @@ def register_codex_native_process(
         owner_lock_path=str(owner_lock_path) if owner_lock_path is not None else None,
     )
     path = registry_path or codex_native_process_registry_path()
-    entries = [
-        existing for existing in _read_registry(path) if existing.session_tag != session_tag
-    ]
-    entries.append(entry)
-    _write_registry(path, entries)
+    with _registry_lock(path):
+        entries = [
+            existing for existing in _read_registry(path) if existing.session_tag != session_tag
+        ]
+        entries.append(entry)
+        _write_registry(path, entries)
 
 
 def unregister_codex_native_process(
@@ -175,8 +176,9 @@ def unregister_codex_native_process(
     if not session_tag:
         return
     path = registry_path or codex_native_process_registry_path()
-    entries = [entry for entry in _read_registry(path) if entry.session_tag != session_tag]
-    _write_registry(path, entries)
+    with _registry_lock(path):
+        entries = [entry for entry in _read_registry(path) if entry.session_tag != session_tag]
+        _write_registry(path, entries)
 
 
 def reconcile_codex_native_process_registry(*, registry_path: Path | None = None) -> None:
@@ -190,20 +192,60 @@ def reconcile_codex_native_process_registry(*, registry_path: Path | None = None
     :returns: None.
     """
     path = registry_path or codex_native_process_registry_path()
-    survivors: list[CodexNativeProcessEntry] = []
-    for entry in _read_registry(path):
-        if _owner_lock_held(entry.owner_lock_path):
-            survivors.append(entry)
-            continue
-        if not _pid_alive(entry.pid):
-            continue
-        if not _process_cmdline_has_tag(entry.pid, entry.session_tag):
-            continue
-        if not _terminate_process_group(entry.pgid):
-            survivors.append(entry)
-            continue
-        _reap_tmux_session(entry.tmux_session_name)
-    _write_registry(path, survivors)
+    with _registry_lock(path):
+        survivors: list[CodexNativeProcessEntry] = []
+        for entry in _read_registry(path):
+            if _owner_lock_held(entry.owner_lock_path):
+                survivors.append(entry)
+                continue
+            if not _pid_alive(entry.pid):
+                continue
+            if not _process_cmdline_has_tag(entry.pid, entry.session_tag):
+                continue
+            if not _terminate_process_group(entry.pgid):
+                survivors.append(entry)
+                continue
+            _reap_tmux_session(entry.tmux_session_name)
+        _write_registry(path, survivors)
+
+
+@contextlib.contextmanager
+def _registry_lock(path: Path) -> Generator[None, None, None]:
+    """
+    Serialize the read-modify-write on the shared registry file.
+
+    The registry is a single host-global file mutated by every concurrent
+    launcher, so an unlocked read-modify-write can drop an entry written by
+    another launcher between its read and its write — leaving an orphan that
+    crash reconciliation can never reap. An exclusive flock on a sibling lock
+    file makes the whole sequence atomic across processes. Degrades to a no-op
+    when locking is unavailable (Windows, or a lock-file failure).
+
+    :param path: Registry file path being mutated.
+    :returns: Context manager guarding the mutation.
+    """
+    if fcntl is None:
+        yield
+        return
+    fd = None
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        _logger.warning("codex-native process registry lock failed", exc_info=True)
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 def _read_registry(path: Path) -> list[CodexNativeProcessEntry]:
@@ -240,7 +282,7 @@ def _write_registry(path: Path, entries: list[CodexNativeProcessEntry]) -> None:
         _logger.warning("codex-native process registry write failed", exc_info=True)
 
 
-def _entry_from_json(item: Any) -> CodexNativeProcessEntry | None:
+def _entry_from_json(item: object) -> CodexNativeProcessEntry | None:
     if not isinstance(item, dict):
         return None
     pid = item.get("pid")
