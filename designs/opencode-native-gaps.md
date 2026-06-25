@@ -73,19 +73,19 @@ Gap-matrix verdicts for the opencode row (✓ = works, ✗ = missing, ? = unknow
 
 | Capability | Matrix | Resolved verdict |
 |---|---|---|
-| Connects to Omnigent MCP | ✗ | missing — build |
+| Connects to Omnigent MCP | ✗ | was missing → **built**: launches the shared `serve-mcp` relay → `sys_*`/`load_skill`/`web_fetch`/comment/policy tools |
 | Model override | ✓ | works (per-prompt) |
 | Streaming (forwarder) | complete-only | by design for native-server |
-| Elicitation (web) | ✓ | **solid** (verified) + a separate `question.v2` surface is unhandled |
-| Policies | ? | **YES, wired** to the TOOL_CALL engine (reactive) |
-| Cost tracking (P1) | ? | **missing** — build |
+| Elicitation (web) | ✓ | **solid** (verified) + a separate `question.asked` surface — foundation landed, web round-trip is a follow-up |
+| Policies | ? | **YES, wired** to the TOOL_CALL engine (reactive); force-`ask` makes it cover MCP + relay tools too |
+| Cost tracking (P1) | ? | was missing → **built** (`external_session_usage`) |
 | Interrupt | ✓ | works (abort) |
 | Bidirectional sync (TUI→Omni) | ✓ | works |
-| In-harness session-cmd sync | ✗ | missing — build |
-| Resume/fork from Omnigent transcript | ✗ | missing — resume loses history cross-host; fork unwired (P1) |
-| Compaction | ? | **missing**, and worse: web-UI `/compact` fakes success (P0) |
-| Reasoning (P1) | ✓ | works |
-| Images | ✓ | works |
+| In-harness session-cmd sync | ✗ | was missing → **built**: compact + fork + resume + model-switch (both ways) + clear |
+| Resume/fork from Omnigent transcript | ✗ | was missing → **built** (text-prefix replay; fork reuses it) |
+| Compaction | ? | was missing (web `/compact` faked success) → **built** (P0) |
+| Reasoning (P1) | matrix said ✓ but was NOT wired | → **built**: reasoning parts → transient reasoning deltas |
+| Images | matrix said ✓ but was NOT wired | → **built**: image parts → image content blocks; non-image files text-flattened |
 
 ## Recon: opencode 1.17.7 (live)
 
