@@ -317,12 +317,41 @@ def read_pending_tool_request(
 
 @dataclass
 class _MirrorItem:
-    """One conversation item ready to POST, plus the message id that produced it."""
+    """One conversation item ready to POST, plus the message id that produced it.
+
+    :param reasoning_text: Thinking (chain-of-thought) text from the same row, if
+        any. Posted as a transient ``external_output_reasoning_delta`` BEFORE the
+        conversation item, so the web UI paints a "thinking" block that the
+        following assistant message finalizes. ``item_type`` may be empty (a
+        reasoning-only row) while ``reasoning_text`` is set.
+    """
 
     msg_id: int
     item_type: str
     item_data: dict[str, object]
     response_id: str
+    reasoning_text: str | None = None
+
+
+def _content_reasoning(content_json: str) -> str:
+    """Extract concatenated thinking text from a Goose ``content_json`` value.
+
+    Goose persists model reasoning as ``{"type":"thinking","thinking":"…"}`` parts
+    (verified against a live ``sessions.db``); redacted thinking
+    (``{"type":"redactedThinking"}``) carries no readable text and is skipped.
+    """
+    try:
+        obj = json.loads(content_json)
+    except ValueError:
+        return ""
+    parts = obj if isinstance(obj, list) else [obj]
+    chunks: list[str] = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("type") == "thinking":
+            thinking = part.get("thinking")
+            if isinstance(thinking, str) and thinking:
+                chunks.append(thinking)
+    return "".join(chunks).strip()
 
 
 def _content_text(content_json: str) -> str:
@@ -389,8 +418,20 @@ def _message_to_item(
             response_id=response_id,
         )
     if role == "assistant":
+        reasoning = _content_reasoning(content_json) or None
         if not text:
-            return None  # tool-only / reasoning-only turn with no prose
+            # A reasoning-only step (thinking, then tools) still surfaces its
+            # thinking; the conversation item is empty (item_type="") so only the
+            # reasoning delta posts, and the cursor advances.
+            if reasoning:
+                return _MirrorItem(
+                    msg_id=msg_id,
+                    item_type="",
+                    item_data={},
+                    response_id="",
+                    reasoning_text=reasoning,
+                )
+            return None  # tool-only turn with no prose or thinking
         return _MirrorItem(
             msg_id=msg_id,
             item_type="message",
@@ -400,6 +441,7 @@ def _message_to_item(
                 "content": [{"type": "output_text", "text": text}],
             },
             response_id=response_id,
+            reasoning_text=reasoning,
         )
     return None  # tool / system / other scaffolding
 
@@ -449,6 +491,24 @@ async def _post_conversation_item(
                 "item_data": item.item_data,
                 "response_id": item.response_id,
             },
+        },
+    )
+    resp.raise_for_status()
+
+
+async def _post_reasoning_delta(client: httpx.AsyncClient, *, session_id: str, text: str) -> None:
+    """POST a row's thinking as one transient ``external_output_reasoning_delta``.
+
+    Goose persists the complete thinking block (not token deltas), so the whole
+    text goes as a single ``started=True`` delta; the assistant message posted
+    next finalizes the painted block. Reasoning is never a persisted conversation
+    item (the same contract as every other harness), so this is fire-and-forget.
+    """
+    resp = await client.post(
+        f"/v1/sessions/{session_id}/events",
+        json={
+            "type": "external_output_reasoning_delta",
+            "data": {"delta": text, "started": True},
         },
     )
     resp.raise_for_status()
@@ -511,6 +571,12 @@ async def forward_goose_store_to_session(
                         _read_new_items, db, goose_session_id, last_id, agent_name
                     )
                     for item in items:
+                        # Paint thinking first so the message that follows finalizes
+                        # the reasoning block.
+                        if item.reasoning_text:
+                            await _post_reasoning_delta(
+                                client, session_id=session_id, text=item.reasoning_text
+                            )
                         if item.item_type:
                             await _post_conversation_item(client, session_id=session_id, item=item)
                         last_id = item.msg_id

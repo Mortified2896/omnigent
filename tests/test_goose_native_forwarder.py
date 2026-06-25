@@ -65,6 +65,52 @@ def test_content_text_handles_shapes() -> None:
     assert f._content_text("plain text") == "plain text"
 
 
+def test_content_reasoning_extracts_thinking_and_skips_redacted() -> None:
+    cj = json.dumps(
+        [
+            {"type": "thinking", "thinking": "step one. "},
+            {"type": "redactedThinking"},
+            {"type": "thinking", "thinking": "step two."},
+            {"type": "text", "text": "answer"},
+        ]
+    )
+    assert f._content_reasoning(cj) == "step one. step two."
+    assert f._content_reasoning(json.dumps([{"type": "text", "text": "hi"}])) == ""
+    assert f._content_reasoning("not json") == ""
+
+
+def test_message_to_item_assistant_carries_reasoning() -> None:
+    cj = json.dumps(
+        [{"type": "thinking", "thinking": "let me think"}, {"type": "text", "text": "hello"}]
+    )
+    item = f._message_to_item(7, "assistant", cj, "goose-native-ui")
+    assert item is not None
+    assert item.item_type == "message"
+    assert item.reasoning_text == "let me think"
+    assert item.item_data["content"] == [{"type": "output_text", "text": "hello"}]
+
+
+def test_message_to_item_reasoning_only_step_posts_reasoning_no_message() -> None:
+    cj = json.dumps([{"type": "thinking", "thinking": "planning tools"}])
+    item = f._message_to_item(8, "assistant", cj, "goose-native-ui")
+    assert item is not None
+    assert item.item_type == ""  # no conversation item, only the reasoning delta
+    assert item.reasoning_text == "planning tools"
+
+
+def test_message_to_item_tool_only_still_skipped() -> None:
+    cj = json.dumps(
+        [
+            {
+                "type": "toolRequest",
+                "id": "x",
+                "toolCall": {"status": "success", "value": {"name": "shell", "arguments": {}}},
+            }
+        ]
+    )
+    assert f._message_to_item(9, "assistant", cj, "a") is None
+
+
 def test_resolve_session_id_by_name(tmp_path: Path) -> None:
     db = tmp_path / "sessions.db"
     _seed_db(db)
