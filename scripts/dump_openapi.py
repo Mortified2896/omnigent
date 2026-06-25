@@ -222,6 +222,15 @@ _TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "session_mcp_servers",
+        "x-displayName": "Session MCP Servers",
+        "description": (
+            "Manage the MCP server declarations on a session's bound "
+            "agent: list the configured servers and create, update, and "
+            "remove them on session-scoped agents."
+        ),
+    },
+    {
         "name": "agents",
         "x-displayName": "Agents",
         "description": "Discover the built-in agents available to bind to a session.",
