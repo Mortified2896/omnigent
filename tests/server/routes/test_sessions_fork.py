@@ -796,14 +796,15 @@ async def test_fork_switch_404_unknown_target() -> None:
             False,
             {"omnigent.ui": "terminal", "omnigent.wrapper": "codex-native-ui"},
         ),
-        # cursor-native is a native terminal-first harness but has no
-        # resumable session file to rebuild, so do not stamp
-        # carry_history_into_native.
+        # cursor target carries history via a text preamble (its conversation
+        # is server-backed, so the runner can't seed a local store for --resume),
+        # so carry_history_into_native IS stamped — the runner branches on the
+        # harness to choose preamble vs transcript rebuild.
         (
             "claude_sdk",
             "cursor-native",
             False,
-            False,
+            True,
             False,
             {"omnigent.ui": "terminal", "omnigent.wrapper": "cursor-native-ui"},
         ),
@@ -851,9 +852,9 @@ async def test_fork_switch_model_and_carry_gating(
     """The switch gates model copy + native carry + UI mode on the target.
 
     A model id is provider-bound, so ``copy_model_settings`` must be True
-    only within a family. ``carry_history_into_native`` must be True only for
-    native targets that can replay fork history (claude/codex); cursor/pi
-    targets are terminal-first but launch fresh, and SDK targets replay
+    only within a family. ``carry_history_into_native`` must be True for
+    native targets that carry fork history (claude/codex/pi rebuild a
+    transcript, cursor replays a text preamble), and SDK targets replay
     history themselves so they never set it. ``resume_source_native_session``
     must be False on a cross-family switch so the store skips the fork-source
     directive (the source's native transcript is the wrong format; a clone
@@ -942,18 +943,31 @@ async def test_fork_no_switch_native_source_carries_history(
     )
 
 
-@pytest.mark.parametrize("harness", ["cursor-native"])
+@pytest.mark.parametrize(
+    "harness,expect_carry",
+    [
+        # cursor carries history via a text preamble the runner replays on the
+        # first message (its conversation is server-backed, so no local store to
+        # seed for --resume) — so a same-agent fork DOES mark native carry.
+        ("cursor-native", True),
+        # pi rebuilds its JSONL session file from the copied Omnigent items
+        # (it is in _FORK_HISTORY_NATIVE_HARNESSES), so a same-agent fork marks
+        # native carry — parity with claude/codex.
+        ("pi-native", True),
+    ],
+)
 @pytest.mark.asyncio
-async def test_fork_cursor_native_does_not_carry_history(
+async def test_fork_cursor_pi_native_carry_gating(
     monkeypatch: pytest.MonkeyPatch,
     harness: str,
+    expect_carry: bool,
 ) -> None:
-    """A fork of a cursor-native source must NOT mark native carry.
+    """A same-agent fork marks native carry for both cursor and pi.
 
-    Unlike claude/codex/pi native, cursor-native records no resumable native
-    session file the runner could rebuild, so ``carry_history_into_native``
-    must be False — stamping it would be a false promise the runner can't keep
-    (the fork launches fresh anyway).
+    cursor carries fork history via a text preamble (its conversation is
+    server-backed, so no local store to seed for --resume); pi rebuilds its
+    JSONL session file from the copied Omnigent items. Both therefore mark
+    ``carry_history_into_native``.
     """
     conv = _make_conversation()
     conv_store = _ConversationStore(
@@ -970,40 +984,8 @@ async def test_fork_cursor_native_does_not_carry_history(
 
     assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
     fork_call = conv_store.fork_calls[0]
-    assert fork_call["carry_history_into_native"] is False, (
-        f"A {harness} fork must not mark native carry — that harness has no "
-        "resumable session file, so the directive would be a false promise."
-    )
-
-
-@pytest.mark.asyncio
-async def test_fork_pi_native_carries_history(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A fork of a pi-native source MUST mark native carry.
-
-    Pi exposes a JSONL session-file format, so the runner rebuilds the Pi
-    session from the copied Omnigent items on fork — parity with claude/codex
-    native. ``carry_history_into_native`` must therefore be True.
-    """
-    conv = _make_conversation()
-    conv_store = _ConversationStore(
-        conversations={"conv_src": conv},
-        items_by_conv={"conv_src": [_make_item("msg_1", "Hi")]},
-    )
-    monkeypatch.setattr(
-        "omnigent.server.routes.sessions.get_agent_cache",
-        lambda: _StubAgentCache({"ag_test": "pi-native"}),
-    )
-    client = TestClient(_build_app(conv_store))
-
-    resp = client.post("/v1/sessions/conv_src/fork", json={})
-
-    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
-    fork_call = conv_store.fork_calls[0]
-    assert fork_call["carry_history_into_native"] is True, (
-        "A pi-native fork must mark native carry — the runner rebuilds Pi's "
-        "JSONL session file from the copied Omnigent items."
+    assert fork_call["carry_history_into_native"] is expect_carry, (
+        f"A {harness} fork should set carry_history_into_native={expect_carry}."
     )
 
 
@@ -1014,11 +996,11 @@ async def test_fork_pi_native_carries_history(
         # valid harness ids that canonicalize_harness passes through unchanged,
         # so the carry gate must recognize them just like their canonical
         # spellings — otherwise an identically-behaving agent silently loses
-        # fork history. ``native-pi`` IS aliased to ``pi-native`` (which is in
-        # the set), so it carries too. cursor (either spelling) still must NOT.
+        # fork history. cursor carries (preamble); ``native-pi`` IS aliased to
+        # ``pi-native`` (which is in the set), so it carries too (rebuild).
         ("native-claude", True),
         ("native-codex", True),
-        ("native-cursor", False),
+        ("native-cursor", True),
         ("native-pi", True),
     ],
 )
@@ -1032,7 +1014,8 @@ async def test_fork_reversed_native_spelling_carry_gating(
 
     ``canonicalize_harness`` aliases ``native-pi`` to ``pi-native``; the other
     reversed spellings pass through unchanged, so the predicate lists both
-    forms explicitly. claude/codex/pi carry fork history; cursor never does.
+    forms explicitly. claude/codex/cursor/pi all carry fork history (claude /
+    codex / pi via transcript rebuild, cursor via preamble).
     """
     conv = _make_conversation()
     conv_store = _ConversationStore(
