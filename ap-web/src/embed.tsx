@@ -106,6 +106,7 @@ const SERVER_INFO_OFFLINE_FALLBACK: ServerInfo = {
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
   server_version: null,
+  smart_routing_enabled: false,
 };
 
 /**

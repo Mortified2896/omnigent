@@ -2621,6 +2621,48 @@ async def test_post_external_session_status_publishes_session_status(
     assert "response_id" not in published[0][1]
 
 
+async def test_post_external_session_status_failed_surfaces_output_and_reauth(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A ``failed`` edge with ``output`` surfaces a typed error on the stream (#1108).
+
+    A native forwarder (e.g. codex-native on an expired login) posts the
+    terminal failure reason as ``data.output`` and flags ``reauth_required``.
+    The handler must surface it as the ``session.status`` edge's ``error`` so a
+    *top-level* session sees the reason — not only the sub-agent parent path.
+    ``reauth_required`` selects the ``codex_reauth_required`` code.
+    """
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.session_stream.publish",
+        lambda session_id, event: published.append((session_id, event)),
+    )
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+
+    resp = await client.post(
+        f"/v1/sessions/{session['id']}/events",
+        json={
+            "type": "external_session_status",
+            "data": {
+                "status": "failed",
+                "output": "401 Unauthorized\n\nRun `codex login` and retry.",
+                "reauth_required": True,
+            },
+        },
+    )
+    assert resp.status_code == 202, resp.text
+
+    assert published[0][1]["status"] == "failed"
+    error = published[0][1]["error"]
+    assert error is not None
+    assert error["code"] == "codex_reauth_required"
+    assert "401 Unauthorized" in error["message"]
+
+
 async def test_post_external_session_status_carries_response_id(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -3847,6 +3889,48 @@ async def test_external_session_usage_cumulative_cost_is_set_not_added(
         assert resp.status_code == 202, resp.text
     usage = _read_session_usage(db_uri, session["id"])
     assert usage.get("total_cost_usd") == 0.90
+
+
+async def test_external_session_usage_cost_is_monotonic(
+    client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    """
+    A cumulative-usage post may only RAISE the persisted costs, never lower them.
+
+    The ``external_session_usage`` event carries the session owner's own bearer
+    token (the forwarder uses no privileged identity), so an owner could replay
+    it with a falsified low cost. Both the display cost (``total_cost_usd``) and
+    the enforcement cost (``policy_cost_usd``, which the cost-budget gate reads)
+    are clamped monotonic so such a post is a no-op — it can't reset the gate to
+    ~0 and re-enable spending past the budget. A regression (the low value
+    landing) would re-open the budget-bypass.
+    """
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+
+    high = await client.post(
+        f"/v1/sessions/{session['id']}/events",
+        json={
+            "type": "external_session_usage",
+            "data": {"cumulative_cost_usd": 0.90, "policy_cost_usd": 0.95},
+        },
+    )
+    assert high.status_code == 202, high.text
+
+    # Falsified low report — must be ignored, not stored.
+    low = await client.post(
+        f"/v1/sessions/{session['id']}/events",
+        json={
+            "type": "external_session_usage",
+            "data": {"cumulative_cost_usd": 0.0, "policy_cost_usd": 0.0},
+        },
+    )
+    assert low.status_code == 202, low.text
+
+    usage = _read_session_usage(db_uri, session["id"])
+    assert usage.get("total_cost_usd") == 0.90
+    assert usage.get("policy_cost_usd") == 0.95
 
 
 async def test_external_session_usage_codex_tokens_priced(

@@ -4,6 +4,7 @@ import { Outlet, useParams, useSearchParams } from "@/lib/routing";
 import { useConversations } from "@/hooks/useConversations";
 import { useSessionAgent } from "@/hooks/useAgents";
 import { useApproveHotkey } from "@/hooks/useApproveHotkey";
+import { useSidebarToggleHotkeys } from "@/hooks/useSidebarToggleHotkeys";
 import { AgentInfoContent, agentHasInfo } from "@/components/AgentInfo";
 import { useIdleNotifications } from "@/hooks/useIdleNotifications";
 import { useIOSViewportLock } from "@/hooks/useIOSViewportLock";
@@ -194,7 +195,9 @@ export function AppShell() {
   // Lifted so the Changes list order and the FileViewer prev/next order
   // share one source of truth (otherwise the "X/N" index won't match the
   // list position). Default "recent" mirrors the prior FilesPanel default.
-  const [filesPanelSort, setFilesPanelSort] = useState<ChangedSort>("recent");
+  const [filesPanelSort, setFilesPanelSort] = useState<ChangedSort>(
+    () => readFilesPanelPreferences().sort,
+  );
   const [panelInitialKey, setPanelInitialKeyState] = useState<string | null>(null);
   const [executionLogsKey, setExecutionLogsKey] = useState<string | null>(null);
   const [filesPanelOpen, setFilesPanelOpen] = useState(false);
@@ -633,6 +636,11 @@ export function AppShell() {
     writeFilesPanelPreferences({ ...readFilesPanelPreferences(), changedOnly: v });
   }, []);
 
+  const handleFilesSortChange = useCallback((s: ChangedSort) => {
+    setFilesPanelSort(s);
+    writeFilesPanelPreferences({ ...readFilesPanelPreferences(), sort: s });
+  }, []);
+
   const openFileViewer = useCallback(
     (path: string) => {
       setSelectedFilePath(path);
@@ -699,6 +707,51 @@ export function AppShell() {
       { replace: true },
     );
   }, [setSearchParams]);
+
+  // Toggle the right (Workspace) sidebar — shared by the header's collapse
+  // button and the ⌘⌥]/Ctrl+Alt+] hotkey so they can't drift. Beyond flipping the
+  // open-state it persists the choice and keeps the deep-link URL in sync:
+  // re-add ?file= on reopen (the FileViewer diff-sync race makes an effect
+  // unsafe here), and strip file/diff/comment on collapse so the URL never
+  // advertises a panel that isn't shown.
+  const toggleRightPanel = () => {
+    const next = !rightPanelOpen;
+    if (conversationId) writeSessionWorkspaceState(conversationId, { open: next });
+    if (next) {
+      if (selectedFilePath) {
+        // Reopening lands back on the file remembered in per-session
+        // state, so re-add ?file= to keep the URL shareable — mirroring
+        // how the scope-sync effect re-adds ?view= on reopen. diff and
+        // comment are URL-only ephemerals (not remembered), so they
+        // intentionally don't rehydrate. Imperative (not an effect) to
+        // avoid the FileViewer diff-sync race documented in that effect.
+
+        setSearchParams(
+          (prev) => {
+            const params = new URLSearchParams(prev);
+            params.set("file", selectedFilePath);
+            return params;
+          },
+          { replace: true },
+        );
+      }
+    } else {
+      // Collapsing the rail hides the workspace, so strip the deep-
+      // link params that point into it (file/diff/comment) — otherwise
+      // the URL advertises a file that isn't shown and a reload would
+      // re-open the rail. (?view= is dropped by the scope-sync effect,
+      // which is gated on rightPanelOpen.)
+      clearFileViewerUrl();
+    }
+    setRightPanelOpen(next);
+  };
+
+  // ⌘⌥[ / ⌘⌥] (Ctrl+Alt on Win/Linux) toggle the left and right sidebars. Bound
+  // here where both panels' open-state lives.
+  useSidebarToggleHotkeys({
+    onToggleLeft: () => setSidebarOpen((prev) => !prev),
+    onToggleRight: toggleRightPanel,
+  });
 
   // Mobile back button: close the open file and return to the files/changes
   // list. On mobile the tab strip is hidden, so a "back" should fully drop the
@@ -1026,36 +1079,7 @@ export function AppShell() {
                   showFilesPanel={showFilesPanel}
                   hasRailContent={hasRailContent}
                   rightPanelOpen={rightPanelOpen}
-                  onToggleRightPanel={() => {
-                    const next = !rightPanelOpen;
-                    if (conversationId) writeSessionWorkspaceState(conversationId, { open: next });
-                    if (next) {
-                      // Reopening lands back on the file remembered in per-session
-                      // state, so re-add ?file= to keep the URL shareable — mirroring
-                      // how the scope-sync effect re-adds ?view= on reopen. diff and
-                      // comment are URL-only ephemerals (not remembered), so they
-                      // intentionally don't rehydrate. Imperative (not an effect) to
-                      // avoid the FileViewer diff-sync race documented in that effect.
-                      if (selectedFilePath) {
-                        setSearchParams(
-                          (prev) => {
-                            const params = new URLSearchParams(prev);
-                            params.set("file", selectedFilePath);
-                            return params;
-                          },
-                          { replace: true },
-                        );
-                      }
-                    } else {
-                      // Collapsing the rail hides the workspace, so strip the deep-
-                      // link params that point into it (file/diff/comment) — otherwise
-                      // the URL advertises a file that isn't shown and a reload would
-                      // re-open the rail. (?view= is dropped by the scope-sync effect,
-                      // which is gated on rightPanelOpen.)
-                      clearFileViewerUrl();
-                    }
-                    setRightPanelOpen(next);
-                  }}
+                  onToggleRightPanel={toggleRightPanel}
                   mobileMenu={{
                     fileViewerOpen,
                     panelOpen,
@@ -1126,7 +1150,7 @@ export function AppShell() {
                       openTerminalsPanel={openTerminalsPanel}
                       permissionLevel={permissionLevel}
                       filesPanelSort={filesPanelSort}
-                      onSortChange={setFilesPanelSort}
+                      onSortChange={handleFilesSortChange}
                       filesPanelFlatView={filesPanelFlatView}
                       onFlatViewChange={handleFilesFlatViewChange}
                       filesPanelShowHidden={filesPanelShowHidden}
@@ -1170,7 +1194,7 @@ export function AppShell() {
                   showHidden={filesPanelShowHidden}
                   onShowHiddenChange={setFilesPanelShowHidden}
                   sort={filesPanelSort}
-                  onSortChange={setFilesPanelSort}
+                  onSortChange={handleFilesSortChange}
                 />
               )}
               {/* Mobile-only full-screen drawers for the rail tabs that have no
@@ -1251,7 +1275,11 @@ export function AppShell() {
                     Tools and policies configured for the active agent.
                   </DialogDescription>
                 </DialogHeader>
-                <AgentInfoContent agent={boundAgent} sessionId={conversationId} />
+                <AgentInfoContent
+                  agent={boundAgent}
+                  sessionId={conversationId}
+                  showIntelligentRouting
+                />
               </DialogContent>
             </Dialog>
           )}
