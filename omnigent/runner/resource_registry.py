@@ -53,6 +53,13 @@ PI_NATIVE_TERMINAL_ROLE = "pi-native"
 OPENCODE_NATIVE_TERMINAL_ROLE = "opencode-native"
 CURSOR_NATIVE_TERMINAL_ROLE = "cursor-native"
 GOOSE_NATIVE_TERMINAL_ROLE = "goose-native"
+# Role marker for the runner-owned native Antigravity (agy) TUI terminal.
+# A generic terminal launched with ``terminal=antigravity`` shares the same
+# public resource id, so the ensure path uses this private marker to tell a
+# runner-owned agy TUI apart from an arbitrary terminal before reusing it.
+ANTIGRAVITY_NATIVE_TERMINAL_ROLE = "antigravity-native"
+QWEN_NATIVE_TERMINAL_ROLE = "qwen-native"
+HERMES_NATIVE_TERMINAL_ROLE = "hermes-native"
 # Role marker for the embedded Omnigent REPL terminal auto-created for
 # runner-hosted SDK sessions (``omnigent attach`` in a tmux pane — the
 # SDK mirror of the native terminals above). The attach WebSocket uses
@@ -966,6 +973,14 @@ class SessionResourceRegistry:
             # goose-native injects then returns (its forwarder only mirrors the
             # transcript, not status), so the PTY watcher is its status source too.
             GOOSE_NATIVE_TERMINAL_ROLE,
+            # qwen-native appends then returns (its forwarder only mirrors the
+            # JSON event transcript, not status), so the PTY watcher is its
+            # status source too.
+            QWEN_NATIVE_TERMINAL_ROLE,
+            # hermes-native injects then returns (its forwarder only mirrors the
+            # SQLite transcript, not status), so the PTY watcher is its status
+            # source too.
+            HERMES_NATIVE_TERMINAL_ROLE,
         }
         if activity_publisher is None and not emit_status and exit_publisher is None:
             return

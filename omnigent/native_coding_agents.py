@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from omnigent._wrapper_labels import (
+    ANTIGRAVITY_NATIVE_WRAPPER_VALUE,
     CLAUDE_NATIVE_WRAPPER_VALUE,
     CODEX_NATIVE_WRAPPER_VALUE,
     CURSOR_NATIVE_WRAPPER_VALUE,
     GOOSE_NATIVE_WRAPPER_VALUE,
+    HERMES_NATIVE_WRAPPER_VALUE,
     OPENCODE_NATIVE_WRAPPER_VALUE,
     PI_NATIVE_WRAPPER_VALUE,
+    QWEN_NATIVE_WRAPPER_VALUE,
     UI_MODE_LABEL_KEY,
     UI_MODE_TERMINAL_VALUE,
     WRAPPER_LABEL_KEY,
@@ -96,6 +99,32 @@ GOOSE_NATIVE_CODING_AGENT = NativeCodingAgent(
     terminal_name="goose",
 )
 
+ANTIGRAVITY_NATIVE_CODING_AGENT = NativeCodingAgent(
+    key="antigravity",
+    display_name="Antigravity",
+    agent_name="antigravity-native-ui",
+    harness="antigravity-native",
+    wrapper_label=ANTIGRAVITY_NATIVE_WRAPPER_VALUE,
+    terminal_name="antigravity",
+)
+QWEN_NATIVE_CODING_AGENT = NativeCodingAgent(
+    key="qwen",
+    display_name="Qwen Code",
+    agent_name="qwen-native-ui",
+    harness="qwen-native",
+    wrapper_label=QWEN_NATIVE_WRAPPER_VALUE,
+    terminal_name="qwen",
+)
+
+HERMES_NATIVE_CODING_AGENT = NativeCodingAgent(
+    key="hermes",
+    display_name="Hermes",
+    agent_name="hermes-native-ui",
+    harness="hermes-native",
+    wrapper_label=HERMES_NATIVE_WRAPPER_VALUE,
+    terminal_name="hermes",
+)
+
 NATIVE_CODING_AGENTS: tuple[NativeCodingAgent, ...] = (
     CLAUDE_NATIVE_CODING_AGENT,
     CODEX_NATIVE_CODING_AGENT,
@@ -103,6 +132,9 @@ NATIVE_CODING_AGENTS: tuple[NativeCodingAgent, ...] = (
     OPENCODE_NATIVE_CODING_AGENT,
     CURSOR_NATIVE_CODING_AGENT,
     GOOSE_NATIVE_CODING_AGENT,
+    ANTIGRAVITY_NATIVE_CODING_AGENT,
+    QWEN_NATIVE_CODING_AGENT,
+    HERMES_NATIVE_CODING_AGENT,
 )
 
 _BY_AGENT_NAME = {agent.agent_name: agent for agent in NATIVE_CODING_AGENTS}

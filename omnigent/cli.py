@@ -1163,6 +1163,7 @@ def cli() -> None:
 # Keep in sync with ``@cli.command()`` decorations below.
 _CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
     {
+        "antigravity",
         "attach",
         "claude",
         "codex",
@@ -1171,6 +1172,7 @@ _CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
         "debby",
         "debug",
         "goose",
+        "hermes",
         "host",
         "lakebox",
         "login",
@@ -1179,6 +1181,7 @@ _CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
         "pane-split",
         "pi",
         "polly",
+        "qwen",
         "resume",
         "run",
         "sandbox",
@@ -4759,6 +4762,260 @@ def goose(
     )
 
 
+@cli.command(
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+    }
+)
+@click.option(
+    "--server",
+    default=None,
+    help=(
+        "Remote omnigent URL. Ensures the host daemon, asks the "
+        "daemon-spawned runner to launch the Hermes TUI, and attaches this TTY. "
+        'Pass --server "" to auto-spawn a persistent local server in the '
+        "background and use that instead of a remote one."
+    ),
+)
+@click.option(
+    "-r",
+    "--resume",
+    "resume",
+    is_flag=False,
+    flag_value=_RESUME_PICKER_SENTINEL,
+    default=None,
+    help=(
+        "Resume a prior Omnigent conversation. With a conversation id "
+        "(e.g. ``--resume conv_abc123``) attaches directly; with no value "
+        "opens an interactive picker scoped to hermes-native sessions."
+    ),
+)
+@click.option(
+    "--session",
+    "session_id",
+    metavar="SESSION_ID",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for ``--resume <id>``; kept for one release.",
+)
+@click.argument("hermes_args", nargs=-1, type=click.UNPROCESSED)
+def hermes(
+    server: str | None,
+    resume: str | None,
+    session_id: str | None,
+    hermes_args: tuple[str, ...],
+) -> None:
+    """Launch the Hermes TUI in an Omnigent terminal.
+
+    \b
+    Examples:
+      omnigent hermes
+      omnigent hermes --resume conv_abc123
+      omnigent hermes --resume                 # interactive picker
+    """
+    choice = _split_resume_value(resume)
+    if session_id is not None and (choice.picker or choice.conversation_id is not None):
+        raise click.UsageError(
+            "--session and --resume are mutually exclusive; "
+            "prefer --resume (--session is deprecated).",
+        )
+
+    from omnigent.hermes_native import run_hermes_native
+
+    cfg = _load_effective_config()
+    if server is None:
+        server = cfg.get("server")
+    auto_open_conversation = _resolve_auto_open_conversation_from_config(cfg)
+
+    server = _ensure_backend(server)
+    resolved_session_id = (
+        choice.conversation_id if choice.conversation_id is not None else session_id
+    )
+
+    run_hermes_native(
+        server=server,
+        session_id=resolved_session_id,
+        resume_picker=choice.picker,
+        hermes_args=hermes_args,
+        auto_open_conversation=auto_open_conversation,
+    )
+
+
+@cli.command(
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+    }
+)
+@click.option(
+    "--server",
+    default=None,
+    help=(
+        "Remote omnigent URL. Ensures the host daemon, binds a runner, "
+        "launches Antigravity (agy) in a terminal resource, and attaches "
+        'this TTY. Pass --server "" to auto-spawn a persistent local '
+        "server in the background and use that instead of a remote one."
+    ),
+)
+@click.option(
+    "-r",
+    "--resume",
+    "resume",
+    is_flag=False,
+    flag_value=_RESUME_PICKER_SENTINEL,
+    default=None,
+    help=(
+        "Resume a prior Omnigent conversation. With a conversation id "
+        "(e.g. ``--resume conv_abc123``) attaches directly; with no value "
+        "opens an interactive picker scoped to antigravity-native sessions."
+    ),
+)
+@click.option(
+    "--session",
+    "session_id",
+    metavar="SESSION_ID",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for ``--resume <id>``; kept for one release.",
+)
+@click.option("--model", default=None, help="Antigravity (agy) model to use for the session.")
+@click.argument("antigravity_args", nargs=-1, type=click.UNPROCESSED)
+def antigravity(
+    server: str | None,
+    resume: str | None,
+    session_id: str | None,
+    model: str | None,
+    antigravity_args: tuple[str, ...],
+) -> None:
+    """Launch the Antigravity (agy) TUI in an Omnigent terminal.
+
+    \b
+    Examples:
+      omnigent antigravity
+      omnigent antigravity --resume conv_abc123
+      omnigent antigravity --resume                  # interactive picker
+      omnigent antigravity --server https://<app>.databricksapps.com
+    """
+    # Validate option combinations BEFORE any side effects (daemon spawn,
+    # server discovery) -- see the same comment in the claude command.
+    choice = _split_resume_value(resume)
+    if session_id is not None and (choice.picker or choice.conversation_id is not None):
+        raise click.UsageError(
+            "--session and --resume are mutually exclusive; "
+            "prefer --resume (--session is deprecated).",
+        )
+
+    from omnigent.antigravity_native import run_antigravity_native
+
+    cfg = _load_effective_config()
+    if server is None:
+        server = cfg.get("server")
+    if model is None:
+        model = cfg.get("model")
+    auto_open_conversation = _resolve_auto_open_conversation_from_config(cfg)
+
+    server = _ensure_backend(server)
+    resolved_session_id = (
+        choice.conversation_id if choice.conversation_id is not None else session_id
+    )
+
+    # permission_mode is left None here (parity with the claude/codex/pi CLI
+    # launchers): the attended terminal launch lets agy's own request-review
+    # prompt govern each tool, and an unattended/headless launch auto-bypasses
+    # inside run_antigravity_native. It is plumbed through build_agy_launch so a
+    # future caller CAN set it, but this human CLI path exposes no permission
+    # flag and never needs one.
+    run_antigravity_native(
+        server=server,
+        session_id=resolved_session_id,
+        resume_picker=choice.picker,
+        antigravity_args=antigravity_args,
+        model=model,
+        auto_open_conversation=auto_open_conversation,
+    )
+
+
+@cli.command(
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+    }
+)
+@click.option(
+    "--server",
+    default=None,
+    help=(
+        "Remote omnigent URL. Ensures the host daemon, asks the "
+        "daemon-spawned runner to launch the qwen TUI, and attaches this TTY. "
+        'Pass --server "" to auto-spawn a persistent local server in the '
+        "background and use that instead of a remote one."
+    ),
+)
+@click.option(
+    "-r",
+    "--resume",
+    "resume",
+    is_flag=False,
+    flag_value=_RESUME_PICKER_SENTINEL,
+    default=None,
+    help=(
+        "Resume a prior Omnigent conversation. With a conversation id "
+        "(e.g. ``--resume conv_abc123``) attaches directly; with no value "
+        "opens an interactive picker scoped to qwen-native sessions."
+    ),
+)
+@click.option(
+    "--session",
+    "session_id",
+    metavar="SESSION_ID",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for ``--resume <id>``; kept for one release.",
+)
+@click.argument("qwen_args", nargs=-1, type=click.UNPROCESSED)
+def qwen(
+    server: str | None,
+    resume: str | None,
+    session_id: str | None,
+    qwen_args: tuple[str, ...],
+) -> None:
+    """Launch the qwen (Qwen Code) TUI in an Omnigent terminal.
+
+    \b
+    Examples:
+      omnigent qwen
+      omnigent qwen --resume conv_abc123
+      omnigent qwen --resume                  # interactive picker
+    """
+    choice = _split_resume_value(resume)
+    if session_id is not None and (choice.picker or choice.conversation_id is not None):
+        raise click.UsageError(
+            "--session and --resume are mutually exclusive; "
+            "prefer --resume (--session is deprecated).",
+        )
+
+    from omnigent.qwen_native import run_qwen_native
+
+    cfg = _load_effective_config()
+    if server is None:
+        server = cfg.get("server")
+    auto_open_conversation = _resolve_auto_open_conversation_from_config(cfg)
+
+    server = _ensure_backend(server)
+    resolved_session_id = (
+        choice.conversation_id if choice.conversation_id is not None else session_id
+    )
+
+    run_qwen_native(
+        server=server,
+        session_id=resolved_session_id,
+        resume_picker=choice.picker,
+        qwen_args=qwen_args,
+        auto_open_conversation=auto_open_conversation,
+    )
+
+
 def _run_bundled_agent(name: str, run_args: tuple[str, ...]) -> None:
     """Forward a bundled-agent subcommand to ``run`` on its packaged path.
 
@@ -4899,7 +5156,7 @@ def resume(
 _HARNESS_CHOICES_HELP = (
     "'claude' (alias for 'claude-sdk'), 'claude-sdk', 'codex', "
     "'cursor', "
-    "'openai-agents', 'open-responses', 'pi', 'antigravity', 'qwen', or 'goose'"
+    "'openai-agents', 'open-responses', 'pi', 'antigravity', 'qwen', 'goose', or 'copilot'"
 )
 _HARNESS_HELP = f"Harness to use for a local agent: {_HARNESS_CHOICES_HELP}."
 _RUN_HARNESS_HELP = (
@@ -9384,6 +9641,242 @@ def _manage_goose_harness() -> None:
             status = None
 
 
+def _manage_hermes_harness() -> None:
+    """Run the level-2 loop for Hermes: ensure the CLI is installed.
+
+    Hermes owns its own auth via ``hermes model`` (interactive provider/model
+    picker) and is installed via a curl script from Nous Research — Omnigent
+    stores no Hermes credential. A missing CLI gates the drill-in; when
+    installed, the drill-in offers to launch ``hermes model`` for provider
+    configuration.
+
+    :returns: None. Side effects: may launch ``hermes model``.
+    """
+    from omnigent.onboarding.harness_install import (
+        HERMES_KEY,
+        harness_cli_installed,
+        harness_install_spec,
+    )
+    from omnigent.onboarding.interactive import console, select
+
+    if not harness_cli_installed(HERMES_KEY):
+        spec = harness_install_spec(HERMES_KEY)
+        hint = (
+            spec.install_hint
+            if spec and spec.install_hint
+            else "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+        )
+        console.print(
+            f"  Hermes isn't installed. Install it with:\n    [bold]{hint}[/bold]\n"
+            "  then re-open this menu."
+        )
+        return
+
+    status: str | None = None
+    while True:
+        rows: list[_HarnessMenuRow] = [
+            _HarnessMenuRow("Run hermes model (configure provider)", action="model"),
+            _HarnessMenuRow("← Back", action="back"),
+        ]
+        idx = select(
+            "Hermes Agent",
+            [r.label for r in rows],
+            clear_on_exit=True,
+            status=status,
+        )
+        if idx < 0:
+            return
+        action = rows[idx].action
+        if action == "back":
+            return
+        if action == "model":
+            import subprocess
+
+            try:
+                subprocess.run(["hermes", "model"], check=False)
+                status = "✓ hermes model completed"
+            except FileNotFoundError:
+                status = "✗ hermes binary not found"
+
+
+def _prompt_install_copilot() -> str | None:
+    """Offer to install the missing ``copilot`` extra; return a status line.
+
+    Shown atop the Copilot drill-in when the optional-extra ``github-copilot-sdk``
+    is absent. Three-choice ``select`` like :func:`_prompt_install_cursor` /
+    :func:`_prompt_install_antigravity` (install now / set token anyway / show
+    command), and like them does NOT gate token management on the SDK: the
+    ``copilot:`` token is stored independently and is useful once the SDK lands,
+    so declining falls through to the token menu. Install is portable and
+    index-free — see
+    :func:`omnigent.onboarding.copilot_auth.copilot_install_command`.
+
+    :returns: Status string for the drill-in's transient status line, or
+        ``None`` (set-token-anyway / Esc / printed-command, no actionable result).
+    """
+    from rich.markup import escape as _rich_escape
+
+    from omnigent.onboarding.copilot_auth import (
+        COPILOT_EXTRA_INSTALL_COMMAND,
+        install_copilot_sdk,
+    )
+    from omnigent.onboarding.interactive import console, select
+
+    cmd = COPILOT_EXTRA_INSTALL_COMMAND
+    # ``select`` renders text through Rich markup; escape the literal
+    # ``[copilot]`` so it renders verbatim.
+    cmd_markup = _rich_escape(cmd)
+    choice = select(
+        "Copilot's SDK (github-copilot-sdk) isn't installed. Install it now?",
+        [
+            f"Install it now ({cmd_markup})",
+            "Set the GitHub token anyway",
+            "I'll run it myself (show the command)",
+        ],
+        descriptions=[
+            f"Runs `{cmd_markup}` (uses uv when available), then continues.",
+            "Skip the install — store the token now; the SDK can be added later.",
+            "Print the command so you can install it yourself, then continue.",
+        ],
+        default=0,
+        clear_on_exit=True,
+    )
+    if choice == 0:
+        console.print(f"  [dim]Installing the copilot extra — running `{cmd_markup}`…[/dim]")
+        if install_copilot_sdk():
+            console.print("  [green]✓ github-copilot-sdk installed[/green]")
+            return "✓ github-copilot-sdk installed"
+        console.print(f"  [red]Install failed.[/red] Run it manually: [bold]{cmd_markup}[/bold]")
+        return "✗ Install failed — set the token anyway, or install by hand"
+    if choice == 2:  # run it yourself
+        console.print(f"  Install the copilot extra with:\n    [bold]{cmd_markup}[/bold]")
+        return None
+    # choice == 1 (set token anyway) or Esc: fall through to the token menu silently.
+    return None
+
+
+def _manage_copilot_harness() -> None:
+    """Run the level-2 loop for Copilot: manage its GitHub token.
+
+    Copilot runs via the ``github-copilot-sdk`` package and authenticates against
+    GitHub's Copilot backend with a GitHub token — the SDK requires one and it
+    has no provider/gateway family. So this manages exactly that credential:
+    set / replace / remove a token stored in the omnigent secret store, mirroring
+    how cursor / antigravity persist theirs (the secret in the store, a
+    ``keychain:``/``env:`` reference in ``~/.omnigent/config.yaml``).
+
+    When the optional ``github-copilot-sdk`` is missing, the drill-in first
+    offers to install it (:func:`_prompt_install_copilot`). Unlike the CLI-backed
+    harnesses (which gate on the CLI), declining still drops into the token
+    menu — the ``copilot:`` token is independently storable. Mirrors cursor /
+    antigravity.
+
+    :returns: None. Side effects: may install the ``copilot`` extra, and may
+        write the ``copilot:`` block of ``~/.omnigent/config.yaml`` and the
+        secret store.
+    """
+    from omnigent.onboarding import secrets as secret_store
+    from omnigent.onboarding.copilot_auth import (
+        COPILOT_CONFIG_KEY,
+        COPILOT_SECRET_NAME,
+        copilot_github_token_configured,
+        copilot_github_token_ref,
+        copilot_sdk_installed,
+    )
+    from omnigent.onboarding.interactive import select
+
+    # Offer the install once on entry (not per loop iteration) when the SDK is
+    # absent; the result seeds the menu's status line. Declining falls through
+    # to token management, since the token is SDK-independent.
+    status: str | None = None
+    if not copilot_sdk_installed():
+        status = _prompt_install_copilot()
+    while True:
+        config = _load_global_config()
+        token_set = copilot_github_token_configured(config)
+
+        rows: list[_HarnessMenuRow] = [
+            _HarnessMenuRow(
+                "Replace GitHub token" if token_set else "Set GitHub token",
+                action="set_key",
+            )
+        ]
+        if token_set:
+            rows.append(_HarnessMenuRow("Remove GitHub token", action="remove_key"))
+        rows.append(_HarnessMenuRow("← Back", action="back"))
+
+        header = (
+            "Copilot — GitHub token configured" if token_set else "Copilot — no GitHub token yet"
+        )
+        idx = select(header, [r.label for r in rows], clear_on_exit=True, status=status)
+        if idx < 0:  # Esc / q
+            return
+        action = rows[idx].action
+        if action == "back":
+            return
+        if action == "set_key":
+            status = _set_copilot_github_token()
+        elif action == "remove_key":
+            ref = copilot_github_token_ref(config)
+            # Only the secret we own (``keychain:copilot``) is ours to delete: a
+            # hand-edited block may point at a shared ``keychain:<other>`` secret,
+            # and an ``env:`` ref names the user's own environment. In both of
+            # those cases just drop the config block and leave the secret.
+            if ref == f"keychain:{COPILOT_SECRET_NAME}":
+                secret_store.delete_secret(COPILOT_SECRET_NAME)
+            _save_global_config({}, unset_keys=(COPILOT_CONFIG_KEY,))
+            status = "✓ Removed Copilot GitHub token"
+
+
+def _set_copilot_github_token() -> str | None:
+    """Prompt for and store a Copilot GitHub token; return a status line.
+
+    Offers an existing ``COPILOT_GITHUB_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN``
+    first (recorded as an ``env:`` ref, so the secret stays in the environment),
+    else reads it with a hidden prompt and stores it under ``keychain:copilot``.
+    The token shape is checked softly (a classic ``ghp_`` PAT — which Copilot
+    rejects — or a wrong paste is flagged but can be forced). The token is never
+    echoed.
+
+    :returns: A status string for the menu, or ``None`` if the user aborted.
+    """
+    from omnigent.onboarding import secrets as secret_store
+    from omnigent.onboarding.copilot_auth import (
+        COPILOT_SECRET_NAME,
+        COPILOT_TOKEN_ENV_VARS,
+        copilot_github_token_settings,
+        looks_like_github_copilot_token,
+    )
+    from omnigent.onboarding.interactive import prompt_text
+
+    detected_var = next((v for v in COPILOT_TOKEN_ENV_VARS if os.environ.get(v)), None)
+    if detected_var is not None and click.confirm(
+        f"Detected {detected_var} in the environment — use it?", default=True
+    ):
+        detected = os.environ[detected_var]
+        if not looks_like_github_copilot_token(detected) and not click.confirm(
+            f"${detected_var} doesn't look like a Copilot-capable GitHub token "
+            "(github_pat_/gho_). Use it anyway?",
+            default=False,
+        ):
+            return None
+        _save_global_config(copilot_github_token_settings(f"env:{detected_var}"))
+        return f"✓ Copilot GitHub token set (from ${detected_var})"
+
+    pasted = prompt_text("GitHub token with Copilot access", hide_input=True).strip()
+    if not pasted:
+        return None
+    if not looks_like_github_copilot_token(pasted) and not click.confirm(
+        "That doesn't look like a Copilot-capable GitHub token (github_pat_/gho_). "
+        "Store it anyway?",
+        default=False,
+    ):
+        return None
+    secret_store.store_secret(COPILOT_SECRET_NAME, pasted)
+    _save_global_config(copilot_github_token_settings(f"keychain:{COPILOT_SECRET_NAME}"))
+    return "✓ Copilot GitHub token stored"
+
+
 def _manage_credential(provider: str, family: str) -> str | None:
     """Run the level-3 loop for one credential: make default / remove.
 
@@ -9908,6 +10401,12 @@ def _run_configure_harnesses_interactive() -> None:
         antigravity_sdk_installed,
     )
     from omnigent.onboarding.configure_models import family_label
+    from omnigent.onboarding.copilot_auth import (
+        COPILOT_EXTRA_INSTALL_COMMAND,
+        COPILOT_TOKEN_ENV_VARS,
+        copilot_github_token_configured,
+        copilot_sdk_installed,
+    )
     from omnigent.onboarding.cursor_auth import (
         CURSOR_EXTRA_INSTALL_COMMAND,
         cursor_api_key_configured,
@@ -9915,8 +10414,10 @@ def _run_configure_harnesses_interactive() -> None:
     )
     from omnigent.onboarding.goose_auth import goose_config_summary
     from omnigent.onboarding.harness_install import (
+        COPILOT_KEY,
         CURSOR_KEY,
         GOOSE_KEY,
+        HERMES_KEY,
         OPENCODE_KEY,
         QWEN_KEY,
         harness_cli_installed,
@@ -9974,6 +10475,9 @@ def _run_configure_harnesses_interactive() -> None:
     # provider family (Goose owns its own auth via ``goose configure``, not an
     # Omnigent credential), so it dispatches to its own drill-in.
     _GOOSE = "\x00goose"
+    # Sentinel marking the Hermes row — like Goose it owns its own auth via
+    # ``hermes model`` and is installed via a curl installer.
+    _HERMES = "\x00hermes"
     families = [ANTHROPIC_FAMILY, OPENAI_FAMILY, PI_SURFACE]
     while True:
         config = _load_global_config()
@@ -10161,6 +10665,60 @@ def _run_configure_harnesses_interactive() -> None:
         options.append(f"  {goose_sub}")
         selectable.append(False)
         row_target.append(None)
+        # Copilot (GitHub Copilot SDK, no provider family): like Cursor, readiness
+        # is just whether a GitHub token with Copilot access is configured (the
+        # ``copilot:`` block or an ambient ``COPILOT_GITHUB_TOKEN``/``GH_TOKEN``/
+        # ``GITHUB_TOKEN``); its drill-in manages that token.
+        copilot_token_set = copilot_github_token_configured(config) or any(
+            os.environ.get(v) for v in COPILOT_TOKEN_ENV_VARS
+        )
+        options.append(f"{'  ' if copilot_token_set else '[red]✗[/] '}Copilot")
+        selectable.append(True)
+        row_target.append(COPILOT_KEY)
+        # ``github-copilot-sdk`` ships in an OPTIONAL extra, so the token can be
+        # set with no SDK present. When the extra is missing, lead with that gap
+        # and the install command (parallel to Cursor / Antigravity), then still
+        # report token status. ``[copilot]`` is escaped — sub-lines render through
+        # Rich markup, where bare brackets parse as a tag.
+        copilot_sub_lines: list[str] = []
+        if not copilot_sdk_installed():
+            from rich.markup import escape as _rich_escape
+
+            copilot_sub_lines.append(
+                f"[dim]not installed — open to install "
+                f"({_rich_escape(COPILOT_EXTRA_INSTALL_COMMAND)})[/]"
+            )
+        copilot_sub_lines.append(
+            "[green]✓[/] GitHub token configured"
+            if copilot_token_set
+            else "[dim]no GitHub token yet — open to add one[/]"
+        )
+        for copilot_sub in copilot_sub_lines:
+            options.append(f"  {copilot_sub}")
+            selectable.append(False)
+            row_target.append(None)
+        # Hermes Agent (its own provider config via ``hermes model``, installed
+        # via a curl installer from Nous Research — no npm package or Omnigent
+        # credential).
+        hermes_installed = harness_cli_installed(HERMES_KEY)
+        options.append(f"{'  ' if hermes_installed else '[red]✗[/] '}Hermes")
+        selectable.append(True)
+        row_target.append(_HERMES)
+        if not hermes_installed:
+            from rich.markup import escape as _rich_escape
+
+            hermes_spec = harness_install_spec(HERMES_KEY)
+            hermes_hint = _rich_escape(
+                hermes_spec.install_hint
+                if hermes_spec and hermes_spec.install_hint
+                else "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+            )
+            hermes_sub = f"[dim]not installed — open to install ({hermes_hint})[/]"
+        else:
+            hermes_sub = "[green]✓[/] ready"
+        options.append(f"  {hermes_sub}")
+        selectable.append(False)
+        row_target.append(None)
         options.append("Quit")
         selectable.append(True)
         row_target.append(_QUIT)
@@ -10175,6 +10733,8 @@ def _run_configure_harnesses_interactive() -> None:
         target = row_target[idx]
         if target == CURSOR_KEY:
             _manage_cursor_harness()
+        elif target == COPILOT_KEY:
+            _manage_copilot_harness()
         elif target in families:
             _manage_harness_providers(target)
         elif target == _ANTIGRAVITY:
@@ -10185,6 +10745,8 @@ def _run_configure_harnesses_interactive() -> None:
             _manage_opencode_harness()
         elif target == _GOOSE:
             _manage_goose_harness()
+        elif target == _HERMES:
+            _manage_hermes_harness()
         else:  # Quit row (or, defensively, a non-family row)
             return
 

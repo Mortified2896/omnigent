@@ -28,6 +28,9 @@ export type ConversationIconKind =
   | "pi"
   | "cursor"
   | "goose"
+  | "antigravity"
+  | "qwen"
+  | "hermes"
   | "nessie"
   | null;
 

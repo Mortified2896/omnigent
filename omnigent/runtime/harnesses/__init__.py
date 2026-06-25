@@ -49,6 +49,10 @@ _HARNESS_MODULES: dict[str, str] = {
     "pi": "omnigent.inner.pi_harness",
     # Native Pi TUI bridge used by ``omnigent pi``.
     "pi-native": "omnigent.inner.pi_native_harness",
+    # Native Antigravity (agy) TUI terminal bridge used by
+    # ``omnigent antigravity``. The in-process SDK counterpart is the
+    # canonical ``antigravity`` harness registered below.
+    "antigravity-native": "omnigent.inner.antigravity_native_harness",
     # Step 4e: openai-agents harness wrap. See
     # omnigent/inner/openai_agents_sdk_harness.py. Registry
     # key is the Omnigent-side spelling (``openai-agents``,
@@ -73,6 +77,13 @@ _HARNESS_MODULES: dict[str, str] = {
     # cursor-native, so it IS in ``NATIVE_HARNESSES``. See
     # omnigent/inner/goose_native_harness.py.
     "goose-native": "omnigent.inner.goose_native_harness",
+    # qwen-native harness wrap. Drives the resident ``qwen`` TUI by appending
+    # JSONL ``submit`` commands to its ``--input-file`` and mirroring the
+    # transcript back from its ``--json-file`` event stream — a native-CLI
+    # harness like goose-native, so it IS in ``NATIVE_HARNESSES``. The bare
+    # ``qwen`` name stays the ACP-piped harness. See
+    # omnigent/inner/qwen_native_harness.py.
+    "qwen-native": "omnigent.inner.qwen_native_harness",
     # Google Antigravity SDK harness wrap. See
     # omnigent/inner/antigravity_harness.py. In-process SDK harness
     # (``google-antigravity``), like openai-agents — Omnigent spawns no CLI
@@ -98,6 +109,25 @@ _HARNESS_MODULES: dict[str, str] = {
     # ``opencode`` is accepted as a friendly alias for the canonical
     # ``opencode-native`` (there is no separate SDK ``opencode`` harness).
     "opencode": "omnigent.inner.opencode_native_harness",
+    # GitHub Copilot SDK harness wrap. See omnigent/inner/copilot_harness.py.
+    # In-process SDK harness (``github-copilot-sdk``), like cursor / antigravity:
+    # the SDK bundles the Copilot CLI binary it drives as a backing server, so
+    # Omnigent spawns no separately-installed CLI. Authenticates against GitHub's
+    # Copilot backend with a GitHub token (no Databricks gateway).
+    "copilot": "omnigent.inner.copilot_harness",
+    # Hermes Agent harness wrap. Runs the ``hermes`` CLI as a subprocess
+    # for each turn, managing its own session state via Hermes' SQLite
+    # session store. See omnigent/inner/hermes_harness.py and
+    # omnigent/inner/hermes_executor.py. The ``hermes`` binary must be
+    # on PATH (or set by HARNESS_HERMES_PATH).
+    "hermes": "omnigent.inner.hermes_harness",
+    # hermes-native harness wrap. Drives the resident ``hermes`` TUI by
+    # injecting each web-UI turn into its tmux pane and mirroring the transcript
+    # back from Hermes' SQLite ``state.db`` session store — a native-CLI harness
+    # like goose-native, so it IS in ``NATIVE_HARNESSES``. The bare ``hermes``
+    # name stays the headless subprocess harness. See
+    # omnigent/inner/hermes_native_harness.py.
+    "hermes-native": "omnigent.inner.hermes_native_harness",
 }
 
 __all__ = ["_HARNESS_MODULES"]

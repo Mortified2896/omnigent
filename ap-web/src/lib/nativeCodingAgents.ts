@@ -4,7 +4,16 @@ export const WRAPPER_LABEL_KEY = "omnigent.wrapper";
 export const UI_MODE_LABEL_KEY = "omnigent.ui";
 export const UI_MODE_TERMINAL_VALUE = "terminal";
 
-export type NativeCodingAgentIconKind = "claude" | "codex" | "opencode" | "pi" | "cursor" | "goose";
+export type NativeCodingAgentIconKind =
+  | "claude"
+  | "codex"
+  | "opencode"
+  | "pi"
+  | "cursor"
+  | "goose"
+  | "antigravity"
+  | "qwen"
+  | "hermes";
 export type NativeCodingAgentCapability = "permissionMode" | "approvalMode";
 
 export interface NativeCodingAgentSpec {
@@ -68,6 +77,20 @@ export const NATIVE_CODING_AGENTS = [
     sortRank: 40,
   },
   {
+    // Antigravity's native CLI (Gemini-family). Mirrors the server's
+    // canonical `antigravity-native` harness and the `antigravity-native-ui`
+    // wrapper the runner keys off to boot the terminal. Added ALONGSIDE the
+    // upstream in-process `antigravity` SDK harness (see BRAIN_HARNESS_LABELS
+    // in agentLabels.ts) — they are distinct rows.
+    key: "antigravity",
+    agentName: "antigravity-native-ui",
+    harness: "antigravity-native",
+    wrapperLabel: "antigravity-native-ui",
+    displayName: "Antigravity",
+    iconKind: "antigravity",
+    sortRank: 45,
+  },
+  {
     key: "goose",
     agentName: "goose-native-ui",
     harness: "goose-native",
@@ -75,6 +98,32 @@ export const NATIVE_CODING_AGENTS = [
     displayName: "Goose",
     iconKind: "goose",
     sortRank: 50,
+  },
+  {
+    // qwen has no brand glyph yet, so it falls back to the generic bot icon
+    // (see AgentCard.iconForAgent / SubagentsPanel) — the `iconKind: "qwen"`
+    // intentionally matches no icon branch. Auth/approval surface in the
+    // embedded terminal, so no capability flags are declared here.
+    key: "qwen",
+    agentName: "qwen-native-ui",
+    harness: "qwen-native",
+    wrapperLabel: "qwen-native-ui",
+    displayName: "Qwen Code",
+    iconKind: "qwen",
+    sortRank: 60,
+  },
+  {
+    // hermes has no brand glyph yet, so it falls back to the generic bot icon
+    // (see AgentCard.iconForAgent / SubagentsPanel) — the `iconKind: "hermes"`
+    // intentionally matches no icon branch. Auth/approval surface in the
+    // embedded terminal, so no capability flags are declared here.
+    key: "hermes",
+    agentName: "hermes-native-ui",
+    harness: "hermes-native",
+    wrapperLabel: "hermes-native-ui",
+    displayName: "Hermes",
+    iconKind: "hermes",
+    sortRank: 70,
   },
 ] as const satisfies readonly NativeCodingAgentSpec[];
 
@@ -89,12 +138,16 @@ const BY_WRAPPER: Map<string, NativeCodingAgentSpec> = new Map(
 );
 
 // Reversed harness spellings that fold to a canonical native `harness`.
-// Mirrors omnigent.harness_aliases on the server: only `native-pi` is a
-// supported reversed alias (claude/codex use the canonical form).
+// Mirrors omnigent.harness_aliases.NATIVE_HARNESSES on the server, which
+// accepts both the canonical and reversed native spellings (claude/codex
+// only use the canonical form, so they need no reversed entry here).
 const HARNESS_ALIASES: Record<string, string> = {
   "native-pi": "pi-native",
   "native-cursor": "cursor-native",
+  "native-antigravity": "antigravity-native",
   "native-goose": "goose-native",
+  "native-qwen": "qwen-native",
+  "native-hermes": "hermes-native",
 };
 
 export function nativeCodingAgentForAgentName(

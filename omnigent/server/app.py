@@ -20,11 +20,13 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.native_coding_agents import (
+    ANTIGRAVITY_NATIVE_CODING_AGENT,
     CLAUDE_NATIVE_CODING_AGENT,
     CODEX_NATIVE_CODING_AGENT,
     CURSOR_NATIVE_CODING_AGENT,
     OPENCODE_NATIVE_CODING_AGENT,
     PI_NATIVE_CODING_AGENT,
+    QWEN_NATIVE_CODING_AGENT,
 )
 from omnigent.resources import examples as _examples_resources
 from omnigent.runtime import (
@@ -80,6 +82,8 @@ _CODEX_NATIVE_AGENT_NAME = CODEX_NATIVE_CODING_AGENT.agent_name
 _PI_NATIVE_AGENT_NAME = PI_NATIVE_CODING_AGENT.agent_name
 _OPENCODE_NATIVE_AGENT_NAME = OPENCODE_NATIVE_CODING_AGENT.agent_name
 _CURSOR_NATIVE_AGENT_NAME = CURSOR_NATIVE_CODING_AGENT.agent_name
+_ANTIGRAVITY_NATIVE_AGENT_NAME = ANTIGRAVITY_NATIVE_CODING_AGENT.agent_name
+_QWEN_NATIVE_AGENT_NAME = QWEN_NATIVE_CODING_AGENT.agent_name
 _DEBBY_AGENT_NAME = "debby"
 _POLLY_AGENT_NAME = "polly"
 _UNMATCHED_ROUTE_TEMPLATE = "<unmatched>"
@@ -356,6 +360,8 @@ def _ensure_default_agents(
     _ensure_default_pi_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_opencode_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_cursor_agent(agent_store, artifact_store, agent_cache)
+    _ensure_default_antigravity_agent(agent_store, artifact_store, agent_cache)
+    _ensure_default_qwen_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_debby_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_polly_agent(agent_store, artifact_store, agent_cache)
     _ensure_extra_builtin_agents(agent_store, artifact_store, agent_cache)
@@ -643,6 +649,93 @@ def _ensure_default_cursor_agent(
         agent_cache,
         name=_CURSOR_NATIVE_AGENT_NAME,
         bundle_bytes=_build_cursor_native_bundle(),
+    )
+
+
+def _ensure_default_antigravity_agent(
+    agent_store: AgentStore,
+    artifact_store: ArtifactStore,
+    agent_cache: Any,
+) -> None:
+    """
+    Register or refresh the antigravity-native-ui agent.
+
+    Called during server lifespan startup so the Web UI can offer Antigravity
+    as a built-in native-terminal agent (the ``agy`` TUI), alongside Claude
+    Code / Codex / Pi. Content-aware via :func:`_ensure_builtin_agent`: a new
+    wheel with a changed spec refreshes the row in place rather than being
+    ignored.
+
+    :param agent_store: Store for agent metadata.
+    :param artifact_store: Store for agent bundles.
+    :param agent_cache: Cache for loaded agent specs.
+    """
+    _ensure_builtin_agent(
+        agent_store,
+        artifact_store,
+        agent_cache,
+        name=_ANTIGRAVITY_NATIVE_AGENT_NAME,
+        bundle_bytes=_build_antigravity_native_bundle(),
+    )
+
+
+def _build_antigravity_native_bundle() -> bytes:
+    """
+    Build a gzipped tarball of the antigravity-native-ui agent spec.
+
+    :returns: Gzipped tarball bytes suitable for the artifact store.
+    """
+    import tempfile
+
+    from omnigent.antigravity_native import _materialize_antigravity_agent_spec
+    from omnigent.spec import materialize_bundle
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        spec_path = _materialize_antigravity_agent_spec(Path(tmpdir))
+        bundle_dir = materialize_bundle(spec_path, Path(tmpdir) / "bundle")
+        return _tar_gz_dir(bundle_dir)
+
+
+def _build_qwen_native_bundle() -> bytes:
+    """
+    Build a gzipped tarball of the qwen-native-ui agent spec.
+
+    :returns: Gzipped tarball bytes suitable for the artifact store.
+    """
+    import tempfile
+
+    from omnigent.qwen_native import _materialize_qwen_agent_spec
+    from omnigent.spec import materialize_bundle
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        spec_path = _materialize_qwen_agent_spec(Path(tmpdir))
+        bundle_dir = materialize_bundle(spec_path, Path(tmpdir) / "bundle")
+        return _tar_gz_dir(bundle_dir)
+
+
+def _ensure_default_qwen_agent(
+    agent_store: AgentStore,
+    artifact_store: ArtifactStore,
+    agent_cache: Any,
+) -> None:
+    """
+    Register or refresh the qwen-native-ui agent.
+
+    Called during server lifespan startup so the Web UI offers Qwen Code as a
+    built-in native-terminal agent on every deployment (not only after the
+    ``omnigent qwen`` CLI first registers it). Content-aware via
+    :func:`_ensure_builtin_agent`.
+
+    :param agent_store: Store for agent metadata.
+    :param artifact_store: Store for agent bundles.
+    :param agent_cache: Cache for loaded agent specs.
+    """
+    _ensure_builtin_agent(
+        agent_store,
+        artifact_store,
+        agent_cache,
+        name=_QWEN_NATIVE_AGENT_NAME,
+        bundle_bytes=_build_qwen_native_bundle(),
     )
 
 
