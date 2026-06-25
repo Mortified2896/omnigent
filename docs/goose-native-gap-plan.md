@@ -155,6 +155,24 @@ Key properties:
 
 ### 3.3 Honest residual limits
 
+- **Request-phase / turn-level policies only gate WEB-originated turns, not the
+  terminal.** goose has no pre-turn hook, so a turn the user types *directly into
+  the embedded terminal* never reaches Omnigent before goose processes it — it
+  bypasses every request-phase gate (input policies, `cost_budget`'s
+  request-phase check). Omnigent's only live chokepoint on native is the
+  tool-call cliclack gate (the mirror), which catches **tool calls** but not a
+  text-only terminal turn. Web-composer turns *are* gated (the server's
+  `_evaluate_input_policy` at POST /events). **Consequence for cost budgets:**
+  enforcement holds on web turns + on tool calls, but a terminal text turn runs
+  ungated. This is fundamental to the TUI-mirror model — for guaranteed
+  turn-level / cost-budget enforcement use the headless `goose` harness (it owns
+  the turn loop, so every turn is gated). Two related sharp edges:
+  (a) the builtin `cost_budget` `max_cost_usd` is a *downgrade gate* — it only
+  DENYs while on an `expensive_models` model (defaults: opus/gpt-5/…), so a bare
+  cap with no matching model never hard-stops; and (b) the policy engine sees the
+  *spec* model, not goose's actual `goose configure` model, so expensive-model
+  matching is unreliable on native unless goose's live model is surfaced to the
+  engine (a `external_model_change` post — not yet wired).
 - **Tool-*result* checkpoint is not enforceable on native.** goose's cliclack
   only prompts *before* execution; there is no post-execution hook, so
   `PHASE_TOOL_RESULT` ASK/DENY cannot *block* a result goose has already
