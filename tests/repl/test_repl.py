@@ -1539,6 +1539,38 @@ def test_startup_header_shows_local_server_url_with_version() -> None:
     assert "server 0.3.0.dev0" in url_line
 
 
+def test_startup_header_shows_databricks_workspace_url_not_api_mount() -> None:
+    """A Databricks server shows the ``/omnigent`` SPA URL, not ``/api/2.0/omnigent``.
+
+    What this proves: the header maps the internal API proxy mount the REPL
+    connects on to the recognizable workspace URL a user expects. A
+    regression that rendered the raw ``server_url`` would leak
+    ``/api/2.0/omnigent`` into the banner. The version still appears inline.
+    """
+    import re
+
+    header = _StartupHeader(
+        folder="~",
+        description=None,
+        model_label=None,
+        credential="Subscription",
+        creds_line=None,
+    )
+    api_mount = "https://e2-dogfood.staging.cloud.databricks.com/api/2.0/omnigent"
+    plain = re.sub(
+        r"\x1b\[[0-9;]*m",
+        "",
+        _render_startup_banner_ansi(
+            "polly", server_url=api_mount, server_version="0.3.0.dev0", header=header
+        ),
+    )
+    # The clean workspace URL is shown, the internal API path is NOT.
+    assert "https://e2-dogfood.staging.cloud.databricks.com/omnigent" in plain
+    assert "/api/2.0/omnigent" not in plain
+    url_line = next(line for line in plain.split("\n") if "/omnigent" in line)
+    assert "server 0.3.0.dev0" in url_line
+
+
 def test_startup_header_omits_server_version_when_unresolved() -> None:
     """No ``server <ver>`` row when the version probe returned ``None``.
 
@@ -1563,12 +1595,51 @@ def test_startup_header_omits_server_version_when_unresolved() -> None:
     assert "server " not in plain
 
 
+def _run(coro):
+    """Drive an async helper to completion from a sync test."""
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def _fake_version_client(by_path: dict[str, dict]) -> tuple[object, list[str]]:
+    """Build a fake ``OmnigentClient`` whose ``_http.get`` serves per-path JSON.
+
+    :param by_path: Maps a request path suffix (e.g. ``"/v1/info"``) to the
+        JSON body its response should return.
+    :returns: ``(client, targets)`` — the fake client, and a list that
+        records each full URL the helper requested, in order.
+    """
+    targets: list[str] = []
+
+    class _FakeResp:
+        def __init__(self, body: dict) -> None:
+            self._body = body
+
+        def json(self) -> dict:
+            return self._body
+
+    class _FakeHttp:
+        async def get(self, target: str, timeout: object = None):
+            targets.append(target)
+            for suffix, body in by_path.items():
+                if target.endswith(suffix):
+                    return _FakeResp(body)
+            return _FakeResp({})
+
+    class _FakeClient:
+        _base_url = "https://omnigent.example.com"
+        _http = _FakeHttp()
+
+    return _FakeClient(), targets
+
+
 @pytest.mark.parametrize(
     "payload,expected",
     [
         # Happy path: server_version present in the /v1/info body.
         ({"server_version": "0.3.0.dev0"}, "0.3.0.dev0"),
-        # Server too old to report the field → None (row omitted).
+        # Server too old to report the field → falls through, None here.
         ({"accounts_enabled": False}, None),
         # Non-string / empty values are rejected rather than rendered.
         ({"server_version": ""}, None),
@@ -1579,34 +1650,40 @@ def test_fetch_server_version_parses_info(payload, expected) -> None:
     """``_fetch_server_version`` extracts a non-empty string ``server_version`` from /v1/info.
 
     What this proves: only a usable version string reaches the header; a
-    missing field, empty string, or non-string is treated as "unknown"
-    (``None``) so the banner never shows a garbage version. Also pins the
+    missing field, empty string, or non-string is treated as "unknown" and
+    falls through (here ``/api/version`` also has nothing, so the result is
+    ``None``) so the banner never shows a garbage version. Also pins the
     probe to go through the client's AUTHENTICATED ``_http`` (so a hosted,
-    auth-gated server answers instead of 401-ing) at ``/v1/info`` on the
-    client's base URL.
+    auth-gated server answers instead of 401-ing), trying ``/v1/info`` first.
     """
-    import asyncio
+    client, targets = _fake_version_client({"/v1/info": payload, "/api/version": {}})
+    assert _run(_fetch_server_version(client)) == expected
+    # The richer capabilities probe is always tried first, via the authed _http.
+    assert targets[0] == "https://omnigent.example.com/v1/info"
 
-    class _FakeResp:
-        def json(self) -> dict:
-            return payload
 
-    captured: dict[str, object] = {}
+def test_fetch_server_version_falls_back_to_api_version() -> None:
+    """When ``/v1/info`` lacks ``server_version``, fall back to ``/api/version``.
 
-    class _FakeHttp:
-        async def get(self, target: str, timeout: object = None):
-            # The probe must ride the client's authed _http, not a bare
-            # httpx.get; capturing the target pins the URL it builds.
-            captured["target"] = target
-            return _FakeResp()
-
-    class _FakeClient:
-        _base_url = "https://omnigent.example.com"
-        _http = _FakeHttp()
-
-    assert asyncio.run(_fetch_server_version(_FakeClient())) == expected
-    # Probe hits /v1/info on the client's base URL, through its authed _http.
-    assert captured["target"] == "https://omnigent.example.com/v1/info"
+    What this proves: an older server (e.g. a staging deploy that predates
+    ``server_version`` landing in ``/v1/info`` but still serves the
+    long-standing ``/api/version``) still fills the version row instead of
+    showing the URL alone. Pins the order: ``/v1/info`` first, then the
+    legacy endpoint only when the first yields no usable version.
+    """
+    client, targets = _fake_version_client(
+        {
+            # Modern endpoint present but without the field (older server).
+            "/v1/info": {"accounts_enabled": False},
+            # Legacy endpoint still reports the installed version.
+            "/api/version": {"version": "0.1.2"},
+        }
+    )
+    assert _run(_fetch_server_version(client)) == "0.1.2"
+    assert targets == [
+        "https://omnigent.example.com/v1/info",
+        "https://omnigent.example.com/api/version",
+    ]
 
 
 def test_fetch_server_version_never_raises() -> None:
@@ -1617,7 +1694,6 @@ def test_fetch_server_version_never_raises() -> None:
     that the client somehow can't satisfy, or a network drop) returns
     ``None`` instead of propagating and taking down REPL boot.
     """
-    import asyncio
 
     class _BoomHttp:
         async def get(self, *_args: object, **_kwargs: object) -> object:
@@ -1627,7 +1703,7 @@ def test_fetch_server_version_never_raises() -> None:
         _base_url = "https://omnigent.example.com"
         _http = _BoomHttp()
 
-    assert asyncio.run(_fetch_server_version(_FakeClient())) is None
+    assert _run(_fetch_server_version(_FakeClient())) is None
 
 
 @pytest.mark.parametrize(

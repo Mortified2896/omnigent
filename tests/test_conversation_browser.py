@@ -9,6 +9,43 @@ import pytest
 import omnigent.conversation_browser as browser
 
 
+@pytest.mark.parametrize(
+    "base_url,expected",
+    [
+        # Databricks workspace API mount → the recognizable /omnigent SPA URL.
+        (
+            "https://e2-dogfood.staging.cloud.databricks.com/api/2.0/omnigent",
+            "https://e2-dogfood.staging.cloud.databricks.com/omnigent",
+        ),
+        # A trailing ``?o=<org>`` selector on the API base is dropped.
+        (
+            "https://ws.databricks.com/api/2.0/omnigent?o=123",
+            "https://ws.databricks.com/omnigent",
+        ),
+        # Trailing slash on the API mount still maps cleanly.
+        (
+            "https://ws.databricks.com/api/2.0/omnigent/",
+            "https://ws.databricks.com/omnigent",
+        ),
+        # Non-Databricks URLs pass through unchanged (sans trailing slash).
+        ("http://127.0.0.1:6767", "http://127.0.0.1:6767"),
+        ("https://omnigent-02m5.onrender.com/", "https://omnigent-02m5.onrender.com"),
+    ],
+)
+def test_display_server_url_maps_databricks_api_mount(base_url: str, expected: str) -> None:
+    """
+    ``display_server_url`` rewrites the Databricks API mount to the SPA URL.
+
+    What this proves: the startup banner shows the workspace ``/omnigent``
+    URL a user recognizes instead of the internal ``/api/2.0/omnigent``
+    proxy path, while every other target is shown verbatim. A regression
+    that stopped mapping would leak the API path back into the banner.
+
+    :returns: None.
+    """
+    assert browser.display_server_url(base_url) == expected
+
+
 def test_conversation_url_quotes_session_id() -> None:
     """
     Conversation URLs percent-encode ids before appending them to the base URL.

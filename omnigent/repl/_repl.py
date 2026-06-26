@@ -476,14 +476,21 @@ def _render_startup_banner_ansi(
         ``None`` for the minimal banner.
     :returns: ANSI-styled string ready to be written to stdout.
     """
+    from omnigent.conversation_browser import display_server_url
     from omnigent.inner.banner import BannerLine, startup_banner_strings
 
     remote = _is_remote_server_url(server_url)
+    # User-facing form of the URL: a Databricks workspace-hosted server is
+    # connected to on its ``/api/2.0/omnigent`` API mount, but the banner
+    # should show the recognizable workspace ``/omnigent`` URL. Non-Databricks
+    # URLs pass through unchanged. The probe still uses the real base URL via
+    # the client; only the displayed string is mapped.
+    display_url = display_server_url(server_url) if server_url else server_url
 
     if header is None:
         banner = startup_banner_strings(
             ui_name,
-            hint_line=server_url if remote else "",
+            hint_line=display_url if remote else "",
             art_color="#F43BA6",
         )
         return banner.ansi
@@ -509,10 +516,10 @@ def _render_startup_banner_ansi(
     # version comes from a best-effort ``GET /v1/info`` probe; when it's
     # unresolved (slow / old server) only the URL shows, and when there's no
     # URL at all the version stands on its own row.
-    if server_url is not None:
-        url_row = server_url
+    if display_url is not None:
+        url_row = display_url
         if server_version:
-            url_row = f"{server_url}  ·  server {server_version}"
+            url_row = f"{display_url}  ·  server {server_version}"
         info_lines.append(BannerLine(url_row, dim=True))
     elif server_version:
         info_lines.append(BannerLine(f"server {server_version}", dim=True))
@@ -533,25 +540,35 @@ def _render_startup_banner_ansi(
 
 
 async def _fetch_server_version(client: OmnigentClient) -> str | None:
-    """Best-effort ``GET /v1/info`` → ``server_version`` for the header row.
+    """Best-effort server version for the header row, with a legacy fallback.
+
+    Tries ``GET /v1/info`` → ``server_version`` first, then falls back to
+    the long-standing ``GET /api/version`` → ``version`` endpoint. The
+    fallback matters for older servers (e.g. a staging deployment that
+    predates ``server_version`` landing in ``/v1/info``): ``/api/version``
+    has reported the same installed version for far longer, so the row
+    still fills in instead of waiting for that server to redeploy. Both
+    return the identical ``importlib.metadata`` version, so the fallback is
+    not a different value, just an older surface.
 
     Routed through the REPL's already-connected :class:`OmnigentClient` so
     the probe carries the SAME auth (bearer / cookie), base URL, and TLS /
-    custom-CA configuration the REPL is already using. ``/v1/info`` is NOT
-    universally unauthed — a hosted deployment (behind OIDC / accounts / a
-    Databricks front door) gates it like any other route, so a bare
+    custom-CA configuration the REPL is already using. These endpoints are
+    NOT universally unauthed — a hosted deployment (behind OIDC / accounts /
+    a Databricks front door) gates them like any other route, so a bare
     credential-less GET would 401 and the version would silently never show
     on exactly the remote servers where the URL row is displayed. Reusing
     the authenticated client makes the probe answer there.
 
     Because the client's ``httpx.AsyncClient`` is awaited directly (not run
-    on a thread), this never blocks the event loop. The timeout is kept
-    tight and bounded *per phase* (connect / read / write each 1.0s) so the
-    worst case a healthy-but-slow or unreachable server can add to the
-    previously-instant banner stays small — the connect phase, the dominant
-    cost for an unreachable host, fails within a second. Any failure —
+    on a thread), this never blocks the event loop. Each request is bounded
+    *per phase* (connect / read / write each 1.0s) so the worst case a
+    healthy-but-slow or unreachable server can add to the previously-instant
+    banner stays small — the connect phase, the dominant cost for an
+    unreachable host, fails within a second (and a dead host fails the first
+    request, so the fallback adds no latency there). Any failure —
     unreachable, slow, 401/4xx/5xx, non-JSON, or a server too old to report
-    the field — returns ``None`` and the banner simply omits the version
+    either field — returns ``None`` and the banner simply omits the version
     row. A welcome-banner detail must never block or fail REPL boot, so this
     swallows every error.
 
@@ -560,14 +577,20 @@ async def _fetch_server_version(client: OmnigentClient) -> str | None:
     :returns: The installed server version string (e.g. ``"0.3.0.dev0"``),
         or ``None`` when it can't be resolved.
     """
-    try:
-        import httpx
+    import httpx
 
-        resp = await client._http.get(f"{client._base_url}/v1/info", timeout=httpx.Timeout(1.0))
-        version = resp.json().get("server_version")
-    except Exception:  # noqa: BLE001 — startup-UI boundary: never block boot on a banner detail
-        return None
-    return version if isinstance(version, str) and version else None
+    timeout = httpx.Timeout(1.0)
+    # (endpoint, response key) pairs tried in order: the richer capabilities
+    # probe first, then the legacy version endpoint older servers still have.
+    for path, key in (("/v1/info", "server_version"), ("/api/version", "version")):
+        try:
+            resp = await client._http.get(f"{client._base_url}{path}", timeout=timeout)
+            version = resp.json().get(key)
+        except Exception:  # noqa: BLE001 — startup-UI boundary: never block boot on a banner detail
+            return None
+        if isinstance(version, str) and version:
+            return version
+    return None
 
 
 def _is_remote_server_url(url: str | None) -> bool:
