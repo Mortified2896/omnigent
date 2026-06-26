@@ -288,9 +288,13 @@ function stopChild(child) {
  * @returns {Promise<{ ok: boolean, url?: string, alreadyRunning?: boolean, error?: string }>}
  */
 async function startLocalServer(cliPath) {
-  const before = await cli.getServerStatus(cliPath);
-  if (before && before.running && typeof before.url === "string") {
-    return { ok: true, url: before.url, alreadyRunning: true };
+  // Reuse a server that's already running via the instant pidfile read (no
+  // `omnigent server status` subprocess), so "Run locally" returns immediately
+  // when there's already a local server — instead of paying a Python cold start
+  // on every click. We didn't start it, so don't claim ownership.
+  const existing = cli.localServerStatus();
+  if (existing) {
+    return { ok: true, url: existing.url, alreadyRunning: true };
   }
   const res = await cli.startLocalServer(cliPath);
   if (res.ok) {
