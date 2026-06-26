@@ -210,6 +210,13 @@ async function evalNativePolicyHttp(config, toolName, args) {
         // Re-park: the server held the connection the whole time, so re-POST
         // the SAME elicitation id immediately (no backoff). This is the human
         // approval window — keep waiting (bounded only by parkDeadline).
+        // A completed long-poll is a healthy round-trip, so refresh the
+        // transient budget the same way the ASK branch does. Without this the
+        // entry budget expires during the first park, and a genuine transport
+        // blip while the human is still deciding would fail closed with zero
+        // retries instead of getting its full transient window.
+        transientDeadline = Date.now() + _TRANSIENT_RETRY_BUDGET_MS;
+        transientBackoff = _TRANSIENT_RETRY_INITIAL_BACKOFF_MS;
         continue;
       }
       // Genuine transport error (connect refused / reset, or an abort that

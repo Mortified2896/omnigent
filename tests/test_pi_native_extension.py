@@ -451,6 +451,54 @@ def test_policy_park_abort_reattaches_same_id(tmp_path: Path) -> None:
     _run_policy_node_script(_extension_path(), tmp_path, body)
 
 
+def test_policy_transient_budget_refreshes_after_park(tmp_path: Path) -> None:
+    """A transport blip AFTER a long-poll re-attach is retried, not failed closed.
+
+    Regression guard for the stale transient-budget bug: the entry budget is set
+    once at function start. A real human-approval park re-attaches every
+    per-attempt timeout, advancing the clock well past that entry budget. Unless
+    the re-attach branch refreshes the budget (as the ASK branch does), a genuine
+    transport blip during the human's deliberation would compare against an
+    already-expired deadline and fail CLOSED with zero retries. Here: park
+    (THROW_ABORT) then a transport error (THROW) then ALLOW; with the refresh the
+    blip is retried and the tool proceeds (3 evaluates), without it the blip would
+    fail closed immediately (2 evaluates, blocked).
+    """
+    body = r"""
+(async () => {
+  global.AbortController = class {
+    constructor() {
+      let aborted = false;
+      const signal = {};
+      Object.defineProperty(signal, "aborted", { get() { return aborted; } });
+      signal._abort = () => { aborted = true; };
+      this.signal = signal;
+    }
+    abort() { this.signal._abort(); }
+  };
+  responders = [
+    "THROW_ABORT",
+    "THROW",
+    (_b) => makeJsonResponse({ result: "POLICY_ACTION_ALLOW" }),
+  ];
+  const verdict = await runToolCall();
+  assert.ok(
+    !verdict || verdict.block !== true,
+    "a blip after a park must be retried, got " + JSON.stringify(verdict),
+  );
+  assert.equal(
+    evalBodies.length,
+    3,
+    "expected park, retried blip, allow = 3 evaluates, got " + evalBodies.length,
+  );
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+"""
+    _run_policy_node_script(_extension_path(), tmp_path, body)
+
+
 def test_policy_transport_error_fails_closed(tmp_path: Path) -> None:
     """A persistent transport error fails CLOSED (finding #1).
 
