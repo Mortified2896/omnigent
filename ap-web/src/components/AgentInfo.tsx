@@ -58,6 +58,8 @@ import { nativeCodingAgentForAgentName } from "@/lib/nativeCodingAgents";
 import { copyText } from "@/lib/clipboard";
 import { useChatStore } from "@/store/chatStore";
 import { RestartWithModelDialog } from "@/shell/RestartWithModelDialog";
+import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { useSessionHostVersion } from "@/hooks/RunnerHealthProvider";
 
 /**
  * Whether a harness id is in the codex (GPT) family — the only harness the
@@ -1155,6 +1157,19 @@ export function AgentInfoContent({
   // popover renders it directly — the frontend derives any aggregate view
   // from this map rather than receiving flat token fields.
   const usageByModel = useChatStore((s) => s.sessionUsageByModel);
+  // Version footer: the server version (global, from the boot capabilities
+  // probe) and the bound host's version (per-session, from the health poll).
+  // Either may be absent — the footer renders whatever is known and hides
+  // entirely when neither is.
+  const serverInfo = useServerInfo();
+  const serverVersion = serverInfo !== "loading" ? serverInfo.server_version : null;
+  const hostVersion = useSessionHostVersion(sessionId ?? undefined);
+  const versionFooter = [
+    serverVersion ? `server ${serverVersion}` : null,
+    hostVersion ? `host ${hostVersion}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // Session owner (the user_id granted LEVEL_OWNER), so a viewer can see whose
   // session this is — e.g. a chat shared into a workspace group. ``null`` /
   // undefined when permissions are off (single-user) or still loading, in
@@ -1277,6 +1292,16 @@ export function AgentInfoContent({
       {showIntelligentRouting && sessionId && <IntelligentRoutingSection sessionId={sessionId} />}
       <McpServersSection sessionId={sessionId} servers={servers} editable={mcpEditable} />
       {sessionId && <SessionPoliciesSection sessionId={sessionId} />}
+      {versionFooter && (
+        <div className="border-t border-border pt-2">
+          <span
+            className="font-mono text-[10px] text-muted-foreground/70"
+            data-testid="agent-info-versions"
+          >
+            {versionFooter}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
