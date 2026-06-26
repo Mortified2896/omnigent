@@ -140,14 +140,16 @@ def clone_hermes_session(
                     source_db,
                 )
                 return
-            _id, source, cwd, started_at = row
+            _id, source, cwd, _started_at = row
             tgt_conn.execute(
                 "INSERT INTO sessions (id, source, cwd, started_at) VALUES (?, ?, ?, ?)",
                 (
                     target_session_id,
                     source,
                     workspace if workspace is not None else cwd,
-                    started_at,
+                    # Use current time so the forwarder's started_at floor
+                    # discovery can find this cloned session.
+                    time.time(),
                 ),
             )
 

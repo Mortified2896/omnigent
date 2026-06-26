@@ -2421,12 +2421,6 @@ async def _auto_create_hermes_terminal(
     # Fork with history: clone the source Hermes session's state.db into the
     # new session's HERMES_HOME so the TUI loads the prior conversation context
     # under a fresh session id (true fork, not a shared --resume).
-    _logger.info(
-        "hermes fork check: carry=%s ext_id=%s src_id=%s",
-        launch_config.fork_carry_history,
-        launch_config.fork_source_external_id,
-        launch_config.fork_source_id,
-    )
     if launch_config.fork_carry_history and launch_config.fork_source_external_id:
         from omnigent.hermes_native_bridge import (
             clone_hermes_session,
