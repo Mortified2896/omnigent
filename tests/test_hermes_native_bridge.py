@@ -80,6 +80,37 @@ def test_inject_user_message_clears_pastes_and_submits(tmp_path, monkeypatch) ->
     assert not list(tmp_path.glob("paste_*.bin"))
 
 
+def test_inject_user_message_retries_when_paste_not_committed(tmp_path, monkeypatch) -> None:
+    """First paste fails (TUI still loading) → re-settle + retry → single Enter."""
+    calls: list[tuple[str, ...]] = []
+    settle_calls: list[tuple] = []
+    # Zero out the commit timeout so the first attempt times out immediately,
+    # exercising the retry path without a real 5-second wait.
+    monkeypatch.setattr(b, "_PASTE_COMMIT_TIMEOUT_S", 0.0)
+    monkeypatch.setattr(
+        b, "_wait_for_tmux_info", lambda *_a, **_k: {"socket_path": "/s", "tmux_target": "t"}
+    )
+    monkeypatch.setattr(b, "_session_alive", lambda *_a, **_k: True)
+    monkeypatch.setattr(b, "_settle_pane", lambda *a, **k: settle_calls.append((a, k)))
+    # Pane never shows the needle — needle-check always fails → retry triggered.
+    monkeypatch.setattr(b, "_capture_pane", lambda *_a, **_k: "")
+    monkeypatch.setattr(b.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(b, "_run_tmux", lambda _sock, *args: calls.append(args))
+
+    b.inject_user_message(tmp_path, content="do something now")
+
+    # _settle_pane called twice: initial settle + retry settle.
+    assert len(settle_calls) == 2
+    # load-buffer called twice: initial paste + retry paste.
+    load_cmds = [a for a in calls if a[0] == "load-buffer"]
+    assert len(load_cmds) == 2, "paste should be retried once"
+    # Exactly one Enter at the end (submit happens once, after both attempts).
+    send_key_cmds = [a for a in calls if a[0] == "send-keys"]
+    assert send_key_cmds[-1] == ("send-keys", "-t", "t", "Enter")
+    enter_count = sum(1 for a in send_key_cmds if a[-1] == "Enter")
+    assert enter_count == 1, "exactly one Enter must be sent"
+
+
 def test_inject_user_message_requires_content(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         b.inject_user_message(tmp_path, content="")

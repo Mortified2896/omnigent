@@ -59,6 +59,12 @@ _PASTE_COMMIT_TIMEOUT_S = 5.0
 # detected by the pane settling (no byte changes across consecutive captures).
 # This many stable polls in a row marks the input box ready.
 _SETTLE_STABLE_POLLS = 3
+# On a new session, Hermes initializes its MCP servers (omnigent, policy hook)
+# before the input prompt is active. The first paste can land during this
+# initialization window and be silently dropped. If the needle doesn't appear
+# after the first attempt, we re-settle (giving MCP time to finish loading) and
+# retry once. This budget caps the re-settle on the retry path.
+_RETRY_SETTLE_S = 10.0
 
 
 def mint_hermes_session_id() -> str:
@@ -585,39 +591,24 @@ def _settle_pane(socket_path: str, tmux_target: str, *, timeout_s: float) -> Non
         previous = current
 
 
-def inject_user_message(
-    bridge_dir: Path,
-    *,
+def _paste_and_check_needle(
+    socket_path: str,
+    tmux_target: str,
     content: str,
-    timeout_s: float = _TMUX_READY_TIMEOUT_S,
-) -> None:
-    """Deliver a web-UI user message into the Hermes TUI via a tmux bracketed paste.
+    bridge_dir: Path,
+    needle: str,
+) -> bool:
+    """Clear any draft, paste *content*, return True if *needle* appeared in pane.
 
-    Clears any leftover draft, pastes *content* (multi-line safe via
-    ``load-buffer``/``paste-buffer -p`` so interior newlines stay data, not
-    submits), settles, then submits with a *single* Enter. Hermes' prompt_toolkit
-    input submits on Enter, so exactly one Enter is sent — a second would submit
-    an empty turn.
+    Clears the input field (C-a + C-k), writes the content to a temp file,
+    and delivers it via ``load-buffer`` / ``paste-buffer -p`` (bracketed-paste
+    markers keep interior newlines as data). If *needle* is non-empty, polls
+    for up to :data:`_PASTE_COMMIT_TIMEOUT_S` seconds for the text to appear.
 
-    :param bridge_dir: The hermes-native bridge dir holding ``tmux.json``.
-    :param content: User text (non-empty).
-    :param timeout_s: Per-readiness-gate timeout.
-    :raises RuntimeError: If the tmux target is never advertised or a tmux
-        command fails.
+    :returns: ``True`` when the needle is found, or when there is no needle
+        (blind-submit path — assume committed). ``False`` when a needle was
+        expected but never appeared, indicating the TUI was not ready.
     """
-    if not content:
-        raise RuntimeError("hermes-native injection requires non-empty content")
-    info = _wait_for_tmux_info(bridge_dir, timeout_s=timeout_s)
-    socket_path = info["socket_path"]
-    tmux_target = info["tmux_target"]
-    # Fast-fail if the TUI already exited: otherwise _settle_pane polls a dead
-    # pane for the full timeout and the web message is silently lost.
-    if not _session_alive(socket_path, tmux_target):
-        raise RuntimeError(
-            "hermes terminal is no longer running (the TUI exited); restart the session"
-        )
-    _settle_pane(socket_path, tmux_target, timeout_s=timeout_s)
-    # Clear any leftover draft: Home (C-a) + kill-to-end (C-k).
     _run_tmux(socket_path, "send-keys", "-t", tmux_target, "C-a")
     _run_tmux(socket_path, "send-keys", "-t", tmux_target, "C-k")
     with tempfile.NamedTemporaryFile(
@@ -641,16 +632,65 @@ def inject_user_message(
     finally:
         with contextlib.suppress(OSError):
             os.unlink(paste_path)
+    if not needle:
+        return True  # no usable needle — assume committed (blind-submit path)
+    deadline = time.monotonic() + _PASTE_COMMIT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if needle in _capture_pane(socket_path, tmux_target):
+            return True
+        time.sleep(_POLL_INTERVAL_S)
+    return False
+
+
+def inject_user_message(
+    bridge_dir: Path,
+    *,
+    content: str,
+    timeout_s: float = _TMUX_READY_TIMEOUT_S,
+) -> None:
+    """Deliver a web-UI user message into the Hermes TUI via a tmux bracketed paste.
+
+    Clears any leftover draft, pastes *content* (multi-line safe via
+    ``load-buffer``/``paste-buffer -p`` so interior newlines stay data, not
+    submits), settles, then submits with a *single* Enter. Hermes' prompt_toolkit
+    input submits on Enter, so exactly one Enter is sent — a second would submit
+    an empty turn.
+
+    On new sessions, Hermes initializes its MCP servers before the input prompt
+    is active. If the first paste doesn't commit (needle not visible), we re-settle
+    to give the TUI time to finish loading and retry once — this prevents the first
+    web-UI message from being silently dropped during startup.
+
+    :param bridge_dir: The hermes-native bridge dir holding ``tmux.json``.
+    :param content: User text (non-empty).
+    :param timeout_s: Per-readiness-gate timeout.
+    :raises RuntimeError: If the tmux target is never advertised or a tmux
+        command fails.
+    """
+    if not content:
+        raise RuntimeError("hermes-native injection requires non-empty content")
+    info = _wait_for_tmux_info(bridge_dir, timeout_s=timeout_s)
+    socket_path = info["socket_path"]
+    tmux_target = info["tmux_target"]
+    # Fast-fail if the TUI already exited: otherwise _settle_pane polls a dead
+    # pane for the full timeout and the web message is silently lost.
+    if not _session_alive(socket_path, tmux_target):
+        raise RuntimeError(
+            "hermes terminal is no longer running (the TUI exited); restart the session"
+        )
+    _settle_pane(socket_path, tmux_target, timeout_s=timeout_s)
+    needle = _submit_needle(content)
     # Wait until the paste is visibly committed before Enter. Submitting mid-paste
     # folds the Enter in as a newline (rapid stdin bursts coalesce), leaving the
     # message unsent. Poll for the text, then submit; blind-submit if no needle.
-    needle = _submit_needle(content)
-    if needle:
-        deadline = time.monotonic() + _PASTE_COMMIT_TIMEOUT_S
-        while time.monotonic() < deadline:
-            if needle in _capture_pane(socket_path, tmux_target):
-                break
-            time.sleep(_POLL_INTERVAL_S)
+    committed = _paste_and_check_needle(socket_path, tmux_target, content, bridge_dir, needle)
+    if not committed:
+        # The paste did not commit — the TUI was likely still initializing when
+        # we first attempted (e.g., MCP server startup on a fresh session). Re-
+        # settle to let the TUI finish loading, then retry once so the first
+        # web-UI message is not silently dropped on new sessions.
+        _settle_pane(socket_path, tmux_target, timeout_s=_RETRY_SETTLE_S)
+        _paste_and_check_needle(socket_path, tmux_target, content, bridge_dir, needle)
     time.sleep(_PASTE_SETTLE_S)
     _run_tmux(socket_path, "send-keys", "-t", tmux_target, "Enter")
 
