@@ -599,6 +599,22 @@ async def bridge_tmux_pty_to_websocket(
                         with contextlib.suppress(OSError):
                             fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
                 elif data is not None and not read_only:
+                    # Check if the pane is still alive before writing. When remain-on-exit
+                    # keeps a dead pane alive, Ctrl-C and other input silently fail because
+                    # there's no process to receive the signal. Close the WebSocket immediately
+                    # to tell the client the session has ended rather than silently dropping
+                    # the keystroke.
+                    if not await _tmux_session_alive(socket_path, tmux_target):
+                        _logger.debug(
+                            "tmux-attach: pane is dead; closing websocket target=%s",
+                            tmux_target,
+                        )
+                        with contextlib.suppress(RuntimeError):
+                            await websocket.close(
+                                code=WS_CLOSE_TERMINAL_NOT_FOUND,
+                                reason="terminal session ended",
+                            )
+                        return
                     last_client_input_at = _monotonic()
                     await _write_all_nonblocking(loop, master_fd, data)
         except WebSocketDisconnect:
