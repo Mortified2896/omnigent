@@ -2068,9 +2068,18 @@ async def _attach_direct_tmux(
             await watcher
 
     startup_profiler.mark("tmux attach subprocess exited")
-    if await _tmux_session_alive(str(socket_path), tmux_target):
-        return _AttachOutcome.DETACHED
-    return _AttachOutcome.EXITED
+    # Use the tri-state probe so a dead pane (session alive, pane_dead=1) is
+    # treated as EXITED rather than DETACHED. With remain-on-exit the session
+    # outlives the inner CLI, so _tmux_session_alive alone would wrongly signal
+    # a user detach and the reconnect loop would re-attach to the dead pane.
+    pane_dead = await _check_pane_dead_definitive(str(socket_path), tmux_target)
+    if pane_dead is True:
+        return _AttachOutcome.EXITED
+    if pane_dead is None:
+        # Inconclusive probe — fall back to session-existence check.
+        if not await _tmux_session_alive(str(socket_path), tmux_target):
+            return _AttachOutcome.EXITED
+    return _AttachOutcome.DETACHED
 
 
 async def _attach_with_transcript_forwarder(
