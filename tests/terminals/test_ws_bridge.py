@@ -1493,7 +1493,7 @@ async def test_check_pane_dead_definitive_tri_state(
         mock_dead.call_count += 1
         return True
     mock_dead.call_count = 0
-    
+
     result = await _check_pane_dead_definitive("socket", "target")
     assert isinstance(result, (bool, type(None)))
     # The real function will try to run tmux; we're just checking the return type contract
