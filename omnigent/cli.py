@@ -6560,7 +6560,13 @@ class _HostGroup(click.Group):
         if ctx.resilient_parsing or not args:
             return args
         try:
-            opts, positionals, _ = self.make_parser(ctx).parse_args(list(args))
+            parser = self.make_parser(ctx)
+            # A click.Group defaults to allow_interspersed_args=False, which would
+            # treat an option *after* the positional URL (e.g.
+            # `host <url> --non-interactive`) as an extra positional. Enable
+            # interspersed parsing so trailing options are classified as options.
+            parser.allow_interspersed_args = True
+            opts, positionals, _ = parser.parse_args(list(args))
         except click.UsageError:
             # Malformed options: let the real parse surface the error.
             return args
@@ -6577,6 +6583,9 @@ class _HostGroup(click.Group):
             )
         if positionals[1:]:
             raise click.UsageError(f"Unexpected extra argument(s): {' '.join(positionals[1:])}")
+        # remove() drops the first token equal to `url`. Safe because the only
+        # value-taking group option (--server) triggers the conflict error above,
+        # so the URL can't be some other option's value.
         remaining = list(args)
         remaining.remove(url)
         return ["--server", url, *remaining]

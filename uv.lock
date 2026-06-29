@@ -2906,7 +2906,7 @@ requires-dist = [
     { name = "cachetools", specifier = ">=5.0,<7" },
     { name = "cel-expr-python", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64') or (platform_machine != 'aarch64' and sys_platform != 'darwin')", specifier = ">=0.1" },
     { name = "claude-agent-sdk", specifier = ">=0.1.62" },
-    { name = "click", specifier = ">=8.0,<8.2" },
+    { name = "click", specifier = ">=8.0,<10" },
     { name = "cursor-sdk", marker = "extra == 'cursor'", specifier = ">=0.1.7" },
     { name = "cwsandbox", marker = "extra == 'cwsandbox'", specifier = ">=0.24,<1" },
     { name = "databricks-mcp", marker = "extra == 'databricks'", specifier = ">=0.1.0" },
