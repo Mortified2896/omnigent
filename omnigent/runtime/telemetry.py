@@ -45,9 +45,6 @@ _logger = logging.getLogger(__name__)
 
 _RESP_PREFIX = "resp_"
 _HEX_LEN = 32
-_DUMMY_PARENT_SPAN_ID = "1000000000000001"
-_W3C_VERSION = "00"
-_W3C_FLAGS_SAMPLED = "01"
 
 _capture_content: bool = False
 _initialized: bool = False
@@ -191,7 +188,13 @@ def trace_context_for_response(
 
     effective = root_response_id or response_id
     trace_id_hex = trace_id_from_response_id(effective)
-    traceparent = f"{_W3C_VERSION}-{trace_id_hex}-{_DUMMY_PARENT_SPAN_ID}-{_W3C_FLAGS_SAMPLED}"
+
+    # Inject a synthetic traceparent to pin all spans to the response-derived
+    # trace ID. The dummy parent span ID (1000000000000001) is a sentinel —
+    # it never matches any real span so the agent span is effectively the
+    # root for display purposes, even though it has a non-null parent_id in
+    # the OTLP payload.
+    traceparent = f"00-{trace_id_hex}-1000000000000001-01"
     ctx = TraceContextTextMapPropagator().extract({"traceparent": traceparent})
     token = context.attach(ctx)
     try:
