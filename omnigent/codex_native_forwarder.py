@@ -2285,6 +2285,7 @@ async def _handle_event(
             params=params,
             delta_coalescer=delta_coalescer if not is_child else None,
             forwarder_state=forwarder_state,
+            bridge_dir=bridge_dir,
         )
 
 
@@ -2738,6 +2739,7 @@ async def _handle_completed_event(
     params: dict[str, Any],
     delta_coalescer: _OutputTextDeltaCoalescer | None,
     forwarder_state: _CodexForwarderState | None,
+    bridge_dir: Path | None = None,
 ) -> None:
     """
     Flush pending text and mirror one completed Codex item.
@@ -2755,7 +2757,9 @@ async def _handle_completed_event(
         await delta_coalescer.flush()
     if forwarder_state is not None:
         forwarder_state.record_completed_plan(params)
-    await _handle_completed_item(client, session_id, params, forwarder_state=forwarder_state)
+    await _handle_completed_item(
+        client, session_id, params, forwarder_state=forwarder_state, bridge_dir=bridge_dir
+    )
 
 
 async def _handle_terminal_turn_boundary(
@@ -3603,6 +3607,7 @@ async def _handle_completed_item(
     params: dict[str, Any],
     *,
     forwarder_state: _CodexForwarderState | None = None,
+    bridge_dir: Path | None = None,
 ) -> None:
     """
     Forward one Codex completed item event when it maps to Omnigent history.
@@ -3648,7 +3653,9 @@ async def _handle_completed_item(
         )
         if forwarder_state is None or not forwarder_state.compaction_item_persisted:
             try:
-                await _persist_codex_compaction_item(client, session_id=session_id)
+                await _persist_codex_compaction_item(
+                    client, session_id=session_id, bridge_dir=bridge_dir
+                )
             except Exception:  # noqa: BLE001
                 _logger.warning(
                     "Failed to persist codex compaction item for %s", session_id, exc_info=True
