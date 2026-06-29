@@ -1291,9 +1291,11 @@ class TerminalInstance:
                 # exited; report the exit rather than treating the frozen pane
                 # as an idle agent. Detach all clients so attached tmux attach
                 # subprocesses (CLI direct attach, server-side bridge PTY) exit
-                # naturally instead of hanging on the dead pane.
-                with contextlib.suppress(Exception):
-                    await self._tmux_output("detach-client", "-s", self.tmux_target)
+                # naturally instead of hanging on the dead pane. Only relevant
+                # when keep_alive_after_exit is set (remain-on-exit was enabled).
+                if self.keep_alive_after_exit:
+                    with contextlib.suppress(Exception):
+                        await self._tmux_output("detach-client", "-s", self.tmux_target)
                 self.running = False
                 if on_exit is not None:
                     await _fire(on_exit, "exit")
@@ -1446,9 +1448,11 @@ class TerminalInstance:
                 # frame, now remembered for diagnostics). Report the exit
                 # deterministically instead of mistaking the frozen pane for an
                 # idle agent and leaving the session hung. Detach all clients
-                # so attached tmux attach subprocesses exit naturally.
-                with contextlib.suppress(Exception):
-                    self._tmux_output_sync("detach-client", "-s", self.tmux_target)
+                # so attached tmux attach subprocesses exit naturally. Only
+                # relevant when keep_alive_after_exit is set.
+                if self.keep_alive_after_exit:
+                    with contextlib.suppress(Exception):
+                        self._tmux_output_sync("detach-client", "-s", self.tmux_target)
                 self.running = False
                 if on_exit is not None:
                     self._fire_watch_callback(on_exit, "exit")
