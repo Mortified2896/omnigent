@@ -266,6 +266,103 @@ def test_over_budget_unknown_model_denies_fail_closed() -> None:
     assert policy(_tool(6.0, model=None))["result"] == "DENY"
 
 
+def _unpriced_tool(input_tokens: int = 1000, model: str = "unpriced-model") -> PolicyEvent:
+    """Build a ``tool_call`` event with token usage but no ``total_cost_usd``.
+
+    Simulates a session that has consumed tokens on a model absent from the
+    pricing catalog: ``total_cost_usd`` is never written, so the key is absent
+    from the usage dict even though real spend has occurred.
+
+    :param input_tokens: Cumulative input tokens to place in the usage dict.
+    :param model: Active model id, e.g. ``"unpriced-model"``.
+    :returns: A ``tool_call`` event with tokens but no cost key.
+    """
+    return {
+        "type": "tool_call",
+        "target": "sys_os_shell",
+        "data": {"name": "sys_os_shell", "arguments": {}},
+        "context": {
+            "actor": {},
+            "usage": {"input_tokens": input_tokens, "total_tokens": input_tokens},
+            "model": model,
+        },
+        "session_state": {},
+    }
+
+
+def test_unpriced_session_denies_fail_closed() -> None:
+    """Token usage without ``total_cost_usd`` → DENY (fail closed).
+
+    A model absent from the pricing catalog never writes ``total_cost_usd``
+    to the session, so the gate would score the session at $0 and never
+    fire. After the fix, the gate detects tokens-present / cost-absent and
+    returns DENY rather than silently treating unknown spend as $0. The
+    deny reason must name the model-pricing gap so the operator knows
+    what to fix.
+    """
+    policy = cost_budget(max_cost_usd=5.0)
+    result = policy(_unpriced_tool())
+    assert result["result"] == "DENY"
+    assert "pricing" in result["reason"].lower()
+
+
+def test_unpriced_session_denies_both_phases() -> None:
+    """Unpriced fail-closed fires on both tool_call and request phases."""
+    policy = cost_budget(max_cost_usd=5.0, ask_thresholds_usd=[1.0])
+    unpriced_request: PolicyEvent = {
+        "type": "request",
+        "target": None,
+        "data": "hello",
+        "context": {
+            "actor": {},
+            "usage": {"input_tokens": 500, "total_tokens": 500},
+            "model": "unpriced-model",
+        },
+        "session_state": {},
+    }
+    assert policy(_unpriced_tool())["result"] == "DENY"
+    assert policy(unpriced_request)["result"] == "DENY"
+
+
+def test_no_tokens_yet_allows_first_turn() -> None:
+    """No tokens in session_usage → ALLOW (first turn, nothing unpriced yet).
+
+    The unpriced check must not fire when the session is brand new (no
+    prior turns). The gate can only detect unpriced spend after at least
+    one turn has written tokens; the very first turn on any model must
+    be allowed so the gate is not infinitely recursive.
+    """
+    policy = cost_budget(max_cost_usd=5.0)
+    # cost=None + no token keys → brand-new session, nothing spent
+    result = policy(_tool(None))
+    assert result["result"] == "ALLOW"
+
+
+def test_priced_zero_cost_allows() -> None:
+    """``total_cost_usd = 0.0`` (explicitly priced at zero) → not an unpriced session.
+
+    A free model that IS in the catalog and reports $0 should behave
+    normally — the key is present, the cost is zero, the gate allows.
+    Confusing this with the absent-key case would block free catalog models.
+    """
+    policy = cost_budget(max_cost_usd=5.0)
+    event: PolicyEvent = {
+        "type": "tool_call",
+        "target": "sys_os_shell",
+        "data": {"name": "sys_os_shell", "arguments": {}},
+        "context": {
+            "actor": {},
+            "usage": {
+                "input_tokens": 1000,
+                "total_cost_usd": 0.0,  # explicitly priced at $0 (free model)
+            },
+            "model": "free-model",
+        },
+        "session_state": {},
+    }
+    assert policy(event)["result"] == "ALLOW"
+
+
 def test_hard_limit_wins_over_checkpoint_approval() -> None:
     """Over the hard limit on an expensive model → DENY even if approved.
 

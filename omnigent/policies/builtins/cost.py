@@ -32,9 +32,13 @@ It reads cumulative spend from
 total maintained server-side (token-priced for relay/codex sessions,
 billed directly for claude-native) — and the active model from
 ``event["context"]["model"]`` (the conversation's ``model_override`` or
-the agent spec's ``llm.model``, resolved by the policy engine). When
-pricing is unavailable the cost stays ``0.0`` and the policy never trips
-(it cannot budget what it cannot price).
+the agent spec's ``llm.model``, resolved by the policy engine). When a
+model has no catalog pricing, ``total_cost_usd`` is never written to the
+session, so the policy would score the session at ``$0`` and never
+enforce the budget. To prevent unpriced spend silently bypassing the cap,
+the gate **fails closed** when token usage is present but
+``total_cost_usd`` is absent: it returns DENY with a message asking the
+user to switch to a priced model.
 
 On the ``tool_call`` phase a DENY/ASK blocks that specific tool call
 (the native hook returns ``deny`` / parks for approval) rather than
@@ -76,6 +80,45 @@ from omnigent.policies.schema import (
 )
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
+
+# DENY response emitted when the session has consumed tokens on a model with
+# no catalog pricing. The gate cannot enforce a budget it cannot measure, so
+# it fails CLOSED rather than silently treating unknown spend as $0.
+_UNPRICED_DENY: PolicyResponse = {
+    "result": "DENY",
+    "reason": (
+        "Blocked by the cost-budget policy: the active model has no catalog "
+        "pricing so cumulative spend cannot be measured. Switch to a priced "
+        "model to continue, or ask an administrator to add this model to the "
+        "pricing catalog."
+    ),
+}
+
+
+def _usage_is_unpriced(usage: dict[str, Any]) -> bool:
+    """Return ``True`` when token usage is present but cost is unpriced.
+
+    The session has had at least one turn (token counters are non-zero) yet
+    ``total_cost_usd`` is absent — meaning no turn was ever priced by the
+    catalog. The gate cannot enforce a budget against this session: it would
+    score every check at ``$0`` and never fire. Callers use this to fail
+    closed (DENY) rather than fail open.
+
+    Returns ``False`` when ``total_cost_usd`` is already present (priced) or
+    when no tokens have been consumed yet (first request, nothing to price).
+    The first turn on an unpriced model still runs — the gate only has
+    post-turn data at check time — but every subsequent turn is denied.
+
+    :param usage: ``event["context"]["usage"]`` or equivalent subtree dict.
+    :returns: ``True`` when enforcement should fail closed due to missing
+        pricing.
+    """
+    if "total_cost_usd" in usage:
+        return False
+    return bool(
+        usage.get("input_tokens") or usage.get("output_tokens") or usage.get("total_tokens")
+    )
+
 
 # Phases the budget gate fires on. ``tool_call`` is the native ``PreToolUse``
 # block point; ``request`` runs before the LLM turn so text-only turns (no
@@ -438,6 +481,9 @@ def cost_budget(
         phase = event.get("type")
         if phase not in _GATED_PHASES:
             return _ALLOW
+        context = event.get("context") or {}
+        if _usage_is_unpriced(context.get("usage") or {}):
+            return _UNPRICED_DENY
         cost = _session_cost_usd(event)
         if cfg.hard_cap_enabled and cost >= max_cost_usd:
             if _model_blocked_over_budget(
@@ -608,6 +654,9 @@ def user_daily_cost_budget(
         phase = event.get("type")
         if phase not in _GATED_PHASES:
             return _ALLOW
+        context = event.get("context") or {}
+        if _usage_is_unpriced(context.get("usage") or {}):
+            return _UNPRICED_DENY
         cost = _user_daily_cost_usd(event)
         owner = _user_daily_owner(event)
         if cfg.hard_cap_enabled and cost >= max_cost_usd:
@@ -747,6 +796,9 @@ def subagent_cost_budget(
         phase = event.get("type")
         if phase not in _GATED_PHASES:
             return _ALLOW
+        context = event.get("context") or {}
+        if _usage_is_unpriced(context.get("subtree_usage") or {}):
+            return _UNPRICED_DENY
         cost = _subtree_cost_usd(event)
         # Check hard limit if max_cost_usd is set.
         if max_cost_usd is not None and cfg.hard_cap_enabled and cost >= max_cost_usd:
