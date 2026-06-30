@@ -40,6 +40,8 @@ _HARNESS_FAMILY: dict[str, str] = {
     "claude-sdk": "claude",
     "claude_sdk": "claude",
     "claude-native": "claude",
+    # pi is multi-model; default to claude tiers for Databricks deployments.
+    "pi": "claude",
     "codex": "gpt",
     "codex-native": "gpt",
     "openai-agents": "gpt",

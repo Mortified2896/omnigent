@@ -12687,7 +12687,7 @@ async def _handle_advise_models_mcp(
     _WORKER_HARNESS: dict[str, str] = {
         "claude_code": "claude-sdk",
         "codex": "codex",
-        "pi": "openai-agents",
+        "pi": "pi",
     }
 
     def _resolve_harness_for_worker(agent: str) -> str | None:

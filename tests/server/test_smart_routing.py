@@ -103,6 +103,13 @@ def test_infer_tiers_openai_agents() -> None:
     assert tiers is not None
 
 
+def test_infer_tiers_pi() -> None:
+    """pi is multi-model; defaults to claude tiers for Databricks deployments."""
+    tiers = infer_tiers("pi")
+    assert tiers is not None
+    assert any("haiku" in m for m in tiers["cheap"])
+
+
 def test_infer_tiers_unknown_harness() -> None:
     """Unknown harnesses return None (not routable)."""
     assert infer_tiers("cursor") is None
