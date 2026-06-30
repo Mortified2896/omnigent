@@ -371,7 +371,13 @@ class ExecutorAdapter(HarnessApp):
                     trace_cm = trace_context_for_response(response_id=ctx.response_id)
                 except Exception:
                     _logger.debug("trace_context_for_response unavailable", exc_info=True)
-            with trace_cm:
+            from omnigent.runtime.telemetry import session_scope
+
+            # Bind the session for the whole turn so every span the harness
+            # creates (agent/LLM/tool, the native tmux inject, DB/httpx child
+            # spans) is tagged with session.id by the span processor — no
+            # per-harness code.
+            with session_scope(self._session_key), trace_cm:
                 if tctx is not None:
                     agent_span = tctx.start_agent_span(
                         agent_name=request.model or "unknown",

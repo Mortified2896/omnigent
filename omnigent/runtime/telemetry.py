@@ -29,6 +29,7 @@ concerns:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -56,6 +57,15 @@ _capture_content: bool = False
 _initialized: bool = False
 _metrics_initialized: bool = False
 _logs_initialized: bool = False
+
+# Session (conversation) id for the current execution context. Set once at a
+# session boundary (request hook, executor turn, forwarder task); the
+# _SessionIdSpanProcessor reads it on_start and stamps `session.id` on EVERY
+# span created in that context — so runner/harness operations are tagged
+# generically, with no per-operation code. Default None = no stamping.
+_session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "omnigent_session_id", default=None
+)
 
 
 def _env_bool(name: str) -> bool:
@@ -212,6 +222,10 @@ def set_session_id(session_id: str | None) -> None:
     """
     if not session_id or not telemetry_enabled():
         return
+    # Bind for the rest of this context so child spans (e.g. the create's DB
+    # writes) get tagged by _SessionIdSpanProcessor too; then stamp the
+    # already-started active span directly (its on_start has already passed).
+    _session_id_var.set(session_id)
     try:
         from opentelemetry import trace as otel_trace
 
@@ -220,6 +234,59 @@ def set_session_id(session_id: str | None) -> None:
             span.set_attribute("session.id", session_id)
     except Exception:  # pragma: no cover - telemetry must never break requests
         pass
+
+
+@contextmanager
+def session_scope(session_id: str | None) -> Iterator[None]:
+    """
+    Bind a session id for the current execution context and its children.
+
+    Every span started while this scope is active is tagged with
+    ``session.id`` by :class:`_SessionIdSpanProcessor`. Set it ONCE at a
+    session boundary — the FastAPI request hook, an executor turn, a
+    forwarder task — so all runner/harness operations (current and future,
+    including DB/httpx child spans) get the attribute generically, instead
+    of stamping each span by hand. No-op for a falsy id or when telemetry
+    is off.
+
+    :param session_id: The Omnigent session (conversation) id, e.g. ``conv_…``.
+    """
+    if not session_id or not telemetry_enabled():
+        yield
+        return
+    token = _session_id_var.set(session_id)
+    try:
+        yield
+    finally:
+        _session_id_var.reset(token)
+
+
+def _make_session_id_processor() -> Any:
+    """
+    Build a span processor that stamps ``session.id`` from the active
+    :data:`_session_id_var` onto every recording span.
+
+    Registered on the runtime ``TracerProvider`` (:func:`_init_otel_traces`)
+    so the session id flows onto all spans — server, runner, harness, and any
+    future operation — with no per-call-site code. Subclasses the SDK
+    ``SpanProcessor`` so it satisfies the full processor interface (e.g. the
+    internal ``_on_ending`` hook); only ``on_start`` is overridden. Built
+    lazily because the OTel SDK is not a hard import dependency of this module.
+
+    :returns: A ``SpanProcessor`` instance.
+    """
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    class _SessionIdSpanProcessor(SpanProcessor):
+        def on_start(self, span: Any, parent_context: Any = None) -> None:
+            try:
+                session_id = _session_id_var.get()
+                if session_id and span.is_recording():
+                    span.set_attribute("session.id", session_id)
+            except Exception:  # pragma: no cover - telemetry must never break spans
+                pass
+
+    return _SessionIdSpanProcessor()
 
 
 def _fastapi_instrumentation_enabled() -> bool:
@@ -273,11 +340,16 @@ def _fastapi_session_id_hook(span: Any, scope: Mapping[str, Any]) -> None:
     :param scope: The ASGI connection scope; ``scope["path"]`` is the route.
     """
     try:
-        if span is None or not span.is_recording():
-            return
         match = _SESSION_ID_IN_PATH.search(scope.get("path") or "")
-        if match:
-            span.set_attribute("session.id", match.group(1))
+        if not match:
+            return
+        session_id = match.group(1)
+        # Bind for the request's whole span tree (DB, httpx, policy, …) via the
+        # processor, then stamp the server span directly (it already started, so
+        # the processor's on_start has already run for it).
+        _session_id_var.set(session_id)
+        if span is not None and span.is_recording():
+            span.set_attribute("session.id", session_id)
     except Exception:  # pragma: no cover - telemetry must never break requests
         pass
 
@@ -824,6 +896,9 @@ def _init_otel_traces(endpoint: str) -> None:
 
             service_name = os.environ.get("OTEL_SERVICE_NAME", "omnigent")
             provider = TracerProvider(resource=Resource.create({SERVICE_NAME: service_name}))
+            # Enrich every span with session.id from the active context (set via
+            # session_scope at the request hook / executor turn / forwarder).
+            provider.add_span_processor(_make_session_id_processor())
             provider.add_span_processor(BatchSpanProcessor(_create_otlp_span_exporter()))
             trace.set_tracer_provider(provider)
 

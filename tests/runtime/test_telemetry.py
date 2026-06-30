@@ -34,15 +34,30 @@ _RESP_ID = f"resp_{_RESP_HEX}"
 
 
 @pytest.fixture(autouse=True)
-def _opt_in_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+def _opt_in_telemetry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """
     Telemetry is opt-in (``OMNIGENT_TELEMETRY_ENABLED``, off by default).
-    This module exercises telemetry behavior, so opt in for every test;
-    the opt-out test clears it explicitly.
+    This module exercises telemetry behavior, so opt in for every test; the
+    opt-out test clears it explicitly. Also resets the session-id contextvar
+    around each test so a ``set_session_id`` / hook call in one test (which
+    deliberately does not reset — prod requests are isolated async tasks)
+    cannot leak into the next.
 
     :param monkeypatch: Pytest monkeypatch fixture.
     """
     monkeypatch.setenv("OMNIGENT_TELEMETRY_ENABLED", "true")
+    token = telemetry._session_id_var.set(None)
+    try:
+        yield
+    finally:
+        telemetry._session_id_var.reset(token)
+        # init()/enable_tracing() in a telemetry test flips global tracing on
+        # and never resets it; clear it so it can't leak "tracing on" into
+        # other suites (e.g. the executor-adapter tests).
+        from omnigent.inner.tracing import disable_tracing
+
+        disable_tracing()
+        telemetry._initialized = False
 
 
 @pytest.fixture
@@ -588,6 +603,34 @@ def test_set_session_id_stamps_current_span(
 
     exported = in_memory_exporter.get_finished_spans()
     assert exported[-1].attributes.get("session.id") == "conv_cafef00d"
+
+
+def test_session_scope_processor_stamps_every_span() -> None:
+    """
+    The generic mechanism: every span created inside ``session_scope`` is
+    tagged with ``session.id`` by ``_SessionIdSpanProcessor`` — no per-span
+    code — and spans outside the scope are left untouched.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(telemetry._make_session_id_processor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    with telemetry.session_scope("conv_generic01"):
+        with tracer.start_as_current_span("server.request"):
+            with tracer.start_as_current_span("db.query"):  # child span, never stamped by hand
+                pass
+    with tracer.start_as_current_span("outside.scope"):
+        pass
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    assert spans["server.request"].attributes.get("session.id") == "conv_generic01"
+    assert spans["db.query"].attributes.get("session.id") == "conv_generic01"
+    assert "session.id" not in (spans["outside.scope"].attributes or {})
 
 
 def test_init_sets_service_name_from_argument(
