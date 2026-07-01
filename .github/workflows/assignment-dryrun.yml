@@ -1,0 +1,221 @@
+name: Assignment Dry-Run (preview)
+
+# Manual, READ-ONLY preview of who the assignment bots WOULD pick for existing
+# PRs / issues -- runs the real selection logic against live data and PRINTS the
+# result. Assigns nothing, requests no reviewers, sends no notifications. Use it
+# to sanity-check ranking quality on historical items (incl. ones the production
+# guards would skip, e.g. your own PRs) without mutating anything.
+#
+# Trigger from the Actions tab -> "Run workflow", or:
+#   gh workflow run "Assignment Dry-Run (preview)" -f prs="1814 1812" -f issues="open" -f limit=10
+#
+# Faithfulness:
+#   - PR path: identical gateway call + candidate/rank/load logic as
+#     auto-assign-reviewer.js (linked-issue adoption + reconcile are NOT
+#     simulated -- they only matter when a linked issue is already assigned).
+#   - Issue path: APPROXIMATES the triage agent's ranked_owners (production runs
+#     the full classifier via `omnigent run`; here we make the same gateway call
+#     with the issue text + AREAS block). The pick logic (rank -> open-issue load)
+#     is identical. Shown for every item regardless of priority (production only
+#     assigns P0/P1).
+
+on:
+  # Auto-demo: runs on the PR that introduces/edits this file (same-repo PR ->
+  # secrets available), previewing a few open PRs + issues so you can eyeball the
+  # picks in-session without a merge. Harmless: read-only.
+  pull_request:
+    paths:
+      - .github/workflows/assignment-dryrun.yml
+  # Ad-hoc: once merged to the default branch, run from the Actions tab against
+  # any specific PR/issue numbers.
+  workflow_dispatch:
+    inputs:
+      prs:
+        description: 'PR numbers (space/comma separated), or "open" for open PRs, or blank to skip'
+        required: false
+        default: ''
+      issues:
+        description: 'Issue numbers (space/comma separated), or "open" for open issues, or blank to skip'
+        required: false
+        default: ''
+      limit:
+        description: 'Max items to sweep when "open" is used (per type)'
+        required: false
+        default: '10'
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Preview assignments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # On workflow_dispatch, use the given inputs. On the pull_request
+          # auto-demo (inputs empty), default to previewing open PRs + issues.
+          PRS: ${{ inputs.prs || 'open' }}
+          ISSUES: ${{ inputs.issues || 'open' }}
+          LIMIT: ${{ inputs.limit || '6' }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
+        run: |
+          if [ -z "${LLM_API_KEY:-}" ] || [ -z "${GATEWAY_BASE_URL:-}" ]; then
+            echo "::error::No LLM credentials in this context; cannot preview."
+            exit 1
+          fi
+
+          # Resolve target lists into files (never interpolate untrusted text into
+          # the shell). "open" -> gh list capped at LIMIT; else the given numbers.
+          limit="${LIMIT:-10}"
+          norm() { printf '%s' "$1" | tr ',' ' '; }
+          if [ "$(norm "$PRS")" = "open" ]; then
+            gh pr list --repo "$REPO" --state open --limit "$limit" --json number \
+              -q '.[].number' > /tmp/pr_nums.txt 2>/dev/null || : > /tmp/pr_nums.txt
+          else
+            printf '%s\n' $(norm "$PRS") > /tmp/pr_nums.txt
+          fi
+          if [ "$(norm "$ISSUES")" = "open" ]; then
+            # --state open includes PRs in `gh issue list`? No -- issue list excludes PRs.
+            gh issue list --repo "$REPO" --state open --limit "$limit" --json number \
+              -q '.[].number' > /tmp/issue_nums.txt 2>/dev/null || : > /tmp/issue_nums.txt
+          else
+            printf '%s\n' $(norm "$ISSUES") > /tmp/issue_nums.txt
+          fi
+
+          python3 <<'PYEOF'
+          import json, os, pathlib, re, subprocess, urllib.request
+
+          REPO = os.environ["REPO"]
+          KEY = os.environ["LLM_API_KEY"].strip()
+          GW = os.environ["GATEWAY_BASE_URL"].rstrip("/")
+          areas = json.loads(pathlib.Path(".github/areas.json").read_text())["areas"]
+          all_owners = [o for a in areas for o in a["owners"]]
+          # ordered (prefix -> owners) rules, document order (last match wins).
+          rules = [(p, a["owners"]) for a in areas for p in a["paths"]]
+          area_lines = [
+              f"- {a['key']}: {a['definition']} Paths: {', '.join(a['paths'])}. "
+              f"Owners: {', '.join(a['owners'])}." for a in areas
+          ]
+
+          def gh_json(*args):
+              return json.loads(subprocess.check_output(["gh", *args, "--repo", REPO], text=True))
+
+          def gateway_rank(system, user):
+              body = json.dumps({
+                  "model": "databricks-claude-sonnet-4-6", "max_tokens": 512,
+                  "temperature": 0, "messages": [
+                      {"role": "system", "content": system},
+                      {"role": "user", "content": user}]}).encode()
+              req = urllib.request.Request(GW + "/chat/completions", data=body, method="POST",
+                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + KEY})
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  data = json.loads(resp.read().decode())
+              text = data["choices"][0]["message"]["content"]
+              m = re.search(r"\[.*\]", text, flags=re.DOTALL)
+              return [x for x in (json.loads(m.group(0)) if m else []) if isinstance(x, str)]
+
+          def pick(candidates, ranked, load):
+              # rank primary (unranked -> +inf), open-work load secondary, name last.
+              rank_of = {u: i for i, u in enumerate(ranked)}
+              return sorted(candidates, key=lambda u: (rank_of.get(u, float("inf")), load.get(u, 0), u))
+
+          def nums(fn):
+              return [int(x) for x in pathlib.Path(fn).read_text().split() if x.strip().isdigit()]
+
+          # ---- PR reviewer preview ---------------------------------------------
+          pr_nums = nums("/tmp/pr_nums.txt")
+          if pr_nums:
+              # Open-review load across open PRs (same signal as the real workflow).
+              load = {}
+              try:
+                  for p in gh_json("pr", "list", "--state", "open", "--limit", "200",
+                                   "--json", "reviewRequests"):
+                      for r in p.get("reviewRequests", []):
+                          lg = r.get("login")
+                          if lg:
+                              load[lg] = load.get(lg, 0) + 1
+              except Exception as e:
+                  print(f"(PR load unavailable: {e}; treating load as 0)")
+              print("=" * 72, "\nPR REVIEWER PREVIEW\n")
+              for n in pr_nums:
+                  try:
+                      pr = gh_json("pr", "view", str(n), "--json", "files,author,title")
+                      files = [f["path"] for f in pr.get("files", [])]
+                      author = (pr.get("author") or {}).get("login", "")
+                      matched = {}
+                      for f in files:
+                          hit = None
+                          for prefix, owners in rules:
+                              if f.startswith(prefix):
+                                  hit = owners
+                          if hit:
+                              for o in hit:
+                                  matched[o] = True
+                      cands = [o for o in (matched or {o: True for o in all_owners})
+                               if o.lower() != author.lower()]
+                      ranked = [u for u in gateway_rank(
+                          "You route a GitHub pull request to the best reviewer. Given AREA "
+                          "definitions (description, file-path prefixes, owner logins) and the "
+                          "changed file PATHS, decide the area(s) and rank those areas' owners "
+                          "by fit. Output ONLY a JSON array of owner logins, best first, using "
+                          "only listed owners. No prose.",
+                          "## Areas\n" + "\n".join(area_lines) +
+                          "\n\n## Changed file paths (untrusted)\n" + "\n".join(f"- {p}" for p in files) +
+                          "\n\nOutput the ranked JSON array now.") if u in cands]  # allowlist filter
+                      order = pick(cands, ranked, load)
+                      print(f"PR #{n}: {pr.get('title','')[:60]}")
+                      print(f"  files : {files}")
+                      print(f"  cands : {cands}")
+                      print(f"  rank  : {ranked or '(none/empty -> load order)'}")
+                      print(f"  WOULD REQUEST: {order[0] if order else '(no candidate)'}\n")
+                  except Exception as e:
+                      print(f"PR #{n}: ERROR {type(e).__name__}: {str(e)[:80]}\n")
+
+          # ---- Issue assignee preview ------------------------------------------
+          issue_nums = nums("/tmp/issue_nums.txt")
+          if issue_nums:
+              load = {}
+              try:
+                  for it in gh_json("issue", "list", "--state", "open", "--limit", "500",
+                                    "--json", "assignees"):
+                      for a in it.get("assignees", []):
+                          lg = a.get("login")
+                          if lg:
+                              load[lg] = load.get(lg, 0) + 1
+              except Exception as e:
+                  print(f"(issue load unavailable: {e}; treating load as 0)")
+              print("=" * 72, "\nISSUE ASSIGNEE PREVIEW  (approximates the triage agent's ranking)\n")
+              for n in issue_nums:
+                  try:
+                      it = gh_json("issue", "view", str(n), "--json", "title,body,labels")
+                      title = it.get("title", "")
+                      body = (it.get("body") or "")[:4000]
+                      ranked = [u for u in gateway_rank(
+                          "You route a GitHub issue to the best owner. Given AREA definitions "
+                          "(description, file-path prefixes, owner logins) and the issue text, "
+                          "decide the area(s) and rank those areas' owners by fit. Output ONLY a "
+                          "JSON array of owner logins, best first, using only listed owners. No prose.",
+                          "## Areas\n" + "\n".join(area_lines) +
+                          f"\n\n## Issue (untrusted)\nTitle: {title}\n\n{body}"
+                          "\n\nOutput the ranked JSON array now.") if u in all_owners]  # allowlist
+                      order = pick(ranked or all_owners, ranked, load)
+                      print(f"Issue #{n}: {title[:60]}")
+                      print(f"  rank  : {ranked or '(none/empty -> full pool by load)'}")
+                      print(f"  WOULD ASSIGN (if P0/P1): {order[0] if order else '(none)'}\n")
+                  except Exception as e:
+                      print(f"Issue #{n}: ERROR {type(e).__name__}: {str(e)[:80]}\n")
+
+          if not pr_nums and not issue_nums:
+              print("Nothing to preview. Pass `prs` and/or `issues` inputs.")
+          print("=" * 72)
+          print("READ-ONLY preview. Nothing was assigned or requested.")
+          PYEOF
