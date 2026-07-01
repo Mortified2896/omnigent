@@ -340,8 +340,10 @@ jobs:
 
       - name: Note draft skipped (already published)
         if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.is_draft != 'true'
+        env:
+          TAG: ${{ steps.guard.outputs.tag }}
         run: |
-          echo "::notice::Release ${{ steps.guard.outputs.tag }} is not a draft — left its notes untouched (only the CHANGELOG PR ran)."
+          echo "::notice::Release ${TAG} is not a draft — left its notes untouched (only the CHANGELOG PR ran)."
 
       # ::add-mask:: redacts rendered logs, not artifact files — scrub the key
       # from artifacts (incl. the unscanned stderr) before upload.
