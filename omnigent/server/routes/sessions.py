@@ -16300,8 +16300,17 @@ def create_sessions_router(
                                 elicitation_id=hook_elicitation_id,
                             )
                         except ElicitationDeclinedError as exc:
-                            # Explicit user decline — return DENY so the
-                            # native harness blocks this specific tool call.
+                            # Explicit user decline: interrupt the native
+                            # harness BEFORE returning the hook deny so the
+                            # Escape key reaches Claude Code's tmux pane first.
+                            # By the time the DENY response reaches the hook
+                            # subprocess, the abort signal is already queued.
+                            # Best-effort: forwarding failures are swallowed.
+                            await _forward_session_change_to_runner(
+                                session_id,
+                                _server_runner_router,
+                                {"type": "interrupt"},
+                            )
                             verdict_body = {
                                 "result": "POLICY_ACTION_DENY",
                                 "reason": exc.args[0] or "Approval was declined.",
