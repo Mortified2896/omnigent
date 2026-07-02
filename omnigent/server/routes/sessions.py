@@ -4179,8 +4179,11 @@ async def _hold_native_ask_gate(
         used by ``POST /policies/evaluate`` retries so a hook retry after
         a transient 5xx / connect-drop does not prompt the human twice.
         ``None`` mints a fresh id (the default for non-retry callers).
-    :returns: ``True`` iff a human accepted; ``False`` on decline /
-        cancel / timeout / disconnect (fail closed).
+    :returns: ``True`` iff a human accepted; ``False`` on cancel /
+        timeout / disconnect (fail closed).
+    :raises ElicitationDeclinedError: when the human explicitly
+        declines (``action == "decline"``). Callers should abort the
+        turn rather than continuing with a DENY.
     """
     tool_name = data.get("name")
     tool_input = data.get("arguments")

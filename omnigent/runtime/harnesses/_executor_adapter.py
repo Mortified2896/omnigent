@@ -471,8 +471,12 @@ class ExecutorAdapter(HarnessApp):
 
                 record_cancellation(agent_span)
                 tctx.end_agent_span(agent_span, response=None)
-                agent_span = None
             ctx.cancelled.set()
+            # Interrupt the inner executor session so the in-flight
+            # generation stops immediately, same as the normal
+            # cancellation path.
+            if self._executor is not None:
+                await self._executor.interrupt_session(self._session_key)
         except BaseException:
             # End agent span on unhandled exceptions so it's not
             # left open (which would leak on the OTel provider).
