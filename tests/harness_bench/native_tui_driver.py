@@ -91,10 +91,16 @@ class NativeVendor:
     own_auth: bool = False
 
 
-# Vendor registry. claude-native is the wired skeleton; the others are
-# declared so the shape is visible, but only claude-native is exercised here.
+# Vendor registry. Both entries are OMNIGENT_CREDENTIAL vendors the bench can
+# run (given the vendor CLI is logged in on the host). Delivery differs under
+# the hood — claude-native is tmux-paste, codex-native is app-server RPC — but
+# the bench only touches the shared session HTTP surface (POST events / SSE /
+# item polling), which the runner drives identically for both; the RPC-vs-tmux
+# split lives entirely runner-side. OWN_AUTH natives are intentionally absent
+# (the bench cannot provision their login).
 _VENDORS: dict[str, NativeVendor] = {
     "claude-native": NativeVendor("claude-native", "claude-native-ui", own_auth=False),
+    "codex-native": NativeVendor("codex-native", "codex-native-ui", own_auth=False),
 }
 
 
