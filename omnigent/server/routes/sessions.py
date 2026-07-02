@@ -16426,6 +16426,16 @@ def create_sessions_router(
         )
         if result is None:
             return Response(status_code=status.HTTP_200_OK)
+        if result.action == "decline":
+            # Explicit user decline: interrupt Codex before returning the
+            # deny response, same as the Claude-native path. The await
+            # ensures the abort signal reaches Codex before it processes
+            # the decline result and lets the LLM continue.
+            await _forward_session_change_to_runner(
+                session_id,
+                _server_runner_router,
+                {"type": "interrupt"},
+            )
         body = codex_request.build_response(result)
         return Response(
             content=json.dumps(body),
