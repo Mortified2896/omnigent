@@ -31,6 +31,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from enum import Enum
 
 from starlette.requests import HTTPConnection
 
@@ -77,6 +78,36 @@ LEVEL_READ = 1
 LEVEL_EDIT = 2
 LEVEL_MANAGE = 3
 LEVEL_OWNER = 4
+
+
+class SharingMode(str, Enum):
+    """Server policy for creating new session permission grants.
+
+    - ``ON``: grants at any level (read/edit/manage) plus workspace/public read.
+    - ``READ_ONLY``: grants are capped at read (view) — edit/manage grants are
+      rejected; workspace/public read still allowed.
+    - ``OFF``: no new grants at all.
+
+    Value is the lowercase name so ``GET /v1/info`` and the
+    ``OMNIGENT_SHARING_MODE`` env var round-trip it directly. Defaults to ``ON``.
+    """
+
+    OFF = "off"
+    READ_ONLY = "read_only"
+    ON = "on"
+
+    @classmethod
+    def coerce(cls, value: object) -> SharingMode:
+        """Map a ``SharingMode``/str/``None`` to a mode, failing open to ``ON``
+        for anything unset or unrecognized (env-var parse + callable boundary)."""
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            try:
+                return cls(value.strip().lower())
+            except ValueError:
+                return cls.ON
+        return cls.ON
 
 
 def env_var_is_truthy(name: str, *, default: bool = False) -> bool:

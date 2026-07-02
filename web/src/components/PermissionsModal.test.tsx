@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { ServerInfo, SharingMode } from "@/lib/capabilities";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 import { PermissionsModal } from "./PermissionsModal";
 
 vi.mock("@/lib/permissionsApi", () => ({
@@ -37,6 +39,40 @@ function createWrapper() {
     return (
       <QueryClientProvider client={qc}>
         <TooltipProvider>{children}</TooltipProvider>
+      </QueryClientProvider>
+    );
+  };
+}
+
+/** Full OSS ServerInfo with permissive defaults; override per test. */
+function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
+  return {
+    accounts_enabled: false,
+    login_url: null,
+    needs_setup: false,
+    databricks_features: false,
+    managed_sandboxes_enabled: false,
+    sandbox_provider: null,
+    sharing_mode: "on",
+    server_version: null,
+    smart_routing_enabled: false,
+    ...overrides,
+  };
+}
+
+/** Wrapper that pins the server's sharing policy via CapabilitiesProvider. */
+function createSharingWrapper(mode: SharingMode) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return (
+      <QueryClientProvider client={qc}>
+        <TooltipProvider>
+          <CapabilitiesProvider info={serverInfo({ sharing_mode: mode })}>
+            {children}
+          </CapabilitiesProvider>
+        </TooltipProvider>
       </QueryClientProvider>
     );
   };
@@ -385,6 +421,64 @@ describe("PermissionsModal", () => {
       fireEvent.change(input, { target: { value: "zzz" } });
 
       await waitFor(() => expect(screen.getByText("No matches")).toBeInTheDocument());
+    });
+  });
+
+  describe("sharing mode", () => {
+    it("off: shows the disabled notice and never fetches grants", async () => {
+      render(<PermissionsModal sessionId="conv_abc" open={true} onOpenChange={() => {}} />, {
+        wrapper: createSharingWrapper("off"),
+      });
+
+      expect(
+        await screen.findByText("Sharing has been disabled for this Omnigent server."),
+      ).toBeInTheDocument();
+      // Off short-circuits before the grant-list query and hides all controls.
+      expect(listMock).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: /grant/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    });
+
+    it("on: renders the full controls with no disabled/read-only notice", async () => {
+      listMock.mockResolvedValue([]);
+
+      render(<PermissionsModal sessionId="conv_abc" open={true} onOpenChange={() => {}} />, {
+        wrapper: createSharingWrapper("on"),
+      });
+
+      await waitFor(() => expect(listMock).toHaveBeenCalledWith("conv_abc"));
+      expect(screen.getByRole("button", { name: /grant/i })).toBeInTheDocument();
+      expect(
+        screen.getByText("Invite others to view or collaborate on this session."),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("Sharing has been disabled for this Omnigent server."),
+      ).not.toBeInTheDocument();
+    });
+
+    it("read_only: shows the read-only notice, keeps Grant, offers only Read", async () => {
+      listMock.mockResolvedValue([]);
+
+      render(<PermissionsModal sessionId="conv_abc" open={true} onOpenChange={() => {}} />, {
+        wrapper: createSharingWrapper("read_only"),
+      });
+
+      await waitFor(() => expect(listMock).toHaveBeenCalledWith("conv_abc"));
+      expect(
+        screen.getByText(
+          "This server allows read-only sharing — invite others to view this session.",
+        ),
+      ).toBeInTheDocument();
+      // Read grants are still allowed, so the Grant control stays.
+      expect(screen.getByRole("button", { name: /grant/i })).toBeInTheDocument();
+      // The add-form level select must offer only Read (Edit is hidden). With no
+      // grants there is exactly one combobox (the add-form select).
+      const trigger = screen.getByRole("combobox");
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Enter" });
+      const listbox = await screen.findByRole("listbox");
+      const options = within(listbox).getAllByRole("option");
+      expect(options.map((o) => o.textContent)).toEqual(["Read"]);
     });
   });
 });

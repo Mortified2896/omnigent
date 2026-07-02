@@ -151,6 +151,7 @@ from omnigent.server.auth import (
     LEVEL_READ,
     RESERVED_USER_PUBLIC,
     AuthProvider,
+    SharingMode,
     local_single_user_enabled,
 )
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
@@ -19110,6 +19111,19 @@ def create_sessions_router(
         await _require_access(
             user_id, session_id, LEVEL_MANAGE, permission_store, conversation_store
         )
+        # Server-wide sharing policy gate (see SharingMode). Applied only
+        # to *new* grants — revoke/list and owner grants are unaffected.
+        _sharing_mode = request.app.state.sharing_mode()
+        if _sharing_mode == SharingMode.OFF:
+            raise OmnigentError(
+                "Sharing has been disabled for this Omnigent server.",
+                code=ErrorCode.FORBIDDEN,
+            )
+        if _sharing_mode == SharingMode.READ_ONLY and body.level > LEVEL_READ:
+            raise OmnigentError(
+                "Sharing is limited to read-only access on this Omnigent server.",
+                code=ErrorCode.FORBIDDEN,
+            )
         if permission_store is None:
             raise OmnigentError(
                 "Permissions not enabled",

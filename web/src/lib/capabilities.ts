@@ -20,6 +20,15 @@
 
 import { hostFetch } from "./host";
 
+/**
+ * Server session-sharing policy (mirrors the backend ``SharingMode``):
+ * ``"on"`` allows grants at any level, ``"read_only"`` caps grants at
+ * view, ``"off"`` disables all new grants (the SPA hides the Share
+ * control). Fails open to ``"on"`` for an unknown/missing value.
+ */
+export type SharingMode = "on" | "read_only" | "off";
+const _SHARING_MODES: readonly SharingMode[] = ["on", "read_only", "off"];
+
 /** Shape of the response from ``GET /v1/info``. */
 export interface ServerInfo {
   accounts_enabled: boolean;
@@ -57,6 +66,13 @@ export interface ServerInfo {
    */
   sandbox_provider: string | null;
   /**
+   * Server session-sharing policy. Drives whether the SPA shows the
+   * Share control (``"on"``), restricts it to read-only invites
+   * (``"read_only"``), or hides it entirely (``"off"``), in lockstep
+   * with the server-side grant gate. Fails open to ``"on"``.
+   */
+  sharing_mode: SharingMode;
+  /**
    * Installed omnigent server version (same value as ``/api/version``),
    * e.g. ``"0.3.0.dev0"``. Shown in the session info popover's version
    * footer. ``null`` only when the probe failed (the OFF sentinel) — a
@@ -78,6 +94,9 @@ const _OFF: ServerInfo = {
   databricks_features: false,
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
+  // Sharing fails OPEN (opposite of the other caps): a failed probe must
+  // not silently disable sharing, so the sentinel is the permissive "on".
+  sharing_mode: "on",
   server_version: null,
   smart_routing_enabled: false,
 };
@@ -112,6 +131,9 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           managed_sandboxes_enabled: data.managed_sandboxes_enabled === true,
           sandbox_provider:
             typeof data.sandbox_provider === "string" ? data.sandbox_provider : null,
+          sharing_mode: _SHARING_MODES.includes(data.sharing_mode as SharingMode)
+            ? (data.sharing_mode as SharingMode)
+            : "on",
           server_version: typeof data.server_version === "string" ? data.server_version : null,
           smart_routing_enabled: data.smart_routing_enabled === true,
         };

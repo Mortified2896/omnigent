@@ -7,7 +7,7 @@ import os
 import re
 import tarfile
 import uuid
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol
@@ -43,7 +43,7 @@ from omnigent.runtime import (
 )
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
-from omnigent.server.auth import AuthProvider
+from omnigent.server.auth import AuthProvider, SharingMode
 from omnigent.server.managed_hosts import ManagedSandboxConfig
 from omnigent.server.mcp_pool import ServerMcpPool
 from omnigent.server.performance_metrics import (
@@ -1067,6 +1067,7 @@ def create_app(
     admins: list[str] | None = None,
     allowed_domains: list[str] | None = None,
     sandbox_config: ManagedSandboxConfig | None = None,
+    sharing_mode: SharingMode | Callable[[], SharingMode] | None = None,
 ) -> FastAPI:
     """
     Build and return the FastAPI application with all routes mounted.
@@ -1124,6 +1125,19 @@ def create_app(
         ``host_type="managed"`` create fails with a clear error).
         Managed-host credentials live on the ``hosts`` table, so no
         extra store is wired.
+    :param sharing_mode: Server policy for creating new session
+        permission grants (see :class:`SharingMode`): ``ON`` allows
+        grants at any level plus public/workspace read, ``READ_ONLY``
+        caps grants at read (edit/manage rejected with 403), and
+        ``OFF`` rejects all new grants (403). Revoke/list and
+        self-ownership grants are unaffected in every mode.
+        Accepts a static :class:`SharingMode`, a zero-arg callable
+        resolved per request (for deployments that flip the policy at
+        runtime), or ``None`` — which defaults from the
+        ``OMNIGENT_SHARING_MODE`` env var (``on``/``read_only``/``off``),
+        failing open to ``ON`` when unset or unrecognized. Reported by
+        ``GET /v1/info`` as ``sharing_mode`` so the web app can gate its
+        Share controls to match.
     :returns: A fully configured :class:`FastAPI` application.
     :raises ValueError: If ``permission_store`` is provided
         without an ``auth_provider``.
@@ -1345,6 +1359,19 @@ def create_app(
     app.state.host_registry = host_registry
     app.state.host_store = host_store
     app.state.sandbox_config = sandbox_config
+    # Session-sharing policy, normalized to a per-request callable so a
+    # deployment can flip it at runtime. ``None`` reads the top-level
+    # ``OMNIGENT_SHARING_MODE`` env var once at boot; every path fails
+    # open to ``ON`` for an unset/unrecognized value (see SharingMode.coerce).
+    if sharing_mode is None:
+        _sharing_default = SharingMode.coerce(os.environ.get("OMNIGENT_SHARING_MODE"))
+        app.state.sharing_mode = lambda: _sharing_default
+    elif callable(sharing_mode):
+        _sharing_callable = sharing_mode
+        app.state.sharing_mode = lambda: SharingMode.coerce(_sharing_callable())
+    else:
+        _sharing_static = SharingMode.coerce(sharing_mode)
+        app.state.sharing_mode = lambda: _sharing_static
     # Tracks in-flight background managed-host launches (POST
     # /v1/sessions returns before the sandbox exists) so a message
     # racing the provision can rendezvous instead of failing with
@@ -1801,6 +1828,11 @@ def create_app(
         # actually offered; None when no provider is named (embedding
         # configs may leave it unset) so the UI keeps the generic label.
         sandbox_provider = sandbox_config.provider if managed_sandboxes_enabled else None
+        # sharing_mode is the server's session-sharing policy
+        # (on/read_only/off), surfaced so the web app can hide the Share
+        # control (off) or restrict it to read-only (read_only) in lockstep
+        # with the server-side grant gate.
+        sharing_mode = app.state.sharing_mode()
         # server_version is the installed omnigent package version (same
         # source as /api/version), surfaced so the web UI can show it in the
         # session info popover alongside the per-session host version.
@@ -1824,6 +1856,7 @@ def create_app(
             "databricks_features": databricks_features,
             "managed_sandboxes_enabled": managed_sandboxes_enabled,
             "sandbox_provider": sandbox_provider,
+            "sharing_mode": sharing_mode.value,
             "server_version": _server_version(),
             "smart_routing_enabled": smart_routing_enabled,
         }
