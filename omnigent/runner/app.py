@@ -12981,6 +12981,46 @@ def create_runner_app(
             )
         await _cancel_active_turn(conv_id, expected_task=target)
 
+    def _publish_buffered_input_consumed(session_id: str, body: dict[str, Any]) -> None:
+        """Announce that a buffered message was just read by the agent.
+
+        A message queued behind an active turn gets no ``session.input.consumed``
+        at forward time (the Omnigent server suppresses it for a buffered
+        forward). Emit one here — when the buffer actually drains into the
+        agent's history — so the client's docked "Queued" row promotes into the
+        transcript at real pickup, not at forward. Carries ``persisted_item_id``
+        (the server-assigned id the forward supplied) as the committed item's
+        id so a later snapshot dedups it. No-op without that id (native forwards
+        omit it; they take the pending-inputs path and never buffer here).
+
+        ``cleared_pending_id`` is left null: the client promotes the optimistic
+        bubble by FIFO position (buffered messages drain in send order), the
+        same mechanism a non-native fresh-turn send already uses — the pending
+        entry never adopts the server id, so a by-id match wouldn't fire.
+
+        :param session_id: Session/conversation identifier, e.g. ``"conv_abc"``.
+        :param body: The buffered message body being drained.
+        """
+        item_id = body.get("persisted_item_id")
+        if not isinstance(item_id, str) or not item_id:
+            return
+        _publish_event(
+            session_id,
+            {
+                "type": "session.input.consumed",
+                "data": {
+                    "item_id": item_id,
+                    "type": "message",
+                    "data": {
+                        "role": body.get("role", "user"),
+                        "content": body.get("content", []),
+                    },
+                    "created_by": body.get("created_by"),
+                    "cleared_pending_id": None,
+                },
+            },
+        )
+
     async def _check_and_start_next_turn(
         session_id: str,
     ) -> None:
@@ -13034,6 +13074,9 @@ def create_runner_app(
                         "content": next_body.get("content", []),
                     }
                 )
+                # No-op for native (the forward omits persisted_item_id) — kept
+                # for symmetry with the LLM branch below.
+                _publish_buffered_input_consumed(session_id, next_body)
             else:
                 # LLM harnesses: drain ALL buffered messages into history so
                 # rapid-fire input becomes a single continuation turn.
@@ -13049,6 +13092,9 @@ def create_runner_app(
                             "content": body.get("content", []),
                         }
                     )
+                    # The agent reads this drained message now — promote its
+                    # docked "Queued" row into the transcript at real pickup.
+                    _publish_buffered_input_consumed(session_id, body)
                 next_body = all_bodies[-1]
 
             # Reserve before the await so a concurrent POST sees an active turn.
@@ -14585,6 +14631,11 @@ def create_runner_app(
                                                     "content": _m.get("content", []),
                                                 }
                                             )
+                                            # Read mid-turn (not at post-turn
+                                            # drain) — promote its docked
+                                            # "Queued" row into the transcript
+                                            # now, at real pickup.
+                                            _publish_buffered_input_consumed(conv_id, _m)
                                     continue
                                 if _evt_type == "response.output_text.delta":
                                     delta = event.get("delta")

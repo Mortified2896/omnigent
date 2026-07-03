@@ -341,6 +341,27 @@ def _stub_runner_client(
     return captured
 
 
+def _capture_input_consumed(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Capture ``session.input.consumed`` events published to the session stream.
+
+    Patches ``session_stream.publish`` in the sessions route module and
+    returns a list that collects only the consumed events, so a test can
+    assert whether the eager forward-time publish fired.
+
+    :returns: A list appended to as ``session.input.consumed`` events publish.
+    """
+    from omnigent.server.routes import sessions as sessions_mod
+
+    consumed: list[dict[str, Any]] = []
+
+    def _publish(sid: str, event: dict[str, Any]) -> None:
+        if isinstance(event, dict) and event.get("type") == "session.input.consumed":
+            consumed.append(event)
+
+    monkeypatch.setattr(sessions_mod.session_stream, "publish", _publish)
+    return consumed
+
+
 async def test_runner_path_forwards_persisted_model_override(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -397,8 +418,14 @@ async def test_message_surfaces_buffered_when_runner_queues_behind_active_turn(
     replies ``{"status": "buffered"}``; the AP route must surface that as
     ``buffered: true`` so the client shows the message in the docked queue
     strip (rather than predicting busy-ness client-side).
+
+    It must ALSO suppress the eager forward-time ``session.input.consumed``:
+    the message is queued, not read, so its consumed event is owned by the
+    runner's drain path. Publishing here would clear the client's docked
+    "Queued" row before real pickup.
     """
     _stub_runner_client(monkeypatch, runner_status="buffered")
+    consumed = _capture_input_consumed(monkeypatch)
 
     agent = await create_test_agent(client)
     session = await _create_session(client, agent["id"])
@@ -413,14 +440,24 @@ async def test_message_surfaces_buffered_when_runner_queues_behind_active_turn(
     )
     assert resp.status_code == 202, resp.text
     assert resp.json().get("buffered") is True, resp.text
+    assert consumed == [], (
+        "a buffered message must NOT publish session.input.consumed at forward "
+        f"time — the runner emits it at drain; got {len(consumed)} event(s)"
+    )
 
 
 async def test_message_omits_buffered_when_runner_starts_fresh_turn(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A fresh-turn send (runner ``status == "accepted"``) carries no ``buffered``."""
+    """A fresh-turn send (runner ``status == "accepted"``) carries no ``buffered``.
+
+    And it DOES publish ``session.input.consumed`` at forward time: a
+    fresh-turn message is read immediately, so the eager publish is correct
+    (the moment ② forward and ③ consume coincide).
+    """
     _stub_runner_client(monkeypatch, runner_status="accepted")
+    consumed = _capture_input_consumed(monkeypatch)
 
     agent = await create_test_agent(client)
     session = await _create_session(client, agent["id"])
@@ -435,6 +472,10 @@ async def test_message_omits_buffered_when_runner_starts_fresh_turn(
     )
     assert resp.status_code == 202, resp.text
     assert resp.json().get("buffered") is not True, resp.text
+    assert len(consumed) == 1, (
+        "a fresh-turn message must publish exactly one session.input.consumed "
+        f"at forward time; got {len(consumed)}"
+    )
 
 
 async def test_create_time_model_override_forwards_on_first_event(

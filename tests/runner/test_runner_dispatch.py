@@ -4249,6 +4249,135 @@ async def test_scaffold_subagent_defers_terminal_delivery_while_continuation_buf
 
 
 @pytest.mark.asyncio
+async def test_buffered_message_emits_input_consumed_at_drain_not_at_buffer() -> None:
+    """A message queued behind an active turn emits input.consumed at drain.
+
+    Guards the queued-message lifecycle: a follow-up posted while a turn is
+    active buffers (``status: "buffered"``) and gets NO ``session.input.consumed``
+    at forward time — the Omnigent server suppresses the eager publish. The
+    runner emits one only when it actually drains the buffer into the agent's
+    history (``_check_and_start_next_turn``), so the client's docked "Queued"
+    row promotes into the transcript at real pickup, not at forward.
+
+    Determinism reuses the gated two-turn harness: turn 1 blocks after its
+    delta so message B provably buffers; while it is buffered we assert NO
+    consumed event carries B's id; releasing turn 1 drains the buffer and the
+    consumed event then arrives carrying B's ``persisted_item_id``.
+    """
+    from omnigent.runner import app as runner_app
+
+    conv_id = "conv_buffered_consume_at_drain"
+    b_item_id = "item_buffered_B"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    turns = [_sse_text_turn("TURN_ONE"), _sse_text_turn("TURN_TWO")]
+
+    async def _spec_resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        """Return a non-native scaffold spec so the message buffers/drains here.
+
+        :param agent_id: Agent id requested by the runner (unused).
+        :param session_id: Session id (unused).
+        :returns: A minimal scaffold spec bound to the test harness.
+        """
+        del agent_id, session_id
+        return AgentSpec(
+            spec_version=1,
+            name="buffered-consume-agent",
+            executor=ExecutorSpec(type="omnigent", config={"harness": _TEST_HARNESS_NAME}),
+        )
+
+    app = create_runner_app(
+        process_manager=cast(
+            HarnessProcessManager,
+            _FakeProcessManager(_GatedTwoTurnHarnessClient(turns, started, release)),
+        ),
+        spec_resolver=_spec_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    def _consumed_ids_for(item_id: str) -> list[str]:
+        """Drain the session event queue; return input.consumed ids matching.
+
+        Reads the module-level per-session queue the SSE ``/stream`` endpoint
+        drains (see ``_drain_published_statuses``) — a live SSE ``GET`` can't
+        interleave with a ``POST`` on the ASGI transport.
+
+        :param item_id: The buffered message's persisted item id to match.
+        :returns: ``item_id`` values from ``session.input.consumed`` events
+            whose id equals ``item_id``.
+        """
+        queue = runner_app._session_event_queues_ref.get(conv_id)
+        seen: list[str] = []
+        while queue is not None and not queue.empty():
+            event = queue.get_nowait()
+            if not isinstance(event, dict) or event.get("type") != "session.input.consumed":
+                continue
+            data = event.get("data")
+            if isinstance(data, dict) and data.get("item_id") == item_id:
+                seen.append(item_id)
+        return seen
+
+    try:
+        async with _runner_test_client(app) as http:
+            # Turn A starts a background turn that blocks before completing.
+            resp_a = await http.post(
+                f"/v1/sessions/{conv_id}/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "agent_id": "ag_buffered",
+                    "model": "x",
+                    "content": [{"type": "input_text", "text": "start the turn"}],
+                },
+            )
+            assert resp_a.status_code == 202
+
+            await asyncio.wait_for(started.wait(), timeout=10.0)
+
+            # Message B arrives while A is active → buffers. Carries the
+            # server-assigned persisted_item_id the Omnigent forward supplies;
+            # that id is what the drain-time consumed event must echo back.
+            resp_b = await http.post(
+                f"/v1/sessions/{conv_id}/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "agent_id": "ag_buffered",
+                    "model": "x",
+                    "persisted_item_id": b_item_id,
+                    "content": [{"type": "input_text", "text": "queued behind A"}],
+                },
+            )
+            assert resp_b.status_code == 202
+            assert resp_b.json()["status"] == "buffered"
+
+            # While B is still buffered (turn A not released), NO consumed
+            # event for B has been emitted — the whole point of the fix.
+            assert _consumed_ids_for(b_item_id) == [], (
+                "input.consumed for B fired while it was still buffered — the "
+                "docked 'Queued' row would clear before real pickup"
+            )
+
+            # Release turn A → the buffer drains into history and turn B runs.
+            release.set()
+
+            # The consumed event for B now arrives, carrying its item id.
+            deadline = asyncio.get_running_loop().time() + 10.0
+            consumed: list[str] = []
+            while asyncio.get_running_loop().time() < deadline:
+                consumed = _consumed_ids_for(b_item_id)
+                if consumed:
+                    break
+                await asyncio.sleep(0.02)
+    finally:
+        release.set()
+
+    assert consumed == [b_item_id], (
+        f"expected exactly one session.input.consumed for B at drain time, got {consumed!r}"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "policy_response", "expected_output", "blocked_output"),
     [

@@ -8793,9 +8793,15 @@ async def _forward_event_to_runner(
             # Non-JSON / unexpected body — treat as not buffered; the
             # consume event still reconciles the message either way.
             buffered = False
-        # Publish input.consumed AFTER the forward succeeds —
-        # the runner has the message and will start the turn.
-        _publish_input_consumed(session_id, persisted_items[0])
+        # Publish input.consumed only for a message that starts a fresh
+        # turn — the runner has it and is about to read it. A buffered
+        # message is queued behind the active turn and NOT read yet; the
+        # runner emits its own session.input.consumed when it actually
+        # drains the buffer (post-turn continuation or mid-turn injection),
+        # and the relay forwards it. Publishing here would pop the client's
+        # docked "Queued" row at forward time, long before pickup.
+        if not buffered:
+            _publish_input_consumed(session_id, persisted_items[0])
         # Emit the routing_decision chip AFTER input.consumed so the
         # live SSE stream delivers the user bubble before the chip —
         # matching the store order (user message was persisted first).
