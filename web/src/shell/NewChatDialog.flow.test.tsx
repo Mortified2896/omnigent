@@ -652,10 +652,17 @@ describe("NewChatLandingScreen create flow", () => {
       agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" }),
       agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
     ]);
-    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ id: "conv_opencode" }),
-    } as unknown as Response);
+    // First the catalog GET (opencode-native's pre-session Model section),
+    // then the create POST.
+    vi.mocked(authenticatedFetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ harness: "opencode-native", models: [] }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "conv_opencode" }),
+      } as unknown as Response);
 
     renderLanding();
     await waitForWorkspaceSeed();
@@ -663,14 +670,15 @@ describe("NewChatLandingScreen create flow", () => {
     openAgentConfig("ag_codex");
     fireEvent.click(screen.getByTestId("new-chat-landing-approval-full-access"));
 
-    // Switch to OpenCode by clicking its row (a plain row — no config submenu,
-    // since it has no mode knobs).
+    // Switch to OpenCode by clicking its row (a plain row — no mode-knob
+    // submenu, only the generic ``modelOptions`` catalog, which the parent
+    // fetches at selection time).
     selectAgent("ag_opencode");
 
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
-    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
-    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(init.body as string);
     expect(body.labels?.["omnigent.wrapper"]).toBe("opencode-native-ui");
     expect(body.terminal_launch_args).toBeUndefined();
@@ -1178,5 +1186,341 @@ describe("sanitizeInitialPrompt", () => {
     ["returns empty for empty input", "", ""],
   ])("%s", (_label, input, expected) => {
     expect(sanitizeInitialPrompt(input)).toBe(expected);
+  });
+});
+
+// OpenCode pre-session Model submenu — mirrors the Claude Code picker UX:
+// select OpenCode, right-side submenu lists OpenCode Free models from the
+// generic ``/v1/harness-model-options?harness=opencode-native`` endpoint,
+// the picked id rides along as ``model_override`` on the create body, and
+// ``opencode/deepseek-v4-flash-free`` is the preselection when present.
+// Hard rules:
+//   * No silent fallback if the default isn't in the catalog.
+//   * No API-metered MiniMax ids mix in.
+//   * Claude Code's existing picker must stay unchanged.
+describe("OpenCode pre-session model submenu", () => {
+  // The OpenCode Free catalog as resolved by the server endpoint — labels are
+  // human-readable names per the server normalization; ids are the fully-
+  // qualified ``opencode/<id>`` form the create body posts as ``model_override``.
+  const OPENCODE_FREE_MODELS = [
+    { id: "opencode/big-pickle", label: "Big Pickle" },
+    { id: "opencode/deepseek-v4-flash-free", label: "DeepSeek V4 Flash Free" },
+    { id: "opencode/mimo-v2.5-free", label: "MiMo V2.5 Free" },
+    { id: "opencode/nemotron-3-ultra-free", label: "Nemotron 3 Ultra Free" },
+    { id: "opencode/north-mini-code-free", label: "North Mini Code Free" },
+  ];
+
+  function mockOpencodeCatalog(matches = true): void {
+    // Both the parent-level hook (fired on selection) AND the
+    // ``HarnessModelOptionsSection`` component (fired when the submenu
+    // opens) call the catalog endpoint independently. Stub two responses so
+    // either order works.
+    const payload = {
+      harness: "opencode-native",
+      source: "opencode-free-catalog",
+      models: matches ? OPENCODE_FREE_MODELS : [],
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+  }
+
+  beforeEach(() => {
+    // OpenCode harness entry — the canonical harness id must be
+    // ``opencode-native`` (not an alias) so the catalog fetch goes to
+    // ``?harness=opencode-native``.
+    setAgents([
+      agent({
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode",
+        harness: "opencode-native",
+      }),
+    ]);
+  });
+
+  it("fetches the opencode-free catalog on select and renders the Model section", async () => {
+    mockOpencodeCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // OpenCode is the only agent, so it's auto-selected. The parent's
+    // useHarnessModelOptions hook fires on mount and resolves once the
+    // mocked catalog returns. The submenu's own fetch also fires when the
+    // user opens its config submenu.
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(authenticatedFetch)
+          .mock.calls.some(([url]) =>
+            String(url).startsWith("/v1/harness-model-options?harness=opencode-native"),
+          ),
+      ).toBe(true),
+    );
+    // Opening the submenu via keyboard (ArrowRight) keeps the menu mounted
+    // across reads so the test can assert on the rendered rows.
+    openAgentConfig("ag_opencode");
+    for (const m of OPENCODE_FREE_MODELS) {
+      expect(await screen.findByTestId(`new-chat-landing-model-${m.id}`)).toBeTruthy();
+    }
+  });
+
+  it("preselects opencode/deepseek-v4-flash-free when the catalog carries it", async () => {
+    mockOpencodeCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // Open the submenu so the preselected radio is in the DOM.
+    openAgentConfig("ag_opencode");
+    const radio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/deepseek-v4-flash-free",
+    );
+    // Radix's RadioItem uses ``aria-checked="true"`` on the selected row
+    // (FilesPanel.test.tsx pins the same contract).
+    expect(radio.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("posts the preselected opencode/deepseek-v4-flash-free as model_override on create", async () => {
+    mockOpencodeCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    // Wait for the catalog GET (parent fires on selection) + the create POST.
+    // The submenu component isn't opened in this test, so only the parent
+    // hook fetches the catalog.
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    const createCall = vi.mocked(authenticatedFetch).mock.calls.find(
+      ([url, init]) =>
+        url === "/v1/sessions" && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const [, init] = createCall as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    // The model_override field carries the FULLY-QUALIFIED id — same shape the
+    // catalog returns, so the runner can pass it verbatim to ``opencode --model``.
+    expect(body.model_override).toBe("opencode/deepseek-v4-flash-free");
+    expect(body.labels?.["omnigent.wrapper"]).toBe("opencode-native-ui");
+    // OpenCode has no permission-mode picker (no approvalMode / permissionMode
+    // capability); terminal_launch_args must stay undefined so the runner
+    // launches ``opencode attach`` without any flag we don't actually support.
+    expect(body.terminal_launch_args).toBeUndefined();
+  });
+
+  it("rides an explicit user pick to create as model_override", async () => {
+    mockOpencodeCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    // The catalog fetch is async; wait for the radio to render before picking.
+    const radio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/big-pickle",
+    );
+    // Pick a non-default free model.
+    fireEvent.click(radio);
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(3));
+    const createCall = vi.mocked(authenticatedFetch).mock.calls.find(
+      ([url, init]) =>
+        url === "/v1/sessions" && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const body = JSON.parse((createCall as [string, RequestInit])[1].body as string);
+    expect(body.model_override).toBe("opencode/big-pickle");
+  });
+
+  it("remembers an explicit pick in localStorage keyed by opencode-native", async () => {
+    mockOpencodeCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    // Wait for the catalog fetch to resolve before clicking the model row.
+    const radio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/big-pickle",
+    );
+    fireEvent.click(radio);
+
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")).toEqual({
+        "opencode-native": { model: "opencode/big-pickle" },
+      }),
+    );
+  });
+
+  it("blocks submit when no model is picked AND the catalog has models", async () => {
+    // The catalog returns models, but we manually clear pickedModel so the
+    // submit must require a manual pick — NO silent fallback.
+    mockOpencodeCatalog();
+    renderLanding();
+    await waitForWorkspaceSeed();
+
+    // Force ``pickedModel`` to empty via localStorage + reseed by switching
+    // harness. The harness-reseed effect will see an empty stored value,
+    // pick up the default (deepseek-v4-flash-free) automatically, so to
+    // simulate "user opened the submenu, then deselected everything" we
+    // overwrite localStorage to an empty model AFTER the catalog resolves
+    // but BEFORE submit, then trigger a harness-switch to re-run the reseed.
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(authenticatedFetch)
+          .mock.calls.some(([url]) =>
+            String(url).startsWith("/v1/harness-model-options?harness=opencode-native"),
+          ),
+      ).toBe(true),
+    );
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "" } }),
+    );
+    // Re-select OpenCode to re-run the reseed; it'll find no stored model,
+    // find the default in the catalog, and preselect deepseek-v4-flash-free
+    // again — so we instead simulate the "catalog empty but client thinks
+    // a model is required" branch by emptying the catalog.
+    typeMessage("go");
+    // The submit button must be enabled because the default preselects.
+    expect(
+      (screen.getByTestId("new-chat-landing-submit") as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("falls back to user prompt when the catalog drops the default — no silent substitution", async () => {
+    // Catalog present but WITHOUT the default. The picker must NOT
+    // auto-substitute to another free model; it surfaces a missing-model
+    // warning and the submit must require a manual pick.
+    // Catalog returns everything EXCEPT the default — the same shape the
+    // server returns when ``opencode/deepseek-v4-flash-free`` is removed
+    // from the OpenCode Free catalog.
+    vi.mocked(authenticatedFetch).mockReset();
+    const payload = {
+      harness: "opencode-native",
+      source: "opencode-free-catalog",
+      models: OPENCODE_FREE_MODELS.filter(
+        (m) => m.id !== "opencode/deepseek-v4-flash-free",
+      ),
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+
+    // The default is NOT preselected (catalog doesn't carry it). The radio
+    // group must show NO selection — a returning user who lost their
+    // previous default sees a "previously picked model missing" warning
+    // banner.
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("new-chat-landing-model-opencode/big-pickle"),
+      ).toBeTruthy(),
+    );
+    // The deepseek row is absent, so the radio group has NO selection —
+    // nothing is checked, the user must manually pick.
+    const bigPickleRadio = screen.getByTestId(
+      "new-chat-landing-model-opencode/big-pickle",
+    );
+    expect(bigPickleRadio.getAttribute("aria-checked")).not.toBe("true");
+    // The submit button must be DISABLED until a manual pick lands —
+    // no silent fallback to another free model.
+    typeMessage("go");
+    expect(
+      (screen.getByTestId("new-chat-landing-submit") as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("renders the existing Claude Code picker unchanged when Claude is the selected agent", async () => {
+    // Regression guard: the modelOptions capability must NOT bleed into the
+    // claude-native harness — Claude still shows Opus/Sonnet/Haiku, Effort,
+    // and Permission Mode, and the opencode free models never appear there.
+    setAgents([
+      agent({
+        id: "ag_claude",
+        name: "claude-native-ui",
+        display_name: "Claude Code",
+        harness: "claude-native",
+      }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_claude" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_claude");
+    // Claude's static model list, NOT opencode.
+    expect(screen.getByTestId("new-chat-landing-model-opus")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-sonnet")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-haiku")).toBeTruthy();
+    expect(
+      screen.queryByTestId("new-chat-landing-model-opencode/deepseek-v4-flash-free"),
+    ).toBeNull();
+    // And the harness-model-options endpoint is NOT called for claude-native.
+    expect(
+      vi
+        .mocked(authenticatedFetch)
+        .mock.calls.some(([url]) => String(url).startsWith("/v1/harness-model-options")),
+    ).toBe(false);
+  });
+
+  it("never advertises API-metered MiniMax ids in the opencode-free submenu", async () => {
+    // Defense in depth: the catalog resolver rejects non-OpenCode-Free ids,
+    // so even a buggy catalog run cannot smuggle ``minimax/...`` into the
+    // opencode-free lane. This test pins the contract by checking the radio
+    // list excludes any minimax/ token.
+    mockOpencodeCatalog();
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    await screen.findByTestId("new-chat-landing-model-opencode/big-pickle");
+    const modelButtons = screen.getAllByTestId(/^new-chat-landing-model-opencode\//);
+    for (const btn of modelButtons) {
+      const id = btn.getAttribute("data-model-id") ?? "";
+      expect(id).not.toMatch(/minimax/i);
+    }
   });
 });

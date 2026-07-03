@@ -56,19 +56,24 @@ export function useHarnessModelOptions(harness: string | null | undefined): {
       return;
     }
 
+    // The async closure below can't see TypeScript's narrowing of ``harness``
+    // (it's a captured outer variable), so bind the narrowed value to a local
+    // before the async hop. Same string either way — the outer ``if (!harness)
+    // return`` ensures we never reach here with a null/undefined value.
+    const targetHarness: string = harness;
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
     async function fetchModels() {
       try {
-        const encoded = encodeURIComponent(harness);
+        const encoded = encodeURIComponent(targetHarness);
         const res = await authenticatedFetch(
           `/v1/harness-model-options?harness=${encoded}`,
         );
         if (!res.ok) {
           throw new Error(
-            `Failed to fetch model options for ${harness}: ${res.status}`,
+            `Failed to fetch model options for ${targetHarness}: ${res.status}`,
           );
         }
         const data: HarnessModelOptionsResponse = await res.json();

@@ -16,7 +16,20 @@ export type NativeCodingAgentIconKind =
   | "antigravity"
   | "kimi"
   | "hermes";
-export type NativeCodingAgentCapability = "permissionMode" | "approvalMode" | "cursorMode";
+export type NativeCodingAgentCapability =
+  | "permissionMode"
+  | "approvalMode"
+  | "cursorMode"
+  // The harness exposes a list of models via the generic
+  // ``/v1/harness-model-options?harness=<canonical-harness>`` endpoint.
+  // The new-session picker surfaces the list in the per-entry submenu so
+  // the user can pick the launch model BEFORE the first prompt. The pick
+  // rides along to the create as ``model_override`` (same field the
+  // claude-native picker uses). The picked model is also the default
+  // for the in-session model picker (ChatPage already plumbs this
+  // through for harnesses whose server-side default is a free-catalog
+  // model, e.g. opencode-native).
+  | "modelOptions";
 
 export interface NativeCodingAgentSpec {
   key: NativeCodingAgentIconKind;
@@ -58,8 +71,8 @@ export const NATIVE_CODING_AGENTS = [
     displayName: "OpenCode",
     iconKind: "opencode",
     sortRank: 25,
-    // No capabilities → no permission picker. OpenCode has no claude-style
-    // permission-mode surface to mirror: its native modes are the `build`
+    // No `permissionMode` capability: OpenCode has no claude-style
+    // permission-mode surface to mirror. Its native modes are the `build`
     // (allow-by-default) and `plan` primary agents, switched at runtime via Tab
     // inside the TUI — and `opencode attach` (how the runner launches it) has
     // no `--agent` flag to preset one anyway. The runner already forces
@@ -68,6 +81,16 @@ export const NATIVE_CODING_AGENTS = [
     // `approvalMode`, whose `--sandbox`/`--ask-for-approval` presets aren't
     // understood by `opencode attach` and crashed the TUI on any non-default
     // pick.)
+    //
+    // `modelOptions` exposes OpenCode Free's pre-session model submenu via
+    // ``GET /v1/harness-model-options?harness=opencode-native``. The catalog
+    // is owned by ``~/.cache/homelab/opencode-free-models.json`` (sync script
+    // in the HomeLab repo). The MiniMax Token Plan lane stays separate —
+    // it lives under harness ``opencode-native-minimax-token-plan`` and gets
+    // its own picker row, NOT this one. No API-metered MiniMax id can ever
+    // reach this lane (the server rejects non-OpenCode-Free ids in the
+    // catalog reader).
+    capabilities: ["modelOptions"],
   },
   {
     key: "cursor",

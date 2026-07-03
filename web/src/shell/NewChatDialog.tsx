@@ -82,6 +82,7 @@ import {
 } from "@/lib/nativeBridge";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+import { useHarnessModelOptions } from "@/hooks/useHarnessModelOptions";
 import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
@@ -178,6 +179,18 @@ const CLAUDE_NATIVE_EFFORTS: { value: string; label: string }[] = [
   { value: "xhigh", label: "xHigh" },
   { value: "max", label: "Max" },
 ];
+
+// Pre-session default for the OpenCode Free model submenu. Sourced from
+// HomeLab's ``~/.cache/homelab/opencode-free-models.json`` catalog —
+// ``opencode/deepseek-v4-flash-free`` is the most recent DeepSeek free
+// tier the OpenCode CLI ships as of the catalog's last sync. The web
+// picks this when (a) the user opens OpenCode's submenu, (b) nothing is
+// stored in localStorage for ``opencode-native``, and (c) the catalog
+// confirms it is present — so the model default tracks catalog drift.
+// If the catalog loses the model, the picker shows an inline error and
+// stays on "no selection" rather than silently substituting another
+// free model; an explicit user pick always wins.
+const OPENCODE_DEFAULT_MODEL_ID = "opencode/deepseek-v4-flash-free";
 
 // Cursor execution modes. "default" sends no flags; other values map to CLI
 // args passed via terminal_launch_args. Keep in sync with `cursor-agent --help`.
@@ -1185,6 +1198,123 @@ function ModelEffortOptions({
   );
 }
 
+/**
+ * Pre-session Model section for harnesses whose server-side catalog
+ * exposes a list of models (currently `opencode-native` via
+ * `/v1/harness-model-options?harness=opencode-native`).
+   *
+   * Lives as its own component because the catalog fetch is a hook —
+   * `useHarnessModelOptions` — and React rules require hooks to run on
+   * every render of the calling component unconditionally, so the fetch
+   * can't be hidden inside the parent's `knobSectionsFor` callback
+   * without being called for every harness entry on every render. This
+   * subcomponent is mounted only while the entry's submenu is open
+   * (one render per open menu, not per harness), so the catalog fetch
+   * only fires for harnesses the user actually opens.
+   *
+   * The model list comes back server-normalized (e.g. OpenCode Free's
+   * `big-pickle`, `deepseek-v4-flash-free`, …). The id the create body
+   * posts as `model_override` is the FULLY-QUALIFIED id (`opencode/<id>`)
+   * — same shape the catalog returns. The `OPENCODE_DEFAULT_MODEL_ID`
+   * constant picks the preselection when the user opens OpenCode's
+   * submenu for the first time and nothing is stored locally; if the
+   * catalog doesn't include it, the picker stays on "no selection"
+   * and surfaces an inline error rather than silently picking another
+   * free model. No fallback path exists.
+   */
+  function HarnessModelOptionsSection({
+    harness,
+    value,
+    onChange,
+    errorTestId,
+    missingWarningTestId,
+  }: {
+    harness: string;
+    value: string;
+    onChange: (model: string) => void;
+    errorTestId?: string;
+    missingWarningTestId?: string;
+  }) {
+    const { models, isLoading, error } = useHarnessModelOptions(harness);
+    // While the catalog loads, render a transient placeholder so the
+    // submenu shell still opens cleanly (matches the Claude submenu
+    // visual contract — a header above the rows). Once loaded, swap
+    // to the radios.
+    //
+    // ``value`` here is whatever the picker state passed in — either
+    // the live picked model (when this harness is the selected agent)
+    // or a stored-last-pick read out of ``readHarnessOptions`` (when the
+    // user is just hovering/previewing). If the stored id has since
+    // been retired from the catalog (the harness catalog rotated), the
+    // radio will visually show nothing checked AND a loud inline
+    // warning surfaces — the user MUST pick again, the create body
+    // gets nothing, and no silent substitution happens.
+    const isValueMissing =
+      !isLoading &&
+      error == null &&
+      models.length > 0 &&
+      value !== "" &&
+      !models.some((m) => m.id === value);
+    return (
+      <>
+        <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">
+          Model
+        </div>
+        {isLoading && (
+          <div
+            data-testid={`new-chat-landing-model-loading-${harness}`}
+            className="px-2 py-1 text-xs text-muted-foreground"
+          >
+            Loading…
+          </div>
+        )}
+        {!isLoading && error != null && (
+          <div
+            data-testid={errorTestId ?? "new-chat-landing-model-error"}
+            className="mx-2 my-1 rounded-sm border border-destructive/40 bg-destructive/5 px-2 py-1 text-xs text-destructive"
+            role="alert"
+          >
+            Could not load models for {harness}: {error.message}
+          </div>
+        )}
+        {isValueMissing && (
+          <div
+            data-testid={missingWarningTestId ?? "new-chat-landing-model-missing"}
+            className="mx-2 my-1 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
+            role="alert"
+          >
+            Previously picked model “{value}” is no longer available. Pick
+            another model before creating the session.
+          </div>
+        )}
+        {!isLoading && error == null && models.length === 0 && (
+          <div
+            data-testid="new-chat-landing-model-empty"
+            className="px-2 py-1 text-xs text-muted-foreground"
+          >
+            No models available.
+          </div>
+        )}
+        {!isLoading && models.length > 0 && (
+          <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+            {models.map((m) => (
+              <DropdownMenuRadioItem
+                key={m.id}
+                value={m.id}
+                data-testid={`new-chat-landing-model-${m.id}`}
+                data-model-id={m.id}
+                onSelect={(event) => event.preventDefault()}
+                className="rounded-sm py-1 pl-2 text-xs"
+              >
+                {m.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        )}
+      </>
+    );
+  }
+
 /** Group / section header inside the picker dropdown (plain div, so Radix
  * doesn't claim roving focus for it — mirrors the in-session picker). */
 function PickerSectionHeader({ children }: { children: ReactNode }) {
@@ -1298,6 +1428,7 @@ function AgentHarnessPicker({
     nativeAgentHasCapability(agent, "permissionMode") ||
     nativeAgentHasCapability(agent, "approvalMode") ||
     nativeAgentHasCapability(agent, "cursorMode") ||
+    nativeAgentHasCapability(agent, "modelOptions") ||
     (agent.harness != null && agent.harness in brainHarnessLabels);
 
   // The agent whose knobs page is open, resolved from the live entry lists so
@@ -1363,17 +1494,59 @@ function AgentHarnessPicker({
     // knobs (only the claude-native entry has them). Resolves to "" (nothing
     // checked → no override sent → Claude Code's own default) when nothing's
     // stored or the stored id has since retired.
+    //
+    // For harnesses with the ``modelOptions`` capability (e.g. opencode-native)
+    // the model's vocabulary isn't known at this layer — the catalog is
+    // fetched by ``HarnessModelOptionsSection`` itself. We pass the stored
+    // value through and let the section's "missing" warning catch a retired
+    // id visually rather than dropping it silently. For the claude-native
+    // harness (whose vocabulary is the static ``CLAUDE_NATIVE_MODELS`` list)
+    // we still filter against the list so a stale id can't survive a model
+    // retirement — matches the existing behaviour.
+    const supportsModelOptions = nativeAgentHasCapability(agent, "modelOptions");
     const modelValue = isSelected
       ? pickedModel
-      : stored.model != null && CLAUDE_NATIVE_MODELS.some((m) => m.id === stored.model)
-        ? stored.model
-        : "";
+      : supportsModelOptions
+        ? (stored.model ?? "")
+        : stored.model != null && CLAUDE_NATIVE_MODELS.some((m) => m.id === stored.model)
+          ? stored.model
+          : "";
     const effortValue = isSelected
       ? pickedEffort
       : stored.effort != null && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === stored.effort)
         ? stored.effort
         : "";
 
+    if (nativeAgentHasCapability(agent, "modelOptions")) {
+      // Harness-level model picker. Catalog comes from
+      // ``/v1/harness-model-options?harness=<canonical>``; the section
+      // validates ``modelValue`` itself and surfaces a loud warning when
+      // the stored/live id is no longer in the catalog. The pick rides
+      // along to the create body as ``model_override`` (same field the
+      // claude-native picker uses — ``opencode-native`` is a free-catalog
+      // harness that ``validate_model_override`` accepts as a generic
+      // non-vendor id).
+      //
+      // Currently only ``opencode-native`` carries ``modelOptions``; the
+      // MiniMax Token Plan lane (harness
+      // ``opencode-native-minimax-token-plan``) is intentionally a
+      // separate row when it lands, so its models never mix into this
+      // menu. Adding a future harness with the same capability is a
+      // one-line entry in ``nativeCodingAgents.ts`` — no further changes
+      // here.
+      if (!entryHarness) return null;
+      return (
+        <HarnessModelOptionsSection
+          harness={entryHarness}
+          value={modelValue}
+          onChange={(m) => {
+            onSelectAgent(agent);
+            if (entryHarness) writeHarnessOption(entryHarness, { model: m });
+            setPickedModel(m);
+          }}
+        />
+      );
+    }
     if (nativeAgentHasCapability(agent, "permissionMode")) {
       return (
         <>
@@ -2071,6 +2244,7 @@ export function NewChatLandingScreen() {
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
+  const supportsModelOptions = nativeAgentHasCapability(selectedAgent, "modelOptions");
   // Defense in depth for the DANGEROUS bypass toggle: never let an armed
   // bypass carry across an agent change. Switching the picker to another
   // agent — or away from Codex and back — must require the typed confirmation
@@ -2085,6 +2259,17 @@ export function NewChatLandingScreen() {
   // model / effort), which are harness-specific. null for non-native agents,
   // which have no knobs to remember.
   const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  // Fetch the selected harness's model-options catalog at the parent level so
+  // the harness-reseed effect (below) can preselect ``OPENCODE_DEFAULT_MODEL_ID``
+  // only when the catalog actually carries it, and so a stale stored model
+  // (retired from the catalog) resolves to "" instead of a "still set"
+  // snapshot that would silently launch an unavailable model. The same data
+  // is independently fetched by ``HarnessModelOptionsSection`` when the
+  // submenu opens; the endpoint is cheap and the hook returns the same
+  // payload, so the double-fetch is fine.
+  const modelOptionsCatalog = useHarnessModelOptions(
+    supportsModelOptions ? selectedNativeHarness : null,
+  );
   // Seed the harness's knobs from the user's last picks when the selected
   // harness changes (including the first mount), so a returning user starts a
   // new session on the options they used last for that harness instead of the
@@ -2124,11 +2309,85 @@ export function NewChatLandingScreen() {
       setApprovalMode(resolve(CODEX_NATIVE_APPROVAL_MODES, CODEX_NATIVE_DEFAULT_APPROVAL_MODE));
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
+    } else if (supportsModelOptions) {
+      // The catalog is fetched at the parent level (above) AND at the
+      // submenu level (by ``HarnessModelOptionsSection``). On a harness
+      // switch the parent fetch may not have resolved yet, so the
+      // cases below are best-effort: they prefer the stored pick when
+      // the catalog confirms it, fall back to ``OPENCODE_DEFAULT_MODEL_ID``
+      // when the catalog confirms that, and only clear ``pickedModel`` when
+      // the catalog is fully loaded AND neither stored nor default is
+      // present. The catalog-loading case is no-op: the
+      // ``modelOptionsCatalogReady`` effect below picks the right value
+      // once the catalog resolves.
+      //
+      // 1. Stored model + catalog has it → keep stored (returning user
+      //    gets THEIR last choice).
+      // 2. Catalog loaded + stored model missing → resolve to "" +
+      //    submenu warning. NO silent substitution.
+      // 3. Catalog loaded + nothing stored → preselect default only if
+      //    present, else "" + warning. The user must pick.
+      // 4. Catalog still loading → leave ``pickedModel`` alone; the
+      //    follow-up effect decides once the fetch resolves.
+      const catalog = modelOptionsCatalog.models;
+      const storedModel = stored.model ?? "";
+      if (modelOptionsCatalog.isLoading) {
+        // Defer to the follow-up effect — don't clear or override the
+        // current value (could already be the user's just-clicked pick).
+      } else if (storedModel !== "" && catalog.some((m) => m.id === storedModel)) {
+        setPickedModel(storedModel);
+      } else if (catalog.some((m) => m.id === OPENCODE_DEFAULT_MODEL_ID)) {
+        setPickedModel(OPENCODE_DEFAULT_MODEL_ID);
+      } else {
+        setPickedModel("");
+      }
     }
     // Reseed only on harness change; capability flags are derived from the
     // same harness so they don't need to be deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedNativeHarness]);
+  // Once the catalog fetch resolves, apply the final preselection logic that
+  // the harness-reseed effect above deferred (case 4: catalog still loading
+  // when the harness changed). Same rules:
+  //   1. Stored model present in catalog → keep it.
+  //   2. Else, default present in catalog → preselect it.
+  //   3. Else → clear (no auto-substitution). The submenu's missing/empty
+  //      warnings will explain.
+  // Re-runs only when the catalog or harness changes — does NOT clobber a
+  // user-made pick between the catalog resolve and the next render, because
+  // it only fires when ``pickedModel`` still matches the harness's stored
+  // value (or is empty, i.e. nothing the user has consciously picked).
+  useEffect(() => {
+    if (!supportsModelOptions || !selectedNativeHarness) return;
+    if (modelOptionsCatalog.isLoading) return;
+    if (modelOptionsCatalog.error != null) {
+      // Leave ``pickedModel`` alone; the user can pick once the submenu
+      // shows the error and re-fetches succeed.
+      return;
+    }
+    const storedModel = readHarnessOptions(selectedNativeHarness).model ?? "";
+    const catalog = modelOptionsCatalog.models;
+    // If the user has already picked something that the catalog confirms,
+    // leave it alone. Otherwise apply the rule above.
+    if (pickedModel !== "" && catalog.some((m) => m.id === pickedModel)) return;
+    if (storedModel !== "" && catalog.some((m) => m.id === storedModel)) {
+      setPickedModel(storedModel);
+    } else if (catalog.some((m) => m.id === OPENCODE_DEFAULT_MODEL_ID)) {
+      setPickedModel(OPENCODE_DEFAULT_MODEL_ID);
+    } else {
+      setPickedModel("");
+    }
+    // We re-read ``pickedModel`` to detect "user already picked something
+    // the catalog confirms" — intentionally in the dep list.
+  }, [
+    supportsModelOptions,
+    selectedNativeHarness,
+    modelOptionsCatalog.isLoading,
+    modelOptionsCatalog.error,
+    modelOptionsCatalog.models,
+    pickedModel,
+    setPickedModel,
+  ]);
   // Native-terminal agents interpret slash commands inside their own CLI
   // (the runner injects the text verbatim), so the landing composer must
   // not intercept them — no skills menu, no slash_command routing.
@@ -2325,25 +2584,43 @@ export function NewChatLandingScreen() {
     textareaRef,
   });
 
+  // ``harnessModelRequired`` is true when the selected agent exposes the
+  // ``modelOptions`` capability AND the catalog has resolved with at least
+  // one model. In that case the user MUST pick one before submitting —
+//   no silent fallback, no implicit use of the harness's own default. The
+//   catalog-empty branch leaves this false: if there's literally nothing
+//   to choose from, blocking the submit would deadlock the user, so the
+//   create body just omits ``model_override`` (same as the bare Claude
+//   picker when nothing is stored).
+  const harnessModelRequired =
+    supportsModelOptions &&
+    !modelOptionsCatalog.isLoading &&
+    modelOptionsCatalog.models.length > 0;
+
   const canSubmit =
     message.trim().length > 0 &&
     selectedAgent != null &&
     (sandboxSelected ? sandboxRepoValid : !!selectedHostId && workspaceValid) &&
-    !creating;
+    !creating &&
+    // No auto-substitution: if a catalog is available, force an explicit pick.
+    !(harnessModelRequired && pickedModel === "");
 
   // Why submit is disabled, surfaced as the button's tooltip. Checked in the
-  // order a user fills the form — location first, then message — so the
-  // tooltip always names the next missing input. Null when nothing is
-  // actionable (submitting, or mid-create).
+  // order a user fills the form — location first, then model (only when the
+  // harness has a catalog), then message — so the tooltip always names the
+  // next missing input. Null when nothing is actionable (submitting, or
+  // mid-create).
   const submitDisabledReason = canSubmit
     ? null
     : sandboxSelected && !sandboxRepoValid
       ? "Please enter a valid repository URL"
       : !sandboxSelected && (!selectedHostId || !workspaceValid)
         ? "Please choose a host and working directory"
-        : message.trim().length === 0
-          ? "Enter a message to get started"
-          : null;
+        : harnessModelRequired && pickedModel === ""
+          ? "Pick a model in the harness submenu"
+          : message.trim().length === 0
+            ? "Enter a message to get started"
+            : null;
 
   // Chip display labels.
   const workspaceLabel = workspaceTrimmed
@@ -2440,6 +2717,7 @@ export function NewChatLandingScreen() {
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
       const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
+      const agentSupportsModelOptions = nativeAgentHasCapability(agent, "modelOptions");
 
       let data: { id: string };
 
@@ -2510,11 +2788,18 @@ export function NewChatLandingScreen() {
                     ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ?? [])
                     : undefined,
             // Model + reasoning effort, persisted on the session row before
-            // the runner launches. Only claude-native surfaces the picker, so
-            // only its agents carry the choice; the runner reads them as
-            // `--model` / `--effort` at terminal launch. An unselected ("")
-            // knob is omitted so Claude Code keeps its own configured model.
-            model_override: agentSupportsPermissionMode && pickedModel ? pickedModel : undefined,
+            // the runner launches. The Claude-native picker (``permissionMode``
+            // capability) carries both model AND effort; the generic
+            // ``modelOptions`` capability (e.g. opencode-native's free
+            // catalog) carries only model — effort stays claude-only and the
+            // create omits it for non-claude harnesses. The runner reads
+            // ``model_override`` as ``--model`` at terminal launch. An
+            // unselected ("") knob is omitted so the harness keeps its own
+            // configured model.
+            model_override:
+              (agentSupportsPermissionMode || agentSupportsModelOptions) && pickedModel
+                ? pickedModel
+                : undefined,
             reasoning_effort:
               agentSupportsPermissionMode && pickedEffort ? pickedEffort : undefined,
             // Smart routing toggle — server-side, available for any agent.
