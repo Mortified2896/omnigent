@@ -121,7 +121,7 @@ import {
   rankMentionEntries,
 } from "@/lib/composerMentions";
 import { useMentionBrowser } from "@/hooks/useMentionBrowser";
-import { useOpenCodeFreeModels } from "@/hooks/useOpenCodeFreeModels";
+import { useHarnessModelOptions } from "@/hooks/useHarnessModelOptions";
 // Re-exported so existing tests importing these from "./ChatPage" keep working
 // after the pure helpers moved to the shared lib.
 export { detectMentionAt, mentionMarkerFor };
@@ -3275,7 +3275,7 @@ function ContextRing({ contextWindow, tokensUsed }: { contextWindow: number; tok
 export function formatStatusModelLabel(
   model: string | null,
   codexModelOptions: readonly CodexModelOption[] = [],
-  openCodeFreeModels?: ReadonlyArray<{ id: string; name: string }>,
+  extraModels?: ReadonlyArray<{ id: string; label: string }>,
 ): string | null {
   const raw = model?.trim();
   if (!raw) return null;
@@ -3284,8 +3284,8 @@ export function formatStatusModelLabel(
   if (codexOption) return codexOption.displayName ?? codexOption.id;
   const known = CLAUDE_NATIVE_MODELS.find((m) => m.id === lower);
   if (known) return known.label;
-  const openCodeModel = openCodeFreeModels?.find((m) => m.id === raw);
-  if (openCodeModel) return openCodeModel.name;
+  const extra = extraModels?.find((m) => m.id === raw);
+  if (extra) return extra.label;
   return raw;
 }
 
@@ -5062,22 +5062,26 @@ function AgentPicker({
   const selectedModel = useChatStore((s) => s.selectedModel);
   const sessionModelOverride = useChatStore((s) => s.sessionModelOverride);
   const llmModel = useChatStore((s) => s.llmModel);
+  const sessionHarness = useChatStore((s) => s.sessionHarness);
 
-  // OpenCode free models are fetched from the server catalog.
-  const { models: openCodeModels } = useOpenCodeFreeModels();
+  // Generic harness model options (e.g. OpenCode free models for the
+  // opencode-native harness). Fetched from the server on mount.
+  const { models: harnessModels } = useHarnessModelOptions(sessionHarness);
 
-  // Codex, cursor, kiro, and opencode all populate the picker from the
-  // server-provided ``codexModelOptions`` channel or the OpenCode free-model
-  // catalog; claude uses the static local catalog.
+  // Codex and cursor both populate the picker from the server-provided
+  // ``codexModelOptions`` channel (the snapshot's ``model_options`` field);
+  // claude uses the static local catalog. All other native model pickers
+  // (currently opencode-native) use the generic harness-model-options
+  // endpoint.
   const usesServerModelOptions =
-    modelPickerKind === "codex" || modelPickerKind === "cursor" || modelPickerKind === "kiro" || modelPickerKind === "opencode";
+    modelPickerKind === "codex" || modelPickerKind === "cursor" || modelPickerKind === "kiro";
   const modelOptions: ReadonlyArray<{ id: string; label?: string; displayName?: string }> =
     modelPickerKind === "claude"
       ? CLAUDE_NATIVE_MODELS
-      : modelPickerKind === "opencode"
-        ? openCodeModels.map((m) => ({ id: m.id, displayName: m.name }))
-        : usesServerModelOptions
-          ? codexModelOptions
+      : usesServerModelOptions
+        ? codexModelOptions
+        : harnessModels.length > 0
+          ? harnessModels.map((m) => ({ id: m.id, label: m.label }))
           : [];
   const isNativeModelPicker = modelPickerKind !== null;
   // Only offer the agent list when there's an actual choice. Inside a
@@ -5134,7 +5138,7 @@ function AgentPicker({
           (sessionModelOverride ?? llmModel)
         : null
     : nonNativeModel;
-  const modelLabel = formatStatusModelLabel(effectiveModel, codexModelOptions, openCodeModels);
+  const modelLabel = formatStatusModelLabel(effectiveModel, codexModelOptions, harnessModels);
   const effortTriggerLabel =
     showEffort && selectedEffort
       ? formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex")
@@ -5242,12 +5246,12 @@ function AgentPicker({
                   : isModelImplicitlySelected(m.id, llmModel));
               const isActive = isExplicit || isImplicit;
               const handleSelect = () => {
-                // For OpenCode sessions, validate the selected model exists
-                // in the fetched free-model catalog before applying.
-                if (modelPickerKind === "opencode" && !openCodeModels.some((om) => om.id === m.id)) {
+                // Validate the selected model exists in the fetched
+                // model-options catalog before applying.
+                if (harnessModels.length > 0 && !harnessModels.some((hm) => hm.id === m.id)) {
                   // eslint-disable-next-line no-alert
                   alert(
-                    "Selected OpenCode free model is not currently available. Refresh models or choose another free model.",
+                    "Selected model is not currently available. Refresh models or choose another model.",
                   );
                   return;
                 }
