@@ -121,6 +121,7 @@ import {
   rankMentionEntries,
 } from "@/lib/composerMentions";
 import { useMentionBrowser } from "@/hooks/useMentionBrowser";
+import { useOpenCodeFreeModels } from "@/hooks/useOpenCodeFreeModels";
 // Re-exported so existing tests importing these from "./ChatPage" keep working
 // after the pure helpers moved to the shared lib.
 export { detectMentionAt, mentionMarkerFor };
@@ -3274,6 +3275,7 @@ function ContextRing({ contextWindow, tokensUsed }: { contextWindow: number; tok
 export function formatStatusModelLabel(
   model: string | null,
   codexModelOptions: readonly CodexModelOption[] = [],
+  openCodeFreeModels?: ReadonlyArray<{ id: string; name: string }>,
 ): string | null {
   const raw = model?.trim();
   if (!raw) return null;
@@ -3282,6 +3284,8 @@ export function formatStatusModelLabel(
   if (codexOption) return codexOption.displayName ?? codexOption.id;
   const known = CLAUDE_NATIVE_MODELS.find((m) => m.id === lower);
   if (known) return known.label;
+  const openCodeModel = openCodeFreeModels?.find((m) => m.id === raw);
+  if (openCodeModel) return openCodeModel.name;
   return raw;
 }
 
@@ -5059,17 +5063,22 @@ function AgentPicker({
   const sessionModelOverride = useChatStore((s) => s.sessionModelOverride);
   const llmModel = useChatStore((s) => s.llmModel);
 
-  // Codex and cursor both populate the picker from the server-provided
-  // ``codexModelOptions`` channel (the snapshot's ``model_options`` field);
-  // claude uses the static local catalog.
+  // OpenCode free models are fetched from the server catalog.
+  const { models: openCodeModels } = useOpenCodeFreeModels();
+
+  // Codex, cursor, kiro, and opencode all populate the picker from the
+  // server-provided ``codexModelOptions`` channel or the OpenCode free-model
+  // catalog; claude uses the static local catalog.
   const usesServerModelOptions =
-    modelPickerKind === "codex" || modelPickerKind === "cursor" || modelPickerKind === "kiro";
+    modelPickerKind === "codex" || modelPickerKind === "cursor" || modelPickerKind === "kiro" || modelPickerKind === "opencode";
   const modelOptions: ReadonlyArray<{ id: string; label?: string; displayName?: string }> =
     modelPickerKind === "claude"
       ? CLAUDE_NATIVE_MODELS
-      : usesServerModelOptions
-        ? codexModelOptions
-        : [];
+      : modelPickerKind === "opencode"
+        ? openCodeModels.map((m) => ({ id: m.id, displayName: m.name }))
+        : usesServerModelOptions
+          ? codexModelOptions
+          : [];
   const isNativeModelPicker = modelPickerKind !== null;
   // Only offer the agent list when there's an actual choice. Inside a
   // session the picker is scoped to the single bound agent (the runner is
@@ -5125,7 +5134,7 @@ function AgentPicker({
           (sessionModelOverride ?? llmModel)
         : null
     : nonNativeModel;
-  const modelLabel = formatStatusModelLabel(effectiveModel, codexModelOptions);
+  const modelLabel = formatStatusModelLabel(effectiveModel, codexModelOptions, openCodeModels);
   const effortTriggerLabel =
     showEffort && selectedEffort
       ? formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex")
@@ -5232,18 +5241,25 @@ function AgentPicker({
                   ? findCodexModelOption(codexModelOptions, llmModel)?.id === m.id
                   : isModelImplicitlySelected(m.id, llmModel));
               const isActive = isExplicit || isImplicit;
+              const handleSelect = () => {
+                // For OpenCode sessions, validate the selected model exists
+                // in the fetched free-model catalog before applying.
+                if (modelPickerKind === "opencode" && !openCodeModels.some((om) => om.id === m.id)) {
+                  // eslint-disable-next-line no-alert
+                  alert(
+                    "Selected OpenCode free model is not currently available. Refresh models or choose another free model.",
+                  );
+                  return;
+                }
+                void useChatStore.getState().setModel(m.id).catch(() => {});
+              };
               return (
                 <DropdownMenuItem
                   key={m.id}
                   data-testid="model-picker-item"
                   data-model-id={m.id}
                   data-active={isActive ? "true" : undefined}
-                  onSelect={() =>
-                    void useChatStore
-                      .getState()
-                      .setModel(m.id)
-                      .catch(() => {})
-                  }
+                  onSelect={handleSelect}
                   className={cn(
                     "items-center gap-2 rounded-sm px-2 py-1.5 text-xs",
                     "data-[active=true]:bg-accent/60 data-[active=true]:text-foreground",

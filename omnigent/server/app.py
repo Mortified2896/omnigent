@@ -59,6 +59,7 @@ from omnigent.server.routes.builtin_agents import create_builtin_agents_router
 from omnigent.server.routes.comments import create_comments_router
 from omnigent.server.routes.default_policies import create_default_policies_router
 from omnigent.server.routes.harnesses import create_harnesses_router
+from omnigent.server.routes.opencode_free_models import create_opencode_free_models_router
 from omnigent.server.routes.policy_registry import create_policy_registry_router
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
 from omnigent.server.routes.session_mcp_servers import create_session_mcp_servers_router
@@ -1933,6 +1934,11 @@ def create_app(
         create_policy_registry_router(auth_provider=auth_provider),
         prefix="/v1",
         tags=["policy_registry"],
+    )
+    app.include_router(
+        create_opencode_free_models_router(auth_provider=auth_provider),
+        prefix="/v1",
+        tags=["opencode_free_models"],
     )
 
     # ── Tunnel lifecycle callbacks (Step 8.5 crash recovery) ───
