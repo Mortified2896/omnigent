@@ -1403,9 +1403,6 @@ function ConversationList({
                 active={activeDrag != null && (activeDrag.project != null || activeDrag.isPinned)}
               >
                 <ConversationSection
-                  // "Sessions" is the visible label (matches the "New session"
-                  // button); "Chats" stays the persisted collapse-state key so
-                  // an existing user's collapse preference survives the rename.
                   title="Sessions"
                   conversations={sections.sessions}
                   pinnedConversationIds={pinnedConversationIds}
