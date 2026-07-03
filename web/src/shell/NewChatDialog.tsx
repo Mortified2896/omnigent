@@ -1710,10 +1710,34 @@ export function NewChatLandingScreen() {
   // user-registered agents). This is the isNativeCodingAgent split, NOT the
   // builtins/customs split: Polly & Debby are built-ins but belong under
   // "Agents", not "Harnesses".
-  const harnessEntries = useMemo(
-    () => agentList.filter((a) => isNativeCodingAgent(a)),
-    [agentList],
-  );
+  // Deduplicate harness entries by canonical native harness: if multiple
+  // agents resolve to the same native harness (e.g. the built-in
+  // `opencode-native-ui` plus a custom agent like `test-opencode-free` that
+  // both use `harness: "opencode-native"`), keep only the one with the
+  // canonical agent name.  This prevents old test sessions from creating
+  // duplicate OpenCode entries in the harness picker.
+  const harnessEntries = useMemo(() => {
+    const seen = new Map<string, AvailableAgent>();
+    for (const a of agentList) {
+      if (!isNativeCodingAgent(a)) continue;
+      const nativeAgent = nativeCodingAgentForAvailableAgent(a);
+      const canonHarness = nativeAgent?.harness;
+      if (!canonHarness) {
+        seen.set(a.id, a);
+        continue;
+      }
+      const existing = seen.get(canonHarness);
+      if (!existing) {
+        seen.set(canonHarness, a);
+      } else {
+        const canonName = nativeAgent.agentName;
+        if (a.name === canonName && existing.name !== canonName) {
+          seen.set(canonHarness, a);
+        }
+      }
+    }
+    return Array.from(seen.values());
+  }, [agentList]);
   const agentEntries = useMemo(() => agentList.filter((a) => !isNativeCodingAgent(a)), [agentList]);
 
   // "Create custom agent" dialog state and pending bundle. When the user
