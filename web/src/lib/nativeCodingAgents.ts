@@ -167,11 +167,15 @@ const BY_WRAPPER: Map<string, NativeCodingAgentSpec> = new Map(
   NATIVE_CODING_AGENTS.map((agent) => [agent.wrapperLabel, agent]),
 );
 
-// Reversed harness spellings that fold to a canonical native `harness`.
-// Mirrors omnigent.harness_aliases.NATIVE_HARNESSES on the server, which
-// accepts both the canonical and reversed native spellings (claude/codex
-// only use the canonical form, so they need no reversed entry here).
+// Server-sent harness spellings that fold to a canonical native `harness`.
+// Mirrors omnigent.harness_aliases.HARNESS_ALIASES on the server, which
+// maps shorthand and reversed spellings to canonical ids. Entries here
+// let nativeCodingAgentForHarness resolve the canonical spec for any
+// alias the server may send in configured_harnesses, and lets
+// dedupeNativeAgents collapse duplicates from the agent list.
 const HARNESS_ALIASES: Record<string, string> = {
+  "opencode": "opencode-native",
+  "native-opencode": "opencode-native",
   "native-pi": "pi-native",
   "native-cursor": "cursor-native",
   "native-kiro": "kiro-native",
