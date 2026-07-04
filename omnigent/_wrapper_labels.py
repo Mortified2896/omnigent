@@ -54,6 +54,24 @@ PI_NATIVE_WRAPPER_VALUE = "pi-native-ui"
 # ``conversations.labels[WRAPPER_LABEL_KEY]``.
 OPENCODE_NATIVE_WRAPPER_VALUE = "opencode-native-ui"
 
+# Value the OpenCode-backed ``MiniMax Token Plan`` lane writes into
+# ``conversations.labels[WRAPPER_LABEL_KEY]``. Distinct from
+# ``OPENCODE_NATIVE_WRAPPER_VALUE`` because the lane runs against a
+# different OpenCode provider prefix (``minimax-coding-plan/`` and
+# ``minimax-cn-coding-plan/``) reachable through the user's MiniMax
+# Token Plan subscription — never the API-metered ``minimax/`` or
+# ``minimax-cn/`` ids and never as a fallback for the free lane.
+OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE = "opencode-native-minimax-token-plan-ui"
+
+# Value the OpenCode-backed ``Codex Subscription`` lane writes into
+# ``conversations.labels[WRAPPER_LABEL_KEY]``. Distinct from
+# ``CODEX_NATIVE_WRAPPER_VALUE`` because this lane is the
+# subscription-authenticated OpenCode Codex provider — reachable
+# through OpenCode's Codex subscription integration, NOT through
+# OpenAI's API-billed path. No OPENAI_API_KEY fallback is configured
+# or expected.
+OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE = "opencode-native-codex-subscription-ui"
+
 # Value the ``omnigent cursor`` wrapper writes into
 # ``conversations.labels[WRAPPER_LABEL_KEY]``.
 CURSOR_NATIVE_WRAPPER_VALUE = "cursor-native-ui"

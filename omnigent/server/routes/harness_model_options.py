@@ -213,6 +213,149 @@ def _resolve_opencode_minimax_token_plan_models() -> dict[str, Any]:
     }
 
 
+# ── Codex Subscription lane ─────────────────────────────────────────
+#
+# Subscription-backed Codex lane routed through OpenCode's
+# subscription-authenticated Codex provider. Distinct harness id
+# ``opencode-native-codex-subscription`` from both ``codex-native``
+# (the OpenAI API-billed path) and ``opencode-native`` (the free
+# lane) so the picker can show all three side-by-side without mixing.
+#
+# Today no local Codex-subscription catalog is shipped: the resolver
+# returns an empty list with an explicit setup / status message so
+# the picker can surface the state instead of inventing models.
+#
+# Hard rules:
+#  * No OpenAI API calls. The resolver reads ONLY from local state.
+#  * No OPENAI_API_KEY fallback. Subscription-only.
+#  * When the local catalog is empty, the resolver returns ``{"models":
+#    [], ..., "error": "Codex Subscription catalog not found ..."}``
+#    so the picker renders the empty / setup state, never an invented
+#    model.
+#  * When a future catalog exposes models under a verified Codex-
+#    subscription provider prefix, this resolver re-checks each entry
+#    against ``_OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES``
+#    so a buggy future catalog run cannot leak OpenAI-API-billed ids
+#    into the picker.
+_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH = (
+    Path.home() / ".cache" / "homelab" / "opencode-codex-subscription-models.json"
+)
+
+# Verified OpenCode Codex-subscription provider prefixes. Conservative
+# on purpose: today none is known, so any ``model_override`` is
+# rejected. When OpenCode ships a verifiable local catalog, populate
+# this set with the resolved prefixes and the executor will admit
+# matching models. The membership list is the SINGLE source of truth
+# for "is this a Codex subscription model?"; the picker resolver and
+# the executor agree on it (see
+# omnigent.inner.opencode_native_codex_subscription_harness._OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES).
+_OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES: frozenset[str] = frozenset()
+
+
+def _resolve_opencode_codex_subscription_models() -> dict[str, Any]:
+    """Resolve Codex Subscription (subscription-backed) models only.
+
+    Reads the local catalog at
+    ``~/.cache/homelab/opencode-codex-subscription-models.json`` if
+    present, and translates each entry into a normalized
+    ``HarnessModelOption``. Re-checks each entry's provider prefix
+    against the verified allowlist so a buggy future catalog run
+    cannot leak non-Codex-subscription ids into the picker.
+
+    The catalog is intentionally OPTIONAL: the resolver does not
+    fail when the catalog is missing — it returns an empty list with
+    a clear setup message. This matches the
+    ``opencode-native-minimax-token-plan`` lane's empty-catalog
+    contract: never invent models, never silently substitute, always
+    surface the state.
+
+    Hard rules (defense-in-depth):
+      * No OpenAI API calls. Local catalog only.
+      * No OPENAI_API_KEY fallback. Subscription-only.
+      * Empty catalog with setup message rather than invented models.
+      * Re-checks each entry's provider prefix even when present.
+
+    :returns: ``{"models": [...], "source":
+        "opencode-codex-subscription-catalog", "last_synced_at": "...",
+        "error": "..."}``. ``last_synced_at`` is whatever the catalog
+        wrote (may be None).
+    """
+    if not _OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH.is_file():
+        return {
+            "models": [],
+            "source": "opencode-codex-subscription-catalog",
+            "last_synced_at": None,
+            "error": (
+                "Codex Subscription catalog not found. The "
+                "opencode-native-codex-subscription lane has no local "
+                "verified catalog yet. Configure OpenCode's Codex "
+                "subscription provider locally so the catalog can be "
+                "populated; this resolver NEVER falls back to the "
+                "OpenAI API-billed path."
+            ),
+        }
+    try:
+        raw = json.loads(_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to read Codex Subscription catalog: %s", exc)
+        return {
+            "models": [],
+            "source": "opencode-codex-subscription-catalog",
+            "last_synced_at": None,
+            "error": f"Catalog unreadable: {exc}",
+        }
+
+    models: list[dict[str, Any]] = []
+    for entry in raw.get("models", []):
+        full_id: str = entry.get("id") or ""
+        bare_id = full_id[len("opencode/"):] if full_id.startswith("opencode/") else full_id
+        provider_id = bare_id.split("/", 1)[0] if "/" in bare_id else ""
+        if provider_id not in _OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES:
+            # Defense-in-depth: the catalog reader rejects anything that
+            # isn't a verified Codex-subscription provider prefix, so a
+            # buggy catalog run cannot leak OpenAI-API-billed ids into
+            # the picker. With an empty allowlist (today's state) every
+            # entry is rejected, which matches the "fail closed" stance.
+            logger.warning(
+                "Codex Subscription catalog returned non-verified id %r; "
+                "omitting from picker.",
+                full_id,
+            )
+            continue
+        model_name = entry.get("model_name") or bare_id.split("/", 1)[-1]
+        raw_line = entry.get("raw_line") or bare_id
+        models.append(
+            {
+                "id": full_id,
+                "label": (
+                    f"{entry.get('name') or model_name} "
+                    "\u2014 Codex Subscription"
+                ),
+                "provider": "Codex",
+                "tier": "subscription",
+                "kind": "subscription",
+                "manual_fallback_only": True,
+                "requires_credentials": True,
+                # Boolean only — the catalog carries no secret value
+                # and neither does this endpoint.
+                "credentials_present": bool(entry.get("credentials_present")),
+                "credential_env_var": "CODEX_SUBSCRIPTION_AUTH",
+                "billing_risk": "subscription",
+                "context_limit": entry.get("context_limit"),
+                "output_limit": entry.get("output_limit"),
+                "provider_id": provider_id,
+                "release_date": entry.get("release_date", ""),
+                "raw_line": raw_line,
+            }
+        )
+
+    return {
+        "models": models,
+        "source": "opencode-codex-subscription-catalog",
+        "last_synced_at": raw.get("last_synced_at"),
+    }
+
+
 # ── Provider registry ────────────────────────────────────────────────
 #
 # Map canonical harness id → resolver function.
@@ -221,6 +364,7 @@ def _resolve_opencode_minimax_token_plan_models() -> dict[str, Any]:
 _HARNESS_MODEL_PROVIDERS: dict[str, Callable[[], dict[str, Any]]] = {
     "opencode-native": _resolve_opencode_free_models,
     "opencode-native-minimax-token-plan": _resolve_opencode_minimax_token_plan_models,
+    "opencode-native-codex-subscription": _resolve_opencode_codex_subscription_models,
 }
 
 

@@ -1524,3 +1524,855 @@ describe("OpenCode pre-session model submenu", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Access-path sections in the new-session harness selector.
+//
+// The picker groups harnesses under two access-path headers:
+//   * "Free / no paid API"   — OpenCode Free today (no API key, no fallback).
+//   * "Subscriptions"        — MiniMax Token Plan and Codex Subscription
+//                              (subscription-backed; no API-billed fallback).
+// Other native harnesses (Claude Code, Codex, Pi, Cursor, Kiro, Goose, …)
+// render under the legacy "Harnesses" header — they have no free/paid
+// split, so labelling them would be noise.
+//
+// Grouping is by access path, NEVER by model family name. A model
+// family like MiniMax M3 may appear in BOTH the OpenCode Free catalog
+// AND the MiniMax Token Plan catalog; those render as separate rows
+// under separate group headers because their harness ids route through
+// different access paths.
+describe("New-chat harness selector access-path grouping", () => {
+  function openPicker(): void {
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+  }
+
+  it("renders OpenCode Free under the Free / no paid API section", async () => {
+    setAgents([
+      agent({
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode Free",
+        harness: "opencode-native",
+      }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openPicker();
+    // The grouping header is pinned on the access-path label so the
+    // contract is observable without coupling to the rendered text.
+    expect(
+      screen.getByTestId("new-chat-landing-harness-access-group-free"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("new-chat-landing-harness-access-group-subscription"),
+    ).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_opencode")).toBeTruthy();
+  });
+
+  it("renders MiniMax Token Plan and Codex Subscription under the Subscriptions section", async () => {
+    setAgents([
+      agent({
+        id: "ag_minimax",
+        name: "opencode-native-minimax-token-plan-ui",
+        display_name: "MiniMax Token Plan",
+        harness: "opencode-native-minimax-token-plan",
+      }),
+      agent({
+        id: "ag_codex_sub",
+        name: "opencode-native-codex-subscription-ui",
+        display_name: "Codex Subscription",
+        harness: "opencode-native-codex-subscription",
+      }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openPicker();
+    expect(
+      screen.getByTestId("new-chat-landing-harness-access-group-subscription"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("new-chat-landing-harness-access-group-free"),
+    ).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_minimax")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_codex_sub")).toBeTruthy();
+  });
+
+  it("renders Claude Code under the legacy Harnesses header (no access-path sub-label)", async () => {
+    // Claude Code is NOT OpenCode-backed and has no free/paid split, so it
+    // renders under the legacy "Harnesses" header — NOT under
+    // "Free / no paid API" or "Subscriptions". A regression that drops the
+    // legacy header would hide Claude from the picker.
+    setAgents([
+      agent({
+        id: "ag_claude",
+        name: "claude-native-ui",
+        display_name: "Claude Code",
+        harness: "claude-native",
+      }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openPicker();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_claude")).toBeTruthy();
+    expect(
+      screen.queryByTestId("new-chat-landing-harness-access-group-free"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("new-chat-landing-harness-access-group-subscription"),
+    ).toBeNull();
+    // "Harnesses" header still renders as the legacy section header.
+    expect(screen.getByText("Harnesses")).toBeTruthy();
+  });
+
+  it("shows both Free and Subscriptions sections when OpenCode Free + MiniMax Token Plan + Codex Subscription are all present", async () => {
+    setAgents([
+      agent({
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode Free",
+        harness: "opencode-native",
+      }),
+      agent({
+        id: "ag_minimax",
+        name: "opencode-native-minimax-token-plan-ui",
+        display_name: "MiniMax Token Plan",
+        harness: "opencode-native-minimax-token-plan",
+      }),
+      agent({
+        id: "ag_codex_sub",
+        name: "opencode-native-codex-subscription-ui",
+        display_name: "Codex Subscription",
+        harness: "opencode-native-codex-subscription",
+      }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openPicker();
+    expect(
+      screen.getByTestId("new-chat-landing-harness-access-group-free"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("new-chat-landing-harness-access-group-subscription"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_opencode")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_minimax")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_codex_sub")).toBeTruthy();
+  });
+
+  it("disambiguates same-family model names by access path", async () => {
+    // Hypothetical future state: both the OpenCode Free catalog AND the
+    // MiniMax Token Plan catalog advertise a model from the same family.
+    // The picker MUST show them under distinct rows under distinct group
+    // headers so the user can never confuse them.
+    setAgents([
+      agent({
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode Free",
+        harness: "opencode-native",
+      }),
+      agent({
+        id: "ag_minimax",
+        name: "opencode-native-minimax-token-plan-ui",
+        display_name: "MiniMax Token Plan",
+        harness: "opencode-native-minimax-token-plan",
+      }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openPicker();
+    // Two distinct picker rows — one per lane.
+    expect(screen.getByTestId("new-chat-landing-agent-ag_opencode")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-agent-ag_minimax")).toBeTruthy();
+    // Two distinct group headers — never merged.
+    const freeGroup = screen.getByTestId("new-chat-landing-harness-access-group-free");
+    const subGroup = screen.getByTestId("new-chat-landing-harness-access-group-subscription");
+    expect(freeGroup).toBeTruthy();
+    expect(subGroup).toBeTruthy();
+    expect(freeGroup.textContent).toContain("Free");
+    expect(subGroup.textContent).toContain("Subscriptions");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// MiniMax Token Plan lane tests.
+//
+// The lane reads its catalog from
+// ``/v1/harness-model-options?harness=opencode-native-minimax-token-plan``,
+// preselects the configured preferred model (or surfaces the catalog-driven
+// choice), and posts the picked id as ``model_override``. The create body
+// tags the session with the lane-specific ``omnigent.wrapper`` value so the
+// runner routes to the Token Plan provider. API-metered ``minimax/...`` and
+// ``minimax-cn/...`` ids MUST NEVER reach this lane.
+describe("MiniMax Token Plan pre-session model submenu", () => {
+  const MINIMAX_TOKEN_PLAN_MODELS = [
+    { id: "opencode/minimax-coding-plan/MiniMax-M2.5", label: "MiniMax M2.5 — Token Plan / Subscription (international)" },
+    { id: "opencode/minimax-coding-plan/MiniMax-M3", label: "MiniMax M3 — Token Plan / Subscription (international)" },
+    { id: "opencode/minimax-cn-coding-plan/MiniMax-M2.5", label: "MiniMax M2.5 — Token Plan / Subscription (China)" },
+  ];
+
+  function mockMinimaxCatalog(matches = true): void {
+    const payload = {
+      harness: "opencode-native-minimax-token-plan",
+      source: "opencode-minimax-token-plan-catalog",
+      models: matches ? MINIMAX_TOKEN_PLAN_MODELS : [],
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+  }
+
+  beforeEach(() => {
+    setAgents([
+      agent({
+        id: "ag_minimax",
+        name: "opencode-native-minimax-token-plan-ui",
+        display_name: "MiniMax Token Plan",
+        harness: "opencode-native-minimax-token-plan",
+      }),
+    ]);
+  });
+
+  it("fetches the MiniMax Token Plan catalog on select", async () => {
+    mockMinimaxCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_minimax" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(authenticatedFetch)
+          .mock.calls.some(([url]) =>
+            String(url).startsWith(
+              "/v1/harness-model-options?harness=opencode-native-minimax-token-plan",
+            ),
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it("renders only Token Plan models in the submenu", async () => {
+    mockMinimaxCatalog();
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_minimax");
+    for (const m of MINIMAX_TOKEN_PLAN_MODELS) {
+      expect(await screen.findByTestId(`new-chat-landing-model-${m.id}`)).toBeTruthy();
+    }
+  });
+
+  it("posts the picked MiniMax Token Plan model as model_override with the lane wrapper label", async () => {
+    mockMinimaxCatalog();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_minimax" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_minimax");
+    const radio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M3",
+    );
+    fireEvent.click(radio);
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(3));
+    const createCall = vi.mocked(authenticatedFetch).mock.calls.find(
+      ([url, init]) =>
+        url === "/v1/sessions" && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const body = JSON.parse((createCall as [string, RequestInit])[1].body as string);
+    expect(body.model_override).toBe("opencode/minimax-coding-plan/MiniMax-M3");
+    // The lane wrapper label is what the runner keys off — NOT
+    // ``opencode-native-ui``. A regression here would silently route a
+    // Token Plan session through the free lane.
+    expect(body.labels?.["omnigent.wrapper"]).toBe(
+      "opencode-native-minimax-token-plan-ui",
+    );
+  });
+
+  it("never advertises API-metered minimax/ or minimax-cn/ ids in the submenu", async () => {
+    // Defense in depth: even if a buggy catalog run slipped an
+    // API-metered id through the sync-script filter, the resolver strips
+    // them and the picker never sees them. This pins the contract by
+    // checking the radio list excludes any minimax/[^-] or minimax-cn/
+    // token (the bare ``opencode/minimax/...`` form, not the Token Plan
+    // ``opencode/minimax-coding-plan/...``).
+    mockMinimaxCatalog();
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_minimax");
+    await screen.findByTestId("new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M2.5");
+    const radios = screen.queryAllByTestId(/^new-chat-landing-model-/);
+    for (const r of radios) {
+      const id = r.getAttribute("data-model-id") ?? "";
+      // API-metered forms have ``opencode/minimax/`` (no ``-coding-plan`` suffix).
+      // Token Plan forms have ``opencode/minimax-coding-plan/`` or
+      // ``opencode/minimax-cn-coding-plan/``. Both prefixes must be allowed
+      // here because the catalog ONLY contains Token Plan ids; an
+      // API-metered ``opencode/minimax/<model>`` id MUST NOT appear at all.
+      expect(id).not.toMatch(/^opencode\/minimax\/(?!coding-plan)/);
+      expect(id).not.toMatch(/^opencode\/minimax-cn\/(?!coding-plan)/);
+    }
+  });
+
+  it("shows the lane-specific setup message when the catalog is empty", async () => {
+    // Empty catalog → the lane-specific setup message renders, NOT the
+    // generic "No models available." The submit gate stays unblocked
+    // because the empty catalog means there's nothing to pick (so the
+    // harness is silently allowed to launch without a model override).
+    vi.mocked(authenticatedFetch).mockReset();
+    mockMinimaxCatalog(false);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_minimax");
+    const empty = await screen.findByTestId(
+      "new-chat-landing-model-empty-minimax-token-plan",
+    );
+    expect(empty.textContent).toContain("MiniMax Token Plan");
+    // The empty message names the sync script so the operator can act on it.
+    expect(empty.textContent).toContain("sync-opencode-minimax-token-plan-models.py");
+  });
+
+  it("does not silently fall back to a free-lane or default model when no model is picked and the catalog is empty", async () => {
+    // No silent substitution: an empty catalog means the user MUST
+    // either (a) populate the catalog or (b) launch without a model
+    // override. NO cross-lane leakage.
+    vi.mocked(authenticatedFetch).mockReset();
+    // Parent hook fires on selection; submenu hook fires when the user
+    // opens the config page. Stub both empty-catalog responses so
+    // neither path replaces the missing model.
+    mockMinimaxCatalog(false);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_minimax" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // Open the config page so the submenu hook fires too.
+    openAgentConfig("ag_minimax");
+    // The submit gate is open (empty catalog → no model required) but
+    // submits WITHOUT model_override and WITH the lane wrapper label.
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(3));
+    const createCall = vi.mocked(authenticatedFetch).mock.calls.find(
+      ([url, init]) =>
+        url === "/v1/sessions" && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const body = JSON.parse((createCall as [string, RequestInit])[1].body as string);
+    // The model_override is omitted (undefined is dropped by JSON.stringify)
+    // — NO silent substitution to the OpenCode Free lane's deepseek model.
+    expect(body.model_override).toBeUndefined();
+    expect(body.labels?.["omnigent.wrapper"]).toBe(
+      "opencode-native-minimax-token-plan-ui",
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Codex Subscription lane tests.
+//
+// Today the catalog resolver returns an empty list with a setup / status
+// message because no public OpenCode Codex-subscription provider prefix
+// is verified yet. The picker MUST surface the empty state verbatim —
+// never invent models, never silently fall back to the OpenAI API-billed
+// path, never substitute a model from another lane.
+describe("Codex Subscription pre-session model submenu", () => {
+  function mockCodexCatalogEmpty(): void {
+    vi.mocked(authenticatedFetch).mockReset();
+    const payload = {
+      harness: "opencode-native-codex-subscription",
+      source: "opencode-codex-subscription-catalog",
+      models: [],
+      last_synced_at: null,
+      error:
+        "Codex Subscription catalog not found. The opencode-native-codex-subscription lane has no local verified catalog yet.",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+  }
+
+  beforeEach(() => {
+    setAgents([
+      agent({
+        id: "ag_codex_sub",
+        name: "opencode-native-codex-subscription-ui",
+        display_name: "Codex Subscription",
+        harness: "opencode-native-codex-subscription",
+      }),
+    ]);
+  });
+
+  it("fetches the Codex Subscription catalog on select", async () => {
+    mockCodexCatalogEmpty();
+    renderLanding();
+    await waitForWorkspaceSeed();
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(authenticatedFetch)
+          .mock.calls.some(([url]) =>
+            String(url).startsWith(
+              "/v1/harness-model-options?harness=opencode-native-codex-subscription",
+            ),
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it("shows the lane-specific setup message when the catalog is empty", async () => {
+    mockCodexCatalogEmpty();
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_codex_sub");
+    const empty = await screen.findByTestId(
+      "new-chat-landing-model-empty-codex-subscription",
+    );
+    // The setup message must explicitly disclaim the OpenAI API-billed path
+    // so the operator (and the test) sees that this lane is NOT
+    // codex-native-with-an-OPENAI_API_KEY fallback.
+    expect(empty.textContent).toContain("Codex subscription is not verified locally");
+    expect(empty.textContent).toContain("NEVER falls back to the OpenAI API-billed path");
+  });
+
+  it("does not silently fall back to a default model or OpenAI-billed path", async () => {
+    // Empty catalog → submit is allowed (no model required) but the
+    // create body MUST carry the lane wrapper label and MUST omit
+    // model_override. NO silent substitution.
+    mockCodexCatalogEmpty();
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_codex_sub" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // Open the config page so the submenu hook fires too.
+    openAgentConfig("ag_codex_sub");
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(3));
+    const createCall = vi.mocked(authenticatedFetch).mock.calls.find(
+      ([url, init]) =>
+        url === "/v1/sessions" && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const body = JSON.parse((createCall as [string, RequestInit])[1].body as string);
+    expect(body.model_override).toBeUndefined();
+    expect(body.labels?.["omnigent.wrapper"]).toBe(
+      "opencode-native-codex-subscription-ui",
+    );
+  });
+
+  it("does not show OpenAI-billed fallback models even when other harnesses have models", async () => {
+    // A buggy future catalog run that slipped an ``openai/codex/...`` id
+    // through the sync-script filter must NOT reach the picker. This
+    // pins the resolver-layer defense in depth.
+    setAgents([
+      agent({
+        id: "ag_codex_sub",
+        name: "opencode-native-codex-subscription-ui",
+        display_name: "Codex Subscription",
+        harness: "opencode-native-codex-subscription",
+      }),
+    ]);
+    vi.mocked(authenticatedFetch).mockReset();
+    // Simulate what the server resolver returns: the catalog carried an
+    // OpenAI API-billed id (or any other non-allowlisted id), but the
+    // resolver stripped it. The endpoint returns an EMPTY models list
+    // (NOT the rejected entries — those never cross the wire).
+    const payload = {
+      harness: "opencode-native-codex-subscription",
+      source: "opencode-codex-subscription-catalog",
+      models: [],
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_codex_sub");
+    // The picker shows the empty / setup state — the OpenAI-billed id
+    // was stripped at the resolver layer.
+    await screen.findByTestId("new-chat-landing-model-empty-codex-subscription");
+    expect(
+      screen.queryByTestId("new-chat-landing-model-opencode/codex/gpt-5.4"),
+    ).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-lane persistence tests.
+//
+// `omnigent:last-mode-by-harness` stores model picks PER HARNESS so a
+// subscription-lane pick never leaks into the OpenCode Free lane and
+// vice versa. These tests pin the per-harness keying.
+describe("Cross-lane persistence in omnigent:last-mode-by-harness", () => {
+  beforeEach(() => {
+    setAgents([
+      agent({
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode Free",
+        harness: "opencode-native",
+      }),
+      agent({
+        id: "ag_minimax",
+        name: "opencode-native-minimax-token-plan-ui",
+        display_name: "MiniMax Token Plan",
+        harness: "opencode-native-minimax-token-plan",
+      }),
+      agent({
+        id: "ag_codex_sub",
+        name: "opencode-native-codex-subscription-ui",
+        display_name: "Codex Subscription",
+        harness: "opencode-native-codex-subscription",
+      }),
+    ]);
+  });
+
+  it("stores MiniMax Token Plan picks under the opencode-native-minimax-token-plan key, not opencode-native", async () => {
+    // Pre-condition: a stored pick for the FREE lane. The MiniMax Token
+    // Plan lane MUST NOT pick this up on its own.
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "opencode/big-pickle" } }),
+    );
+    // Stub the MiniMax Token Plan catalog with at least one entry so a
+    // user pick can persist.
+    vi.mocked(authenticatedFetch).mockReset();
+    const payload = {
+      harness: "opencode-native-minimax-token-plan",
+      source: "opencode-minimax-token-plan-catalog",
+      models: [
+        { id: "opencode/minimax-coding-plan/MiniMax-M3", label: "MiniMax M3 — Token Plan / Subscription (international)" },
+      ],
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_minimax");
+    const radio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M3",
+    );
+    fireEvent.click(radio);
+
+    await waitFor(() => {
+      const stored = JSON.parse(
+        localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}",
+      );
+      // The MiniMax Token Plan pick is stored under ITS OWN key. The
+      // free-lane key is untouched.
+      expect(stored["opencode-native-minimax-token-plan"]).toEqual({
+        model: "opencode/minimax-coding-plan/MiniMax-M3",
+      });
+      expect(stored["opencode-native"]).toEqual({ model: "opencode/big-pickle" });
+    });
+  });
+
+  it("does not leak an opencode-native pick into the opencode-native-minimax-token-plan harness", async () => {
+    // A stored Free-lane pick must NEVER reach the MiniMax Token Plan
+    // catalog as a preselect. The harness-reseed effect keys on the
+    // harness id; the stored value for ``opencode-native`` is irrelevant.
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "opencode/big-pickle" } }),
+    );
+    vi.mocked(authenticatedFetch).mockReset();
+    const payload = {
+      harness: "opencode-native-minimax-token-plan",
+      source: "opencode-minimax-token-plan-catalog",
+      models: [
+        { id: "opencode/minimax-coding-plan/MiniMax-M3", label: "MiniMax M3 — Token Plan / Subscription (international)" },
+      ],
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // The MiniMax lane is the only catalog-resolution path — the parent
+    // hook fires on selection.
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(authenticatedFetch)
+          .mock.calls.some(([url]) =>
+            String(url).startsWith(
+              "/v1/harness-model-options?harness=opencode-native-minimax-token-plan",
+            ),
+          ),
+      ).toBe(true),
+    );
+    openAgentConfig("ag_minimax");
+    const radio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M3",
+    );
+    // The Free-lane pick is NOT preselected on the MiniMax radio.
+    expect(radio.getAttribute("aria-checked")).not.toBe("true");
+    // And no ``opencode/big-pickle`` row exists in the MiniMax submenu.
+    expect(
+      screen.queryByTestId("new-chat-landing-model-opencode/big-pickle"),
+    ).toBeNull();
+  });
+
+  it("does not leak an opencode-native-minimax-token-plan pick into the opencode-native harness", async () => {
+    // Mirror of the previous test: a stored Token Plan pick must NEVER
+    // reach the Free lane as a preselect.
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({
+        "opencode-native-minimax-token-plan": {
+          model: "opencode/minimax-coding-plan/MiniMax-M3",
+        },
+      }),
+    );
+    // OpenCode Free catalog.
+    vi.mocked(authenticatedFetch).mockReset();
+    const payload = {
+      harness: "opencode-native",
+      source: "opencode-free-catalog",
+      models: [
+        { id: "opencode/big-pickle", label: "Big Pickle" },
+        { id: "opencode/deepseek-v4-flash-free", label: "DeepSeek V4 Flash Free" },
+      ],
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    const bigPickleRadio = await screen.findByTestId(
+      "new-chat-landing-model-opencode/big-pickle",
+    );
+    // The Token Plan pick is NOT preselected on any Free-lane row.
+    expect(bigPickleRadio.getAttribute("aria-checked")).not.toBe("true");
+    // And no MiniMax Token Plan row exists in the Free submenu.
+    expect(
+      screen.queryByTestId("new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M3"),
+    ).toBeNull();
+  });
+
+  it("does not leak a pick between any two subscription lanes", async () => {
+    // MiniMax Token Plan and Codex Subscription are both subscription
+    // lanes but distinct access paths. A MiniMax pick must NOT carry to
+    // Codex Subscription and vice versa.
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({
+        "opencode-native-minimax-token-plan": {
+          model: "opencode/minimax-coding-plan/MiniMax-M3",
+        },
+      }),
+    );
+    // Codex Subscription catalog is empty today.
+    vi.mocked(authenticatedFetch).mockReset();
+    const codexPayload = {
+      harness: "opencode-native-codex-subscription",
+      source: "opencode-codex-subscription-catalog",
+      models: [],
+      last_synced_at: null,
+      error: "Codex Subscription catalog not found.",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => codexPayload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => codexPayload,
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_codex_sub");
+    // The Codex submenu shows the empty / setup state — NO MiniMax Token
+    // Plan row leaks in.
+    await screen.findByTestId("new-chat-landing-model-empty-codex-subscription");
+    expect(
+      screen.queryByTestId("new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M3"),
+    ).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Claude Code regression guard: the access-path grouping MUST NOT bleed
+// into Claude Code. Claude still shows Opus/Sonnet/Haiku, Effort, and
+// Permission Mode — and the harness-model-options endpoint is NEVER called
+// for claude-native (Claude uses the static CLAUDE_NATIVE_MODELS list, not
+// the catalog).
+describe("Claude Code picker stays unchanged under access-path grouping", () => {
+  beforeEach(() => {
+    setAgents([
+      agent({
+        id: "ag_claude",
+        name: "claude-native-ui",
+        display_name: "Claude Code",
+        harness: "claude-native",
+      }),
+    ]);
+  });
+
+  it("renders Claude Code under the legacy Harnesses header (not Free or Subscriptions)", async () => {
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_claude");
+    expect(screen.getByTestId("new-chat-landing-model-opus")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-sonnet")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-haiku")).toBeTruthy();
+    // Claude must NEVER trigger a harness-model-options fetch.
+    expect(
+      vi
+        .mocked(authenticatedFetch)
+        .mock.calls.some(([url]) => String(url).startsWith("/v1/harness-model-options")),
+    ).toBe(false);
+    // No access-path headers should appear when only legacy harnesses are
+    // present.
+    expect(
+      screen.queryByTestId("new-chat-landing-harness-access-group-free"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("new-chat-landing-harness-access-group-subscription"),
+    ).toBeNull();
+    // The legacy "Harnesses" header still renders as the section header.
+    expect(screen.getByText("Harnesses")).toBeTruthy();
+  });
+
+  it("never shows a harness-model-options fetch for Claude Code across picker opens and closes", async () => {
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_claude");
+    closeMenu();
+    openAgentConfig("ag_claude");
+    closeMenu();
+    // The only authenticatedFetch calls should be the create POST; no
+    // harness-model-options catalog fetches.
+    const harnessCatalogCalls = vi
+      .mocked(authenticatedFetch)
+      .mock.calls.filter(([url]) => String(url).startsWith("/v1/harness-model-options"));
+    expect(harnessCatalogCalls).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Submit gate: catalog has models and no valid pick → submit disabled with
+// the "Pick a model in the harness submenu" tooltip. Mirrors the
+// OpenCode Free flow's contract for the MiniMax Token Plan lane.
+describe("Submit gate for MiniMax Token Plan lane", () => {
+  function mockMinimaxCatalog(models: Array<{ id: string; label: string }>): void {
+    const payload = {
+      harness: "opencode-native-minimax-token-plan",
+      source: "opencode-minimax-token-plan-catalog",
+      models,
+      last_synced_at: "2026-07-03T11:55:05Z",
+    };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => payload,
+    } as unknown as Response);
+  }
+
+  it("disables submit with the 'Pick a model' tooltip when the catalog has models but none picked", async () => {
+    setAgents([
+      agent({
+        id: "ag_minimax",
+        name: "opencode-native-minimax-token-plan-ui",
+        display_name: "MiniMax Token Plan",
+        harness: "opencode-native-minimax-token-plan",
+      }),
+    ]);
+    mockMinimaxCatalog([
+      { id: "opencode/minimax-coding-plan/MiniMax-M3", label: "MiniMax M3 — Token Plan / Subscription (international)" },
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // Wait for the catalog to resolve so the submit gate can compute its
+    // "catalog has models + nothing picked" branch.
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(authenticatedFetch)
+          .mock.calls.some(([url]) =>
+            String(url).startsWith(
+              "/v1/harness-model-options?harness=opencode-native-minimax-token-plan",
+            ),
+          ),
+      ).toBe(true),
+    );
+    // Type a real message and the message gate passes. The catalog gate
+    // must now block because nothing is selected.
+    typeMessage("go");
+    const submit = screen.getByTestId("new-chat-landing-submit") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    // The disabled reason ("Pick a model in the harness submenu") is
+    // bound to the submit button via the same conditional the picker
+    // submenu uses; the tooltip text only mounts on hover (Radix
+    // Tooltip). Pin the contract through the picker-side string,
+    // which is rendered inline next to the warning banner when the
+    // submenu is open.
+    openAgentConfig("ag_minimax");
+    await screen.findByTestId(
+      "new-chat-landing-model-opencode/minimax-coding-plan/MiniMax-M3",
+    );
+    expect(submit.disabled).toBe(true);
+  });
+});

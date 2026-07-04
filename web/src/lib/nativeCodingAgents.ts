@@ -8,6 +8,8 @@ export type NativeCodingAgentIconKind =
   | "claude"
   | "codex"
   | "opencode"
+  | "opencode-minimax-token-plan"
+  | "opencode-codex-subscription"
   | "pi"
   | "cursor"
   | "kiro"
@@ -31,6 +33,21 @@ export type NativeCodingAgentCapability =
   // model, e.g. opencode-native).
   | "modelOptions";
 
+// Access-path grouping for the harness selector. The picker renders
+// harnesses under these group headers so the user can see, at a glance,
+// whether a lane is free / no paid API (no API key, no fallback) or
+// subscription-backed (Token Plan / Codex subscription). Grouping is
+// driven by the harness's *access path* — NEVER by the model family
+// name. A model family like MiniMax M3 may exist in BOTH the OpenCode
+// Free catalog AND the MiniMax Token Plan catalog; these are NEVER
+// conflated, because they live under different harnesses with separate
+// canonical ids. See ``docs/omnigent-tailscale-eval.md``.
+export type NativeCodingAgentAccessPathGroup =
+  | "free" // Free / no paid API — OpenCode Free today; no API key, no
+  //         fallback to a paid provider.
+  | "subscription" // Subscription — Token Plan / subscription-backed.
+  | "other"; // Anything else (Claude Code, Codex, Pi, Cursor, Kiro, Goose, etc.).
+
 export interface NativeCodingAgentSpec {
   key: NativeCodingAgentIconKind;
   agentName: string;
@@ -40,6 +57,14 @@ export interface NativeCodingAgentSpec {
   iconKind: NativeCodingAgentIconKind;
   sortRank: number;
   capabilities?: readonly NativeCodingAgentCapability[];
+  // Which access-path group this agent belongs to in the picker.
+  // Drives the "Free / no paid API" vs "Subscriptions" header split
+  // in the harness selector. Defaults to "other" when unset so
+  // existing entries render under the legacy "Harnesses" header
+  // (Claude, Codex, Pi, etc. stay together; the access-path split
+  // applies ONLY to the OpenCode-backed lanes where the grouping
+  // carries real safety meaning).
+  accessPathGroup?: NativeCodingAgentAccessPathGroup;
 }
 
 export const NATIVE_CODING_AGENTS = [
@@ -68,9 +93,10 @@ export const NATIVE_CODING_AGENTS = [
     agentName: "opencode-native-ui",
     harness: "opencode-native",
     wrapperLabel: "opencode-native-ui",
-    displayName: "OpenCode",
+    displayName: "OpenCode Free",
     iconKind: "opencode",
     sortRank: 25,
+    accessPathGroup: "free",
     // No `permissionMode` capability: OpenCode has no claude-style
     // permission-mode surface to mirror. Its native modes are the `build`
     // (allow-by-default) and `plan` primary agents, switched at runtime via Tab
@@ -90,6 +116,69 @@ export const NATIVE_CODING_AGENTS = [
     // its own picker row, NOT this one. No API-metered MiniMax id can ever
     // reach this lane (the server rejects non-OpenCode-Free ids in the
     // catalog reader).
+    capabilities: ["modelOptions"],
+  },
+  {
+    // OpenCode-backed MiniMax Token Plan lane. Distinct harness id
+    // (``opencode-native-minimax-token-plan``) and distinct wrapper label
+    // (``opencode-native-minimax-token-plan-ui``) from ``opencode-native``
+    // so:
+    //   * a stored model pick from this lane never leaks into the OpenCode
+    //     Free lane and vice versa;
+    //   * a same-family model name (e.g. ``MiniMax-M3``) appearing in
+    //     BOTH the OpenCode Free catalog AND the MiniMax Token Plan
+    //     catalog renders as TWO distinct picker rows under TWO distinct
+    //     group headers (``Free / no paid API`` vs ``Subscriptions``);
+    //   * the create body ships the correct ``omnigent.wrapper`` label
+    //     so the runner routes to the right OpenCode provider prefix.
+    //
+    // Subscription-only. The executor rejects any ``model_override`` whose
+    // provider prefix is not under ``minimax-coding-plan`` or
+    // ``minimax-cn-coding-plan`` — the two Token Plan prefixes. The
+    // API-metered ``minimax/`` and ``minimax-cn/`` ids can NEVER reach
+    // this lane; the catalog resolver also strips them at three layers
+    // (sync / verify / resolver). No ``MINIMAX_API_KEY`` is consulted
+    // as a fallback at runtime; the catalog only carries a boolean
+    // ``credentials_present``.
+    key: "opencode-minimax-token-plan",
+    agentName: "opencode-native-minimax-token-plan-ui",
+    harness: "opencode-native-minimax-token-plan",
+    wrapperLabel: "opencode-native-minimax-token-plan-ui",
+    displayName: "MiniMax Token Plan",
+    iconKind: "opencode-minimax-token-plan",
+    sortRank: 26,
+    accessPathGroup: "subscription",
+    capabilities: ["modelOptions"],
+  },
+  {
+    // OpenCode-backed Codex Subscription lane. Distinct harness id
+    // (``opencode-native-codex-subscription``) and distinct wrapper label
+    // (``opencode-native-codex-subscription-ui``) from BOTH
+    // ``codex-native`` (the OpenAI API-billed Codex path) and
+    // ``opencode-native`` (the free lane) so a stored model pick never
+    // leaks across lanes and a same-family model name appearing in
+    // multiple lanes renders as separate rows under separate group
+    // headers.
+    //
+    // Subscription-only, today fail-closed: the local catalog resolver
+    // returns an empty list with a setup / status message because no
+    // public OpenCode Codex-subscription provider prefix is verified yet.
+    // The picker renders the empty state instead of inventing models.
+    // When the allowlist grows, the executor and the picker gate on the
+    // same membership list so they stay in lockstep.
+    //
+    // No ``OPENAI_API_KEY`` is consulted anywhere in this lane — no
+    // OpenAI SDK, no OpenAI billing path, no silent fallback. The
+    // subscription-backed Codex path is the ONLY way this lane can
+    // ever run a model.
+    key: "opencode-codex-subscription",
+    agentName: "opencode-native-codex-subscription-ui",
+    harness: "opencode-native-codex-subscription",
+    wrapperLabel: "opencode-native-codex-subscription-ui",
+    displayName: "Codex Subscription",
+    iconKind: "opencode-codex-subscription",
+    sortRank: 27,
+    accessPathGroup: "subscription",
     capabilities: ["modelOptions"],
   },
   {
@@ -199,6 +288,8 @@ const BY_WRAPPER: Map<string, NativeCodingAgentSpec> = new Map(
 const HARNESS_ALIASES: Record<string, string> = {
   "opencode": "opencode-native",
   "native-opencode": "opencode-native",
+  "opencode-minimax-token-plan": "opencode-native-minimax-token-plan",
+  "opencode-codex-subscription": "opencode-native-codex-subscription",
   "native-pi": "pi-native",
   "native-cursor": "cursor-native",
   "native-kiro": "kiro-native",
@@ -273,4 +364,28 @@ export function nativeAgentHasCapability(
   capability: NativeCodingAgentCapability,
 ): boolean {
   return nativeCodingAgentForAvailableAgent(agent)?.capabilities?.includes(capability) ?? false;
+}
+
+/**
+ * Return the access-path group this native agent belongs to.
+ *
+ * Drives the "Free / no paid API" vs "Subscriptions" header split in
+ * the harness selector. The grouping is by **access path**, NEVER by
+ * model family name — a model family like MiniMax M3 may exist in
+ * both the OpenCode Free catalog and the MiniMax Token Plan catalog,
+ * and these render under different groups because their harnesses
+ * route through different access paths.
+ *
+ * Returns ``"other"`` for native agents without a declared group
+ * (Claude Code, Codex, Pi, Cursor, Kiro, Goose, …) so they keep
+ * rendering under the legacy "Harnesses" header. ``null`` for
+ * non-native / unknown harnesses.
+ */
+export function nativeAgentAccessPathGroup(
+  agent: Pick<AvailableAgent, "name" | "harness"> | null | undefined,
+): NativeCodingAgentAccessPathGroup | null {
+  if (agent == null) return null;
+  const native = nativeCodingAgentForAvailableAgent(agent);
+  if (native === undefined) return null;
+  return native.accessPathGroup ?? "other";
 }

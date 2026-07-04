@@ -30,7 +30,9 @@ from omnigent.harness_plugins import (
     CURSOR_NATIVE_CODING_AGENT,
     KIMI_NATIVE_CODING_AGENT,
     KIRO_NATIVE_CODING_AGENT,
+    OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT,
     OPENCODE_NATIVE_CODING_AGENT,
+    OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT,
     PI_NATIVE_CODING_AGENT,
     QWEN_NATIVE_CODING_AGENT,
 )
@@ -148,6 +150,12 @@ _CLAUDE_NATIVE_AGENT_NAME = CLAUDE_NATIVE_CODING_AGENT.agent_name
 _CODEX_NATIVE_AGENT_NAME = CODEX_NATIVE_CODING_AGENT.agent_name
 _PI_NATIVE_AGENT_NAME = PI_NATIVE_CODING_AGENT.agent_name
 _OPENCODE_NATIVE_AGENT_NAME = OPENCODE_NATIVE_CODING_AGENT.agent_name
+_OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_AGENT_NAME = (
+    OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT.agent_name
+)
+_OPENCODE_NATIVE_CODEX_SUBSCRIPTION_AGENT_NAME = (
+    OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT.agent_name
+)
 _CURSOR_NATIVE_AGENT_NAME = CURSOR_NATIVE_CODING_AGENT.agent_name
 _KIRO_NATIVE_AGENT_NAME = KIRO_NATIVE_CODING_AGENT.agent_name
 _ANTIGRAVITY_NATIVE_AGENT_NAME = ANTIGRAVITY_NATIVE_CODING_AGENT.agent_name
@@ -431,6 +439,12 @@ def _ensure_default_agents(
     _ensure_default_codex_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_pi_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_opencode_agent(agent_store, artifact_store, agent_cache)
+    _ensure_default_opencode_native_minimax_token_plan_agent(
+        agent_store, artifact_store, agent_cache
+    )
+    _ensure_default_opencode_native_codex_subscription_agent(
+        agent_store, artifact_store, agent_cache
+    )
     _ensure_default_cursor_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_kiro_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_antigravity_agent(agent_store, artifact_store, agent_cache)
@@ -637,6 +651,72 @@ def _ensure_default_opencode_agent(
         agent_cache,
         name=_OPENCODE_NATIVE_AGENT_NAME,
         bundle_bytes=_build_opencode_native_bundle(),
+    )
+
+
+# Subscription / paid-API lanes built on top of the OpenCode native
+# bridge. Each lane reuses ``_build_opencode_native_bundle``'s plumbing
+# (``opencode serve`` + SSE forwarder + tmux) and only differs in the
+# harness id the executor mounts — see
+# ``omnigent.inner.opencode_native_{minimax_token_plan,codex_subscription}_harness``.
+# The bundles are registered as separate built-in agents so the picker
+# sees three rows under "Harnesses", each routing to the right provider
+# prefix and stamping the right ``omnigent.wrapper`` label at create.
+
+
+def _build_opencode_native_minimax_token_plan_bundle() -> bytes:
+    """Build a gzipped tarball of the MiniMax Token Plan agent spec."""
+    import tempfile
+
+    from omnigent.opencode_native import _materialize_opencode_minimax_token_plan_agent_spec
+    from omnigent.spec import materialize_bundle
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        spec_path = _materialize_opencode_minimax_token_plan_agent_spec(Path(tmpdir), model=None)
+        bundle_dir = materialize_bundle(spec_path, Path(tmpdir) / "bundle")
+        return _tar_gz_dir(bundle_dir)
+
+
+def _ensure_default_opencode_native_minimax_token_plan_agent(
+    agent_store: AgentStore,
+    artifact_store: ArtifactStore,
+    agent_cache: Any,
+) -> None:
+    """Register the OpenCode-backed MiniMax Token Plan built-in agent."""
+    _ensure_builtin_agent(
+        agent_store,
+        artifact_store,
+        agent_cache,
+        name=_OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_AGENT_NAME,
+        bundle_bytes=_build_opencode_native_minimax_token_plan_bundle(),
+    )
+
+
+def _build_opencode_native_codex_subscription_bundle() -> bytes:
+    """Build a gzipped tarball of the Codex Subscription agent spec."""
+    import tempfile
+
+    from omnigent.opencode_native import _materialize_opencode_codex_subscription_agent_spec
+    from omnigent.spec import materialize_bundle
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        spec_path = _materialize_opencode_codex_subscription_agent_spec(Path(tmpdir), model=None)
+        bundle_dir = materialize_bundle(spec_path, Path(tmpdir) / "bundle")
+        return _tar_gz_dir(bundle_dir)
+
+
+def _ensure_default_opencode_native_codex_subscription_agent(
+    agent_store: AgentStore,
+    artifact_store: ArtifactStore,
+    agent_cache: Any,
+) -> None:
+    """Register the OpenCode-backed Codex Subscription built-in agent."""
+    _ensure_builtin_agent(
+        agent_store,
+        artifact_store,
+        agent_cache,
+        name=_OPENCODE_NATIVE_CODEX_SUBSCRIPTION_AGENT_NAME,
+        bundle_bytes=_build_opencode_native_codex_subscription_bundle(),
     )
 
 

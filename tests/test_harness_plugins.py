@@ -212,3 +212,87 @@ def test_community_namespace_imports_external_harness_package(
 
     module = importlib.import_module("omnigent.community.harness.foo")
     assert module.VALUE == "ok"
+
+
+def test_opencode_backed_subscription_lanes_are_registered() -> None:
+    """The OpenCode-backed MiniMax Token Plan and Codex Subscription lanes
+    are registered as native harnesses alongside the OpenCode Free lane.
+
+    The three lanes MUST stay distinct at every layer (harness id,
+    wrapper label, native agent entry) so a stored model pick from
+    one lane never carries into another lane's runner. A regression
+    that drops one of the entries would silently route a
+    subscription session through the OpenCode Free lane.
+    """
+    native_agents = hp.native_agents()
+    by_key = {agent.key: agent for agent in native_agents}
+    # All three OpenCode-backed lanes are present as native coding
+    # agents.
+    assert "opencode" in by_key
+    assert "opencode-minimax-token-plan" in by_key
+    assert "opencode-codex-subscription" in by_key
+    # Harness ids are distinct.
+    opencode = by_key["opencode"].harness
+    minimax = by_key["opencode-minimax-token-plan"].harness
+    codex_sub = by_key["opencode-codex-subscription"].harness
+    assert opencode == "opencode-native"
+    assert minimax == "opencode-native-minimax-token-plan"
+    assert codex_sub == "opencode-native-codex-subscription"
+    assert len({opencode, minimax, codex_sub}) == 3
+    # Wrapper labels are distinct (ChatPage and resume dispatcher key
+    # off these).
+    opencode_wrapper = by_key["opencode"].wrapper_label
+    minimax_wrapper = by_key["opencode-minimax-token-plan"].wrapper_label
+    codex_sub_wrapper = by_key["opencode-codex-subscription"].wrapper_label
+    assert len({opencode_wrapper, minimax_wrapper, codex_sub_wrapper}) == 3
+
+
+def test_opencode_backed_subscription_lanes_have_module_paths() -> None:
+    """Each OpenCode-backed lane is wired into ``harness_modules``.
+
+    The runner launches the lane via the registered module's
+    ``create_app`` factory, so a missing module would prevent the
+    server from binding the harness.
+    """
+    modules = hp.harness_modules()
+    assert "opencode-native" in modules
+    assert "opencode-native-minimax-token-plan" in modules
+    assert "opencode-native-codex-subscription" in modules
+    # Each module path points at the canonical ``omnigent.inner``
+    # namespace, so the runner's import path matches what the
+    # bundled agent spec expects.
+    assert modules["opencode-native"] == "omnigent.inner.opencode_native_harness"
+    assert (
+        modules["opencode-native-minimax-token-plan"]
+        == "omnigent.inner.opencode_native_minimax_token_plan_harness"
+    )
+    assert (
+        modules["opencode-native-codex-subscription"]
+        == "omnigent.inner.opencode_native_codex_subscription_harness"
+    )
+
+
+def test_opencode_backed_subscription_lanes_are_listed_in_valid_harnesses() -> None:
+    """The three OpenCode-backed lanes are all listed in ``valid_harnesses``.
+
+    The server-side session-create validation consults this set to
+    decide which harnesses a session can bind. A missing entry would
+    silently reject the lane at session-create time.
+    """
+    valid = hp.valid_harnesses()
+    assert "opencode-native" in valid
+    assert "opencode-native-minimax-token-plan" in valid
+    assert "opencode-native-codex-subscription" in valid
+
+
+def test_opencode_backed_subscription_lanes_are_native() -> None:
+    """The three OpenCode-backed lanes are recognised as native harnesses.
+
+    The picker / runner uses ``native_harnesses()`` to distinguish the
+    native-CLI harnesses from in-process SDK harnesses — a missing
+    entry would route a native session through the wrong code path.
+    """
+    native = hp.native_harnesses()
+    assert "opencode-native" in native
+    assert "opencode-native-minimax-token-plan" in native
+    assert "opencode-native-codex-subscription" in native

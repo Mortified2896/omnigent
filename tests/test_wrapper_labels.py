@@ -20,6 +20,9 @@ from omnigent._wrapper_labels import (
     CLAUDE_NATIVE_WRAPPER_VALUE,
     CODEX_NATIVE_WRAPPER_VALUE,
     KIRO_NATIVE_WRAPPER_VALUE,
+    OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE,
+    OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE,
+    OPENCODE_NATIVE_WRAPPER_VALUE,
     PI_NATIVE_WRAPPER_VALUE,
     WRAPPER_LABEL_KEY,
 )
@@ -151,3 +154,94 @@ def test_kiro_native_wrapper_constants_match_registry() -> None:
     assert KIRO_NATIVE_CODING_AGENT.harness == "kiro-native"
     assert KIRO_NATIVE_CODING_AGENT.wrapper_label == KIRO_NATIVE_WRAPPER_VALUE
     assert KIRO_NATIVE_CODING_AGENT.terminal_name == "kiro"
+
+
+def test_opencode_native_minimax_token_plan_wrapper_constant() -> None:
+    """OpenCode-backed MiniMax Token Plan lane: distinct harness id and wrapper.
+
+    The harness id, agent name, and wrapper label MUST stay distinct
+    from the OpenCode Free lane so the picker / runner / session
+    metadata never confuse them — even though both lanes route through
+    the same `opencode serve` process.
+    """
+    assert OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE == (
+        "opencode-native-minimax-token-plan-ui"
+    )
+    from omnigent.harness_plugins import OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT
+
+    assert (
+        OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT.wrapper_label
+        == OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE
+    )
+    assert (
+        OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT.harness
+        == "opencode-native-minimax-token-plan"
+    )
+    assert OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT.agent_name == (
+        "opencode-native-minimax-token-plan-ui"
+    )
+    # Subscription-only lane — distinct access path from OpenCode Free.
+    assert (
+        OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT.wrapper_label
+        != OPENCODE_NATIVE_WRAPPER_VALUE
+    )
+
+
+def test_opencode_native_codex_subscription_wrapper_constant() -> None:
+    """OpenCode-backed Codex Subscription lane: distinct harness id and wrapper.
+
+    Subscription-only today (fail-closed — no public Codex-subscription
+    provider prefix is verified yet). MUST NOT collide with either
+    ``codex-native`` (the OpenAI API-billed Codex wrapper) or
+    ``opencode-native`` (the Free lane).
+    """
+    assert OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE == (
+        "opencode-native-codex-subscription-ui"
+    )
+    from omnigent.harness_plugins import OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT
+
+    assert (
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT.wrapper_label
+        == OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE
+    )
+    assert (
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT.harness
+        == "opencode-native-codex-subscription"
+    )
+    assert (
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT.agent_name
+        == "opencode-native-codex-subscription-ui"
+    )
+    # Subscription-only lane — distinct access path from OpenCode Free
+    # AND from the OpenAI API-billed Codex wrapper.
+    assert (
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT.wrapper_label
+        != OPENCODE_NATIVE_WRAPPER_VALUE
+    )
+    assert (
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT.wrapper_label
+        != CODEX_NATIVE_WRAPPER_VALUE
+    )
+
+
+def test_opencode_native_wrapper_lanes_distinct_from_free_lane() -> None:
+    """The three OpenCode-backed lanes carry distinct wrapper labels.
+
+    Cross-lane confusion here would re-introduce the resume-misroute
+    bug class — a MiniMax Token Plan session would resume as an OpenCode
+    Free session, or a Codex Subscription session as the OpenAI API
+    Codex session, etc.
+    """
+    assert OPENCODE_NATIVE_WRAPPER_VALUE == "opencode-native-ui"
+    assert (
+        OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE
+        != OPENCODE_NATIVE_WRAPPER_VALUE
+    )
+    assert (
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE
+        != OPENCODE_NATIVE_WRAPPER_VALUE
+    )
+    assert (
+        OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE
+        != OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE
+    )

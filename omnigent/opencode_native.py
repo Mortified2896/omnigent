@@ -63,6 +63,16 @@ _logger = logging.getLogger(__name__)
 # ``wrapper_agent_name`` and the web native registry).
 _AGENT_NAME = "opencode-native-ui"
 
+# Subscription / paid-API lanes — distinct harness ids from the free
+# OpenCode lane. Each gets its own bundled agent spec so the picker
+# can route a session to the right provider prefix and the runner can
+# read the per-lane wrapper label (``omnigent.wrapper``). The bundle
+# rows are seeded by ``omnigent.server.app`` at startup so they show
+# up alongside ``opencode-native-ui`` in ``GET /v1/agents``.
+
+_MINIMAX_TOKEN_PLAN_AGENT_NAME = "opencode-native-minimax-token-plan-ui"
+_CODEX_SUBSCRIPTION_AGENT_NAME = "opencode-native-codex-subscription-ui"
+
 
 def _materialize_opencode_agent_spec(
     tmpdir: Path,
@@ -101,6 +111,120 @@ def _materialize_opencode_agent_spec(
         # Declare a default shell terminal so the relay advertises the
         # ``sys_terminal_*`` family to the wrapped opencode (the relay's gate
         # is a non-empty ``terminals:`` block on this spec).
+        "terminals": {
+            "shell": {
+                "command": "bash",
+                "allow_cwd_override": True,
+                "os_env": {
+                    "type": "caller_process",
+                    "cwd": ".",
+                    "sandbox": {"type": "none"},
+                },
+            },
+        },
+    }
+    yaml_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return yaml_path
+
+
+def _materialize_opencode_minimax_token_plan_agent_spec(
+    tmpdir: Path,
+    *,
+    model: str | None = None,
+) -> Path:
+    """Write the agent spec for the OpenCode-backed MiniMax Token Plan lane.
+
+    Mirrors :func:`_materialize_opencode_agent_spec` but pins the harness
+    id to ``opencode-native-minimax-token-plan`` so the runner launches
+    the corresponding executor (see
+    :mod:`omnigent.inner.opencode_native_minimax_token_plan_harness`).
+    Subscription-only: the executor rejects any model whose provider
+    prefix is not under ``minimax-coding-plan/`` or
+    ``minimax-cn-coding-plan/`` (the two Token-Plan prefixes), so the
+    API-metered ``minimax/`` and ``minimax-cn/`` ids can never leak
+    into this lane.
+
+    :param tmpdir: Temporary directory for the generated YAML file.
+    :param model: Optional model id, e.g. ``"opencode/minimax-coding-plan/MiniMax-M2.7"``.
+    :returns: Path to the generated YAML spec.
+    """
+    yaml_path = tmpdir / "opencode-native-minimax-token-plan-ui.yaml"
+    executor: dict[str, str] = {"harness": "opencode-native-minimax-token-plan"}
+    if model is not None:
+        executor["model"] = model
+    raw: dict[str, Any] = {
+        "name": _MINIMAX_TOKEN_PLAN_AGENT_NAME,
+        "prompt": (
+            "OpenCode is running in the session terminal, routed through "
+            "OpenCode's MiniMax Token Plan provider (subscription-backed). "
+            "Web UI messages are forwarded into the same native OpenCode "
+            "server session. API-metered minimax/ or minimax-cn/ model ids "
+            "are explicitly rejected."
+        ),
+        "executor": executor,
+        "spawn": True,
+        "os_env": {
+            "type": "caller_process",
+            "cwd": ".",
+            "sandbox": {"type": "none"},
+        },
+        "terminals": {
+            "shell": {
+                "command": "bash",
+                "allow_cwd_override": True,
+                "os_env": {
+                    "type": "caller_process",
+                    "cwd": ".",
+                    "sandbox": {"type": "none"},
+                },
+            },
+        },
+    }
+    yaml_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return yaml_path
+
+
+def _materialize_opencode_codex_subscription_agent_spec(
+    tmpdir: Path,
+    *,
+    model: str | None = None,
+) -> Path:
+    """Write the agent spec for the OpenCode-backed Codex Subscription lane.
+
+    Mirrors :func:`_materialize_opencode_agent_spec` but pins the harness
+    id to ``opencode-native-codex-subscription`` so the runner launches
+    the corresponding executor (see
+    :mod:`omnigent.inner.opencode_native_codex_subscription_harness`).
+    Subscription-only: the executor rejects every model until the local
+    catalog resolver finds a verified Codex-subscription provider
+    prefix. The OpenAI API-billed path is never reachable from this
+    lane — no OPENAI_API_KEY fallback exists.
+
+    :param tmpdir: Temporary directory for the generated YAML file.
+    :param model: Optional model id (only meaningful once a local
+        Codex-subscription catalog is configured).
+    :returns: Path to the generated YAML spec.
+    """
+    yaml_path = tmpdir / "opencode-native-codex-subscription-ui.yaml"
+    executor: dict[str, str] = {"harness": "opencode-native-codex-subscription"}
+    if model is not None:
+        executor["model"] = model
+    raw: dict[str, Any] = {
+        "name": _CODEX_SUBSCRIPTION_AGENT_NAME,
+        "prompt": (
+            "OpenCode is running in the session terminal, routed through "
+            "OpenCode's Codex subscription provider (subscription-backed). "
+            "Web UI messages are forwarded into the same native OpenCode "
+            "server session. The OpenAI API-billed path is explicitly "
+            "rejected — no OPENAI_API_KEY fallback is configured."
+        ),
+        "executor": executor,
+        "spawn": True,
+        "os_env": {
+            "type": "caller_process",
+            "cwd": ".",
+            "sandbox": {"type": "none"},
+        },
         "terminals": {
             "shell": {
                 "command": "bash",

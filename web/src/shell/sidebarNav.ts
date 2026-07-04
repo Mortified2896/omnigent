@@ -40,6 +40,11 @@ export type ConversationIconKind =
   | "kimi"
   | "hermes"
   | "nessie"
+  // Subscription / OpenCode-backed lanes — distinct icon kinds so the
+  // sidebar can render them with the appropriate glyph (or fall back
+  // to the generic OpenCode icon when no glyph exists yet).
+  | "opencode-minimax-token-plan"
+  | "opencode-codex-subscription"
   | null;
 
 // Display label for a session with no title and no native-wrapper name —

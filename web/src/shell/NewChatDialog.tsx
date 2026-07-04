@@ -68,6 +68,7 @@ import { sortAgentsForDisplay } from "@/lib/agentGrouping";
 import { cn } from "@/lib/utils";
 import {
   isNativeCodingAgent,
+  nativeAgentAccessPathGroup,
   nativeAgentHasCapability,
   nativeCodingAgentForAvailableAgent,
   nativeWrapperLabelsForAgent,
@@ -82,7 +83,7 @@ import {
 } from "@/lib/nativeBridge";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
-import { useHarnessModelOptions } from "@/hooks/useHarnessModelOptions";
+import { useHarnessModelOptions, type HarnessModelOption } from "@/hooks/useHarnessModelOptions";
 import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
@@ -191,6 +192,33 @@ const CLAUDE_NATIVE_EFFORTS: { value: string; label: string }[] = [
 // stays on "no selection" rather than silently substituting another
 // free model; an explicit user pick always wins.
 const OPENCODE_DEFAULT_MODEL_ID = "opencode/deepseek-v4-flash-free";
+
+// Pre-session default for the MiniMax Token Plan model submenu.
+// Sourced from HomeLab's
+// ``~/.cache/homelab/opencode-minimax-token-plan-models.json`` catalog.
+// Picked the same way as the free-lane default (only when the catalog
+// carries it AND nothing is stored locally for that harness). The id is
+// the FULLY-QUALIFIED OpenCode form the runner consumes verbatim; a
+// bare `MiniMax-M2.7` would never be sent through (the catalog reader
+// always wraps with `opencode/<provider>/<model>`). The harness id is
+// keyed separately from `opencode-native` so a stored Free-lane pick
+// never leaks into the Subscription lane and vice versa.
+//
+// NOTE: This default applies only if the configured preferred MiniMax
+// subscription model exists in the catalog. ``null`` here means "let
+// the catalog drive" — the harness-reseed effect below picks the first
+// catalog entry when the user has no stored pick and no configured
+// preference, and the user MUST pick explicitly if the catalog is empty.
+const MINIMAX_TOKEN_PLAN_DEFAULT_MODEL_ID: string | null = null;
+
+// Pre-session default for the Codex Subscription model submenu. Same
+// contract as the MiniMax Token Plan default: the catalog drives the
+// preselection. Today the catalog is intentionally empty (no public
+// OpenCode Codex-subscription provider prefix is verified), so the
+// picker stays on "no selection" and surfaces a setup / status
+// message rather than silently substituting a model from a different
+// lane (e.g. the OpenAI API-billed `codex/gpt-5.4`).
+const CODEX_SUBSCRIPTION_DEFAULT_MODEL_ID: string | null = null;
 
 // Cursor execution modes. "default" sends no flags; other values map to CLI
 // args passed via terminal_launch_args. Keep in sync with `cursor-agent --help`.
@@ -1228,12 +1256,16 @@ function ModelEffortOptions({
     onChange,
     errorTestId,
     missingWarningTestId,
+    emptyMessage,
+    emptyTestId,
   }: {
     harness: string;
     value: string;
     onChange: (model: string) => void;
     errorTestId?: string;
     missingWarningTestId?: string;
+    emptyMessage?: ReactNode;
+    emptyTestId?: string;
   }) {
     const { models, isLoading, error } = useHarnessModelOptions(harness);
     // While the catalog loads, render a transient placeholder so the
@@ -1289,10 +1321,10 @@ function ModelEffortOptions({
         )}
         {!isLoading && error == null && models.length === 0 && (
           <div
-            data-testid="new-chat-landing-model-empty"
+            data-testid={emptyTestId ?? "new-chat-landing-model-empty"}
             className="px-2 py-1 text-xs text-muted-foreground"
           >
-            No models available.
+            {emptyMessage ?? "No models available."}
           </div>
         )}
         {!isLoading && models.length > 0 && (
@@ -1322,6 +1354,71 @@ function PickerSectionHeader({ children }: { children: ReactNode }) {
     <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">
       {children}
     </div>
+  );
+}
+
+/**
+ * One access-path group section inside the harness picker.
+ *
+ * Renders the group label (e.g. ``"Free / no paid API"``,
+ * ``"Subscriptions"``, or the legacy ``"Harnesses"``) followed by the
+ * entries that belong to that group. When the group is an access-path
+ * split (i.e. it represents ``Free / no paid API`` or ``Subscriptions``)
+ * the label is rendered as a sub-header under the implicit top-level
+ * ``Harnesses`` header that the harness picker always shows. The
+ * legacy ``Harnesses`` group renders its label inline as the regular
+ * section header — no extra ``Harnesses`` sub-header is added.
+ *
+ * Pure presentational: receives the entries and a renderEntry callback
+ * from the parent. Empty groups are filtered out by the parent's
+ * `harnessAccessPathGroups` memo.
+ */
+function AccessPathGroupSection({
+  group,
+  renderEntry,
+  showHeader,
+}: {
+  group: {
+    groupId: string;
+    label: string;
+    entries: AvailableAgent[];
+    isAccessPathSplit: boolean;
+  };
+  renderEntry: (agent: AvailableAgent) => ReactNode;
+  // When true (the default), render the section's header. The picker
+  // toggles this off for the legacy "Harnesses" group because the
+  // top-level harness header has already been rendered above the group
+  // list. For access-path split groups, the section header IS the
+  // group label (no top-level "Harnesses" header is rendered alongside).
+  showHeader?: boolean;
+}) {
+  if (!group.isAccessPathSplit) {
+    if (showHeader === false) {
+      // The picker already rendered the top-level "Harnesses" header
+      // above this group; the section's own header would be a duplicate.
+      return <>{group.entries.map(renderEntry)}</>;
+    }
+    // Legacy "Harnesses" header: no access-path sub-label.
+    return (
+      <>
+        <PickerSectionHeader>{group.label}</PickerSectionHeader>
+        {group.entries.map(renderEntry)}
+      </>
+    );
+  }
+  // Access-path split: render the explicit sub-header.
+  return (
+    <>
+      <div
+        // Pin a data-attribute on the access-path label so tests can
+        // assert the grouping without coupling to the rendered text.
+        data-testid={`new-chat-landing-harness-access-group-${group.groupId}`}
+        className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80"
+      >
+        {group.label}
+      </div>
+      {group.entries.map(renderEntry)}
+    </>
   );
 }
 
@@ -1535,6 +1632,33 @@ function AgentHarnessPicker({
       // one-line entry in ``nativeCodingAgents.ts`` — no further changes
       // here.
       if (!entryHarness) return null;
+      // Per-lane setup / status messages for the empty-catalog case.
+      // Today:
+      //  * ``opencode-native`` (OpenCode Free) — generic "No models
+      //    available" until the sync script populates the catalog.
+      //  * ``opencode-native-minimax-token-plan`` — "subscription not
+      //    configured" with a clear pointer to the catalog reader path.
+      //  * ``opencode-native-codex-subscription`` — "Codex subscription
+      //    not verified locally; no OpenAI API fallback is configured".
+      // The picker surfaces the state verbatim — never invent or
+      // substitute a model from a different lane.
+      const emptyMessages: Record<string, ReactNode> = {
+        "opencode-native-minimax-token-plan": (
+          <>
+            No MiniMax Token Plan models configured yet. Run{" "}
+            <code>sync-opencode-minimax-token-plan-models.py</code> to populate the local catalog;
+            this lane is subscription-only and rejects API-metered ids.
+          </>
+        ),
+        "opencode-native-codex-subscription": (
+          <>
+            Codex subscription is not verified locally yet. This lane NEVER falls back to the
+            OpenAI API-billed path; configure OpenCode's Codex subscription provider locally so
+            the catalog can be populated.
+          </>
+        ),
+      };
+      const emptyMessage = emptyMessages[entryHarness];
       return (
         <HarnessModelOptionsSection
           harness={entryHarness}
@@ -1544,6 +1668,14 @@ function AgentHarnessPicker({
             if (entryHarness) writeHarnessOption(entryHarness, { model: m });
             setPickedModel(m);
           }}
+          emptyMessage={emptyMessage}
+          emptyTestId={
+            entryHarness === "opencode-native-codex-subscription"
+              ? "new-chat-landing-model-empty-codex-subscription"
+              : entryHarness === "opencode-native-minimax-token-plan"
+                ? "new-chat-landing-model-empty-minimax-token-plan"
+                : undefined
+          }
         />
       );
     }
@@ -1641,6 +1773,62 @@ function AgentHarnessPicker({
     }
     return null;
   };
+
+  // Group the harness entries by access-path group for the picker header
+  // split. OpenCode-backed lanes with declared access-path groups render
+  // under "Free / no paid API" / "Subscriptions"; native harnesses
+  // without a declared access-path group (Claude Code, Codex, Pi,
+  // Cursor, Kiro, Goose, …) render under the legacy "Harnesses" header
+  // — they have no free/paid split, so labelling them would be noise.
+  //
+  // The grouping is stable across re-renders: the memo's deps are the
+  // entries themselves. Reordering / deduping upstream carries through.
+  const harnessAccessPathGroups: {
+    groupId: string;
+    label: string;
+    entries: AvailableAgent[];
+    isAccessPathSplit: boolean;
+  }[] = useMemo(() => {
+    const free = harnessEntries.filter((a) => nativeAgentAccessPathGroup(a) === "free");
+    const subscription = harnessEntries.filter(
+      (a) => nativeAgentAccessPathGroup(a) === "subscription",
+    );
+    const other = harnessEntries.filter((a) => {
+      const group = nativeAgentAccessPathGroup(a);
+      return group === null || group === "other";
+    });
+    const groups: {
+      groupId: string;
+      label: string;
+      entries: AvailableAgent[];
+      isAccessPathSplit: boolean;
+    }[] = [];
+    if (other.length > 0) {
+      groups.push({
+        groupId: "other",
+        label: "Harnesses",
+        entries: other,
+        isAccessPathSplit: false,
+      });
+    }
+    if (free.length > 0) {
+      groups.push({
+        groupId: "free",
+        label: "Free / no paid API",
+        entries: free,
+        isAccessPathSplit: true,
+      });
+    }
+    if (subscription.length > 0) {
+      groups.push({
+        groupId: "subscription",
+        label: "Subscriptions",
+        entries: subscription,
+        isAccessPathSplit: true,
+      });
+    }
+    return groups;
+  }, [harnessEntries]);
 
   const renderEntry = (agent: AvailableAgent): ReactNode => {
     const active = agent.id === effectiveAgentId;
@@ -1784,12 +1972,38 @@ function AgentHarnessPicker({
           </div>
         ) : (
           <>
-            {/* Harnesses group first — the native terminal CLIs (Claude Code is
-            the default), so the most-used picks lead. */}
+            {/*
+             * Harnesses group — the native terminal CLIs.
+             *
+             * Access-path grouping ("Free / no paid API" vs "Subscriptions")
+             * applies ONLY to the OpenCode-backed lanes where the grouping
+             * carries real safety meaning. Other native agents (Claude Code,
+             * Codex, Pi, Cursor, Kiro, Goose, …) render under the legacy
+             * "Harnesses" header (always present) — they don't have a
+             * free/paid split, so labelling them would be noise.
+             *
+             * Grouping is by ACCESS PATH, NEVER by model family name. A
+             * model family like MiniMax M3 may appear in BOTH the OpenCode
+             * Free catalog AND the MiniMax Token Plan catalog; those
+             * render as separate rows under separate group headers because
+             * their harness ids route through different access paths.
+             */}
             {harnessEntries.length > 0 && (
               <>
-                <PickerSectionHeader>Harnesses</PickerSectionHeader>
-                {harnessEntries.map(renderEntry)}
+                {harnessAccessPathGroups.some((g) => g.groupId === "other") && (
+                  <PickerSectionHeader>Harnesses</PickerSectionHeader>
+                )}
+                {harnessAccessPathGroups.map((group) => (
+                  <AccessPathGroupSection
+                    key={group.groupId}
+                    group={group}
+                    renderEntry={renderEntry}
+                    // The "other" group has already had its label rendered
+                    // above (the top-level "Harnesses" header); passing
+                    // showHeader={false} prevents a duplicate.
+                    showHeader={group.groupId !== "other"}
+                  />
+                ))}
                 <DropdownMenuSeparator />
               </>
             )}
@@ -1848,6 +2062,7 @@ type LandingDraft = {
   pickedHarness: string | null;
   pickedModel: string;
   pickedEffort: string;
+  preSessionModel: string;
   costControlMode: CostControlMode;
 };
 
@@ -2259,6 +2474,25 @@ export function NewChatLandingScreen() {
   // model / effort), which are harness-specific. null for non-native agents,
   // which have no knobs to remember.
   const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  // The preferred-default model id for the selected harness's catalog, if
+  // any. Each OpenCode-backed lane carries its own constant so the
+  // harness-reseed effect below preselects the right entry. ``null``
+  // means "no preferred default — let the catalog drive the preselection
+  // (the user must pick explicitly if the catalog is empty, no silent
+  // substitution)". Cross-lane safety: the lookup is keyed on the
+  // selected harness id, never on model family name, so a model id from
+  // one lane cannot be reused as a default for another lane.
+  const selectedHarnessDefaultModelId: string | null = useMemo(() => {
+    if (!selectedNativeHarness) return null;
+    if (selectedNativeHarness === "opencode-native") return OPENCODE_DEFAULT_MODEL_ID;
+    if (selectedNativeHarness === "opencode-native-minimax-token-plan") {
+      return MINIMAX_TOKEN_PLAN_DEFAULT_MODEL_ID;
+    }
+    if (selectedNativeHarness === "opencode-native-codex-subscription") {
+      return CODEX_SUBSCRIPTION_DEFAULT_MODEL_ID;
+    }
+    return null;
+  }, [selectedNativeHarness]);
   // Fetch the selected harness's model-options catalog at the parent level so
   // the harness-reseed effect (below) can preselect ``OPENCODE_DEFAULT_MODEL_ID``
   // only when the catalog actually carries it, and so a stale stored model
@@ -2336,8 +2570,11 @@ export function NewChatLandingScreen() {
         // current value (could already be the user's just-clicked pick).
       } else if (storedModel !== "" && catalog.some((m) => m.id === storedModel)) {
         setPickedModel(storedModel);
-      } else if (catalog.some((m) => m.id === OPENCODE_DEFAULT_MODEL_ID)) {
-        setPickedModel(OPENCODE_DEFAULT_MODEL_ID);
+      } else if (
+        selectedHarnessDefaultModelId !== null &&
+        catalog.some((m) => m.id === selectedHarnessDefaultModelId)
+      ) {
+        setPickedModel(selectedHarnessDefaultModelId);
       } else {
         setPickedModel("");
       }
@@ -2372,8 +2609,11 @@ export function NewChatLandingScreen() {
     if (pickedModel !== "" && catalog.some((m) => m.id === pickedModel)) return;
     if (storedModel !== "" && catalog.some((m) => m.id === storedModel)) {
       setPickedModel(storedModel);
-    } else if (catalog.some((m) => m.id === OPENCODE_DEFAULT_MODEL_ID)) {
-      setPickedModel(OPENCODE_DEFAULT_MODEL_ID);
+    } else if (
+      selectedHarnessDefaultModelId !== null &&
+      catalog.some((m) => m.id === selectedHarnessDefaultModelId)
+    ) {
+      setPickedModel(selectedHarnessDefaultModelId);
     } else {
       setPickedModel("");
     }
@@ -2387,6 +2627,7 @@ export function NewChatLandingScreen() {
     modelOptionsCatalog.models,
     pickedModel,
     setPickedModel,
+    selectedHarnessDefaultModelId,
   ]);
   // Native-terminal agents interpret slash commands inside their own CLI
   // (the runner injects the text verbatim), so the landing composer must

@@ -22,6 +22,8 @@ from omnigent._wrapper_labels import (
     HERMES_NATIVE_WRAPPER_VALUE,
     KIMI_NATIVE_WRAPPER_VALUE,
     KIRO_NATIVE_WRAPPER_VALUE,
+    OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE,
+    OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE,
     OPENCODE_NATIVE_WRAPPER_VALUE,
     PI_NATIVE_WRAPPER_VALUE,
     QWEN_NATIVE_WRAPPER_VALUE,
@@ -133,6 +135,55 @@ OPENCODE_NATIVE_CODING_AGENT = NativeCodingAgent(
     wrapper_label=OPENCODE_NATIVE_WRAPPER_VALUE,
     terminal_name="opencode",
     subagent_wrapper_label="opencode-native-ui-subagent",
+)
+
+# OpenCode-backed MiniMax Token Plan lane.
+#
+# Distinct harness id (`opencode-native-minimax-token-plan`) from the
+# OpenCode Free lane (`opencode-native`) so the picker can show both
+# side-by-side without either polluting the other, and so a stored
+# model pick never leaks across access paths. The wrapper the runner
+# reads (`omnigent.wrapper`) is also distinct: a session created from
+# this lane tags itself `opencode-native-minimax-token-plan-ui` so the
+# in-session ChatPage can dispatch the right provider / model.
+#
+# Subscription-only: it routes through OpenCode's
+# `minimax-coding-plan/` and `minimax-cn-coding-plan/` providers —
+# subscription-backed (Token Plan) MiniMax models. Never the API-
+# metered `minimax/` or `minimax-cn/` prefixes, and never a fallback
+# for `opencode-native`.
+OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT = NativeCodingAgent(
+    key="opencode-minimax-token-plan",
+    display_name="MiniMax Token Plan",
+    agent_name="opencode-native-minimax-token-plan-ui",
+    harness="opencode-native-minimax-token-plan",
+    wrapper_label=OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_WRAPPER_VALUE,
+    terminal_name="opencode",
+    subagent_wrapper_label="opencode-native-minimax-token-plan-ui-subagent",
+)
+
+# OpenCode-backed Codex Subscription lane.
+#
+# Distinct harness id (`opencode-native-codex-subscription`) from the
+# native Codex (`codex-native`) and OpenCode Free (`opencode-native`)
+# lanes so the picker can show all three side-by-side without mixing
+# them, and so a stored model pick never leaks across access paths.
+# The wrapper the runner reads is also distinct
+# (`opencode-native-codex-subscription-ui`) so in-session dispatch
+# reaches the right provider.
+#
+# Subscription-only: it routes through OpenCode's Codex subscription
+# provider (reachable via the user's Codex subscription / OpenCode-
+# authenticated path). NEVER the API-metered `codex/` or OpenAI
+# path, and never a fallback for `opencode-native` or `codex-native`.
+OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT = NativeCodingAgent(
+    key="opencode-codex-subscription",
+    display_name="Codex Subscription",
+    agent_name="opencode-native-codex-subscription-ui",
+    harness="opencode-native-codex-subscription",
+    wrapper_label=OPENCODE_NATIVE_CODEX_SUBSCRIPTION_WRAPPER_VALUE,
+    terminal_name="opencode",
+    subagent_wrapper_label="opencode-native-codex-subscription-ui-subagent",
 )
 
 CURSOR_NATIVE_CODING_AGENT = NativeCodingAgent(
@@ -504,6 +555,8 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "open-responses",
             "openai-agents",
             "opencode-native",
+            "opencode-native-codex-subscription",
+            "opencode-native-minimax-token-plan",
             "pi",
             "pi-native",
             "qwen",
@@ -529,6 +582,8 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "kiro-native": "omnigent.inner.kiro_native_harness",
         "openai-agents": "omnigent.inner.openai_agents_sdk_harness",
         "opencode-native": "omnigent.inner.opencode_native_harness",
+        "opencode-native-codex-subscription": "omnigent.inner.opencode_native_codex_subscription_harness",
+        "opencode-native-minimax-token-plan": "omnigent.inner.opencode_native_minimax_token_plan_harness",
         "pi": "omnigent.inner.pi_harness",
         "pi-native": "omnigent.inner.pi_native_harness",
         "qwen": "omnigent.inner.qwen_harness",
@@ -574,6 +629,8 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "native-pi",
             "native-qwen",
             "opencode-native",
+            "opencode-native-codex-subscription",
+            "opencode-native-minimax-token-plan",
             "pi-native",
             "qwen-native",
         }
@@ -583,6 +640,8 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         CODEX_NATIVE_CODING_AGENT,
         PI_NATIVE_CODING_AGENT,
         OPENCODE_NATIVE_CODING_AGENT,
+        OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_CODING_AGENT,
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_CODING_AGENT,
         CURSOR_NATIVE_CODING_AGENT,
         KIRO_NATIVE_CODING_AGENT,
         GOOSE_NATIVE_CODING_AGENT,
