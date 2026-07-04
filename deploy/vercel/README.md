@@ -36,8 +36,14 @@ runner  ───────────────►      │ container func
 
 - **`Dockerfile.vercel`** (repo root) — auto-detected by Vercel; the image is
   built on Vercel's builders (no local Docker) and pushed to Vercel's
-  registry. It's a `FROM ghcr.io/omnigent-ai/omnigent-server` shim plus
-  `boto3` for the S3 artifact store and a Vercel-specific entrypoint (below).
+  registry. It's a `FROM ghcr.io/omnigent-ai/omnigent-server` shim that
+  overlays this checkout's entrypoint + Blob backend (so the deploy tracks
+  the repo even when the pulled image lags it), pre-compiles bytecode for
+  faster cold boots, and adds the `vercel`/`boto3` SDKs.
+- **`vercel.json`** (repo root) — pins the function region to `iad1` to sit
+  next to Neon's default region; if you provision your database elsewhere,
+  change it to match. Cross-country DB round-trips dominate request latency
+  otherwise.
 - **Bind-first entrypoint** (`entrypoint.py` here) — Vercel gives a container
   **15 s** to accept TCP connections, but a first boot runs Alembic
   migrations (~1 min against Neon), and even a normal cold boot takes

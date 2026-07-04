@@ -18,9 +18,22 @@ ENV PORT=80
 # in the base image.
 RUN /opt/venv/bin/pip install --no-cache-dir 'vercel>=0.5,<1' 'boto3>=1.30,<2'
 
-# Vercel gives a container 15 s to accept TCP connections, but first-boot
-# migrations against a remote Postgres take ~1 minute — so swap in the
-# bind-first entrypoint, which serves 503s while migrating in the background.
+# Overlay this checkout's entrypoint and Blob backend onto the image, so the
+# deploy tracks the repo even when the pulled image lags it (identical no-ops
+# once the image ships them). Without the overlay, an older image entrypoint
+# boots before binding (missing Vercel's 15 s accept window on cold starts)
+# and can't select the Blob artifact store.
+COPY deploy/docker/entrypoint.py /app/entrypoint.py
+COPY omnigent/stores/artifact_store/vercel_blob.py /build/omnigent/stores/artifact_store/vercel_blob.py
+
+# Pre-compile bytecode at build time: the image sets PYTHONDONTWRITEBYTECODE,
+# so without .pyc files every cold start re-parses the whole dependency tree,
+# stretching the boot the shim is hiding.
+RUN /opt/venv/bin/python -m compileall -q /opt/venv /build /app || true
+
+# Vercel gives a container 15 s to accept TCP connections, but boot takes
+# 10-60 s (migrations against a remote Postgres) — so swap in the bind-first
+# entrypoint, which serves 503s while booting in the background.
 # The interpreter path is absolute: Vercel's runtime overrides PATH, so a bare
 # `python` resolves to the system interpreter instead of the image's venv.
 COPY deploy/vercel/entrypoint.py /app/vercel_entrypoint.py
