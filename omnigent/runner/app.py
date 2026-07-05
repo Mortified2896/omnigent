@@ -906,6 +906,25 @@ async def _codex_native_launch_config(
     )
 
 
+# Permission-mode label key the web UI stamps on an opencode-native
+# conversation when the user picks a non-default permission mode.
+# Runner reads it from ``labels`` and writes the corresponding
+# ``permission`` field into the synthesized ``opencode.json``.
+_OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.opencode_native.permission_mode"
+
+# Mapping from OpenCode permission-mode values → opencode.json
+# ``permission`` field value. ``None`` means the mode is advisory
+# (the policy engine handles it) and no config change is needed.
+_OPENCODE_PERMISSION_MODE_TO_CONFIG: dict[str, str | None] = {
+    "default": "ask",
+    "auto": "allow",
+    "acceptEdits": None,  # advisory; policy engine decides
+    "plan": None,         # advisory; policy engine decides
+    "dontAsk": None,      # advisory; policy engine decides
+    "bypassPermissions": "allow",
+}
+
+
 @dataclasses.dataclass(frozen=True)
 class _OpenCodeNativeLaunchConfig:
     """
@@ -920,6 +939,11 @@ class _OpenCodeNativeLaunchConfig:
         transcript should be seeded as a text preamble
         (``omnigent.fork.carry_history``); opencode has no native session to
         clone, so the runner rehydrates from the copied Omnigent transcript.
+    :param permission_mode: OpenCode-native permission mode from the
+        conversation labels, e.g. ``"auto"`` or ``"default"``. ``None``
+        when unset (equivalent to ``"default"``).
+    :param reasoning_effort: Per-session reasoning-effort override (maps to
+        OpenCode's ``--variant``). ``None`` when unset.
     """
 
     workspace: Path
@@ -928,6 +952,8 @@ class _OpenCodeNativeLaunchConfig:
     model_override: str | None
     external_session_id: str | None
     fork_carry_history: bool = False
+    permission_mode: str | None = None
+    reasoning_effort: str | None = None
 
 
 async def _opencode_native_launch_config(
@@ -1003,6 +1029,14 @@ async def _opencode_native_launch_config(
     fork_carry_history = (
         isinstance(labels, dict) and labels.get(FORK_CARRY_HISTORY_LABEL_KEY) == "1"
     )
+    permission_mode: str | None = None
+    if isinstance(labels, dict):
+        raw = labels.get(_OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY)
+        if isinstance(raw, str) and raw in _OPENCODE_PERMISSION_MODE_TO_CONFIG:
+            permission_mode = raw
+    reasoning_effort = snapshot.get("reasoning_effort")
+    if isinstance(reasoning_effort, str) and not reasoning_effort:
+        reasoning_effort = None
     return _OpenCodeNativeLaunchConfig(
         workspace=_codex_session_workspace(session_workspace),
         policy_server_url=_required_runner_env("RUNNER_SERVER_URL"),
@@ -1010,6 +1044,8 @@ async def _opencode_native_launch_config(
         model_override=model_override,
         external_session_id=external_session_id,
         fork_carry_history=fork_carry_history,
+        permission_mode=permission_mode,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -1135,7 +1171,17 @@ async def _auto_create_opencode_terminal(
     if mcp_block:
         config.setdefault("$schema", "https://opencode.ai/config.json")
         config["mcp"] = mcp_block
-        config["permission"] = "ask"
+        # Resolve the OpenCode-native permission mode from the conversation
+        # label, falling back to ``"ask"`` (the default). This lets the web
+        # UI's permission-mode picker control whether opencode prompts or
+        # auto-approves MCP tools. ``None`` from the mapping means advisory
+        # only — the permission stays at ``"ask"`` and the policy engine
+        # makes the call.
+        permission_config = _OPENCODE_PERMISSION_MODE_TO_CONFIG.get(
+            launch_config.permission_mode
+        )
+        if permission_config is not None:
+            config["permission"] = permission_config
 
     # Load the Omnigent policy-bridge plugin so opencode's lifecycle hooks reach
     # the policy engine at phases the reactive permission.asked path can't:
@@ -1177,6 +1223,14 @@ async def _auto_create_opencode_terminal(
     # their providers and falls back to the no-auth default model. No-op on a
     # remote runner (no local auth.json) / Databricks-gateway path.
     seed_opencode_auth(bridge_dir)
+
+    # Stamp the reasoning-effort env var so the executor can forward it as
+    # the per-prompt ``variant`` (OpenCode's --variant). Only set when the
+    # session has a non-empty reasoning_effort. The env is scoped to this
+    # harness process (set here rather than in the spawn env that may be
+    # built before the launch config is loaded).
+    if launch_config.reasoning_effort:
+        policy_env["HARNESS_OPENCODE_NATIVE_REASONING_EFFORT"] = launch_config.reasoning_effort
 
     # Start the Omnigent builtin-tool relay BEFORE opencode boots, so
     # ``tool_relay.json`` exists when opencode launches the ``serve-mcp`` MCP

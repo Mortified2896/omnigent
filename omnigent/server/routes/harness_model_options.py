@@ -63,7 +63,7 @@ def _resolve_opencode_free_models() -> dict[str, Any]:
     return {
         "models": [
             {
-                "id": f"opencode/{m['id']}",
+                "id": m["id"],
                 "label": m.get("name") or m["id"].replace("-", " ").title(),
                 "provider": "OpenCode",
                 "tier": "free",
@@ -73,6 +73,7 @@ def _resolve_opencode_free_models() -> dict[str, Any]:
                 "billing_risk": "none-observed",
                 "context_limit": m.get("context_limit"),
                 "output_limit": m.get("output_limit"),
+                "variants": m.get("variants", []),
             }
             for m in free_models
         ],

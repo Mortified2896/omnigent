@@ -18,6 +18,13 @@ export interface HarnessModelOption {
   billing_risk: string;
   context_limit: number | null;
   output_limit: number | null;
+  /**
+   * Provider-specific reasoning-effort / variant levels this model
+   * supports. Empty or absent means the model does not expose a
+   * variant setting (OpenCode `--variant`). The frontend uses this
+   * to conditionally show the reasoning-effort picker.
+   */
+  variants?: string[];
 }
 
 interface HarnessModelOptionsResponse {

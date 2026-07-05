@@ -31,7 +31,14 @@ export type NativeCodingAgentCapability =
   // for the in-session model picker (ChatPage already plumbs this
   // through for harnesses whose server-side default is a free-catalog
   // model, e.g. opencode-native).
-  | "modelOptions";
+  | "modelOptions"
+  // OpenCode-specific reasoning effort support. When present, the
+  // pre-session submenu shows a reasoning-effort picker whose options
+  // are filtered by the picked model's ``variants`` array (models with
+  // no variants hide the picker). The selected effort is stored as
+  // ``reasoning_effort`` on the create body and forwarded to OpenCode
+  // as the ``--variant`` per-prompt flag.
+  | "reasoningEffort";
 
 // Access-path grouping for the harness selector. The picker renders
 // harnesses under these group headers so the user can see, at a glance,
@@ -97,18 +104,23 @@ export const NATIVE_CODING_AGENTS = [
     iconKind: "opencode",
     sortRank: 25,
     accessPathGroup: "free",
-    // No `permissionMode` capability: OpenCode has no claude-style
-    // permission-mode surface to mirror. Its native modes are the `build`
-    // (allow-by-default) and `plan` primary agents, switched at runtime via Tab
-    // inside the TUI — and `opencode attach` (how the runner launches it) has
-    // no `--agent` flag to preset one anyway. The runner already forces
-    // `permission: "ask"` so tools route through the Omnigent policy engine, so
-    // a launch-time picker would mirror nothing. (Previously declared Codex's
-    // `approvalMode`, whose `--sandbox`/`--ask-for-approval` presets aren't
-    // understood by `opencode attach` and crashed the TUI on any non-default
-    // pick.)
+    // Permission mode lets the user control OpenCode's auto-approval
+    // behavior. Unlike Claude Code (which injects --permission-mode into the
+    // TUI), OpenCode's permission mode is translated server-side into the
+    // synthesized opencode.json ``permission`` field and, for the "auto" /
+    // "bypass" modes, the runner writes ``permission: "allow"`` instead of the
+    // default ``permission: "ask"``. The runner also stores the mode on the
+    // conversation so the policy engine can factor the user's intent into
+    // auto-decisions.
     //
-    // `modelOptions` exposes OpenCode Free's pre-session model submenu via
+    // Reasoning effort is exposed as ``--variant`` per-prompt when the picked
+    // model's catalog entry advertises non-empty ``variants``. Models with no
+    // variants (e.g. ``opencode/big-pickle``, all ``omniroute/*`` models) hide
+    // the effort picker. The selected effort is stored as ``reasoning_effort``
+    // on the conversation and forwarded to OpenCode's HTTP API as the
+    // ``variant`` field in each prompt payload.
+    //
+    // ``modelOptions`` exposes OpenCode Free's pre-session model submenu via
     // ``GET /v1/harness-model-options?harness=opencode-native``. The catalog
     // is owned by ``~/.cache/homelab/opencode-free-models.json`` (sync script
     // in the HomeLab repo). The MiniMax Token Plan lane stays separate —
@@ -116,7 +128,7 @@ export const NATIVE_CODING_AGENTS = [
     // its own picker row, NOT this one. No API-metered MiniMax id can ever
     // reach this lane (the server rejects non-OpenCode-Free ids in the
     // catalog reader).
-    capabilities: ["modelOptions"],
+    capabilities: ["modelOptions", "permissionMode", "reasoningEffort"],
   },
   {
     // OpenCode-backed MiniMax Token Plan lane. Distinct harness id

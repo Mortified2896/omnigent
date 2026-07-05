@@ -65,6 +65,8 @@ def build_prompt_payload(prompt: NativePrompt) -> dict[str, Any]:
     model = _split_model(prompt.model)
     if model is not None:
         payload["model"] = model
+    if prompt.variant:
+        payload["variant"] = prompt.variant
     return payload
 
 

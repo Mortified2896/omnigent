@@ -54,9 +54,12 @@ class OpenCodeNativeExecutor(NativeServerHarness):
             build_prompt=self._build_prompt_with_model_override,
         )
 
+    REASONING_EFFORT_ENV_VAR = "HARNESS_OPENCODE_NATIVE_REASONING_EFFORT"
+
     def _build_prompt_with_model_override(self, content: Any) -> NativePrompt | None:
         """
-        Build a prompt, pinning the resolved model so it governs from turn one.
+        Build a prompt, pinning the resolved model and reasoning-effort
+        variant so they govern from turn one.
 
         OpenCode's ``POST /session`` create body does NOT accept a model
         (verified against the OpenCode SDK ``SessionCreateData``); the model
@@ -69,18 +72,30 @@ class OpenCodeNativeExecutor(NativeServerHarness):
         wins: the base ``run_turn`` only fills the model when the prompt
         leaves it unset, so it skips a prompt this method already pinned.
 
+        Reasoning effort (``variant``) is read from the environment variable
+        the runner stamps on the harness process. When set, it is forwarded
+        as the per-prompt ``variant`` field, which maps to OpenCode's
+        ``--variant`` / provider-specific reasoning-effort.
+
         :param content: Executor message content (string or content blocks).
         :returns: The prompt with the resolved model applied, or ``None``
             when there is nothing to send.
         """
         prompt = _content_to_native_prompt(content)
-        if prompt is None or prompt.model:
+        if prompt is None:
             return prompt
-        state = read_bridge_state(self._bridge_dir)
-        model = state.model_override if state is not None else None
-        if not model:
-            return prompt
-        return dataclasses.replace(prompt, model=model)
+        # Resolve model override from bridge state (persisted per-session).
+        if not prompt.model:
+            state = read_bridge_state(self._bridge_dir)
+            model = state.model_override if state is not None else None
+            if model:
+                prompt = dataclasses.replace(prompt, model=model)
+        # Resolve reasoning-effort variant from the env the runner stamps.
+        if not prompt.variant:
+            variant = os.environ.get(self.REASONING_EFFORT_ENV_VAR, "").strip()
+            if variant:
+                prompt = dataclasses.replace(prompt, variant=variant)
+        return prompt
 
     async def _resolve_opencode_session_id(self) -> str | None:
         """

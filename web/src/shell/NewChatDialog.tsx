@@ -165,6 +165,56 @@ const CLAUDE_NATIVE_PERMISSION_MODES: { value: string; label: string; descriptio
   },
 ];
 
+// OpenCode-native permission modes, same values as Claude but the runner-side
+// mapping is different: ``default`` / ``auto`` / ``bypassPermissions`` control
+// the ``permission`` field in the synthesized ``opencode.json`` (``"ask"`` vs
+// ``"allow"``), while the semantic modes (``acceptEdits``, ``plan``, ``dontAsk``)
+// are advisory — the Omnigent policy engine uses the stored mode to influence
+// auto-approval decisions rather than passing a CLI flag OpenCode would not
+// understand.
+const OPENCODE_NATIVE_PERMISSION_MODES: {
+  value: string;
+  label: string;
+  description: string;
+}[] = [
+  { value: "default", label: "Default", description: "Prompts before edits and commands" },
+  {
+    value: "auto",
+    label: "Auto",
+    description: "Auto-runs; routes approvals through Omnigent policy",
+  },
+  {
+    value: "acceptEdits",
+    label: "Accept edits",
+    description: "Auto-applies file edits; commands still prompt",
+  },
+  { value: "plan", label: "Plan", description: "Plans only; makes no edits" },
+  { value: "dontAsk", label: "Don't ask", description: "Auto-denies anything not pre-approved" },
+  {
+    value: "bypassPermissions",
+    label: "Bypass permissions",
+    description: "Runs everything; no prompts or safety checks",
+  },
+];
+const OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE = "default";
+const OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.opencode_native.permission_mode";
+
+// OpenCode-native reasoning-effort / variant levels. These map to OpenCode's
+// ``--variant`` flag (``opencode run``) and the per-prompt ``variant`` field
+// in the HTTP API. Only models whose catalog entry includes non-empty
+// ``variants`` show this picker; models with empty or absent variants hide
+// it. ``"none"`` corresponds to OpenCode's minimal-effort variant and is
+// deliberately excluded from the dropdown — the default (unset, "Auto") lets
+// OpenCode decide.
+const OPENCODE_NATIVE_EFFORTS: { value: string; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "xHigh" },
+  { value: "max", label: "Max" },
+];
+
 // Claude-native reasoning-effort options for the new-session model/effort
 // picker. There is deliberately no hardcoded model/effort default: a fresh
 // session leaves both unselected and omits `model_override` / `reasoning_effort`
@@ -1347,6 +1397,76 @@ function ModelEffortOptions({
     );
   }
 
+/**
+ * OpenCode-native reasoning-effort radio rows, rendered inside the agent
+ * submenu below the model picker for OpenCode Free. Conditional: only
+ * rendered when the picked model's ``variants`` array is non-empty (models
+ * that don't support variant/reasoning-effort hide the picker entirely).
+ *
+ * Fetches the harness catalog to read the selected model's supported
+ * variants and filters the effort dropdown accordingly. "Auto" is always
+ * shown (lets the server decide); specific levels are shown only when the
+ * model supports them.
+ */
+function OpenCodeEffortOptions({
+  harness,
+  modelId,
+  value,
+  onValueChange,
+}: {
+  harness: string;
+  modelId: string;
+  value: string;
+  onValueChange: (effort: string) => void;
+}) {
+  const { models, isLoading, error } = useHarnessModelOptions(harness);
+  const selectedModel = models.find((m) => m.id === modelId);
+  const variants = selectedModel?.variants;
+  // No model selected, model has no variants, or catalog not loaded yet:
+  // hide the effort section entirely.
+  if (
+    !modelId ||
+    !variants ||
+    variants.length === 0 ||
+    isLoading ||
+    error != null
+  ) {
+    // When an effort was previously selected for a model that no longer
+    // supports it, clear the selection silently.
+    if (value && value !== "auto" && variants && !variants.includes(value)) {
+      onValueChange("auto");
+    }
+    return null;
+  }
+  // Filter the full effort list to only show "Auto" + supported variants.
+  const available = OPENCODE_NATIVE_EFFORTS.filter(
+    (e) => e.value === "auto" || variants.includes(e.value),
+  );
+  // If the current selection is no longer valid, reset to "auto".
+  const safeValue =
+    available.some((e) => e.value === value) ? value : "auto";
+  return (
+    <>
+      <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">
+        Effort <span className="font-normal text-muted-foreground/60">— {variants.join(", ")}</span>
+      </div>
+      <DropdownMenuRadioGroup value={safeValue} onValueChange={onValueChange}>
+        {available.map((e) => (
+          <DropdownMenuRadioItem
+            key={e.value}
+            value={e.value}
+            data-testid={`new-chat-landing-opencode-effort-${e.value}`}
+            onSelect={(event) => event.preventDefault()}
+            className="rounded-sm py-1 pl-2 text-xs"
+          >
+            {e.label}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+    </>
+  );
+}
+
 /** Group / section header inside the picker dropdown (plain div, so Radix
  * doesn't claim roving focus for it — mirrors the in-session picker). */
 function PickerSectionHeader({ children }: { children: ReactNode }) {
@@ -1614,34 +1734,16 @@ function AgentHarnessPicker({
         ? stored.effort
         : "";
 
-    if (nativeAgentHasCapability(agent, "modelOptions")) {
-      // Harness-level model picker. Catalog comes from
-      // ``/v1/harness-model-options?harness=<canonical>``; the section
-      // validates ``modelValue`` itself and surfaces a loud warning when
-      // the stored/live id is no longer in the catalog. The pick rides
-      // along to the create body as ``model_override`` (same field the
-      // claude-native picker uses — ``opencode-native`` is a free-catalog
-      // harness that ``validate_model_override`` accepts as a generic
-      // non-vendor id).
-      //
-      // Currently only ``opencode-native`` carries ``modelOptions``; the
-      // MiniMax Token Plan lane (harness
-      // ``opencode-native-minimax-token-plan``) is intentionally a
-      // separate row when it lands, so its models never mix into this
-      // menu. Adding a future harness with the same capability is a
-      // one-line entry in ``nativeCodingAgents.ts`` — no further changes
-      // here.
+    if (
+      nativeAgentHasCapability(agent, "modelOptions") &&
+      !nativeAgentHasCapability(agent, "permissionMode")
+    ) {
+      // Standalone harness-level model picker (no permission/effort knobs).
+      // Used by subscription lanes (MiniMax Token Plan, Codex Subscription).
+      // Currently only ``opencode-native`` also has ``modelOptions``, but it
+      // also carries ``permissionMode`` and ``reasoningEffort`` — handled by
+      // the combined section below.
       if (!entryHarness) return null;
-      // Per-lane setup / status messages for the empty-catalog case.
-      // Today:
-      //  * ``opencode-native`` (OpenCode Free) — generic "No models
-      //    available" until the sync script populates the catalog.
-      //  * ``opencode-native-minimax-token-plan`` — "subscription not
-      //    configured" with a clear pointer to the catalog reader path.
-      //  * ``opencode-native-codex-subscription`` — "Codex subscription
-      //    not verified locally; no OpenAI API fallback is configured".
-      // The picker surfaces the state verbatim — never invent or
-      // substitute a model from a different lane.
       const emptyMessages: Record<string, ReactNode> = {
         "opencode-native-minimax-token-plan": (
           <>
@@ -1677,6 +1779,52 @@ function AgentHarnessPicker({
                 : undefined
           }
         />
+      );
+    }
+    // Combined model + reasoning effort + permission mode for OpenCode-native
+    // (``modelOptions`` + ``permissionMode`` + ``reasoningEffort``). The model
+    // picker comes from the catalog (``HarnessModelOptionsSection``), and the
+    // reasoning-effort picker is rendered alongside it only when the picked
+    // model's ``variants`` array is non-empty.
+    if (
+      nativeAgentHasCapability(agent, "modelOptions") &&
+      nativeAgentHasCapability(agent, "permissionMode")
+    ) {
+      if (!entryHarness) return null;
+      return (
+        <>
+          <HarnessModelOptionsSection
+            harness={entryHarness}
+            value={modelValue}
+            onChange={(m) => {
+              onSelectAgent(agent);
+              if (entryHarness) writeHarnessOption(entryHarness, { model: m });
+              setPickedModel(m);
+            }}
+            emptyMessage="No models available for this lane."
+          />
+          <PickerSectionHeader>Effort</PickerSectionHeader>
+          <OpenCodeEffortOptions
+            modelId={modelValue}
+            onValueChange={(e) => {
+              onSelectAgent(agent);
+              if (entryHarness) writeHarnessOption(entryHarness, { effort: e });
+              setPickedEffort(e);
+            }}
+            value={effortValue}
+            harness={entryHarness}
+          />
+          <DropdownMenuSeparator />
+          <PickerSectionHeader>Permission Mode</PickerSectionHeader>
+          <PermissionModeOptions
+            value={modeValue(
+              OPENCODE_NATIVE_PERMISSION_MODES,
+              OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE,
+              permissionMode,
+            )}
+            onValueChange={onModeChange(setPermissionMode)}
+          />
+        </>
       );
     }
     if (nativeAgentHasCapability(agent, "permissionMode")) {
@@ -2460,6 +2608,7 @@ export function NewChatLandingScreen() {
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
   const supportsModelOptions = nativeAgentHasCapability(selectedAgent, "modelOptions");
+  const supportsReasoningEffort = nativeAgentHasCapability(selectedAgent, "reasoningEffort");
   // Defense in depth for the DANGEROUS bypass toggle: never let an armed
   // bypass carry across an agent change. Switching the picker to another
   // agent — or away from Codex and back — must require the typed confirmation
@@ -2521,14 +2670,21 @@ export function NewChatLandingScreen() {
     // the current list resolves to the default for the same reason.
     const resolve = (modes: readonly { value: string }[], dflt: string) =>
       stored.mode != null && modes.some((m) => m.value === stored.mode) ? stored.mode : dflt;
-    if (supportsPermissionMode) {
+    if (supportsModelOptions && supportsPermissionMode) {
+      // OpenCode-native: model + catalog-driven effort + permission mode.
+      setPermissionMode(
+        resolve(OPENCODE_NATIVE_PERMISSION_MODES, OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE),
+      );
+      setPickedEffort(
+        stored.effort != null && OPENCODE_NATIVE_EFFORTS.some((e) => e.value === stored.effort)
+          ? stored.effort
+          : "",
+      );
+    } else if (supportsPermissionMode) {
+      // Claude-native: model (static list) + effort + permission mode.
       setPermissionMode(
         resolve(CLAUDE_NATIVE_PERMISSION_MODES, CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE),
       );
-      // The model + effort picker remembers its own last pick (same per-harness
-      // snapshot the mode knob uses), validated against the current vocab. With
-      // nothing stored (or a retired id) it resolves to "" — unselected, so the
-      // create omits the override and Claude Code uses its own configured model.
       setPickedModel(
         stored.model != null && CLAUDE_NATIVE_MODELS.some((m) => m.id === stored.model)
           ? stored.model
@@ -2959,6 +3115,7 @@ export function NewChatLandingScreen() {
       const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
       const agentSupportsModelOptions = nativeAgentHasCapability(agent, "modelOptions");
+      const agentSupportsReasoningEffort = nativeAgentHasCapability(agent, "reasoningEffort");
 
       let data: { id: string };
 
@@ -3013,14 +3170,37 @@ export function NewChatLandingScreen() {
             // label (only when the toggle is armed for a codex-native agent)
             // so the runner launches with --dangerously-bypass-approvals-and-
             // sandbox and the choice survives reload.
+            //
+            // OpenCode-native permission mode is also passed as a label
+            // (``OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY``) so the runner can
+            // read it from the conversation and adjust the synthesized
+            // ``opencode.json`` ``permission`` field accordingly. Unlike Claude
+            // Code (which injects ``--permission-mode`` into the TUI CLI via
+            // ``terminal_launch_args``), ``opencode attach`` does not accept a
+            // ``--permission-mode`` flag, so the label is the communication
+            // channel. The label is only set when the mode is non-default.
             labels:
               agentSupportsApprovalMode && bypassSandbox
                 ? { ...(nativeLabels ?? {}), [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
-                : nativeLabels,
+                : agentSupportsModelOptions &&
+                    agentSupportsPermissionMode &&
+                    permissionMode !== OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE
+                  ? { ...(nativeLabels ?? {}), [OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY]: permissionMode }
+                  : nativeLabels,
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
+            // For Claude-native (standalone `permissionMode` capability without
+            // `modelOptions`): the ``--permission-mode`` flag is passed directly
+            // to the ``claude`` CLI. For OpenCode-native (``modelOptions`` +
+            // ``permissionMode``): ``opencode attach`` does not support
+            // ``--permission-mode``, so the runner reads the mode from the
+            // ``omnigent.opencode_native.permission_mode`` label instead, and
+            // ``terminal_launch_args`` stays undefined for the permission-mode
+            // dimension (the reasoning-effort dimension goes through the
+            // ``reasoning_effort`` field).
             terminal_launch_args:
               agentSupportsPermissionMode &&
+              !agentSupportsModelOptions &&
               permissionMode !== CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
                 ? ["--permission-mode", permissionMode]
                 : agentSupportsApprovalMode && approvalMode !== CODEX_NATIVE_DEFAULT_APPROVAL_MODE
@@ -3032,17 +3212,21 @@ export function NewChatLandingScreen() {
             // the runner launches. The Claude-native picker (``permissionMode``
             // capability) carries both model AND effort; the generic
             // ``modelOptions`` capability (e.g. opencode-native's free
-            // catalog) carries only model — effort stays claude-only and the
-            // create omits it for non-claude harnesses. The runner reads
-            // ``model_override`` as ``--model`` at terminal launch. An
-            // unselected ("") knob is omitted so the harness keeps its own
-            // configured model.
+            // catalog) carries only model. For OpenCode-native
+            // (``modelOptions`` + ``reasoningEffort``), the effort is also
+            // sent so the executor can forward it as the ``variant`` per-prompt
+            // field. An unselected ("") knob is omitted so the harness keeps
+            // its own configured model/effort. ``"auto"`` effort is also omitted
+            // since it means "let the model decide".
             model_override:
               (agentSupportsPermissionMode || agentSupportsModelOptions) && pickedModel
                 ? pickedModel
                 : undefined,
             reasoning_effort:
-              agentSupportsPermissionMode && pickedEffort ? pickedEffort : undefined,
+              (agentSupportsPermissionMode || agentSupportsReasoningEffort) &&
+              pickedEffort && pickedEffort !== "auto"
+                ? pickedEffort
+                : undefined,
             // Smart routing toggle — server-side, available for any agent.
             cost_control_mode_override: costControlMode ?? undefined,
             harness_override: pickedHarness ?? undefined,

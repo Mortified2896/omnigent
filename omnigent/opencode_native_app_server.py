@@ -123,7 +123,11 @@ def find_opencode_cli(opencode_path: str | None = None) -> str:
         if resolved:
             return resolved
         raise OpenCodeCliNotFoundError(f"opencode executable not found: {opencode_path!r}")
-    resolved = shutil.which("opencode")
+    # Prefer the OmniRoute-aware wrapper when available — it sources
+    # ~/.config/omniroute/client.env inside the subprocess so provider
+    # credentials survive the filtered server environment. Fall back to
+    # plain ``opencode`` for sessions without the wrapper.
+    resolved = shutil.which("opencode-omniroute") or shutil.which("opencode")
     if not resolved:
         raise OpenCodeCliNotFoundError(
             "opencode CLI not found on PATH; install the 'opencode-ai' npm package"
