@@ -245,6 +245,15 @@ _INTENT_KEY = "_intent_gate_intent"
 # Full key: ``_intent_gate_check:<hex16-of-intent+tool+args>``.
 _INTENT_CHECK_PREFIX = "_intent_gate_check:"
 
+
+def _off_task_reason(tool_name: str, intent: str) -> str:
+    return (
+        f"Tool call '{tool_name}' may not be consistent with the "
+        f"session's original task. The agent was asked to: "
+        f"{intent[:200]}"
+    )
+
+
 _DEFAULT_INTENT_CHECK_PROMPT = """\
 You are a security policy enforcer for an AI agent.
 
@@ -334,7 +343,7 @@ def intent_gate() -> PolicyCallable:
         """Capture intent on first request; gate tool calls against it.
 
         :param event: Policy event dict.
-        :returns: DENY when a tool call is classified as OFF_TASK; ``None``
+        :returns: ASK when a tool call is classified as OFF_TASK; ``None``
             (abstain) on all other phases and on fail-open conditions.
         """
         phase = event.get("type")
@@ -383,12 +392,8 @@ def intent_gate() -> PolicyCallable:
 
         if cached == "OFF_TASK":
             return {
-                "result": "DENY",
-                "reason": (
-                    f"Tool call '{tool_name}' is not consistent with the "
-                    f"session's original task. The agent was asked to: "
-                    f"{intent[:200]}"
-                ),
+                "result": "ASK",
+                "reason": _off_task_reason(tool_name, intent),
             }
         if cached == "ON_TASK":
             return None
@@ -430,17 +435,13 @@ def intent_gate() -> PolicyCallable:
 
         if verdict == "OFF_TASK":
             _log.info(
-                "intent_gate: OFF_TASK — denying tool_call %s (intent: %.80s…)",
+                "intent_gate: OFF_TASK — asking about tool_call %s (intent: %.80s…)",
                 tool_name,
                 intent,
             )
             return {
-                "result": "DENY",
-                "reason": (
-                    f"Tool call '{tool_name}' is not consistent with the "
-                    f"session's original task. The agent was asked to: "
-                    f"{intent[:200]}"
-                ),
+                "result": "ASK",
+                "reason": _off_task_reason(tool_name, intent),
                 "state_updates": [
                     {"key": cache_key, "action": "set", "value": "OFF_TASK"},
                 ],
@@ -502,7 +503,8 @@ POLICY_REGISTRY: list[dict[str, Any]] = [
             "Enforces intent-based permissioning: records the user's first message "
             "as the authoritative session intent, then gates every tool call against "
             "that intent using the server-level LLM client. Tool calls that cannot "
-            "plausibly serve the original task are denied before they run. "
+            "plausibly serve the original task trigger an ASK prompt for human approval "
+            "before they run. "
             "Classification results are cached in session_state to avoid redundant "
             "LLM calls for identical tool invocations. "
             "Requires an llm: config block on the server; abstains (fail-open) when "

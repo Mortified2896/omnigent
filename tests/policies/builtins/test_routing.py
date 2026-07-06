@@ -621,8 +621,8 @@ async def test_intent_gate_on_task_allows_and_caches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_intent_gate_off_task_denies_and_caches() -> None:
-    """OFF_TASK verdict denies with reason and caches."""
+async def test_intent_gate_off_task_asks_and_caches() -> None:
+    """OFF_TASK verdict asks with reason and caches."""
     client = _FakePolicyLLMClient(_off_task_response())
     policy = intent_gate()
     result = await policy(
@@ -633,7 +633,7 @@ async def test_intent_gate_off_task_denies_and_caches() -> None:
         )
     )
     assert result is not None
-    assert result["result"] == "DENY"
+    assert result["result"] == "ASK"
     assert "send_email" in result["reason"]
     assert "fix the login bug" in result["reason"]
     updates = {u["key"]: u["value"] for u in result["state_updates"]}
@@ -665,8 +665,8 @@ async def test_intent_gate_cached_on_task_skips_llm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_intent_gate_cached_off_task_denies_without_llm() -> None:
-    """Cached OFF_TASK denies without calling the classifier."""
+async def test_intent_gate_cached_off_task_asks_without_llm() -> None:
+    """Cached OFF_TASK asks without calling the classifier."""
     client = _FakePolicyLLMClient(_on_task_response())
     policy = intent_gate()
 
@@ -684,7 +684,7 @@ async def test_intent_gate_cached_off_task_denies_without_llm() -> None:
         )
     )
     assert result is not None
-    assert result["result"] == "DENY"
+    assert result["result"] == "ASK"
     client._mock_create.assert_not_awaited()
 
 
