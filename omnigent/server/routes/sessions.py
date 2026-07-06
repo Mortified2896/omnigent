@@ -9560,6 +9560,10 @@ async def _relay_runner_stream(
 
     text_acc: list[str] = []
     current_response_id: str | None = None
+    # Set to True when response.usage_delta events have been accumulated for
+    # the current turn. response.completed skips _accumulate_session_usage
+    # when True to prevent double-counting. Reset on each new response.in_progress.
+    _usage_delta_accumulated: bool = False
     # Model/agent label from the turn header, stamped on text segments
     # flushed at tool-call boundaries (the boundary event carries no model).
     current_model: str | None = None
@@ -9695,6 +9699,7 @@ async def _relay_runner_stream(
                         _model = resp_obj.get("model")
                         if isinstance(_model, str) and _model:
                             current_model = _model
+                        _usage_delta_accumulated = False  # reset for new turn
 
                     # Accumulate response-scoped (scaffold) text deltas for
                     # persistence. Native message-scoped deltas (with a
@@ -9875,24 +9880,29 @@ async def _relay_runner_stream(
                         # Incremental usage from one LLM API call within a
                         # multi-call turn. Accumulate immediately so cost-budget
                         # policies and daily limits see current spend mid-turn.
-                        # response.completed will carry no usage when this event
-                        # was emitted (executor suppresses it to avoid double-
-                        # counting), so these deltas ARE the full turn cost.
+                        # When deltas cover the full turn, response.completed
+                        # skips re-accumulation (tracked by _usage_delta_accumulated).
                         _accumulate_session_usage(
                             {"usage": event.get("delta")},
                             session_id,
                             conversation_store,
                         )
+                        _usage_delta_accumulated = True
                     elif evt_type == "response.completed":
                         # Persist the turn's usage (cost + token buckets) so
                         # policy callables can read
                         # event["context"]["usage"]["total_cost_usd"] and the
                         # subtree roll-up below sees the new totals.
-                        _accumulate_session_usage(
-                            event.get("response", {}),
-                            session_id,
-                            conversation_store,
-                        )
+                        # Skip when response.usage_delta events already covered
+                        # this turn to avoid double-counting. Backward compat:
+                        # old harnesses never emit usage_delta, so the flag is
+                        # False and accumulation proceeds as before.
+                        if not _usage_delta_accumulated:
+                            _accumulate_session_usage(
+                                event.get("response", {}),
+                                session_id,
+                                conversation_store,
+                            )
                         # Push the server-computed cost AND token breakdown
                         # to the web client's session indicator, rolled up
                         # over the spawn subtree. The session's own event

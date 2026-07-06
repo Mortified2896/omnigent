@@ -1028,12 +1028,14 @@ class ExecutorAdapter(HarnessApp):
                 # executors to leave response=None, and only emit
                 # on non-streaming paths.
                 pass
-            # Capture provider-reported usage so _build_terminal_event
-            # can include it in the response.completed SSE payload.
-            # When UsageDelta events were emitted mid-turn, suppress
-            # usage here to prevent double-counting at the server
-            # (the deltas already accumulated the full turn cost).
-            if event.usage is not None and not self._usage_deltas_emitted:
+            # Always capture provider-reported usage on ctx so
+            # _build_terminal_event includes it in response.completed.
+            # Backward compatibility: an old server that doesn't handle
+            # response.usage_delta must still see usage on response.completed
+            # to accumulate cost. New servers skip the response.completed
+            # accumulation when response.usage_delta events already covered
+            # this turn (tracked via a relay-loop flag in sessions.py).
+            if event.usage is not None:
                 ctx.provider_usage = event.usage
         elif isinstance(event, CompactionComplete):
             from omnigent.server.schemas import (

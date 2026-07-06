@@ -471,16 +471,18 @@ async def test_usage_delta_emits_usage_delta_sse_event(
 
 
 @pytest.mark.asyncio
-async def test_usage_delta_suppresses_usage_on_completed(
+async def test_usage_delta_completed_still_carries_usage_for_backward_compat(
     use_usage_delta_single: None,
     manager: HarnessProcessManager,
 ) -> None:
-    """When UsageDelta was emitted, response.completed carries no usage field.
+    """response.completed always carries usage for backward compatibility.
 
-    What breaks if this fails: the server double-counts — once per usage_delta
-    and again on response.completed — inflating the session cost.
+    Old servers that don't handle response.usage_delta must still see usage
+    on response.completed to accumulate cost. New servers skip accumulation
+    on response.completed when _usage_delta_accumulated is set, preventing
+    double-counting without breaking old deployments.
     """
-    conv_id = "conv_usage_delta_no_double"
+    conv_id = "conv_usage_delta_compat"
     client = await manager.get_client(conv_id, _TEST_HARNESS_NAME)
     events: list[_ParsedSSEEvent] = []
     async with client.stream(
@@ -489,10 +491,13 @@ async def test_usage_delta_suppresses_usage_on_completed(
         async for event in _stream_iter(response):
             events.append(event)
 
+    # response.usage_delta emitted
+    assert any(e.event == "response.usage_delta" for e in events)
+    # response.completed still carries usage (for old-server compat)
     completed = next(e for e in events if e.event == "response.completed")
     response_obj = completed.data.get("response", {})
-    assert response_obj.get("usage") is None, (
-        "response.completed must not carry usage when UsageDelta events were emitted"
+    assert response_obj.get("usage") is not None, (
+        "response.completed must carry usage for backward compat with old servers"
     )
 
 
