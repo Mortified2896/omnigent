@@ -234,10 +234,10 @@ _DAEMON_REUSE_MIN_AGE_S = 6.0
 
 # How long uvicorn waits for active connections (WebSocket, SSE) after
 # SIGTERM before force-closing them.  SSE streams signal themselves via
-# session_stream.shutdown_all() in the lifespan handler, so the main
-# remaining consumers of this window are WebSocket tunnels that need a
-# moment to drain.  5 s is enough for a clean tunnel teardown while
-# keeping Ctrl-C feeling instant.
+# session_stream.shutdown_all() in _ShutdownSignalingServer.shutdown(),
+# so the main remaining consumers of this window are WebSocket tunnels
+# that need a moment to drain.  5 s is enough for a clean tunnel teardown
+# while keeping Ctrl-C feeling instant.
 # Overridable via OMNIGENT_SERVER_SHUTDOWN_TIMEOUT_S for deployments that
 # need a longer drain window (e.g. large file uploads).
 _SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_S_DEFAULT = 5
@@ -3243,9 +3243,17 @@ def server(
         """
 
         async def shutdown(self, sockets=None) -> None:  # type: ignore[override]
+            import asyncio as _asyncio
+
             from omnigent.runtime import session_stream as _session_stream
 
             _session_stream.shutdown_all()
+            # Yield to the event loop so generators can consume _DONE,
+            # flush their final "data: [DONE]\n\n" chunk, and exit before
+            # super().shutdown() calls connection.shutdown() / transport.close().
+            # Without this pause the generators write to an already-closing
+            # transport, leaving connections open past the graceful window.
+            await _asyncio.sleep(0)
             await super().shutdown(sockets)
 
     _config = uvicorn.Config(
