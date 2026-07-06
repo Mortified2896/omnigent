@@ -243,8 +243,8 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
     # NOT emit token-level deltas. Only kiro-native is so proven (0 deltas over
     # a full SSE capture); a static "forwarder posts no external_output_text_delta"
     # grep is NOT sufficient — pi-native has no such delta-posting forwarder yet
-    # streams 7 deltas live (its Pi extension emits them by another path), so
-    # the grep-based flip was wrong for it. The rest stay True until live-verified.
+    # streams 7 deltas live (by what path was not traced), so the grep-based
+    # flip was wrong for it. The rest stay True until live-verified.
     "pi-native": _C(
         _IM.NATIVE_TUI,
         _EL.NONE,
