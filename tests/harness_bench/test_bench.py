@@ -125,6 +125,17 @@ def test_infra_failure_reason_classifies_auth_and_ignores_capability_gaps() -> N
     # A successful turn is never an infra failure.
     assert infra_failure_reason(TurnResult(completed=True, text="ok")) is None
 
+    # Token-provisioning failures on full-server (codex/pi) are env/auth gaps,
+    # not capability gaps -> must yield a skip reason, never a false UNSUPPORTED
+    # that drifts against a SUPPORTED declaration.
+    for msg in (
+        "inner executor error: provider auth command `sh` produced an empty token",
+        "PiExecutor(gateway=True) could not fetch a gateway token for the workspace host.",
+        "Failed to resolve external API key auth",
+    ):
+        result = TurnResult(failed=True, error={"message": msg})
+        assert infra_failure_reason(result) is not None, msg
+
 
 async def test_offline_render_produces_matrix() -> None:
     matrix = await run_bench(_OFFICIAL, live=False)
