@@ -19,11 +19,11 @@ on:
   schedule:
     - cron: "0 9 * * *"
   pull_request:
-    # No labeled/unlabeled: label events share the same PR-number concurrency
-    # key as code-push events, so cancel-in-progress would kill a running suite
-    # when e.g. the automerge label is applied mid-run. The security-gate re-run
-    # path uses rerun-security-gate.yml instead (same as e2e-ui.yml / integration.yml).
-    types: [opened, synchronize, reopened, ready_for_review]
+    # labeled/unlabeled: kept for the skip-security-scan recovery path
+    # (rerun-security-gate-run.yml re-runs CI/E2E via this trigger when the
+    # relay times out). The concurrency group key appends the label name for
+    # label events so they never cancel a running code-push suite.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
     paths-ignore: ['web/**', 'tests/e2e_ui/**']
   workflow_dispatch:
     inputs:
@@ -38,8 +38,9 @@ on:
 
 concurrency:
   # PRs key by number, dispatch by branch (so re-runs cancel); schedule keys
-  # by SHA so each merge to `main` gets its own run.
-  group: e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.branch || github.sha }}
+  # by SHA so each merge to `main` gets its own run. Label events append the
+  # label name so they never share a slot with a code-push run.
+  group: e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.branch || github.sha }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name || 'run' }}
   cancel-in-progress: true
 
 permissions:
@@ -58,7 +59,13 @@ env:
 jobs:
   # Security gate: untrusted PRs wait on the deterministic scan
   # (security-gate.yml); trusted authors and non-PR events pass instantly.
+  # Skip for label events unrelated to skip-security-scan (e.g. automerge) so
+  # they don't spin up the full suite in their isolated concurrency slot.
   gate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'skip-security-scan'
     uses: ./.github/workflows/security-gate.yml
 
   # Shard matrix (e2e-shard-matrix.sh, shared with e2e-ui.yml). Fork PRs run by
