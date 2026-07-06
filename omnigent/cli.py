@@ -1199,6 +1199,7 @@ _CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
         "qwen",
         "resume",
         "run",
+        "session",
         "sandbox",
         "server",
         "setup",
@@ -5540,6 +5541,100 @@ def resume(
         target=target,
         server=_resolve_server_url(server) if server else server,
     )
+
+
+@cli.group("session", invoke_without_command=True)
+@click.pass_context
+def session(ctx: click.Context) -> None:
+    """Manage Omnigent sessions.
+
+    \b
+    Examples:
+      omnigent session export --id conv_abc123
+      omnigent session export --id conv_abc123 --output transcript.jsonl
+    """
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@session.command("export")
+@click.option(
+    "--id",
+    "session_id",
+    required=True,
+    metavar="SESSION_ID",
+    help="Session ID to export, e.g. conv_abc123.",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output",
+    default=None,
+    metavar="FILE",
+    help=("Output file path.  Defaults to <SESSION_ID>.jsonl in the current directory."),
+)
+@click.option(
+    "--database-uri",
+    "database_uri",
+    default=None,
+    metavar="URI",
+    help=("SQLAlchemy database URI for the session store.  [default: local omnigent database]"),
+)
+def session_export(session_id: str, output: str | None, database_uri: str | None) -> None:
+    """Export a session transcript to a portable JSONL file.
+
+    Each line of the output is a JSON object.  The first line carries
+    the session metadata (``"record_type": "session_meta"``); every
+    subsequent line is one conversation item
+    (``"record_type": "item"``).  The file preserves full turn order
+    and can be re-imported with a future ``omnigent session import``.
+
+    \b
+    Examples:
+      omnigent session export --id conv_abc123
+      omnigent session export --id conv_abc123 --output my_session.jsonl
+      omnigent session export --id conv_abc123 --database-uri sqlite:////path/to/chat.db
+    """
+    from dataclasses import asdict
+
+    from omnigent.stores.conversation_store.sqlalchemy_store import (
+        SqlAlchemyConversationStore,
+    )
+
+    db_uri = database_uri or _default_db_uri()
+    store = SqlAlchemyConversationStore(db_uri)
+
+    conv = store.get_conversation(session_id)
+    if conv is None:
+        raise click.ClickException(f"Session {session_id!r} not found.")
+
+    out_path = Path(output) if output else Path(f"{session_id}.jsonl")
+
+    n_items = 0
+    with out_path.open("w", encoding="utf-8") as fh:
+        # First line: session metadata so importers can recreate the
+        # conversation row before replaying items.
+        meta_record = {"record_type": "session_meta", **asdict(conv)}
+        fh.write(json.dumps(meta_record, default=str) + "\n")
+
+        # Remaining lines: items in ascending position order, paginated
+        # so very large sessions don't require loading everything at once.
+        after: str | None = None
+        while True:
+            page = store.list_items(session_id, limit=500, after=after, order="asc")
+            for item in page.data:
+                item_record = {
+                    "record_type": "item",
+                    "created_at": item.created_at,
+                    **item.to_api_dict(),
+                }
+                fh.write(json.dumps(item_record, default=str) + "\n")
+                n_items += 1
+            if not page.has_more:
+                break
+            after = page.last_id
+
+    click.echo(f"Exported {n_items} item(s) from {session_id} to {out_path}")
 
 
 # Shared option help for ``run`` and the harness commands. These are the same
