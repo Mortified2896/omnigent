@@ -100,8 +100,14 @@ def _declared_from_capabilities(harness: str) -> dict[str, Verdict]:
 
     caps = harness_capabilities().get(harness)
     if caps is not None:
-        # streaming: True → deltas (SUPPORTED); False → complete-only (PARTIAL).
-        declared["streaming"] = Verdict.SUPPORTED if caps.streaming else Verdict.PARTIAL
+        # streaming is a binary capability: True → the harness streams token
+        # deltas (SUPPORTED); False → it does not (UNSUPPORTED). PARTIAL is a
+        # probe *observation* only — the streaming probe returns it for the
+        # ambiguous coalesced-single-delta case against a SUPPORTED declaration
+        # — never a declared value. Declaring False as PARTIAL would drift
+        # against a non-streaming harness, which the probe reports UNSUPPORTED
+        # (0 deltas), not PARTIAL.
+        declared["streaming"] = Verdict.SUPPORTED if caps.streaming else Verdict.UNSUPPORTED
         # interrupt: True → SUPPORTED; False → UNSUPPORTED.
         declared["interrupt"] = Verdict.SUPPORTED if caps.interrupt else Verdict.UNSUPPORTED
 
