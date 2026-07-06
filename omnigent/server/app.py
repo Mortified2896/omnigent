@@ -1257,15 +1257,6 @@ def create_app(
         try:
             yield
         finally:
-            # Signal all active SSE subscribers to exit their generator
-            # loops cleanly before uvicorn's graceful-shutdown timer fires.
-            # Without this, every open session stream waits for its next
-            # heartbeat (up to 15 s) before noticing the server is going
-            # away, causing uvicorn to force-cancel them and log spurious
-            # "Exception in ASGI application" tracebacks.
-            from omnigent.runtime import session_stream as _session_stream
-
-            _session_stream.shutdown_all()
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task

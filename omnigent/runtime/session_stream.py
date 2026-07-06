@@ -26,7 +26,6 @@ Consumer (SSE endpoint, async):
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
@@ -131,15 +130,16 @@ def shutdown_all() -> None:
 
     Broadcasts the end-of-stream sentinel to every queued subscriber so
     SSE generators return at their next iteration without waiting for a
-    heartbeat timeout or forced task cancellation. Must be called from
-    the asyncio event loop (e.g. the server lifespan shutdown handler);
-    sync callers should use :func:`close` per-conversation instead.
+    heartbeat timeout or forced task cancellation. Called from the asyncio
+    event loop (``_ShutdownSignalingServer.shutdown`` in ``cli.py``) before
+    uvicorn's graceful-shutdown wait starts, so streams drain within the
+    window rather than being force-cancelled. Sync callers should use
+    :func:`close` per-conversation instead.
     """
     with _lock:
         all_subs = [entry for subs in _subscribers.values() for entry in subs]
     for queue, _ in all_subs:
-        with contextlib.suppress(asyncio.QueueFull):
-            queue.put_nowait(_DONE)
+        queue.put_nowait(_DONE)
 
 
 async def subscribe(
