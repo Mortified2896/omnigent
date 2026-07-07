@@ -40,75 +40,49 @@ def _is_sqlite() -> bool:
     return op.get_bind().dialect.name == "sqlite"
 
 
+def _drop_all_fks_on_table(table_name: str, sqlite: bool) -> None:
+    """
+    Drop all FK constraints on a table.
+
+    SQLite often stores FK constraints without names (name=None) or with
+    names that differ from the naming convention. When batch_alter_table
+    runs with recreate="always" and a naming_convention, unnamed FKs are
+    assigned names by the convention during the rebuild — so we must drop
+    them by their convention-derived name, not their original None.
+
+    For each FK we compute the name to drop: use the existing name if set,
+    otherwise derive it from the convention: fk_<table>_<column>.
+    """
+    bind = op.get_bind()
+    fks = sa.inspect(bind).get_foreign_keys(table_name)
+    with op.batch_alter_table(
+        table_name,
+        recreate="always" if sqlite else "auto",
+        naming_convention=_NAMING_CONVENTION,
+    ) as batch_op:
+        for fk in fks:
+            name = fk["name"]
+            if name is None:
+                # Derive the name the convention will assign during rebuild.
+                col = fk["constrained_columns"][0]
+                name = f"fk_{table_name}_{col}"
+            batch_op.drop_constraint(name, type_="foreignkey")
+
+
 def upgrade() -> None:
     """Drop all FK constraints from every affected table."""
     sqlite = _is_sqlite()
     if sqlite:
         op.execute(sa.text("PRAGMA foreign_keys = OFF"))
 
-    # session_permissions: drop FK on user_id → users.id
-    #                      and FK on conversation_id → conversations.id
-    with op.batch_alter_table(
+    for table in (
         "session_permissions",
-        recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
-    ) as batch_op:
-        if not sqlite:
-            batch_op.drop_constraint("fk_session_permissions_user_id", type_="foreignkey")
-            batch_op.drop_constraint(
-                "fk_session_permissions_conversation_id", type_="foreignkey"
-            )
-        # On SQLite, recreate="always" rebuilds without any FKs.
-
-    # conversations: drop FK on parent_conversation_id → conversations.id,
-    #                         root_conversation_id → conversations.id,
-    #                         agent_id → agents.id,
-    #                         host_id → hosts.host_id
-    with op.batch_alter_table(
         "conversations",
-        recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
-    ) as batch_op:
-        if not sqlite:
-            batch_op.drop_constraint(
-                "fk_conversations_parent_conversation_id", type_="foreignkey"
-            )
-            batch_op.drop_constraint(
-                "fk_conversations_root_conversation_id", type_="foreignkey"
-            )
-            batch_op.drop_constraint("fk_conversations_agent_id", type_="foreignkey")
-            batch_op.drop_constraint("fk_conversations_host_id", type_="foreignkey")
-
-    # conversation_items: drop FK on conversation_id → conversations.id
-    with op.batch_alter_table(
         "conversation_items",
-        recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
-    ) as batch_op:
-        if not sqlite:
-            batch_op.drop_constraint(
-                "fk_conversation_items_conversation_id", type_="foreignkey"
-            )
-
-    # conversation_labels: drop FK on conversation_id → conversations.id
-    with op.batch_alter_table(
         "conversation_labels",
-        recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
-    ) as batch_op:
-        if not sqlite:
-            batch_op.drop_constraint(
-                "fk_conversation_labels_conversation_id", type_="foreignkey"
-            )
-
-    # policies: drop FK on session_id → conversations.id
-    with op.batch_alter_table(
         "policies",
-        recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
-    ) as batch_op:
-        if not sqlite:
-            batch_op.drop_constraint("fk_policies_session_id", type_="foreignkey")
+    ):
+        _drop_all_fks_on_table(table, sqlite)
 
     if sqlite:
         op.execute(sa.text("PRAGMA foreign_keys = ON"))
@@ -124,7 +98,6 @@ def downgrade() -> None:
     with op.batch_alter_table(
         "policies",
         recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
     ) as batch_op:
         batch_op.create_foreign_key(
             "fk_policies_session_id",
@@ -138,7 +111,6 @@ def downgrade() -> None:
     with op.batch_alter_table(
         "conversation_labels",
         recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
     ) as batch_op:
         batch_op.create_foreign_key(
             "fk_conversation_labels_conversation_id",
@@ -152,7 +124,6 @@ def downgrade() -> None:
     with op.batch_alter_table(
         "conversation_items",
         recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
     ) as batch_op:
         batch_op.create_foreign_key(
             "fk_conversation_items_conversation_id",
@@ -166,7 +137,6 @@ def downgrade() -> None:
     with op.batch_alter_table(
         "conversations",
         recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
     ) as batch_op:
         batch_op.create_foreign_key(
             "fk_conversations_agent_id",
@@ -190,7 +160,7 @@ def downgrade() -> None:
             ondelete="CASCADE",
         )
         batch_op.create_foreign_key(
-            "fk_conversations_host_id",
+            "fk_conversations_host_id_hosts",
             "hosts",
             ["host_id"],
             ["host_id"],
@@ -201,7 +171,6 @@ def downgrade() -> None:
     with op.batch_alter_table(
         "session_permissions",
         recreate="always" if sqlite else "auto",
-        naming_convention=_NAMING_CONVENTION,
     ) as batch_op:
         batch_op.create_foreign_key(
             "fk_session_permissions_conversation_id",

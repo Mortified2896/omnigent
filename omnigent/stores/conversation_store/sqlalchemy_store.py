@@ -2612,15 +2612,19 @@ class SqlAlchemyConversationStore(ConversationStore):
             if row is None:
                 raise LookupError(f"conversation not found: {conversation_id!r}")
 
-            # Delete the old session-scoped agent. Without DB-level CASCADE,
-            # deleting the agent row while agent_id still references it is safe;
-            # we reassign agent_id to the new agent below. Only delete
+            # Null the forward pointer before deleting the old agent so
+            # SQLAlchemy's identity map doesn't hold a reference to a deleted
+            # row when it flushes. The DB no longer enforces any cascade here,
+            # but the ORM still tracks the relationship. Only delete
             # session-scoped agents — template/built-in agents are shared.
             old_agent_id = row.agent_id
+            row.agent_id = None
+            session.flush()
             if old_agent_id is not None:
                 old_agent = session.get(SqlAgent, old_agent_id)
                 if old_agent is not None and old_agent.kind == AGENT_KIND_SESSION:
                     session.delete(old_agent)
+                    session.flush()
 
             new_agent = _new_session_agent_row(
                 agent_id=new_agent_id,
