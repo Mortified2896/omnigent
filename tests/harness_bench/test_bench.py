@@ -659,6 +659,41 @@ def test_transport_resolution_family_default_and_fast() -> None:
     assert resolve_transport_name(sdk, override="native-tui", fast=True) == "native-tui"
 
 
+async def test_native_provisioning_http_error_becomes_provisioning_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An HTTP failure in native provisioning surfaces as a ProvisioningError.
+
+    goose-native's terminal-ensure can 500 (the vendor cannot start a thread) —
+    an environment/server-state gap, not a bench bug. __aenter__ must convert
+    the raw httpx error into a ProvisioningError so run_harness logs it quietly
+    (one INFO line) instead of dumping a traceback.
+    """
+    import httpx
+
+    from tests.harness_bench.driver import ProvisioningError
+    from tests.harness_bench.native_tui_driver import NativeTuiDriver
+
+    profile = BenchProfile(
+        harness="claude-native",
+        model="m",
+        env_prefix="HARNESS_CLAUDE_NATIVE_",
+        marker="X",
+        transport="native-tui",
+    )
+    driver = NativeTuiDriver(profile, databricks_profile="oss")
+
+    def _boom() -> None:
+        request = httpx.Request("POST", "http://localhost/resources/terminals")
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError("500", request=request, response=response)
+
+    monkeypatch.setattr(driver, "_provision", _boom)
+    with pytest.raises(ProvisioningError) as exc_info:
+        await driver.__aenter__()
+    assert "500" in str(exc_info.value)
+
+
 def test_full_server_skips_native_with_accurate_message() -> None:
     """full-server rejects a native profile by naming the native transport.
 
