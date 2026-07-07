@@ -75,9 +75,22 @@ driver the run uses:
 `model_override`. Verdicts map to the support-matrix glyphs
 (`✓ ~ ✗ — ?`), plus `·` skipped and `!! DRIFT`.
 
-Tool calling and Policy DENY only get a real verdict on `full-server` (a
-server-dispatched builtin under a spec-baked deny policy); on `sdk-inproc` and
-`native-tui` they report `·`. That is why full-server is the SDK default.
+A `·` always means "the bench did not measure this here", never "the harness
+lacks it". In particular Tool calling and Policy DENY only get a real verdict
+on `full-server` (a server-dispatched builtin under a spec-baked deny policy),
+so they show `·` on `sdk-inproc` and `native-tui`:
+
+- **Native harnesses show `·` for Tool calling / Policy DENY, and that is not a
+  native limitation.** Native harnesses do call tools and enforce permissions;
+  the bench just cannot observe it on `native-tui` yet. A native tool call is
+  the vendor's own tool (Bash/Read/...), not a server-dispatched builtin the
+  bench can force, and a native deny is a vendor permission decision, not a
+  server-side policy evaluation the probe can assert against. Giving those two
+  cells a real verdict needs new driver work (an open item), not a change to
+  the harnesses.
+- **SDK harnesses show `·` only under `--fast`** (the wrap-direct `sdk-inproc`
+  path has no tool-call policy hook); the default `full-server` run proves both
+  as `✓`. That is why full-server is the SDK default.
 
 ## Layout
 
@@ -120,7 +133,8 @@ harness-agnostic -- they only call the driver's semantic methods.
 Live today: the six P0 dimensions above; all three transports (`sdk-inproc`,
 `full-server`, `native-tui`); the four official SDK harnesses (claude-sdk,
 codex, pi, openai-agents) plus every registered native. Not yet wired (see the
-design doc's open items): Tool calling / Policy DENY on `native-tui`,
+design doc's open items): **bench observation** of Tool calling / Policy DENY
+on `native-tui` (a driver gap, not a native-harness limitation),
 registry-driven server-side native-agent seeding, and the P1 dimensions
 (steering, live-queue, resume/fork, elicitation, reasoning, images, cost,
 compaction).

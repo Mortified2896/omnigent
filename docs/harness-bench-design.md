@@ -306,10 +306,15 @@ The MVP and most of phase-2 are landed. What exists on `main` today:
 
 ### Not yet wired
 
-- **Tool calling / Policy DENY on `native-tui`** — native tool calls are the
-  vendor's own and a native deny is a vendor permission decision, not a
-  server-dispatched `function_call_output`; observing them needs new driver
-  work. (SDK harnesses have these via `full-server`.)
+- **Bench observation of Tool calling / Policy DENY on `native-tui`** — a
+  *driver gap, not a native-harness limitation*. Native harnesses do call tools
+  and enforce permissions; the bench cannot yet observe it on this transport.
+  A native tool call is the vendor's own tool (Bash/Read/...), not a
+  server-dispatched `function_call_output` the bench can force, and a native
+  deny is a vendor permission decision, not a server-side policy evaluation the
+  probe can assert against. So both cells show `·` (not measured), never `✗`.
+  Wiring the observation needs new driver work. (SDK harnesses get these via
+  `full-server`.)
 - **P1 dimensions** — steering, live-queue, resume/fork, elicitation ASK,
   reasoning, images, cost, compaction. Probes not written yet (report
   `UNKNOWN`).
@@ -382,15 +387,22 @@ stream, the bench flags a real drift on the next run, rather than a false
 ## Which transport exercises which dimension
 
 Not every dimension is observable on every transport, so a `·` (SKIPPED) in a
-run often means "this transport can't exercise it here," not "the harness lacks
-it." Two dimensions in particular only get a real verdict on the `full-server`
-transport:
+run always means "the bench did not measure this here," never "the harness
+lacks it." Two dimensions in particular only get a real verdict on the
+`full-server` transport:
 
 | Dimension | sdk-inproc (`--fast`) | full-server (default) | native-tui |
 |---|---|---|---|
 | Basic turn, Streaming, Model override, Interrupt | ✓ | ✓ | ✓ |
-| **Tool calling** | · (harness dispatches tools internally) | ✓ (server-dispatched builtin) | · (not yet wired) |
-| **Policy DENY** | · (wrap-direct: no tool-call policy hook) | ✓ (spec-baked deny, enforced) | · (not yet wired) |
+| **Tool calling** | · (harness dispatches tools internally) | ✓ (server-dispatched builtin) | · (bench can't observe vendor tools yet) |
+| **Policy DENY** | · (wrap-direct: no tool-call policy hook) | ✓ (spec-baked deny, enforced) | · (bench can't observe vendor deny yet) |
+
+The `native-tui` `·` is a *bench observation gap, not a native-harness
+limitation*: native harnesses do call tools and enforce permissions, but a
+native tool call is the vendor's own (Bash/Read/...) and a native deny is a
+vendor permission decision, neither of which is the server-dispatched,
+policy-gated call the probe watches for. Giving those cells a real verdict
+needs new driver work, not a change to the harnesses.
 
 Because `full-server` sees everything `sdk-inproc` does *plus* these two, it is
 the **default** for SDK harnesses — a plain live run proves Tool calling and
@@ -409,10 +421,11 @@ evaluation.
 
 `full-server` covers **SDK harnesses only** — it registers the harness via an
 agent bundle, which is the SDK-wrap path; native harnesses need the host-daemon
-provisioning the `native-tui` driver owns. So Tool calling / Policy DENY for
-native harnesses remain genuinely unwired (a follow-up), distinct from the
-`--fast` (sdk-inproc) `·` which is a transport limitation the default
-`full-server` run already answers.
+provisioning the `native-tui` driver owns. So Tool calling / Policy DENY on
+native harnesses are not observed by *any* transport yet — a bench follow-up,
+not a native-harness gap — distinct from the `--fast` (sdk-inproc) `·`, which
+is a transport limitation the default `full-server` run already answers for SDK
+harnesses.
 
 ## Plugin seamlessness: where it is and isn't
 
@@ -469,10 +482,13 @@ agree with it.
   hardcoded `_ensure_default_*_agent()` list in `server/app.py` with a loop over
   `native_agents()`, so any native harness (in-repo or plugin) registers
   automatically. This is the fix for the plugin-seamlessness seam above.
-- **Tool calling / Policy DENY on `native-tui`** — unwired; native tool calls
-  are the vendor's own and a native deny is a vendor permission decision, not a
-  server-dispatched `function_call_output`. Needs new driver work. (SDK
-  harnesses have these via `full-server`.)
+- **Bench observation of Tool calling / Policy DENY on `native-tui`** — a
+  driver gap, not a native-harness limitation: native harnesses call tools and
+  enforce permissions, but a native tool call is the vendor's own and a native
+  deny is a vendor permission decision, not the server-dispatched
+  `function_call_output` the probe watches for. The cells show `·` (not
+  measured), never `✗`. Needs new driver work. (SDK harnesses get these via
+  `full-server`.)
 - **Per-harness native provisioning gaps** the bench has surfaced but not yet
   resolved: goose-native returns a 500 on the terminal-ensure endpoint;
   hermes-native's forwarder does not wire up (a lazy-chat / first-turn gate to
