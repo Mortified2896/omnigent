@@ -20,6 +20,7 @@ model sees it).
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import secrets
@@ -152,16 +153,33 @@ def policy_hook_reauth(
         # Lazy import: paid only on the rare re-auth path, off the hot path.
         try:
             from omnigent.runner._entry import _make_auth_token_factory
-        except Exception:  # noqa: BLE001 — best-effort; fail closed if unavailable
+        except Exception as exc:  # noqa: BLE001 — best-effort; fail closed if unavailable
+            print(
+                f"omnigent policy-hook reauth: could not import auth factory: {exc}",
+                file=sys.stderr,
+            )
             return None
         factory = _make_auth_token_factory(server_url)
         if factory is None:
+            print(
+                "omnigent policy-hook reauth: no credential resolved "
+                f"(no stored token and no Databricks SDK auth for {server_url!r})",
+                file=sys.stderr,
+            )
             return None
         try:
             token = factory()
-        except Exception:  # noqa: BLE001 — transient mint failure; fail closed
+        except Exception as exc:  # noqa: BLE001 — transient mint failure; fail closed
+            print(
+                f"omnigent policy-hook reauth: token mint failed: {exc}",
+                file=sys.stderr,
+            )
             return None
         if not token:
+            print(
+                "omnigent policy-hook reauth: factory returned empty token",
+                file=sys.stderr,
+            )
             return None
         return {**headers, "Authorization": f"Bearer {token}"}
 
@@ -431,6 +449,31 @@ def fail_closed_hook_output(hook_event: str) -> dict[str, object] | None:
     return None
 
 
+def _jwt_exp(token: str) -> float | None:
+    """Extract the ``exp`` claim from a JWT without verifying the signature.
+
+    Used only to decide whether to proactively re-mint before the token lapses
+    — the server still validates the token on receipt. Returns ``None`` when
+    the token is not a well-formed JWT or carries no ``exp``.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        # JWT payload is base64url without padding; pad to a multiple of 4.
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        exp = payload.get("exp")
+        return float(exp) if isinstance(exp, (int, float)) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Re-mint the baked bearer this many seconds before it expires — absorbs
+# clock skew and the round-trip latency of the mint itself.
+_PROACTIVE_REAUTH_MARGIN_S = 300.0
+
+
 def post_evaluate_with_retry(
     url: str,
     headers: dict[str, str],
@@ -493,6 +536,30 @@ def post_evaluate_with_retry(
     backoff_s = _EVALUATE_POLICY_RETRY_INITIAL_BACKOFF_S
     timeout = httpx.Timeout(read_timeout, connect=_EVALUATE_POLICY_CONNECT_TIMEOUT_S)
     reauthed = False
+    # Proactively re-mint when the baked bearer is already expired or within
+    # the margin of expiry. This handles the "runner older than ~1h" case
+    # without waiting for a 401/302 signal — the one-shot reauth gets used
+    # before the first attempt rather than as a recovery.
+    if reauth is not None and not reauthed:
+        bearer = headers.get("Authorization", "")
+        token_str = bearer.removeprefix("Bearer ") if bearer.startswith("Bearer ") else ""
+        exp = _jwt_exp(token_str) if token_str else None
+        if exp is not None and exp - time.time() < _PROACTIVE_REAUTH_MARGIN_S:
+            print(
+                f"omnigent {hook_label}: baked bearer expires in "
+                f"{max(0.0, exp - time.time()):.0f}s; re-minting proactively",
+                file=sys.stderr,
+            )
+            refreshed = reauth()
+            if refreshed:
+                headers = refreshed
+                reauthed = True
+            # If reauth() returned None, fall through and let the server
+            # reject the lapsed token — the existing 401/302 handler below
+            # won't retry again (reauthed=False would allow it, but we just
+            # tried and got None, so mark reauthed to avoid a second attempt).
+            else:
+                reauthed = True
     while True:
         try:
             with httpx.Client(headers=headers, timeout=timeout) as client:
