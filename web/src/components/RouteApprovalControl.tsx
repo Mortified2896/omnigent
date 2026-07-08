@@ -35,18 +35,19 @@ export function RouteApprovalControl({
         <TooltipTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
-            size="icon"
+            variant={isOn ? "secondary" : "outline"}
+            size="sm"
             disabled={disabled || globallyDisabled}
-            aria-label="Route approval gate"
+            aria-label={isOn ? "Disable route approval gate" : "Enable route approval gate"}
             aria-pressed={isOn}
             data-testid="route-approval-toggle"
             data-mode={isOn ? "on" : "off"}
             data-server-enabled={serverEnabled ? "true" : "false"}
-            className="relative size-9 text-muted-foreground hover:bg-transparent dark:hover:bg-transparent md:size-8"
+            className="h-9 gap-1.5 rounded-full px-2.5 text-xs md:h-8 md:px-2"
             onClick={() => onChange(isOn ? "off" : "on")}
           >
             <ShieldCheckIcon className="size-4" aria-hidden="true" />
+            <span>Route approval: {isOn ? "On" : "Off"}</span>
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top" sideOffset={6} className="max-w-56 px-3 py-2 text-xs">
