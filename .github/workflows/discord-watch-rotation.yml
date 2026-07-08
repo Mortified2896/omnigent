@@ -9,6 +9,10 @@ on:
     - cron: "0 15 * * *" # 08:00 SF in summer (PDT); 07:00 in winter (PST)
   workflow_dispatch: {} # manual "Run workflow" button for testing
 
+# Only needs to check out the repo; nothing is written back.
+permissions:
+  contents: read
+
 # Avoid overlapping runs if one is slow.
 concurrency:
   group: discord-watch-rotation
