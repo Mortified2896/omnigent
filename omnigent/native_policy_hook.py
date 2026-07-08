@@ -474,7 +474,7 @@ def post_evaluate_with_retry(
     read_timeout: float,
     hook_label: str,
     reauth: Callable[[], dict[str, str] | None] | None = None,
-) -> httpx.Response | None:
+) -> tuple[httpx.Response, None] | tuple[None, str]:
     """
     POST to the Omnigent policy evaluate endpoint, retrying on transient errors.
 
@@ -516,8 +516,9 @@ def post_evaluate_with_retry(
         ``None`` (the default) keeps the legacy behavior for callers that have
         no token source. Returning ``None`` from it falls through to the
         normal failure handling (the caller fails closed).
-    :returns: Successful :class:`httpx.Response`, or ``None`` when retries
-        are exhausted or the error is non-retryable.
+    :returns: ``(response, error)`` — on success, ``(response, None)``; on
+        failure, ``(None, short_error_string)`` describing the last error so
+        callers can surface it in the deny/block reason shown to the user.
     """
     # Mint one stable id for the whole retry sequence. Each retry re-sends
     # it so the server can re-park the SAME elicitation rather than opening
@@ -529,6 +530,7 @@ def post_evaluate_with_retry(
     backoff_s = _EVALUATE_POLICY_RETRY_INITIAL_BACKOFF_S
     timeout = httpx.Timeout(read_timeout, connect=_EVALUATE_POLICY_CONNECT_TIMEOUT_S)
     reauthed = False
+    last_error: str = "unknown error"
     while True:
         try:
             with httpx.Client(headers=headers, timeout=timeout) as client:
@@ -557,21 +559,26 @@ def post_evaluate_with_retry(
                         )
                         continue
                 resp.raise_for_status()
-                return resp
+                return resp, None
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code < 500:
-                body_preview = exc.response.text[:200] if exc.response.content else ""
+            status = exc.response.status_code
+            body_preview = exc.response.text[:200] if exc.response.content else ""
+            last_error = f"server returned {status}" + (
+                f": {body_preview}" if body_preview else ""
+            )
+            if status < 500:
                 print(
-                    f"omnigent {hook_label}: Omnigent returned {exc.response.status_code}"
+                    f"omnigent {hook_label}: Omnigent returned {status}"
                     + (f": {body_preview}" if body_preview else ""),
                     file=sys.stderr,
                 )
-                return None
+                return None, last_error
             print(
-                f"omnigent {hook_label}: Omnigent returned {exc.response.status_code}; retrying",
+                f"omnigent {hook_label}: Omnigent returned {status}; retrying",
                 file=sys.stderr,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            last_error = f"connection error: {exc}"
             print(
                 f"omnigent {hook_label}: Omnigent request failed; retrying: {exc}",
                 file=sys.stderr,
@@ -580,17 +587,18 @@ def post_evaluate_with_retry(
             # Other HTTP errors (ReadTimeout while a long ASK poll is in flight,
             # etc.) are not retried — retrying a severed ASK would open a new
             # elicitation and prompt the human twice.
+            last_error = f"request error: {exc}"
             print(
                 f"omnigent {hook_label}: Omnigent request failed: {exc}",
                 file=sys.stderr,
             )
-            return None
+            return None, last_error
         if time.monotonic() + backoff_s >= deadline:
             print(
                 f"omnigent {hook_label}: retry budget exhausted",
                 file=sys.stderr,
             )
-            return None
+            return None, f"retry budget exhausted (last error: {last_error})"
         # Two-step backoff; not worth a retry library in this dependency-light hook.
         time.sleep(backoff_s)
         backoff_s = min(backoff_s * 2, _EVALUATE_POLICY_RETRY_MAX_BACKOFF_S)

@@ -162,7 +162,7 @@ def _main_evaluate_policy(argv: list[str]) -> int:
 
     session_component = urllib.parse.quote(session_id, safe="")
     url = f"{ap_server_url.rstrip('/')}/v1/sessions/{session_component}/policies/evaluate"
-    resp = post_evaluate_with_retry(
+    resp, api_error = post_evaluate_with_retry(
         url,
         headers,
         eval_request,
@@ -172,7 +172,7 @@ def _main_evaluate_policy(argv: list[str]) -> int:
         reauth=reauth,
     )
     if resp is None:
-        return _fail_closed(reauth.failure_reason)
+        return _fail_closed(api_error or reauth.failure_reason)
     if not resp.content:
         print("omnigent codex evaluate-policy hook: empty Omnigent response", file=sys.stderr)
         return _fail_closed()
