@@ -208,13 +208,25 @@ OPENCODE_NATIVE_LANES: tuple[OpenCodeNativeLaneConfig, ...] = (
         },
         label_suffix="Token Plan / Subscription",
     ),
-    # Codex Subscription — subscription lane, today FAIL CLOSED.
-    # The allowlist is intentionally EMPTY: no public OpenCode
-    # Codex-subscription provider prefix is verified yet, so the
-    # resolver returns ``models: []`` and the executor rejects every
-    # model id. The OpenAI API-billed ``codex/`` and ``openai/``
-    # prefixes are explicitly rejected at three layers (sync,
-    # verify, resolver) — they can never reach this lane.
+    # Codex Subscription — subscription lane, today FAIL CLOSED
+    # because the OpenCode Codex auth plugin is NOT installed.
+    #
+    # OpenCode v1.17.13 does not ship a built-in Codex provider
+    # (verified: ``opencode models --refresh --verbose`` exposes no
+    # ``codex/*`` or ``openai/*`` provider without a plugin). The
+    # community plugin ``opencode-openai-codex-auth`` registers
+    # ChatGPT Plus/Pro OAuth-backed GPT-5.2 / Codex models under
+    # the ``openai/`` provider prefix — which is the SAME prefix
+    # as the OpenAI API-billed path. So the lane stays fail-closed
+    # even with the plugin installed: the resolver can never admit
+    # ``openai/*`` ids without an additional in-catalog proof of
+    # subscription backing (e.g. an ``oauth:chatgpt`` credential
+    # marker on each entry).
+    #
+    # The empty-state message points at the missing piece — the
+    # plugin AND the OAuth login — so the operator can act on it
+    # without guessing. The resolver NEVER falls back to the
+    # OpenAI API-billed path.
     OpenCodeNativeLaneConfig(
         resolver_id="opencode-native-codex-subscription",
         catalog_path=_CATALOG_DIR / "opencode-codex-subscription-models.json",
@@ -223,12 +235,17 @@ OPENCODE_NATIVE_LANES: tuple[OpenCodeNativeLaneConfig, ...] = (
         kind="subscription",
         billing_risk="subscription",
         empty_state_message=(
-            "Codex Subscription catalog not found. The "
-            "opencode-native-codex-subscription lane has no local "
-            "verified catalog yet. Configure OpenCode's Codex "
-            "subscription provider locally so the catalog can be "
-            "populated; this resolver NEVER falls back to the "
-            "OpenAI API-billed path."
+            "Codex subscription lane unavailable: missing OpenCode "
+            "Codex auth plugin/config. OpenCode v1.17.13 does not "
+            "ship a built-in Codex provider; install the "
+            "opencode-openai-codex-auth plugin and run "
+            "`opencode auth login` to authenticate with ChatGPT "
+            "Plus/Pro, then re-run the sync script. The resolver "
+            "will not admit any `openai/*` or `codex/*` model id "
+            "until the plugin is verified AND each catalog entry "
+            "carries a `credential_source == 'oauth:chatgpt'` "
+            "marker. This lane NEVER falls back to the OpenAI "
+            "API-billed path."
         ),
         lane_variant=LaneVariant.SUBSCRIPTION,
         # Stable source string preserved across the refactor — the
@@ -237,8 +254,10 @@ OPENCODE_NATIVE_LANES: tuple[OpenCodeNativeLaneConfig, ...] = (
         # harness name, but the source label was kept stable for
         # backward compatibility.
         source_label="opencode-codex-subscription-catalog",
-        # Empty allowlist = fail closed. Populated by
-        # stage 3 of the Codex Subscription rollout — see
+        # Empty allowlist = fail closed. Populated only after
+        # the opencode-openai-codex-auth plugin is installed AND
+        # the auth.json carries an `oauth:chatgpt` credential for
+        # the `openai` provider — see
         # docs/opencode-codex-subscription-models.md.
         allowed_provider_prefixes=frozenset(),
         credential_env_var="CODEX_SUBSCRIPTION_AUTH",
@@ -306,7 +325,10 @@ def empty_state_disclaimer(lane: OpenCodeNativeLaneConfig) -> str:
     if lane.lane_variant is LaneVariant.SUBSCRIPTION:
         return (
             f" {lane.resolver_id} NEVER falls back to a paid-API "
-            f"provider; configure the local catalog to populate this lane."
+            f"provider. The resolver rejects every `openai/*` and "
+            f"`codex/*` id regardless of catalog content, so a "
+            f"buggy catalog run cannot leak API-billed ids into the "
+            f"picker."
         )
     return (
         f" {lane.resolver_id} never falls back to a paid API; "

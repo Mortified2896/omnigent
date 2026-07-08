@@ -279,8 +279,12 @@ async def test_codex_subscription_returns_empty_with_setup_message_when_catalog_
     # The error must clearly state this is a local-not-configured state and
     # explicitly disclaim the OpenAI API-billed path — the picker surfaces
     # this verbatim, so a future operator can act on it.
-    assert "Codex Subscription catalog not found" in body["error"]
-    assert "NEVER falls back to the OpenAI API-billed path" in body["error"]
+    assert "Codex subscription lane unavailable" in body["error"]
+    assert "missing OpenCode Codex auth plugin" in body["error"]
+    assert "NEVER falls back" in body["error"]
+    # The message must point at the concrete remediation path.
+    assert "opencode-openai-codex-auth" in body["error"]
+    assert "opencode auth login" in body["error"]
 
 
 async def test_codex_subscription_returns_empty_even_with_catalog_until_prefix_verified(
