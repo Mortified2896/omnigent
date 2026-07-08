@@ -26,7 +26,11 @@ npm run loadtest:session-switch
 ```
 
 Delays are controlled via env vars in `sessionSwitchBench.ts` (defaults 50ms history,
-800ms snapshot).
+800ms snapshot). `WEB_LATENCY_HUMAN_DELAY_MS` (default 450) simulates sidebar hover
++ read time before click when prefetch is enabled.
+
+Playwright uses `SESSION_SWITCH_HOVER_MS` (default 350) and
+`SESSION_SWITCH_REACTION_MS` (default 180) for the `human_click` scenario.
 
 ## Playwright (real remote API)
 

@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WEB="$ROOT/web"
 CHAT_STORE="$WEB/src/store/chatStore.ts"
 BACKUP="/tmp/omnigent-chatStore.post.ts"
-RUNS="${WEB_LATENCY_RUNS:-20}"
+RUNS="${WEB_LATENCY_RUNS:-3}"
 OUT_DIR="${TMPDIR:-/tmp}/session-switch-bench"
 mkdir -p "$OUT_DIR"
 

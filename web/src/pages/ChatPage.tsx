@@ -1626,6 +1626,7 @@ function MainAgentSurface({
         <Conversation className="chat-scroll-fade flex-1">
           {/* gap-4 overrides ConversationContent's default gap-8 so consecutive agent turns read as one thread. */}
           <ConversationContent
+            data-testid="chat-transcript-ready"
             className={cn(
               "chat-conversation-content mx-auto w-full gap-4 pt-20 pb-6",
               CHAT_COLUMN_WIDTH,
@@ -1785,7 +1786,10 @@ function MainAgentSurface({
 
 function HydratingPlaceholder() {
   return (
-    <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
+    <div
+      data-testid="hydrating-placeholder"
+      className="flex flex-1 items-center justify-center gap-2 text-muted-foreground text-sm"
+    >
       <Loader2Icon className="size-4 animate-spin" />
       Loading conversation…
     </div>

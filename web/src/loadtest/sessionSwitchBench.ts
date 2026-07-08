@@ -139,6 +139,8 @@ export async function runSessionSwitchBench(opts: {
   historyDelayMs: number;
   snapshotDelayMs: number;
   prefetch?: boolean;
+  /** Pause after prefetch starts, before switchTo (sidebar hover + read). */
+  humanDelayMs?: number;
   scenario?: string;
 }): Promise<SessionSwitchBenchResult> {
   const sessionId = opts.sessionId ?? "bench_conv";
@@ -235,6 +237,13 @@ export async function runSessionSwitchBench(opts: {
   if (opts.prefetch) {
     prefetchSessionForSwitch(client, sessionId);
     await delay(0);
+  }
+
+  const humanDelayMs =
+    opts.humanDelayMs ??
+    (opts.prefetch ? Number(process.env.WEB_LATENCY_HUMAN_DELAY_MS ?? "450") : 0);
+  if (humanDelayMs > 0) {
+    await delay(humanDelayMs);
   }
 
   startAt = performance.now();

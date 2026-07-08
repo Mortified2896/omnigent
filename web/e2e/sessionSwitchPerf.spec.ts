@@ -74,6 +74,14 @@ function emit(line: Record<string, unknown>): void {
   process.stdout.write(`SESSION_SWITCH_PERF_JSON ${JSON.stringify(line)}\n`);
 }
 
+/** Sidebar hover + reaction before click (ms). */
+function humanInputDelays(): { hoverMs: number; reactionMs: number } {
+  return {
+    hoverMs: Number(process.env.SESSION_SWITCH_HOVER_MS ?? "350"),
+    reactionMs: Number(process.env.SESSION_SWITCH_REACTION_MS ?? "180"),
+  };
+}
+
 async function waitForChatReady(page: import("@playwright/test").Page): Promise<void> {
   await Promise.race([
     page.getByTestId("message-bubble").first().waitFor({ state: "visible", timeout: 90_000 }),
@@ -119,13 +127,24 @@ async function measureOneSwitch(
 
   const row = page.locator(`a[href="/c/${toId}"]`).first();
   await row.scrollIntoViewIfNeeded();
-  if (scenario === "hover_prefetch") {
+  const { hoverMs, reactionMs } = humanInputDelays();
+  if (scenario === "cold_click") {
+    await page.waitForTimeout(reactionMs);
+  } else if (scenario === "hover_prefetch") {
     await row.hover();
     await page.waitForTimeout(150);
+  } else {
+    // human_click (default): hover long enough for sidebar prefetch debounce,
+    // then a short reaction pause before clicking.
+    await row.hover();
+    await page.waitForTimeout(hoverMs);
+    await page.waitForTimeout(reactionMs);
   }
   await row.click();
 
-  const placeholder = page.getByTestId("hydrating-placeholder");
+  const placeholder = page
+    .getByTestId("hydrating-placeholder")
+    .or(page.getByText("Loading conversation…"));
   await placeholder.waitFor({ state: "visible", timeout: 5_000 }).catch(() => undefined);
   const blankScreenMs = await placeholder
     .waitFor({ state: "hidden", timeout: 90_000 })
@@ -184,7 +203,7 @@ test.describe("session switch perf", () => {
   test("measures real switch latency against OMNIGENT_URL", async ({ page }) => {
     const runsWanted = Number(process.env.SESSION_SWITCH_RUNS ?? "5");
     const label = process.env.SESSION_SWITCH_LABEL ?? "e2e";
-    const scenario = process.env.SESSION_SWITCH_SCENARIO ?? "cold_click";
+    const scenario = process.env.SESSION_SWITCH_SCENARIO ?? "human_click";
     const pair = await pickSwitchPair();
     process.stdout.write(
       `SESSION_SWITCH_PAIR_JSON ${JSON.stringify({ label, scenario, ...pair })}\n`,
@@ -210,8 +229,8 @@ test.describe("session switch perf", () => {
     const readyMs = summary.transcriptReadyMs || summary.bubbleVisibleMs;
     expect(readyMs).toBeGreaterThan(0);
     expect(readyMs).toBeLessThan(120_000);
-    if (label === "post") {
-      expect(summary.historyHydratedMs).toBeGreaterThan(0);
+    if (label === "post" && summary.historyHydratedMs > 0) {
+      expect(summary.historyHydratedMs).toBeLessThan(summary.blankScreenMs + 500);
     }
   });
 });

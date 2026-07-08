@@ -34,6 +34,7 @@ type ScenarioCfg = {
   historyDelayMs: number;
   snapshotDelayMs: number;
   prefetch?: boolean;
+  humanDelayMs?: number;
 };
 
 const SCENARIOS: Record<string, ScenarioCfg> = {
@@ -44,6 +45,7 @@ const SCENARIOS: Record<string, ScenarioCfg> = {
     historyDelayMs: 50,
     snapshotDelayMs: 800,
     prefetch: true,
+    humanDelayMs: Number(process.env.WEB_LATENCY_HUMAN_DELAY_MS ?? "450"),
   },
 };
 
