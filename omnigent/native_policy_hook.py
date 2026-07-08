@@ -130,59 +130,64 @@ def policy_hook_wrapper_script(server_url: str, session_id: str, hook_script_pat
     )
 
 
-def policy_hook_reauth(
-    server_url: str, headers: dict[str, str]
-) -> Callable[[], dict[str, str] | None]:
-    """Build a callable that re-mints the Omnigent bearer for *server_url*.
+class PolicyHookReauth:
+    """Callable that re-mints the Omnigent bearer for a policy hook subprocess.
 
     The baked one-shot token dies with the ~1h Databricks OAuth lifetime; on a
     lapsed-token signal (401 or Apps ``302→/oidc/``) ``post_evaluate_with_retry``
     calls this once to mint a fresh bearer through the same factory the
     refresh-capable runtime auth uses, keeping the other headers (e.g.
-    ``X-Databricks-Org-Id``) so routing survives. Returns ``None`` when no
-    refresh mechanism is available, so the caller fails closed.
+    ``X-Databricks-Org-Id``) so routing survives.
 
-    :param server_url: Omnigent server base URL the hook POSTs to.
-    :param headers: Current (lapsed) headers; the fresh bearer is merged over
-        a copy so routing headers survive.
-    :returns: A zero-arg callable returning fresh headers, or ``None``.
+    The ``failure_reason`` attribute is set to a short diagnostic string when
+    the re-mint fails so callers can surface it in the fail-closed message shown
+    to the user — stderr from hook subprocesses is discarded by the harness, so
+    this is the only channel that reaches the UI.
     """
 
-    def _reauth() -> dict[str, str] | None:
+    failure_reason: str | None
+
+    def __init__(self, server_url: str, headers: dict[str, str]) -> None:
+        self._server_url = server_url
+        self._headers = headers
+        self.failure_reason = None
+
+    def __call__(self) -> dict[str, str] | None:
         # Lazy import: paid only on the rare re-auth path, off the hot path.
         try:
             from omnigent.runner._entry import _make_auth_token_factory
         except Exception as exc:  # noqa: BLE001 — best-effort; fail closed if unavailable
-            print(
-                f"omnigent policy-hook reauth: could not import auth factory: {exc}",
-                file=sys.stderr,
-            )
+            self.failure_reason = f"auth factory unavailable: {exc}"
             return None
-        factory = _make_auth_token_factory(server_url)
+        factory = _make_auth_token_factory(self._server_url)
         if factory is None:
-            print(
-                "omnigent policy-hook reauth: no credential resolved "
-                f"(no stored token and no Databricks SDK auth for {server_url!r})",
-                file=sys.stderr,
+            self.failure_reason = (
+                "no credential resolved "
+                f"(no stored token and no Databricks SDK auth for {self._server_url!r})"
             )
             return None
         try:
             token = factory()
         except Exception as exc:  # noqa: BLE001 — transient mint failure; fail closed
-            print(
-                f"omnigent policy-hook reauth: token mint failed: {exc}",
-                file=sys.stderr,
-            )
+            self.failure_reason = f"token mint failed: {exc}"
             return None
         if not token:
-            print(
-                "omnigent policy-hook reauth: factory returned empty token",
-                file=sys.stderr,
-            )
+            self.failure_reason = "auth factory returned empty token"
             return None
-        return {**headers, "Authorization": f"Bearer {token}"}
+        self.failure_reason = None
+        return {**self._headers, "Authorization": f"Bearer {token}"}
 
-    return _reauth
+
+def policy_hook_reauth(server_url: str, headers: dict[str, str]) -> PolicyHookReauth:
+    """Build a :class:`PolicyHookReauth` callable for *server_url*.
+
+    :param server_url: Omnigent server base URL the hook POSTs to.
+    :param headers: Current (lapsed) headers; the fresh bearer is merged over
+        a copy so routing headers survive.
+    :returns: A :class:`PolicyHookReauth` instance. Call it to attempt a
+        re-mint; check ``.failure_reason`` afterwards when it returns ``None``.
+    """
+    return PolicyHookReauth(server_url, headers)
 
 
 def _is_login_redirect_or_unauthorized(response: httpx.Response) -> bool:
@@ -397,7 +402,9 @@ def evaluation_response_to_hook_output(
     return None
 
 
-def fail_closed_hook_output(hook_event: str) -> dict[str, object] | None:
+def fail_closed_hook_output(
+    hook_event: str, detail: str | None = None
+) -> dict[str, object] | None:
     """
     Build the fail-closed hook output for an unobtainable policy verdict.
 
@@ -428,22 +435,34 @@ def fail_closed_hook_output(hook_event: str) -> dict[str, object] | None:
       an already-incurred side effect.
 
     :param hook_event: Hook event name, e.g. ``"PreToolUse"``.
+    :param detail: Optional short diagnostic string appended to the reason
+        shown in the UI, e.g. a reauth failure message from
+        :attr:`PolicyHookReauth.failure_reason`. Omit when no detail is
+        available.
     :returns: A ``permissionDecision: "deny"`` hook output for
         ``PreToolUse``; a ``decision: "block"`` output for
         ``UserPromptSubmit``; ``None`` for every other event (fail open).
     """
+    tool_reason = (
+        f"{_EVAL_UNAVAILABLE_REASON} Detail: {detail}" if detail else _EVAL_UNAVAILABLE_REASON
+    )
+    request_reason = (
+        f"{_EVAL_UNAVAILABLE_REQUEST_REASON} Detail: {detail}"
+        if detail
+        else _EVAL_UNAVAILABLE_REQUEST_REASON
+    )
     if hook_event == _PRE_TOOL_USE:
         return {
             "hookSpecificOutput": {
                 "hookEventName": _PRE_TOOL_USE,
                 "permissionDecision": "deny",
-                "permissionDecisionReason": _EVAL_UNAVAILABLE_REASON,
+                "permissionDecisionReason": tool_reason,
             },
         }
     if hook_event == _USER_PROMPT_SUBMIT:
         return {
             "decision": "block",
-            "reason": _EVAL_UNAVAILABLE_REQUEST_REASON,
+            "reason": request_reason,
         }
     return None
 

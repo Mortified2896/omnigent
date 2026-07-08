@@ -141,8 +141,10 @@ def _main_evaluate_policy(argv: list[str]) -> int:
     context = eval_request["event"]["context"]
     context["harness"] = _HARNESS
 
-    def _fail_closed() -> int:
-        out = fail_closed_hook_output(hook_event)
+    reauth = policy_hook_reauth(ap_server_url, headers)
+
+    def _fail_closed(detail: str | None = None) -> int:
+        out = fail_closed_hook_output(hook_event, detail)
         if out is not None:
             sys.stdout.write(json.dumps(out))
         return 0
@@ -155,10 +157,10 @@ def _main_evaluate_policy(argv: list[str]) -> int:
         _EVALUATE_POLICY_TIMEOUT_S,
         "kimi evaluate-policy hook",
         # Re-mint the baked one-shot token if it lapses mid-session.
-        reauth=policy_hook_reauth(ap_server_url, headers),
+        reauth=reauth,
     )
     if resp is None or not resp.content:
-        return _fail_closed()
+        return _fail_closed(reauth.failure_reason)
     try:
         eval_response = resp.json()
     except json.JSONDecodeError:
