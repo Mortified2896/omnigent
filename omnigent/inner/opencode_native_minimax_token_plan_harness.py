@@ -12,6 +12,16 @@ The executor is the same ``OpenCodeNativeExecutor`` as the free lane
 (``opencode-native``); only the model-prefix allowlist differs. Reusing
 the executor keeps the bridge / SSE forwarder / tmux plumbing shared
 so the runner doesn't fork the runtime for a provider-only variant.
+
+The allowlist itself is sourced from the shared
+:class:`omnigent.inner._opencode_native_lane_config.OPENCODE_NATIVE_LANES`
+table — the single source of truth shared with the server-side
+resolver, the sync / verify scripts, and any future OpenCode-backed
+subscription lane. The hard-coded mirror
+``_MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES`` below is kept as a
+belt-and-braces pin for the test suite (the test asserts both the
+local constant and the shared-config entry agree, so a future edit
+that diverges the two fails loudly).
 """
 
 from __future__ import annotations
@@ -21,6 +31,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+from omnigent.inner._opencode_native_lane_config import (
+    OpenCodeNativeLaneConfig,
+    lane_for_executor_harness_id,
+)
 from omnigent.inner.executor import Executor
 from omnigent.inner.opencode_native_executor import OpenCodeNativeExecutor
 from omnigent.native_server_harness import NativeServerHarness
@@ -35,15 +49,36 @@ from omnigent.opencode_native_bridge import (
 # Canonical harness id, surfaced in harness error messages.
 OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_HARNESS_ID = "opencode-native-minimax-token-plan"
 
-# OpenCode provider prefixes the MiniMax Token Plan lane allows. Anything
-# else (the API-metered ``minimax/`` or ``minimax-cn/`` prefixes, or any
-# unrelated OpenCode provider) is rejected at pin time so it can never
-# leak into a Token Plan session — even if a stale stored pick from
-# another lane, a malformed model_override, or a bug elsewhere tries to
-# route through here.
+# Local mirror of the lane's provider-prefix allowlist. The
+# authoritative source is
+# :func:`omnigent.inner._opencode_native_lane_config.lane_for_executor_harness_id`
+# — this constant exists so the test suite can pin the contract
+# without going through the shared config. The test asserts the
+# two agree.
 _MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES: frozenset[str] = frozenset(
     {"minimax-coding-plan", "minimax-cn-coding-plan"}
 )
+
+
+def _lane() -> OpenCodeNativeLaneConfig:
+    """Return the shared-config lane for the MiniMax Token Plan harness.
+
+    :returns: The matching :class:`OpenCodeNativeLaneConfig` from the
+        shared ``OPENCODE_NATIVE_LANES`` table.
+    :raises RuntimeError: When the harness id is not registered in the
+        shared config. This is a configuration error — the harness
+        module is being imported without the shared config knowing
+        about it.
+    """
+    lane = lane_for_executor_harness_id(OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_HARNESS_ID)
+    if lane is None:
+        raise RuntimeError(
+            f"Harness id {OPENCODE_NATIVE_MINIMAX_TOKEN_PLAN_HARNESS_ID!r} is not "
+            "registered in omnigent.inner._opencode_native_lane_config.OPENCODE_NATIVE_LANES. "
+            "Add the lane config there — the executor / resolver / picker all "
+            "read from the shared table, so a missing entry is a configuration bug."
+        )
+    return lane
 
 
 class OpenCodeNativeMinimaxTokenPlanExecutor(NativeServerHarness):
@@ -56,6 +91,11 @@ class OpenCodeNativeMinimaxTokenPlanExecutor(NativeServerHarness):
     (``minimax-coding-plan/`` or ``minimax-cn-coding-plan/``). Anything
     else raises before the prompt is sent so the runner never reaches
     the OpenCode bridge with an out-of-lane model.
+
+    The allowlist is sourced from the shared
+    ``OPENCODE_NATIVE_LANES`` table (via :func:`_lane`), so the
+    executor and the catalog resolver always agree — there is no
+    risk of one drifting from the other.
 
     :param bridge_dir: Optional bridge directory override. ``None``
         reads :data:`OPENCODE_NATIVE_BRIDGE_DIR_ENV_VAR`.
@@ -92,13 +132,14 @@ class OpenCodeNativeMinimaxTokenPlanExecutor(NativeServerHarness):
         if not model:
             return prompt
         if not _is_allowed_token_plan_model(model):
+            lane = _lane()
             raise RuntimeError(
                 f"Model {model!r} is not a MiniMax Token Plan model. The "
-                f"opencode-native-minimax-token-plan lane only accepts "
-                f"models under the following OpenCode provider prefixes: "
-                f"{sorted(_MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES)}. "
-                "API-metered minimax/ or minimax-cn/ ids are explicitly "
-                "rejected — never substituted as a fallback."
+                f"{lane.resolver_id} lane only accepts models under the "
+                f"following OpenCode provider prefixes: "
+                f"{sorted(lane.allowed_provider_prefixes)}. API-metered "
+                "minimax/ or minimax-cn/ ids are explicitly rejected — "
+                "never substituted as a fallback."
             )
         return dataclasses.replace(prompt, model=model)
 
@@ -123,10 +164,22 @@ def _is_allowed_token_plan_model(model: str) -> bool:
 
     Accepts both the bare OpenCode form (``<provider>/<model>``) and the
     fully-qualified form (``opencode/<provider>/<model>``).
+
+    The allowlist is sourced from the shared
+    :class:`OpenCodeNativeLaneConfig.allowed_provider_prefixes` (via
+    :func:`_lane`) — the same membership list the server-side
+    resolver uses. The local constant
+    ``_MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES`` exists only for
+    the test suite's belt-and-braces pin.
     """
+    lane = _lane()
+    if not lane.allowed_provider_prefixes:
+        # No verified prefix yet → no model can be admitted. This
+        # matches the "fail closed" stance the resolver takes.
+        return False
     bare = model[len("opencode/"):] if model.startswith("opencode/") else model
     prefix = bare.split("/", 1)[0] if "/" in bare else ""
-    return prefix in _MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES
+    return prefix in lane.allowed_provider_prefixes
 
 
 def _bridge_dir_from_env() -> Path:

@@ -50,9 +50,53 @@ def test_minimax_token_plan_allowed_prefixes() -> None:
     )
 
 
+def test_minimax_token_plan_allowed_prefixes_match_shared_config() -> None:
+    """Belt-and-braces pin: the local mirror must agree with the shared config.
+
+    The shared ``OPENCODE_NATIVE_LANES`` table is the single source
+    of truth for the allowlist — the resolver, the executor, the
+    picker, and the sync / verify scripts all read from it. The
+    local constant is a copy kept only for the test suite's
+    contract pin; if a future edit diverges the two, this test
+    fails loudly.
+    """
+    from omnigent.inner._opencode_native_lane_config import (
+        lane_for_executor_harness_id,
+    )
+
+    lane = lane_for_executor_harness_id(
+        "opencode-native-minimax-token-plan"
+    )
+    assert lane is not None
+    assert lane.allowed_provider_prefixes == (
+        minimax_mod._MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES
+    )
+
+
 def test_codex_subscription_allowed_prefixes_is_empty_by_design() -> None:
     """The Codex Subscription allowlist is intentionally empty today — fail closed."""
     assert codex_mod._OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES == frozenset()
+
+
+def test_codex_subscription_allowed_prefixes_match_shared_config() -> None:
+    """Belt-and-braces pin: the local mirror must agree with the shared config.
+
+    The shared ``OPENCODE_NATIVE_LANES`` table is the single source
+    of truth for the allowlist. Today the allowlist is empty in
+    BOTH the local constant AND the shared config — a future edit
+    that populates one without the other fails this test.
+    """
+    from omnigent.inner._opencode_native_lane_config import (
+        lane_for_executor_harness_id,
+    )
+
+    lane = lane_for_executor_harness_id(
+        "opencode-native-codex-subscription"
+    )
+    assert lane is not None
+    assert lane.allowed_provider_prefixes == (
+        codex_mod._OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES
+    )
 
 
 # ── Allowlist matching ──────────────────────────────────────────────

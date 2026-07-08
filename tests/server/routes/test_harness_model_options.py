@@ -45,23 +45,55 @@ def _write_catalog(path: Path, payload: dict[str, Any]) -> None:
 def catalog_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Force catalog reads to a temp directory.
 
-    ``Path.home()`` is patched to ``tmp_path`` so every resolver that
-    constructs ``Path.home() / ".cache/homelab/<name>.json"`` resolves
-    under the temp dir. The resolver module's module-level path
-    constants are also pointed at the same dir, since they were
-    captured at import time with ``Path.home()``.
+    The shared ``OPENCODE_NATIVE_LANES`` table (which the resolver
+    reads from) holds each lane's catalog path. The table is
+    constructed at import time with ``Path.home() / ".cache/homelab/<lane>.json"``,
+    so the fixture:
+
+    1. Patches ``Path.home()`` to ``tmp_path`` so any code that
+       re-reads ``Path.home()`` resolves to the test temp dir.
+    2. Re-points every lane's ``catalog_path`` to the same
+       ``tmp_path`` so the resolver reads from the test dir. The
+       ``OPENCODE_NATIVE_LANES`` tuple is a tuple of frozen
+       dataclasses — each lane is replaced with a ``dataclasses.replace``
+       that swaps the path. (The dataclass is frozen, so we
+       cannot mutate in place.)
+    3. Rebuilds the ``_HARNESS_MODEL_PROVIDERS`` registry from the
+       patched lanes (the registry is built at import time from
+       the same table, so it must be rebuilt after the patch).
     """
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(hmo_module, "_OPENCODE_CATALOG_PATH", tmp_path / ".cache" / "homelab" / "opencode-free-models.json")
+
+    from omnigent.inner import _opencode_native_lane_config as lane_config_mod
+    import dataclasses
+
+    test_cache = tmp_path / ".cache" / "homelab"
+    patched_lanes = []
+    for lane in lane_config_mod.OPENCODE_NATIVE_LANES:
+        new_path = test_cache / lane.catalog_path.name
+        patched_lanes.append(dataclasses.replace(lane, catalog_path=new_path))
     monkeypatch.setattr(
-        hmo_module,
-        "_MINIMAX_TOKEN_PLAN_CATALOG_PATH",
-        tmp_path / ".cache" / "homelab" / "opencode-minimax-token-plan-models.json",
+        lane_config_mod,
+        "OPENCODE_NATIVE_LANES",
+        tuple(patched_lanes),
     )
+    # Rebuild the resolver-id lookup map too (the resolver module
+    # imported its own reference at import time).
+    monkeypatch.setattr(
+        lane_config_mod,
+        "_BY_RESOLVER_ID",
+        {lane.resolver_id: lane for lane in patched_lanes},
+    )
+    # The resolver module's provider registry was built at import
+    # time from the original lanes — rebuild it so the patched paths
+    # are honoured.
     monkeypatch.setattr(
         hmo_module,
-        "_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH",
-        tmp_path / ".cache" / "homelab" / "opencode-codex-subscription-models.json",
+        "_HARNESS_MODEL_PROVIDERS",
+        {
+            lane.resolver_id: (lambda lane=lane: hmo_module._resolve_lane_models(lane))
+            for lane in patched_lanes
+        },
     )
     return tmp_path
 
@@ -329,13 +361,70 @@ def test_registry_lists_all_three_lanes() -> None:
 
 
 def test_codex_subscription_allowlist_is_intentionally_empty() -> None:
-    """Pin the fail-closed state — no public Codex-subscription provider prefix is verified yet."""
-    assert hmo_module._OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES == frozenset()
+    """Pin the fail-closed state — no public Codex-subscription provider prefix is verified yet.
+
+    The allowlist now lives in the shared
+    ``OPENCODE_NATIVE_LANES`` table (single source of truth shared
+    with the executor); the resolver and the executor gate on the
+    same membership list. This test pins the resolver's view of
+    the allowlist.
+    """
+    from omnigent.inner._opencode_native_lane_config import (
+        lane_for_resolver_id,
+    )
+
+    lane = lane_for_resolver_id("opencode-native-codex-subscription")
+    assert lane is not None
+    assert lane.allowed_provider_prefixes == frozenset()
 
 
 def test_minimax_token_plan_allowlist_lists_only_token_plan_prefixes() -> None:
-    """Pin the two Token Plan prefixes (and only those) as the API-metered guard."""
-    assert hmo_module._MINIMAX_TOKEN_PLAN_PROVIDER_PREFIXES == (
-        "minimax-coding-plan",
-        "minimax-cn-coding-plan",
+    """Pin the two Token Plan prefixes (and only those) as the API-metered guard.
+
+    The allowlist now lives in the shared ``OPENCODE_NATIVE_LANES``
+    table (single source of truth shared with the executor).
+    """
+    from omnigent.inner._opencode_native_lane_config import (
+        lane_for_resolver_id,
+    )
+
+    lane = lane_for_resolver_id("opencode-native-minimax-token-plan")
+    assert lane is not None
+    assert lane.allowed_provider_prefixes == frozenset(
+        {"minimax-coding-plan", "minimax-cn-coding-plan"}
+    )
+
+
+def test_resolver_and_executor_allowlists_agree() -> None:
+    """The resolver and the executor must agree on every SUBSCRIPTION
+    lane's allowlist — that's the whole point of the shared
+    ``OPENCODE_NATIVE_LANES`` table.
+
+    A divergence here means a buggy catalog run could be admitted by
+    the picker (because the resolver allows it) but rejected by the
+    runner (because the executor disallows it) — or vice versa.
+    Either is a silent pick-then-crash bug. This test fails loudly
+    on any such divergence.
+    """
+    from omnigent.inner._opencode_native_lane_config import (
+        lane_for_resolver_id,
+    )
+    from omnigent.inner import (
+        opencode_native_minimax_token_plan_harness as minimax_mod,
+    )
+    from omnigent.inner import (
+        opencode_native_codex_subscription_harness as codex_mod,
+    )
+
+    # The MiniMax Token Plan lane: resolver + executor agree.
+    resolver_lane = lane_for_resolver_id("opencode-native-minimax-token-plan")
+    assert resolver_lane is not None
+    assert resolver_lane.allowed_provider_prefixes == (
+        minimax_mod._MINIMAX_TOKEN_PLAN_ALLOWED_PROVIDER_PREFIXES
+    )
+    # The Codex Subscription lane: resolver + executor agree.
+    resolver_lane = lane_for_resolver_id("opencode-native-codex-subscription")
+    assert resolver_lane is not None
+    assert resolver_lane.allowed_provider_prefixes == (
+        codex_mod._OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES
     )

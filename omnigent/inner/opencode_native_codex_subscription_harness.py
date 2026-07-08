@@ -2,16 +2,28 @@
 
 Subscription-backed Codex lane: routes through OpenCode's Codex
 subscription provider (reachable via the user's Codex subscription /
-OpenCode-authenticated path). The API-metered OpenAI / ``codex/``
-path is explicitly rejected — this lane never falls back to it.
+OpenCode-authenticated path). The API-metered OpenAI / ``codex/`` /
+``openai/`` paths are explicitly rejected — this lane never falls
+back to them.
 
 Today the resolver returns an empty catalog with a setup message
 ("Codex Subscription catalog not found" / "Codex subscription is
 not configured locally") so the picker surfaces the state instead of
-inventing models. When OpenCode exposes a local Codex-subscription
-catalog, the executor is ready to consume it: same executor plumbing
-as the free / MiniMax lanes, with a Codex-subscription provider
+inventing models. The local allowlist is intentionally empty in
+stage 2: no public OpenCode Codex-subscription provider prefix is
+verified yet, so the executor rejects every model id at pin time.
+When OpenCode exposes a verifiable local Codex-subscription catalog,
+populate the ``allowed_provider_prefixes`` on the
+``opencode-native-codex-subscription`` entry in
+:data:`omnigent.inner._opencode_native_lane_config.OPENCODE_NATIVE_LANES`
+and the executor is ready to consume it: same executor plumbing as
+the free / MiniMax lanes, with a Codex-subscription provider
 allowlist on the model pin.
+
+The allowlist is the SINGLE source of truth shared with the
+server-side resolver — there is no copy-paste of the membership
+list, and a future edit that diverges the two fails the lane-config
+contract test loudly.
 """
 
 from __future__ import annotations
@@ -21,6 +33,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+from omnigent.inner._opencode_native_lane_config import (
+    OpenCodeNativeLaneConfig,
+    lane_for_executor_harness_id,
+)
 from omnigent.inner.executor import Executor
 from omnigent.native_server_harness import NativeServerHarness
 from omnigent.native_server_transport import NativePrompt
@@ -34,19 +50,38 @@ from omnigent.opencode_native_bridge import (
 # Canonical harness id, surfaced in harness error messages.
 OPENCODE_NATIVE_CODEX_SUBSCRIPTION_HARNESS_ID = "opencode-native-codex-subscription"
 
-# OpenCode provider prefixes the Codex Subscription lane allows when it
-# becomes possible to populate the local catalog. Anything else —
-# including the OpenAI API-billed ``codex/`` provider, the OpenAI API
-# key, or any unrelated OpenCode provider — is rejected at pin time so
-# it can never reach the runner. The membership list is intentionally
-# conservative: today no public OpenCode provider prefix is known for
-# the Codex subscription path, so every ``model_override`` is rejected
-# and the runner surfaces the local-not-configured state.
+# Local mirror of the lane's provider-prefix allowlist. The
+# authoritative source is
+# :func:`omnigent.inner._opencode_native_lane_config.lane_for_executor_harness_id`
+# — this constant exists so the test suite can pin the
+# fail-closed empty state without going through the shared config.
+# The test asserts the two agree.
 _OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES: frozenset[str] = frozenset(
     # Reserved for the future OpenCode Codex-subscription provider prefix.
     # The catalog resolver also gates on this same membership list, so
     # the picker and the executor stay in lockstep.
 )
+
+
+def _lane() -> OpenCodeNativeLaneConfig:
+    """Return the shared-config lane for the Codex Subscription harness.
+
+    :returns: The matching :class:`OpenCodeNativeLaneConfig` from the
+        shared ``OPENCODE_NATIVE_LANES`` table.
+    :raises RuntimeError: When the harness id is not registered in
+        the shared config. This is a configuration error — the
+        harness module is being imported without the shared config
+        knowing about it.
+    """
+    lane = lane_for_executor_harness_id(OPENCODE_NATIVE_CODEX_SUBSCRIPTION_HARNESS_ID)
+    if lane is None:
+        raise RuntimeError(
+            f"Harness id {OPENCODE_NATIVE_CODEX_SUBSCRIPTION_HARNESS_ID!r} is not "
+            "registered in omnigent.inner._opencode_native_lane_config.OPENCODE_NATIVE_LANES. "
+            "Add the lane config there — the executor / resolver / picker all "
+            "read from the shared table, so a missing entry is a configuration bug."
+        )
+    return lane
 
 
 class OpenCodeNativeCodexSubscriptionExecutor(NativeServerHarness):
@@ -96,10 +131,11 @@ class OpenCodeNativeCodexSubscriptionExecutor(NativeServerHarness):
         if not model:
             return prompt
         if not _is_allowed_codex_subscription_model(model):
+            lane = _lane()
             raise RuntimeError(
                 f"Model {model!r} is not a verified Codex subscription model. "
-                "The opencode-native-codex-subscription lane only accepts models "
-                "from the locally-verified Codex subscription catalog; OpenAI "
+                f"The {lane.resolver_id} lane only accepts models from the "
+                "locally-verified Codex subscription catalog; OpenAI "
                 "API-billed paths are explicitly rejected. Configure the local "
                 "Codex subscription catalog before launching a session in this "
                 "lane — see docs/omnigent-tailscale-eval.md."
@@ -127,8 +163,17 @@ def _is_allowed_codex_subscription_model(model: str) -> bool:
 
     Accepts both the bare OpenCode form (``<provider>/<model>``) and the
     fully-qualified form (``opencode/<provider>/<model>``).
+
+    The allowlist is sourced from the shared
+    :class:`OpenCodeNativeLaneConfig.allowed_provider_prefixes` (via
+    :func:`_lane`) — the same membership list the server-side
+    resolver uses. The local constant
+    ``_OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES`` exists
+    only for the test suite's belt-and-braces pin (today it's empty —
+    fail closed).
     """
-    if not _OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES:
+    lane = _lane()
+    if not lane.allowed_provider_prefixes:
         # No verified prefix yet → no model can be admitted. This is the
         # intentional "fail closed" state: until a local catalog is in
         # place, the lane cannot launch any model and the resolver returns
@@ -136,7 +181,7 @@ def _is_allowed_codex_subscription_model(model: str) -> bool:
         return False
     bare = model[len("opencode/"):] if model.startswith("opencode/") else model
     prefix = bare.split("/", 1)[0] if "/" in bare else ""
-    return prefix in _OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES
+    return prefix in lane.allowed_provider_prefixes
 
 
 def _bridge_dir_from_env() -> Path:

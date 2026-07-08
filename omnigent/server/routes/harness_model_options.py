@@ -6,11 +6,16 @@ harness that provides a registered model source.
 
 Provider registry
 -----------------
-Add new model sources by registering a resolver in
-``_HARNESS_MODEL_PROVIDERS``. Each resolver returns a list of normalized
-model dicts with ``id``, ``label``, ``provider``, ``tier``, ``kind``,
-``manual_fallback_only``, ``requires_credentials``, ``billing_risk``,
-``context_limit``, and ``output_limit``.
+The provider registry is built dynamically from
+:data:`omnigent.inner._opencode_native_lane_config.OPENCODE_NATIVE_LANES`
+— the shared single source of truth for every OpenCode-backed lane.
+Adding a new lane is a one-config-entry change in that table; the
+resolver and the executor both consume it without further edits.
+
+Each resolver returns a list of normalized model dicts with ``id``,
+``label``, ``provider``, ``tier``, ``kind``, ``manual_fallback_only``,
+``requires_credentials``, ``billing_risk``, ``context_limit``, and
+``output_limit``.
 """
 
 from __future__ import annotations
@@ -22,182 +27,187 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Query, Request
 
+from omnigent.inner._opencode_native_lane_config import (
+    OPENCODE_NATIVE_LANES,
+    OpenCodeNativeLaneConfig,
+    all_resolver_ids,
+    empty_state_disclaimer,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
 logger = logging.getLogger(__name__)
 
-# ── OpenCode free-catalog provider ───────────────────────────────────
 
-_OPENCODE_CATALOG_PATH = Path.home() / ".cache" / "homelab" / "opencode-free-models.json"
+# ── Generic lane resolver ──────────────────────────────────────────
 
 
-def _resolve_opencode_free_models() -> dict[str, Any]:
-    """Resolve OpenCode free models from the local catalog.
+def _resolve_lane_models(lane: OpenCodeNativeLaneConfig) -> dict[str, Any]:
+    """Resolve models for *lane* from its local catalog.
 
-    :returns: ``{"models": [...], "source": "opencode-free-catalog",
-        "last_synced_at": "..."}`` or an error-shaped dict.
+    Reads the catalog at ``lane.catalog_path`` (which the sync script
+    owns — see ``scripts/sync-opencode-<lane>-models.py`` in the
+    HomeLab repo) and translates each entry into a normalized
+    ``HarnessModelOption``. Filters at three layers:
+
+    1. **Sync layer** (offline) — the sync script's provider-prefix
+       allowlist keeps only verified ids. Catalog carries no
+       API-billed ids to begin with.
+    2. **Verify layer** (pre-run) — the verify script refuses
+       API-billed / non-lane ids with a clear non-zero exit.
+    3. **Resolver layer** (this function) — re-checks each entry
+       against ``lane.allowed_provider_prefixes`` (SUBSCRIPTION
+       lanes) or ``m.get("free") is True`` (FREE lanes) so a buggy
+       future catalog run cannot leak cross-lane ids into the
+       picker.
+
+    :param lane: The lane config from the shared table.
+    :returns: ``{"models": [...], "source": ..., "last_synced_at":
+        ..., "error": ...}``. The ``error`` key is present when the
+        catalog is missing or unreadable, or when the entry's
+        provider prefix is not in the allowlist.
     """
-    if not _OPENCODE_CATALOG_PATH.exists():
+    if not lane.catalog_path.is_file():
         return {
             "models": [],
-            "source": "opencode-free-catalog",
+            "source": lane.source_label or f"{lane.resolver_id}-catalog",
             "last_synced_at": None,
-            "error": "Catalog not found. Run opencode models to refresh.",
+            "error": lane.empty_state_message + empty_state_disclaimer(lane),
         }
-
     try:
-        raw = json.loads(_OPENCODE_CATALOG_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(lane.catalog_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read OpenCode free-model catalog: %s", exc)
+        logger.warning(
+            "Failed to read catalog for lane %s: %s",
+            lane.resolver_id,
+            exc,
+        )
         return {
             "models": [],
-            "source": "opencode-free-catalog",
+            "source": lane.source_label or f"{lane.resolver_id}-catalog",
             "last_synced_at": None,
             "error": f"Catalog unreadable: {exc}",
         }
 
-    all_models = raw.get("models", [])
-    free_models = [m for m in all_models if m.get("free") is True]
+    if lane.lane_variant.value == "free":
+        models = _filter_and_normalize_free_lane(raw.get("models", []), lane)
+    else:
+        models = _filter_and_normalize_subscription_lane(
+            raw.get("models", []), lane
+        )
 
     return {
-        "models": [
-            {
-                "id": m["id"],
-                "label": m.get("name") or m["id"].replace("-", " ").title(),
-                "provider": "OpenCode",
-                "tier": "free",
-                "kind": "manual-fallback",
-                "manual_fallback_only": m.get("explicit_manual_fallback_only", False),
-                "requires_credentials": False,
-                "billing_risk": "none-observed",
-                "context_limit": m.get("context_limit"),
-                "output_limit": m.get("output_limit"),
-                "variants": m.get("variants", []),
-            }
-            for m in free_models
-        ],
-        "source": "opencode-free-catalog",
+        "models": models,
+        "source": lane.source_label or f"{lane.resolver_id}-catalog",
         "last_synced_at": raw.get("last_synced_at"),
     }
 
 
-# ── MiniMax Token Plan lane ──────────────────────────────────────────
-#
-# Separate, explicit lane for the **MiniMax Token Plan / subscription**
-# models that opencode 1.17.13 ships as built-in providers under
-# ``minimax-coding-plan/`` and ``minimax-cn-coding-plan/``. Catalog is
-# produced by HomeLab's
-# ``scripts/sync-opencode-minimax-token-plan-models.py`` (24h refresh
-# via ``opencode-minimax-token-plan-refresh.timer``). The resolver does
-# NOT shell out to opencode or call MiniMax: it just reads the
-# pre-built catalog and rejects any model id whose provider prefix is
-# NOT one of the two Token-Plan prefixes — so the API-metered
-# ``minimax/`` / ``minimax-cn/`` variants can never leak into this lane
-# even if a future catalog run misconfigured filters.
-#
-# Exposed under harness key ``opencode-native-minimax-token-plan``,
-# distinct from ``opencode-native`` (the OpenCode Free lane) so the
-# picker can show both side-by-side without either polluting the other.
+def _filter_and_normalize_free_lane(
+    raw_models: list[dict[str, Any]],
+    lane: OpenCodeNativeLaneConfig,
+) -> list[dict[str, Any]]:
+    """Filter and normalize entries for a FREE lane (e.g. OpenCode Free).
 
-_MINIMAX_TOKEN_PLAN_CATALOG_PATH = (
-    Path.home() / ".cache" / "homelab" / "opencode-minimax-token-plan-models.json"
-)
-
-# Provider-id prefixes that are admission-controlled for this lane.
-# Anything else (e.g. ``minimax/`` or ``minimax-cn/``) is rejected
-# even if a buggy catalog ran them through. Defense-in-depth.
-_MINIMAX_TOKEN_PLAN_PROVIDER_PREFIXES: tuple[str, str] = (
-    "minimax-coding-plan",
-    "minimax-cn-coding-plan",
-)
-
-_MINIMAX_REGION_LABELS: dict[str, str] = {
-    "minimax-coding-plan": "international",
-    "minimax-cn-coding-plan": "China",
-}
-
-
-def _resolve_opencode_minimax_token_plan_models() -> dict[str, Any]:
-    """Resolve MiniMax **Token Plan** (subscription) models only.
-
-    Reads the catalog at
-    ``~/.cache/homelab/opencode-minimax-token-plan-models.json`` (owned
-    by ``scripts/sync-opencode-minimax-token-plan-models.py`` in the
-    HomeLab repo) and translates each entry into a normalized
-    ``HarnessModelOption``.
-
-    API-metered model ids (prefix ``minimax/`` or ``minimax-cn/``) are
-    deliberately excluded from the catalog by the sync script; this
-    resolver additionally re-checks each entry's id and rejects
-    anything that is not under one of the two Token-Plan prefixes, so
-    the endpoint can never advertise an API-metered model. If the
-    catalog is missing or unreadable, returns ``{"models": [], ...,
-    "error": "..."}`` rather than crashing — the picker surfaces the
-    error and the operator can run the sync script manually.
-
-    :returns: ``{"models": [...], "source": "opencode-minimax-token-plan-catalog",
-        "last_synced_at": "..."}``. ``last_synced_at`` is whatever the
-        sync script wrote.
+    FREE lanes filter by ``m.get("free") is True`` rather than by
+    provider prefix (the OpenCode Free catalog mixes several
+    providers and the "free" flag is the cross-provider signal).
+    The id the picker returns is always the fully-qualified
+    ``opencode/<id>`` form — the runner consumes it verbatim.
     """
-    if not _MINIMAX_TOKEN_PLAN_CATALOG_PATH.is_file():
-        return {
-            "models": [],
-            "source": "opencode-minimax-token-plan-catalog",
-            "last_synced_at": None,
-            "error": (
-                "MiniMax Token Plan catalog not found. Run "
-                "sync-opencode-minimax-token-plan-models.py to populate."
-            ),
-        }
-    try:
-        raw = json.loads(_MINIMAX_TOKEN_PLAN_CATALOG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read MiniMax Token Plan catalog: %s", exc)
-        return {
-            "models": [],
-            "source": "opencode-minimax-token-plan-catalog",
-            "last_synced_at": None,
-            "error": f"Catalog unreadable: {exc}",
-        }
+    models: list[dict[str, Any]] = []
+    for m in raw_models:
+        if m.get("free") is not True:
+            continue
+        bare_id = m.get("id", "")
+        if not bare_id:
+            continue
+        full_id = f"opencode/{bare_id}" if not bare_id.startswith("opencode/") else bare_id
+        models.append(
+            {
+                "id": full_id,
+                "label": m.get("name") or bare_id.replace("-", " ").title(),
+                "provider": lane.display_provider,
+                "tier": lane.tier,
+                "kind": lane.kind,
+                "manual_fallback_only": bool(
+                    m.get("explicit_manual_fallback_only", False)
+                ),
+                "requires_credentials": False,
+                "billing_risk": lane.billing_risk,
+                "context_limit": m.get("context_limit"),
+                "output_limit": m.get("output_limit"),
+                "variants": m.get("variants", []),
+            }
+        )
+    return models
+
+
+def _filter_and_normalize_subscription_lane(
+    raw_models: list[dict[str, Any]],
+    lane: OpenCodeNativeLaneConfig,
+) -> list[dict[str, Any]]:
+    """Filter and normalize entries for a SUBSCRIPTION lane.
+
+    SUBSCRIPTION lanes filter by provider-prefix allowlist. The
+    resolver layer re-checks every entry's provider prefix against
+    ``lane.allowed_provider_prefixes`` even though the sync script
+    already filtered — defense-in-depth against a buggy future
+    catalog run that shipped an API-metered id.
+
+    Returns ``[]`` when the allowlist is empty (fail-closed state
+    for lanes like Codex Subscription that don't have a verified
+    prefix yet).
+    """
+    if not lane.allowed_provider_prefixes:
+        # Fail closed — no verified provider prefix admits any
+        # model. The catalog is still reported as the source so
+        # the picker can show "configured but not verified" if
+        # useful.
+        return []
 
     models: list[dict[str, Any]] = []
-    for entry in raw.get("models", []):
+    for entry in raw_models:
         full_id: str = entry.get("id") or ""
         # ``full_id`` is the OpenCode-qualified form:
         # ``opencode/<provider>/<model>``. Strip the leading
         # ``opencode/`` to get the opencode-CLI form used by the
         # provider prefix check.
-        bare_id = full_id[len("opencode/"):] if full_id.startswith("opencode/") else full_id
+        bare_id = (
+            full_id[len("opencode/"):] if full_id.startswith("opencode/") else full_id
+        )
         provider_id = bare_id.split("/", 1)[0] if "/" in bare_id else ""
-        if provider_id not in _MINIMAX_TOKEN_PLAN_PROVIDER_PREFIXES:
-            # Defense-in-depth: catalog already filters; this refuses to
-            # pass through any API-metered id that sneaks in.
+        if provider_id not in lane.allowed_provider_prefixes:
             logger.warning(
-                "MiniMax Token Plan catalog returned non-Token-Plan "
-                "id %r; omitting from picker.", full_id,
+                "Lane %s catalog returned non-allowed id %r; omitting from picker.",
+                lane.resolver_id,
+                full_id,
             )
             continue
-        region_label = _MINIMAX_REGION_LABELS.get(provider_id, "")
+        region_label = lane.region_labels.get(provider_id, "")
         model_name = entry.get("model_name") or bare_id.split("/", 1)[-1]
         raw_line = entry.get("raw_line") or bare_id
+        label = entry.get("name") or model_name
+        if lane.label_suffix:
+            # Region-aware suffix (e.g. "Token Plan / Subscription (China)").
+            if region_label:
+                label = f"{label} — {lane.label_suffix} ({region_label})"
+            else:
+                label = f"{label} — {lane.label_suffix}"
         models.append(
             {
                 "id": full_id,
-                "label": (
-                    f"{entry.get('name') or model_name} "
-                    f"— Token Plan / Subscription ({region_label})"
-                ),
-                "provider": "MiniMax",
-                "tier": "subscription",
-                "kind": "token-plan",
+                "label": label,
+                "provider": lane.display_provider,
+                "tier": lane.tier,
+                "kind": lane.kind,
                 "manual_fallback_only": True,
                 "requires_credentials": True,
                 # Boolean ONLY — the catalog carries no secret value
                 # and neither does this endpoint.
                 "credentials_present": bool(entry.get("credentials_present")),
-                "credential_env_var": "MINIMAX_API_KEY",
-                "billing_risk": "token-plan-subscription",
+                "credential_env_var": lane.credential_env_var,
+                "billing_risk": lane.billing_risk,
                 "context_limit": entry.get("context_limit"),
                 "output_limit": entry.get("output_limit"),
                 "provider_id": provider_id,
@@ -206,166 +216,18 @@ def _resolve_opencode_minimax_token_plan_models() -> dict[str, Any]:
                 "raw_line": raw_line,
             }
         )
-
-    return {
-        "models": models,
-        "source": "opencode-minimax-token-plan-catalog",
-        "last_synced_at": raw.get("last_synced_at"),
-    }
-
-
-# ── Codex Subscription lane ─────────────────────────────────────────
-#
-# Subscription-backed Codex lane routed through OpenCode's
-# subscription-authenticated Codex provider. Distinct harness id
-# ``opencode-native-codex-subscription`` from both ``codex-native``
-# (the OpenAI API-billed path) and ``opencode-native`` (the free
-# lane) so the picker can show all three side-by-side without mixing.
-#
-# Today no local Codex-subscription catalog is shipped: the resolver
-# returns an empty list with an explicit setup / status message so
-# the picker can surface the state instead of inventing models.
-#
-# Hard rules:
-#  * No OpenAI API calls. The resolver reads ONLY from local state.
-#  * No OPENAI_API_KEY fallback. Subscription-only.
-#  * When the local catalog is empty, the resolver returns ``{"models":
-#    [], ..., "error": "Codex Subscription catalog not found ..."}``
-#    so the picker renders the empty / setup state, never an invented
-#    model.
-#  * When a future catalog exposes models under a verified Codex-
-#    subscription provider prefix, this resolver re-checks each entry
-#    against ``_OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES``
-#    so a buggy future catalog run cannot leak OpenAI-API-billed ids
-#    into the picker.
-_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH = (
-    Path.home() / ".cache" / "homelab" / "opencode-codex-subscription-models.json"
-)
-
-# Verified OpenCode Codex-subscription provider prefixes. Conservative
-# on purpose: today none is known, so any ``model_override`` is
-# rejected. When OpenCode ships a verifiable local catalog, populate
-# this set with the resolved prefixes and the executor will admit
-# matching models. The membership list is the SINGLE source of truth
-# for "is this a Codex subscription model?"; the picker resolver and
-# the executor agree on it (see
-# omnigent.inner.opencode_native_codex_subscription_harness._OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES).
-_OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES: frozenset[str] = frozenset()
-
-
-def _resolve_opencode_codex_subscription_models() -> dict[str, Any]:
-    """Resolve Codex Subscription (subscription-backed) models only.
-
-    Reads the local catalog at
-    ``~/.cache/homelab/opencode-codex-subscription-models.json`` if
-    present, and translates each entry into a normalized
-    ``HarnessModelOption``. Re-checks each entry's provider prefix
-    against the verified allowlist so a buggy future catalog run
-    cannot leak non-Codex-subscription ids into the picker.
-
-    The catalog is intentionally OPTIONAL: the resolver does not
-    fail when the catalog is missing — it returns an empty list with
-    a clear setup message. This matches the
-    ``opencode-native-minimax-token-plan`` lane's empty-catalog
-    contract: never invent models, never silently substitute, always
-    surface the state.
-
-    Hard rules (defense-in-depth):
-      * No OpenAI API calls. Local catalog only.
-      * No OPENAI_API_KEY fallback. Subscription-only.
-      * Empty catalog with setup message rather than invented models.
-      * Re-checks each entry's provider prefix even when present.
-
-    :returns: ``{"models": [...], "source":
-        "opencode-codex-subscription-catalog", "last_synced_at": "...",
-        "error": "..."}``. ``last_synced_at`` is whatever the catalog
-        wrote (may be None).
-    """
-    if not _OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH.is_file():
-        return {
-            "models": [],
-            "source": "opencode-codex-subscription-catalog",
-            "last_synced_at": None,
-            "error": (
-                "Codex Subscription catalog not found. The "
-                "opencode-native-codex-subscription lane has no local "
-                "verified catalog yet. Configure OpenCode's Codex "
-                "subscription provider locally so the catalog can be "
-                "populated; this resolver NEVER falls back to the "
-                "OpenAI API-billed path."
-            ),
-        }
-    try:
-        raw = json.loads(_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read Codex Subscription catalog: %s", exc)
-        return {
-            "models": [],
-            "source": "opencode-codex-subscription-catalog",
-            "last_synced_at": None,
-            "error": f"Catalog unreadable: {exc}",
-        }
-
-    models: list[dict[str, Any]] = []
-    for entry in raw.get("models", []):
-        full_id: str = entry.get("id") or ""
-        bare_id = full_id[len("opencode/"):] if full_id.startswith("opencode/") else full_id
-        provider_id = bare_id.split("/", 1)[0] if "/" in bare_id else ""
-        if provider_id not in _OPENCODE_CODEX_SUBSCRIPTION_ALLOWED_PROVIDER_PREFIXES:
-            # Defense-in-depth: the catalog reader rejects anything that
-            # isn't a verified Codex-subscription provider prefix, so a
-            # buggy catalog run cannot leak OpenAI-API-billed ids into
-            # the picker. With an empty allowlist (today's state) every
-            # entry is rejected, which matches the "fail closed" stance.
-            logger.warning(
-                "Codex Subscription catalog returned non-verified id %r; "
-                "omitting from picker.",
-                full_id,
-            )
-            continue
-        model_name = entry.get("model_name") or bare_id.split("/", 1)[-1]
-        raw_line = entry.get("raw_line") or bare_id
-        models.append(
-            {
-                "id": full_id,
-                "label": (
-                    f"{entry.get('name') or model_name} "
-                    "\u2014 Codex Subscription"
-                ),
-                "provider": "Codex",
-                "tier": "subscription",
-                "kind": "subscription",
-                "manual_fallback_only": True,
-                "requires_credentials": True,
-                # Boolean only — the catalog carries no secret value
-                # and neither does this endpoint.
-                "credentials_present": bool(entry.get("credentials_present")),
-                "credential_env_var": "CODEX_SUBSCRIPTION_AUTH",
-                "billing_risk": "subscription",
-                "context_limit": entry.get("context_limit"),
-                "output_limit": entry.get("output_limit"),
-                "provider_id": provider_id,
-                "release_date": entry.get("release_date", ""),
-                "raw_line": raw_line,
-            }
-        )
-
-    return {
-        "models": models,
-        "source": "opencode-codex-subscription-catalog",
-        "last_synced_at": raw.get("last_synced_at"),
-    }
+    return models
 
 
 # ── Provider registry ────────────────────────────────────────────────
 #
-# Map canonical harness id → resolver function.
-# Each resolver returns a dict with ``models`` (list) and metadata.
+# Map canonical harness id → resolver function. Built dynamically
+# from the shared ``OPENCODE_NATIVE_LANES`` table so adding a future
+# lane is a one-config-entry change.
 
 _HARNESS_MODEL_PROVIDERS: dict[str, Callable[[], dict[str, Any]]] = {
-    "opencode-native": _resolve_opencode_free_models,
-    "opencode-native-minimax-token-plan": _resolve_opencode_minimax_token_plan_models,
-    "opencode-native-codex-subscription": _resolve_opencode_codex_subscription_models,
+    lane.resolver_id: (lambda lane=lane: _resolve_lane_models(lane))
+    for lane in OPENCODE_NATIVE_LANES
 }
 
 
