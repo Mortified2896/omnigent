@@ -108,6 +108,7 @@ def _to_conversation(
         reasoning_effort=row.reasoning_effort,
         model_override=row.model_override,
         cost_control_mode_override=row.cost_control_mode_override,
+        route_approval_enabled=row.route_approval_enabled,
         harness_override=row.harness_override,
         sub_agent_name=row.sub_agent_name,
         external_session_id=row.external_session_id,
@@ -1840,6 +1841,8 @@ class SqlAlchemyConversationStore(ConversationStore):
         _unset_model_override: bool = False,
         cost_control_mode_override: str | None = None,
         _unset_cost_control_mode_override: bool = False,
+        route_approval_enabled: bool | None = None,
+        _unset_route_approval_enabled: bool = False,
         harness_override: str | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
@@ -1904,6 +1907,12 @@ class SqlAlchemyConversationStore(ConversationStore):
                 changed = True
             elif cost_control_mode_override is not None:
                 row.cost_control_mode_override = cost_control_mode_override
+                changed = True
+            if _unset_route_approval_enabled:
+                row.route_approval_enabled = None
+                changed = True
+            elif route_approval_enabled is not None:
+                row.route_approval_enabled = route_approval_enabled
                 changed = True
             if harness_override is not None:
                 row.harness_override = harness_override

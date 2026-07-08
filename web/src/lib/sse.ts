@@ -793,6 +793,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
     // session-scoped allow rule on accept). `tool` is the gated tool;
     // `host` is the WebFetch request domain when present (drives the
     // button label and the rule scope).
+    const routeProposalRaw = p.route_proposal;
     const rememberScopeRaw = p.remember_scope;
     const rememberScope: RememberScope | null =
       rememberScopeRaw &&
@@ -847,6 +848,10 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
           : null,
       allowAllEdits,
       rememberScope,
+      routeProposal:
+        routeProposalRaw && typeof routeProposalRaw === "object" && !Array.isArray(routeProposalRaw)
+          ? (routeProposalRaw as Record<string, unknown>)
+          : null,
     } satisfies ElicitationRequest;
   }
 

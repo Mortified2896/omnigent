@@ -54,6 +54,7 @@ import type { RememberScope } from "@/lib/types";
 import { useChatStore } from "@/store/chatStore";
 import { AskUserQuestionForm, type AskUserQuestionAnswers } from "./AskUserQuestionForm";
 import { ExitPlanModeReview } from "./ExitPlanModeReview";
+import { RouteProposalCard, type RouteProposalPayload } from "./RouteProposalCard";
 
 /**
  * Extract the answer-option labels from an AskUserQuestion-shaped
@@ -81,7 +82,7 @@ function extractOptionLabels(schema: Record<string, unknown>): string[] {
  */
 export type SubmitApprovalFn = (
   elicitationId: string,
-  action: "accept" | "decline",
+  action: "accept" | "decline" | "cancel",
   content?: Record<string, unknown>,
 ) => void;
 
@@ -149,6 +150,7 @@ interface ApprovalCardProps {
    * elicitation (edit tools take the ``allowAllEdits`` path instead).
    */
   rememberScope?: RememberScope | null;
+  routeProposal?: RouteProposalPayload | null;
   /**
    * Verdict submitter override. Defaults to `chatStore.submitApproval`
    * (the in-chat path: optimistic block flip + resolve POST + rollback).
@@ -173,6 +175,7 @@ export function ApprovalCard({
   codexCommand,
   allowAllEdits,
   rememberScope,
+  routeProposal,
   onSubmit,
 }: ApprovalCardProps) {
   const submit: SubmitApprovalFn =
@@ -215,6 +218,18 @@ export function ApprovalCard({
     // permission update back to the PermissionRequest hook.
     submit(elicitationId, "accept", { remember: true });
   };
+  if (routeProposal) {
+    return (
+      <RouteProposalCard
+        elicitationId={elicitationId}
+        proposal={routeProposal}
+        status={status}
+        response={response}
+        onSubmit={submit}
+      />
+    );
+  }
+
   const submitPlanRejection = (feedback: string) => {
     // The typed feedback rides on `content.feedback`; the server
     // forwards it to Claude as the deny `message`, so Claude stays in
@@ -584,6 +599,7 @@ export function ElicitationCard({
       codexCommand={item.codexCommand}
       allowAllEdits={item.allowAllEdits}
       rememberScope={item.rememberScope}
+      routeProposal={item.routeProposal as RouteProposalPayload | null | undefined}
       onSubmit={onSubmit}
     />
   );

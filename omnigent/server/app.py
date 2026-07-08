@@ -1857,6 +1857,12 @@ def create_app(
             )
         except ImportError:
             smart_routing_enabled = False
+        # route_approval_enabled: server-level capability probe for the
+        # route approval gate. Mirrors the env flag — when the global
+        # toggle is off, the SPA hides the per-session switch entirely.
+        from omnigent.server.route_proposal import route_approval_gate_enabled
+
+        route_approval_enabled = route_approval_gate_enabled()
         return {
             "accounts_enabled": accounts_enabled,
             "login_url": login_url,
@@ -1866,6 +1872,7 @@ def create_app(
             "sandbox_provider": sandbox_provider,
             "server_version": _server_version(),
             "smart_routing_enabled": smart_routing_enabled,
+            "route_approval_enabled": route_approval_enabled,
         }
 
     @app.get("/v1/me", response_model=None)  # Union return type (dict | JSONResponse)

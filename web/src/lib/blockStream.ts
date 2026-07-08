@@ -862,6 +862,7 @@ function* processEvent(state: ReducerState, event: StreamEvent): Generator<AnyBl
         codexCommand: event.codexCommand,
         allowAllEdits: event.allowAllEdits,
         rememberScope: event.rememberScope,
+        routeProposal: event.routeProposal,
       } satisfies ElicitationBlock;
       return;
     }

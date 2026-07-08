@@ -68,6 +68,13 @@ export interface ServerInfo {
    * (``OMNIGENT_SMART_ROUTING=1`` + ``llm:`` config). Hidden by default.
    */
   smart_routing_enabled: boolean;
+  /**
+   * True when the route approval gate is configured at the server level
+   * (e.g. ``OMNIGENT_ROUTE_APPROVAL_GATE`` is not explicitly disabled).
+   * The per-session toggle is still required to actually gate a message;
+   * this flag only tells the SPA whether the feature is available.
+   */
+  route_approval_enabled: boolean;
 }
 
 /** Sentinel used when the probe fails — accounts is off, no login URL. */
@@ -80,6 +87,7 @@ const _OFF: ServerInfo = {
   sandbox_provider: null,
   server_version: null,
   smart_routing_enabled: false,
+  route_approval_enabled: false,
 };
 
 let _cached: ServerInfo | null = null;
@@ -114,6 +122,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
             typeof data.sandbox_provider === "string" ? data.sandbox_provider : null,
           server_version: typeof data.server_version === "string" ? data.server_version : null,
           smart_routing_enabled: data.smart_routing_enabled === true,
+          route_approval_enabled: data.route_approval_enabled === true,
         };
         return _cached;
       }

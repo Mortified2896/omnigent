@@ -612,6 +612,8 @@ class ConversationStore(ABC):
         _unset_model_override: bool = False,
         cost_control_mode_override: str | None = None,
         _unset_cost_control_mode_override: bool = False,
+        route_approval_enabled: bool | None = None,
+        _unset_route_approval_enabled: bool = False,
         harness_override: str | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,

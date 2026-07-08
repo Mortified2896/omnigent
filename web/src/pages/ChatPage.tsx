@@ -157,6 +157,7 @@ import {
   isCostRoutingSession,
   parseCostRoutingVerdict,
 } from "@/components/CostRoutingControl";
+import { RouteApprovalControl } from "@/components/RouteApprovalControl";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { MainTerminalView } from "@/shell/MainTerminalView";
 import { UNTITLED_CONVERSATION_LABEL } from "@/shell/sidebarNav";
@@ -832,6 +833,7 @@ export function ChatPage() {
     serverInfo !== "loading" &&
     serverInfo.smart_routing_enabled &&
     isCostRoutingSession(activeSession);
+  const routeApprovalServerEnabled = serverInfo !== "loading" && serverInfo.route_approval_enabled;
 
   // Non-null only when the active session is a sub-agent (child): the
   // composer then peeks a "Chatting with sub-agent …" tray and the
@@ -1082,6 +1084,7 @@ export function ChatPage() {
       showCodexGoal={shouldShowCodexGoalControl(capabilitySource)}
       costRoutingVerdict={costRoutingVerdict}
       costRoutingEligible={costRoutingEligible}
+      routeApprovalServerEnabled={routeApprovalServerEnabled}
       subAgentLabel={subAgentLabel}
     />
   );
@@ -1312,6 +1315,8 @@ interface MainAgentSurfaceProps {
   costRoutingVerdict: CostRoutingVerdict | null;
   /** Session passes `isCostRoutingSession` (polly orchestrator, not a child). */
   costRoutingEligible: boolean;
+  /** Server-level capability for the route-approval toggle. */
+  routeApprovalServerEnabled: boolean;
   /**
    * Sub-agent instance label when the active session is a child, e.g.
    * ``"check-account-eligibility"``; ``null`` for top-level sessions.
@@ -1384,6 +1389,7 @@ function MainAgentSurface({
   showCodexGoal = false,
   costRoutingVerdict,
   costRoutingEligible,
+  routeApprovalServerEnabled,
   subAgentLabel,
 }: MainAgentSurfaceProps) {
   const terminalFirst = useTerminalFirst();
@@ -1735,6 +1741,7 @@ function MainAgentSurface({
         }
         costRoutingVerdict={costRoutingVerdict}
         costRoutingEligible={costRoutingEligible}
+        routeApprovalServerEnabled={routeApprovalServerEnabled}
         subAgentLabel={subAgentLabel}
       />
 
@@ -3143,6 +3150,8 @@ interface ComposerProps {
   costRoutingVerdict?: CostRoutingVerdict | null;
   /** Session passes `isCostRoutingSession` (polly orchestrator, not a child); see that predicate. */
   costRoutingEligible?: boolean;
+  /** Server-level capability for the route-approval toggle. */
+  routeApprovalServerEnabled?: boolean;
   /**
    * Sub-agent instance label when the active session is a child, e.g.
    * ``"check-account-eligibility"``; ``null``/omitted for top-level
@@ -3556,6 +3565,7 @@ export function Composer({
   unreachable = false,
   costRoutingVerdict = null,
   costRoutingEligible = false,
+  routeApprovalServerEnabled = false,
   subAgentLabel = null,
 }: ComposerProps) {
   const [value, setValue] = useState("");
@@ -3615,6 +3625,7 @@ export function Composer({
 
   // Per-session cost-control switch, hydrated from the snapshot on bind.
   const costControlModeOverride = useChatStore((s) => s.costControlModeOverride);
+  const routeApprovalEnabled = useChatStore((s) => s.routeApprovalEnabled);
   const codexPlanMode = useChatStore((s) => s.codexPlanMode);
   // Harness/agent identity shown in the status tray below the card. The
   // picker trigger owns model/effort now, so the identity moves here.
@@ -4616,6 +4627,17 @@ export function Composer({
                 verdict={costRoutingVerdict}
               />
             )}
+            <RouteApprovalControl
+              value={routeApprovalEnabled === true ? "on" : "off"}
+              serverEnabled={routeApprovalServerEnabled}
+              disabled={isReadOnly}
+              onChange={(mode) =>
+                void useChatStore
+                  .getState()
+                  .setRouteApprovalEnabled(mode === "on" ? true : false)
+                  .catch(() => {})
+              }
+            />
             {showCodexPlanMode && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -5255,7 +5277,10 @@ function AgentPicker({
                   );
                   return;
                 }
-                void useChatStore.getState().setModel(m.id).catch(() => {});
+                void useChatStore
+                  .getState()
+                  .setModel(m.id)
+                  .catch(() => {});
               };
               return (
                 <DropdownMenuItem

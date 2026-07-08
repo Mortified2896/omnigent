@@ -353,6 +353,11 @@ class SqlConversation(Base):
     # Per-session cost-control switch: "on" | "off". Nullable; None
     # means use the spec default (see entities.Conversation).
     cost_control_mode_override: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Per-session route-approval toggle. True gates message execution
+    # behind the route proposal approval card; False / NULL runs without
+    # the gate. Combined server-side with the OMNIGENT_ROUTE_APPROVAL_GATE
+    # env flag (see omnigent.server.route_proposal).
+    route_approval_enabled: Mapped[bool | None] = mapped_column(nullable=True)
     # Per-session brain-harness override, e.g. "pi". Nullable; None
     # means use the spec's executor.config.harness (see entities.Conversation).
     harness_override: Mapped[str | None] = mapped_column(String(64), nullable=True)

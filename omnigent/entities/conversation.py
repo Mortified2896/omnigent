@@ -198,6 +198,7 @@ class Conversation:
     reasoning_effort: str | None = None
     model_override: str | None = None
     cost_control_mode_override: str | None = None
+    route_approval_enabled: bool | None = None
     harness_override: str | None = None
     sub_agent_name: str | None = None
     external_session_id: str | None = None

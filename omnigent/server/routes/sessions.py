@@ -168,6 +168,14 @@ from omnigent.server.managed_hosts import (
 )
 from omnigent.server.mcp_pool import ServerMcpPool
 from omnigent.server.permissions import check_session_access
+from omnigent.server.route_proposal import (
+    RouteDecision,
+    final_route_from_decision,
+    proposal_is_non_api_only,
+    propose_route,
+    route_approval_gate_enabled,
+    route_proposal_store,
+)
 from omnigent.server.routes._auth_helpers import (
     attribution_user as _attribution_user,
 )
@@ -1573,6 +1581,89 @@ async def _publish_and_wait_for_harness_elicitation(
                 )
 
 
+async def _propose_route_and_wait_for_approval(
+    request: Request,
+    *,
+    session_id: str,
+    conv: Conversation,
+    body: SessionEventInput,
+    conversation_store: ConversationStore,
+) -> dict[str, Any]:
+    user_text = _extract_user_text_for_routing(body)
+    if not user_text:
+        raise OmnigentError(
+            "Cannot route an empty message",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    try:
+        proposal = await propose_route(user_text, current_harness=_resolve_harness(conv))
+    except RuntimeError as exc:
+        raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+    if not proposal_is_non_api_only(proposal):
+        raise OmnigentError(
+            "Route proposal violates non-API-only execution policy",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    route_proposal_store.save_proposal(session_id, proposal)
+    params = ElicitationRequestParams(
+        mode="form",
+        message="Approve execution route before Omnigent starts this task.",
+        requestedSchema={
+            "type": "object",
+            "properties": {
+                "model_policy": {"type": "string"},
+                "model_lane": {"type": "string"},
+                "reasoning_effort": {"type": "string"},
+                "permission_mode": {"type": "string"},
+                "comment": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        phase="route_proposal",
+        policy_name="execution_route_approval",
+        content_preview=proposal.rationale,
+        route_proposal=proposal.model_dump(mode="json"),
+    )
+    result = await _publish_and_wait_for_harness_elicitation(
+        request,
+        session_id=session_id,
+        params=params,
+        timeout_s=3600.0,
+        conversation_store=conversation_store,
+        elicitation_id=f"elicit_{proposal.proposal_id}",
+    )
+    if result is None or result.action in ("decline", "cancel"):
+        action = result.action if result is not None else "cancel"
+        route_proposal_store.save_decision(
+            session_id,
+            RouteDecision(
+                proposal_id=proposal.proposal_id,
+                action=action,
+                user_comment=None,
+                final_route=None,
+                router_used_profile=proposal.router_used_profile,
+            ),
+        )
+        raise OmnigentError(
+            "Execution route was not approved; task was not forwarded",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    content = result.content or {}
+    final_route = final_route_from_decision(proposal, content)
+    comment = content.get("comment")
+    route_proposal_store.save_decision(
+        session_id,
+        RouteDecision(
+            proposal_id=proposal.proposal_id,
+            action="accept",
+            user_comment=comment if isinstance(comment, str) else None,
+            final_route=final_route,
+            router_used_profile=proposal.router_used_profile,
+        ),
+    )
+    return final_route
+
+
 def _canonical_tool_input(tool_input: dict[str, Any] | None) -> dict[str, Any]:
     """
     Canonicalize a tool input for terminal-resolved correlation.
@@ -2491,6 +2582,7 @@ def _build_session_response(
         harness=_resolve_harness(conv),
         model_override=conv.model_override,
         cost_control_mode_override=conv.cost_control_mode_override,
+        route_approval_enabled=conv.route_approval_enabled,
         context_window=context_window,
         last_total_tokens=last_total_tokens,
         # Seed the client's cost indicator on resume. Uses the SUBTREE
@@ -4038,6 +4130,11 @@ async def _resolve_elicitation(
                 session_id,
                 elicitation_id,
             )
+    # Route-proposal approvals are server-side execution gates; there is
+    # no runner-side pending approval yet because the user message has not
+    # been forwarded.
+    if isinstance(elicitation_id, str) and elicitation_id.startswith("elicit_route_"):
+        return
     # Runner-side elicitations (policy approvals, scaffold dispatch)
     # resolve when the canonical approval event reaches the runner.
     await _forward_approval_to_runner(session_id, data, runner_router)
@@ -8584,6 +8681,7 @@ async def _forward_event_to_runner(
     artifact_store: ArtifactStore | None = None,
     has_mcp_servers: bool = False,
     created_by: str | None = None,
+    request: Request | None = None,
 ) -> str:
     """
     Persist a user event and forward it to the runner.
@@ -8674,6 +8772,21 @@ async def _forward_event_to_runner(
                     exc_info=True,
                 )
 
+    approved_route: dict[str, Any] | None = None
+    if (
+        body.type == "message"
+        and request is not None
+        and route_approval_gate_enabled()
+        and conv.route_approval_enabled is True
+    ):
+        approved_route = await _propose_route_and_wait_for_approval(
+            request,
+            session_id=session_id,
+            conv=conv,
+            body=body,
+            conversation_store=conversation_store,
+        )
+
     # Flatten SessionEventInput {type, data} into the runner's
     # discriminated-union shape {type, ...data_fields}. The runner's
     # POST handler expects the harness event shape, not the
@@ -8733,7 +8846,12 @@ async def _forward_event_to_runner(
     ) or _parent_routing_on
     _routed_model: str | None = None
     _verdict: dict[str, Any] | None = None
-    if effective_runner_override is None and _routing_enabled and body.type == "message":
+    if (
+        approved_route is None
+        and effective_runner_override is None
+        and _routing_enabled
+        and body.type == "message"
+    ):
         from omnigent.server.smart_routing import route_turn
 
         _harness = _resolve_harness(conv)
@@ -8835,6 +8953,7 @@ async def _dispatch_session_event_to_runner(
     has_mcp_servers: bool = False,
     created_by: str | None = None,
     runner_router: RunnerRouter | None = None,
+    request: Request | None = None,
 ) -> _SessionEventDispatchResult:
     """
     Forward an item-event to the runner with harness-aware dispatch.
@@ -8933,6 +9052,20 @@ async def _dispatch_session_event_to_runner(
                 conversation_store,
                 ensure_outcome.policy_notice,
             )
+        approved_route: dict[str, Any] | None = None
+        if (
+            request is not None
+            and route_approval_gate_enabled()
+            and conv.route_approval_enabled is True
+        ):
+            approved_route = await _propose_route_and_wait_for_approval(
+                request,
+                session_id=session_id,
+                conv=conv,
+                body=body,
+                conversation_store=conversation_store,
+            )
+
         # Record the optimistic bubble before forwarding so it's known
         # server-side immediately (replayed into the snapshot). Roll it
         # back on any failure/cancellation so a message the TUI never
@@ -8962,7 +9095,7 @@ async def _dispatch_session_event_to_runner(
         ) or _native_parent_routing_on
         _native_routed_model: str | None = None
         _native_verdict: dict[str, Any] | None = None
-        if conv.model_override is None and _native_routing_enabled:
+        if approved_route is None and conv.model_override is None and _native_routing_enabled:
             from omnigent.server.smart_routing import route_turn
 
             _harness = _resolve_harness(conv)
@@ -9040,6 +9173,7 @@ async def _dispatch_session_event_to_runner(
         artifact_store=artifact_store,
         has_mcp_servers=has_mcp_servers,
         created_by=created_by,
+        request=request,
     )
     return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
 
@@ -12138,6 +12272,12 @@ async def _create_session_from_existing_agent(
     cost_control_mode_override = _validated_cost_control_mode_override(
         body.cost_control_mode_override
     )
+    route_approval_enabled = body.route_approval_enabled
+    if route_approval_enabled is not None and not isinstance(route_approval_enabled, bool):
+        raise OmnigentError(
+            "invalid route_approval_enabled: must be a boolean or null",
+            code=ErrorCode.INVALID_INPUT,
+        )
 
     # Validated against the loaded spec (known harness + omnigent
     # executor type) before any row exists, mirroring the CLI's
@@ -12280,6 +12420,7 @@ async def _create_session_from_existing_agent(
         model_override is not None
         or reasoning_effort is not None
         or cost_control_mode_override is not None
+        or route_approval_enabled is not None
         or harness_override is not None
     ):
         # ``create_conversation`` has no override params; reuse the
@@ -12292,6 +12433,7 @@ async def _create_session_from_existing_agent(
             model_override=model_override,
             reasoning_effort=reasoning_effort,
             cost_control_mode_override=cost_control_mode_override,
+            route_approval_enabled=route_approval_enabled,
             harness_override=harness_override,
         )
         if updated_conv is None:
@@ -15113,6 +15255,20 @@ def create_sessions_router(
         cost_control_mode_override = _validated_cost_control_mode_override(
             body.cost_control_mode_override
         )
+        clear_route_approval = (
+            "route_approval_enabled" in body.model_fields_set
+            and body.route_approval_enabled is None
+        )
+        route_approval_enabled = body.route_approval_enabled
+        if (
+            "route_approval_enabled" in body.model_fields_set
+            and route_approval_enabled is not None
+            and not isinstance(route_approval_enabled, bool)
+        ):
+            raise OmnigentError(
+                "invalid route_approval_enabled: must be a boolean or null",
+                code=ErrorCode.INVALID_INPUT,
+            )
 
         # Native-terminal pass-through args: ``None`` leaves them
         # unchanged; a provided list (including ``[]``) replaces the
@@ -15224,6 +15380,8 @@ def create_sessions_router(
             _unset_model_override=clear_model,
             cost_control_mode_override=None if clear_cost_control else cost_control_mode_override,
             _unset_cost_control_mode_override=clear_cost_control,
+            route_approval_enabled=None if clear_route_approval else route_approval_enabled,
+            _unset_route_approval_enabled=clear_route_approval,
             terminal_launch_args=terminal_launch_args,
             archived=body.archived,
         )
@@ -19364,6 +19522,7 @@ def create_sessions_router(
             has_mcp_servers=_has_mcp_servers,
             created_by=_attribution_user(user_id),
             runner_router=runner_router,
+            request=request,
         )
         response: dict[str, Any] = {"queued": True}
         if dispatch.item_id is not None:

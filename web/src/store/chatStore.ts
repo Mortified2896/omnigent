@@ -342,6 +342,14 @@ export interface ChatState {
    */
   costControlModeOverride: "on" | "off" | null;
   /**
+   * Per-session route-approval toggle. When true, the Omnigent server
+   * pauses each user message behind the Execution Route Proposal card
+   * (subject to the server-level `route_approval_enabled` capability).
+   * Hydrated from the snapshot on bind and written through
+   * `setRouteApprovalEnabled`.
+   */
+  routeApprovalEnabled: boolean | null;
+  /**
    * Per-session Codex collaboration-mode flag. Hydrated from
    * ``omnigent.codex_native.collaboration_mode`` on bind and updated by the
    * web toggle or native Codex TUI events. False for non-Codex sessions.
@@ -536,6 +544,7 @@ export interface ChatState {
    * default. No-ops when there is no active conversation.
    */
   setCostControlMode: (mode: "on" | "off" | null) => Promise<void>;
+  setRouteApprovalEnabled: (enabled: boolean | null) => Promise<void>;
   /**
    * Toggle Codex Plan mode for the active session. No-ops when there is no
    * active conversation.
@@ -751,6 +760,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectedModel: loadPickerPref(PICKER_PREF_MODEL_KEY),
   sessionModelOverride: null,
   costControlModeOverride: null,
+  routeApprovalEnabled: null,
   codexPlanMode: false,
   hasMoreHistory: false,
   loadingMoreHistory: false,
@@ -1249,6 +1259,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // so they reset with the session and re-hydrate from the snapshot.
         sessionModelOverride: null,
         costControlModeOverride: null,
+        routeApprovalEnabled: null,
         codexPlanMode: false,
         contextWindow: null,
         tokensUsed: null,
@@ -1409,6 +1420,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Roll back so the pill doesn't claim a state the server never persisted.
       if (get().conversationId === conversationId) {
         set({ costControlModeOverride: previous });
+      }
+      throw err;
+    }
+  },
+
+  setRouteApprovalEnabled: async (enabled) => {
+    const { conversationId } = get();
+    if (!conversationId) return;
+    const previous = get().routeApprovalEnabled;
+    set({ routeApprovalEnabled: enabled });
+    try {
+      const session = await updateSession(conversationId, { routeApprovalEnabled: enabled });
+      if (get().conversationId !== conversationId) return;
+      set({ routeApprovalEnabled: session.routeApprovalEnabled ?? null });
+    } catch (err) {
+      if (get().conversationId === conversationId) {
+        set({ routeApprovalEnabled: previous });
       }
       throw err;
     }
@@ -1701,6 +1729,7 @@ function sessionBindingPatch(
   | "sessionHarness"
   | "subAgentName"
   | "costControlModeOverride"
+  | "routeApprovalEnabled"
   | "codexPlanMode"
   | "contextWindow"
   | "gitBranch"
@@ -1724,6 +1753,7 @@ function sessionBindingPatch(
     sessionHarness: session.harness ?? null,
     subAgentName: session.subAgentName ?? null,
     costControlModeOverride: session.costControlModeOverride ?? null,
+    routeApprovalEnabled: session.routeApprovalEnabled ?? null,
     codexPlanMode: codexPlanModeFromSession(session),
     contextWindow: session.contextWindow ?? null,
     gitBranch: session.gitBranch ?? null,

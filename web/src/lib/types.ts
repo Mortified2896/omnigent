@@ -314,6 +314,13 @@ export interface Session {
    * "Cost Optimized" toggle.
    */
   costControlModeOverride?: "on" | "off" | null;
+  /**
+   * Per-session route-approval toggle. When `true`, Omnigent shows an
+   * Execution Route Proposal card before forwarding each user message
+   * to the runner. When `false` / `null`, the gate is off for this
+   * session (the server-level capability probe is still required).
+   */
+  routeApprovalEnabled?: boolean | null;
   /** Model context window size in tokens as looked up server-side. */
   contextWindow?: number | null;
   /**

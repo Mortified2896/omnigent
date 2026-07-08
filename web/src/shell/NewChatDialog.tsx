@@ -106,6 +106,7 @@ import { OttoEyes } from "@/components/OttoEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import { IntelligentModelControl, type CostControlMode } from "@/components/CostRoutingControl";
+import { RouteApprovalControl } from "@/components/RouteApprovalControl";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentRowTooltip } from "@/components/AgentHoverCard";
 import { CreateAgentDialog } from "./CreateAgentDialog";
@@ -1280,122 +1281,120 @@ function ModelEffortOptions({
  * Pre-session Model section for harnesses whose server-side catalog
  * exposes a list of models (currently `opencode-native` via
  * `/v1/harness-model-options?harness=opencode-native`).
-   *
-   * Lives as its own component because the catalog fetch is a hook —
-   * `useHarnessModelOptions` — and React rules require hooks to run on
-   * every render of the calling component unconditionally, so the fetch
-   * can't be hidden inside the parent's `knobSectionsFor` callback
-   * without being called for every harness entry on every render. This
-   * subcomponent is mounted only while the entry's submenu is open
-   * (one render per open menu, not per harness), so the catalog fetch
-   * only fires for harnesses the user actually opens.
-   *
-   * The model list comes back server-normalized (e.g. OpenCode Free's
-   * `big-pickle`, `deepseek-v4-flash-free`, …). The id the create body
-   * posts as `model_override` is the FULLY-QUALIFIED id (`opencode/<id>`)
-   * — same shape the catalog returns. The `OPENCODE_DEFAULT_MODEL_ID`
-   * constant picks the preselection when the user opens OpenCode's
-   * submenu for the first time and nothing is stored locally; if the
-   * catalog doesn't include it, the picker stays on "no selection"
-   * and surfaces an inline error rather than silently picking another
-   * free model. No fallback path exists.
-   */
-  function HarnessModelOptionsSection({
-    harness,
-    value,
-    onChange,
-    errorTestId,
-    missingWarningTestId,
-    emptyMessage,
-    emptyTestId,
-  }: {
-    harness: string;
-    value: string;
-    onChange: (model: string) => void;
-    errorTestId?: string;
-    missingWarningTestId?: string;
-    emptyMessage?: ReactNode;
-    emptyTestId?: string;
-  }) {
-    const { models, isLoading, error } = useHarnessModelOptions(harness);
-    // While the catalog loads, render a transient placeholder so the
-    // submenu shell still opens cleanly (matches the Claude submenu
-    // visual contract — a header above the rows). Once loaded, swap
-    // to the radios.
-    //
-    // ``value`` here is whatever the picker state passed in — either
-    // the live picked model (when this harness is the selected agent)
-    // or a stored-last-pick read out of ``readHarnessOptions`` (when the
-    // user is just hovering/previewing). If the stored id has since
-    // been retired from the catalog (the harness catalog rotated), the
-    // radio will visually show nothing checked AND a loud inline
-    // warning surfaces — the user MUST pick again, the create body
-    // gets nothing, and no silent substitution happens.
-    const isValueMissing =
-      !isLoading &&
-      error == null &&
-      models.length > 0 &&
-      value !== "" &&
-      !models.some((m) => m.id === value);
-    return (
-      <>
-        <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">
-          Model
+ *
+ * Lives as its own component because the catalog fetch is a hook —
+ * `useHarnessModelOptions` — and React rules require hooks to run on
+ * every render of the calling component unconditionally, so the fetch
+ * can't be hidden inside the parent's `knobSectionsFor` callback
+ * without being called for every harness entry on every render. This
+ * subcomponent is mounted only while the entry's submenu is open
+ * (one render per open menu, not per harness), so the catalog fetch
+ * only fires for harnesses the user actually opens.
+ *
+ * The model list comes back server-normalized (e.g. OpenCode Free's
+ * `big-pickle`, `deepseek-v4-flash-free`, …). The id the create body
+ * posts as `model_override` is the FULLY-QUALIFIED id (`opencode/<id>`)
+ * — same shape the catalog returns. The `OPENCODE_DEFAULT_MODEL_ID`
+ * constant picks the preselection when the user opens OpenCode's
+ * submenu for the first time and nothing is stored locally; if the
+ * catalog doesn't include it, the picker stays on "no selection"
+ * and surfaces an inline error rather than silently picking another
+ * free model. No fallback path exists.
+ */
+function HarnessModelOptionsSection({
+  harness,
+  value,
+  onChange,
+  errorTestId,
+  missingWarningTestId,
+  emptyMessage,
+  emptyTestId,
+}: {
+  harness: string;
+  value: string;
+  onChange: (model: string) => void;
+  errorTestId?: string;
+  missingWarningTestId?: string;
+  emptyMessage?: ReactNode;
+  emptyTestId?: string;
+}) {
+  const { models, isLoading, error } = useHarnessModelOptions(harness);
+  // While the catalog loads, render a transient placeholder so the
+  // submenu shell still opens cleanly (matches the Claude submenu
+  // visual contract — a header above the rows). Once loaded, swap
+  // to the radios.
+  //
+  // ``value`` here is whatever the picker state passed in — either
+  // the live picked model (when this harness is the selected agent)
+  // or a stored-last-pick read out of ``readHarnessOptions`` (when the
+  // user is just hovering/previewing). If the stored id has since
+  // been retired from the catalog (the harness catalog rotated), the
+  // radio will visually show nothing checked AND a loud inline
+  // warning surfaces — the user MUST pick again, the create body
+  // gets nothing, and no silent substitution happens.
+  const isValueMissing =
+    !isLoading &&
+    error == null &&
+    models.length > 0 &&
+    value !== "" &&
+    !models.some((m) => m.id === value);
+  return (
+    <>
+      <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">Model</div>
+      {isLoading && (
+        <div
+          data-testid={`new-chat-landing-model-loading-${harness}`}
+          className="px-2 py-1 text-xs text-muted-foreground"
+        >
+          Loading…
         </div>
-        {isLoading && (
-          <div
-            data-testid={`new-chat-landing-model-loading-${harness}`}
-            className="px-2 py-1 text-xs text-muted-foreground"
-          >
-            Loading…
-          </div>
-        )}
-        {!isLoading && error != null && (
-          <div
-            data-testid={errorTestId ?? "new-chat-landing-model-error"}
-            className="mx-2 my-1 rounded-sm border border-destructive/40 bg-destructive/5 px-2 py-1 text-xs text-destructive"
-            role="alert"
-          >
-            Could not load models for {harness}: {error.message}
-          </div>
-        )}
-        {isValueMissing && (
-          <div
-            data-testid={missingWarningTestId ?? "new-chat-landing-model-missing"}
-            className="mx-2 my-1 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
-            role="alert"
-          >
-            Previously picked model “{value}” is no longer available. Pick
-            another model before creating the session.
-          </div>
-        )}
-        {!isLoading && error == null && models.length === 0 && (
-          <div
-            data-testid={emptyTestId ?? "new-chat-landing-model-empty"}
-            className="px-2 py-1 text-xs text-muted-foreground"
-          >
-            {emptyMessage ?? "No models available."}
-          </div>
-        )}
-        {!isLoading && models.length > 0 && (
-          <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-            {models.map((m) => (
-              <DropdownMenuRadioItem
-                key={m.id}
-                value={m.id}
-                data-testid={`new-chat-landing-model-${m.id}`}
-                data-model-id={m.id}
-                onSelect={(event) => event.preventDefault()}
-                className="rounded-sm py-1 pl-2 text-xs"
-              >
-                {m.label}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        )}
-      </>
-    );
-  }
+      )}
+      {!isLoading && error != null && (
+        <div
+          data-testid={errorTestId ?? "new-chat-landing-model-error"}
+          className="mx-2 my-1 rounded-sm border border-destructive/40 bg-destructive/5 px-2 py-1 text-xs text-destructive"
+          role="alert"
+        >
+          Could not load models for {harness}: {error.message}
+        </div>
+      )}
+      {isValueMissing && (
+        <div
+          data-testid={missingWarningTestId ?? "new-chat-landing-model-missing"}
+          className="mx-2 my-1 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
+          role="alert"
+        >
+          Previously picked model “{value}” is no longer available. Pick another model before
+          creating the session.
+        </div>
+      )}
+      {!isLoading && error == null && models.length === 0 && (
+        <div
+          data-testid={emptyTestId ?? "new-chat-landing-model-empty"}
+          className="px-2 py-1 text-xs text-muted-foreground"
+        >
+          {emptyMessage ?? "No models available."}
+        </div>
+      )}
+      {!isLoading && models.length > 0 && (
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          {models.map((m) => (
+            <DropdownMenuRadioItem
+              key={m.id}
+              value={m.id}
+              data-testid={`new-chat-landing-model-${m.id}`}
+              data-model-id={m.id}
+              onSelect={(event) => event.preventDefault()}
+              className="rounded-sm py-1 pl-2 text-xs"
+            >
+              {m.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      )}
+    </>
+  );
+}
 
 /**
  * OpenCode-native reasoning-effort radio rows, rendered inside the agent
@@ -1424,13 +1423,7 @@ function OpenCodeEffortOptions({
   const variants = selectedModel?.variants;
   // No model selected, model has no variants, or catalog not loaded yet:
   // hide the effort section entirely.
-  if (
-    !modelId ||
-    !variants ||
-    variants.length === 0 ||
-    isLoading ||
-    error != null
-  ) {
+  if (!modelId || !variants || variants.length === 0 || isLoading || error != null) {
     // When an effort was previously selected for a model that no longer
     // supports it, clear the selection silently.
     if (value && value !== "auto" && variants && !variants.includes(value)) {
@@ -1443,8 +1436,7 @@ function OpenCodeEffortOptions({
     (e) => e.value === "auto" || variants.includes(e.value),
   );
   // If the current selection is no longer valid, reset to "auto".
-  const safeValue =
-    available.some((e) => e.value === value) ? value : "auto";
+  const safeValue = available.some((e) => e.value === value) ? value : "auto";
   return (
     <>
       <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">
@@ -1754,9 +1746,9 @@ function AgentHarnessPicker({
         ),
         "opencode-native-codex-subscription": (
           <>
-            Codex subscription is not verified locally yet. This lane NEVER falls back to the
-            OpenAI API-billed path; configure OpenCode's Codex subscription provider locally so
-            the catalog can be populated.
+            Codex subscription is not verified locally yet. This lane NEVER falls back to the OpenAI
+            API-billed path; configure OpenCode's Codex subscription provider locally so the catalog
+            can be populated.
           </>
         ),
       };
@@ -2212,6 +2204,7 @@ type LandingDraft = {
   pickedEffort: string;
   preSessionModel: string;
   costControlMode: CostControlMode;
+  routeApprovalEnabled: boolean;
 };
 
 let landingDraft: LandingDraft | null = null;
@@ -2445,11 +2438,15 @@ export function NewChatLandingScreen() {
   // via the harness-seed effect below).
   const [pickedModel, _setPickedModel] = useState<string>(() => landingDraft?.pickedModel ?? "");
   const [pickedEffort, setPickedEffort] = useState<string>(() => landingDraft?.pickedEffort ?? "");
+  const [preSessionModel] = useState<string>(() => landingDraft?.preSessionModel ?? "");
   // Per-session cost-control switch ("Cost Optimized" pill). Unset
   // (null) defers to the agent spec's default and is omitted from
   // the create body.
   const [costControlMode, _setCostControlMode] = useState<CostControlMode>(
     () => landingDraft?.costControlMode ?? null,
+  );
+  const [routeApprovalEnabled, _setRouteApprovalEnabled] = useState<boolean>(
+    () => landingDraft?.routeApprovalEnabled ?? false,
   );
   // Model selection and smart routing are mutually exclusive: enabling
   // routing clears the explicit model pick, and picking a model turns
@@ -2493,7 +2490,9 @@ export function NewChatLandingScreen() {
     pickedHarness,
     pickedModel,
     pickedEffort,
+    preSessionModel,
     costControlMode,
+    routeApprovalEnabled,
   };
   useEffect(() => {
     return () => {
@@ -2984,15 +2983,13 @@ export function NewChatLandingScreen() {
   // ``harnessModelRequired`` is true when the selected agent exposes the
   // ``modelOptions`` capability AND the catalog has resolved with at least
   // one model. In that case the user MUST pick one before submitting —
-//   no silent fallback, no implicit use of the harness's own default. The
-//   catalog-empty branch leaves this false: if there's literally nothing
-//   to choose from, blocking the submit would deadlock the user, so the
-//   create body just omits ``model_override`` (same as the bare Claude
-//   picker when nothing is stored).
+  //   no silent fallback, no implicit use of the harness's own default. The
+  //   catalog-empty branch leaves this false: if there's literally nothing
+  //   to choose from, blocking the submit would deadlock the user, so the
+  //   create body just omits ``model_override`` (same as the bare Claude
+  //   picker when nothing is stored).
   const harnessModelRequired =
-    supportsModelOptions &&
-    !modelOptionsCatalog.isLoading &&
-    modelOptionsCatalog.models.length > 0;
+    supportsModelOptions && !modelOptionsCatalog.isLoading && modelOptionsCatalog.models.length > 0;
 
   const canSubmit =
     message.trim().length > 0 &&
@@ -3185,7 +3182,10 @@ export function NewChatLandingScreen() {
                 : agentSupportsModelOptions &&
                     agentSupportsPermissionMode &&
                     permissionMode !== OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE
-                  ? { ...(nativeLabels ?? {}), [OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY]: permissionMode }
+                  ? {
+                      ...(nativeLabels ?? {}),
+                      [OPENCODE_NATIVE_PERMISSION_MODE_LABEL_KEY]: permissionMode,
+                    }
                   : nativeLabels,
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
@@ -3224,11 +3224,13 @@ export function NewChatLandingScreen() {
                 : undefined,
             reasoning_effort:
               (agentSupportsPermissionMode || agentSupportsReasoningEffort) &&
-              pickedEffort && pickedEffort !== "auto"
+              pickedEffort &&
+              pickedEffort !== "auto"
                 ? pickedEffort
                 : undefined,
             // Smart routing toggle — server-side, available for any agent.
             cost_control_mode_override: costControlMode ?? undefined,
+            route_approval_enabled: routeApprovalEnabled || undefined,
             harness_override: pickedHarness ?? undefined,
           }),
         });
@@ -3648,6 +3650,11 @@ export function NewChatLandingScreen() {
                       onChange={setCostControlMode}
                     />
                   )}
+                <RouteApprovalControl
+                  value={routeApprovalEnabled ? "on" : "off"}
+                  serverEnabled={info !== "loading" && info.route_approval_enabled}
+                  onChange={(mode) => _setRouteApprovalEnabled(mode === "on")}
+                />
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>

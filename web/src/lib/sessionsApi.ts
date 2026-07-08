@@ -138,6 +138,8 @@ interface SessionResponseWire {
   model_override?: string | null;
   /** Per-session cost-control switch; `null`/absent = spec default. */
   cost_control_mode_override?: "on" | "off" | null;
+  /** Per-session route-approval toggle; `null`/absent = spec default. */
+  route_approval_enabled?: boolean | null;
   context_window?: number | null;
   last_total_tokens?: number | null;
   total_cost_usd?: number | null;
@@ -285,6 +287,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
     harness: wire.harness ?? null,
     modelOverride: wire.model_override,
     costControlModeOverride: wire.cost_control_mode_override,
+    routeApprovalEnabled: wire.route_approval_enabled,
     contextWindow: wire.context_window,
     lastTotalTokens: wire.last_total_tokens,
     totalCostUsd: wire.total_cost_usd,
@@ -640,6 +643,7 @@ export async function updateSession(
     modelOverride?: string | null;
     codexPlanMode?: boolean;
     costControlModeOverride?: "on" | "off" | null;
+    routeApprovalEnabled?: boolean | null;
     runnerId?: string;
     silent?: boolean;
   },
@@ -656,6 +660,9 @@ export async function updateSession(
   }
   if ("costControlModeOverride" in updates) {
     body.cost_control_mode_override = updates.costControlModeOverride ?? null;
+  }
+  if ("routeApprovalEnabled" in updates) {
+    body.route_approval_enabled = updates.routeApprovalEnabled ?? null;
   }
   if (updates.runnerId !== undefined) {
     body.runner_id = updates.runnerId;

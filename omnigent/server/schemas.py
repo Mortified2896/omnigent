@@ -1237,6 +1237,7 @@ class SessionCreateRequest(BaseModel):
     model_override: str | None = None
     reasoning_effort: str | None = None
     cost_control_mode_override: str | None = None
+    route_approval_enabled: bool | None = None
     harness_override: str | None = None
 
     @model_validator(mode="after")
@@ -1724,6 +1725,7 @@ class SessionResponse(BaseModel):
     harness: str | None = None
     model_override: str | None = None
     cost_control_mode_override: str | None = None
+    route_approval_enabled: bool | None = None
     context_window: int | None = None
     last_total_tokens: int | None = None
     total_cost_usd: float | None = None
@@ -1827,10 +1829,26 @@ class UpdateSessionRequest(BaseModel):
     model_override: str | None = None
     collaboration_mode: str | None = None
     cost_control_mode_override: str | None = None
+    route_approval_enabled: bool | None = None
     external_session_id: str | None = None
     terminal_launch_args: list[str] | None = None
     archived: bool | None = None
     silent: bool = False
+
+    @field_validator("route_approval_enabled", mode="before")
+    @classmethod
+    def _route_approval_enabled_strict(
+        cls, value: object
+    ) -> object:
+        """Reject non-boolean values without coercing ``1`` / ``0``.
+
+        Pydantic's bool coercion accepts integers, which would silently
+        turn a typo into a stored override — the field gates the
+        server-side execution gate, so we fail loud instead.
+        """
+        if value is None or isinstance(value, bool):
+            return value
+        raise ValueError("must be a boolean or null")
 
     model_config = ConfigDict(extra="forbid")
 
