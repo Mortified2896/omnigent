@@ -105,14 +105,23 @@ jobs:
       # ktlint is invoked by the android-ktlint-* pre-commit hooks. The wrapper
       # script (web/android/bin/ktlint.sh) exits 0 if ktlint is absent, so we
       # install it here before pre-commit runs to ensure the check is enforced.
+      # The SHA-256 is verified against the checksum published alongside each
+      # ktlint release so a corrupted or spoofed download is caught before the
+      # binary is made executable.
       - name: Install ktlint
         env:
           KTLINT_VERSION: "1.8.0"
         run: |
-          curl -sSL \
+          cd /tmp
+          curl -sSLf \
             "https://github.com/pinterest/ktlint/releases/download/${KTLINT_VERSION}/ktlint" \
-            -o /usr/local/bin/ktlint
-          chmod +x /usr/local/bin/ktlint
+            -o ktlint
+          curl -sSLf \
+            "https://github.com/pinterest/ktlint/releases/download/${KTLINT_VERSION}/ktlint.sha256" \
+            -o ktlint.sha256
+          sha256sum -c ktlint.sha256
+          chmod +x ktlint
+          sudo mv ktlint /usr/local/bin/ktlint
 
       - name: Run formatting, lint, and typing checks
         run: uv run pre-commit run --all-files --show-diff-on-failure

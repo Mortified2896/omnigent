@@ -1,5 +1,6 @@
 # ktlint reads EditorConfig for Kotlin style settings.
 # https://pinterest.github.io/ktlint/latest/rules/standard/
+root = true
 
 [*.{kt,kts}]
 max_line_length = 100
