@@ -919,8 +919,8 @@ _OPENCODE_PERMISSION_MODE_TO_CONFIG: dict[str, str | None] = {
     "default": "ask",
     "auto": "allow",
     "acceptEdits": None,  # advisory; policy engine decides
-    "plan": None,         # advisory; policy engine decides
-    "dontAsk": None,      # advisory; policy engine decides
+    "plan": None,  # advisory; policy engine decides
+    "dontAsk": None,  # advisory; policy engine decides
     "bypassPermissions": "allow",
 }
 
@@ -1118,6 +1118,11 @@ async def _auto_create_opencode_terminal(
     clear_bridge_state(bridge_dir)
 
     model_override = launch_config.model_override or _opencode_native_model_from_spec(agent_spec)
+    opencode_config_model = model_override
+    if isinstance(opencode_config_model, str) and opencode_config_model.startswith(
+        ("opencode/minimax-coding-plan/", "opencode/minimax-cn-coding-plan/")
+    ):
+        opencode_config_model = opencode_config_model[len("opencode/") :]
     # Route opencode through the Databricks AI gateway when the spec names a
     # profile. Unlike codex/claude/pi (which consume HARNESS_*_GATEWAY_* env the
     # CLI translates), opencode reads provider/auth from its own config file, so
@@ -1140,7 +1145,7 @@ async def _auto_create_opencode_terminal(
     # gateway or a pinned default) + the agent's MCP servers + force-ask.
     config: dict[str, object] = {}
     gateway = resolve_databricks_gateway(
-        _opencode_native_profile_from_spec(agent_spec), model_id=model_override
+        _opencode_native_profile_from_spec(agent_spec), model_id=opencode_config_model
     )
     if gateway is not None:
         # Pin the per-prompt model to the synthesized provider/endpoint id, and
@@ -1148,13 +1153,13 @@ async def _auto_create_opencode_terminal(
         model_override = gateway.qualified_model
         config = dict(build_opencode_provider_config(gateway))
         config["model"] = model_override
-    elif model_override:
+    elif opencode_config_model:
         # No custom provider, but a model is pinned (``omni opencode --model`` or
         # the ``omni setup`` OpenCode default): write opencode's default model so
         # the native TUI and the first turn use it instead of ``opencode/big-pickle``.
         # OpenCode resolves the provider from the model-id prefix against its own
         # auth.json, so no provider block is needed.
-        config = dict(build_opencode_model_default_config(model_override))
+        config = dict(build_opencode_model_default_config(opencode_config_model))
 
     # Build opencode's ``mcp`` block: the Omnigent builtin-tool relay (so the
     # model can call sys_*/load_skill/web_fetch — the real "connects to Omnigent
@@ -1177,9 +1182,7 @@ async def _auto_create_opencode_terminal(
         # auto-approves MCP tools. ``None`` from the mapping means advisory
         # only — the permission stays at ``"ask"`` and the policy engine
         # makes the call.
-        permission_config = _OPENCODE_PERMISSION_MODE_TO_CONFIG.get(
-            launch_config.permission_mode
-        )
+        permission_config = _OPENCODE_PERMISSION_MODE_TO_CONFIG.get(launch_config.permission_mode)
         if permission_config is not None:
             config["permission"] = permission_config
 
@@ -9007,7 +9010,15 @@ def create_runner_app(
                 from omnigent.pi_native_bridge import build_pi_native_spawn_env
 
                 spawn_env = build_pi_native_spawn_env(session_id)
-            if harness_name == "opencode-native" and spawn_env is None:
+            if (
+                harness_name
+                in {
+                    "opencode-native",
+                    "opencode-native-codex-subscription",
+                    "opencode-native-minimax-token-plan",
+                }
+                and spawn_env is None
+            ):
                 from omnigent.opencode_native_bridge import (
                     OPENCODE_NATIVE_BRIDGE_ID_LABEL_KEY,
                     build_opencode_native_spawn_env,

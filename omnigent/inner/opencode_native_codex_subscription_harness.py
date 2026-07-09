@@ -38,12 +38,12 @@ from omnigent.inner._opencode_native_lane_config import (
     lane_for_executor_harness_id,
 )
 from omnigent.inner.executor import Executor
+from omnigent.inner.opencode_native_executor import _request_session_id_from_env
 from omnigent.native_server_harness import NativeServerHarness
 from omnigent.native_server_transport import NativePrompt
 from omnigent.opencode_http_transport import OpenCodeHttpTransport
 from omnigent.opencode_native_bridge import (
     OPENCODE_NATIVE_BRIDGE_DIR_ENV_VAR,
-    OPENCODE_NATIVE_REQUEST_SESSION_ID_ENV_VAR,
     read_bridge_state,
 )
 
@@ -179,7 +179,7 @@ def _is_allowed_codex_subscription_model(model: str) -> bool:
         # place, the lane cannot launch any model and the resolver returns
         # an empty list with a setup message.
         return False
-    bare = model[len("opencode/"):] if model.startswith("opencode/") else model
+    bare = model[len("opencode/") :] if model.startswith("opencode/") else model
     prefix = bare.split("/", 1)[0] if "/" in bare else ""
     return prefix in lane.allowed_provider_prefixes
 
@@ -248,7 +248,5 @@ def create_app():  # type: ignore[no-untyped-def]
     """
     from omnigent.runtime.harnesses._executor_adapter import ExecutorAdapter
 
-    adapter = ExecutorAdapter(
-        executor_factory=_build_opencode_native_codex_subscription_executor
-    )
+    adapter = ExecutorAdapter(executor_factory=_build_opencode_native_codex_subscription_executor)
     return adapter.build()

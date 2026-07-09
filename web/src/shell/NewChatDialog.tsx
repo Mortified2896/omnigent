@@ -83,7 +83,7 @@ import {
 } from "@/lib/nativeBridge";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
-import { useHarnessModelOptions, type HarnessModelOption } from "@/hooks/useHarnessModelOptions";
+import { useHarnessModelOptions } from "@/hooks/useHarnessModelOptions";
 import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
@@ -2607,7 +2607,6 @@ export function NewChatLandingScreen() {
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
   const supportsModelOptions = nativeAgentHasCapability(selectedAgent, "modelOptions");
-  const supportsReasoningEffort = nativeAgentHasCapability(selectedAgent, "reasoningEffort");
   // Defense in depth for the DANGEROUS bypass toggle: never let an armed
   // bypass carry across an agent change. Switching the picker to another
   // agent — or away from Codex and back — must require the typed confirmation

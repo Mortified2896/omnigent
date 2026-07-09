@@ -26,7 +26,6 @@ that diverges the two fails loudly).
 
 from __future__ import annotations
 
-import dataclasses
 import os
 from pathlib import Path
 from typing import Any
@@ -36,13 +35,12 @@ from omnigent.inner._opencode_native_lane_config import (
     lane_for_executor_harness_id,
 )
 from omnigent.inner.executor import Executor
-from omnigent.inner.opencode_native_executor import OpenCodeNativeExecutor
+from omnigent.inner.opencode_native_executor import _request_session_id_from_env
 from omnigent.native_server_harness import NativeServerHarness
 from omnigent.native_server_transport import NativePrompt
 from omnigent.opencode_http_transport import OpenCodeHttpTransport
 from omnigent.opencode_native_bridge import (
     OPENCODE_NATIVE_BRIDGE_DIR_ENV_VAR,
-    OPENCODE_NATIVE_REQUEST_SESSION_ID_ENV_VAR,
     read_bridge_state,
 )
 
@@ -141,7 +139,10 @@ class OpenCodeNativeMinimaxTokenPlanExecutor(NativeServerHarness):
                 "minimax/ or minimax-cn/ ids are explicitly rejected — "
                 "never substituted as a fallback."
             )
-        return dataclasses.replace(prompt, model=model)
+        # OpenCode starts the native session with this model as its default.
+        # Leaving the prompt unpinned avoids a provider/model lookup bug in
+        # OpenCode 1.17.x for subscription provider ids.
+        return prompt
 
     async def _resolve_opencode_session_id(self) -> str | None:
         """
@@ -177,7 +178,7 @@ def _is_allowed_token_plan_model(model: str) -> bool:
         # No verified prefix yet → no model can be admitted. This
         # matches the "fail closed" stance the resolver takes.
         return False
-    bare = model[len("opencode/"):] if model.startswith("opencode/") else model
+    bare = model[len("opencode/") :] if model.startswith("opencode/") else model
     prefix = bare.split("/", 1)[0] if "/" in bare else ""
     return prefix in lane.allowed_provider_prefixes
 
