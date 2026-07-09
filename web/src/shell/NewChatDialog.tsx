@@ -1944,10 +1944,11 @@ export function NewChatLandingScreen() {
   // Per-session Model Routing Agent toggle. Independent of the legacy
   // cost-control switch — gated server-side on
   // /v1/info.route_approval_enabled so the new flow never overlaps the
-  // smart-routing path. Unset (false) defers to off and is omitted
-  // from the create body when false.
+  // smart-routing path. New sessions default to Agent when the server
+  // advertises the route-approval gate; an explicit user toggle to
+  // Manual is preserved in the landing draft and sent to the server.
   const [routeApprovalEnabled, setRouteApprovalEnabled] = useState<boolean>(
-    () => landingDraft?.routeApprovalEnabled ?? false,
+    () => landingDraft?.routeApprovalEnabled ?? routeApprovalServerEnabled,
   );
   // Model selection and smart routing are mutually exclusive: enabling
   // routing clears the explicit model pick, and picking a model turns
@@ -2714,8 +2715,9 @@ export function NewChatLandingScreen() {
             cost_control_mode_override: costControlMode ?? undefined,
             // Model Routing Agent toggle — independent of smart routing
             // and gated server-side on /v1/info.route_approval_enabled.
-            // False (the default) is omitted so the server column stays null.
-            route_approval_enabled: routeApprovalEnabled ? true : undefined,
+            // Send both true and false so an explicit Manual choice is
+            // durable; omission is reserved for older clients / defaults.
+            route_approval_enabled: routeApprovalServerEnabled ? routeApprovalEnabled : undefined,
             harness_override: pickedHarness ?? undefined,
           }),
         });

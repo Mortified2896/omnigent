@@ -12585,12 +12585,17 @@ async def _create_session_from_existing_agent(
 
     telemetry.set_session_id(conv.id)
 
+    route_approval_enabled = (
+        body.route_approval_enabled
+        if body.route_approval_enabled is not None
+        else _route_approval_gate_enabled()
+    )
     if (
         model_override is not None
         or reasoning_effort is not None
         or cost_control_mode_override is not None
         or harness_override is not None
-        or body.route_approval_enabled is not None
+        or route_approval_enabled is not None
         or body.omniroute_route_id is not None
         or body.permission_mode is not None
         or body.omniroute_requires_explicit_approval is not None
@@ -12606,7 +12611,7 @@ async def _create_session_from_existing_agent(
             reasoning_effort=reasoning_effort,
             cost_control_mode_override=cost_control_mode_override,
             harness_override=harness_override,
-            route_approval_enabled=body.route_approval_enabled,
+            route_approval_enabled=route_approval_enabled,
             omniroute_route_id=body.omniroute_route_id,
             permission_mode=body.permission_mode,
             omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
