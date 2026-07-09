@@ -124,7 +124,7 @@ def test_routing_off_does_not_call_router(monkeypatch):
     instantiates or calls the RoutingAgent, even if a stale omniroute_route_id
     is left over from a previous approval."""
     agent = _FakeRoutingAgent(_proposal())
-    monkeypatch.setattr(routes_sessions, "_RoutingAgent", agent)
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
 
     def _must_not_run(*args, **kwargs):
         raise AssertionError("router should not be invoked")
@@ -143,7 +143,7 @@ def test_routing_off_manual_picker_preserved(monkeypatch):
     """When routing is off, manual model_override, harness_override, and
     reasoning_effort remain the source of truth — stale approved route is ignored."""
     agent = _FakeRoutingAgent(_proposal())
-    monkeypatch.setattr(routes_sessions, "_RoutingAgent", agent)
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
 
     conv = _conv(
         route_approval_enabled=False,
@@ -170,7 +170,7 @@ def test_routing_off_short_circuits_in_dispatcher(monkeypatch):
     monkeypatch.setattr(routes_sessions, "_routing_approval_is_enabled", lambda c: False)
     # No router call happens because the helper exits on the disabled check.
     agent = _FakeRoutingAgent(_proposal())
-    monkeypatch.setattr(routes_sessions, "_RoutingAgent", agent)
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
     assert routes_sessions._routing_approval_is_enabled(conv) is False
     assert agent.calls == 0
     assert dispatched == []  # not invoked at all
@@ -183,7 +183,11 @@ def test_routing_on_calls_router(monkeypatch):
     when the elicitation is resolved with decline (no execution path)."""
     monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
     agent = _FakeRoutingAgent(_proposal())
-    monkeypatch.setattr(routes_sessions, "_RoutingAgent", agent)
+    monkeypatch.setattr(
+        routes_sessions,
+        "_build_routing_agent_from_runtime",
+        agent,
+    )
     # The decline path returns None before invoking the conversation store.
     # Patch the Future resolution by setting the registry directly.
 
@@ -197,7 +201,7 @@ def test_routing_on_calls_router(monkeypatch):
         return None
 
     monkeypatch.setattr(routes_sessions, "_await_route_approval", _wrapped)
-    assert agent is routes_sessions._RoutingAgent() or True
+    assert agent is routes_sessions._build_routing_agent_from_runtime() or True
     assert callable(routes_sessions._await_route_approval)
 
 
@@ -205,7 +209,11 @@ def test_routing_on_calls_router(monkeypatch):
 async def test_router_configuration_error_is_user_visible(monkeypatch):
     """Router setup failures produce a clear transcript error, not internal_error."""
     monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
-    monkeypatch.setattr(routes_sessions, "_RoutingAgent", _FailingRoutingAgent())
+    monkeypatch.setattr(
+        routes_sessions,
+        "_build_routing_agent_from_runtime",
+        _FailingRoutingAgent,
+    )
     monkeypatch.setattr(routes_sessions, "_publish_input_consumed", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(routes_sessions, "_publish_error_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(routes_sessions, "_publish_status", lambda *_args, **_kwargs: None)
@@ -244,7 +252,7 @@ def test_gate_disabled_blocks_routing(monkeypatch):
     """Gate env off => no router call even if toggle is on (server-level feature flag)."""
     monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: False)
     agent = _FakeRoutingAgent(_proposal())
-    monkeypatch.setattr(routes_sessions, "_RoutingAgent", agent)
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
     assert route_approval_gate_enabled() is not None
 
 

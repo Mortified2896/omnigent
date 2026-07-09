@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
 from omnigent.reasoning_effort import EFFORT_VALUES, validate_effort
 from omnigent.server.omniroute_routes import (
+    NATIVE_OMNIROUTE_ROUTE_IDS,
     OMNIROUTE_ROUTE_CATALOG,
     get_route_profile,
     reasoning_lte,
 )
+
+_logger = logging.getLogger(__name__)
 
 KNOWN_PERMISSION_MODES = frozenset(
     {
@@ -33,6 +37,14 @@ KNOWN_HARNESSES = frozenset(
         "claude-native",
         "codex-native",
         "pi",
+    }
+)
+_KNOWN_BILLING_CLASSES = frozenset({"free", "subscription", "api_billed", "unknown"})
+_KNOWN_FALLBACK_POLICIES = frozenset(
+    {
+        "fail_closed_no_api_billed_fallback",
+        "allow_any_fallback",
+        "fail_closed",
     }
 )
 _DEFAULT_ROUTE_POLICY_SOURCE = "default_route_policy"
@@ -67,6 +79,79 @@ _ROUTER_PROMPT_EXAMPLE = (
     '"omniroute_requires_explicit_approval":false,'
     '"rationale":["Normal repository coding task."]}'
 )
+
+
+def _build_proposal_json_schema() -> dict[str, object]:
+    """Strict JSON schema for :class:`RouteProposal` payloads.
+
+    Used when the routing agent calls a JSON-schema-capable LLM
+    (e.g. the server-level :class:`PolicyLLMClient`); the same
+    schema is reused by the env-var ``OMNIGENT_ROUTER_*`` direct
+    httpx path so the LLM output is constrained to a single object
+    type. Mirrors the field list in :data:`_ROUTER_PROMPT_FIELDS`.
+    """
+    route_enum = sorted(NATIVE_OMNIROUTE_ROUTE_IDS)
+    return {
+        "type": "object",
+        "properties": {
+            "task_type": {
+                "type": "string",
+                "description": (
+                    "Short category like 'coding', 'general_chat', 'reasoning', 'multimodal'."
+                ),
+            },
+            "recommended_harness": {
+                "type": "string",
+                "enum": sorted(KNOWN_HARNESSES),
+            },
+            "omniroute_route_id": {
+                "type": "string",
+                "enum": route_enum,
+            },
+            "reasoning_effort": {
+                "type": "string",
+                "enum": sorted(EFFORT_VALUES),
+            },
+            "permission_mode": {
+                "type": "string",
+                "enum": sorted(KNOWN_PERMISSION_MODES),
+            },
+            "allowed_billing_classes": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(_KNOWN_BILLING_CLASSES)},
+            },
+            "forbidden_billing_classes": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(_KNOWN_BILLING_CLASSES)},
+            },
+            "execution_fallback_policy": {
+                "type": "string",
+                "enum": sorted(_KNOWN_FALLBACK_POLICIES),
+            },
+            "omniroute_requires_explicit_approval": {"type": "boolean"},
+            "rationale": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+        },
+        "required": [
+            "task_type",
+            "recommended_harness",
+            "omniroute_route_id",
+            "reasoning_effort",
+            "permission_mode",
+            "allowed_billing_classes",
+            "forbidden_billing_classes",
+            "execution_fallback_policy",
+            "omniroute_requires_explicit_approval",
+            "rationale",
+        ],
+        "additionalProperties": False,
+    }
+
+
+PROPOSAL_JSON_SCHEMA: dict[str, object] = _build_proposal_json_schema()
 
 
 @dataclass(frozen=True)
@@ -107,6 +192,23 @@ def route_approval_gate_enabled() -> bool:
     }
 
 
+def fail_open_to_default_policy_enabled() -> bool:
+    """Whether the agent falls back to a static default policy on error.
+
+    Disabled by default — fail-closed surfaces a clear user-facing
+    error. ``OMNIGENT_ROUTER_FAIL_OPEN_TO_DEFAULT_POLICY=true``
+    (or ``1|yes|on``) opts in. Used only as an emergency escape
+    hatch; the default policy is a static hardcoded ``auto/coding``
+    proposal and is NOT a router recommendation.
+    """
+    return os.environ.get("OMNIGENT_ROUTER_FAIL_OPEN_TO_DEFAULT_POLICY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def validate_route_proposal(proposal: RouteProposal) -> RouteProposal:
     if proposal.proposal_source == "llm_router" and not proposal.router_invoked:
         raise RoutingAgentError("llm_router proposal must have router_invoked=true")
@@ -141,6 +243,26 @@ def validate_route_proposal(proposal: RouteProposal) -> RouteProposal:
 
 
 class RoutingAgent:
+    """Model Routing Agent — picks a native OmniRoute for an inbound user message.
+
+    Resolution order:
+
+    1. **Server-level LLM client** (``policy_llm_client``): the same
+       :class:`PolicyLLMClient` used for policy functions / smart
+       routing. Preferred path on this machine since it inherits
+       the existing ``llm:`` server config wiring.
+    2. **Direct httpx** using the ``OMNIGENT_ROUTER_*`` env vars.
+       Useful when the routing agent should target an explicit
+       endpoint (e.g. a smaller / cheaper model split off from
+       the main policy LLM).
+    3. **Fail-closed** by default: raises :class:`RoutingAgentError`
+       with a clear ``"unavailable; fail-closed"`` message. Set
+       ``OMNIGENT_ROUTER_FAIL_OPEN_TO_DEFAULT_POLICY=true`` to
+       opt back into the emergency default policy (NOT a router
+       recommendation — labelled ``"Router unavailable — default
+       policy used"``).
+    """
+
     def __init__(
         self,
         *,
@@ -149,12 +271,14 @@ class RoutingAgent:
         api_url: str | None = None,
         api_key: str | None = None,
         timeout: float = 20.0,
+        policy_llm_client: Any | None = None,
     ) -> None:
         self.primary_model = primary_model or os.environ.get("OMNIGENT_ROUTER_MODEL")
         self.fallback_model = fallback_model or os.environ.get("OMNIGENT_ROUTER_FALLBACK_MODEL")
         self.api_url = api_url or os.environ.get("OMNIGENT_ROUTER_API_URL")
         self.api_key = api_key or os.environ.get("OMNIGENT_ROUTER_API_KEY")
         self.timeout = timeout
+        self.policy_llm_client = policy_llm_client
 
     async def propose(
         self,
@@ -167,6 +291,19 @@ class RoutingAgent:
         ),
     ) -> RouteProposal:
         errors: list[str] = []
+        if self.policy_llm_client is not None:
+            try:
+                return await self._call_via_policy_llm(
+                    user_message, available_harnesses, billing_policy, False
+                )
+            except (
+                httpx.HTTPError,
+                RoutingAgentError,
+                ValueError,
+                OSError,
+                AttributeError,
+            ) as exc:
+                errors.append(f"policy_llm: {exc}")
         if self.primary_model and self.api_url:
             try:
                 return await self._call_and_validate(
@@ -181,7 +318,11 @@ class RoutingAgent:
                 )
             except (httpx.HTTPError, RoutingAgentError, ValueError, OSError) as exc:
                 errors.append(f"fallback: {exc}")
-        if os.environ.get("OMNIGENT_ROUTER_FAIL_OPEN_TO_DEFAULT_POLICY", "").lower() == "true":
+        if fail_open_to_default_policy_enabled():
+            _logger.warning(
+                "RoutingAgent: no router reachable; falling back to default policy "
+                "(OMNIGENT_ROUTER_FAIL_OPEN_TO_DEFAULT_POLICY=true)"
+            )
             return validate_route_proposal(
                 RouteProposal(
                     task_type="coding",
@@ -216,18 +357,66 @@ class RoutingAgent:
         raw = await self._invoke_router(
             model, self._prompt(user_message, available_harnesses, billing_policy)
         )
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise RoutingAgentError("invalid JSON from router") from exc
-        if not isinstance(data, dict):
-            raise RoutingAgentError("router JSON must be an object")
+        data = self._parse_router_response(raw)
         data.setdefault("router_invoked", True)
         data.setdefault("router_fallback_used", fallback)
         data.setdefault("proposal_source", "llm_router")
         data.setdefault("proposal_source_label", "Router recommendation")
         proposal = RouteProposal(**data)
         return validate_route_proposal(proposal)
+
+    async def _call_via_policy_llm(
+        self,
+        user_message: str,
+        available_harnesses: list[str] | None,
+        billing_policy: str,
+        fallback: bool,
+    ) -> RouteProposal:
+        """Call the server-level :class:`PolicyLLMClient` for a JSON proposal."""
+        prompt = self._prompt(user_message, available_harnesses, billing_policy)
+        response = await self.policy_llm_client.create(
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                }
+            ],
+            instructions=(
+                "You are Omnigent's Model Routing Agent. Return strict JSON matching "
+                "the provided schema only; never add markdown, prose, or extra keys."
+            ),
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "route_proposal",
+                    "strict": True,
+                    "schema": PROPOSAL_JSON_SCHEMA,
+                }
+            },
+        )
+        try:
+            text = response.output[0].content[0].text
+        except (AttributeError, IndexError, TypeError) as exc:
+            raise RoutingAgentError("router response missing content") from exc
+        if not isinstance(text, str) or not text.strip():
+            raise RoutingAgentError("router response missing content")
+        data = self._parse_router_response(text)
+        data.setdefault("router_invoked", True)
+        data.setdefault("router_fallback_used", fallback)
+        data.setdefault("proposal_source", "llm_router")
+        data.setdefault("proposal_source_label", "Router recommendation")
+        proposal = RouteProposal(**data)
+        return validate_route_proposal(proposal)
+
+    @staticmethod
+    def _parse_router_response(raw: str) -> dict[str, Any]:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RoutingAgentError("invalid JSON from router") from exc
+        if not isinstance(data, dict):
+            raise RoutingAgentError("router JSON must be an object")
+        return data
 
     async def _invoke_router(self, model: str, prompt: str) -> str:
         headers = {"content-type": "application/json"}
@@ -265,3 +454,59 @@ class RoutingAgent:
                 f"Example: {_ROUTER_PROMPT_EXAMPLE}",
             ]
         )
+
+
+def build_routing_agent_from_runtime() -> RoutingAgent:
+    """Build a :class:`RoutingAgent` using the active runtime configuration.
+
+    Preferred path: pass a :class:`PolicyLLMClient` constructed from
+    ``RuntimeCaps.llm`` so the routing agent reuses the server-level
+    LLM (the same wiring :mod:`omnigent.server.smart_routing` uses).
+    Falls back to env-var httpx when no server-level LLM is set.
+
+    Connection resolution honours ``policy_llm_connection_factory``
+    (managed deployments that bill per-caller) before falling back
+    to the static ``llm.connection`` / ``llm.profile`` path used by
+    the policy engine.
+
+    Never raises — returns a RoutingAgent that may fail-closed when
+    invoked; callers (``_await_route_approval``) translate that to
+    the user-facing error. The returned agent always has a config;
+    no caller should ever instantiate ``RoutingAgent()`` with empty
+    kwargs again, since that silently routes to ``httpx`` env vars
+    the server does not necessarily have.
+    """
+    try:
+        from omnigent.runtime._globals import get_caps
+        from omnigent.runtime.policies.builder import (
+            _build_policy_llm_client,
+            _resolve_server_llm_connection,
+        )
+    except ImportError:
+        get_caps = None  # type: ignore[assignment]
+
+    policy_client: Any | None = None
+    if get_caps is not None:
+        try:
+            caps = get_caps()
+        except Exception:  # noqa: BLE001  # never propagate
+            caps = None
+        server_llm = getattr(caps, "llm", None) if caps is not None else None
+        if server_llm is not None:
+            connection: dict[str, str] | None = None
+            factory = (
+                getattr(caps, "policy_llm_connection_factory", None) if caps is not None else None
+            )
+            if callable(factory):
+                try:
+                    connection = factory()
+                except Exception:  # noqa: BLE001
+                    connection = None
+            if not connection:
+                try:
+                    connection = _resolve_server_llm_connection(server_llm)
+                except Exception:  # noqa: BLE001
+                    connection = None
+            policy_client = _build_policy_llm_client(server_llm, connection)
+
+    return RoutingAgent(policy_llm_client=policy_client)

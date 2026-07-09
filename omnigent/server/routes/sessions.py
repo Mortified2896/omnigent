@@ -197,10 +197,10 @@ from omnigent.server.routes._content_type import (
 from omnigent.server.routes._host_worktree import CreatedWorktree
 from omnigent.server.routes._origin import require_trusted_origin
 from omnigent.server.routing_agent import (
-    RoutingAgent as _RoutingAgent,
+    RoutingAgentError as _RoutingAgentError,
 )
 from omnigent.server.routing_agent import (
-    RoutingAgentError as _RoutingAgentError,
+    build_routing_agent_from_runtime as _build_routing_agent_from_runtime,
 )
 from omnigent.server.routing_agent import (
     route_approval_gate_enabled as _route_approval_gate_enabled,
@@ -8671,7 +8671,7 @@ async def _await_route_approval(
     user_text = _extract_user_text_for_routing(body)
     if not user_text:
         return conv
-    proposal = await _RoutingAgent().propose(
+    proposal = await _build_routing_agent_from_runtime().propose(
         user_message=user_text, available_harnesses=["OpenCode Native"]
     )
     elicitation_id = f"route_{secrets.token_hex(16)}"
