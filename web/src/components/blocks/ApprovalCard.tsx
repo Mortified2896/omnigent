@@ -54,6 +54,7 @@ import type { RememberScope } from "@/lib/types";
 import { useChatStore } from "@/store/chatStore";
 import { AskUserQuestionForm, type AskUserQuestionAnswers } from "./AskUserQuestionForm";
 import { ExitPlanModeReview } from "./ExitPlanModeReview";
+import { RouteProposalCard } from "./RouteProposalCard";
 
 /**
  * Extract the answer-option labels from an AskUserQuestion-shaped
@@ -149,6 +150,7 @@ interface ApprovalCardProps {
    * elicitation (edit tools take the ``allowAllEdits`` path instead).
    */
   rememberScope?: RememberScope | null;
+  routeProposal?: Record<string, unknown> | null;
   /**
    * Verdict submitter override. Defaults to `chatStore.submitApproval`
    * (the in-chat path: optimistic block flip + resolve POST + rollback).
@@ -173,6 +175,7 @@ export function ApprovalCard({
   codexCommand,
   allowAllEdits,
   rememberScope,
+  routeProposal,
   onSubmit,
 }: ApprovalCardProps) {
   const submit: SubmitApprovalFn =
@@ -241,6 +244,7 @@ export function ApprovalCard({
   const isAskUserQuestion = askPayload !== null;
   const isMultiChoice = optionLabels.length > 0;
   const isCodexCommandApproval = codexCommand !== null && codexCommand !== undefined;
+  const isRouteProposal = routeProposal !== null && routeProposal !== undefined;
   // External URL: the elicitation points to a third-party page (OAuth,
   // external MCP server, etc.) — show a link. Our own /approve/...
   // paths are handled inline with approve/reject buttons.
@@ -483,7 +487,12 @@ export function ApprovalCard({
         )}
       </AlertTitle>
       <AlertDescription className="flex flex-col gap-2">
-        {isExitPlanMode ? (
+        {isRouteProposal ? (
+          <>
+            <RouteProposalCard proposal={routeProposal} />
+            {binaryButtons}
+          </>
+        ) : isExitPlanMode ? (
           <>
             <span>Claude finished planning and wants to proceed.</span>
             <ExitPlanModeReview
@@ -584,6 +593,7 @@ export function ElicitationCard({
       codexCommand={item.codexCommand}
       allowAllEdits={item.allowAllEdits}
       rememberScope={item.rememberScope}
+      routeProposal={item.routeProposal}
       onSubmit={onSubmit}
     />
   );

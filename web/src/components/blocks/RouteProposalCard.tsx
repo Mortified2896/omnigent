@@ -1,0 +1,59 @@
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
+export interface RouteProposalCardProps {
+  proposal: Record<string, unknown>;
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function list(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string").join(", ")
+    : "";
+}
+
+export function RouteProposalCard({ proposal }: RouteProposalCardProps) {
+  const explicit = proposal.omniroute_requires_explicit_approval === true;
+  const rationale = Array.isArray(proposal.rationale)
+    ? proposal.rationale.filter((v): v is string => typeof v === "string")
+    : [];
+  return (
+    <Alert
+      data-testid="route-proposal-card"
+      className="border-yellow-300 bg-yellow-50/40 dark:bg-yellow-950/10"
+    >
+      <AlertTitle>
+        Proposal source: {text(proposal.proposal_source_label) || "Router recommendation"}
+      </AlertTitle>
+      <AlertDescription className="mt-2 flex flex-col gap-1 text-sm">
+        <div>Harness: {text(proposal.recommended_harness) || "OpenCode Native"}</div>
+        <div>
+          OmniRoute route: <code>{text(proposal.omniroute_route_id)}</code>
+        </div>
+        <div>Reasoning effort: {text(proposal.reasoning_effort)}</div>
+        <div>Permission mode: {text(proposal.permission_mode)}</div>
+        <div>
+          Billing:{" "}
+          {text(proposal.billing_summary) ||
+            `${list(proposal.allowed_billing_classes)} allowed; ${list(proposal.forbidden_billing_classes)} forbidden`}
+        </div>
+        {text(proposal.risk_note) && <div>Risk note: {text(proposal.risk_note)}</div>}
+        {explicit && (
+          <div className="font-medium text-yellow-800 dark:text-yellow-300">
+            Explicit approval required — this route may use pro/premium routing and should only be
+            used for hard tasks.
+          </div>
+        )}
+        {rationale.length > 0 && (
+          <ul className="list-disc pl-5">
+            {rationale.map((entry) => (
+              <li key={entry}>{entry}</li>
+            ))}
+          </ul>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
+}

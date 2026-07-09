@@ -17,6 +17,8 @@ from typing import Annotated, Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, Strict, field_validator, model_validator
 
 from omnigent.entities import ConversationItem
+from omnigent.server.omniroute_routes import is_known_route_id
+from omnigent.server.routing_agent import KNOWN_PERMISSION_MODES
 
 # ── Shared ──────────────────────────────────────────────────────
 
@@ -1320,6 +1322,24 @@ class SessionCreateRequest(BaseModel):
     reasoning_effort: str | None = None
     cost_control_mode_override: str | None = None
     harness_override: str | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
+
+    @field_validator("omniroute_route_id")
+    @classmethod
+    def _known_create_omniroute_route(cls, value: str | None) -> str | None:
+        if value is not None and not is_known_route_id(value):
+            raise ValueError("unknown native OmniRoute route id")
+        return value
+
+    @field_validator("permission_mode")
+    @classmethod
+    def _known_create_permission_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in KNOWN_PERMISSION_MODES:
+            raise ValueError("unknown permission mode")
+        return value
 
     @model_validator(mode="after")
     def _check_git_requires_host(self) -> SessionCreateRequest:
@@ -1831,6 +1851,10 @@ class SessionResponse(BaseModel):
     terminal_pending: bool = False
     sandbox_status: SandboxStatus | None = None
     active_response_id: str | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -1911,8 +1935,26 @@ class UpdateSessionRequest(BaseModel):
     cost_control_mode_override: str | None = None
     external_session_id: str | None = None
     terminal_launch_args: list[str] | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
     archived: bool | None = None
     silent: bool = False
+
+    @field_validator("omniroute_route_id")
+    @classmethod
+    def _known_omniroute_route(cls, value: str | None) -> str | None:
+        if value is not None and not is_known_route_id(value):
+            raise ValueError("unknown native OmniRoute route id")
+        return value
+
+    @field_validator("permission_mode")
+    @classmethod
+    def _known_permission_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in KNOWN_PERMISSION_MODES:
+            raise ValueError("unknown permission mode")
+        return value
 
     model_config = ConfigDict(extra="forbid")
 
