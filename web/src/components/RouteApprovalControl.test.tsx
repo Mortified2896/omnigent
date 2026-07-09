@@ -5,10 +5,16 @@ import { RouteApprovalControl } from "./RouteApprovalControl";
 afterEach(cleanup);
 
 describe("RouteApprovalControl", () => {
-  it("explains manual-mode preservation when disabled", () => {
+  it("keeps manual-mode preservation in hover help, not inline composer text", () => {
     render(<RouteApprovalControl enabled={false} onChange={() => undefined} />);
-    expect(screen.getByTestId("route-approval-control")).toHaveTextContent(
+    const control = screen.getByTestId("route-approval-control");
+    expect(control).toHaveTextContent("Model RoutingManual");
+    expect(control).not.toHaveTextContent(
       "manual harness, model/route, and reasoning selections are preserved",
+    );
+    expect(control).toHaveAttribute(
+      "title",
+      "Manual harness, model/route, and reasoning selections are preserved.",
     );
   });
 
