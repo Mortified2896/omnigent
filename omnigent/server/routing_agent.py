@@ -426,6 +426,9 @@ class RoutingAgent:
             "model": model,
             "messages": [{"role": "system", "content": prompt}],
             "temperature": 0,
+            # Local OmniRoute returns SSE by default; force a single JSON
+            # body so ``resp.json()`` works without consuming a stream.
+            "stream": False,
             "response_format": {"type": "json_object"},
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
