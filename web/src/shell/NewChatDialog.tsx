@@ -107,6 +107,7 @@ import { OttoEyes } from "@/components/OttoEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import { IntelligentModelControl, type CostControlMode } from "@/components/CostRoutingControl";
+import { RouteApprovalControl } from "@/components/RouteApprovalControl";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentRowTooltip } from "@/components/AgentHoverCard";
 import { CreateAgentDialog } from "./CreateAgentDialog";
@@ -1696,6 +1697,7 @@ type LandingDraft = {
   pickedModel: string;
   pickedEffort: string;
   costControlMode: CostControlMode;
+  routeApprovalEnabled: boolean;
 };
 
 let landingDraft: LandingDraft | null = null;
@@ -1806,6 +1808,10 @@ export function NewChatLandingScreen() {
   const info = useServerInfo();
   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
+  // Independent gate for the new Model Routing Agent selector — does not
+  // require smart_routing_enabled to be true. The two flows are
+  // separate systems with their own server-side feature flags.
+  const routeApprovalServerEnabled = info !== "loading" && info.route_approval_enabled === true;
   // Provider-named label for the sandbox option (e.g. "Modal Sandbox"),
   // falling back to the generic "New Sandbox" when the server names no
   // provider.
@@ -1920,6 +1926,14 @@ export function NewChatLandingScreen() {
   const [costControlMode, _setCostControlMode] = useState<CostControlMode>(
     () => landingDraft?.costControlMode ?? null,
   );
+  // Per-session Model Routing Agent toggle. Independent of the legacy
+  // cost-control switch — gated server-side on
+  // /v1/info.route_approval_enabled so the new flow never overlaps the
+  // smart-routing path. Unset (false) defers to off and is omitted
+  // from the create body when false.
+  const [routeApprovalEnabled, setRouteApprovalEnabled] = useState<boolean>(
+    () => landingDraft?.routeApprovalEnabled ?? false,
+  );
   // Model selection and smart routing are mutually exclusive: enabling
   // routing clears the explicit model pick, and picking a model turns
   // routing off.
@@ -1966,6 +1980,7 @@ export function NewChatLandingScreen() {
     pickedModel,
     pickedEffort,
     costControlMode,
+    routeApprovalEnabled,
   };
   useEffect(() => {
     return () => {
@@ -2627,6 +2642,10 @@ export function NewChatLandingScreen() {
               agentSupportsPermissionMode && pickedEffort ? pickedEffort : undefined,
             // Smart routing toggle — server-side, available for any agent.
             cost_control_mode_override: costControlMode ?? undefined,
+            // Model Routing Agent toggle — independent of smart routing
+            // and gated server-side on /v1/info.route_approval_enabled.
+            // False (the default) is omitted so the server column stays null.
+            route_approval_enabled: routeApprovalEnabled ? true : undefined,
             harness_override: pickedHarness ?? undefined,
           }),
         });
@@ -3046,6 +3065,12 @@ export function NewChatLandingScreen() {
                       onChange={setCostControlMode}
                     />
                   )}
+                {routeApprovalServerEnabled && (
+                  <RouteApprovalControl
+                    enabled={routeApprovalEnabled}
+                    onChange={setRouteApprovalEnabled}
+                  />
+                )}
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>

@@ -159,6 +159,7 @@ import {
   isCostRoutingSession,
   parseCostRoutingVerdict,
 } from "@/components/CostRoutingControl";
+import { RouteApprovalControl } from "@/components/RouteApprovalControl";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { MainTerminalView } from "@/shell/MainTerminalView";
 import { UNTITLED_CONVERSATION_LABEL } from "@/shell/sidebarNav";
@@ -855,6 +856,14 @@ export function ChatPage() {
     serverInfo !== "loading" &&
     serverInfo.smart_routing_enabled &&
     isCostRoutingSession(activeSession);
+  // Model Routing Agent gate (independent of smart_routing_enabled) and
+  // the per-session toggle. The composer's "Model Routing Agent" switch
+  // is shown when the server enables the feature and the active session
+  // is editable. The read-only refinement is computed below, after
+  // `permissionLevel`/`readOnlyReason` are derived.
+  const routeApprovalServerEnabled =
+    serverInfo !== "loading" && serverInfo.route_approval_enabled === true;
+  const routeApprovalEnabled = useChatStore((s) => s.routeApprovalEnabled);
 
   // Non-null only when the active session is a sub-agent (child): the
   // composer then peeks a "Chatting with sub-agent …" tray and the
@@ -1049,6 +1058,11 @@ export function ChatPage() {
     conversationsData !== undefined,
   );
   const readOnlyReason = readOnlyReasonForSessionLabels(activeSession, activeConv);
+  // Show the new Model Routing Agent selector only when the server has
+  // the gate on AND the active session is editable. Kept independent
+  // of the legacy `smart_routing_enabled` flow.
+  const showRouteApprovalControl =
+    routeApprovalServerEnabled && !(readOnlyReason !== null || permissionLevel === 1);
   // Once present, the live session snapshot is authoritative.
   const capabilitySource = {
     labels: activeSession ? (activeSession.labels ?? {}) : (activeConv?.labels ?? {}),
@@ -1112,6 +1126,8 @@ export function ChatPage() {
       codexModelOptions={codexModelOptions}
       showCodexPlanMode={shouldShowCodexPlanModeControl(capabilitySource)}
       showCodexGoal={shouldShowCodexGoalControl(capabilitySource)}
+      showRouteApprovalControl={showRouteApprovalControl}
+      routeApprovalEnabled={routeApprovalEnabled}
       costRoutingVerdict={costRoutingVerdict}
       costRoutingEligible={costRoutingEligible}
       subAgentLabel={subAgentLabel}
@@ -1338,6 +1354,15 @@ interface MainAgentSurfaceProps {
   codexModelOptions: readonly CodexModelOption[];
   /** Show the Codex Plan-mode toggle. */
   showCodexPlanMode: boolean;
+  /**
+   * Whether the Model Routing Agent is server-enabled
+   * (``/v1/info.route_approval_enabled``) AND the active session is
+   * editable. Drives the new ``RouteApprovalControl`` selector in the
+   * composer (independent of the legacy smart-routing toggle).
+   */
+  showRouteApprovalControl: boolean;
+  /** Per-session Model Routing Agent toggle value. */
+  routeApprovalEnabled: boolean;
   /** Show the Codex Goal control. */
   showCodexGoal?: boolean;
   /** Latest advisor verdict for the cost-routing pill; null when none. */
@@ -1414,6 +1439,8 @@ function MainAgentSurface({
   codexModelOptions,
   showCodexPlanMode,
   showCodexGoal = false,
+  showRouteApprovalControl,
+  routeApprovalEnabled,
   costRoutingVerdict,
   costRoutingEligible,
   subAgentLabel,
@@ -1758,6 +1785,9 @@ function MainAgentSurface({
         codexModelOptions={codexModelOptions}
         showCodexPlanMode={showCodexPlanMode}
         showCodexGoal={showCodexGoal}
+        showRouteApprovalControl={showRouteApprovalControl}
+        routeApprovalEnabled={routeApprovalEnabled}
+        routeApprovalDisabled={readOnlyReason !== null || permissionLevel === 1}
         isTerminalFirst={isTerminalFirst}
         isNativeWrapper={isNativeWrapper}
         reconnectHint={liveness.kind === "runner_asleep" || liveness.kind === "host_asleep"}
@@ -3154,6 +3184,16 @@ interface ComposerProps {
   /** Show the Codex Goal control. */
   showCodexGoal?: boolean;
   /**
+   * Show the Model Routing Agent selector. The caller already gates this
+   * on ``/v1/info.route_approval_enabled`` and the session being
+   * editable; the composer just renders the control when told.
+   */
+  showRouteApprovalControl: boolean;
+  /** Per-session Model Routing Agent toggle value. */
+  routeApprovalEnabled: boolean;
+  /** Disable the Model Routing Agent switch (read-only sessions, etc). */
+  routeApprovalDisabled: boolean;
+  /**
    * Terminal-first session (Chat/Terminal pill present). Presentation
    * only: tightens the composer's bottom padding to `pb-1.5` so it sits
    * closer to the pill beneath it; non-terminal-first chats use the
@@ -3595,6 +3635,9 @@ export function Composer({
   codexModelOptions,
   showCodexPlanMode,
   showCodexGoal = false,
+  showRouteApprovalControl = false,
+  routeApprovalEnabled = false,
+  routeApprovalDisabled = false,
   isTerminalFirst = false,
   isNativeWrapper = false,
   reconnectHint = false,
@@ -4710,6 +4753,18 @@ export function Composer({
                 }
                 disabled={isReadOnly}
                 verdict={costRoutingVerdict}
+              />
+            )}
+            {showRouteApprovalControl && (
+              <RouteApprovalControl
+                enabled={routeApprovalEnabled}
+                disabled={routeApprovalDisabled}
+                onChange={(enabled) =>
+                  void useChatStore
+                    .getState()
+                    .setRouteApprovalEnabled(enabled)
+                    .catch(() => {})
+                }
               />
             )}
             {showCodexPlanMode && (

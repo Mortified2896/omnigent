@@ -90,6 +90,7 @@ describe("createSession", () => {
       harness: null,
       modelOverride: undefined,
       costControlModeOverride: undefined,
+      routeApprovalEnabled: null,
       reasoningEffort: undefined,
       pendingElicitations: [],
       pendingInputs: [],

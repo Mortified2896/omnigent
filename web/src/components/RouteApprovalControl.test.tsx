@@ -18,4 +18,24 @@ describe("RouteApprovalControl", () => {
     fireEvent.click(screen.getByRole("switch", { name: /model routing agent/i }));
     expect(onChange).toHaveBeenCalledWith(true);
   });
+
+  it("reflects the enabled state in the switch aria-checked attribute", () => {
+    const { rerender } = render(
+      <RouteApprovalControl enabled={false} onChange={() => undefined} />,
+    );
+    expect(screen.getByRole("switch", { name: /model routing agent/i })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    rerender(<RouteApprovalControl enabled={true} onChange={() => undefined} />);
+    expect(screen.getByRole("switch", { name: /model routing agent/i })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("forwards the disabled prop to the underlying switch", () => {
+    render(<RouteApprovalControl enabled={false} disabled={true} onChange={() => undefined} />);
+    expect(screen.getByRole("switch", { name: /model routing agent/i })).toBeDisabled();
+  });
 });
