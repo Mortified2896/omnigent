@@ -314,6 +314,15 @@ export interface Session {
    * "Cost Optimized" toggle.
    */
   costControlModeOverride?: "on" | "off" | null;
+  /**
+   * Per-session LLM-backed Model Routing Agent toggle. `true` engages
+   * the routing agent at the start of every turn (proposes a harness,
+   * native OmniRoute route, reasoning effort, and permission mode,
+   * and publishes an approval card before execution). `false` /
+   * `null` defers to the user's manual model/harness/effort picks.
+   * Driven by the "Model Routing Agent" toggle.
+   */
+  routeApprovalEnabled?: boolean | null;
   /** Model context window size in tokens as looked up server-side. */
   contextWindow?: number | null;
   /**

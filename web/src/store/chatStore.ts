@@ -382,6 +382,13 @@ export interface ChatState {
    */
   codexPlanMode: boolean;
   /**
+   * Per-session LLM-backed Model Routing Agent toggle. Hydrated from
+   * ``Session.routeApprovalEnabled`` on bind and updated by the web
+   * "Model Routing Agent" toggle (``setRouteApprovalEnabled``). False
+   * by default — manual harness/model/effort picks are preserved.
+   */
+  routeApprovalEnabled: boolean;
+  /**
    * True when older items exist before the loaded history window. Binds
    * hydrate only the most recent page (see `fetchSessionItemsPage`);
    * scroll-up `loadMoreHistory` pages older until this goes false.
@@ -619,6 +626,16 @@ export interface ChatState {
    * default. No-ops when there is no active conversation.
    */
   setCostControlMode: (mode: "on" | "off" | null) => Promise<void>;
+  /**
+   * Toggle the LLM-backed Model Routing Agent for the active
+   * session. When ``true`` the routing agent proposes a harness,
+   * native OmniRoute route, reasoning effort, and permission mode
+   * for every turn and publishes an approval card before execution.
+   * Optimistic local flip then PATCH; the server's canonical value
+   * (or a rollback on failure) settles the state. No-ops when
+   * there is no active conversation.
+   */
+  setRouteApprovalEnabled: (enabled: boolean) => Promise<void>;
   /**
    * Toggle Codex Plan mode for the active session. No-ops when there is no
    * active conversation.
@@ -883,6 +900,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionModelOverride: null,
   costControlModeOverride: null,
   codexPlanMode: false,
+  routeApprovalEnabled: false,
   hasMoreHistory: false,
   loadingMoreHistory: false,
   oldestItemId: null,
@@ -1585,6 +1603,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionModelOverride: null,
         costControlModeOverride: null,
         codexPlanMode: false,
+        routeApprovalEnabled: false,
         contextWindow: null,
         tokensUsed: null,
         sessionCostUsd: null,
@@ -1782,6 +1801,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       if (get().conversationId === conversationId) {
         set({ codexPlanMode: previous });
+      }
+      throw err;
+    }
+  },
+
+  setRouteApprovalEnabled: async (enabled) => {
+    const { conversationId } = get();
+    if (!conversationId) return;
+    const previous = get().routeApprovalEnabled;
+    set({ routeApprovalEnabled: enabled });
+    try {
+      const session = await updateSession(conversationId, { routeApprovalEnabled: enabled });
+      if (get().conversationId !== conversationId) return;
+      set({ routeApprovalEnabled: session.routeApprovalEnabled === true });
+    } catch (err) {
+      if (get().conversationId === conversationId) {
+        set({ routeApprovalEnabled: previous });
       }
       throw err;
     }
@@ -2058,6 +2094,7 @@ function sessionBindingPatch(
   | "subAgentName"
   | "costControlModeOverride"
   | "codexPlanMode"
+  | "routeApprovalEnabled"
   | "contextWindow"
   | "gitBranch"
   | "skills"
@@ -2081,6 +2118,7 @@ function sessionBindingPatch(
     subAgentName: session.subAgentName ?? null,
     costControlModeOverride: session.costControlModeOverride ?? null,
     codexPlanMode: codexPlanModeFromSession(session),
+    routeApprovalEnabled: session.routeApprovalEnabled === true,
     contextWindow: session.contextWindow ?? null,
     gitBranch: session.gitBranch ?? null,
     skills: session.skills ?? [],

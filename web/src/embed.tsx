@@ -109,6 +109,7 @@ const SERVER_INFO_OFFLINE_FALLBACK: ServerInfo = {
   sandbox_provider: null,
   server_version: null,
   smart_routing_enabled: false,
+  route_approval_enabled: false,
 };
 
 /**
