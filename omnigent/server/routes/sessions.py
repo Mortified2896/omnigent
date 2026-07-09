@@ -7520,6 +7520,54 @@ async def _persist_native_terminal_failure(
     return consumed.id
 
 
+def _model_routing_agent_error_message(exc: _RoutingAgentError) -> str:
+    detail = str(exc).strip()
+    if detail == "Model Routing Agent unavailable; fail-closed":
+        return (
+            "Model Routing Agent is enabled, but no routing model/client is configured. "
+            "Configure OMNIGENT_ROUTER_MODEL and OMNIGENT_ROUTER_API_URL, or disable "
+            "Model Routing Agent for this session."
+        )
+    return f"Model Routing Agent could not produce a safe route proposal: {detail}"
+
+
+async def _persist_model_routing_agent_failure_turn(
+    session_id: str,
+    conv: Conversation,
+    body: SessionEventInput,
+    conversation_store: ConversationStore,
+    error_message: str,
+    *,
+    created_by: str | None,
+) -> str:
+    """Persist a consumed user message and Model Routing Agent error."""
+    message = error_message.strip() or "Model Routing Agent could not produce a route proposal."
+    error = ErrorData(
+        source="execution",
+        code="model_routing_agent_failed",
+        message=message,
+    )
+    turn_id = generate_task_id()
+    user_item = _build_new_item(body, turn_id, created_by=created_by)
+    persisted_items = await asyncio.to_thread(
+        conversation_store.append,
+        session_id,
+        [user_item],
+    )
+    await _seed_missing_title_from_user_message(conv, user_item, conversation_store)
+    error_persist_result = await _relay_persist_error_once(
+        conversation_store,
+        session_id,
+        NewConversationItem(type="error", response_id=turn_id, data=error),
+    )
+    consumed = persisted_items[0]
+    _publish_input_consumed(session_id, consumed)
+    if error_persist_result == "persisted":
+        _publish_error_event(session_id, error)
+    _publish_status(session_id, "failed", ErrorDetail(code=error.code, message=error.message))
+    return consumed.id
+
+
 async def _persist_host_launch_failure_turn(
     session_id: str,
     conv: Conversation,
@@ -9126,7 +9174,22 @@ async def _dispatch_session_event_to_runner(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
-    routed_conv = await _await_route_approval(session_id, conv, body, conversation_store)
+    try:
+        routed_conv = await _await_route_approval(session_id, conv, body, conversation_store)
+    except _RoutingAgentError as exc:
+        if body.type != "message":
+            raise
+        detail = _model_routing_agent_error_message(exc)
+        _logger.warning("model_routing_agent failed session=%s error=%s", session_id, detail)
+        item_id = await _persist_model_routing_agent_failure_turn(
+            session_id,
+            conv,
+            body,
+            conversation_store,
+            detail,
+            created_by=created_by,
+        )
+        return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
     if routed_conv is None:
         return _SessionEventDispatchResult(item_id=None, pending_id=None)
     conv = routed_conv
@@ -19667,6 +19730,31 @@ def create_sessions_router(
                 _runner_needs_session_init = False
             else:
                 _runner_needs_session_init = True
+        if runner_client is None and body.type == "message" and _routing_approval_is_enabled(conv):
+            try:
+                routed_conv = await _await_route_approval(
+                    session_id,
+                    conv,
+                    body,
+                    conversation_store,
+                )
+            except _RoutingAgentError as exc:
+                detail = _model_routing_agent_error_message(exc)
+                _logger.warning(
+                    "model_routing_agent failed session=%s error=%s", session_id, detail
+                )
+                item_id = await _persist_model_routing_agent_failure_turn(
+                    session_id,
+                    conv,
+                    body,
+                    conversation_store,
+                    detail,
+                    created_by=_attribution_user(user_id),
+                )
+                return {"queued": True, "item_id": item_id}
+            if routed_conv is None:
+                return {"queued": True, "item_id": None}
+            conv = routed_conv
         if runner_client is None:
             # A native terminal-session message must NOT be silently
             # dropped when no runner is reachable — the runner crashed

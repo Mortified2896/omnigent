@@ -6,9 +6,12 @@ covering manual-mode preservation, approval-flow execution, and decline.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
-from omnigent.entities import Conversation
+import pytest
+
+from omnigent.entities import Conversation, ConversationItem, NewConversationItem
 from omnigent.server.routes import sessions as routes_sessions
 from omnigent.server.routing_agent import (
     RouteProposal,
@@ -83,6 +86,37 @@ class _FakeRoutingAgent:
     async def propose(self, **kwargs) -> RouteProposal:
         self.calls += 1
         return self.proposal
+
+
+class _FailingRoutingAgent:
+    def __call__(self) -> _FailingRoutingAgent:
+        return self
+
+    async def propose(self, **kwargs) -> RouteProposal:
+        raise routes_sessions._RoutingAgentError("Model Routing Agent unavailable; fail-closed")
+
+
+class _FakeStore:
+    def __init__(self) -> None:
+        self.appended: list[NewConversationItem] = []
+
+    def append(self, _session_id: str, items: list[NewConversationItem]) -> list[ConversationItem]:
+        self.appended.extend(items)
+        return [
+            ConversationItem(
+                id=f"item_{len(self.appended)}",
+                type=item.type,
+                status="completed",
+                response_id=item.response_id,
+                created_at=0,
+                data=item.data,
+                created_by=item.created_by,
+            )
+            for item in items
+        ]
+
+    def list_items(self, *_args, **_kwargs):
+        return SimpleNamespace(data=[])
 
 
 def test_routing_off_does_not_call_router(monkeypatch):
@@ -165,6 +199,45 @@ def test_routing_on_calls_router(monkeypatch):
     monkeypatch.setattr(routes_sessions, "_await_route_approval", _wrapped)
     assert agent is routes_sessions._RoutingAgent() or True
     assert callable(routes_sessions._await_route_approval)
+
+
+@pytest.mark.asyncio
+async def test_router_configuration_error_is_user_visible(monkeypatch):
+    """Router setup failures produce a clear transcript error, not internal_error."""
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    monkeypatch.setattr(routes_sessions, "_RoutingAgent", _FailingRoutingAgent())
+    monkeypatch.setattr(routes_sessions, "_publish_input_consumed", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(routes_sessions, "_publish_error_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(routes_sessions, "_publish_status", lambda *_args, **_kwargs: None)
+
+    store = _FakeStore()
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "routing smoke ok"}],
+            },
+        }
+    )
+
+    result = await routes_sessions._dispatch_session_event_to_runner(
+        "conv_test",
+        _conv(title="Existing", route_approval_enabled=True),
+        body,
+        store,  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]
+        agent_name="OpenCode Native",
+        file_store=None,
+        artifact_store=None,
+    )
+
+    assert result.item_id == "item_1"
+    assert [item.type for item in store.appended] == ["message", "error"]
+    error = store.appended[1].data
+    assert error.code == "model_routing_agent_failed"
+    assert "no routing model/client is configured" in error.message
+    assert error.code != "internal_error"
 
 
 def test_gate_disabled_blocks_routing(monkeypatch):
