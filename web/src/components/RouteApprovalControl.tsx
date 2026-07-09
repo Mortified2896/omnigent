@@ -18,13 +18,20 @@ export function RouteApprovalControl({ enabled, disabled, onChange }: RouteAppro
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className="inline-flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-8"
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:gap-2 sm:px-2 md:h-8"
             data-testid="route-approval-control"
             data-mode={enabled ? "agent" : "manual"}
             title={description}
           >
-            <span className="whitespace-nowrap font-medium text-foreground">Model Routing</span>
-            <span className="whitespace-nowrap tabular-nums">{modeLabel}</span>
+            <span className="route-approval-short-label whitespace-nowrap font-medium text-foreground sm:hidden">
+              Routing
+            </span>
+            <span className="route-approval-full-label hidden whitespace-nowrap font-medium text-foreground sm:inline">
+              Model Routing
+            </span>
+            <span className="route-approval-mode-label hidden whitespace-nowrap tabular-nums sm:inline">
+              {modeLabel}
+            </span>
             <Switch
               size="sm"
               checked={enabled}

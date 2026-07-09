@@ -1593,9 +1593,9 @@ function AgentHarnessPicker({
           data-testid="new-chat-landing-agent-select"
           // Drop the Button's focus-visible ring/border that otherwise shows
           // when focus returns to the trigger after a pick.
-          className="h-8 gap-1.5 px-2.5 font-normal text-muted-foreground hover:text-foreground focus-visible:border-transparent focus-visible:ring-0"
+          className="new-chat-landing-agent-select h-8 min-w-0 gap-1.5 px-2 font-normal text-muted-foreground hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 sm:px-2.5"
         >
-          <span className="max-w-[12rem] truncate text-xs text-foreground">
+          <span className="max-w-[7rem] truncate text-xs text-foreground sm:max-w-[12rem]">
             {hasAgents ? agentLabel : "No agents"}
           </span>
           <ChevronDownIcon className="size-3.5 opacity-60" />
@@ -2818,17 +2818,16 @@ export function NewChatLandingScreen() {
     // the hero reads better optically.
     <div
       ref={setLandingSurface}
-      className="flex flex-1 items-center justify-center"
+      className="flex flex-1 items-start justify-center pt-[18svh] sm:items-center sm:pt-0"
       data-testid="new-chat-landing"
     >
       {/* Padding lives inside the 840px cap, so the composer renders at
-          840 − 80 = 760px max on desktop. px-4 on phones (16px gutters)
-          keeps the composer from feeling cramped against the viewport
-          edges; widens to the full px-10 at the md breakpoint and up. */}
-      <div className="flex w-full max-w-[840px] flex-col items-center gap-8 px-4 pt-8 pb-16 md:select-none md:px-10">
-        <div className="flex flex-col items-center gap-3.5 sm:flex-row">
-          <OttoEyes className="h-18 w-auto shrink-0" />
-          <h1 className="text-center text-3xl font-medium tracking-[-0.03em] text-foreground sm:text-left">
+          840 − 80 = 760px max on desktop. Phones use tight 12px gutters
+          to keep dense controls inside the viewport, then widen from sm up. */}
+      <div className="new-chat-landing-inner flex w-full max-w-[840px] flex-col items-center gap-6 px-3 pt-4 pb-12 sm:gap-8 sm:px-4 sm:pt-8 sm:pb-16 md:select-none md:px-10">
+        <div className="new-chat-landing-hero flex flex-col items-center gap-3 sm:flex-row sm:gap-3.5">
+          <OttoEyes className="h-16 w-auto shrink-0 sm:h-18" />
+          <h1 className="text-center text-2xl font-medium tracking-[-0.03em] text-foreground sm:text-left sm:text-3xl">
             What should we do?
           </h1>
         </div>
@@ -2851,7 +2850,7 @@ export function NewChatLandingScreen() {
             // translucent card. Mirrors the chat composer card. Drag-over
             // lifts an inset ring (overlay below).
             className={cn(
-              "relative z-10 flex w-full flex-col rounded-2xl border border-border bg-card dark:bg-card-solid shadow-[0_12px_20px_-20px_rgba(0,0,0,0.14),0_20px_28px_-28px_rgba(0,0,0,0.1)] transition-[border-color,box-shadow] duration-150 has-[textarea:focus]:border-foreground",
+              "new-chat-landing-composer-card relative z-10 flex w-full flex-col rounded-2xl border border-border bg-card dark:bg-card-solid shadow-[0_12px_20px_-20px_rgba(0,0,0,0.14),0_20px_28px_-28px_rgba(0,0,0,0.1)] transition-[border-color,box-shadow] duration-150 has-[textarea:focus]:border-foreground",
               isDragActive && "ring-2 ring-ring ring-inset",
             )}
             data-testid="new-chat-landing-composer"
@@ -3074,9 +3073,9 @@ export function NewChatLandingScreen() {
             {/* No own bg — the pill paints the surface. An explicit bg-card
                 here would also catch the .dark .bg-card glass rule (border +
                 shadow) and visually split the pill in half. */}
-            <div className="flex items-center justify-between pt-1 pr-4 pb-3 pl-2">
+            <div className="new-chat-landing-toolbar grid grid-cols-[auto_1fr_auto] items-center gap-x-1.5 gap-y-1 pt-1 pr-2 pb-2 pl-2 sm:flex sm:flex-nowrap sm:justify-between sm:pr-4 sm:pb-3">
               {/* Attach + dictate — left side, mirroring the in-session composer. */}
-              <div className="flex items-center gap-0.5">
+              <div className="new-chat-landing-actions flex shrink-0 items-center gap-0.5">
                 <Button
                   type="button"
                   size="icon"
@@ -3095,7 +3094,7 @@ export function NewChatLandingScreen() {
                   onTranscript={(text) => setMessage((prev) => (prev ? `${prev} ${text}` : text))}
                 />
               </div>
-              <div className="flex items-center gap-0.5">
+              <div className="new-chat-landing-run-controls col-span-3 row-start-2 flex min-w-0 items-center gap-0.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:col-span-1 sm:row-start-auto sm:flex-1 sm:flex-wrap sm:justify-end sm:overflow-visible">
                 {/* Unified agent / harness picker — selects the agent or
                   harness and exposes its run-config knobs in a per-entry
                   submenu (model / effort / permission mode for Claude Code,
@@ -3143,28 +3142,28 @@ export function NewChatLandingScreen() {
                     onChange={setRouteApprovalEnabled}
                   />
                 )}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex">
-                        <Button
-                          type="submit"
-                          size="icon"
-                          disabled={!canSubmit}
-                          aria-label="Start session"
-                          data-testid="new-chat-landing-submit"
-                          className="size-8 rounded-full bg-foreground text-card transition-opacity hover:opacity-80 disabled:opacity-50"
-                        >
-                          <ArrowUpIcon className="size-4" />
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {submitDisabledReason != null && (
-                      <TooltipContent>{submitDisabledReason}</TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
               </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="new-chat-landing-submit-wrap col-start-3 row-start-1 inline-flex justify-self-end sm:col-start-auto sm:row-start-auto">
+                      <Button
+                        type="submit"
+                        size="icon"
+                        disabled={!canSubmit}
+                        aria-label="Start session"
+                        data-testid="new-chat-landing-submit"
+                        className="size-8 rounded-full bg-foreground text-card transition-opacity hover:opacity-80 disabled:opacity-50"
+                      >
+                        <ArrowUpIcon className="size-4" />
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {submitDisabledReason != null && (
+                    <TooltipContent>{submitDisabledReason}</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </form>
           {/* Composer footer tray — host / working directory / worktree
@@ -3176,8 +3175,8 @@ export function NewChatLandingScreen() {
               chip row can wrap on narrow screens — with a fixed h-16 the
               chips overflowed the viewport on phones, widening the whole
               page (#sidebar-wider-than-screen on the landing page). */}
-          <div className="relative z-0 -mt-9 flex w-full items-center rounded-b-2xl bg-tray/40 pt-8 pr-3 pb-2 pl-2">
-            <div className="flex flex-wrap items-center gap-1">
+          <div className="new-chat-landing-tray relative z-0 -mt-9 flex w-full items-center rounded-b-2xl bg-tray/40 pt-8 pr-2 pb-2 pl-2 sm:pr-3">
+            <div className="new-chat-landing-tray-row flex flex-wrap items-center gap-1.5 sm:gap-1">
               {/* Host chip */}
               <DropdownMenu
                 onOpenChange={(open) => {

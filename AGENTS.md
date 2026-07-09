@@ -3,6 +3,22 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
+## Definition of done for app / website changes
+
+For any change that affects the running app or website (frontend, backend,
+static assets, API behaviour, routing, auth, configuration, etc.), editing files
+is not enough. Do **not** tell the user the work is done, finished, implemented,
+or ready to inspect until the change is actually visible through the Tailscale
+website/environment the user checks.
+
+Before reporting completion, make the required build/deploy/restart step explicit
+and run it when available (for example, rebuild the web bundle so
+`omnigent/server/static/web-ui/` is updated, restart the running server/service,
+or otherwise refresh the served app). If you cannot make the change visible on
+the Tailscale website from the current environment, say so plainly and describe
+what remains: e.g. "code changed and built, but not verified on Tailscale". In
+that case, do not present the task as fully complete.
+
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or
