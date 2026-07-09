@@ -1664,9 +1664,48 @@ describe("NewChatLandingScreen", () => {
 describe("NewChatLandingScreen — Model Routing Agent selector", () => {
   beforeEach(setupLandingMocks);
 
-  it("shows the routing agent selector when /v1/info reports route_approval_enabled=true", () => {
+  it("shows the routing agent selector enabled by default when /v1/info reports route_approval_enabled=true", () => {
     renderLanding({ route_approval_enabled: true });
-    expect(screen.getByTestId("route-approval-control")).toBeTruthy();
+    const control = screen.getByTestId("route-approval-control");
+    expect(control).toBeTruthy();
+    expect(control.getAttribute("data-mode")).toBe("agent");
+    expect(
+      screen.getByRole("switch", { name: "Model Routing Agent" }).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("sends the default-on routing flag, and preserves an explicit Manual toggle", async () => {
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
+    renderLanding({ route_approval_enabled: true });
+
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "hello" },
+    });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    let body = JSON.parse(
+      (authenticatedFetchMock.mock.calls[0][1] as RequestInit).body as string,
+    ) as Record<string, unknown>;
+    expect(body.route_approval_enabled).toBe(true);
+
+    cleanup();
+    authenticatedFetchMock.mockClear();
+    renderLanding({ route_approval_enabled: true });
+    fireEvent.click(screen.getByRole("switch", { name: "Model Routing Agent" }));
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "manual please" },
+    });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    body = JSON.parse(
+      (authenticatedFetchMock.mock.calls[0][1] as RequestInit).body as string,
+    ) as Record<string, unknown>;
+    expect(body.route_approval_enabled).toBe(false);
   });
 
   it("hides the routing agent selector when /v1/info reports route_approval_enabled=false", () => {
