@@ -619,6 +619,10 @@ class ConversationStore(ABC):
         cost_control_mode_override: str | None = None,
         _unset_cost_control_mode_override: bool = False,
         harness_override: str | None = None,
+        route_approval_enabled: bool | None = None,
+        omniroute_route_id: str | None = None,
+        permission_mode: str | None = None,
+        omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
     ) -> Conversation | None:

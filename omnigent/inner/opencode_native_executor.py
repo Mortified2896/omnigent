@@ -78,9 +78,17 @@ class OpenCodeNativeExecutor(NativeServerHarness):
             return prompt
         state = read_bridge_state(self._bridge_dir)
         model = state.model_override if state is not None else None
-        if not model:
+        reasoning_effort = os.environ.get("HARNESS_OPENCODE_NATIVE_REASONING_EFFORT") or (
+            state.reasoning_effort if state is not None else None
+        )
+        updates: dict[str, str] = {}
+        if model:
+            updates["model"] = model
+        if reasoning_effort:
+            updates["variant"] = reasoning_effort
+        if not updates:
             return prompt
-        return dataclasses.replace(prompt, model=model)
+        return dataclasses.replace(prompt, **updates)
 
     async def _resolve_opencode_session_id(self) -> str | None:
         """

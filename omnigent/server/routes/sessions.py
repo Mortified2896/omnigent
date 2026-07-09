@@ -196,6 +196,15 @@ from omnigent.server.routes._content_type import (
 )
 from omnigent.server.routes._host_worktree import CreatedWorktree
 from omnigent.server.routes._origin import require_trusted_origin
+from omnigent.server.routing_agent import (
+    RoutingAgent as _RoutingAgent,
+)
+from omnigent.server.routing_agent import (
+    RoutingAgentError as _RoutingAgentError,
+)
+from omnigent.server.routing_agent import (
+    route_approval_gate_enabled as _route_approval_gate_enabled,
+)
 from omnigent.server.schemas import (
     AgentObject,
     ChildSessionList,
@@ -2518,6 +2527,10 @@ def _build_session_response(
         harness=_resolve_harness(conv),
         model_override=conv.model_override,
         cost_control_mode_override=conv.cost_control_mode_override,
+        route_approval_enabled=conv.route_approval_enabled,
+        omniroute_route_id=conv.omniroute_route_id,
+        permission_mode=conv.permission_mode,
+        omniroute_requires_explicit_approval=conv.omniroute_requires_explicit_approval,
         context_window=context_window,
         last_total_tokens=last_total_tokens,
         # Seed the client's cost indicator on resume. Uses the SUBTREE
@@ -8566,6 +8579,115 @@ async def _persist_session_event(
     return item_id
 
 
+def _routing_approval_is_enabled(conv: Conversation) -> bool:
+    return conv.route_approval_enabled is True
+
+
+def _route_proposal_params(proposal: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from omnigent.server.omniroute_routes import get_route_profile
+
+    profile = get_route_profile(proposal.omniroute_route_id)
+    billing = (
+        f"{', '.join(proposal.allowed_billing_classes)} allowed; "
+        f"{', '.join(proposal.forbidden_billing_classes)} forbidden"
+    )
+    return {
+        "mode": "form",
+        "message": "Approve Omnigent Model Routing Agent recommendation before execution.",
+        "requestedSchema": {},
+        "phase": "route_approval",
+        "policy_name": "model_routing_agent",
+        "content_preview": json.dumps(asdict(proposal), ensure_ascii=True),
+        "route_proposal": {
+            **asdict(proposal),
+            "billing_summary": billing,
+            "risk_note": profile.risk_note if profile else "",
+        },
+    }
+
+
+async def _await_route_approval(
+    session_id: str,
+    conv: Conversation,
+    body: SessionEventInput,
+    conversation_store: ConversationStore,
+) -> Conversation | None:
+    if not (
+        _routing_approval_is_enabled(conv)
+        and _route_approval_gate_enabled()
+        and body.type == "message"
+    ):
+        return conv
+    user_text = _extract_user_text_for_routing(body)
+    if not user_text:
+        return conv
+    proposal = await _RoutingAgent().propose(
+        user_message=user_text, available_harnesses=["OpenCode Native"]
+    )
+    elicitation_id = f"route_{secrets.token_hex(16)}"
+    fut: asyncio.Future[ElicitationResult] = asyncio.get_running_loop().create_future()
+    _harness_elicitation_registry[elicitation_id] = fut
+    _harness_elicitation_owners[elicitation_id] = session_id
+    event = {
+        "type": "response.elicitation_request",
+        "elicitation_id": elicitation_id,
+        "method": "elicitation/create",
+        "params": _route_proposal_params(proposal),
+    }
+    session_stream.publish(session_id, event)
+    _logger.info(
+        (
+            "model_routing_agent proposal session=%s task_type=%s harness=%s "
+            "route=%s reasoning_effort=%s permission_mode=%s fallback=%s "
+            "actual_provider_model=unknown"
+        ),
+        session_id,
+        proposal.task_type,
+        proposal.recommended_harness,
+        proposal.omniroute_route_id,
+        proposal.reasoning_effort,
+        proposal.permission_mode,
+        proposal.router_fallback_used,
+    )
+    try:
+        result = await fut
+    finally:
+        _harness_elicitation_registry.pop(elicitation_id, None)
+        _harness_elicitation_owners.pop(elicitation_id, None)
+    if result.action != "accept":
+        _logger.info(
+            "model_routing_agent declined session=%s route=%s",
+            session_id,
+            proposal.omniroute_route_id,
+        )
+        _publish_elicitation_resolved(session_id, elicitation_id)
+        return None
+    updated = await asyncio.to_thread(
+        conversation_store.update_conversation,
+        session_id,
+        reasoning_effort=proposal.reasoning_effort,
+        omniroute_route_id=proposal.omniroute_route_id,
+        permission_mode=proposal.permission_mode,
+        omniroute_requires_explicit_approval=proposal.omniroute_requires_explicit_approval,
+    )
+    _logger.info(
+        (
+            "model_routing_agent approved session=%s route=%s "
+            "reasoning_effort=%s permission_mode=%s actual_provider_model=unknown"
+        ),
+        session_id,
+        proposal.omniroute_route_id,
+        proposal.reasoning_effort,
+        proposal.permission_mode,
+    )
+    _publish_elicitation_resolved(session_id, elicitation_id)
+    if updated is None:
+        raise _RoutingAgentError("session disappeared while applying route proposal")
+    return updated
+
+
 def _extract_user_text_for_routing(body: SessionEventInput) -> str:
     """Extract plain text from a user message event for the routing judge.
 
@@ -8800,9 +8922,10 @@ async def _forward_event_to_runner(
         _parent_routing_on = (
             _parent_conv is not None and _parent_conv.cost_control_mode_override == "on"
         )
-    _routing_enabled = (
-        conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
-    ) or _parent_routing_on
+    _routing_enabled = not _routing_approval_is_enabled(conv) and (
+        (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
+        or _parent_routing_on
+    )
     _routed_model: str | None = None
     _verdict: dict[str, Any] | None = None
     if effective_runner_override is None and _routing_enabled and body.type == "message":
@@ -8835,6 +8958,8 @@ async def _forward_event_to_runner(
                         exc_info=True,
                     )
     # ────────────────────────────────────────────────────────────────
+    if _routing_approval_is_enabled(conv) and conv.omniroute_route_id:
+        effective_runner_override = conv.omniroute_route_id
     if effective_runner_override is not None:
         runner_body["model_override"] = effective_runner_override
     # Per-session brain-harness override — create-time only, so no
@@ -8976,6 +9101,10 @@ async def _dispatch_session_event_to_runner(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
+    routed_conv = await _await_route_approval(session_id, conv, body, conversation_store)
+    if routed_conv is None:
+        return _SessionEventDispatchResult(item_id=None, pending_id=None)
+    conv = routed_conv
     if body.type == "message" and _is_native_terminal_session(conv):
         # Validate before touching the runner. The ensure probe is only
         # for syntactically valid user messages; assistant/system-shaped
@@ -9029,9 +9158,10 @@ async def _dispatch_session_event_to_runner(
                 _native_parent_conv is not None
                 and _native_parent_conv.cost_control_mode_override == "on"
             )
-        _native_routing_enabled = (
-            conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
-        ) or _native_parent_routing_on
+        _native_routing_enabled = not _routing_approval_is_enabled(conv) and (
+            (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
+            or _native_parent_routing_on
+        )
         _native_routed_model: str | None = None
         _native_verdict: dict[str, Any] | None = None
         if conv.model_override is None and _native_routing_enabled:
@@ -12363,6 +12493,10 @@ async def _create_session_from_existing_agent(
         or reasoning_effort is not None
         or cost_control_mode_override is not None
         or harness_override is not None
+        or body.route_approval_enabled is not None
+        or body.omniroute_route_id is not None
+        or body.permission_mode is not None
+        or body.omniroute_requires_explicit_approval is not None
     ):
         # ``create_conversation`` has no override params; reuse the
         # PATCH path's store write before the runner reads the snapshot
@@ -12375,6 +12509,10 @@ async def _create_session_from_existing_agent(
             reasoning_effort=reasoning_effort,
             cost_control_mode_override=cost_control_mode_override,
             harness_override=harness_override,
+            route_approval_enabled=body.route_approval_enabled,
+            omniroute_route_id=body.omniroute_route_id,
+            permission_mode=body.permission_mode,
+            omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
         )
         if updated_conv is None:
             raise OmnigentError(
@@ -15308,6 +15446,10 @@ def create_sessions_router(
             cost_control_mode_override=None if clear_cost_control else cost_control_mode_override,
             _unset_cost_control_mode_override=clear_cost_control,
             terminal_launch_args=terminal_launch_args,
+            route_approval_enabled=body.route_approval_enabled,
+            omniroute_route_id=body.omniroute_route_id,
+            permission_mode=body.permission_mode,
+            omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
             archived=body.archived,
         )
         if updated is None:

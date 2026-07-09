@@ -927,6 +927,7 @@ class _OpenCodeNativeLaunchConfig:
     policy_server_url: str
     terminal_launch_args: list[str] | None
     model_override: str | None
+    reasoning_effort: str | None
     external_session_id: str | None
     fork_carry_history: bool = False
 
@@ -975,7 +976,13 @@ async def _opencode_native_launch_config(
         and all(isinstance(arg, str) for arg in terminal_launch_args)
     ):
         raise RuntimeError(f"Invalid terminal_launch_args for OpenCode session {session_id!r}.")
-    model_override = snapshot.get("model_override")
+    route_approval_enabled = snapshot.get("route_approval_enabled") is True
+    route_model_override = snapshot.get("omniroute_route_id") if route_approval_enabled else None
+    model_override = (
+        route_model_override
+        if isinstance(route_model_override, str) and route_model_override
+        else snapshot.get("model_override")
+    )
     if model_override is not None:
         if not isinstance(model_override, str) or not model_override:
             raise RuntimeError(f"Invalid model_override for OpenCode session {session_id!r}.")
@@ -985,6 +992,11 @@ async def _opencode_native_launch_config(
             raise RuntimeError(
                 f"Invalid model_override for OpenCode session {session_id!r}: {exc}"
             ) from exc
+    reasoning_effort = snapshot.get("reasoning_effort")
+    if reasoning_effort is not None and (
+        not isinstance(reasoning_effort, str) or not reasoning_effort
+    ):
+        raise RuntimeError(f"Invalid reasoning_effort for OpenCode session {session_id!r}.")
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
@@ -1009,6 +1021,7 @@ async def _opencode_native_launch_config(
         policy_server_url=_required_runner_env("RUNNER_SERVER_URL"),
         terminal_launch_args=terminal_launch_args,
         model_override=model_override,
+        reasoning_effort=reasoning_effort,
         external_session_id=external_session_id,
         fork_carry_history=fork_carry_history,
     )
@@ -1146,6 +1159,8 @@ async def _auto_create_opencode_terminal(
     # PostToolUse hooks); coordinates come from the OMNIGENT_* env stamped on
     # the server below. Only wired when there's a server to evaluate against.
     policy_env: dict[str, str] = {}
+    if launch_config.reasoning_effort:
+        policy_env["HARNESS_OPENCODE_NATIVE_REASONING_EFFORT"] = launch_config.reasoning_effort
     runner_server_url = os.environ.get("RUNNER_SERVER_URL")
     if server_client is not None and runner_server_url:
         plugin_path = write_opencode_policy_plugin(bridge_dir)
@@ -1248,6 +1263,7 @@ async def _auto_create_opencode_terminal(
                 xdg_data_home=str(server.xdg_data_home),
                 xdg_config_home=str(server.xdg_config_home),
                 model_override=model_override,
+                reasoning_effort=launch_config.reasoning_effort,
                 workspace=workspace,
             ),
         )

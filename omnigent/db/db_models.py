@@ -466,6 +466,14 @@ class SqlConversation(Base):
     # Per-session brain-harness override, e.g. "pi". Nullable; None
     # means use the spec's executor.config.harness (see entities.Conversation).
     harness_override: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Model Routing Agent approval state. Nullable so existing/manual sessions
+    # preserve their current picker behavior until explicitly enabled.
+    route_approval_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    omniroute_route_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    permission_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    omniroute_requires_explicit_approval: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
     # Sub-agent type name within the parent's spec tree, e.g.
     # "summarizer". The runner uses this to load the sub-agent's
     # AgentSpec instead of the parent's. Replaces task.agent_name

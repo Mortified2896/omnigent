@@ -122,6 +122,10 @@ def _to_conversation(
         model_override=row.model_override,
         cost_control_mode_override=row.cost_control_mode_override,
         harness_override=row.harness_override,
+        route_approval_enabled=row.route_approval_enabled,
+        omniroute_route_id=row.omniroute_route_id,
+        permission_mode=row.permission_mode,
+        omniroute_requires_explicit_approval=row.omniroute_requires_explicit_approval,
         sub_agent_name=row.sub_agent_name,
         external_session_id=row.external_session_id,
         # NULL → None; a stored JSON array (e.g. ``"[]"`` or
@@ -1943,6 +1947,10 @@ class SqlAlchemyConversationStore(ConversationStore):
         cost_control_mode_override: str | None = None,
         _unset_cost_control_mode_override: bool = False,
         harness_override: str | None = None,
+        route_approval_enabled: bool | None = None,
+        omniroute_route_id: str | None = None,
+        permission_mode: str | None = None,
+        omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
     ) -> Conversation | None:
@@ -2009,6 +2017,18 @@ class SqlAlchemyConversationStore(ConversationStore):
                 changed = True
             if harness_override is not None:
                 row.harness_override = harness_override
+                changed = True
+            if route_approval_enabled is not None:
+                row.route_approval_enabled = route_approval_enabled
+                changed = True
+            if omniroute_route_id is not None:
+                row.omniroute_route_id = omniroute_route_id
+                changed = True
+            if permission_mode is not None:
+                row.permission_mode = permission_mode
+                changed = True
+            if omniroute_requires_explicit_approval is not None:
+                row.omniroute_requires_explicit_approval = omniroute_requires_explicit_approval
                 changed = True
             if terminal_launch_args is not None:
                 row.terminal_launch_args = json.dumps(terminal_launch_args)

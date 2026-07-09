@@ -223,6 +223,7 @@ class OpenCodeNativeBridgeState:
     :param status: Coarse status, ``"idle"`` or ``"busy"``.
     :param model_override: Persisted model override, e.g.
         ``"anthropic/claude-opus-4"``, or ``None``.
+    :param reasoning_effort: Persisted normalized reasoning effort, or ``None``.
     :param workspace: Workspace cwd the session runs in.
     :param last_event_id: Last SSE event id seen, for resume/debug.
     """
@@ -236,6 +237,7 @@ class OpenCodeNativeBridgeState:
     active_message_id: str | None = None
     status: str = "idle"
     model_override: str | None = None
+    reasoning_effort: str | None = None
     workspace: str | None = None
     last_event_id: str | None = None
 
@@ -544,6 +546,7 @@ def write_bridge_state(bridge_dir: Path, state: OpenCodeNativeBridgeState) -> No
                     "active_message_id": state.active_message_id,
                     "status": state.status,
                     "model_override": state.model_override,
+                    "reasoning_effort": state.reasoning_effort,
                     "workspace": state.workspace,
                     "last_event_id": state.last_event_id,
                 },
@@ -617,6 +620,7 @@ def read_bridge_state(bridge_dir: Path) -> OpenCodeNativeBridgeState | None:
         active_message_id=_opt_str("active_message_id"),
         status=status if isinstance(status, str) and status else "idle",
         model_override=_opt_str("model_override"),
+        reasoning_effort=_opt_str("reasoning_effort"),
         workspace=_opt_str("workspace"),
         last_event_id=_opt_str("last_event_id"),
     )
