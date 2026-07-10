@@ -8752,6 +8752,45 @@ async def _await_route_approval(
     _publish_elicitation_resolved(session_id, elicitation_id)
     if updated is None:
         raise _RoutingAgentError("session disappeared while applying route proposal")
+    # Stage a routing snapshot so the task-outcome recorder can
+    # stamp the immutable provenance onto the upcoming task_run
+    # row at execution start (response.in_progress). Captured here
+    # rather than on the conversation row because the routing
+    # proposal carries evaluator-side provenance (decision_id,
+    # billing class, fallback flag) that the conversation schema
+    # doesn't model yet — and we want a stable, audit-grade
+    # snapshot, not a denormalised subset on the conversation.
+    try:
+        from omnigent.server.task_outcome_recorder import (
+            RoutingSnapshot,
+            stage_routing_snapshot,
+        )
+
+        stage_routing_snapshot(
+            session_id,
+            RoutingSnapshot(
+                requested_route_id=proposal.omniroute_route_id,
+                reasoning_effort=proposal.reasoning_effort,
+                permission_mode=proposal.permission_mode,
+                omniroute_decision_id=proposal.evaluator_decision_id,
+                selection_strategy=proposal.evaluator_selection_strategy,
+                billing_class=proposal.evaluator_billing_class,
+                fallback_used=proposal.router_fallback_used,
+                proposed_harness=proposal.recommended_harness,
+                evaluator_route_id=proposal.router_evaluator_route,
+                evaluator_model=proposal.actual_evaluator_model,
+                evaluator_provider=proposal.actual_evaluator_provider,
+                evaluator_billing_class=proposal.evaluator_billing_class,
+                evaluator_fallback_used=proposal.evaluator_fallback_used,
+                evaluator_decision_id=proposal.evaluator_decision_id,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001  # never propagate
+        _logger.debug(
+            "model_routing_agent: failed to stage routing snapshot for session=%s: %s",
+            session_id,
+            exc,
+        )
     return updated
 
 
@@ -9846,6 +9885,16 @@ async def _relay_runner_stream(
     and persists conversation items (assistant messages, tool
     calls) to the conversation store as they arrive.
 
+    The relay also drives the task-outcome recorder (see
+    :mod:`omnigent.server.task_outcome_recorder`): on
+    ``response.in_progress`` it creates a :class:`TaskRun` row
+    with the routing snapshot staged by the approval flow; on
+    every terminal response event it finalises the row +
+    enqueues the LLM evaluator + enqueues the Langfuse outbox
+    events. The recorder is looked up via the module-level
+    ``get_recorder()`` so this function doesn't need an extra
+    parameter threaded through every caller.
+
     :param session_id: Session/conversation identifier,
         e.g. ``"conv_abc123"``.
     :param runner_client: HTTP client pointed at the runner.
@@ -9858,12 +9907,30 @@ async def _relay_runner_stream(
         startup readiness.
     """
     from omnigent.runtime import session_stream
+    from omnigent.server.task_outcome_recorder import get_recorder as _get_recorder
 
     text_acc: list[str] = []
     current_response_id: str | None = None
     # Model/agent label from the turn header, stamped on text segments
     # flushed at tool-call boundaries (the boundary event carries no model).
     current_model: str | None = None
+    # Per-turn state for the task-outcome recorder. ``current_task_run_id``
+    # is stamped by ``response.in_progress`` and consumed by the
+    # terminal branch. ``current_response_summary`` is appended-to by
+    # the existing ``text_acc`` logic so the LLM evaluator sees a
+    # bounded final-response excerpt without re-implementing the
+    # text-buffering machinery.
+    current_task_run_id: str | None = None
+    current_response_summary: list[str] = []
+    current_changed_files: set[str] = set()
+    current_commit_sha: str | None = None
+    current_triggering_message_id: str | None = None
+    current_user_message_summary: str | None = None
+    # The recorder is fetched once per relay loop start; the lifespan
+    # installs it before any relay starts so this read is never racy
+    # in production. Tests that don't install a recorder get ``None``
+    # and the relay simply skips the task-outcome hooks.
+    task_outcome_recorder = _get_recorder()
     # Map tool call_id → response_id so a function_call_output that
     # arrives after a new response.in_progress (different response_id)
     # still pairs with its matching function_call. Without this, the
@@ -9996,6 +10063,53 @@ async def _relay_runner_stream(
                         _model = resp_obj.get("model")
                         if isinstance(_model, str) and _model:
                             current_model = _model
+                        # Create the task_run row at execution start
+                        # (not when the user message lands) so an
+                        # approval-cancelled execution still produces
+                        # a ``running`` → terminal run, not a half-row.
+                        # Idempotent on ``(workspace_id, response_id)``
+                        # so a duplicate in_progress (rare, defensive)
+                        # returns the same id.
+                        if (
+                            task_outcome_recorder is not None
+                            and isinstance(_rid, str)
+                            and _rid
+                            and current_task_run_id is None
+                        ):
+                            try:
+                                _conv = await asyncio.to_thread(
+                                    conversation_store.get_conversation,
+                                    session_id,
+                                )
+                                _project_path = _conv.workspace if _conv is not None else None
+                                # The triggering user message is the
+                                # most recent message item in the
+                                # conversation before the current
+                                # response_id's first item. We
+                                # deliberately don't try to look up
+                                # the exact message id here — the
+                                # relay re-runs over hundreds of
+                                # events per turn and a per-event
+                                # ``list_items`` lookup would be
+                                # expensive. ``triggering_message_id``
+                                # is best-effort metadata for the
+                                # review-card UI; it's ``None`` when
+                                # the lookup is skipped.
+                                current_task_run_id = (
+                                    task_outcome_recorder.on_response_in_progress(
+                                        session_id=session_id,
+                                        conversation=_conv,
+                                        response_id=_rid,
+                                        model_id=(_model if isinstance(_model, str) else None),
+                                        user_message_id=current_triggering_message_id,
+                                        user_message_summary=current_user_message_summary,
+                                        project_path=_project_path,
+                                    )
+                                )
+                            except Exception:  # never propagate
+                                _logger.exception(
+                                    "Relay: task_outcome_recorder.on_response_in_progress failed",
+                                )
 
                     # Accumulate response-scoped (scaffold) text deltas for
                     # persistence. Native message-scoped deltas (with a
@@ -10007,6 +10121,13 @@ async def _relay_runner_stream(
                         _delta = event.get("delta")
                         if isinstance(_delta, str) and _delta:
                             text_acc.append(_delta)
+                            # Mirror into the task-outcome summary buffer.
+                            # Capped via the recorder's truncation so the
+                            # LLM evaluator sees a bounded excerpt even on
+                            # long turns; here we just append and let the
+                            # recorder truncate at terminal time.
+                            if task_outcome_recorder is not None:
+                                current_response_summary.append(_delta)
 
                     # Track tool call_id → response_id so a
                     # function_call_output that arrives under a later
@@ -10228,6 +10349,110 @@ async def _relay_runner_stream(
                     # terminal event so it doesn't leak to the
                     # next turn.
                     if evt_type in _TERMINAL_RESPONSE_EVENT_TYPES:
+                        # Finalise the task_outcome task_run row + enqueue
+                        # the LLM evaluator + enqueue Langfuse sync.
+                        # Maps the four terminal event types onto the
+                        # matching ``task_runs.terminal_status`` codes.
+                        # On a genuine task failure (``response.failed``
+                        # or ``response.incomplete``) we capture the
+                        # error code / message so the human-review card
+                        # can show what happened; for ``cancelled`` /
+                        # ``completed`` the failure fields stay NULL.
+                        # The recorder never raises — it logs and
+                        # swallows so a recorder bug can never block the
+                        # SSE relay loop.
+                        if task_outcome_recorder is not None and current_task_run_id is not None:
+                            try:
+                                _terminal_status = {
+                                    "response.completed": "completed",
+                                    "response.failed": "failed",
+                                    "response.cancelled": "cancelled",
+                                    "response.incomplete": "incomplete",
+                                }.get(evt_type)
+                                if _terminal_status is not None:
+                                    _failure_code: str | None = None
+                                    _failure_msg: str | None = None
+                                    if evt_type in ("response.failed", "response.incomplete"):
+                                        _raw_err: Any = None
+                                        if evt_type == "response.failed":
+                                            _resp_obj = event.get("response")
+                                            if isinstance(_resp_obj, dict):
+                                                _raw_err = _resp_obj.get("error")
+                                            if _raw_err is None:
+                                                _raw_err = event.get("error")
+                                        else:  # response.incomplete
+                                            _resp_obj = event.get("response")
+                                            if isinstance(_resp_obj, dict):
+                                                _details = _resp_obj.get("incomplete_details")
+                                                if isinstance(_details, dict):
+                                                    _raw_err = _details
+                                        if isinstance(_raw_err, dict):
+                                            _raw_code = _raw_err.get("code")
+                                            if isinstance(_raw_code, str) and _raw_code:
+                                                _failure_code = _raw_code
+                                            _raw_msg = _raw_err.get("message") or _raw_err.get(
+                                                "reason"
+                                            )
+                                            if isinstance(_raw_msg, str) and _raw_msg:
+                                                _failure_msg = _raw_msg[:1000]
+                                    _resp_obj2 = event.get("response")
+                                    _usage: dict[str, Any] = {}
+                                    if isinstance(_resp_obj2, dict):
+                                        _u = _resp_obj2.get("usage")
+                                        if isinstance(_u, dict):
+                                            _usage = _u
+                                    _input_tokens = _usage.get("input_tokens")
+                                    _output_tokens = _usage.get("output_tokens")
+                                    _total_cost = _usage.get("total_cost_usd")
+                                    # Final response summary: join the
+                                    # text_acc buffer (also used by the
+                                    # existing text-flush path) so the
+                                    # evaluator sees a bounded excerpt.
+                                    _summary_text: str | None = None
+                                    if current_response_summary:
+                                        _summary_text = "".join(current_response_summary)
+                                        if len(_summary_text) > 2000:
+                                            _summary_text = _summary_text[:1999] + "…"
+                                    _changed_files_list = (
+                                        sorted(current_changed_files)
+                                        if current_changed_files
+                                        else None
+                                    )
+                                    _input_tok = (
+                                        _input_tokens if isinstance(_input_tokens, int) else None
+                                    )
+                                    _output_tok = (
+                                        _output_tokens if isinstance(_output_tokens, int) else None
+                                    )
+                                    _cost_usd = (
+                                        _total_cost
+                                        if isinstance(_total_cost, (int, float))
+                                        else None
+                                    )
+                                    task_outcome_recorder.on_response_terminal(
+                                        task_run_id=current_task_run_id,
+                                        terminal_status=_terminal_status,
+                                        terminal_at=int(time.time()),
+                                        response_summary=_summary_text,
+                                        changed_files=_changed_files_list,
+                                        commit_sha=current_commit_sha,
+                                        failure_error_code=_failure_code,
+                                        failure_error_message=_failure_msg,
+                                        input_tokens=_input_tok,
+                                        output_tokens=_output_tok,
+                                        total_cost_usd=_cost_usd,
+                                    )
+                            except Exception as exc:  # noqa: BLE001  # never propagate
+                                _logger.warning(
+                                    "Relay: task_outcome_recorder.on_response_terminal failed: %s",
+                                    exc,
+                                )
+                            current_task_run_id = None
+                            current_response_summary = []
+                            current_changed_files = set()
+                            current_commit_sha = None
+                            current_triggering_message_id = None
+                            current_user_message_summary = None
                         current_response_id = None
 
                     # Patch the live event's response_id for
@@ -10328,6 +10553,11 @@ def _ensure_runner_relay(
     When the bound runner changes (last-write-wins PATCH-rebind),
     the stale relay is cancelled and a fresh one is created
     against the new runner.
+
+    The task-outcome recorder (if installed via
+    :func:`omnigent.server.task_outcome_recorder.set_recorder`) is
+    picked up by the relay loop via the module-level getter — no
+    extra parameter threading needed.
 
     :param session_id: Session/conversation identifier,
         e.g. ``"conv_abc123"``.

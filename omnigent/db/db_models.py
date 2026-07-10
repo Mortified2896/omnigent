@@ -1076,3 +1076,440 @@ class SqlUserDailyCost(Base):
     cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
     ask_approved_usd: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
     updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class SqlTaskRun(Base):
+    """
+    SQLAlchemy model for the ``task_runs`` table.
+
+    One row per routed coding execution attempt initiated by a user
+    message. The relay creates the row on ``response.in_progress``
+    with the routing snapshot captured at approval time (when
+    approval is on); the row's status is updated to a terminal
+    value on the matching response.* event.
+
+    The routing snapshot is immutable after first write so a later
+    ``PATCH /v1/sessions/{id}`` (e.g. the user changing route) does
+    not retroactively rewrite provenance. Token usage comes from
+    ``response.completed.usage`` and is best-effort — the harness
+    is not required to populate every bucket.
+
+    See ``omnigent/server/task_outcome_recorder.py`` for the write
+    paths and ``omnigent/entities/task_outcome.py`` for the wire /
+    store boundary shape.
+
+    :param id: UUID for the run, e.g. ``"tr_abc123"``.
+    :param conversation_id: Owning session id, e.g. ``"conv_abc123"``.
+    :param response_id: Harness-side task id (matches
+        ``conversation_items.response_id`` for the user message that
+        started the run). Stamped on first ``response.in_progress``;
+        ``None`` while the harness hasn't yet emitted it.
+    :param triggering_message_id: User message item id that started
+        the run (when known).
+    :param project_path: Repository / workspace identifier at task
+        start. Free-form so a deployment can fill in the cwd, the
+        repo URL, etc. without a schema change.
+    :param task_description: Sanitized, bounded task description
+        (truncated summary of the triggering user message).
+    :param proposed_task_family: Family proposed by the LLM
+        evaluator; ``None`` until evaluation runs.
+    :param estimated_difficulty: Optional difficulty hint from the
+        routing agent (e.g. ``"hard"``); ``None`` until surfaced.
+    :param harness_id: Harness name resolved at task start, e.g.
+        ``"OpenCode Native"`` or ``"pi"``.
+    :param requested_route_id: Native OmniRoute route id the
+        routing agent proposed, e.g. ``"auto/coding"``. Mirrors the
+        routing snapshot at start; never updated.
+    :param selected_provider: Concrete provider resolved by
+        OmniRoute for this run (e.g. ``"databricks"``).
+    :param selected_model: Concrete model resolved by OmniRoute for
+        this run (e.g. ``"databricks-claude-sonnet-4-6"``).
+    :param reasoning_effort: Routing snapshot — e.g. ``"medium"``.
+    :param permission_mode: Routing snapshot — e.g.
+        ``"ask_before_edits"``.
+    :param omniroute_decision_id: Stable per-call decision id
+        returned by OmniRoute (header
+        ``x-omniroute-decision-id``).
+    :param selection_strategy: Strategy used by OmniRoute (e.g.
+        ``"single"``); ``None`` when not reported.
+    :param billing_class: Billing class for the resolved model
+        (e.g. ``"free"``, ``"subscription"``,
+        ``"api_billed"``, ``"unknown"``).
+    :param fallback_used: ``True`` when OmniRoute fell back to a
+        secondary model. ``None`` until the response lifecycle
+        reports it.
+    :param terminal_status: SMALLINT code matching
+        ``db.enum_codecs.TASK_RUN_STATUS``: ``running``/``completed``/
+        ``failed``/``cancelled``/``incomplete``.
+    :param started_at: Unix epoch seconds the run row was created.
+    :param terminal_at: Unix epoch seconds the terminal event was
+        observed.
+    :param duration_ms: ``terminal_at - started_at`` in
+        milliseconds. ``None`` while running.
+    :param input_tokens: Total input tokens across the turn
+        (best-effort; harness is not required to populate).
+    :param output_tokens: Total output tokens across the turn.
+    :param total_cost_usd: Catalog-priced or harness-reported USD
+        cost for the turn. ``None`` when unpriced.
+    :param response_summary: Truncated final assistant response
+        (sanitized to a bounded length by the writer).
+    :param changed_files_json: JSON-encoded list of changed file
+        paths when the harness surfaced them, e.g.
+        ``'["src/api/x.py", "src/api/y.py"]'``. ``None`` when not
+        surfaced.
+    :param commit_sha: Git commit SHA when the harness surfaced it;
+        ``None`` when unavailable.
+    :param failure_error_code: Error code from
+        ``response.failed.error.code`` or
+        ``response.incomplete.incomplete_details.reason``.
+    :param failure_error_message: Error message from the same
+        payload, truncated.
+    :param langfuse_trace_id: Langfuse trace id stamped on first
+        successful sync; ``None`` while pending or unconfigured.
+    :param langfuse_observation_id: Langfuse observation id for
+        the root trace observation (per Langfuse's
+        ``observation`` field on the scores endpoint).
+    :param created_at: Unix epoch seconds when the row was first
+        written (same as ``started_at`` for this schema).
+    :param updated_at: Unix epoch seconds of the last write.
+    """
+
+    __tablename__ = "task_runs"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    triggering_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    project_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proposed_task_family: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    estimated_difficulty: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    harness_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_route_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    selected_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    selected_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    permission_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    omniroute_decision_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    selection_strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    billing_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    fallback_used: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    terminal_status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    started_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    terminal_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    total_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    response_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_files_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    langfuse_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    langfuse_observation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "terminal_status IN (1, 2, 3, 4, 5)",
+            name="ck_task_runs_terminal_status",
+        ),
+        # (workspace_id, conversation_id, started_at DESC) — the listing
+        # path's WHERE + ORDER BY index, id trailing to complete the PK.
+        Index(
+            "ix_task_runs_conversation_started_at",
+            "workspace_id",
+            "conversation_id",
+            text("started_at DESC"),
+            "id",
+        ),
+        # (workspace_id, response_id, id) — task-run lookup by response id
+        # (the relay stamps ``response_id`` on first in_progress and the
+        # terminal branch needs to find the row it just updated).
+        Index(
+            "ix_task_runs_response_id",
+            "workspace_id",
+            "response_id",
+            "id",
+        ),
+        # (workspace_id, terminal_status, id) — powers the unreviewed /
+        # pending-evaluator listings.
+        Index(
+            "ix_task_runs_terminal_status",
+            "workspace_id",
+            "terminal_status",
+            "id",
+        ),
+    )
+
+
+class SqlTaskEvaluation(Base):
+    """
+    SQLAlchemy model for the ``task_evaluations`` table.
+
+    Append-only: each row is one immutable automated evaluation. LLM
+    evaluations are produced by ``omnigent.server.task_outcome_evaluator``
+    after the task reaches a terminal state. When the evaluator fails,
+    a single ``verdict='inconclusive'`` row is still recorded so the
+    schema contract is "always exactly one evaluation per task run"
+    rather than "sometimes missing" (the schema avoids a JOIN on the
+    review card to decide whether evaluation ran).
+
+    :param id: UUID for the evaluation, e.g. ``"tev_abc123"``.
+    :param task_run_id: Owning :class:`SqlTaskRun.id`.
+    :param evaluator_type: SMALLINT code matching
+        ``db.enum_codecs.TASK_EVALUATION_TYPE``: ``deterministic``/``llm``.
+    :param evaluator_provider: Concrete provider resolved by OmniRoute
+        for the evaluation call.
+    :param evaluator_model: Concrete model resolved by OmniRoute for
+        the evaluation call.
+    :param evaluator_route_id: Native OmniRoute route id the
+        evaluator used, when known (the same ``PolicyLLMClient`` the
+        routing agent uses, so it inherits the same routing path).
+    :param verdict: ``success`` / ``partial`` / ``failure`` /
+        ``inconclusive``. ``inconclusive`` is recorded both when the
+        evaluator returns it AND when the evaluator call itself
+        fails (the failure is captured in ``reasoning``).
+    :param confidence: 0.0–1.0 confidence from the LLM. ``None``
+        when the evaluator didn't produce one (deterministic / failed).
+    :param quality_score: 1–5 from the LLM. ``None`` when not
+        produced.
+    :param proposed_task_family: Family the evaluator proposes.
+    :param reasoning: Free-text reasoning from the evaluator (or a
+        bounded error message when the evaluator call failed).
+    :param evidence_json: JSON-encoded list of strings (evidence
+        items the evaluator cited).
+    :param unresolved_issues_json: JSON-encoded list of strings
+        (issues the evaluator flagged but did not resolve).
+    :param created_at: Unix epoch seconds when the row was written.
+    """
+
+    __tablename__ = "task_evaluations"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluator_type: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    evaluator_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    evaluator_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    evaluator_route_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    proposed_task_family: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unresolved_issues_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("evaluator_type IN (1, 2)", name="ck_task_evaluations_type"),
+        CheckConstraint(
+            "verdict IN ('success','partial','failure','inconclusive')",
+            name="ck_task_evaluations_verdict",
+        ),
+        # (workspace_id, task_run_id, created_at, id) — listing all
+        # evaluations for a run ordered by time.
+        Index(
+            "ix_task_evaluations_run",
+            "workspace_id",
+            "task_run_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+
+class SqlTaskReview(Base):
+    """
+    SQLAlchemy model for the ``task_reviews`` table.
+
+    One human review per ``(task_run_id, reviewer)``. The unique
+    constraint on ``(workspace_id, task_run_id, created_by)`` is what
+    makes the table idempotent on re-submit — a PATCH to the same
+    reviewer's review updates the existing row instead of appending
+    a duplicate. Reviews are stored SEPARATELY from the LLM
+    evaluation so a human disagreement never overwrites the LLM
+    verdict.
+
+    :param id: UUID for the review, e.g. ``"trv_abc123"``.
+    :param task_run_id: Owning :class:`SqlTaskRun.id`.
+    :param verdict: ``success`` / ``partial`` / ``failure`` /
+        ``unsure`` / ``skipped``. ``skipped`` is a real persisted
+        state (so the UI can show "Skipped" rather than
+        "Not reviewed") and remains re-editable later.
+    :param quality_score: 1–5 from the human, optional.
+    :param final_task_family: Task family the human picked (may
+        correct the LLM's proposed family).
+    :param evaluator_accuracy: ``correct`` / ``partly_correct`` /
+        ``incorrect`` / ``unsure`` — the human's view of whether the
+        LLM verdict was right. ``None`` when not yet filled in.
+    :param comments: Optional free-text.
+    :param created_by: Reviewer email / id. ``NULL`` in single-user
+        mode and for legacy reviews.
+    :param created_at: Unix epoch seconds when the row was first
+        written.
+    :param updated_at: Unix epoch seconds of the last write
+        (body / verdict / etc.). Same value as ``created_at`` for
+        never-edited reviews.
+    """
+
+    __tablename__ = "task_reviews"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    quality_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    final_task_family: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluator_accuracy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('success','partial','failure','unsure','skipped')",
+            name="ck_task_reviews_verdict",
+        ),
+        CheckConstraint(
+            "evaluator_accuracy IS NULL OR evaluator_accuracy IN "
+            "('correct','partly_correct','incorrect','unsure')",
+            name="ck_task_reviews_evaluator_accuracy",
+        ),
+        # Idempotent re-submit: a re-submission by the same reviewer
+        # replaces the existing row in place instead of appending.
+        UniqueConstraint(
+            "workspace_id",
+            "task_run_id",
+            "created_by",
+            name="uq_task_reviews_run_reviewer",
+        ),
+        # (workspace_id, task_run_id, updated_at, id) — listing reviews
+        # for a run ordered by most-recent-first.
+        Index(
+            "ix_task_reviews_run",
+            "workspace_id",
+            "task_run_id",
+            "updated_at",
+            "id",
+        ),
+    )
+
+
+class SqlLangfuseSyncOutbox(Base):
+    """
+    SQLAlchemy model for the ``langfuse_sync_outbox`` table.
+
+    Transactional outbox for Langfuse delivery. Every score / trace
+    summary that should reach Langfuse is written here in the same
+    database transaction as the originating event (task terminal
+    status, evaluator row, or human review), then drained by a
+    bounded retry worker started in ``server/app.py``'s lifespan.
+
+    Rows are NEVER deleted (so audits can see what was attempted
+    even after delivery). ``status`` moves pending → delivered
+    or pending → dead (retry budget exhausted). ``status='skipped'``
+    is the audit-record path when Langfuse is unconfigured
+    (``LANGFUSE_*`` env unset) — the worker writes it once and the
+    row stays as proof that no Langfuse call was attempted.
+
+    :param id: UUID for the outbox row, e.g. ``"lfs_abc123"``.
+    :param task_run_id: Owning :class:`SqlTaskRun.id`.
+    :param task_evaluation_id: Owning :class:`SqlTaskEvaluation.id`
+        when the event is an evaluator row (``None`` for trace /
+        human-review-only events).
+    :param event_type: ``task_root`` / ``llm_verdict`` /
+        ``human_verdict`` / ``human_quality`` /
+        ``llm_evaluation_accuracy``. Used by the worker to choose
+        the Langfuse endpoint shape (scores vs trace summary).
+    :param idempotency_key: Stable Langfuse score id (``task:<run>:…:v1``).
+        The Langfuse API uses this as the score ``id`` field so
+        retries are idempotent at the Langfuse side.
+    :param payload_json: UTF-8 bytes of the JSON request body the
+        worker will POST. Pre-computed so a retry replays the same
+        body without re-deriving it (and so a future writer change
+        cannot silently shift the payload shape).
+    :param status: SMALLINT code matching
+        ``db.enum_codecs.LANGFUSE_OUTBOX_STATUS``: ``pending`` /
+        ``delivered`` / ``dead`` / ``skipped``.
+    :param attempt_count: Number of POST attempts so far (incl. the
+        current one). Bounded by the retry schedule; capped so a
+        stuck row can't keep spinning forever.
+    :param last_error: Truncated last-error string from the worker
+        (HTTP status / exception message). ``None`` while pending
+        and never written.
+    :param next_attempt_at: Unix epoch seconds the worker should
+        next try this row. Set to the row's ``created_at`` initially
+        so the first attempt happens immediately, then advanced by
+        the retry schedule.
+    :param created_at: Unix epoch seconds the row was written.
+    :param delivered_at: Unix epoch seconds of the successful POST.
+        ``None`` while pending / dead / skipped.
+    """
+
+    __tablename__ = "langfuse_sync_outbox"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_evaluation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_json: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    attempt_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    delivered_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN (1, 2, 3, 4)", name="ck_langfuse_outbox_status"),
+        # (workspace_id, status, next_attempt_at, id) — the worker's
+        # "what's due right now" scan: WHERE status=1 AND
+        # next_attempt_at <= now ORDER BY next_attempt_at, id LIMIT 50.
+        Index(
+            "ix_langfuse_outbox_due",
+            "workspace_id",
+            "status",
+            "next_attempt_at",
+            "id",
+        ),
+        # (workspace_id, task_run_id, id) — "what's pending for this run"
+        # join used by the API's review-detail endpoint.
+        Index(
+            "ix_langfuse_outbox_run",
+            "workspace_id",
+            "task_run_id",
+            "id",
+        ),
+    )

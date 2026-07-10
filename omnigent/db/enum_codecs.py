@@ -86,6 +86,37 @@ POLICY_SCOPE: dict[str, int] = {
     "session": 2,
 }
 
+# Task-run lifecycle (see task_outcome module). Wider OpenAI-style vocabulary
+# reserved up front so a future status widens without a migration. ``running``
+# is the initial state the relay writes on ``response.in_progress``; the rest
+# map 1:1 to the response-lifecycle SSE event names.
+TASK_RUN_STATUS: dict[str, int] = {
+    "running": 1,
+    "completed": 2,
+    "failed": 3,
+    "cancelled": 4,
+    "incomplete": 5,
+}
+
+# Evaluator type for ``task_evaluations.evaluator_type``. ``deterministic``
+# reserved for future objective checks (tests / lint / build); ``llm`` is
+# the only producer today.
+TASK_EVALUATION_TYPE: dict[str, int] = {
+    "deterministic": 1,
+    "llm": 2,
+}
+
+# Outbox status for ``langfuse_sync_outbox.status``. ``skipped`` is set when
+# Langfuse is unconfigured (``LANGFUSE_*`` env unset) so audit queries can
+# still see what was attempted; ``dead`` is the terminal failure state after
+# the bounded retry schedule is exhausted.
+LANGFUSE_OUTBOX_STATUS: dict[str, int] = {
+    "pending": 1,
+    "delivered": 2,
+    "dead": 3,
+    "skipped": 4,
+}
+
 
 def _assert_item_type_codes_cover_data_classes() -> None:
     """
@@ -247,3 +278,33 @@ def encode_policy_scope(name: str) -> int:
 def decode_policy_scope(code: int) -> str:
     """Decode a ``policies.scope`` int code to its name."""
     return _decode(POLICY_SCOPE, code, field="policies.scope")
+
+
+def encode_task_run_status(name: str) -> int:
+    """Encode a ``task_runs.terminal_status`` name to its int code."""
+    return _encode(TASK_RUN_STATUS, name, field="task_runs.terminal_status")
+
+
+def decode_task_run_status(code: int) -> str:
+    """Decode a ``task_runs.terminal_status`` int code to its name."""
+    return _decode(TASK_RUN_STATUS, code, field="task_runs.terminal_status")
+
+
+def encode_task_evaluation_type(name: str) -> int:
+    """Encode a ``task_evaluations.evaluator_type`` name to its int code."""
+    return _encode(TASK_EVALUATION_TYPE, name, field="task_evaluations.evaluator_type")
+
+
+def decode_task_evaluation_type(code: int) -> str:
+    """Decode a ``task_evaluations.evaluator_type`` int code to its name."""
+    return _decode(TASK_EVALUATION_TYPE, code, field="task_evaluations.evaluator_type")
+
+
+def encode_langfuse_outbox_status(name: str) -> int:
+    """Encode a ``langfuse_sync_outbox.status`` name to its int code."""
+    return _encode(LANGFUSE_OUTBOX_STATUS, name, field="langfuse_sync_outbox.status")
+
+
+def decode_langfuse_outbox_status(code: int) -> str:
+    """Decode a ``langfuse_sync_outbox.status`` int code to its name."""
+    return _decode(LANGFUSE_OUTBOX_STATUS, code, field="langfuse_sync_outbox.status")

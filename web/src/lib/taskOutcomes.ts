@@ -1,0 +1,223 @@
+// Typed client for the `/v1/task-runs/...` and
+// `/v1/sessions/{id}/task-runs[/...]` endpoints introduced with
+// the task-outcome tracking vertical slice. Mirrors
+// `omnigent/server/routes/task_outcomes.py`.
+//
+// All requests go through the existing Vite `/v1` proxy
+// (`web/vite.config.ts`) so no proxy changes are needed.
+
+import { authenticatedFetch } from "./identity";
+
+/** A single task run record as returned by the server. */
+export interface TaskRun {
+  id: string;
+  conversation_id: string;
+  response_id: string | null;
+  triggering_message_id: string | null;
+  project_path: string | null;
+  task_description: string | null;
+  proposed_task_family: string | null;
+  estimated_difficulty: string | null;
+  harness_id: string | null;
+  requested_route_id: string | null;
+  selected_provider: string | null;
+  selected_model: string | null;
+  reasoning_effort: string | null;
+  permission_mode: string | null;
+  omniroute_decision_id: string | null;
+  selection_strategy: string | null;
+  billing_class: string | null;
+  fallback_used: boolean | null;
+  terminal_status: "running" | "completed" | "failed" | "cancelled" | "incomplete";
+  started_at: number | null;
+  terminal_at: number | null;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_cost_usd: number | null;
+  response_summary: string | null;
+  changed_files: string[] | null;
+  commit_sha: string | null;
+  failure_error_code: string | null;
+  failure_error_message: string | null;
+  langfuse_trace_id: string | null;
+  langfuse_observation_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Lighter-weight summary used by the listing endpoints. */
+export interface TaskRunSummary {
+  id: string;
+  conversation_id: string;
+  response_id: string | null;
+  terminal_status: TaskRun["terminal_status"];
+  started_at: number | null;
+  terminal_at: number | null;
+  duration_ms: number | null;
+  selected_provider: string | null;
+  selected_model: string | null;
+  requested_route_id: string | null;
+  fallback_used: boolean | null;
+  harness_id: string | null;
+  proposed_task_family: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_cost_usd: number | null;
+  commit_sha: string | null;
+  changed_files_count: number | null;
+  failure_error_code: string | null;
+  langfuse_trace_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** A single automated evaluation record (one per task run). */
+export interface TaskEvaluation {
+  id: string;
+  task_run_id: string;
+  evaluator_type: "deterministic" | "llm";
+  evaluator_provider: string | null;
+  evaluator_model: string | null;
+  evaluator_route_id: string | null;
+  verdict: "success" | "partial" | "failure" | "inconclusive";
+  confidence: number | null;
+  quality_score: number | null;
+  proposed_task_family: string | null;
+  reasoning: string | null;
+  evidence: string[] | null;
+  unresolved_issues: string[] | null;
+  created_at: number;
+}
+
+/** A human review (upserted on re-submit). */
+export interface TaskReview {
+  id: string;
+  task_run_id: string;
+  verdict: "success" | "partial" | "failure" | "unsure" | "skipped";
+  quality_score: number | null;
+  final_task_family: string | null;
+  evaluator_accuracy: "correct" | "partly_correct" | "incorrect" | "unsure" | null;
+  comments: string | null;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Aggregate response of `GET /v1/task-runs/{id}`. */
+export interface TaskRunDetailResponse {
+  run: TaskRun;
+  evaluation: TaskEvaluation | null;
+  /** Review submitted by the requesting user (``null`` when none). */
+  review: TaskReview | null;
+  /** Any review (any reviewer) — for the unreviewed-runs check. */
+  any_review: TaskReview | null;
+  langfuse_pending: boolean;
+}
+
+/** Stable list of task families surfaced in the picker. */
+export const TASK_FAMILIES: readonly string[] = [
+  "repository_inspection",
+  "planning",
+  "small_bug_fix",
+  "feature_implementation",
+  "test_failure_repair",
+  "refactor",
+  "frontend",
+  "backend_api",
+  "database_migration",
+  "infrastructure_config",
+  "code_review",
+  "documentation",
+  "other",
+] as const;
+
+/** Stable list of review verdicts the picker accepts. */
+export const REVIEW_VERDICTS: readonly TaskReview["verdict"][] = [
+  "success",
+  "partial",
+  "failure",
+  "unsure",
+  "skipped",
+] as const;
+
+/** Stable list of "evaluator accuracy" verdicts the picker accepts. */
+export const EVALUATOR_ACCURACY_VALUES: readonly NonNullable<TaskReview["evaluator_accuracy"]>[] = [
+  "correct",
+  "partly_correct",
+  "incorrect",
+  "unsure",
+] as const;
+
+/** Body of `POST /v1/task-runs/{id}/review`. */
+export interface UpsertReviewRequest {
+  verdict: TaskReview["verdict"];
+  quality_score?: number | null;
+  final_task_family?: string | null;
+  evaluator_accuracy?: TaskReview["evaluator_accuracy"];
+  comments?: string | null;
+}
+
+/** Response of `GET /v1/sessions/{id}/task-runs`. */
+export interface ListSessionTaskRunsResponse {
+  object: "list";
+  runs: TaskRunSummary[];
+}
+
+/** Response of `GET /v1/sessions/{id}/unreviewed-task-outcomes`. */
+export interface ListUnreviewedTaskOutcomesResponse {
+  object: "list";
+  task_run_ids: string[];
+  runs: TaskRunSummary[];
+}
+
+export async function listSessionTaskRuns(
+  sessionId: string,
+  limit: number = 50,
+): Promise<ListSessionTaskRunsResponse> {
+  const url = `/v1/sessions/${encodeURIComponent(sessionId)}/task-runs?limit=${limit}`;
+  const resp = await authenticatedFetch(url, { credentials: "same-origin" });
+  if (!resp.ok) {
+    throw new Error(`listSessionTaskRuns failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function listUnreviewedTaskOutcomes(
+  sessionId: string,
+  limit: number = 100,
+): Promise<ListUnreviewedTaskOutcomesResponse> {
+  const url = `/v1/sessions/${encodeURIComponent(sessionId)}/unreviewed-task-outcomes?limit=${limit}`;
+  const resp = await authenticatedFetch(url, { credentials: "same-origin" });
+  if (!resp.ok) {
+    throw new Error(`listUnreviewedTaskOutcomes failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function getTaskRun(taskRunId: string): Promise<TaskRunDetailResponse> {
+  const url = `/v1/task-runs/${encodeURIComponent(taskRunId)}`;
+  const resp = await authenticatedFetch(url, { credentials: "same-origin" });
+  if (!resp.ok) {
+    throw new Error(`getTaskRun failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function submitTaskRunReview(
+  taskRunId: string,
+  body: UpsertReviewRequest,
+): Promise<TaskReview> {
+  const url = `/v1/task-runs/${encodeURIComponent(taskRunId)}/review`;
+  const resp = await authenticatedFetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`submitTaskRunReview failed: ${resp.status} ${text.slice(0, 200)}`);
+  }
+  return resp.json();
+}

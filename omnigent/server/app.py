@@ -1077,6 +1077,7 @@ def create_app(
     admins: list[str] | None = None,
     allowed_domains: list[str] | None = None,
     sandbox_config: ManagedSandboxConfig | None = None,
+    task_outcome_store: Any | None = None,
 ) -> FastAPI:
     """
     Build and return the FastAPI application with all routes mounted.
@@ -1195,6 +1196,24 @@ def create_app(
     _mcp_pool = ServerMcpPool()
     server_metrics = ServerPerformanceMetrics()
     server_metrics_otel = ServerMetricsOtelPublisher()
+
+    # Task-outcome recorder: wired before the lifespan starts so any
+    # relay spawned during the lifespan picks it up via
+    # ``get_recorder()``. Skipped when the operator didn't pass a
+    # task_outcome_store (older deployments / tests).
+    if task_outcome_store is not None:
+        from omnigent.server.task_outcome_recorder import (
+            TaskOutcomeRecorder,
+            set_recorder,
+        )
+
+        set_recorder(TaskOutcomeRecorder(store=task_outcome_store))
+    else:
+        from omnigent.server.task_outcome_recorder import set_recorder
+
+        # Ensure a previous (test / dev) install doesn't leak into
+        # this app instance.
+        set_recorder(None)
 
     @asynccontextmanager
     async def _lifespan(
@@ -1316,12 +1335,32 @@ def create_app(
                 otel_publisher=server_metrics_otel,
             )
         )
+        # Background Langfuse outbox drain. Started alongside the
+        # metrics publisher; cancelled in the teardown below.
+        # ``task_outcome_store`` is the same store passed to the
+        # recorder above; the worker re-reads it so a fresh table
+        # is always drained even if the recorder's reference is
+        # later swapped by a test.
+        langfuse_sync_task: asyncio.Task[None] | None = None
+        if task_outcome_store is not None:
+            from omnigent.server.langfuse_sync import (
+                run_langfuse_sync_worker,
+            )
+
+            langfuse_sync_task = asyncio.create_task(
+                run_langfuse_sync_worker(task_outcome_store),
+                name="omnigent-langfuse-sync-worker",
+            )
         try:
             yield
         finally:
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task
+            if langfuse_sync_task is not None:
+                langfuse_sync_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await langfuse_sync_task
             # Stop in-flight background managed-sandbox launches so a
             # slow provision doesn't outlive the ASGI shutdown (the
             # sandbox itself, if already provisioned, is reaped by the
@@ -1979,6 +2018,21 @@ def create_app(
             ),
             prefix="/v1",
             tags=["comments"],
+        )
+    if task_outcome_store is not None:
+        from omnigent.server.routes.task_outcomes import (
+            create_task_outcomes_router,
+        )
+
+        app.include_router(
+            create_task_outcomes_router(
+                task_outcome_store,
+                conversation_store=conversation_store,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
+            prefix="/v1",
+            tags=["task_outcomes"],
         )
     if policy_store is not None:
         app.include_router(
