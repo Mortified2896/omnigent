@@ -119,6 +119,28 @@ class _FakeStore:
         return SimpleNamespace(data=[])
 
 
+def test_route_proposal_payload_includes_evaluator_provenance():
+    payload = routes_sessions._route_proposal_params(
+        _proposal(
+            router_evaluator_route="auto/smart",
+            actual_evaluator_provider="mistral",
+            actual_evaluator_model="mistral/mistral-large-latest",
+            evaluator_billing_class="free",
+            evaluator_fallback_used=False,
+            evaluator_decision_id="decision-123",
+            evaluator_selection_strategy="auto",
+        )
+    )
+    route_proposal = payload["route_proposal"]
+    assert route_proposal["router_evaluator_route"] == "auto/smart"
+    assert route_proposal["actual_evaluator_provider"] == "mistral"
+    assert route_proposal["actual_evaluator_model"] == "mistral/mistral-large-latest"
+    assert route_proposal["evaluator_billing_class"] == "free"
+    assert route_proposal["evaluator_fallback_used"] is False
+    assert route_proposal["evaluator_decision_id"] == "decision-123"
+    assert route_proposal["evaluator_selection_strategy"] == "auto"
+
+
 def test_routing_off_does_not_call_router(monkeypatch):
     """When route_approval_enabled is False, the helper short-circuits and never
     instantiates or calls the RoutingAgent, even if a stale omniroute_route_id

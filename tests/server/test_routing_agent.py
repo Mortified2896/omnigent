@@ -4,10 +4,12 @@ import pytest
 
 from omnigent.server.routing_agent import (
     PROPOSAL_JSON_SCHEMA,
+    EvaluatorProvenanceError,
     RouteProposal,
     RoutingAgent,
     RoutingAgentError,
     build_routing_agent_from_runtime,
+    extract_evaluator_provenance,
     fail_open_to_default_policy_enabled,
     validate_route_proposal,
 )
@@ -88,6 +90,93 @@ def test_invalid_permission_mode_fails():
         validate_route_proposal(proposal(permission_mode="root"))
 
 
+def _provenance_headers(**overrides):
+    headers = {
+        "x-omniroute-requested-model": "auto/smart",
+        "x-omniroute-selected-provider": "test-provider",
+        "x-omniroute-selected-model": "test-provider/test-model",
+        "x-omniroute-billing-class": "free",
+        "x-omniroute-fallback-used": "false",
+        "x-omniroute-decision-id": "decision-123",
+        "x-omniroute-selection-strategy": "auto",
+    }
+    headers.update(overrides)
+    return headers
+
+
+def test_evaluator_provenance_accepts_free_and_preserves_audit_headers():
+    provenance = extract_evaluator_provenance(
+        requested_model="auto/smart",
+        payload={"model": "auto/smart"},
+        headers=_provenance_headers(),
+    )
+    assert provenance["router_evaluator_route"] == "auto/smart"
+    assert provenance["actual_evaluator_provider"] == "test-provider"
+    assert provenance["actual_evaluator_model"] == "test-provider/test-model"
+    assert provenance["evaluator_billing_class"] == "free"
+    assert provenance["evaluator_fallback_used"] is False
+    assert provenance["evaluator_decision_id"] == "decision-123"
+    assert provenance["evaluator_selection_strategy"] == "auto"
+
+
+def test_evaluator_provenance_accepts_subscription_and_true_fallback():
+    provenance = extract_evaluator_provenance(
+        requested_model="auto/smart",
+        payload={},
+        headers=_provenance_headers(
+            **{"x-omniroute-billing-class": "subscription", "x-omniroute-fallback-used": "true"}
+        ),
+    )
+    assert provenance["evaluator_billing_class"] == "subscription"
+    assert provenance["evaluator_fallback_used"] is True
+
+
+@pytest.mark.parametrize("billing", ["api_billed", "unknown"])
+def test_evaluator_provenance_rejects_forbidden_or_unknown_billing(billing):
+    with pytest.raises(EvaluatorProvenanceError):
+        extract_evaluator_provenance(
+            requested_model="auto/smart",
+            payload={},
+            headers=_provenance_headers(**{"x-omniroute-billing-class": billing}),
+        )
+
+
+def test_evaluator_provenance_rejects_missing_billing():
+    headers = _provenance_headers()
+    headers.pop("x-omniroute-billing-class")
+    with pytest.raises(EvaluatorProvenanceError):
+        extract_evaluator_provenance(requested_model="auto/smart", payload={}, headers=headers)
+
+
+@pytest.mark.parametrize(
+    "missing", ["x-omniroute-selected-provider", "x-omniroute-selected-model"]
+)
+def test_evaluator_provenance_rejects_missing_selected_provenance(missing):
+    headers = _provenance_headers()
+    headers.pop(missing)
+    if missing == "x-omniroute-selected-provider":
+        headers["x-omniroute-selected-model"] = "model-without-provider-prefix"
+    with pytest.raises(EvaluatorProvenanceError):
+        extract_evaluator_provenance(requested_model="auto/smart", payload={}, headers=headers)
+
+
+def test_evaluator_provenance_uses_same_rules_for_stream_metadata_payload():
+    stream_payload = {
+        "metadata": {
+            "omniroute": {
+                "requested_model": "auto/smart",
+                "selected_provider": "stream-provider",
+                "selected_model": "stream-provider/model",
+                "billing_class": "api_billed",
+                "fallback_used": False,
+                "decision_id": "stream-decision",
+            }
+        }
+    }
+    with pytest.raises(EvaluatorProvenanceError):
+        extract_evaluator_provenance(requested_model="auto/smart", payload=stream_payload)
+
+
 class StubAgent(RoutingAgent):
     def __init__(self, responses):
         super().__init__(
@@ -97,11 +186,19 @@ class StubAgent(RoutingAgent):
         )
         self.responses = list(responses)
 
-    async def _invoke_router(self, model, prompt):
+    async def _invoke_router(self, model, prompt, *, fallback: bool = False):
         value = self.responses.pop(0)
         if isinstance(value, Exception):
             raise value
-        return value
+        return value, {
+            "router_evaluator_route": model,
+            "actual_evaluator_model": "test-provider/test-model",
+            "actual_evaluator_provider": "test-provider",
+            "evaluator_billing_class": "free",
+            "evaluator_fallback_used": fallback,
+            "evaluator_fallback_model": self.fallback_model,
+            "router_prompt_version": "route-proposal-v1",
+        }
 
 
 @pytest.mark.asyncio

@@ -40,6 +40,31 @@ export function RouteProposalCard({ proposal }: RouteProposalCardProps) {
             `${list(proposal.allowed_billing_classes)} allowed; ${list(proposal.forbidden_billing_classes)} forbidden`}
         </div>
         {text(proposal.risk_note) && <div>Risk note: {text(proposal.risk_note)}</div>}
+        {text(proposal.router_evaluator_route) && (
+          <div>
+            Evaluator route: <code>{text(proposal.router_evaluator_route)}</code>
+          </div>
+        )}
+        {text(proposal.actual_evaluator_provider) && (
+          <div>Selected provider: {text(proposal.actual_evaluator_provider)}</div>
+        )}
+        {text(proposal.actual_evaluator_model) && (
+          <div>
+            Selected model: <code>{text(proposal.actual_evaluator_model)}</code>
+          </div>
+        )}
+        {text(proposal.evaluator_billing_class) && (
+          <div>Evaluator billing: {text(proposal.evaluator_billing_class)}</div>
+        )}
+        {typeof proposal.evaluator_fallback_used === "boolean" && (
+          <div>Evaluator fallback used: {proposal.evaluator_fallback_used ? "true" : "false"}</div>
+        )}
+        {text(proposal.evaluator_decision_id) && (
+          <div>Decision ID: {text(proposal.evaluator_decision_id)}</div>
+        )}
+        {text(proposal.evaluator_selection_strategy) && (
+          <div>Selection strategy: {text(proposal.evaluator_selection_strategy)}</div>
+        )}
         {explicit && (
           <div className="font-medium text-yellow-800 dark:text-yellow-300">
             Explicit approval required — this route may use pro/premium routing and should only be

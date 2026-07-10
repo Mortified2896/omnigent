@@ -201,6 +201,7 @@ def _build_proposal_json_schema() -> dict[str, object]:
 
 
 PROPOSAL_JSON_SCHEMA: dict[str, object] = _build_proposal_json_schema()
+ROUTER_PROMPT_VERSION = "route-proposal-v1"
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,19 @@ class RouteProposal:
     router_fallback_used: bool
     proposal_source: Literal["llm_router", "default_route_policy"]
     proposal_source_label: str
+    router_evaluator_route: str | None = None
+    actual_evaluator_model: str | None = None
+    actual_evaluator_provider: str | None = None
+    evaluator_billing_class: str | None = None
+    evaluator_fallback_used: bool | None = None
+    evaluator_fallback_model: str | None = None
+    evaluator_selection_strategy: str | None = None
+    evaluator_decision_id: str | None = None
+    router_prompt_version: str = ROUTER_PROMPT_VERSION
+    proposal_id: str | None = None
+    source_input_sha256_prefix: str | None = None
+    source_extracted_chars: int | None = None
+    source_content_blocks: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +244,179 @@ class RouteAlternative:
 
 class RoutingAgentError(RuntimeError):
     pass
+
+
+class EvaluatorProvenanceError(RoutingAgentError):
+    pass
+
+
+_ALLOWED_EVALUATOR_BILLING_CLASSES = {"free", "subscription"}
+_FORBIDDEN_EVALUATOR_BILLING_CLASSES = {"api_billed", "unknown"}
+
+
+def _is_auto_route(model: str | None) -> bool:
+    value = (model or "").strip().lower()
+    return value == "auto" or value.startswith("auto/")
+
+
+def _first_str(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _get_path(obj: Any, path: tuple[str, ...]) -> Any:
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _parse_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _omniroute_metadata_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        payload.get("omniroute"),
+        payload.get("metadata"),
+        _get_path(payload, ("metadata", "omniroute")),
+    ]
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        candidates.extend(
+            [
+                _get_path(first, ("omniroute",)),
+                _get_path(first, ("message", "omniroute")),
+                _get_path(first, ("message", "metadata")),
+                _get_path(first, ("message", "metadata", "omniroute")),
+            ]
+        )
+    merged: dict[str, Any] = {}
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            merged.update(candidate)
+    return merged
+
+
+def extract_evaluator_provenance(
+    *,
+    requested_model: str,
+    payload: dict[str, Any],
+    headers: httpx.Headers | dict[str, str] | None = None,
+    fallback_model: str | None = None,
+    outer_fallback_used: bool = False,
+) -> dict[str, Any]:
+    meta = _omniroute_metadata_from_payload(payload)
+    header_get = (headers or {}).get
+    selected_model = _first_str(
+        meta.get("selected_model"),
+        meta.get("actual_provider_model"),
+        meta.get("provider_model"),
+        meta.get("routed_model"),
+        header_get("x-omniroute-selected-model"),
+        payload.get("actual_provider_model"),
+        payload.get("selected_model"),
+        payload.get("provider_model"),
+        payload.get("routed_model"),
+    )
+    requested = _first_str(
+        meta.get("requested_model"),
+        meta.get("requested_route"),
+        header_get("x-omniroute-requested-model"),
+        requested_model,
+    )
+    if not selected_model or selected_model == requested_model or _is_auto_route(selected_model):
+        raise EvaluatorProvenanceError(
+            "OmniRoute evaluator provenance unavailable: concrete selected model is unknown"
+        )
+    provider = _first_str(
+        meta.get("selected_provider"),
+        meta.get("provider"),
+        header_get("x-omniroute-selected-provider"),
+    )
+    if provider is None and "/" in selected_model:
+        provider = selected_model.split("/", 1)[0]
+    if provider is None:
+        raise EvaluatorProvenanceError(
+            "OmniRoute evaluator provenance unavailable: selected provider is unknown"
+        )
+    billing = _first_str(
+        meta.get("selected_billing_class"),
+        meta.get("billing_class"),
+        meta.get("billing"),
+        header_get("x-omniroute-billing-class"),
+        header_get("x-omniroute-selected-billing-class"),
+    )
+    if billing not in _ALLOWED_EVALUATOR_BILLING_CLASSES:
+        if billing in _FORBIDDEN_EVALUATOR_BILLING_CLASSES:
+            raise EvaluatorProvenanceError(
+                f"OmniRoute evaluator billing class {billing!r} is forbidden"
+            )
+        raise EvaluatorProvenanceError(
+            "OmniRoute evaluator provenance unavailable: billing class is unknown"
+        )
+    fallback_value = (
+        meta.get("fallback_used")
+        if "fallback_used" in meta
+        else header_get("x-omniroute-fallback-used")
+    )
+    fallback_used = _parse_bool(fallback_value)
+    if fallback_used is None:
+        fallback_used = outer_fallback_used
+    return {
+        "router_evaluator_route": requested or requested_model,
+        "actual_evaluator_model": selected_model,
+        "actual_evaluator_provider": provider,
+        "evaluator_billing_class": billing,
+        "evaluator_fallback_used": fallback_used,
+        "evaluator_fallback_model": _first_str(
+            meta.get("fallback_model"), header_get("x-omniroute-fallback-model"), fallback_model
+        ),
+        "evaluator_selection_strategy": _first_str(
+            meta.get("selection_strategy"),
+            meta.get("selected_route_template"),
+            header_get("x-omniroute-selection-strategy"),
+        ),
+        "evaluator_decision_id": _first_str(
+            meta.get("decision_id"), header_get("x-omniroute-decision-id")
+        ),
+        "router_prompt_version": ROUTER_PROMPT_VERSION,
+    }
+
+
+def validate_evaluator_auditability(proposal: RouteProposal) -> None:
+    if proposal.proposal_source != "llm_router" or not proposal.router_invoked:
+        return
+    if not any(
+        [
+            proposal.router_evaluator_route,
+            proposal.actual_evaluator_model,
+            proposal.actual_evaluator_provider,
+            proposal.evaluator_billing_class,
+        ]
+    ):
+        return
+    if not proposal.router_evaluator_route:
+        raise EvaluatorProvenanceError("router evaluator route is missing")
+    if not proposal.actual_evaluator_model or _is_auto_route(proposal.actual_evaluator_model):
+        raise EvaluatorProvenanceError("concrete evaluator model is missing")
+    if not proposal.actual_evaluator_provider:
+        raise EvaluatorProvenanceError("concrete evaluator provider is missing")
+    if proposal.evaluator_billing_class not in _ALLOWED_EVALUATOR_BILLING_CLASSES:
+        raise EvaluatorProvenanceError("allowed evaluator billing provenance is missing")
 
 
 def route_approval_gate_enabled() -> bool:
@@ -288,6 +475,7 @@ def validate_route_proposal(proposal: RouteProposal) -> RouteProposal:
         proposal = RouteProposal(
             **{**asdict(proposal), "omniroute_requires_explicit_approval": True}
         )
+    validate_evaluator_auditability(proposal)
     return proposal
 
 
@@ -548,6 +736,8 @@ class RoutingAgent:
                 return await self._call_via_policy_llm(
                     user_message, available_harnesses, billing_policy, False
                 )
+            except EvaluatorProvenanceError:
+                raise
             except (
                 httpx.HTTPError,
                 RoutingAgentError,
@@ -561,6 +751,8 @@ class RoutingAgent:
                 return await self._call_and_validate(
                     self.primary_model, user_message, available_harnesses, billing_policy, False
                 )
+            except EvaluatorProvenanceError:
+                raise
             except (httpx.HTTPError, RoutingAgentError, ValueError, OSError) as exc:
                 errors.append(f"primary: {exc}")
         if self.fallback_model and self.api_url:
@@ -568,6 +760,8 @@ class RoutingAgent:
                 return await self._call_and_validate(
                     self.fallback_model, user_message, available_harnesses, billing_policy, True
                 )
+            except EvaluatorProvenanceError:
+                raise
             except (httpx.HTTPError, RoutingAgentError, ValueError, OSError) as exc:
                 errors.append(f"fallback: {exc}")
         if fail_open_to_default_policy_enabled():
@@ -606,10 +800,13 @@ class RoutingAgent:
         billing_policy: str,
         fallback: bool,
     ) -> RouteProposal:
-        raw = await self._invoke_router(
-            model, self._prompt(user_message, available_harnesses, billing_policy)
+        raw, provenance = await self._invoke_router(
+            model,
+            self._prompt(user_message, available_harnesses, billing_policy),
+            fallback=fallback,
         )
         data = self._parse_router_response(raw)
+        data.update(provenance)
         data.setdefault("router_invoked", True)
         data.setdefault("router_fallback_used", fallback)
         data.setdefault("proposal_source", "llm_router")
@@ -672,7 +869,9 @@ class RoutingAgent:
             raise RoutingAgentError("router JSON must be an object")
         return data
 
-    async def _invoke_router(self, model: str, prompt: str) -> str:
+    async def _invoke_router(
+        self, model: str, prompt: str, *, fallback: bool = False
+    ) -> tuple[str, dict[str, Any]]:
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
@@ -689,10 +888,17 @@ class RoutingAgent:
             resp = await client.post(self.api_url, headers=headers, json=body)
             resp.raise_for_status()
             payload = resp.json()
+            provenance = extract_evaluator_provenance(
+                requested_model=model,
+                payload=payload,
+                headers=resp.headers,
+                fallback_model=self.fallback_model,
+                outer_fallback_used=fallback,
+            )
         content = payload.get("choices", [{}])[0].get("message", {}).get("content")
         if not isinstance(content, str) or not content.strip():
             raise RoutingAgentError("router response missing content")
-        return content
+        return content, provenance
 
     def _prompt(
         self, user_message: str, available_harnesses: list[str] | None, billing_policy: str
