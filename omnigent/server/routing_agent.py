@@ -48,6 +48,23 @@ _KNOWN_FALLBACK_POLICIES = frozenset(
     }
 )
 _DEFAULT_ROUTE_POLICY_SOURCE = "default_route_policy"
+_ROUTER_PROMPT_PERMISSION_RULES = (
+    "Permission mode is a safety policy, not a model-quality setting. "
+    "Pick the strictest mode that still lets the task complete. "
+    "Use 'read_only' for greetings, general chat, explanations, plan-only "
+    "requests, review-only requests, and any prompt that says 'do not edit "
+    "files', 'do not run tools', 'no changes', or 'explain only'. "
+    "Use 'ask_before_edits' ONLY when the user asks to create, modify, "
+    "patch, refactor, delete, or commit files. "
+    "Use 'ask_before_commands' ONLY when the user asks to run tests, shell "
+    "commands, package installs, services, migrations, or other terminal "
+    "actions. "
+    "Never pick 'ask_before_edits' for a greeting, simple question, "
+    "explanation, or plan-only request. "
+    "Never pick 'ask_before_commands' unless command/tool execution is "
+    "actually requested or necessary. "
+    "Never pick 'auto_accept_edits' or 'bypass'."
+)
 _ROUTER_PROMPT_RULES = (
     "Rules: choose only provided route IDs; do not invent IDs. "
     "Use auto/cheap only for routing/planning/simple chat. "
@@ -58,7 +75,7 @@ _ROUTER_PROMPT_RULES = (
     "Use auto/reasoning:pro only for hardest tasks. "
     "Use auto/vision or auto/multimodal only for multimodal input. "
     "Pick reasoning_effort separately from route ID. "
-    "Permission mode is harness safety policy. "
+    f"{_ROUTER_PROMPT_PERMISSION_RULES} "
     "API-billed and unknown billing are forbidden unless explicitly allowed. "
     "Use subscriptions when quality matters. "
     "Prefer free only when equivalent."
@@ -69,7 +86,28 @@ _ROUTER_PROMPT_FIELDS = (
     "execution_fallback_policy,omniroute_requires_explicit_approval,rationale "
     "(array of strings)."
 )
-_ROUTER_PROMPT_EXAMPLE = (
+# Few-shot examples. Order matters: the LLM should see the read-only cases
+# first so it learns to default to the strictest mode that still works.
+_ROUTER_PROMPT_EXAMPLES: tuple[str, ...] = (
+    # 1) Greeting -> cheapest route + read_only.
+    '{"task_type":"general_chat","recommended_harness":"OpenCode Native",'
+    '"omniroute_route_id":"auto/cheap","reasoning_effort":"low",'
+    '"permission_mode":"read_only",'
+    '"allowed_billing_classes":["free","subscription"],'
+    '"forbidden_billing_classes":["api_billed","unknown"],'
+    '"execution_fallback_policy":"fail_closed_no_api_billed_fallback",'
+    '"omniroute_requires_explicit_approval":false,'
+    '"rationale":["Trivial greeting; cheapest route and read-only mode suffice."]}',
+    # 2) Plan-only with explicit "do not edit / do not run tools" -> read_only.
+    '{"task_type":"general_chat","recommended_harness":"OpenCode Native",'
+    '"omniroute_route_id":"auto/cheap","reasoning_effort":"low",'
+    '"permission_mode":"read_only",'
+    '"allowed_billing_classes":["free","subscription"],'
+    '"forbidden_billing_classes":["api_billed","unknown"],'
+    '"execution_fallback_policy":"fail_closed_no_api_billed_fallback",'
+    '"omniroute_requires_explicit_approval":false,'
+    '"rationale":["Plan-only request; user said do not edit or run tools."]}',
+    # 3) Implement / repo edit -> ask_before_edits.
     '{"task_type":"coding","recommended_harness":"OpenCode Native",'
     '"omniroute_route_id":"auto/coding","reasoning_effort":"medium",'
     '"permission_mode":"ask_before_edits",'
@@ -77,8 +115,19 @@ _ROUTER_PROMPT_EXAMPLE = (
     '"forbidden_billing_classes":["api_billed","unknown"],'
     '"execution_fallback_policy":"fail_closed_no_api_billed_fallback",'
     '"omniroute_requires_explicit_approval":false,'
-    '"rationale":["Normal repository coding task."]}'
+    '"rationale":["User asked to implement a fix; repo edits required."]}',
+    # 4) Run tests / shell -> ask_before_commands.
+    '{"task_type":"coding","recommended_harness":"OpenCode Native",'
+    '"omniroute_route_id":"auto/coding","reasoning_effort":"medium",'
+    '"permission_mode":"ask_before_commands",'
+    '"allowed_billing_classes":["free","subscription"],'
+    '"forbidden_billing_classes":["api_billed","unknown"],'
+    '"execution_fallback_policy":"fail_closed_no_api_billed_fallback",'
+    '"omniroute_requires_explicit_approval":false,'
+    '"rationale":["User asked to run tests; shell command execution required."]}',
 )
+# Backwards-compatible alias for tests and external callers.
+_ROUTER_PROMPT_EXAMPLE = _ROUTER_PROMPT_EXAMPLES[0]
 
 
 def _build_proposal_json_schema() -> dict[str, object]:
@@ -242,6 +291,209 @@ def validate_route_proposal(proposal: RouteProposal) -> RouteProposal:
     return proposal
 
 
+# Lightweight keyword cues used by the permission floor to down-grade too-strong
+# proposals. The sets are intentionally small: the goal is to catch obvious
+# over-permissioning (e.g. greeting => ask_before_edits), not to fully parse
+# natural language. False negatives are tolerable; the upstream router prompt
+# carries the real semantics. False positives are bounded — we only ever
+# DOWN-grade, never UP-grade.
+_READ_ONLY_CUES: tuple[str, ...] = (
+    "do not edit",
+    "don't edit",
+    "do not run tools",
+    "don't run tools",
+    "no tools",
+    "no edits",
+    "no changes",
+    "no file changes",
+    "plan only",
+    "plan how",
+    "explain only",
+    "explain what",
+    "explain how",
+    "review only",
+    "read only",
+    "read-only",
+    "just describe",
+    "without modifying",
+    "without changing",
+    "without running",
+    "without editing",
+    "without making changes",
+    "what would you do",
+    "what you would do",
+)
+_EDIT_CUES: tuple[str, ...] = (
+    "implement",
+    "write a",
+    "write the",
+    "add a",
+    "add the",
+    "create a",
+    "create the",
+    "modify",
+    "refactor",
+    "patch",
+    "delete the",
+    "delete file",
+    "remove the",
+    "rename the",
+    "fix the",
+    "fix bug",
+    "fix issue",
+    "commit",
+    "edit file",
+    "edit the file",
+    "update the file",
+    "rewrite",
+)
+_COMMAND_CUES: tuple[str, ...] = (
+    "run the tests",
+    "run tests",
+    "run test",
+    "run pytest",
+    "run npm test",
+    "run npm",
+    "run yarn",
+    "run pnpm",
+    "run cargo",
+    "run go test",
+    "run make",
+    "run pytest",
+    "run the suite",
+    "run shell",
+    "run a shell",
+    "shell command",
+    "execute the command",
+    "install deps",
+    "install the",
+    "npm install",
+    "pip install",
+    "yarn install",
+    "pnpm install",
+    "brew install",
+    "apt install",
+    "run migrations",
+    "start the server",
+    "restart the server",
+    "kill the process",
+    "docker run",
+    "docker compose",
+    "kubectl",
+    "terraform",
+    "deploy",
+)
+
+
+def _message_signals(user_message: str) -> tuple[bool, bool, bool]:
+    """Classify a user message into (read_only_eligible, edit_request, command_request).
+
+    The classifier is intentionally conservative. It only flags READ-ONLY cues
+    or COMMAND cues positively when the literal phrase is present; edit cues
+    are checked last and require a recognised verb so we don't accidentally
+    flag a question like "can you explain how to refactor this?".
+    """
+    text = (user_message or "").lower()
+    if not text.strip():
+        # Empty prompt — treat as read-only eligible. No edits, no commands.
+        return True, False, False
+    read_only = any(cue in text for cue in _READ_ONLY_CUES)
+    command = any(cue in text for cue in _COMMAND_CUES)
+    # Only treat as an edit request when the cue is present AND the message
+    # does NOT also carry an explicit read-only signal. A "plan how to
+    # refactor this" prompt is still plan-only.
+    edit = (not read_only) and any(cue in text for cue in _EDIT_CUES)
+    return read_only, edit, command
+
+
+# Order matters: index 0 is the strictest mode. A downgrade is any move toward
+# index 0; an upgrade is any move away from index 0. The guard only downgrades.
+_PERMISSION_STRICTNESS: tuple[str, ...] = (
+    "read_only",
+    "ask_before_edits",
+    "ask_before_commands",
+    "auto_accept_edits",
+    "bypass",
+)
+
+
+def _permission_floor(user_message: str) -> str:
+    """Return the strictest permission mode acceptable for the user message.
+
+    - read-only-eligible messages => ``read_only``
+    - command request (no explicit read-only) => ``ask_before_commands``
+    - edit request (no command, no read-only) => ``ask_before_edits``
+    - otherwise => ``read_only`` (safest default; never silently grants edits)
+    """
+    read_only, edit, command = _message_signals(user_message)
+    if read_only:
+        return "read_only"
+    if command:
+        return "ask_before_commands"
+    if edit:
+        return "ask_before_edits"
+    # Plain chat, greeting, or anything without edit/command intent =>
+    # the safest mode is read_only. This is the key behaviour: a vague or
+    # trivial prompt must not receive edit/command authority.
+    return "read_only"
+
+
+def _enforce_permission_floor(proposal: RouteProposal, user_message: str) -> RouteProposal:
+    """Down-grade a too-strong permission_mode on a validated router proposal.
+
+    The router can over-permission trivial prompts (e.g. ``ask_before_edits``
+    for a greeting). This guard is the safety net:
+
+    - Only ever moves ``permission_mode`` toward ``read_only`` (never upgrades).
+    - Appends a ``Permission floor: ...`` rationale entry so the user-facing
+      card can show why the proposal was adjusted.
+    - Leaves edit / shell proposals unchanged when the message signals an
+      edit or shell intent.
+    - Returns the input proposal unchanged when no downgrade is needed.
+    """
+    current = proposal.permission_mode
+    if current not in _PERMISSION_STRICTNESS:
+        # Unknown / new mode: leave alone. validate_route_proposal already
+        # raised if it was truly unknown; this is a defensive fallback.
+        return proposal
+    floor = _permission_floor(user_message)
+    current_idx = _PERMISSION_STRICTNESS.index(current)
+    floor_idx = _PERMISSION_STRICTNESS.index(floor)
+    if current_idx <= floor_idx:
+        # Already at or stricter than the floor — no change.
+        return proposal
+    adjusted = floor
+    note = (
+        f"Permission floor: router proposed '{current}' but user message is "
+        f"read-only-eligible (signals: read_only={_message_signals(user_message)[0]}, "
+        f"command={_message_signals(user_message)[2]}). Downgrading to '{adjusted}'."
+        if adjusted == "read_only"
+        else (
+            f"Permission floor: router proposed '{current}' but user message "
+            f"signals command execution (signals: command=True). Downgrading to "
+            f"'{adjusted}'."
+            if adjusted == "ask_before_commands"
+            else (
+                f"Permission floor: router proposed '{current}' but user message "
+                f"does not signal edit intent. Downgrading to '{adjusted}'."
+            )
+        )
+    )
+    _logger.info(
+        "model_routing_agent permission_floor session=N/A from=%s to=%s note=%s",
+        current,
+        adjusted,
+        note,
+    )
+    return RouteProposal(
+        **{
+            **asdict(proposal),
+            "permission_mode": adjusted,
+            "rationale": [*proposal.rationale, note],
+        }
+    )
+
+
 class RoutingAgent:
     """Model Routing Agent — picks a native OmniRoute for an inbound user message.
 
@@ -363,7 +615,8 @@ class RoutingAgent:
         data.setdefault("proposal_source", "llm_router")
         data.setdefault("proposal_source_label", "Router recommendation")
         proposal = RouteProposal(**data)
-        return validate_route_proposal(proposal)
+        proposal = validate_route_proposal(proposal)
+        return _enforce_permission_floor(proposal, user_message)
 
     async def _call_via_policy_llm(
         self,
@@ -406,7 +659,8 @@ class RoutingAgent:
         data.setdefault("proposal_source", "llm_router")
         data.setdefault("proposal_source_label", "Router recommendation")
         proposal = RouteProposal(**data)
-        return validate_route_proposal(proposal)
+        proposal = validate_route_proposal(proposal)
+        return _enforce_permission_floor(proposal, user_message)
 
     @staticmethod
     def _parse_router_response(raw: str) -> dict[str, Any]:
@@ -444,17 +698,20 @@ class RoutingAgent:
         self, user_message: str, available_harnesses: list[str] | None, billing_policy: str
     ) -> str:
         routes = [asdict(p) for p in OMNIROUTE_ROUTE_CATALOG.values()]
+        examples = "\n".join(
+            f"Example {i + 1}: {ex}" for i, ex in enumerate(_ROUTER_PROMPT_EXAMPLES)
+        )
         return "\n".join(
             [
                 "You are Omnigent's Model Routing Agent. Return strict JSON only.",
-                f"User message: {user_message}",
+                f"User message (JSON string): {json.dumps(user_message)}",
                 f"Available harnesses: {available_harnesses or ['OpenCode Native']}",
                 f"Allowed permission modes: {sorted(KNOWN_PERMISSION_MODES)}",
                 f"Billing policy: {billing_policy}",
                 f"Available native OmniRoute routes: {json.dumps(routes, separators=(',', ':'))}",
                 _ROUTER_PROMPT_RULES,
                 _ROUTER_PROMPT_FIELDS,
-                f"Example: {_ROUTER_PROMPT_EXAMPLE}",
+                examples,
             ]
         )
 

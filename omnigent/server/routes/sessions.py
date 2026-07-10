@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import mimetypes
@@ -8670,7 +8671,14 @@ async def _await_route_approval(
         return conv
     user_text = _extract_user_text_for_routing(body)
     if not user_text:
-        return conv
+        raise _RoutingAgentError("router input could not be extracted from user message")
+    _logger.info(
+        "model_routing_agent input session=%s content_types=%s chars=%s sha256=%s",
+        session_id,
+        _routing_content_types(body),
+        len(user_text),
+        hashlib.sha256(user_text.encode("utf-8")).hexdigest()[:12],
+    )
     proposal = await _build_routing_agent_from_runtime().propose(
         user_message=user_text, available_harnesses=["OpenCode Native"]
     )
@@ -8736,23 +8744,50 @@ async def _await_route_approval(
     return updated
 
 
-def _extract_user_text_for_routing(body: SessionEventInput) -> str:
-    """Extract plain text from a user message event for the routing judge.
+def _routing_content_types(body: SessionEventInput) -> list[str]:
+    """Return content block type names for route-input audit logging."""
+    content = body.data.get("content")
+    if not isinstance(content, list):
+        return []
+    types: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and isinstance(block.get("type"), str):
+            types.append(block["type"])
+        else:
+            types.append("<invalid>")
+    return types
 
-    Concatenates all ``input_text`` blocks in ``body.data["content"]``,
-    returning the first 4 000 characters.  Returns ``""`` for non-message
-    events or events with no text content.
+
+def _extract_user_text_for_routing(body: SessionEventInput) -> str:
+    """Extract auditable user-message context for the routing judge.
+
+    Includes all text blocks plus explicit placeholders for image/file
+    attachments. The router must see that a message is multimodal instead of
+    classifying a ``"."``/``"?"`` caption as punctuation-only after the
+    attachment blocks were dropped. Returns ``""`` only when no routeable
+    context can be extracted.
     """
     content = body.data.get("content")
     if not isinstance(content, list):
         return ""
     parts: list[str] = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "input_text":
-            text = block.get("text", "")
-            if isinstance(text, str):
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "input_text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
                 parts.append(text)
-    return " ".join(parts)[:4000]
+            continue
+        if block_type in ("input_image", "input_file"):
+            filename = block.get("filename")
+            file_id = block.get("file_id")
+            label = "image" if block_type == "input_image" else "file"
+            name = filename if isinstance(filename, str) and filename else file_id
+            suffix = f": {name}" if isinstance(name, str) and name else ""
+            parts.append(f"[attached {label}{suffix}]")
+    return "\n".join(parts)[:4000]
 
 
 async def _emit_server_routing_decision(
