@@ -8680,7 +8680,11 @@ async def _await_route_approval(
         and body.type == "message"
     ):
         return conv
-    user_text = _extract_user_text_for_routing(body)
+    # FULL extracted user text (no truncation) — used for audit hash +
+    # routing-agent provenance. The routing LLM only sees a separately
+    # bounded excerpt so a 128k-char prompt doesn't blow the routing
+    # evaluator's context window or timeout.
+    user_text = _extract_full_user_text(body)
     if not user_text:
         raise _RoutingAgentError("router input could not be extracted from user message")
     _logger.info(
@@ -8769,14 +8773,18 @@ def _routing_content_types(body: SessionEventInput) -> list[str]:
     return types
 
 
-def _extract_user_text_for_routing(body: SessionEventInput) -> str:
-    """Extract auditable user-message context for the routing judge.
+def _extract_full_user_text(body: SessionEventInput) -> str:
+    """Return the FULL extracted user text (no truncation).
 
     Includes all text blocks plus explicit placeholders for image/file
     attachments. The router must see that a message is multimodal instead of
     classifying a ``"."``/``"?"`` caption as punctuation-only after the
     attachment blocks were dropped. Returns ``""`` only when no routeable
     context can be extracted.
+
+    The audit-level info (length, sha256, content-types) uses this
+    FULL version. The routing LLM prompt uses a separately-bounded
+    excerpt via :func:`omnigent.server.routing_agent._bound_routing_user_message`.
     """
     content = body.data.get("content")
     if not isinstance(content, list):
@@ -8798,7 +8806,25 @@ def _extract_user_text_for_routing(body: SessionEventInput) -> str:
             name = filename if isinstance(filename, str) and filename else file_id
             suffix = f": {name}" if isinstance(name, str) and name else ""
             parts.append(f"[attached {label}{suffix}]")
-    return "\n".join(parts)[:4000]
+    return "\n".join(parts)
+
+
+def _extract_user_text_for_routing(body: SessionEventInput) -> str:
+    """Extract auditable user-message context for the routing judge.
+
+    Includes all text blocks plus explicit placeholders for image/file
+    attachments. The router must see that a message is multimodal instead of
+    classifying a ``"."``/``"?"`` caption as punctuation-only after the
+    attachment blocks were dropped. Returns ``""`` only when no routeable
+    context can be extracted.
+
+    This is the legacy 4000-char audit slice — kept for callers that
+    want a quick bounded text without pulling in the routing agent.
+    The full-fidelity :func:`_extract_full_user_text` plus the agent's
+    own budget (``OMNIGENT_ROUTER_INPUT_BUDGET_CHARS``) is the
+    preferred path for new code.
+    """
+    return _extract_full_user_text(body)[:4000]
 
 
 async def _emit_server_routing_decision(

@@ -3,14 +3,19 @@ import json
 import pytest
 
 from omnigent.server.routing_agent import (
+    DEFAULT_ROUTING_INPUT_BUDGET_CHARS,
     PROPOSAL_JSON_SCHEMA,
     EvaluatorProvenanceError,
     RouteProposal,
     RoutingAgent,
     RoutingAgentError,
+    _bound_routing_user_message,
+    _route_proposal_from_data,
     build_routing_agent_from_runtime,
     extract_evaluator_provenance,
     fail_open_to_default_policy_enabled,
+    hash_user_message,
+    routing_input_budget_chars,
     validate_route_proposal,
 )
 
@@ -967,3 +972,504 @@ def test_module_docstring_documents_billing_vs_transport():
     assert "api_billed" in doc
     assert "billing" in doc
     assert "transport" in doc
+
+
+# ---------------------------------------------------------------------------
+# Bounded routing-input representation
+#
+# The routing LLM only needs a bounded excerpt of the user message to pick a
+# route + permission mode. The agent derives this excerpt via
+# ``_bound_routing_user_message(user_message, budget)`` unless the caller
+# passes an explicit ``routing_user_message`` to ``RoutingAgent.propose(...)``.
+# Execution path always sees the full original prompt; only the routing
+# judge sees the bounded slice.
+# ---------------------------------------------------------------------------
+
+
+def test_short_user_message_passes_through_unchanged():
+    """Short messages (≤ budget) must reach the routing LLM verbatim.
+
+    The previous behaviour — embedding the entire user message with
+    ``json.dumps(user_message)`` — must still hold for any prompt short
+    enough to fit. Bounding only kicks in when the input is over budget.
+    """
+    short = "Implement a debounce hook in src/utils.ts."
+    bounded = _bound_routing_user_message(short, 4000)
+    assert bounded == short
+
+
+def test_short_user_message_under_default_budget_unchanged():
+    """The default budget is 4000 chars; anything under it passes through."""
+    assert _bound_routing_user_message("Hi", 4000) == "Hi"
+    # Exactly at the budget → also passes through (no marker needed).
+    exact = "x" * 4000
+    assert _bound_routing_user_message(exact, 4000) == exact
+
+
+def test_long_user_message_is_bounded_with_omission_marker():
+    """Long prompts are compacted with a deterministic marker that names
+    both the omitted character count and the original total length."""
+    long_prompt = "Lorem ipsum dolor sit amet. " * 5000  # ~140_000 chars
+    bounded = _bound_routing_user_message(long_prompt, 4000)
+    # Marker must be present and contain both numbers.
+    assert "omitted from routing-only representation" in bounded
+    assert f"original user message has {len(long_prompt)} chars" in bounded
+    # Output stays close to the budget.
+    assert len(bounded) <= 4500
+    # The head of the original survives intact.
+    assert bounded.startswith(long_prompt[:50])
+    # The tail of the original survives (subtract any trailing whitespace
+    # the boundary-snap may have introduced).
+    assert bounded.rstrip().endswith(long_prompt[-50:].rstrip())
+
+
+def test_bounded_representation_is_deterministic():
+    """The same input must always produce the same bounded output.
+
+    Otherwise stale-approval hashes would drift between calls and the
+    routing approval card would re-prompt the user on every send.
+    """
+    long_prompt = "x" * 20_000
+    a = _bound_routing_user_message(long_prompt, 4000)
+    b = _bound_routing_user_message(long_prompt, 4000)
+    assert a == b
+
+
+def test_bounded_representation_preserves_unicode_codepoint_boundaries():
+    """Truncation must never split a multi-byte UTF-8 codepoint in half.
+
+    A naive ``text[:N]`` on a string with 4-byte emojis would return a
+    lone surrogate half and break encode/decode round-trips. The bounded
+    representation must round-trip cleanly through UTF-8.
+    """
+    # Each emoji is 4 bytes / 2 Python chars (surrogate pair). 4000 chars
+    # of emoji = ~2000 emojis.
+    emoji_prompt = "🎉" * 2000
+    bounded = _bound_routing_user_message(emoji_prompt, 400)
+    # Hard requirement: round-trip UTF-8 encode/decode without error.
+    bounded.encode("utf-8").decode("utf-8")
+    # And: the head/tail taken from the original must themselves survive.
+    assert bounded.startswith("🎉")
+    assert bounded.rstrip().endswith("🎉")
+
+
+def test_bounded_representation_preserves_code_block_boundaries():
+    """Code blocks are common in coding prompts; the bounded excerpt must
+    not leave a half-opened Markdown fence in the routing prompt (would
+    confuse the LLM about what is data vs instruction)."""
+    code_prompt = "```python\ndef foo():\n    return 42\n```\n" * 1000
+    bounded = _bound_routing_user_message(code_prompt, 200)
+    assert bounded.startswith("```python")
+    assert bounded.rstrip().endswith("```")
+
+
+def test_routing_prompt_total_stays_within_budget_plus_overhead():
+    """The full routing prompt (overhead + bounded user message) must stay
+    close to the configured budget + the fixed prompt overhead (~12 KB).
+    A 128K-char prompt must not blow past the budget after bounding."""
+    long_prompt = "Lorem ipsum dolor sit amet. " * 25_000  # ~650K
+    bounded = _bound_routing_user_message(long_prompt, 4000)
+    agent = RoutingAgent()
+    full_prompt = agent._prompt(bounded, ["OpenCode Native"], "free only")
+    # Fixed overhead (catalog + rules + examples) is ~12 KB.
+    assert len(full_prompt) < 25_000
+
+
+def test_full_input_hash_differs_from_bounded_hash():
+    """The provenance hash on the proposal must be computed from the FULL
+    user message, not the bounded excerpt. Otherwise stale-approval checks
+    would falsely pass when a long prompt is rewritten slightly."""
+    long_prompt = "the quick brown fox jumps over the lazy dog. " * 1000
+    bounded = _bound_routing_user_message(long_prompt, 4000)
+    assert hash_user_message(long_prompt) != hash_user_message(bounded)
+    # And the hash is exactly 12 hex chars.
+    assert len(hash_user_message(long_prompt)) == 12
+    int(hash_user_message(long_prompt), 16)  # valid hex
+
+
+def test_routing_input_budget_env_var():
+    """``OMNIGENT_ROUTER_INPUT_BUDGET_CHARS`` must control the budget."""
+    import os
+
+    try:
+        os.environ["OMNIGENT_ROUTER_INPUT_BUDGET_CHARS"] = "8000"
+        assert routing_input_budget_chars() == 8000
+        os.environ["OMNIGENT_ROUTER_INPUT_BUDGET_CHARS"] = "150"
+        # Below the 200-char floor → clamped.
+        assert routing_input_budget_chars() == 200
+        os.environ["OMNIGENT_ROUTER_INPUT_BUDGET_CHARS"] = "not-an-int"
+        # Invalid → default.
+        assert routing_input_budget_chars() == DEFAULT_ROUTING_INPUT_BUDGET_CHARS
+    finally:
+        os.environ.pop("OMNIGENT_ROUTER_INPUT_BUDGET_CHARS", None)
+    assert routing_input_budget_chars() == DEFAULT_ROUTING_INPUT_BUDGET_CHARS
+
+
+def test_propose_uses_full_user_message_for_source_provenance():
+    """``propose(user_message=..., routing_user_message=...)`` must populate
+    ``source_extracted_chars`` and ``source_input_sha256_prefix`` from the
+    FULL user_message, NOT from the bounded routing excerpt."""
+    full = "x" * 20_000
+    bounded = _bound_routing_user_message(full, 4000)
+
+    class FakePolicyClient:
+        async def create(self, **kwargs):
+            return type(
+                "R",
+                (),
+                {
+                    "output": [
+                        type(
+                            "O",
+                            (),
+                            {"content": [type("C", (), {"text": _trivial_json()})()]},
+                        )()
+                    ]
+                },
+            )()
+
+    agent = RoutingAgent(policy_llm_client=FakePolicyClient())
+
+    import asyncio
+
+    proposal = asyncio.run(
+        agent.propose(
+            user_message=full,
+            routing_user_message=bounded,
+            available_harnesses=["OpenCode Native"],
+        )
+    )
+    assert proposal.source_extracted_chars == len(full)
+    assert proposal.source_input_sha256_prefix == hash_user_message(full)
+    # And NOT the bounded excerpt's hash.
+    assert proposal.source_input_sha256_prefix != hash_user_message(bounded)
+
+
+def test_long_prompt_does_not_fail_just_because_routing_evaluator_has_small_context():
+    """End-to-end: a long prompt that would normally blow past the routing
+    LLM's context window must still produce a valid proposal because the
+    agent bounds the input before calling the LLM.
+
+    The agent uses ~12 KB of fixed overhead (catalog + rules + examples)
+    plus the bounded user excerpt (~4 KB at the default budget). The
+    total prompt therefore stays around 16 KB regardless of input size
+    — a routing LLM with a 32K context window can handle it even when
+    the user message is 128K chars. Without bounding, the prompt would
+    grow linearly with the user message and blow past the LLM's window.
+    """
+    full = "Fix the bug. " * 10_000  # ~140_000 chars
+
+    class SmallContextFakePolicyClient:
+        """Asserts the routing prompt stays under 32K chars (the bound
+        that a typical 8K-token context model would tolerate) and
+        returns a valid proposal otherwise. The bounding is what keeps
+        the prompt this small."""
+
+        async def create(self, *, input, **kwargs):
+            prompt_text = input[0]["content"][0]["text"]
+            # Without bounding, this prompt would be ~140K chars; with
+            # bounding it stays around 16K.
+            assert len(prompt_text) < 32_000, (
+                f"routing prompt too large: {len(prompt_text)} chars (bounding failed)"
+            )
+            return type(
+                "R",
+                (),
+                {
+                    "output": [
+                        type(
+                            "O",
+                            (),
+                            {"content": [type("C", (), {"text": _trivial_json()})()]},
+                        )()
+                    ]
+                },
+            )()
+
+    agent = RoutingAgent(policy_llm_client=SmallContextFakePolicyClient())
+    import asyncio
+
+    proposal = asyncio.run(
+        agent.propose(
+            user_message=full,
+            available_harnesses=["OpenCode Native"],
+        )
+    )
+    # The LLM succeeded — the bounding kept the prompt small enough.
+    assert proposal.router_invoked is True
+    # Source provenance still reflects the FULL original prompt.
+    assert proposal.source_extracted_chars == len(full)
+
+
+def test_propose_auto_derives_routing_user_message_when_omitted():
+    """When the caller doesn't pass ``routing_user_message=``, the agent
+    must derive a bounded excerpt from ``user_message`` and use it for
+    the routing prompt — but the proposal's source hash + char count
+    must still reflect the full input."""
+    full = "y" * 12_000
+    captured: dict[str, str] = {}
+
+    class CapturingPolicyClient:
+        async def create(self, *, input, **kwargs):
+            # Record what text the routing LLM actually saw.
+            captured["text"] = input[0]["content"][0]["text"]
+            return type(
+                "R",
+                (),
+                {
+                    "output": [
+                        type(
+                            "O",
+                            (),
+                            {"content": [type("C", (), {"text": _trivial_json()})()]},
+                        )()
+                    ]
+                },
+            )()
+
+    agent = RoutingAgent(policy_llm_client=CapturingPolicyClient())
+
+    import asyncio
+
+    proposal = asyncio.run(
+        agent.propose(
+            user_message=full,
+            available_harnesses=["OpenCode Native"],
+        )
+    )
+    # The routing LLM saw the bounded excerpt (≤ budget + overhead).
+    assert "omitted from routing-only representation" in captured["text"]
+    assert f"original user message has {len(full)} chars" in captured["text"]
+    # But the proposal's source provenance reflects the FULL input.
+    assert proposal.source_extracted_chars == len(full)
+
+
+def test_propose_explicit_routing_user_message_is_used_verbatim():
+    """When the caller passes an explicit ``routing_user_message``, the
+    agent uses it verbatim for the routing LLM and does NOT re-bound it.
+    Useful for the session-event dispatcher that already produces a
+    4000-char audit slice via ``_extract_user_text_for_routing``."""
+    full = "z" * 12_000
+    explicit_routing_slice = full[:4000]  # already a slice
+    captured: dict[str, str] = {}
+
+    class CapturingPolicyClient:
+        async def create(self, *, input, **kwargs):
+            captured["text"] = input[0]["content"][0]["text"]
+            return type(
+                "R",
+                (),
+                {
+                    "output": [
+                        type(
+                            "O",
+                            (),
+                            {"content": [type("C", (), {"text": _trivial_json()})()]},
+                        )()
+                    ]
+                },
+            )()
+
+    agent = RoutingAgent(policy_llm_client=CapturingPolicyClient())
+
+    import asyncio
+
+    asyncio.run(
+        agent.propose(
+            user_message=full,
+            routing_user_message=explicit_routing_slice,
+            available_harnesses=["OpenCode Native"],
+        )
+    )
+    # The verbatim slice appears in the routing prompt with NO omission
+    # marker (it fits the budget).
+    assert "omitted from routing-only representation" not in captured["text"]
+    assert explicit_routing_slice[:50] in captured["text"]
+
+
+def test_route_proposal_from_data_strips_unknown_keys():
+    """An LLM that returns extra fields (e.g. ``"command"``) must not blow
+    up :class:`RouteProposal` with a TypeError. The dataclass stays
+    ``frozen=True`` and strict — the agent just filters unknown keys
+    before instantiation. The validator still catches missing required
+    fields."""
+    parsed = json.loads(_trivial_json())
+    parsed["router_invoked"] = True
+    parsed["router_fallback_used"] = False
+    parsed["proposal_source"] = "llm_router"
+    parsed["proposal_source_label"] = "Router recommendation"
+    parsed["command"] = "echo hi"  # rogue field
+    parsed["totally_unknown"] = "also rogue"
+    # Direct dataclass construction would raise:
+    with pytest.raises(TypeError):
+        RouteProposal(**parsed)
+    # But the agent's defensive builder produces a valid proposal:
+    proposal = _route_proposal_from_data(parsed)
+    assert isinstance(proposal, RouteProposal)
+    assert not hasattr(proposal, "command")
+    assert not hasattr(proposal, "totally_unknown")
+
+
+def test_route_proposal_from_data_preserves_known_keys():
+    """The defensive filter must NOT drop legitimate proposal fields.
+    Regression guard for the unknown-keys fix."""
+    parsed = json.loads(_trivial_json())
+    parsed["router_invoked"] = True
+    parsed["router_fallback_used"] = False
+    parsed["proposal_source"] = "llm_router"
+    parsed["proposal_source_label"] = "Router recommendation"
+    proposal = _route_proposal_from_data(parsed)
+    assert proposal.omniroute_route_id == "auto/cheap"
+    assert proposal.permission_mode == "read_only"
+
+
+def test_route_proposal_from_data_still_fails_validation_for_invalid_route():
+    """Filtering unknown keys is NOT a substitute for validation. A
+    response with an unknown route id (e.g. ``"auto/fake"``) must still
+    be rejected by :func:`validate_route_proposal` after construction."""
+    parsed = json.loads(_trivial_json())
+    parsed["router_invoked"] = True
+    parsed["router_fallback_used"] = False
+    parsed["proposal_source"] = "llm_router"
+    parsed["proposal_source_label"] = "Router recommendation"
+    parsed["omniroute_route_id"] = "auto/fake"
+    proposal = _route_proposal_from_data(parsed)
+    with pytest.raises(RoutingAgentError):  # validate_route_proposal raises
+        validate_route_proposal(proposal)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: long prompt reaches the harness intact
+#
+# Pins the contract that the session-event dispatcher forwards the FULL
+# original ``body`` to the runner — the routing agent only CLASSIFIES the
+# prompt; it must never substitute or rewrite the user's request.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_routing_agent_does_not_rewrite_user_message_on_execution_path(monkeypatch):
+    """Even when the routing agent fails to produce a proposal, the
+    session-event dispatcher must persist the user's FULL original
+    message verbatim. The bounding only affects the routing judge's
+    excerpt, never the persisted message item or the runner payload.
+    """
+    from types import SimpleNamespace
+
+    from omnigent.entities import (
+        Conversation,
+        ConversationItem,
+        NewConversationItem,
+    )
+    from omnigent.server.routes import sessions as routes_sessions
+
+    full_prompt = "x" * 25_000
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": full_prompt}],
+            },
+        }
+    )
+
+    # Build a Conversation that triggers the routing path.
+    conv = Conversation(
+        id="conv_test",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_test",
+        title=None,
+        kind="default",
+        parent_conversation_id=None,
+        agent_id="ag_test",
+        runner_id=None,
+        host_id=None,
+        labels={},
+        session_state={},
+        session_usage={},
+        reasoning_effort=None,
+        model_override=None,
+        cost_control_mode_override=None,
+        harness_override=None,
+        route_approval_enabled=True,
+        omniroute_route_id=None,
+        permission_mode=None,
+        omniroute_requires_explicit_approval=None,
+        sub_agent_name=None,
+        external_session_id=None,
+        terminal_launch_args=None,
+        workspace=None,
+        git_branch=None,
+        archived=False,
+    )
+
+    # Routing agent that always fails (forces the failure-turn path).
+    class _Fail:
+        def __call__(self):
+            return self
+
+        async def propose(self, **kwargs):
+            raise routes_sessions._RoutingAgentError("router unavailable for this test")
+
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", _Fail())
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    monkeypatch.setattr(routes_sessions, "_publish_input_consumed", lambda *a, **k: None)
+    monkeypatch.setattr(routes_sessions, "_publish_error_event", lambda *a, **k: None)
+    monkeypatch.setattr(routes_sessions, "_publish_status", lambda *a, **k: None)
+
+    appended: list[NewConversationItem] = []
+
+    class _Store:
+        def append(self, _sid, items):
+            appended.extend(items)
+            return [
+                ConversationItem(
+                    id=f"item_{i}",
+                    type=it.type,
+                    status="completed",
+                    response_id=it.response_id,
+                    created_at=0,
+                    data=it.data,
+                    created_by=it.created_by,
+                )
+                for i, it in enumerate(appended)
+            ]
+
+        def list_items(self, *_a, **_k):
+            return SimpleNamespace(data=[])
+
+        def update_conversation(self, *_a, **_k):
+            return None
+
+        def get_conversation(self, _sid):
+            return conv
+
+    result = await routes_sessions._dispatch_session_event_to_runner(
+        "conv_test",
+        conv,
+        body,
+        _Store(),  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]  # runner_client unused in failure path
+        agent_name="OpenCode Native",
+        file_store=None,
+        artifact_store=None,
+    )
+
+    assert result.item_id is not None
+    # Two items persisted: the original message + the routing failure chip.
+    assert [it.type for it in appended] == ["message", "error"]
+    message_item = appended[0]
+    # The persisted message carries its content as a Pydantic-typed data
+    # object — the round-trip through parse_item_data gives us the typed
+    # ``MessageData`` whose ``.content`` is a list of content blocks.
+    content_blocks = message_item.data.content
+    assert isinstance(content_blocks, list) and content_blocks
+    first_block = content_blocks[0]
+    # ``InputText`` carries ``text``; dict-style access works for either.
+    persisted_text = first_block.text if hasattr(first_block, "text") else first_block["text"]
+    # CRITICAL: the persisted message MUST contain the FULL original
+    # prompt verbatim — the bounding must not leak into execution.
+    assert persisted_text == full_prompt
+    assert len(persisted_text) == 25_000

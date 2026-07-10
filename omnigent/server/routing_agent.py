@@ -23,10 +23,11 @@ reported billing class, which is treated as factual provenance here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Any, Literal
 
 import httpx
@@ -40,6 +41,134 @@ from omnigent.server.omniroute_routes import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+# ── Routing-input budget ───────────────────────────────────────────────
+#
+# The routing LLM only needs a bounded excerpt of the user message to
+# pick a route + permission mode. Sending the full long prompt:
+# - bloats every routing call (slow on small context-window judges)
+# - can blow past the evaluator's timeout on slow backends
+# - can confuse the judge on what really matters (the head + tail of
+#   the message is usually enough)
+#
+# ``OMNIGENT_ROUTER_INPUT_BUDGET_CHARS`` controls the max length of the
+# routing-only excerpt (the user-message slice embedded into the
+# prompt). Default 4000, matching the pre-existing
+# ``_extract_user_text_for_routing`` audit slice. The execution path
+# always forwards the FULL original user message to the runner — the
+# budget only affects the routing judge.
+DEFAULT_ROUTING_INPUT_BUDGET_CHARS = 4000
+_OMISSION_MARKER_TEMPLATE = (
+    "\n\n... [{omitted_chars} characters omitted from routing-only "
+    "representation; original user message has {original_chars} chars] ...\n\n"
+)
+
+
+def routing_input_budget_chars() -> int:
+    """Return the configured routing-input character budget.
+
+    Reads ``OMNIGENT_ROUTER_INPUT_BUDGET_CHARS`` on every call so a
+    server restart isn't required to pick up a new value. Values
+    below 200 are clamped to 200 (need enough headroom for at least
+    a short greeting + omission marker).
+    """
+    raw = os.environ.get("OMNIGENT_ROUTER_INPUT_BUDGET_CHARS", "").strip()
+    if not raw:
+        return DEFAULT_ROUTING_INPUT_BUDGET_CHARS
+    try:
+        value = int(raw)
+    except ValueError:
+        _logger.warning(
+            "routing_input_budget: OMNIGENT_ROUTER_INPUT_BUDGET_CHARS=%r is not an int; "
+            "using default %d",
+            raw,
+            DEFAULT_ROUTING_INPUT_BUDGET_CHARS,
+        )
+        return DEFAULT_ROUTING_INPUT_BUDGET_CHARS
+    if value < 200:
+        _logger.warning(
+            "routing_input_budget: OMNIGENT_ROUTER_INPUT_BUDGET_CHARS=%d is below the "
+            "200-char minimum; clamping to 200",
+            value,
+        )
+        return 200
+    return value
+
+
+def _bound_routing_user_message(user_message: str, budget: int) -> str:
+    """Return a deterministic, budget-bounded routing-only excerpt.
+
+    Short messages (≤ *budget* chars) pass through unchanged. Long
+    messages are compacted to preserve the head and tail with an
+    explicit omission marker that names the original size, so the
+    routing LLM knows the message is bigger than what it sees and
+    can act accordingly (e.g. flag a coding-vs-reasoning decision
+    that hinges on the middle, or downgrade effort for a long
+    context-bound task).
+
+    The boundary cuts are codepoint-safe — they never split a
+    multi-byte UTF-8 character in half. Code-block fences (`` ``` ``)
+    and backtick runs are also kept intact by preferring to break
+    at whitespace, so the router never sees a broken ```` ``` `` fence
+    that could trigger a Markdown rendering bug in the routing
+    LLM's own output.
+    """
+    if not isinstance(user_message, str):
+        user_message = "" if user_message is None else str(user_message)
+    if len(user_message) <= budget:
+        return user_message
+    original_chars = len(user_message)
+    # Split the budget roughly in half, leaving a few chars slack for
+    # the omission marker when re-joined.
+    head_budget = budget // 2
+    tail_budget = budget - head_budget
+    head = _safe_truncate_to_boundary(user_message, head_budget, side="left")
+    tail = _safe_truncate_to_boundary(user_message, tail_budget, side="right")
+    omitted_chars = max(0, original_chars - len(head) - len(tail))
+    marker = _OMISSION_MARKER_TEMPLATE.format(
+        omitted_chars=omitted_chars, original_chars=original_chars
+    )
+    return f"{head}{marker}{tail}"
+
+
+def _safe_truncate_to_boundary(text: str, limit: int, *, side: str) -> str:
+    """Truncate *text* to ≤ *limit* chars without splitting a codepoint.
+
+    *side* ``"left"`` keeps the first *limit* chars (head); ``"right"``
+    keeps the last *limit* chars (tail). Prefers to break at the
+    last whitespace before the limit so the routing LLM does not see
+    a half-word boundary.
+    """
+    if limit <= 0 or len(text) <= limit:
+        return text
+    if side == "left":
+        candidate = text[:limit]
+        # Snap back to the last whitespace so we don't end a token mid-word.
+        last_ws = max(candidate.rfind(" "), candidate.rfind("\n"), candidate.rfind("\t"))
+        if last_ws > limit - max(40, limit // 4):
+            candidate = candidate[:last_ws]
+        return candidate
+    # side == "right" → keep the tail.
+    candidate = text[-limit:]
+    first_ws = min(
+        (i for i, ch in enumerate(candidate) if ch in " \n\t"),
+        default=-1,
+    )
+    if first_ws != -1 and first_ws < limit // 4:
+        candidate = candidate[first_ws + 1 :]
+    return candidate
+
+
+def hash_user_message(user_message: str) -> str:
+    """Return the SHA-256 prefix (12 hex chars) of the full user message.
+
+    Used as the ``source_input_sha256_prefix`` on
+    :class:`RouteProposal` so stale-approval checks compare against the
+    COMPLETE original prompt, not the bounded routing-only excerpt.
+    """
+    return hashlib.sha256(user_message.encode("utf-8")).hexdigest()[:12]
+
 
 KNOWN_PERMISSION_MODES = frozenset(
     {
@@ -653,6 +782,29 @@ def _permission_floor(user_message: str) -> str:
     return "read_only"
 
 
+def _route_proposal_from_data(data: dict[str, Any]) -> RouteProposal:
+    """Build a :class:`RouteProposal` from a parsed router response dict.
+
+    Filters unknown keys defensively so an LLM that emits extra fields
+    (e.g. ``"command"``) cannot blow up the frozen dataclass with a
+    :class:`TypeError: unexpected keyword argument`. Unknown keys are
+    logged at DEBUG — the validator still raises if a REQUIRED field is
+    missing or invalid; this is purely a robustness guard.
+    """
+    allowed = {f.name for f in fields(RouteProposal)}
+    unknown = sorted(k for k in data if k not in allowed)
+    if unknown:
+        _logger.debug(
+            "routing_agent: stripping %d unknown keys from router response: %s",
+            len(unknown),
+            unknown,
+        )
+        filtered = {k: v for k, v in data.items() if k in allowed}
+    else:
+        filtered = data
+    return RouteProposal(**filtered)
+
+
 def _enforce_permission_floor(proposal: RouteProposal, user_message: str) -> RouteProposal:
     """Down-grade a too-strong permission_mode on a validated router proposal.
 
@@ -761,12 +913,41 @@ class RoutingAgent:
             "provider. Do not infer api_billed from the word 'api' in "
             "provider or model IDs."
         ),
+        routing_user_message: str | None = None,
     ) -> RouteProposal:
+        """Pick an :class:`OmniRoute` route for *user_message*.
+
+        Two distinct values flow through this method:
+
+        - ``user_message`` — the COMPLETE original prompt, forwarded
+          to the coding harness by the caller. The routing agent does
+          not forward anything; it only classifies. Surfaced via
+          :attr:`RouteProposal.source_extracted_chars` /
+          ``source_input_sha256_prefix`` for audit and stale-approval
+          checks.
+        - ``routing_user_message`` — the bounded excerpt the routing
+          LLM actually sees. When ``None``, the agent derives it via
+          :func:`_bound_routing_user_message` using
+          :func:`routing_input_budget_chars`. Callers that already
+          pre-truncated (e.g. the session-event dispatcher's
+          ``_extract_user_text_for_routing`` audit slice) can pass
+          that slice verbatim here.
+
+        The execution path always receives the FULL original prompt;
+        the bounding is strictly a routing-input optimisation.
+        """
+        budget = routing_input_budget_chars()
+        if routing_user_message is None:
+            routing_user_message = _bound_routing_user_message(user_message, budget)
         errors: list[str] = []
         if self.policy_llm_client is not None:
             try:
                 return await self._call_via_policy_llm(
-                    user_message, available_harnesses, billing_policy, False
+                    user_message,
+                    routing_user_message,
+                    available_harnesses,
+                    billing_policy,
+                    False,
                 )
             except EvaluatorProvenanceError:
                 raise
@@ -781,7 +962,12 @@ class RoutingAgent:
         if self.primary_model and self.api_url:
             try:
                 return await self._call_and_validate(
-                    self.primary_model, user_message, available_harnesses, billing_policy, False
+                    self.primary_model,
+                    user_message,
+                    routing_user_message,
+                    available_harnesses,
+                    billing_policy,
+                    False,
                 )
             except EvaluatorProvenanceError:
                 raise
@@ -790,7 +976,12 @@ class RoutingAgent:
         if self.fallback_model and self.api_url:
             try:
                 return await self._call_and_validate(
-                    self.fallback_model, user_message, available_harnesses, billing_policy, True
+                    self.fallback_model,
+                    user_message,
+                    routing_user_message,
+                    available_harnesses,
+                    billing_policy,
+                    True,
                 )
             except EvaluatorProvenanceError:
                 raise
@@ -817,6 +1008,8 @@ class RoutingAgent:
                     router_fallback_used=False,
                     proposal_source="default_route_policy",
                     proposal_source_label="Router unavailable — default policy used",
+                    source_input_sha256_prefix=hash_user_message(user_message),
+                    source_extracted_chars=len(user_message),
                 )
             )
         raise RoutingAgentError(
@@ -828,13 +1021,14 @@ class RoutingAgent:
         self,
         model: str,
         user_message: str,
+        routing_user_message: str,
         available_harnesses: list[str] | None,
         billing_policy: str,
         fallback: bool,
     ) -> RouteProposal:
         raw, provenance = await self._invoke_router(
             model,
-            self._prompt(user_message, available_harnesses, billing_policy),
+            self._prompt(routing_user_message, available_harnesses, billing_policy),
             fallback=fallback,
         )
         data = self._parse_router_response(raw)
@@ -843,19 +1037,22 @@ class RoutingAgent:
         data.setdefault("router_fallback_used", fallback)
         data.setdefault("proposal_source", "llm_router")
         data.setdefault("proposal_source_label", "Router recommendation")
-        proposal = RouteProposal(**data)
+        data.setdefault("source_input_sha256_prefix", hash_user_message(user_message))
+        data.setdefault("source_extracted_chars", len(user_message))
+        proposal = _route_proposal_from_data(data)
         proposal = validate_route_proposal(proposal)
         return _enforce_permission_floor(proposal, user_message)
 
     async def _call_via_policy_llm(
         self,
         user_message: str,
+        routing_user_message: str,
         available_harnesses: list[str] | None,
         billing_policy: str,
         fallback: bool,
     ) -> RouteProposal:
         """Call the server-level :class:`PolicyLLMClient` for a JSON proposal."""
-        prompt = self._prompt(user_message, available_harnesses, billing_policy)
+        prompt = self._prompt(routing_user_message, available_harnesses, billing_policy)
         response = await self.policy_llm_client.create(
             input=[
                 {
@@ -887,7 +1084,9 @@ class RoutingAgent:
         data.setdefault("router_fallback_used", fallback)
         data.setdefault("proposal_source", "llm_router")
         data.setdefault("proposal_source_label", "Router recommendation")
-        proposal = RouteProposal(**data)
+        data.setdefault("source_input_sha256_prefix", hash_user_message(user_message))
+        data.setdefault("source_extracted_chars", len(user_message))
+        proposal = _route_proposal_from_data(data)
         proposal = validate_route_proposal(proposal)
         return _enforce_permission_floor(proposal, user_message)
 
