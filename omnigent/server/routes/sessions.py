@@ -8638,10 +8638,21 @@ def _route_proposal_params(proposal: Any) -> dict[str, Any]:
     from omnigent.server.omniroute_routes import get_route_profile
 
     profile = get_route_profile(proposal.omniroute_route_id)
-    billing = (
-        f"{', '.join(proposal.allowed_billing_classes)} allowed; "
-        f"{', '.join(proposal.forbidden_billing_classes)} forbidden"
+    # Surface the existing billing classes verbatim so the wire format is
+    # unchanged, but add an inline clarification so the card does not read
+    # as "all API access forbidden". ``api_billed`` is metered billing,
+    # not a transport flag — API keys / OAuth / OpenAI-compatible endpoints /
+    # local proxies are transport mechanisms, not eligibility reasons.
+    billing_labels = {
+        "api_billed": "api_billed (metered billing — transport-independent)",
+    }
+    allowed_text = ", ".join(
+        billing_labels.get(entry, entry) for entry in proposal.allowed_billing_classes
     )
+    forbidden_text = ", ".join(
+        billing_labels.get(entry, entry) for entry in proposal.forbidden_billing_classes
+    )
+    billing = f"{allowed_text} allowed; {forbidden_text} forbidden"
     return {
         "mode": "form",
         "message": "Approve Omnigent Model Routing Agent recommendation before execution.",

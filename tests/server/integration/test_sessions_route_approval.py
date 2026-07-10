@@ -141,6 +141,47 @@ def test_route_proposal_payload_includes_evaluator_provenance():
     assert route_proposal["evaluator_selection_strategy"] == "auto"
 
 
+def test_route_proposal_payload_preserves_api_backed_provider_provenance():
+    """An API-backed provider exposed through OmniRoute must keep its
+    provenance (selected provider, selected model, decision id, billing
+    class) intact on the approval card. The validator must NOT downgrade
+    or strip the proposal because it carries an API-key style identifier
+    in the provenance.
+    """
+    payload = routes_sessions._route_proposal_params(
+        _proposal(
+            router_evaluator_route="auto/smart",
+            actual_evaluator_provider="openai-api-key-backed",
+            actual_evaluator_model="openai-api-key-backed/gpt-via-omniroute",
+            evaluator_billing_class="free",  # free tier via an OpenAI-compatible endpoint
+            evaluator_decision_id="api-backed-decision-456",
+            evaluator_selection_strategy="auto",
+        )
+    )
+    rp = payload["route_proposal"]
+    assert rp["actual_evaluator_provider"] == "openai-api-key-backed"
+    assert rp["actual_evaluator_model"] == "openai-api-key-backed/gpt-via-omniroute"
+    assert rp["evaluator_billing_class"] == "free"
+    assert rp["evaluator_decision_id"] == "api-backed-decision-456"
+
+
+def test_route_proposal_billing_summary_clarifies_api_billed_meaning():
+    """Approval-card ``billing_summary`` must surface the raw ``api_billed``
+    value (wire format unchanged) but inline an explicit clarification that
+    it is metered billing and transport-independent. This prevents the card
+    from reading as ``all API access forbidden``.
+    """
+    payload = routes_sessions._route_proposal_params(_proposal())
+    summary = payload["route_proposal"]["billing_summary"]
+    # The raw billing-class value must still be present (wire format
+    # unchanged).
+    assert "api_billed" in summary
+    # An inline clarification must accompany it so the reader does not
+    # conclude that all API-backed routes are forbidden.
+    assert "metered billing" in summary
+    assert "transport" in summary.lower()
+
+
 def test_routing_off_does_not_call_router(monkeypatch):
     """When route_approval_enabled is False, the helper short-circuits and never
     instantiates or calls the RoutingAgent, even if a stale omniroute_route_id

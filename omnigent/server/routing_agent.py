@@ -1,4 +1,25 @@
-"""LLM-backed model routing agent for native OmniRoute routes."""
+"""LLM-backed model routing agent for native OmniRoute routes.
+
+Note on ``api_billed``
+----------------------
+
+``api_billed`` is an **existing billing classification** reported by
+OmniRoute. It denotes metered / pay-per-use billing on the underlying
+provider account. It is NOT a transport flag and it does NOT mean
+"every provider reached through an API is forbidden".
+
+API transport is orthogonal: API keys, OAuth, OpenAI-compatible
+endpoints, local proxies, and subscription bridges exposed through an
+API are all valid transport / authentication mechanisms. A free-tier
+or subscription model served through any of those transports is still
+classified as ``free`` or ``subscription`` by OmniRoute — never as
+``api_billed`` — and remains fully eligible for Omnigent routing
+according to the route profile.
+
+The validator therefore never rejects, hides, or downgrades a route
+solely because it uses an API; the only filter is the OmniRoute-
+reported billing class, which is treated as factual provenance here.
+"""
 
 from __future__ import annotations
 
@@ -76,7 +97,13 @@ _ROUTER_PROMPT_RULES = (
     "Use auto/vision or auto/multimodal only for multimodal input. "
     "Pick reasoning_effort separately from route ID. "
     f"{_ROUTER_PROMPT_PERMISSION_RULES} "
-    "API-billed and unknown billing are forbidden unless explicitly allowed. "
+    "api_billed and unknown billing are forbidden unless explicitly allowed. "
+    "Note: 'api_billed' is a metered-billing class (provider charges per "
+    "token / per request). It is NOT a transport flag — providers reached "
+    "through API keys, OAuth, OpenAI-compatible endpoints, local proxies, "
+    "or subscription bridges are still eligible; they are simply reported "
+    "by OmniRoute as free / subscription when the meter is not metered. "
+    "Do not infer billing from the word 'api' in provider or model IDs. "
     "Use subscriptions when quality matters. "
     "Prefer free only when equivalent."
 )
@@ -727,7 +754,12 @@ class RoutingAgent:
         available_harnesses: list[str] | None = None,
         billing_policy: str = (
             "free and subscription allowed; "
-            "api_billed and unknown forbidden unless explicitly allowed"
+            "api_billed (metered billing) and unknown forbidden unless "
+            "explicitly allowed. api_billed is NOT a transport flag — API "
+            "keys, OAuth, OpenAI-compatible endpoints, and local proxies are "
+            "transport/authentication mechanisms, not reasons to reject a "
+            "provider. Do not infer api_billed from the word 'api' in "
+            "provider or model IDs."
         ),
     ) -> RouteProposal:
         errors: list[str] = []

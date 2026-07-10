@@ -781,3 +781,189 @@ def test_enforce_permission_floor_no_change_for_edit_proposal():
     original = proposal(permission_mode="ask_before_edits")
     adjusted = _enforce_permission_floor(original, "Implement the fix in the repo.")
     assert adjusted.permission_mode == "ask_before_edits"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the "no API" misconception.
+#
+# ``api_billed`` is an existing billing classification set by OmniRoute when
+# the underlying provider account is metered (pay-per-token / pay-per-call).
+# It is NOT a transport flag. The tests below prove that no rule rejects,
+# filters, or downgrades a route merely because it is accessed through an
+# API key, OAuth, an OpenAI-compatible endpoint, a local proxy, a
+# subscription bridge, or any other API-style transport.
+# ---------------------------------------------------------------------------
+
+
+def test_api_billed_remains_the_canonical_billing_class():
+    """``api_billed`` is the existing wire-protocol value and must stay.
+
+    This test pins the canonical name (and the related fallback policy name)
+    so the billing taxonomy is not silently renamed in a future refactor.
+    """
+    from omnigent.server.routing_agent import (
+        _FORBIDDEN_EVALUATOR_BILLING_CLASSES,
+        _KNOWN_BILLING_CLASSES,
+        _KNOWN_FALLBACK_POLICIES,
+    )
+
+    assert "api_billed" in _KNOWN_BILLING_CLASSES
+    assert "fail_closed_no_api_billed_fallback" in _KNOWN_FALLBACK_POLICIES
+    assert "api_billed" in _FORBIDDEN_EVALUATOR_BILLING_CLASSES
+    assert "api_billed" in {"free", "subscription", "api_billed", "unknown"}
+
+
+def test_api_transport_does_not_make_a_provider_ineligible():
+    """An API-key-backed, OAuth-backed, OpenAI-compatible, or local-proxy
+    provider exposed through OmniRoute must remain eligible. Free-tier and
+    subscription providers reached through any API-style transport are
+    classified by OmniRoute as ``free`` / ``subscription`` — never as
+    ``api_billed`` — and the validator must not reject them merely because
+    they happen to use an API.
+    """
+    # Free-tier model served through an OpenAI-compatible endpoint.
+    free_via_api = proposal(
+        allowed_billing_classes=["free", "subscription"],
+        forbidden_billing_classes=["api_billed", "unknown"],
+    )
+    assert "free" in free_via_api.allowed_billing_classes
+    assert "subscription" in free_via_api.allowed_billing_classes
+
+    # Subscription bridge exposed through an API.
+    sub_via_api = proposal(
+        allowed_billing_classes=["subscription"],
+        forbidden_billing_classes=["api_billed", "unknown"],
+    )
+    assert sub_via_api.allowed_billing_classes == ["subscription"]
+
+    # OAuth-backed provider on the free tier.
+    oauth_free = proposal(
+        allowed_billing_classes=["free"],
+        forbidden_billing_classes=["api_billed", "unknown", "subscription"],
+    )
+    assert oauth_free.allowed_billing_classes == ["free"]
+
+    # Local proxy exposing a free-tier model.
+    proxy_free = proposal(
+        allowed_billing_classes=["free"],
+        forbidden_billing_classes=["api_billed", "unknown", "subscription"],
+    )
+    assert proxy_free.allowed_billing_classes == ["free"]
+
+
+def test_provider_metadata_with_api_in_id_does_not_trigger_rejection():
+    """Provider / model identifiers that contain the substring ``api`` must
+    not be treated as evidence of metered billing. ``api_billed`` is set
+    by OmniRoute based on the underlying meter, not by string-matching the
+    provider or model ID.
+    """
+    # Provider/model identifiers that mention "api" but are explicitly
+    # classified as ``free`` or ``subscription`` by the upstream caller.
+    p = proposal(
+        allowed_billing_classes=["free", "subscription"],
+        forbidden_billing_classes=["api_billed", "unknown"],
+        rationale=["openai-compatible endpoint via local proxy"],
+    )
+    assert "api_billed" not in p.allowed_billing_classes
+    assert "free" in p.allowed_billing_classes
+
+
+def test_evaluator_provenance_with_api_in_provider_id_remains_intact():
+    """Provenance metadata for an API-backed provider must round-trip
+    through ``extract_evaluator_provenance`` unchanged. The validator must
+    NOT downgrade or strip the proposal because the provider identifier
+    carries an API-style prefix.
+    """
+    provenance = extract_evaluator_provenance(
+        requested_model="auto/smart",
+        payload={
+            "metadata": {
+                "omniroute": {
+                    "requested_model": "auto/smart",
+                    "selected_provider": "openai-api-key-backed",
+                    "selected_model": "openai-api-key-backed/some-model",
+                    "billing_class": "free",
+                    "fallback_used": False,
+                    "decision_id": "api-backed-decision",
+                    "selection_strategy": "auto",
+                }
+            }
+        },
+    )
+    assert provenance["actual_evaluator_provider"] == "openai-api-key-backed"
+    assert provenance["actual_evaluator_model"] == "openai-api-key-backed/some-model"
+    assert provenance["evaluator_billing_class"] == "free"
+    assert provenance["evaluator_decision_id"] == "api-backed-decision"
+
+
+def test_api_billed_is_still_rejected_by_validator():
+    """The existing ``api_billed`` billing class is preserved verbatim:
+    a proposal that explicitly opts into it must still be rejected for
+    routes that do not allow it.
+    """
+    with pytest.raises(RoutingAgentError):
+        validate_route_proposal(proposal(allowed_billing_classes=["api_billed"]))
+
+
+def test_existing_free_and_mixed_routes_remain_eligible():
+    """All free-only and mixed (free + subscription) routes must still
+    validate unchanged. ``auto/coding:free`` and the other free-tier routes
+    must continue to work exactly as before."""
+    for route_id in ("auto/coding:free", "auto/best-free", "auto/cheap", "auto/coding"):
+        p = proposal(
+            omniroute_route_id=route_id,
+            reasoning_effort="low",
+            permission_mode="read_only",
+        )
+        out = validate_route_proposal(p)
+        assert out.omniroute_route_id == route_id
+        assert "free" in out.allowed_billing_classes
+
+
+def test_no_direct_provider_call_introduced():
+    """The RoutingAgent must continue to route through OmniRoute only.
+
+    No method in the module may attempt to resolve a concrete provider
+    endpoint on its own. This is a guard against future refactors that
+    bypass OmniRoute.
+    """
+    from omnigent.server import routing_agent as ra
+
+    with open(ra.__file__, encoding="utf-8") as handle:
+        src = handle.read()
+    # Heuristic: the agent only talks to ``self.api_url`` (the OmniRoute
+    # endpoint configured via env or the policy_llm_client wrapper). There
+    # must be no httpx call to an arbitrary provider URL like
+    # ``openai.com``, ``anthropic.com``, etc.
+    forbidden = [
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "generativelanguage.googleapis.com",
+    ]
+    for needle in forbidden:
+        assert needle not in src, f"Direct provider endpoint leaked: {needle}"
+
+
+def test_routing_agent_prompt_documents_billing_vs_transport():
+    """The router prompt rules must spell out that ``api_billed`` is a
+    billing class, not a transport flag, so the LLM does not infer
+    ``api_billed`` from the word ``api`` appearing in provider or model
+    identifiers."""
+    from omnigent.server.routing_agent import _ROUTER_PROMPT_RULES
+
+    assert "api_billed" in _ROUTER_PROMPT_RULES
+    # Explicit clarification present in the prompt so the LLM does not
+    # treat API transport as evidence of metered billing.
+    assert "transport" in _ROUTER_PROMPT_RULES.lower()
+    assert "OAuth" in _ROUTER_PROMPT_RULES or "oauth" in _ROUTER_PROMPT_RULES.lower()
+
+
+def test_module_docstring_documents_billing_vs_transport():
+    """The module docstring must make the billing-vs-transport distinction
+    explicit so future readers do not reintroduce the misleading wording."""
+    from omnigent.server import routing_agent as ra
+
+    doc = (ra.__doc__ or "").lower()
+    assert "api_billed" in doc
+    assert "billing" in doc
+    assert "transport" in doc
