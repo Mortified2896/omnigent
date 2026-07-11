@@ -105,7 +105,20 @@ export interface TaskRun {
   selection_strategy: string | null;
   billing_class: string | null;
   fallback_used: boolean | null;
+  /** Legacy execution projection; evaluator activity never changes this. */
   terminal_status: "running" | "completed" | "failed" | "cancelled" | "incomplete";
+  execution_status?: "queued" | "starting" | "running" | "cancelling" | "cancelled" | "completed" | "failed" | "timed_out";
+  evaluation_status?: "not_requested" | "pending" | "completed" | "skipped" | "failed";
+  execution_started_at?: number | null;
+  execution_finished_at?: number | null;
+  execution_duration_ms?: number | null;
+  evaluation_started_at?: number | null;
+  evaluation_finished_at?: number | null;
+  timeout_type?: string | null;
+  last_useful_activity_at?: number | null;
+  actual_provider?: string | null;
+  actual_provider_model?: string | null;
+  actual_provenance_verified?: boolean | null;
   started_at: number | null;
   terminal_at: number | null;
   duration_ms: number | null;

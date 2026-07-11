@@ -94,12 +94,13 @@ EVALUATOR_ACCURACY_VALUES: tuple[str, ...] = (
     "incorrect",
     "unsure",
 )
+# ``terminal_status`` is retained for API compatibility and is always derived
+# from ``execution_status``. Evaluation activity must never change it.
 TASK_RUN_STATUSES: tuple[str, ...] = (
-    "running",
-    "completed",
-    "failed",
-    "cancelled",
-    "incomplete",
+    "queued", "starting", "running", "cancelling", "cancelled", "completed", "failed", "timed_out", "incomplete", # legacy wire value
+)
+EVALUATION_STATUSES: tuple[str, ...] = (
+    "not_requested", "pending", "completed", "skipped", "failed",
 )
 OUTBOX_STATUSES: tuple[str, ...] = (
     "pending",
@@ -172,6 +173,20 @@ class TaskRun:
     terminal_status: str
     created_at: int
     updated_at: int
+    # Independent execution/evaluation state machines.  ``terminal_status``
+    # mirrors execution_status for legacy clients only.
+    execution_status: str = "running"
+    evaluation_status: str = "not_requested"
+    execution_started_at: int | None = None
+    execution_finished_at: int | None = None
+    execution_duration_ms: int | None = None
+    evaluation_started_at: int | None = None
+    evaluation_finished_at: int | None = None
+    timeout_type: str | None = None
+    last_useful_activity_at: int | None = None
+    actual_provider: str | None = None
+    actual_provider_model: str | None = None
+    actual_provenance_verified: bool | None = None
     response_id: str | None = None
     triggering_message_id: str | None = None
     project_path: str | None = None

@@ -93,6 +93,18 @@ def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
         terminal_status=decode_task_run_status(row.terminal_status),
         created_at=row.created_at,
         updated_at=row.updated_at,
+        execution_status=row.execution_status,
+        evaluation_status=row.evaluation_status,
+        execution_started_at=row.execution_started_at,
+        execution_finished_at=row.execution_finished_at,
+        execution_duration_ms=row.execution_duration_ms,
+        evaluation_started_at=row.evaluation_started_at,
+        evaluation_finished_at=row.evaluation_finished_at,
+        timeout_type=row.timeout_type,
+        last_useful_activity_at=row.last_useful_activity_at,
+        actual_provider=row.actual_provider,
+        actual_provider_model=row.actual_provider_model,
+        actual_provenance_verified=row.actual_provenance_verified,
         response_id=row.response_id,
         triggering_message_id=row.triggering_message_id,
         project_path=row.project_path,
@@ -237,7 +249,14 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             selection_strategy=data.selection_strategy,
             billing_class=data.billing_class,
             fallback_used=data.fallback_used,
-            terminal_status=encode_task_run_status(data.terminal_status),
+            terminal_status=encode_task_run_status("running"),
+            execution_status="running",
+            evaluation_status="not_requested",
+            execution_started_at=now,
+            last_useful_activity_at=now,
+            actual_provider=data.selected_provider,
+            actual_provider_model=data.selected_model,
+            actual_provenance_verified=False,
             started_at=now,
             created_at=now,
             updated_at=now,
@@ -283,13 +302,29 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             row = session.get(SqlTaskRun, (current_workspace_id(), data.task_run_id))
             if row is None:
                 return None
-            row.terminal_status = encode_task_run_status(data.terminal_status)
+            # Compare-and-set: late terminal callbacks cannot resurrect a
+            # cancelled/timed-out run or overwrite its first finish time.
+            if row.execution_status not in {"queued", "starting", "running", "cancelling"}:
+                # Preserve historical API behaviour for duplicate callbacks;
+                # authoritative execution_finished_at remains immutable.
+                row.terminal_at = data.terminal_at
+                row.updated_at = now
+                session.flush()
+                return _run_row_to_entity(row)
+            status = "timed_out" if data.terminal_status == "incomplete" and data.failure_error_code in {"timeout", "deadline_exceeded"} else data.terminal_status
+            if status not in {"completed", "failed", "cancelled", "timed_out"}:
+                raise ValueError(f"invalid execution terminal status: {status}")
+            legacy_status = "failed" if status == "timed_out" else status
+            row.execution_status = status
+            row.terminal_status = encode_task_run_status(legacy_status)
+            row.execution_finished_at = data.terminal_at
             row.terminal_at = data.terminal_at
-            row.duration_ms = (
-                (data.terminal_at - row.started_at) * 1000
-                if (row.started_at is not None and data.terminal_at is not None)
-                else None
-            )
+            started = row.execution_started_at or row.started_at
+            duration = (data.terminal_at - started) * 1000 if started is not None else None
+            row.execution_duration_ms = max(1, duration) if duration is not None else None
+            row.duration_ms = row.execution_duration_ms
+            if status == "timed_out":
+                row.timeout_type = data.failure_error_code or "stream_inactivity"
             if data.response_id is not None:
                 row.response_id = data.response_id
             if data.input_tokens is not None:
@@ -406,7 +441,18 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             created_at=now,
         )
         with self._session() as session:
+            run = session.get(SqlTaskRun, (current_workspace_id(), data.task_run_id))
+            if run is None:
+                raise ValueError(f"unknown task run: {data.task_run_id}")
             session.add(row)
+            # Store callers may create deterministic evidence while running;
+            # only the recorder schedules LLM evaluation and it does so after
+            # an execution terminal transition.  Crucially this update never
+            # touches execution_status or the legacy terminal projection.
+            if run.execution_status in {"completed", "failed", "cancelled", "timed_out"}:
+                run.evaluation_status = "skipped" if data.verdict == "inconclusive" else "completed"
+                run.evaluation_finished_at = now
+                run.updated_at = now
             session.flush()
             return _evaluation_row_to_entity(row)
 
