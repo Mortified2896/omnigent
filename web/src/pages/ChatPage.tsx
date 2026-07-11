@@ -55,6 +55,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
 import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
+import { ownsOutcomeCard } from "@/lib/taskOutcomes";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
@@ -1697,8 +1698,12 @@ function MainAgentSurface({
               )
             ) : (
               <>
-                {streamBubbles.map((bubble) => (
-                  <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
+                {streamBubbles.map((bubble, index) => (
+                  <BubbleView
+                    key={bubbleKey(bubble)}
+                    bubble={bubble}
+                    renderOutcome={ownsOutcomeCard(streamBubbles, index)}
+                  />
                 ))}
                 {/* Pending elicitation cards, floated to the bottom of the
                     chat so an outstanding question stays in view (stick-to-
@@ -2854,7 +2859,13 @@ function CompactionLoadingIndicator() {
 // markdown/syntax-highlighting subtree. See `bubblesEqual`. Exported for
 // the user-bubble markdown render tests.
 export const BubbleView = memo(
-  function BubbleView({ bubble }: { bubble: Bubble }) {
+  function BubbleView({
+    bubble,
+    renderOutcome = true,
+  }: {
+    bubble: Bubble;
+    renderOutcome?: boolean;
+  }) {
     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
     if (bubble.kind === "compaction_loading") {
       return <CompactionLoadingIndicator />;
@@ -2870,9 +2881,10 @@ export const BubbleView = memo(
         />
       );
     }
-    return <AssistantBubble bubble={bubble} />;
+    return <AssistantBubble bubble={bubble} renderOutcome={renderOutcome} />;
   },
-  (prev, next) => bubblesEqual(prev.bubble, next.bubble),
+  (prev, next) =>
+    prev.renderOutcome === next.renderOutcome && bubblesEqual(prev.bubble, next.bubble),
 );
 
 /**
@@ -3088,7 +3100,13 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
   );
 }
 
-function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistant" }> }) {
+function AssistantBubble({
+  bubble,
+  renderOutcome = true,
+}: {
+  bubble: Extract<Bubble, { kind: "assistant" }>;
+  renderOutcome?: boolean;
+}) {
   const { conversationId: outcomeSessionId } = useParams<{ conversationId: string }>();
   // The walker only emits an assistant bubble when at least one
   // assistant-side block exists, so `items` is non-empty here in the
@@ -3131,7 +3149,7 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
             <span>Interrupted</span>
           </p>
         )}
-        {bubble.lifecycle !== "streaming" && outcomeSessionId && (
+        {renderOutcome && bubble.lifecycle !== "streaming" && outcomeSessionId && (
           <TaskOutcomeBriefCard sessionId={outcomeSessionId} responseId={bubble.responseId} />
         )}
         {markdownText && (

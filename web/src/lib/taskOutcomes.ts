@@ -7,6 +7,36 @@
 // (`web/vite.config.ts`) so no proxy changes are needed.
 
 import { authenticatedFetch } from "./identity";
+import type { Bubble } from "./renderItems";
+
+/**
+ * Select the single transcript position that owns an outcome card for each
+ * response. A reconnect can temporarily leave the live and hydrated copies
+ * of a response in the bubble list; the final occurrence is the canonical
+ * position, directly below the completed assistant result.
+ */
+export function canonicalOutcomeResponseIds(bubbles: readonly Bubble[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (let index = bubbles.length - 1; index >= 0; index -= 1) {
+    const bubble = bubbles[index];
+    if (bubble?.kind === "assistant" && bubble.lifecycle !== "streaming") {
+      ids.add(bubble.responseId);
+    }
+  }
+  return ids;
+}
+
+export function ownsOutcomeCard(bubbles: readonly Bubble[], bubbleIndex: number): boolean {
+  const bubble = bubbles[bubbleIndex];
+  if (!bubble || bubble.kind !== "assistant" || bubble.lifecycle === "streaming") return false;
+  return !bubbles.some(
+    (candidate, index) =>
+      index > bubbleIndex &&
+      candidate.kind === "assistant" &&
+      candidate.lifecycle !== "streaming" &&
+      candidate.responseId === bubble.responseId,
+  );
+}
 
 /** A single task run record as returned by the server. */
 export interface TaskRun {
