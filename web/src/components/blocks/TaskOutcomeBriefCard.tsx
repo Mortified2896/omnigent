@@ -61,7 +61,10 @@ export function TaskOutcomeBriefCard({
   sessionId: string;
   responseId: string;
 }) {
-  const { phase, detail, error, retry } = useTaskRunForResponse(sessionId, responseId);
+  const { phase, detail, error, identityMismatch, retry } = useTaskRunForResponse(
+    sessionId,
+    responseId,
+  );
   const [editing, setEditing] = useState(false);
   // sessionStorage-scoped dismissal. The task remains in the
   // unreviewed-outcomes queue — this only hides the inline card
@@ -79,6 +82,10 @@ export function TaskOutcomeBriefCard({
       setPostponedPersisted(true);
     }
   }, [detail?.run?.id, sessionId]);
+
+  // The registry selected this response, but never trust an endpoint that
+  // violates the same identity. Rendering nothing prevents misattachment.
+  if (identityMismatch) return null;
 
   if (phase === "loading" || phase === "waiting") {
     return (

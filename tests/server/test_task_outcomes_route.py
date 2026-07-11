@@ -80,12 +80,13 @@ def _seed_terminalised(
     *,
     conv: str = "c1",
     status: str = "completed",
+    response_id: str | None = None,
 ) -> str:
     """Create + terminalise a run via the store; return its id."""
     run = store.create_run(
         CreateTaskRunInput(
             conversation_id=conv,
-            response_id=f"r_{secrets.token_hex(8)}",
+            response_id=response_id or f"r_{secrets.token_hex(8)}",
             task_description="Fix the login bug.",
             requested_route_id="auto/coding",
             selected_provider="databricks",
@@ -111,6 +112,24 @@ def _seed_terminalised(
         )
     )
     return run.id
+
+
+# ── by-response task-run lookup ─────────────────────────────────────────
+
+
+def test_get_task_run_by_response_requires_exact_transcript_response_id(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    """An unrelated assistant response cannot adopt the sole terminal run."""
+    store, client = store_and_app
+    _seed_terminalised(store, response_id="resp_real_task")
+
+    exact = client.get("/v1/sessions/c1/task-runs/by-response/resp_real_task")
+    assert exact.status_code == 200
+    assert exact.json()["run"]["response_id"] == "resp_real_task"
+
+    unmatched = client.get("/v1/sessions/c1/task-runs/by-response/resp_runner_disconnected")
+    assert unmatched.status_code == 404
 
 
 # ── list_session_task_runs ──────────────────────────────────────────────

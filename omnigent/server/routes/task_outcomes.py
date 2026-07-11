@@ -353,19 +353,7 @@ def create_task_outcomes_router(
             store.get_run_for_response, response_id=response_id, conversation_id=session_id
         )
         if run is None:
-            # Older relay events used the harness response id while the
-            # transcript exposes its assistant-item response id. Only use a
-            # fallback when the session has exactly one terminal run; this
-            # prevents attaching a run to the wrong response in multi-task sessions.
-            candidates = await _call_store(
-                store.list_runs_for_conversation, conversation_id=session_id, limit=2
-            )
-            terminal = [
-                candidate for candidate in candidates if candidate.terminal_status != "running"
-            ]
-            if len(terminal) != 1:
-                raise OmnigentError("Task run not found", code=ErrorCode.NOT_FOUND)
-            run = terminal[0]
+            raise OmnigentError("Task run not found", code=ErrorCode.NOT_FOUND)
         detail = await _call_store(store.get_run_detail, task_run_id=run.id)
         return {
             "run": _serialise_run(detail.run),

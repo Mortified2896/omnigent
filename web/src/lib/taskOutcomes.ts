@@ -6,6 +6,7 @@
 // All requests go through the existing Vite `/v1` proxy
 // (`web/vite.config.ts`) so no proxy changes are needed.
 
+import { useEffect, useRef, useState } from "react";
 import { authenticatedFetch } from "./identity";
 import type { Bubble } from "./renderItems";
 
@@ -20,6 +21,17 @@ export class TaskRunFetchError extends Error {
     super(message ?? `task run fetch failed: ${status}`);
     this.name = "TaskRunFetchError";
     this.status = status;
+  }
+}
+
+/** The endpoint returned a run for another transcript response. */
+export class TaskRunResponseIdentityError extends TaskRunFetchError {
+  constructor(requestedResponseId: string, returnedResponseId: string | null) {
+    super(409, "task run response identity mismatch");
+    console.warn("Task outcome response identity mismatch", {
+      requestedResponseId,
+      returnedResponseId,
+    });
   }
 }
 
@@ -253,9 +265,13 @@ export interface ListUnreviewedTaskOutcomesResponse {
 export async function listSessionTaskRuns(
   sessionId: string,
   limit: number = 50,
+  signal?: AbortSignal,
 ): Promise<ListSessionTaskRunsResponse> {
   const url = `/v1/sessions/${encodeURIComponent(sessionId)}/task-runs?limit=${limit}`;
-  const resp = await authenticatedFetch(url, { credentials: "same-origin" });
+  const resp = await authenticatedFetch(url, {
+    credentials: "same-origin",
+    ...(signal ? { signal } : {}),
+  });
   if (!resp.ok) {
     throw new Error(`listSessionTaskRuns failed: ${resp.status}`);
   }
@@ -285,8 +301,81 @@ export async function getTaskRunForResponse(
     ...(signal ? { signal } : {}),
   });
   if (!resp.ok) throw new TaskRunFetchError(resp.status);
-  return resp.json();
+  const detail: TaskRunDetailResponse = await resp.json();
+  if (detail.run.response_id !== responseId) {
+    throw new TaskRunResponseIdentityError(responseId, detail.run.response_id);
+  }
+  return detail;
 }
+
+/**
+ * Authoritative, session-scoped eligibility for inline outcome cards. The
+ * registry comes only from persisted task runs; transcript order and bubble
+ * content are deliberately never used to infer task ownership.
+ */
+export function useTaskOutcomeResponseIds(
+  sessionId: string | null | undefined,
+  streamStatus: "idle" | "streaming",
+): ReadonlySet<string> {
+  const [registry, setRegistry] = useState<{ sessionId: string | null; ids: ReadonlySet<string> }>({
+    sessionId: null,
+    ids: new Set(),
+  });
+  const statusRef = useRef(streamStatus);
+  const statusSessionRef = useRef(sessionId ?? null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!sessionId) {
+      setRegistry({ sessionId: null, ids: new Set() });
+      return () => controller.abort();
+    }
+    // Clear synchronously in the effect and retain the session key in state so
+    // a previous session's IDs can never qualify the new session while loading.
+    setRegistry({ sessionId, ids: new Set() });
+    void listSessionTaskRuns(sessionId, 200, controller.signal)
+      .then(({ runs }) => {
+        if (controller.signal.aborted) return;
+        setRegistry({
+          sessionId,
+          ids: new Set(runs.flatMap((run) => (run.response_id ? [run.response_id] : []))),
+        });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) console.warn("Failed to load task outcome registry", error);
+      });
+    return () => controller.abort();
+  }, [sessionId]);
+
+  useEffect(() => {
+    const sessionChanged = statusSessionRef.current !== (sessionId ?? null);
+    statusSessionRef.current = sessionId ?? null;
+    const wasStreaming = statusRef.current === "streaming";
+    statusRef.current = streamStatus;
+    if (sessionChanged || !sessionId || !wasStreaming || streamStatus !== "idle") return;
+    const controller = new AbortController();
+    // A terminal response can precede persistence of its task_run row. Refresh
+    // once at the terminal boundary rather than probing every assistant bubble.
+    void listSessionTaskRuns(sessionId, 200, controller.signal)
+      .then(({ runs }) => {
+        if (!controller.signal.aborted) {
+          setRegistry({
+            sessionId,
+            ids: new Set(runs.flatMap((run) => (run.response_id ? [run.response_id] : []))),
+          });
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          console.warn("Failed to refresh task outcome registry", error);
+      });
+    return () => controller.abort();
+  }, [sessionId, streamStatus]);
+
+  return registry.sessionId === sessionId ? registry.ids : EMPTY_TASK_OUTCOME_RESPONSE_IDS;
+}
+
+const EMPTY_TASK_OUTCOME_RESPONSE_IDS: ReadonlySet<string> = new Set();
 
 export async function getTaskRun(taskRunId: string): Promise<TaskRunDetailResponse> {
   const url = `/v1/task-runs/${encodeURIComponent(taskRunId)}`;
@@ -326,6 +415,8 @@ export interface TaskRunReadiness {
   phase: TaskRunReadinessPhase;
   detail: TaskRunDetailResponse | null;
   error: string | null;
+  /** A server identity violation is terminal and must not render a card. */
+  identityMismatch: boolean;
   /** Restart the bounded polling cycle (also used by the [Retry] button). */
   retry: () => void;
 }

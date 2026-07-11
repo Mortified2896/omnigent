@@ -14,6 +14,7 @@ import {
   TASK_RUN_READINESS_DELAYS_MS,
   TASK_RUN_READINESS_MAX_ATTEMPTS,
   TaskRunFetchError,
+  TaskRunResponseIdentityError,
 } from "./taskOutcomes";
 import type {
   TaskRunDetailResponse,
@@ -43,12 +44,14 @@ export function useTaskRunForResponse(sessionId: string, responseId: string): Ta
   const [phase, setPhase] = useState<TaskRunReadinessPhase>("loading");
   const [detail, setDetail] = useState<TaskRunDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [identityMismatch, setIdentityMismatch] = useState(false);
   // Generation token: bumped on every retry or key change so an in-flight
   // fetch can detect it has been superseded.
   const [generation, setGeneration] = useState(0);
   const retry = useCallback(() => {
     setDetail(null);
     setError(null);
+    setIdentityMismatch(false);
     setPhase("loading");
     setGeneration((g) => g + 1);
   }, []);
@@ -58,6 +61,7 @@ export function useTaskRunForResponse(sessionId: string, responseId: string): Ta
     // effect re-running (since ``generation`` is in the dep list).
     setDetail(null);
     setError(null);
+    setIdentityMismatch(false);
     setPhase("loading");
     const localGeneration = generation;
 
@@ -120,6 +124,14 @@ export function useTaskRunForResponse(sessionId: string, responseId: string): Ta
           scheduleNext(delay);
           return;
         }
+        // A mismatched response identity is a server invariant violation,
+        // not an unavailable evaluation. Never attach or retry that run.
+        if (e instanceof TaskRunResponseIdentityError) {
+          setDetail(null);
+          setIdentityMismatch(true);
+          setPhase("failed");
+          return;
+        }
         // Non-retryable error. Keep `detail` empty so we don't pretend
         // the task run was found.
         setDetail(null);
@@ -135,5 +147,5 @@ export function useTaskRunForResponse(sessionId: string, responseId: string): Ta
     };
   }, [sessionId, responseId, generation]);
 
-  return { phase, detail, error, retry };
+  return { phase, detail, error, identityMismatch, retry };
 }

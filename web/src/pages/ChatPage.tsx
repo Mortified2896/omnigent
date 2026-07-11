@@ -55,7 +55,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
 import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
-import { ownsOutcomeCard } from "@/lib/taskOutcomes";
+import { ownsOutcomeCard, useTaskOutcomeResponseIds } from "@/lib/taskOutcomes";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
@@ -1494,6 +1494,7 @@ function MainAgentSurface({
     () => (pendingElicitations.length === 0 ? bubbles : stripPendingElicitations(bubbles)),
     [bubbles, pendingElicitations.length],
   );
+  const taskOutcomeResponseIds = useTaskOutcomeResponseIds(conversationId, status);
 
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) — guarded so the composer's
   // own unmodified ArrowUp/Down history-recall still works.
@@ -1702,7 +1703,12 @@ function MainAgentSurface({
                   <BubbleView
                     key={bubbleKey(bubble)}
                     bubble={bubble}
-                    renderOutcome={ownsOutcomeCard(streamBubbles, index)}
+                    renderOutcome={
+                      bubble.kind === "assistant" &&
+                      bubble.lifecycle === "completed" &&
+                      taskOutcomeResponseIds.has(bubble.responseId) &&
+                      ownsOutcomeCard(streamBubbles, index)
+                    }
                   />
                 ))}
                 {/* Pending elicitation cards, floated to the bottom of the

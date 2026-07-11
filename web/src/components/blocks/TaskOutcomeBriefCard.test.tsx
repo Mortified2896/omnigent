@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskOutcomeBriefCard } from "./TaskOutcomeBriefCard";
-import { TaskRunFetchError } from "@/lib/taskOutcomes";
+import { TaskRunFetchError, TaskRunResponseIdentityError } from "@/lib/taskOutcomes";
 import type { TaskRunDetailResponse } from "@/lib/taskOutcomes";
 
 const mocks = vi.hoisted(() => ({
@@ -436,6 +436,19 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
     await advanceTimers(1);
     expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes the card and stops polling when the endpoint returns another response's run", async () => {
+    mocks.getTaskRunForResponse.mockRejectedValue(
+      new TaskRunResponseIdentityError("resp-1", "resp-other"),
+    );
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+
+    expect(screen.queryByTestId("outcome-brief-pending")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("outcome-brief-failed")).not.toBeInTheDocument();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
   });
 
   it("saving Adjust submits action=adjust with the corrected fields", async () => {
