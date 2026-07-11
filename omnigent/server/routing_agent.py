@@ -17,8 +17,10 @@ classified as ``free`` or ``subscription`` by OmniRoute — never as
 according to the route profile.
 
 The validator therefore never rejects, hides, or downgrades a route
-solely because it uses an API; the only filter is the OmniRoute-
-reported billing class, which is treated as factual provenance here.
+solely because it uses an API. Evaluator billing provenance is telemetry:
+all four known classes (including ``api_billed`` and ``unknown``) are
+preserved and non-blocking. The selected execution route may still apply
+its own explicit billing policy to the task.
 """
 
 from __future__ import annotations
@@ -97,39 +99,48 @@ def routing_input_budget_chars() -> int:
 
 
 def _bound_routing_user_message(user_message: str, budget: int) -> str:
-    """Return a deterministic, budget-bounded routing-only excerpt.
+    """Return a deterministic excerpt whose length never exceeds *budget*.
 
     Short messages (≤ *budget* chars) pass through unchanged. Long
     messages are compacted to preserve the head and tail with an
     explicit omission marker that names the original size, so the
     routing LLM knows the message is bigger than what it sees and
-    can act accordingly (e.g. flag a coding-vs-reasoning decision
-    that hinges on the middle, or downgrade effort for a long
-    context-bound task).
+    can act accordingly. The marker is reserved before selecting the
+    two excerpts; this keeps the configured budget a hard bound rather
+    than an approximate target.
 
     The boundary cuts are codepoint-safe — they never split a
-    multi-byte UTF-8 character in half. Code-block fences (`` ``` ``)
-    and backtick runs are also kept intact by preferring to break
-    at whitespace, so the router never sees a broken ```` ``` `` fence
-    that could trigger a Markdown rendering bug in the routing
-    LLM's own output.
+    multi-byte UTF-8 character. Code-block fences (`` ``` ``) and
+    backtick runs are also kept intact by preferring to break at
+    whitespace.
     """
     if not isinstance(user_message, str):
         user_message = "" if user_message is None else str(user_message)
     if len(user_message) <= budget:
         return user_message
     original_chars = len(user_message)
-    # Split the budget roughly in half, leaving a few chars slack for
-    # the omission marker when re-joined.
-    head_budget = budget // 2
-    tail_budget = budget - head_budget
+    # Reserve enough space for the marker before allocating head/tail.
+    # The omitted count can only have as many digits as original_chars,
+    # so this upper-bound marker is never shorter than the final one.
+    marker_budget = len(
+        _OMISSION_MARKER_TEMPLATE.format(
+            omitted_chars=original_chars,
+            original_chars=original_chars,
+        )
+    )
+    excerpt_budget = max(0, budget - marker_budget)
+    head_budget = excerpt_budget // 2
+    tail_budget = excerpt_budget - head_budget
     head = _safe_truncate_to_boundary(user_message, head_budget, side="left")
     tail = _safe_truncate_to_boundary(user_message, tail_budget, side="right")
     omitted_chars = max(0, original_chars - len(head) - len(tail))
     marker = _OMISSION_MARKER_TEMPLATE.format(
         omitted_chars=omitted_chars, original_chars=original_chars
     )
-    return f"{head}{marker}{tail}"
+    bounded = f"{head}{marker}{tail}"
+    # Boundary snapping can only reduce the excerpts, but retain this
+    # defensive slice if a future marker change invalidates the estimate.
+    return bounded if len(bounded) <= budget else bounded[:budget]
 
 
 def _safe_truncate_to_boundary(text: str, limit: int, *, side: str) -> str:
@@ -406,7 +417,12 @@ class EvaluatorProvenanceError(RoutingAgentError):
     pass
 
 
-_ALLOWED_EVALUATOR_BILLING_CLASSES = {"free", "subscription"}
+# Billing provenance describes how the evaluator call was metered; it is
+# telemetry, not an execution eligibility decision. Every known class must
+# survive validation, including ``api_billed`` and ``unknown``.
+_ALLOWED_EVALUATOR_BILLING_CLASSES = set(_KNOWN_BILLING_CLASSES)
+# Kept as a named compatibility set for callers that distinguish evaluator
+# provenance from the selected execution route's billing policy.
 _FORBIDDEN_EVALUATOR_BILLING_CLASSES = {"api_billed", "unknown"}
 
 
@@ -517,10 +533,6 @@ def extract_evaluator_provenance(
         header_get("x-omniroute-selected-billing-class"),
     )
     if billing not in _ALLOWED_EVALUATOR_BILLING_CLASSES:
-        if billing in _FORBIDDEN_EVALUATOR_BILLING_CLASSES:
-            raise EvaluatorProvenanceError(
-                f"OmniRoute evaluator billing class {billing!r} is forbidden"
-            )
         raise EvaluatorProvenanceError(
             "OmniRoute evaluator provenance unavailable: billing class is unknown"
         )
