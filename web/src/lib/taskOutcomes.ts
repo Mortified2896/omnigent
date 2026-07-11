@@ -10,6 +10,41 @@ import { authenticatedFetch } from "./identity";
 import type { Bubble } from "./renderItems";
 
 /**
+ * Typed error raised by the task-run fetchers below. Carries the
+ * HTTP status so callers can distinguish a not-yet-indexed
+ * ``404`` (retryable) from a real server fault.
+ */
+export class TaskRunFetchError extends Error {
+  readonly status: number;
+  constructor(status: number, message?: string) {
+    super(message ?? `task run fetch failed: ${status}`);
+    this.name = "TaskRunFetchError";
+    this.status = status;
+  }
+}
+
+/**
+ * A run can transition through several readiness phases before the
+ * operator can act on it:
+ *
+ * - ``loading`` — initial fetch in flight.
+ * - ``waiting`` — last fetch returned retryable (404 or evaluation
+ *   still null); backing off before the next attempt.
+ * - ``ready`` — run found and evaluation (or human review) present.
+ * - ``exhausted`` — retry budget spent without an evaluation. The
+ *   component should render a compact retry surface, not pretend
+ *   the automated evaluator returned ``unsure``.
+ * - ``failed`` — non-retryable error (5xx, network, etc).
+ */
+export type TaskRunReadinessPhase = "loading" | "waiting" | "ready" | "exhausted" | "failed";
+
+/** Backoff schedule (ms) for follow-up readiness polls. */
+export const TASK_RUN_READINESS_DELAYS_MS: readonly number[] = [800, 1_600, 3_200, 6_400] as const;
+
+/** Maximum number of follow-up attempts after the initial fetch. */
+export const TASK_RUN_READINESS_MAX_ATTEMPTS = TASK_RUN_READINESS_DELAYS_MS.length;
+
+/**
  * Select the single transcript position that owns an outcome card for each
  * response. A reconnect can temporarily leave the live and hydrated copies
  * of a response in the bubble list; the final occurrence is the canonical
@@ -242,10 +277,14 @@ export async function listUnreviewedTaskOutcomes(
 export async function getTaskRunForResponse(
   sessionId: string,
   responseId: string,
+  signal?: AbortSignal,
 ): Promise<TaskRunDetailResponse> {
   const url = `/v1/sessions/${encodeURIComponent(sessionId)}/task-runs/by-response/${encodeURIComponent(responseId)}`;
-  const resp = await authenticatedFetch(url, { credentials: "same-origin" });
-  if (!resp.ok) throw new Error(`getTaskRunForResponse failed: ${resp.status}`);
+  const resp = await authenticatedFetch(url, {
+    credentials: "same-origin",
+    ...(signal ? { signal } : {}),
+  });
+  if (!resp.ok) throw new TaskRunFetchError(resp.status);
   return resp.json();
 }
 
@@ -253,7 +292,7 @@ export async function getTaskRun(taskRunId: string): Promise<TaskRunDetailRespon
   const url = `/v1/task-runs/${encodeURIComponent(taskRunId)}`;
   const resp = await authenticatedFetch(url, { credentials: "same-origin" });
   if (!resp.ok) {
-    throw new Error(`getTaskRun failed: ${resp.status}`);
+    throw new TaskRunFetchError(resp.status, `getTaskRun failed: ${resp.status}`);
   }
   return resp.json();
 }
@@ -271,7 +310,22 @@ export async function submitTaskRunReview(
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`submitTaskRunReview failed: ${resp.status} ${text.slice(0, 200)}`);
+    throw new TaskRunFetchError(
+      resp.status,
+      `submitTaskRunReview failed: ${resp.status} ${text.slice(0, 200)}`,
+    );
   }
   return resp.json();
+}
+
+/**
+ * Result of {@link useTaskRunForResponse}. The component renders
+ * against these fields instead of wiring its own timers.
+ */
+export interface TaskRunReadiness {
+  phase: TaskRunReadinessPhase;
+  detail: TaskRunDetailResponse | null;
+  error: string | null;
+  /** Restart the bounded polling cycle (also used by the [Retry] button). */
+  retry: () => void;
 }

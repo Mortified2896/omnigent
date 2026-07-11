@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskOutcomeBriefCard } from "./TaskOutcomeBriefCard";
+import { TaskRunFetchError } from "@/lib/taskOutcomes";
 import type { TaskRunDetailResponse } from "@/lib/taskOutcomes";
 
 const mocks = vi.hoisted(() => ({
   getTaskRunForResponse: vi.fn(),
+  getTaskRun: vi.fn(),
   submitTaskRunReview: vi.fn(),
 }));
 vi.mock("@/lib/taskOutcomes", async (importOriginal) => {
@@ -41,6 +43,35 @@ function acceptedReview(): NonNullable<TaskRunDetailResponse["review"]> {
     review_action: "accepted",
     learning_eligible: true,
   };
+}
+
+type DetailOverrides = Omit<Partial<TaskRunDetailResponse>, "run" | "evaluation" | "review"> & {
+  run?: Partial<TaskRunDetailResponse["run"]>;
+  evaluation?: TaskRunDetailResponse["evaluation"];
+  review?: TaskRunDetailResponse["review"];
+};
+
+function detailFor(overrides: DetailOverrides = {}): TaskRunDetailResponse {
+  return {
+    ...detail,
+    ...overrides,
+    run: { ...detail.run, ...overrides.run },
+    evaluation: overrides.evaluation === undefined ? detail.evaluation : overrides.evaluation,
+    review: overrides.review === undefined ? detail.review : overrides.review,
+  };
+}
+
+async function flushAsync(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+async function advanceTimers(ms: number): Promise<void> {
+  await act(async () => {
+    vi.advanceTimersByTime(ms);
+    await Promise.resolve();
+  });
 }
 
 const detail: TaskRunDetailResponse = {
@@ -105,6 +136,7 @@ describe("TaskOutcomeBriefCard actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getTaskRunForResponse.mockResolvedValue(detail);
+    mocks.getTaskRun.mockResolvedValue(detail);
     mocks.submitTaskRunReview.mockImplementation(
       async (_runId: string, body: { action?: string }) => {
         if (body?.action === "decline") return review;
@@ -123,6 +155,7 @@ describe("TaskOutcomeBriefCard actions", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (typeof window !== "undefined") {
       try {
         window.sessionStorage.clear();
@@ -240,5 +273,203 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(mocks.submitTaskRunReview).not.toHaveBeenCalled();
     second.unmount();
     first.unmount();
+  });
+
+  it("polls with a real refetch until a late evaluation appears, then Accept submits it", async () => {
+    vi.useFakeTimers();
+    mocks.getTaskRunForResponse
+      .mockResolvedValueOnce(detailFor({ evaluation: null }))
+      .mockResolvedValueOnce(detail);
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("outcome-brief-pending")).toHaveTextContent(
+      /Preparing outcome brief/,
+    );
+
+    await advanceTimers(800);
+    expect(screen.getByTestId("task-outcome-brief-card")).toBeInTheDocument();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Likely success · small_bug_fix · Quality 5\/5/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
+    await flushAsync();
+    expect(mocks.submitTaskRunReview).toHaveBeenCalledWith("run-1", {
+      action: "accept",
+      source_evaluation_id: "eval-1",
+      verdict: undefined,
+    });
+  });
+
+  it("retries an initially missing task run and renders the later run with evaluation", async () => {
+    vi.useFakeTimers();
+    mocks.getTaskRunForResponse
+      .mockRejectedValueOnce(new TaskRunFetchError(404))
+      .mockResolvedValueOnce(detail);
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("outcome-brief-pending")).toBeInTheDocument();
+
+    await advanceTimers(800);
+    expect(screen.getByTestId("task-outcome-brief-card")).toBeInTheDocument();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("exhausts repeated 404s without infinite timers and Retry starts a new cycle", async () => {
+    vi.useFakeTimers();
+    mocks.getTaskRunForResponse.mockRejectedValue(new TaskRunFetchError(404));
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+
+    await advanceTimers(800);
+    await advanceTimers(1_600);
+    await advanceTimers(3_200);
+    await advanceTimers(6_400);
+    expect(screen.getByTestId("outcome-brief-exhausted")).toBeInTheDocument();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(5);
+
+    await advanceTimers(60_000);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(5);
+
+    fireEvent.click(screen.getByTestId("outcome-brief-retry"));
+    await flushAsync();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(6);
+  });
+
+  it("exhausts evaluation-null responses without rendering a fabricated verdict", async () => {
+    vi.useFakeTimers();
+    mocks.getTaskRunForResponse.mockResolvedValue(detailFor({ evaluation: null }));
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    await advanceTimers(800);
+    await advanceTimers(1_600);
+    await advanceTimers(3_200);
+    await advanceTimers(6_400);
+
+    expect(screen.getByTestId("outcome-brief-evaluation-unavailable")).toBeInTheDocument();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(5);
+    expect(screen.queryByText(/Likely unsure/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Accept/ })).not.toBeInTheDocument();
+  });
+
+  it("unmount cancels a scheduled poll and aborts the in-flight request", async () => {
+    vi.useFakeTimers();
+    mocks.getTaskRunForResponse.mockResolvedValueOnce(detailFor({ evaluation: null }));
+    const rendered = render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+    const firstSignal = mocks.getTaskRunForResponse.mock.calls[0][2] as AbortSignal;
+    expect(firstSignal.aborted).toBe(false);
+
+    rendered.unmount();
+    expect(firstSignal.aborted).toBe(true);
+    await advanceTimers(60_000);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it("changing session or response prevents the prior request from overwriting new state", async () => {
+    let resolveOld!: (value: TaskRunDetailResponse) => void;
+    const oldPromise = new Promise<TaskRunDetailResponse>((resolve) => {
+      resolveOld = resolve;
+    });
+    const newDetail = detailFor({
+      run: {
+        id: "run-2",
+        conversation_id: "conv-2",
+        response_id: "resp-2",
+      },
+      evaluation: { ...detail.evaluation!, id: "eval-2", task_run_id: "run-2" },
+    });
+    mocks.getTaskRunForResponse.mockReturnValueOnce(oldPromise).mockResolvedValueOnce(newDetail);
+
+    const rendered = render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    const oldSignal = mocks.getTaskRunForResponse.mock.calls[0][2] as AbortSignal;
+
+    rendered.rerender(<TaskOutcomeBriefCard sessionId="conv-2" responseId="resp-2" />);
+    await flushAsync();
+    await screen.findByTestId("task-outcome-brief-card");
+    expect(oldSignal.aborted).toBe(true);
+    expect(screen.getByTestId("task-outcome-brief-card")).toHaveAttribute(
+      "data-task-run-id",
+      "run-2",
+    );
+
+    await act(async () => {
+      resolveOld(detail);
+      await oldPromise;
+    });
+    expect(screen.getByTestId("task-outcome-brief-card")).toHaveAttribute(
+      "data-task-run-id",
+      "run-2",
+    );
+  });
+
+  it("does not start overlapping poll requests while the previous request is slow", async () => {
+    vi.useFakeTimers();
+    let resolveSlow!: (value: TaskRunDetailResponse) => void;
+    const slow = new Promise<TaskRunDetailResponse>((resolve) => {
+      resolveSlow = resolve;
+    });
+    mocks.getTaskRunForResponse
+      .mockReturnValueOnce(slow)
+      .mockResolvedValueOnce(detailFor({ evaluation: null }));
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+
+    await advanceTimers(8_000);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveSlow(detailFor({ evaluation: null }));
+      await slow;
+    });
+    await advanceTimers(799);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+    await advanceTimers(1);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("saving Adjust submits action=adjust with the corrected fields", async () => {
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await screen.findByTestId("task-outcome-brief-card");
+    fireEvent.click(screen.getByRole("button", { name: /Adjust/ }));
+    const reviewCard = await screen.findByTestId("task-review-card");
+    expect(mocks.submitTaskRunReview).not.toHaveBeenCalled();
+
+    fireEvent.click(within(reviewCard).getByText("Partially successful"));
+    fireEvent.click(within(reviewCard).getByRole("button", { name: "4" }));
+    fireEvent.click(within(reviewCard).getByText("incorrect"));
+    const selects = within(reviewCard).getAllByRole("combobox");
+    fireEvent.change(selects[0], { target: { value: "too_weak" } });
+    fireEvent.change(selects[3], { target: { value: "backend_api" } });
+    fireEvent.change(within(reviewCard).getByPlaceholderText(/Optional notes/), {
+      target: { value: "Corrected outcome after manual review." },
+    });
+
+    fireEvent.click(within(reviewCard).getByRole("button", { name: /Save review/ }));
+    await waitFor(() =>
+      expect(mocks.submitTaskRunReview).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({
+          action: "adjust",
+          source_evaluation_id: "eval-1",
+          verdict: "partial",
+          quality_score: 4,
+          final_task_family: "backend_api",
+          route_fit: "too_weak",
+          evaluator_accuracy: "incorrect",
+          comments: "Corrected outcome after manual review.",
+        }),
+      ),
+    );
   });
 });

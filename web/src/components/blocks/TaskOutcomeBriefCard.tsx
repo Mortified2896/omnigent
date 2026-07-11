@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
-import { CheckIcon, LoaderIcon, PencilIcon, XIcon } from "lucide-react";
-import { getTaskRunForResponse, submitTaskRunReview } from "@/lib/taskOutcomes";
+import { useEffect, useState } from "react";
+import { CheckIcon, LoaderIcon, PencilIcon, RefreshCwIcon, XIcon } from "lucide-react";
+import { submitTaskRunReview } from "@/lib/taskOutcomes";
 import type { TaskRunDetailResponse } from "@/lib/taskOutcomes";
+import { useTaskRunForResponse } from "@/lib/useTaskRunReadiness";
 import { TaskReviewCard } from "./TaskReviewCard";
 
 /** Storage key prefix for the per-session, per-run local dismissal marker. */
@@ -60,39 +61,17 @@ export function TaskOutcomeBriefCard({
   sessionId: string;
   responseId: string;
 }) {
-  const [detail, setDetail] = useState<TaskRunDetailResponse | null>(null);
-  const [pending, setPending] = useState(true);
+  const { phase, detail, error, retry } = useTaskRunForResponse(sessionId, responseId);
   const [editing, setEditing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  // Local, non-persisted dismissal for "Review later". The task
-  // remains in the unreviewed-outcomes queue — this only hides
-  // the inline card for the current viewing context.
+  // sessionStorage-scoped dismissal. The task remains in the
+  // unreviewed-outcomes queue — this only hides the inline card
+  // for the current tab until the tab is closed.
   const [postponed, setPostponed] = useState(false);
   const [postponedPersisted, setPostponedPersisted] = useState(false);
-  const load = useCallback(async () => {
-    try {
-      const next = await getTaskRunForResponse(sessionId, responseId);
-      setDetail(next);
-      setError(null);
-    } catch (e) {
-      if (String(e).includes("404")) setDetail(null);
-      else setError("Outcome brief unavailable");
-    } finally {
-      setPending(false);
-    }
-  }, [sessionId, responseId]);
-  useEffect(() => {
-    void load();
-  }, [load]);
-  useEffect(() => {
-    if (attempt >= 3 || !detail || detail.evaluation) return;
-    const timer = window.setTimeout(() => setAttempt((value) => value + 1), 800 * 2 ** attempt);
-    return () => window.clearTimeout(timer);
-  }, [attempt, detail]);
-  // Once we know the run id, hydrate the optional sessionStorage dismissal
-  // marker. Done as an effect (not at render time) so SSR / tests don't
-  // touch window during render.
+
+  // Once we know the run id, hydrate the optional sessionStorage
+  // dismissal marker. Done as an effect (not at render time) so SSR /
+  // tests don't touch window during render.
   useEffect(() => {
     if (!detail?.run?.id) return;
     if (readPostponed(sessionId, detail.run.id)) {
@@ -100,22 +79,171 @@ export function TaskOutcomeBriefCard({
       setPostponedPersisted(true);
     }
   }, [detail?.run?.id, sessionId]);
-  if (pending)
+
+  if (phase === "loading" || phase === "waiting") {
     return (
       <div className="mt-2 text-xs text-muted-foreground" data-testid="outcome-brief-pending">
         <LoaderIcon className="mr-1 inline size-3 animate-spin" />
         Preparing outcome brief…
       </div>
     );
-  if (!detail || error) return null;
-  if (!detail.evaluation && attempt < 3)
+  }
+
+  if (phase === "failed") {
     return (
-      <div className="mt-2 text-xs text-muted-foreground" data-testid="outcome-brief-pending">
-        Preparing outcome brief…
+      <div
+        className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"
+        data-testid="outcome-brief-failed"
+      >
+        <span>Outcome brief unavailable</span>
+        <button
+          type="button"
+          className="ml-1 underline"
+          onClick={retry}
+          data-testid="outcome-brief-retry"
+        >
+          <RefreshCwIcon className="mr-1 inline size-3" />
+          Retry
+        </button>
+        {error ? <span className="text-rose-600">({error})</span> : null}
       </div>
     );
+  }
+
+  if (phase === "exhausted") {
+    // The task run still hasn't shown up after the retry budget —
+    // there is nothing for the operator to act on, so render a
+    // compact retry surface and leave the unreviewed-outcomes queue
+    // to surface the run later.
+    if (!detail?.run) {
+      return (
+        <div
+          className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"
+          data-testid="outcome-brief-exhausted"
+        >
+          <span>Outcome brief not ready yet</span>
+          <button
+            type="button"
+            className="ml-1 underline"
+            onClick={retry}
+            data-testid="outcome-brief-retry"
+          >
+            <RefreshCwIcon className="mr-1 inline size-3" />
+            Retry
+          </button>
+        </div>
+      );
+    }
+    if (editing) {
+      return (
+        <TaskReviewCard
+          taskRunId={detail.run.id}
+          initialRun={detail.run}
+          isOpen
+          onOpenChange={() => setEditing(false)}
+          onReviewed={() => {
+            setEditing(false);
+            retry();
+          }}
+        />
+      );
+    }
+    const restoreCard = () => {
+      if (postponedPersisted) {
+        clearPostponed(sessionId, detail.run!.id);
+        setPostponedPersisted(false);
+      }
+      setPostponed(false);
+    };
+    if (postponed) {
+      return (
+        <div
+          className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
+          data-testid="outcome-brief-postponed"
+          data-task-run-id={detail.run.id}
+        >
+          <span>Outcome review postponed</span>
+          <button className="ml-auto underline" onClick={restoreCard}>
+            Review now
+          </button>
+        </div>
+      );
+    }
+    // Run exists but the evaluator still hasn't produced a row.
+    // We deliberately don't render a fabricated "unsure" verdict —
+    // Adjust can still submit a human review without an evaluation.
+    return (
+      <div
+        className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
+        data-testid="outcome-brief-evaluation-unavailable"
+        data-task-run-id={detail.run.id}
+      >
+        <span>Outcome evaluation unavailable</span>
+        <button className="ml-auto underline" onClick={() => setEditing(true)}>
+          <PencilIcon className="mr-1 inline size-3" />
+          Adjust
+        </button>
+        <button className="underline" onClick={retry} data-testid="outcome-brief-retry">
+          <RefreshCwIcon className="mr-1 inline size-3" />
+          Retry
+        </button>
+        <button
+          className="rounded border px-2 py-1"
+          data-testid="outcome-review-later"
+          onClick={() => {
+            writePostponed(sessionId, detail.run!.id);
+            setPostponedPersisted(true);
+            setPostponed(true);
+          }}
+        >
+          Review later
+        </button>
+      </div>
+    );
+  }
+
+  // phase === "ready" — detail must exist and have either an evaluation
+  // or a human review. Defensive guard kept for clarity.
+  if (!detail) return null;
+  return renderReadyCard({
+    detail,
+    editing,
+    setEditing,
+    sessionId,
+    postponed,
+    postponedPersisted,
+    setPostponed,
+    setPostponedPersisted,
+    onReviewed: retry,
+  });
+}
+
+function renderReadyCard(args: {
+  detail: TaskRunDetailResponse;
+  editing: boolean;
+  setEditing: (v: boolean) => void;
+  sessionId: string;
+  postponed: boolean;
+  postponedPersisted: boolean;
+  setPostponed: (v: boolean) => void;
+  setPostponedPersisted: (v: boolean) => void;
+  onReviewed: () => void;
+}) {
+  const {
+    detail,
+    editing,
+    setEditing,
+    sessionId,
+    postponed,
+    postponedPersisted,
+    setPostponed,
+    setPostponedPersisted,
+    onReviewed,
+  } = args;
   const { run, evaluation, review } = detail;
-  if (review && !editing)
+  const hasEvaluation = evaluation !== null;
+
+  if (review && !editing) {
     return (
       <div
         className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
@@ -132,7 +260,8 @@ export function TaskOutcomeBriefCard({
         </button>
       </div>
     );
-  if (editing)
+  }
+  if (editing) {
     return (
       <TaskReviewCard
         taskRunId={run.id}
@@ -141,10 +270,11 @@ export function TaskOutcomeBriefCard({
         onOpenChange={() => setEditing(false)}
         onReviewed={() => {
           setEditing(false);
-          void load();
+          onReviewed();
         }}
       />
     );
+  }
   const verdict = evaluation?.verdict ?? "unsure";
   const family = evaluation?.proposed_task_family ?? run.proposed_task_family ?? "—";
   const confidence =
@@ -157,7 +287,7 @@ export function TaskOutcomeBriefCard({
       source_evaluation_id: action === "accept" ? evaluation?.id : undefined,
       verdict: action === "decline" ? "skipped" : undefined,
     });
-    await load();
+    onReviewed();
   };
   const postponeCard = () => {
     // Mark locally only — no review POST is issued, and the task
@@ -173,7 +303,7 @@ export function TaskOutcomeBriefCard({
     }
     setPostponed(false);
   };
-  if (postponed)
+  if (postponed) {
     return (
       <div
         className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
@@ -186,6 +316,7 @@ export function TaskOutcomeBriefCard({
         </button>
       </div>
     );
+  }
   return (
     <div
       className="mt-2 rounded-md border bg-card px-3 py-2 text-xs shadow-sm"
@@ -210,8 +341,12 @@ export function TaskOutcomeBriefCard({
       </div>
       <div className="mt-2 flex gap-2">
         <button
-          className="rounded bg-primary px-2 py-1 text-primary-foreground"
+          className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50"
           onClick={() => void act("accept")}
+          disabled={!hasEvaluation}
+          title={
+            hasEvaluation ? undefined : "Accept requires an automated evaluation to be present."
+          }
         >
           <CheckIcon className="mr-1 inline size-3" />
           Accept
