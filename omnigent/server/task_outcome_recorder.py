@@ -157,6 +157,17 @@ def consume_routing_snapshot(session_id: str) -> RoutingSnapshot | None:
         return _routing_snapshots.pop(session_id, None)
 
 
+def discard_routing_snapshot(session_id: str) -> None:
+    """Drop any staged approval metadata for *session_id*.
+
+    A user can approve a proposal and then switch the session back to
+    manual routing before the runner starts. Do not let that old proposal
+    annotate the next direct task.
+    """
+    with _routing_snapshots_lock:
+        _routing_snapshots.pop(session_id, None)
+
+
 def peek_routing_snapshot(session_id: str) -> RoutingSnapshot | None:
     """Return the staged snapshot for *session_id* without clearing."""
     with _routing_snapshots_lock:
@@ -629,6 +640,7 @@ __all__ = [
     "RoutingSnapshot",
     "TaskOutcomeRecorder",
     "consume_routing_snapshot",
+    "discard_routing_snapshot",
     "get_recorder",
     "peek_routing_snapshot",
     "set_recorder",

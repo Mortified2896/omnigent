@@ -325,7 +325,7 @@ def test_unreviewed_task_outcomes_excludes_running_runs(
     store_and_app: tuple[TaskOutcomeStore, TestClient],
 ) -> None:
     """A still-running task is not reviewable."""
-    store, client = store_and_app
+    _store, client = store_and_app
     # Seed a still-running run via raw SQL (the store's create_run
     # defaults to "running" already; the route filter checks status).
     run_id = f"tr_{secrets.token_hex(16)}"

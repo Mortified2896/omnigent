@@ -9288,6 +9288,12 @@ async def _dispatch_session_event_to_runner(
     try:
         routed_conv = await _await_route_approval(session_id, conv, body, conversation_store)
     except _RoutingAgentError as exc:
+        # An approval failure never owns a future execution. Clear any
+        # metadata left by an earlier approval so a later direct turn
+        # cannot inherit it.
+        from omnigent.server.task_outcome_recorder import discard_routing_snapshot
+
+        discard_routing_snapshot(session_id)
         if body.type != "message":
             raise
         detail = _model_routing_agent_error_message(exc)
@@ -9302,8 +9308,18 @@ async def _dispatch_session_event_to_runner(
         )
         return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
     if routed_conv is None:
+        from omnigent.server.task_outcome_recorder import discard_routing_snapshot
+
+        discard_routing_snapshot(session_id)
         return _SessionEventDispatchResult(item_id=None, pending_id=None)
     conv = routed_conv
+    if not _routing_approval_is_enabled(conv):
+        # Manual mode is a real execution bypass, not merely hidden UI.
+        # In particular, an approval accepted on an earlier turn must not
+        # become telemetry for this direct turn.
+        from omnigent.server.task_outcome_recorder import discard_routing_snapshot
+
+        discard_routing_snapshot(session_id)
     if body.type == "message" and _is_native_terminal_session(conv):
         # Validate before touching the runner. The ensure probe is only
         # for syntactically valid user messages; assistant/system-shaped
@@ -15872,6 +15888,13 @@ def create_sessions_router(
                 "Session not found",
                 code=ErrorCode.NOT_FOUND,
             )
+        if body.route_approval_enabled is False:
+            # Disabling the session bypasses the Model Routing Agent. Any
+            # proposal approved before the toggle changed belongs to no
+            # subsequent direct task.
+            from omnigent.server.task_outcome_recorder import discard_routing_snapshot
+
+            discard_routing_snapshot(session_id)
         # Archiving hides the session from the default view (and its unread
         # dot), so drop its per-user read-state to bound in-memory growth.
         # Only on archive→true; unarchiving leaves it pruned (reads as seen).

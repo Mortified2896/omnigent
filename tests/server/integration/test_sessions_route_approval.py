@@ -239,6 +239,46 @@ def test_routing_off_short_circuits_in_dispatcher(monkeypatch):
     assert dispatched == []  # not invoked at all
 
 
+@pytest.mark.asyncio
+async def test_routing_off_dispatches_complete_prompt_without_router(monkeypatch):
+    """Manual mode bypasses the Model Routing Agent and forwards the body."""
+    conv = _conv(route_approval_enabled=False, harness_override="opencode-native")
+    prompt = "Return only ROUTING_DISABLED_OK. " + ("context " * 1000)
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
+            },
+        }
+    )
+    agent = _FakeRoutingAgent(_proposal())
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    monkeypatch.setattr(routes_sessions, "_is_native_terminal_session", lambda _conv: False)
+    captured: dict[str, Any] = {}
+
+    async def _forward(*args, **kwargs):
+        captured["body"] = args[2]
+        return "item_direct"
+
+    monkeypatch.setattr(routes_sessions, "_forward_event_to_runner", _forward)
+    result = await routes_sessions._dispatch_session_event_to_runner(
+        "conv_test",
+        conv,
+        body,
+        None,  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]
+        agent_name="OpenCode Native",
+        file_store=None,
+        artifact_store=None,
+    )
+
+    assert result.item_id == "item_direct"
+    assert captured["body"].data["content"][0]["text"] == prompt
+    assert agent.calls == 0
+
+
 def test_routing_on_calls_router(monkeypatch):
     """When route_approval_enabled is True and the gate env var is on, the
     helper invokes the RoutingAgent and publishes an elicitation for approval.

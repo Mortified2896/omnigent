@@ -137,13 +137,13 @@ def test_evaluator_provenance_accepts_subscription_and_true_fallback():
 
 
 @pytest.mark.parametrize("billing", ["api_billed", "unknown"])
-def test_evaluator_provenance_rejects_forbidden_or_unknown_billing(billing):
-    with pytest.raises(EvaluatorProvenanceError):
-        extract_evaluator_provenance(
-            requested_model="auto/smart",
-            payload={},
-            headers=_provenance_headers(**{"x-omniroute-billing-class": billing}),
-        )
+def test_evaluator_provenance_preserves_nonstandard_billing_without_blocking(billing):
+    provenance = extract_evaluator_provenance(
+        requested_model="auto/smart",
+        payload={},
+        headers=_provenance_headers(**{"x-omniroute-billing-class": billing}),
+    )
+    assert provenance["evaluator_billing_class"] == billing
 
 
 def test_evaluator_provenance_rejects_missing_billing():
@@ -178,8 +178,8 @@ def test_evaluator_provenance_uses_same_rules_for_stream_metadata_payload():
             }
         }
     }
-    with pytest.raises(EvaluatorProvenanceError):
-        extract_evaluator_provenance(requested_model="auto/smart", payload=stream_payload)
+    provenance = extract_evaluator_provenance(requested_model="auto/smart", payload=stream_payload)
+    assert provenance["evaluator_billing_class"] == "api_billed"
 
 
 class StubAgent(RoutingAgent):
@@ -901,13 +901,19 @@ def test_evaluator_provenance_with_api_in_provider_id_remains_intact():
     assert provenance["evaluator_decision_id"] == "api-backed-decision"
 
 
-def test_api_billed_is_still_rejected_by_validator():
-    """The existing ``api_billed`` billing class is preserved verbatim:
-    a proposal that explicitly opts into it must still be rejected for
-    routes that do not allow it.
+def test_api_billed_execution_policy_remains_separate_from_evaluator_provenance():
+    """Execution route policy may reject metered execution, while evaluator
+    provenance carrying ``api_billed`` remains non-blocking telemetry.
     """
     with pytest.raises(RoutingAgentError):
         validate_route_proposal(proposal(allowed_billing_classes=["api_billed"]))
+
+    provenance = extract_evaluator_provenance(
+        requested_model="auto/smart",
+        payload={},
+        headers=_provenance_headers(**{"x-omniroute-billing-class": "api_billed"}),
+    )
+    assert provenance["evaluator_billing_class"] == "api_billed"
 
 
 def test_existing_free_and_mixed_routes_remain_eligible():
@@ -1014,8 +1020,9 @@ def test_long_user_message_is_bounded_with_omission_marker():
     # Marker must be present and contain both numbers.
     assert "omitted from routing-only representation" in bounded
     assert f"original user message has {len(long_prompt)} chars" in bounded
-    # Output stays close to the budget.
-    assert len(bounded) <= 4500
+    # The configured routing budget is a hard bound, including the
+    # omission marker.
+    assert len(bounded) <= 4000
     # The head of the original survives intact.
     assert bounded.startswith(long_prompt[:50])
     # The tail of the original survives (subtract any trailing whitespace

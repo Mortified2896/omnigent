@@ -20,6 +20,7 @@ from omnigent.server.task_outcome_recorder import (
     RoutingSnapshot,
     TaskOutcomeRecorder,
     consume_routing_snapshot,
+    discard_routing_snapshot,
     get_recorder,
     peek_routing_snapshot,
     set_recorder,
@@ -81,6 +82,13 @@ def test_stage_then_consume_clears_snapshot() -> None:
 def test_consume_returns_none_when_unset() -> None:
     """Consuming an un-staged session returns ``None``."""
     assert consume_routing_snapshot("nonexistent-session") is None
+
+
+def test_discard_routing_snapshot_prevents_manual_turn_inheritance() -> None:
+    """Turning routing off must invalidate an accepted proposal."""
+    stage_routing_snapshot("c1", RoutingSnapshot(requested_route_id="auto/coding"))
+    discard_routing_snapshot("c1")
+    assert consume_routing_snapshot("c1") is None
 
 
 def test_stage_overwrites_existing() -> None:
@@ -157,7 +165,6 @@ def test_recorder_handles_in_progress_failure_gracefully(
     store: TaskOutcomeStore,
 ) -> None:
     """A store-side failure in ``on_response_in_progress`` is logged, not raised."""
-    recorder = TaskOutcomeRecorder(store=store)
     broken_store = MagicMock()
     broken_store.create_run = MagicMock(side_effect=RuntimeError("db gone"))
     broken_recorder = TaskOutcomeRecorder(store=broken_store)
