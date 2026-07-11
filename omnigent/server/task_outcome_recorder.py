@@ -544,7 +544,19 @@ class TaskOutcomeRecorder:
                         else (
                             "human_family"
                             if score.name == "task_family_human"
-                            else "llm_evaluation_accuracy"
+                            else (
+                                "human_route_fit"
+                                if score.name == "route_fit_human"
+                                else (
+                                    "human_failure_attribution"
+                                    if score.name == "failure_attribution_human"
+                                    else (
+                                        "human_learning_eligibility"
+                                        if score.name == "learning_eligible"
+                                        else "llm_evaluation_accuracy"
+                                    )
+                                )
+                            )
                         )
                     )
                 )

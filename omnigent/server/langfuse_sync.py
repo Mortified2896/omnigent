@@ -105,6 +105,9 @@ SCORE_NAME_TASK_FAMILY_LLM = "task_family_llm"
 SCORE_NAME_TASK_VERDICT_HUMAN = "task_verdict_human"
 SCORE_NAME_TASK_QUALITY_HUMAN = "task_quality_human"
 SCORE_NAME_TASK_FAMILY_HUMAN = "task_family_human"
+SCORE_NAME_ROUTE_FIT_HUMAN = "route_fit_human"
+SCORE_NAME_FAILURE_ATTRIBUTION_HUMAN = "failure_attribution_human"
+SCORE_NAME_LEARNING_ELIGIBLE = "learning_eligible"
 SCORE_NAME_LLM_EVALUATION_ACCURACY = "llm_evaluation_accuracy"
 
 
@@ -336,6 +339,35 @@ def build_score_payloads(
                     **common,
                 )
             )
+        if review.route_fit:
+            payloads.append(
+                LangfuseScorePayload(
+                    id=langfuse_idempotency_key(task_run.id, "route-fit"),
+                    name=SCORE_NAME_ROUTE_FIT_HUMAN,
+                    value=review.route_fit,
+                    data_type="CATEGORICAL",
+                    **common,
+                )
+            )
+        if review.failure_attribution:
+            payloads.append(
+                LangfuseScorePayload(
+                    id=langfuse_idempotency_key(task_run.id, "failure-attribution"),
+                    name=SCORE_NAME_FAILURE_ATTRIBUTION_HUMAN,
+                    value=review.failure_attribution,
+                    data_type="CATEGORICAL",
+                    **common,
+                )
+            )
+        payloads.append(
+            LangfuseScorePayload(
+                id=langfuse_idempotency_key(task_run.id, "learning-eligible"),
+                name=SCORE_NAME_LEARNING_ELIGIBLE,
+                value=1 if review.learning_eligible else 0,
+                data_type="NUMERIC",
+                **common,
+            )
+        )
         if review.evaluator_accuracy:
             payloads.append(
                 LangfuseScorePayload(

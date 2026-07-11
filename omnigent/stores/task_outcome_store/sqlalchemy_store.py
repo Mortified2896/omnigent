@@ -158,6 +158,14 @@ def _review_row_to_entity(row: SqlTaskReview) -> TaskReview:
         evaluator_accuracy=row.evaluator_accuracy,
         comments=row.comments,
         created_by=row.created_by,
+        review_action=row.review_action,
+        learning_eligible=row.learning_eligible,
+        route_fit=row.route_fit,
+        failure_attribution=row.failure_attribution,
+        preferred_route_id=row.preferred_route_id,
+        preferred_reasoning_effort=row.preferred_reasoning_effort,
+        source_evaluation_id=row.source_evaluation_id,
+        review_schema_version=row.review_schema_version,
     )
 
 
@@ -243,6 +251,21 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         """Return a single ``task_runs`` row by id. See base class."""
         with self._session() as session:
             row = session.get(SqlTaskRun, (current_workspace_id(), task_run_id))
+            return _run_row_to_entity(row) if row is not None else None
+
+    def get_run_for_response(self, response_id: str, conversation_id: str) -> TaskRun | None:
+        stmt = (
+            select(SqlTaskRun)
+            .where(
+                SqlTaskRun.workspace_id == current_workspace_id(),
+                SqlTaskRun.response_id == response_id,
+                SqlTaskRun.conversation_id == conversation_id,
+            )
+            .order_by(SqlTaskRun.updated_at.desc())
+            .limit(1)
+        )
+        with self._session() as session:
+            row = session.execute(stmt).scalars().first()
             return _run_row_to_entity(row) if row is not None else None
 
     def get_run_for_conversation(self, task_run_id: str, conversation_id: str) -> TaskRun | None:
@@ -425,6 +448,14 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 existing.final_task_family = data.final_task_family
                 existing.evaluator_accuracy = data.evaluator_accuracy
                 existing.comments = data.comments
+                existing.review_action = data.review_action
+                existing.learning_eligible = data.learning_eligible
+                existing.route_fit = data.route_fit
+                existing.failure_attribution = data.failure_attribution
+                existing.preferred_route_id = data.preferred_route_id
+                existing.preferred_reasoning_effort = data.preferred_reasoning_effort
+                existing.source_evaluation_id = data.source_evaluation_id
+                existing.review_schema_version = data.review_schema_version
                 existing.updated_at = now
                 session.flush()
                 return _review_row_to_entity(existing)
@@ -437,6 +468,14 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 evaluator_accuracy=data.evaluator_accuracy,
                 comments=data.comments,
                 created_by=data.created_by,
+                review_action=data.review_action,
+                learning_eligible=data.learning_eligible,
+                route_fit=data.route_fit,
+                failure_attribution=data.failure_attribution,
+                preferred_route_id=data.preferred_route_id,
+                preferred_reasoning_effort=data.preferred_reasoning_effort,
+                source_evaluation_id=data.source_evaluation_id,
+                review_schema_version=data.review_schema_version,
                 created_at=now,
                 updated_at=now,
             )
@@ -458,6 +497,27 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         with self._session() as session:
             row = session.execute(stmt).scalars().first()
             return _review_row_to_entity(row) if row is not None else None
+
+    def list_learning_reviews(self, limit: int = 100) -> list[TaskReview]:
+        stmt = (
+            select(SqlTaskReview)
+            .join(
+                SqlTaskRun,
+                (SqlTaskRun.workspace_id == SqlTaskReview.workspace_id)
+                & (SqlTaskRun.id == SqlTaskReview.task_run_id),
+            )
+            .where(
+                SqlTaskReview.workspace_id == current_workspace_id(),
+                SqlTaskReview.review_action.in_(("accepted", "adjusted")),
+                SqlTaskReview.learning_eligible.is_(True),
+                SqlTaskReview.verdict.in_(("success", "partial", "failure", "unsure")),
+                (SqlTaskRun.response_id.is_not(None) | SqlTaskRun.harness_id.is_not(None)),
+            )
+            .order_by(SqlTaskReview.updated_at.desc())
+            .limit(limit)
+        )
+        with self._session() as session:
+            return [_review_row_to_entity(row) for row in session.execute(stmt).scalars().all()]
 
     def get_any_review_for_run(self, task_run_id: str) -> TaskReview | None:
         """Return any review row for *task_run_id*. See base class."""

@@ -190,6 +190,14 @@ class UpsertTaskReviewInput:
     final_task_family: str | None = None
     evaluator_accuracy: str | None = None
     comments: str | None = None
+    review_action: str = "accepted"
+    learning_eligible: bool = True
+    route_fit: str | None = None
+    failure_attribution: str | None = None
+    preferred_route_id: str | None = None
+    preferred_reasoning_effort: str | None = None
+    source_evaluation_id: str | None = None
+    review_schema_version: int = 1
 
 
 @dataclasses.dataclass(frozen=True)
@@ -243,6 +251,10 @@ class TaskOutcomeStore(ABC):
     @abstractmethod
     def get_run(self, task_run_id: str) -> TaskRun | None:
         """Return a single :class:`TaskRun` row by id, or ``None``."""
+
+    @abstractmethod
+    def get_run_for_response(self, response_id: str, conversation_id: str) -> TaskRun | None:
+        """Return the task run for an exact terminal response in a session."""
 
     @abstractmethod
     def get_run_for_conversation(self, task_run_id: str, conversation_id: str) -> TaskRun | None:
@@ -350,6 +362,10 @@ class TaskOutcomeStore(ABC):
         created_by: str | None,
     ) -> TaskReview | None:
         """Return the reviewer's review row for *task_run_id*, or ``None``."""
+
+    @abstractmethod
+    def list_learning_reviews(self, limit: int = 100) -> list[TaskReview]:
+        """Return only approved reviews with usable task provenance."""
 
     @abstractmethod
     def get_any_review_for_run(self, task_run_id: str) -> TaskReview | None:

@@ -48,7 +48,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from omnigent.entities import (
     EVALUATOR_ACCURACY_VALUES,
+    FAILURE_ATTRIBUTION_VALUES,
+    REASONING_EFFORT_VALUES,
+    REVIEW_ACTIONS,
     REVIEW_VERDICTS,
+    ROUTE_FIT_VALUES,
     TASK_FAMILIES,
     TaskRun,
 )
@@ -153,6 +157,14 @@ def _serialise_review(review: Any | None) -> dict[str, Any] | None:
         "evaluator_accuracy": review.evaluator_accuracy,
         "comments": review.comments,
         "created_by": review.created_by,
+        "review_action": review.review_action,
+        "learning_eligible": review.learning_eligible,
+        "route_fit": review.route_fit,
+        "failure_attribution": review.failure_attribution,
+        "preferred_route_id": review.preferred_route_id,
+        "preferred_reasoning_effort": review.preferred_reasoning_effort,
+        "source_evaluation_id": review.source_evaluation_id,
+        "review_schema_version": review.review_schema_version,
         "created_at": review.created_at,
         "updated_at": review.updated_at,
     }
@@ -222,11 +234,17 @@ class UpsertReviewRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    verdict: str
+    action: str | None = None
+    source_evaluation_id: str | None = Field(default=None, max_length=64)
+    verdict: str | None = None
     quality_score: int | None = Field(default=None, ge=1, le=5)
+    route_fit: str | None = None
+    failure_attribution: str | None = None
+    preferred_route_id: str | None = Field(default=None, max_length=64)
+    preferred_reasoning_effort: str | None = None
     final_task_family: str | None = None
     evaluator_accuracy: str | None = None
-    comments: str | None = None
+    comments: str | None = Field(default=None, max_length=4000)
 
 
 # ── Router factory ───────────────────────────────────────────────────────
@@ -323,6 +341,46 @@ def create_task_outcomes_router(
             "runs": [_run_to_summary_dict(r) for r in runs],
         }
 
+    # ── GET /task-runs/by-response/{response_id} ───────────────────
+
+    @router.get("/sessions/{session_id}/task-runs/by-response/{response_id}")
+    async def get_task_run_for_response(
+        request: Request, session_id: str, response_id: str
+    ) -> dict[str, Any]:
+        user_id = get_user_id(request, auth_provider)
+        await require_access(user_id, session_id, LEVEL_READ, permission_store, conversation_store)
+        run = await _call_store(
+            store.get_run_for_response, response_id=response_id, conversation_id=session_id
+        )
+        if run is None:
+            # Older relay events used the harness response id while the
+            # transcript exposes its assistant-item response id. Only use a
+            # fallback when the session has exactly one terminal run; this
+            # prevents attaching a run to the wrong response in multi-task sessions.
+            candidates = await _call_store(
+                store.list_runs_for_conversation, conversation_id=session_id, limit=2
+            )
+            terminal = [
+                candidate for candidate in candidates if candidate.terminal_status != "running"
+            ]
+            if len(terminal) != 1:
+                raise OmnigentError("Task run not found", code=ErrorCode.NOT_FOUND)
+            run = terminal[0]
+        detail = await _call_store(store.get_run_detail, task_run_id=run.id)
+        return {
+            "run": _serialise_run(detail.run),
+            "evaluation": _serialise_evaluation(detail.evaluation),
+            "review": _serialise_review(
+                await _call_store(
+                    store.get_review_for_run,
+                    task_run_id=run.id,
+                    created_by=attribution_user(user_id),
+                )
+            ),
+            "any_review": _serialise_review(detail.review),
+            "langfuse_pending": detail.langfuse_pending,
+        }
+
     # ── GET /task-runs/{id} ─────────────────────────────────────────
 
     @router.get("/task-runs/{task_run_id}")
@@ -397,17 +455,63 @@ def create_task_outcomes_router(
             permission_store,
             conversation_store,
         )
-        if body.verdict not in REVIEW_VERDICTS:
+        legacy_submission = body.action is None and body.source_evaluation_id is None
+        action = {"accept": "accepted", "adjust": "adjusted", "decline": "declined"}.get(
+            body.action or "",
+            body.action or ("declined" if body.verdict == "skipped" else "accepted"),
+        )
+        if action not in REVIEW_ACTIONS:
             raise OmnigentError(
-                f"verdict must be one of {list(REVIEW_VERDICTS)!r}, got {body.verdict!r}",
+                f"action must be one of {list(REVIEW_ACTIONS)!r}", code=ErrorCode.INVALID_INPUT
+            )
+        if action == "declined":
+            verdict = "skipped"
+        else:
+            verdict = body.verdict
+        if (action != "accepted" or legacy_submission) and (
+            verdict not in REVIEW_VERDICTS or (action != "declined" and verdict == "skipped")
+        ):
+            raise OmnigentError(
+                f"verdict must be one of {list(REVIEW_VERDICTS)!r}, got {verdict!r}",
                 code=ErrorCode.INVALID_INPUT,
             )
+        evaluation = await _call_store(store.get_evaluation_for_run, task_run_id=task_run_id)
+        if body.source_evaluation_id is not None and (
+            evaluation is None or body.source_evaluation_id != evaluation.id
+        ):
+            raise HTTPException(status_code=409, detail="source evaluation is stale")
+        if action == "accepted" and evaluation is not None and not legacy_submission:
+            # Accept is deliberately resolved from the immutable evaluation.
+            verdict = evaluation.verdict if evaluation.verdict != "inconclusive" else "unsure"
+            quality_score = evaluation.quality_score
+            final_task_family = evaluation.proposed_task_family
+        elif action == "accepted" and not legacy_submission:
+            raise OmnigentError(
+                "an evaluation is required to accept", code=ErrorCode.INVALID_INPUT
+            )
+        else:
+            quality_score = None if action == "declined" else body.quality_score
+            final_task_family = None if action == "declined" else body.final_task_family
         if body.final_task_family is not None and body.final_task_family not in TASK_FAMILIES:
             raise OmnigentError(
                 f"final_task_family must be one of {list(TASK_FAMILIES)!r}, "
                 f"got {body.final_task_family!r}",
                 code=ErrorCode.INVALID_INPUT,
             )
+        if body.route_fit is not None and body.route_fit not in ROUTE_FIT_VALUES:
+            raise OmnigentError("invalid route_fit", code=ErrorCode.INVALID_INPUT)
+        if (
+            body.failure_attribution is not None
+            and body.failure_attribution not in FAILURE_ATTRIBUTION_VALUES
+        ):
+            raise OmnigentError("invalid failure_attribution", code=ErrorCode.INVALID_INPUT)
+        if (
+            body.preferred_reasoning_effort is not None
+            and body.preferred_reasoning_effort not in REASONING_EFFORT_VALUES
+        ):
+            raise OmnigentError("invalid preferred_reasoning_effort", code=ErrorCode.INVALID_INPUT)
+        if body.preferred_route_id is not None and len(body.preferred_route_id) > 64:
+            raise OmnigentError("preferred_route_id is too long", code=ErrorCode.INVALID_INPUT)
         if (
             body.evaluator_accuracy is not None
             and body.evaluator_accuracy not in EVALUATOR_ACCURACY_VALUES
@@ -423,12 +527,22 @@ def create_task_outcomes_router(
             store.upsert_review,
             data=UpsertTaskReviewInput(
                 task_run_id=task_run_id,
-                verdict=body.verdict,
+                verdict=verdict,
                 created_by=attribution_user(user_id),
-                quality_score=body.quality_score,
-                final_task_family=body.final_task_family,
-                evaluator_accuracy=body.evaluator_accuracy,
+                quality_score=quality_score,
+                final_task_family=final_task_family,
+                evaluator_accuracy=None if action == "declined" else body.evaluator_accuracy,
                 comments=body.comments,
+                review_action=action,
+                learning_eligible=action in ("accepted", "adjusted"),
+                route_fit=None if action == "declined" else body.route_fit,
+                failure_attribution=None if action == "declined" else body.failure_attribution,
+                preferred_route_id=None if action == "declined" else body.preferred_route_id,
+                preferred_reasoning_effort=None
+                if action == "declined"
+                else body.preferred_reasoning_effort,
+                source_evaluation_id=body.source_evaluation_id
+                or (evaluation.id if action == "accepted" and evaluation else None),
             ),
         )
         recorder = get_recorder()

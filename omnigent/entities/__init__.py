@@ -36,8 +36,12 @@ from omnigent.entities.session_resources import (
 )
 from omnigent.entities.task_outcome import (
     EVALUATOR_ACCURACY_VALUES,
+    FAILURE_ATTRIBUTION_VALUES,
     OUTBOX_STATUSES,
+    REASONING_EFFORT_VALUES,
+    REVIEW_ACTIONS,
     REVIEW_VERDICTS,
+    ROUTE_FIT_VALUES,
     TASK_FAMILIES,
     TASK_RUN_STATUSES,
     TASK_VERDICTS,
@@ -52,9 +56,13 @@ from omnigent.entities.task_outcome import (
 __all__ = [
     "DEFAULT_ENVIRONMENT_ID",
     "EVALUATOR_ACCURACY_VALUES",
+    "FAILURE_ATTRIBUTION_VALUES",
     "NON_CONTENT_ITEM_TYPES",
     "OUTBOX_STATUSES",
+    "REASONING_EFFORT_VALUES",
+    "REVIEW_ACTIONS",
     "REVIEW_VERDICTS",
+    "ROUTE_FIT_VALUES",
     "TASK_FAMILIES",
     "TASK_RUN_STATUSES",
     "TASK_VERDICTS",

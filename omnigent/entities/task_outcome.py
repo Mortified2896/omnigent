@@ -60,6 +60,34 @@ REVIEW_VERDICTS: tuple[str, ...] = (
     "unsure",
     "skipped",
 )
+ROUTE_FIT_VALUES: tuple[str, ...] = (
+    "appropriate",
+    "too_weak",
+    "overkill",
+    "wrong_capability",
+    "unsure",
+)
+FAILURE_ATTRIBUTION_VALUES: tuple[str, ...] = (
+    "router",
+    "model",
+    "harness",
+    "environment",
+    "permissions",
+    "task_definition",
+    "external_service",
+    "unknown",
+)
+REVIEW_ACTIONS: tuple[str, ...] = ("accepted", "adjusted", "declined")
+REASONING_EFFORT_VALUES: tuple[str, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+)
+
 EVALUATOR_ACCURACY_VALUES: tuple[str, ...] = (
     "correct",
     "partly_correct",
@@ -261,6 +289,14 @@ class TaskReview:
     evaluator_accuracy: str | None = None
     comments: str | None = None
     created_by: str | None = None
+    review_action: str | None = None
+    learning_eligible: bool = False
+    route_fit: str | None = None
+    failure_attribution: str | None = None
+    preferred_route_id: str | None = None
+    preferred_reasoning_effort: str | None = None
+    source_evaluation_id: str | None = None
+    review_schema_version: int = 1
 
 
 @dataclasses.dataclass

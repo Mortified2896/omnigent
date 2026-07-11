@@ -100,6 +100,14 @@ export interface TaskReview {
   evaluator_accuracy: "correct" | "partly_correct" | "incorrect" | "unsure" | null;
   comments: string | null;
   created_by: string | null;
+  review_action: "accepted" | "adjusted" | "declined" | null;
+  learning_eligible: boolean;
+  route_fit: "appropriate" | "too_weak" | "overkill" | "wrong_capability" | "unsure" | null;
+  failure_attribution: string | null;
+  preferred_route_id: string | null;
+  preferred_reasoning_effort: string | null;
+  source_evaluation_id: string | null;
+  review_schema_version: number;
   created_at: number;
   updated_at: number;
 }
@@ -151,7 +159,13 @@ export const EVALUATOR_ACCURACY_VALUES: readonly NonNullable<TaskReview["evaluat
 
 /** Body of `POST /v1/task-runs/{id}/review`. */
 export interface UpsertReviewRequest {
-  verdict: TaskReview["verdict"];
+  action?: "accept" | "adjust" | "decline";
+  source_evaluation_id?: string | null;
+  verdict?: TaskReview["verdict"];
+  route_fit?: TaskReview["route_fit"];
+  failure_attribution?: string | null;
+  preferred_route_id?: string | null;
+  preferred_reasoning_effort?: string | null;
   quality_score?: number | null;
   final_task_family?: string | null;
   evaluator_accuracy?: TaskReview["evaluator_accuracy"];
@@ -192,6 +206,16 @@ export async function listUnreviewedTaskOutcomes(
   if (!resp.ok) {
     throw new Error(`listUnreviewedTaskOutcomes failed: ${resp.status}`);
   }
+  return resp.json();
+}
+
+export async function getTaskRunForResponse(
+  sessionId: string,
+  responseId: string,
+): Promise<TaskRunDetailResponse> {
+  const url = `/v1/sessions/${encodeURIComponent(sessionId)}/task-runs/by-response/${encodeURIComponent(responseId)}`;
+  const resp = await authenticatedFetch(url, { credentials: "same-origin" });
+  if (!resp.ok) throw new Error(`getTaskRunForResponse failed: ${resp.status}`);
   return resp.json();
 }
 

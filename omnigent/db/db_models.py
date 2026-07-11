@@ -1386,6 +1386,16 @@ class SqlTaskReview(Base):
     evaluator_accuracy: Mapped[str | None] = mapped_column(String(32), nullable=True)
     comments: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    learning_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    route_fit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    failure_attribution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    preferred_route_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    preferred_reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source_evaluation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_schema_version: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="1"
+    )
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
@@ -1393,6 +1403,25 @@ class SqlTaskReview(Base):
         CheckConstraint(
             "verdict IN ('success','partial','failure','unsure','skipped')",
             name="ck_task_reviews_verdict",
+        ),
+        CheckConstraint(
+            "review_action IS NULL OR review_action IN ('accepted','adjusted','declined')",
+            name="ck_task_reviews_action",
+        ),
+        CheckConstraint(
+            "learning_eligible = 0 OR review_action IN ('accepted','adjusted')",
+            name="ck_task_reviews_learning",
+        ),
+        CheckConstraint(
+            "route_fit IS NULL OR route_fit IN "
+            "('appropriate','too_weak','overkill','wrong_capability','unsure')",
+            name="ck_task_reviews_route_fit",
+        ),
+        CheckConstraint(
+            "failure_attribution IS NULL OR failure_attribution IN "
+            "('router','model','harness','environment','permissions','task_definition',"
+            "'external_service','unknown')",
+            name="ck_task_reviews_failure_attribution",
         ),
         CheckConstraint(
             "evaluator_accuracy IS NULL OR evaluator_accuracy IN "

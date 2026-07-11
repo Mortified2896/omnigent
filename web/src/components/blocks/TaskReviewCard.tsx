@@ -125,6 +125,10 @@ export function TaskReviewCard({
   const [qualityScore, setQualityScore] = useState<number | "">("");
   const [finalFamily, setFinalFamily] = useState<string>("");
   const [evaluatorAccuracy, setEvaluatorAccuracy] = useState<string>("");
+  const [routeFit, setRouteFit] = useState<string>("");
+  const [failureAttribution, setFailureAttribution] = useState<string>("");
+  const [preferredRoute, setPreferredRoute] = useState<string>("");
+  const [preferredEffort, setPreferredEffort] = useState<string>("");
   const [comments, setComments] = useState<string>("");
 
   const run = detail?.run ?? initialRun ?? null;
@@ -145,12 +149,20 @@ export function TaskReviewCard({
         setQualityScore(existing.quality_score ?? "");
         setFinalFamily(existing.final_task_family ?? "");
         setEvaluatorAccuracy(existing.evaluator_accuracy ?? "");
+        setRouteFit(existing.route_fit ?? "");
+        setFailureAttribution(existing.failure_attribution ?? "");
+        setPreferredRoute(existing.preferred_route_id ?? "");
+        setPreferredEffort(existing.preferred_reasoning_effort ?? "");
         setComments(existing.comments ?? "");
       } else {
         setOutcome("");
         setQualityScore("");
         setFinalFamily(next.evaluation?.proposed_task_family ?? "");
         setEvaluatorAccuracy("");
+        setRouteFit("");
+        setFailureAttribution("");
+        setPreferredRoute("");
+        setPreferredEffort("");
         setComments("");
       }
     } catch (err) {
@@ -182,6 +194,8 @@ export function TaskReviewCard({
         const body: UpsertReviewRequest = skipped
           ? { verdict: "skipped" }
           : {
+              action: "adjust",
+              source_evaluation_id: evaluation?.id ?? null,
               verdict: (outcome as TaskReview["verdict"]) || review?.verdict || "unsure",
               quality_score: qualityScore === "" ? null : Number(qualityScore),
               final_task_family: finalFamily === "" ? null : finalFamily,
@@ -189,6 +203,10 @@ export function TaskReviewCard({
                 evaluatorAccuracy === ""
                   ? null
                   : (evaluatorAccuracy as TaskReview["evaluator_accuracy"]),
+              route_fit: routeFit === "" ? null : (routeFit as TaskReview["route_fit"]),
+              failure_attribution: failureAttribution === "" ? null : failureAttribution,
+              preferred_route_id: preferredRoute === "" ? null : preferredRoute,
+              preferred_reasoning_effort: preferredEffort === "" ? null : preferredEffort,
               comments: comments === "" ? null : comments,
             };
         await submitTaskRunReview(taskRunId, body);
@@ -206,6 +224,10 @@ export function TaskReviewCard({
       qualityScore,
       finalFamily,
       evaluatorAccuracy,
+      routeFit,
+      failureAttribution,
+      preferredRoute,
+      preferredEffort,
       comments,
       review?.verdict,
       fetchDetail,
@@ -288,11 +310,19 @@ export function TaskReviewCard({
               setFinalFamily={setFinalFamily}
               evaluatorAccuracy={evaluatorAccuracy}
               setEvaluatorAccuracy={setEvaluatorAccuracy}
+              routeFit={routeFit}
+              setRouteFit={setRouteFit}
+              failureAttribution={failureAttribution}
+              setFailureAttribution={setFailureAttribution}
+              preferredRoute={preferredRoute}
+              setPreferredRoute={setPreferredRoute}
+              preferredEffort={preferredEffort}
+              setPreferredEffort={setPreferredEffort}
               comments={comments}
               setComments={setComments}
               saving={saving}
               onSave={() => submit(false)}
-              onSkip={() => submit(true)}
+              onSkip={() => undefined}
               existingReview={review}
             />
           )}
@@ -464,6 +494,14 @@ function TaskReviewForm({
   setFinalFamily,
   evaluatorAccuracy,
   setEvaluatorAccuracy,
+  routeFit,
+  setRouteFit,
+  failureAttribution,
+  setFailureAttribution,
+  preferredRoute,
+  setPreferredRoute,
+  preferredEffort,
+  setPreferredEffort,
   comments,
   setComments,
   saving,
@@ -479,6 +517,14 @@ function TaskReviewForm({
   setFinalFamily: (v: string) => void;
   evaluatorAccuracy: string;
   setEvaluatorAccuracy: (v: string) => void;
+  routeFit: string;
+  setRouteFit: (v: string) => void;
+  failureAttribution: string;
+  setFailureAttribution: (v: string) => void;
+  preferredRoute: string;
+  setPreferredRoute: (v: string) => void;
+  preferredEffort: string;
+  setPreferredEffort: (v: string) => void;
   comments: string;
   setComments: (v: string) => void;
   saving: boolean;
@@ -554,6 +600,78 @@ function TaskReviewForm({
       </div>
 
       <div>
+        <div className="mb-1 text-xs font-medium text-slate-600">
+          Route fit (separate from task success)
+        </div>
+        <select
+          value={routeFit}
+          onChange={(e) => setRouteFit(e.target.value)}
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+        >
+          <option value="">— not specified —</option>
+          {["appropriate", "too_weak", "overkill", "wrong_capability", "unsure"].map((value) => (
+            <option key={value} value={value}>
+              {value.replace("_", " ")}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <div className="mb-1 text-xs font-medium text-slate-600">
+          Failure attribution (when applicable)
+        </div>
+        <select
+          value={failureAttribution}
+          onChange={(e) => setFailureAttribution(e.target.value)}
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+        >
+          <option value="">— not specified —</option>
+          {[
+            "router",
+            "model",
+            "harness",
+            "environment",
+            "permissions",
+            "task_definition",
+            "external_service",
+            "unknown",
+          ].map((value) => (
+            <option key={value} value={value}>
+              {value.replace("_", " ")}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <div className="mb-1 text-xs font-medium text-slate-600">
+          Preferred correction (optional)
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={preferredRoute}
+            onChange={(e) => setPreferredRoute(e.target.value)}
+            maxLength={64}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+            placeholder="OmniRoute route ID"
+          />
+          <select
+            value={preferredEffort}
+            onChange={(e) => setPreferredEffort(e.target.value)}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+          >
+            <option value="">reasoning effort</option>
+            {["none", "minimal", "low", "medium", "high", "xhigh", "max"].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div>
         <div className="mb-1 text-xs font-medium text-slate-600">Task family (corrected)</div>
         <select
           value={finalFamily}
@@ -588,7 +706,7 @@ function TaskReviewForm({
           className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
           <XIcon className="h-3 w-3" />
-          Skip for now
+          Review later
         </button>
         <button
           type="button"

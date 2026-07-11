@@ -54,6 +54,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
+import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
@@ -3088,6 +3089,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
 }
 
 function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistant" }> }) {
+  const { conversationId: outcomeSessionId } = useParams<{ conversationId: string }>();
   // The walker only emits an assistant bubble when at least one
   // assistant-side block exists, so `items` is non-empty here in the
   // common case. The "Working…" shimmer for the empty-items / streaming
@@ -3128,6 +3130,9 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
             <XIcon className="size-3" aria-hidden="true" />
             <span>Interrupted</span>
           </p>
+        )}
+        {bubble.lifecycle !== "streaming" && outcomeSessionId && (
+          <TaskOutcomeBriefCard sessionId={outcomeSessionId} responseId={bubble.responseId} />
         )}
         {markdownText && (
           <MessageActions className="mt-1 opacity-40 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
