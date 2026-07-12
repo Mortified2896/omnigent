@@ -236,6 +236,52 @@ async def test_bulk_delete_preserves_unrelated_sessions(
     assert conv_store.get_conversation(to_keep.id) is not None
 
 
+async def test_bulk_delete_registered_in_openapi(client: httpx.AsyncClient) -> None:
+    """Regression: the bulk-delete endpoint must be advertised in OpenAPI.
+
+    The frontend fires ``POST /v1/sessions/bulk-delete`` and expects the
+    documented 200-with-{deleted,failed} response. If a new endpoint is
+    added in code but the running service was started before the change,
+    the live UI silently fails (the call returns 405 because the path is
+    absent). The unit tests + ``vite build`` both passed for the original
+    regression because neither exercises a live ASGI app. This test pins
+    the contract: any router serving bulk-delete must expose it under
+    ``/v1/sessions/bulk-delete`` so the deployed runtime matches the code.
+    """
+    openapi = await client.get("/openapi.json")
+    assert openapi.status_code == 200
+    paths = openapi.json()["paths"]
+    assert "/v1/sessions/bulk-delete" in paths, (
+        "POST /v1/sessions/bulk-delete missing from OpenAPI — the running "
+        "service is using stale code (started before the route was added). "
+        "Restart omnigent-eval-web.service."
+    )
+    bulk = paths["/v1/sessions/bulk-delete"]
+    assert "post" in bulk, "bulk-delete endpoint must accept POST"
+    # Must accept a JSON body with an ``ids`` array — that's what the
+    # frontend sends.
+    request_ref = (
+        bulk["post"]
+        .get("requestBody", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+        .get("$ref", "")
+    )
+    assert request_ref.endswith("BulkDeleteRequest"), (
+        f"expected $ref to BulkDeleteRequest, got {request_ref!r}"
+    )
+    # Must return the BulkDeleteResult shape.
+    response_ref = (
+        bulk["post"].get("responses", {}).get("200", {}).get("model", {}).get("$ref", "")
+    )
+    # FastAPI exposes the success schema either via ``model`` or via the
+    # components/schemas reference — both are valid.
+    assert response_ref == "" or response_ref.endswith("BulkDeleteResult"), (
+        f"expected 200 response schema to reference BulkDeleteResult, got {response_ref!r}"
+    )
+
+
 # ── PATCH /v1/sessions/{id} ─────────────────────────────────────────
 
 
