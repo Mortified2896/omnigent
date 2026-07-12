@@ -136,8 +136,9 @@ def test_recorder_creates_run_on_in_progress(
     assert run.task_description == "Fix login"
     assert run.requested_route_id == "auto/coding"
     assert run.selected_model == "databricks/databricks-claude-sonnet-4-6"
-    # `databricks/databricks-...` splits at the leading slash.
-    assert run.selected_provider == "databricks"
+    # An approved combo is requested through OmniRoute even when a harness
+    # happens to report a concrete-looking model label.
+    assert run.selected_provider == "omniroute"
 
 
 def test_recorder_creates_run_when_no_snapshot(

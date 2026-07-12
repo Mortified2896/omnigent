@@ -347,11 +347,25 @@ function TaskReviewCardBody({
           <div className="font-medium text-slate-900">{run.requested_route_id ?? "—"}</div>
         </div>
         <div>
-          <span className="text-slate-500">Selected model</span>
+          <span className="text-slate-500">Execution requested</span>
           <div className="font-medium text-slate-900">
             {run.selected_provider
               ? `${run.selected_provider}/${run.selected_model ?? "?"}`
               : (run.selected_model ?? "—")}
+          </div>
+        </div>
+        <div>
+          <span className="text-slate-500">Executed provider/model</span>
+          <div className="font-medium text-slate-900">
+            {run.actual_provider && run.actual_provider_model
+              ? `${run.actual_provider}/${run.actual_provider_model}`
+              : "Unavailable"}
+          </div>
+        </div>
+        <div>
+          <span className="text-slate-500">Execution provenance</span>
+          <div className="font-medium text-slate-900">
+            {run.actual_provenance_verified ? "Verified" : "Unverified"}
           </div>
         </div>
         <div>

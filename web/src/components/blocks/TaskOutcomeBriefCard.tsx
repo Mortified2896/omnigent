@@ -335,12 +335,16 @@ function renderReadyCard(args: {
         Likely {verdict} · {family} · Quality {evaluation?.quality_score ?? "—"}/5
       </div>
       <div className="mt-1 text-muted-foreground">
-        {run.requested_route_id ?? "Direct/manual"} →{" "}
-        {run.selected_provider && run.selected_model
-          ? `${run.selected_provider}/${run.selected_model}`
-          : "—"}{" "}
-        · Reasoning {run.reasoning_effort ?? "—"} · Fallback:{" "}
-        {run.fallback_used == null ? "—" : run.fallback_used ? "yes" : "no"}
+        Requested combo: {run.requested_route_id ?? "—"} · Requested reasoning:{" "}
+        {run.reasoning_effort ?? "—"}
+      </div>
+      <div className="mt-1 text-muted-foreground">
+        Executed provider/model:{" "}
+        {run.actual_provider && run.actual_provider_model
+          ? `${run.actual_provider}/${run.actual_provider_model}`
+          : "Unavailable"}{" "}
+        · Execution provenance: {run.actual_provenance_verified ? "Verified" : "Unverified"}
+        {" · "}Fallback: {run.fallback_used == null ? "—" : run.fallback_used ? "yes" : "no"}
       </div>
       <div className="mt-1 text-muted-foreground">
         Evidence: ✓ {evidence} · Commit {run.commit_sha?.slice(0, 8) ?? "—"} · Evaluator confidence:{" "}

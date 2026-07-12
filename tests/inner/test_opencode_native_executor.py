@@ -67,6 +67,7 @@ def _seed_state(
     opencode_session_id: str = "ses_1",
     model_override: str | None = None,
     reasoning_effort: str | None = None,
+    route_approved: bool = False,
 ) -> None:
     write_bridge_state(
         bridge_dir,
@@ -77,6 +78,7 @@ def _seed_state(
             auth_secret="pw",
             model_override=model_override,
             reasoning_effort=reasoning_effort,
+            route_approved=route_approved,
         ),
     )
 
@@ -165,6 +167,16 @@ async def test_run_turn_passes_reasoning_effort_variant(
     prompt_reqs = [r for r in fake_server.requests if r[1].endswith("/prompt_async")]
     assert prompt_reqs[0][2]["variant"] == "medium"
     assert prompt_reqs[0][2]["reasoning_effort"] == "medium"
+
+
+async def test_approved_route_without_model_fails_closed(
+    fake_server: _FakeServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_state(tmp_path, route_approved=True, reasoning_effort="high")
+    executor = _executor(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="no valid OmniRoute model pin"):
+        await _run(executor, "hello")
+    assert fake_server.requests == []
 
 
 async def test_run_turn_omits_model_when_no_override(

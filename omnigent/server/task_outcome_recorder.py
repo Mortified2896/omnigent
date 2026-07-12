@@ -273,8 +273,11 @@ class TaskOutcomeRecorder:
                     task_description=user_message_summary,
                     harness_id=harness_id,
                     requested_route_id=(snapshot.requested_route_id if snapshot else None),
-                    selected_provider=(_resolve_selected_provider(model_id, snapshot)),
-                    selected_model=_resolve_selected_model(model_id, snapshot),
+                    # selected_* is the execution request (not the router
+                    # evaluator). Actual provider/model are intentionally
+                    # absent until execution-path metadata is observed.
+                    selected_provider=_requested_execution_provider(model_id, snapshot),
+                    selected_model=_requested_execution_model(model_id, snapshot),
                     reasoning_effort=(snapshot.reasoning_effort if snapshot else None),
                     permission_mode=(snapshot.permission_mode if snapshot else None),
                     omniroute_decision_id=(snapshot.omniroute_decision_id if snapshot else None),
@@ -581,44 +584,44 @@ class TaskOutcomeRecorder:
 # ── Selection resolution helpers ────────────────────────────────────────
 
 
-def _resolve_selected_model(model_id: str | None, snapshot: RoutingSnapshot | None) -> str | None:
+def _requested_execution_model(
+    model_id: str | None, snapshot: RoutingSnapshot | None
+) -> str | None:
     """Pick the model id to stamp onto the :class:`TaskRun` row.
 
-    Order: (1) the concrete ``model`` from the harness response
-    (``response.in_progress.response.model``); (2) the routing
-    snapshot's ``evaluator_model`` when the harness didn't report
-    one (rare — the harness always does for relay executors);
-    (3) ``None`` (the column stays NULL).
+    Order: (1) the model requested from the harness; (2) the approved
+        OmniRoute combo from the routing snapshot; (3) ``None``.  The model
+        that evaluated the route is deliberately never used here.
 
-    :param model_id: Model id from the harness (``None`` when the
-        harness didn't report one).
-    :param snapshot: The staged :class:`RoutingSnapshot` (``None``
-        when route approval was off).
-    :returns: The model id to stamp, or ``None``.
+        :param model_id: Model id from the harness (``None`` when the
+            harness didn't report one).
+        :param snapshot: The staged :class:`RoutingSnapshot` (``None``
+            when route approval was off).
+        :returns: The model id to stamp, or ``None``.
     """
     if isinstance(model_id, str) and model_id.strip():
         return model_id.strip()
-    if snapshot is not None and snapshot.evaluator_model:
-        return snapshot.evaluator_model
+    if snapshot is not None and snapshot.requested_route_id:
+        return snapshot.requested_route_id
     return None
 
 
-def _resolve_selected_provider(
+def _requested_execution_provider(
     model_id: str | None, snapshot: RoutingSnapshot | None
 ) -> str | None:
     """Pick the provider id to stamp onto the :class:`TaskRun` row.
 
-    Order: (1) explicit evaluator provider from the snapshot;
-    (2) provider inferred from ``model_id`` (``provider/model``
-    split); (3) ``None``.
+    Order: (1) OmniRoute for an approved combo; (2) provider inferred from
+        the harness request; (3) ``None``.  Routing-evaluator provenance is
+        intentionally excluded.
 
-    :param model_id: Model id from the harness.
-    :param snapshot: The staged :class:`RoutingSnapshot` (``None``
-        when route approval was off).
-    :returns: The provider id, or ``None``.
+        :param model_id: Model id from the harness.
+        :param snapshot: The staged :class:`RoutingSnapshot` (``None``
+            when route approval was off).
+        :returns: The provider id, or ``None``.
     """
-    if snapshot is not None and snapshot.evaluator_provider:
-        return snapshot.evaluator_provider
+    if snapshot is not None and snapshot.requested_route_id:
+        return "omniroute"
     if isinstance(model_id, str) and "/" in model_id:
         return model_id.split("/", 1)[0]
     return None

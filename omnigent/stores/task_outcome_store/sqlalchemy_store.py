@@ -254,8 +254,10 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             evaluation_status="not_requested",
             execution_started_at=now,
             last_useful_activity_at=now,
-            actual_provider=data.selected_provider,
-            actual_provider_model=data.selected_model,
+            # A routing proposal is not execution evidence.  These fields are
+            # filled only by a future execution-path provenance observation.
+            actual_provider=None,
+            actual_provider_model=None,
             actual_provenance_verified=False,
             started_at=now,
             created_at=now,
