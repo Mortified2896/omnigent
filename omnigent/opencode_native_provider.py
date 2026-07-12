@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
+
 if TYPE_CHECKING:
     from omnigent.spec.types import MCPServerConfig
 
@@ -41,6 +43,119 @@ DATABRICKS_GATEWAY_PROVIDER_NAME = "Databricks AI Gateway"
 _SERVING_ENDPOINTS_PATH = "serving-endpoints"
 # Fallback chat model when neither the spec nor config names one.
 DEFAULT_DATABRICKS_GATEWAY_MODEL = "databricks-claude-sonnet-4-6"
+
+# Route-approved turns must use this local OpenAI-compatible provider rather
+# than OpenCode's built-in ``opencode`` provider, which talks to Zen directly.
+OMNIROUTE_PROVIDER_ID = "omniroute"
+OMNIROUTE_BASE_URL = "http://127.0.0.1:20128/v1"
+OMNIROUTE_BASE_URL_ENV = "OMNIGENT_OMNIROUTE_BASE_URL"
+
+
+def omniroute_base_url() -> str:
+    """Return the configured local OmniRoute OpenAI-compatible endpoint."""
+    return os.environ.get(OMNIROUTE_BASE_URL_ENV, OMNIROUTE_BASE_URL).rstrip("/")
+
+
+async def fetch_omniroute_combo_models(
+    *, base_url: str | None = None, api_key: str | None = None
+) -> dict[str, dict[str, str]]:
+    """Read live combo ids from OmniRoute's OpenAI model catalog.
+
+    A route is valid only when runtime metadata marks it as a combo; no static
+    allow-list is maintained in Omnigent.
+    """
+    endpoint = (base_url or omniroute_base_url()).rstrip("/") + "/models"
+    token = (
+        api_key
+        or os.environ.get("OMNIGENT_OMNIROUTE_API_KEY")
+        or os.environ.get("OMNIROUTE_API_KEY")
+    )
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(endpoint, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise OpenCodeOmniRouteConfigurationError(
+            "Could not read the OmniRoute model catalog; "
+            "route-approved OpenCode execution was not started."
+        ) from exc
+    entries = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(entries, list):
+        raise OpenCodeOmniRouteConfigurationError(
+            "OmniRoute model catalog had an invalid response."
+        )
+    combos: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        model_id = entry.get("id")
+        if isinstance(model_id, str) and model_id and entry.get("owned_by") == "combo":
+            combos[model_id] = {"name": model_id}
+    return combos
+
+
+def omniroute_api_key_from_config(config: Mapping[str, object]) -> str | None:
+    """Extract a local provider key without logging or serializing it elsewhere."""
+    providers = config.get("provider")
+    provider = providers.get(OMNIROUTE_PROVIDER_ID) if isinstance(providers, Mapping) else None
+    options = provider.get("options") if isinstance(provider, Mapping) else None
+    api_key = options.get("apiKey") if isinstance(options, Mapping) else None
+    return api_key if isinstance(api_key, str) and api_key else None
+
+
+def merge_omniroute_combo_catalog(
+    config: dict[str, object], *, combos: Mapping[str, Mapping[str, object]], approved_route: str
+) -> dict[str, object]:
+    """Merge live combos into the local provider without discarding user config."""
+    if approved_route not in combos:
+        raise OpenCodeOmniRouteConfigurationError(
+            f"Approved OmniRoute route {approved_route!r} is not exposed by the runtime catalog."
+        )
+    result = dict(config)
+    providers = dict(result.get("provider") or {})
+    existing = providers.get(OMNIROUTE_PROVIDER_ID)
+    provider = dict(existing) if isinstance(existing, Mapping) else {}
+    options = dict(provider.get("options") or {})
+    options["baseURL"] = omniroute_base_url()
+    provider.setdefault("npm", "@ai-sdk/openai-compatible")
+    provider.setdefault("name", "OmniRoute")
+    provider["options"] = options
+    models = dict(provider.get("models") or {})
+    models.update({key: dict(value) for key, value in combos.items()})
+    provider["models"] = models
+    providers[OMNIROUTE_PROVIDER_ID] = provider
+    result["provider"] = providers
+    result.setdefault("$schema", "https://opencode.ai/config.json")
+    return result
+
+
+class OpenCodeOmniRouteConfigurationError(RuntimeError):
+    """Raised when an approved OmniRoute turn would bypass the local router."""
+
+
+def qualify_omniroute_model(route_id: str) -> str:
+    """Return the OpenCode model reference for an approved OmniRoute route."""
+    return f"{OMNIROUTE_PROVIDER_ID}/{route_id}"
+
+
+def validate_omniroute_provider_config(config: Mapping[str, object]) -> None:
+    """Require the local OmniRoute provider for a route-approved OpenCode turn.
+
+    The error deliberately omits provider credentials and the configured remote
+    URL. A direct upstream here would make OpenCode bypass OmniRoute's routing,
+    provenance, and timeout policy.
+    """
+    providers = config.get("provider")
+    provider = providers.get(OMNIROUTE_PROVIDER_ID) if isinstance(providers, Mapping) else None
+    options = provider.get("options") if isinstance(provider, Mapping) else None
+    base_url = options.get("baseURL") if isinstance(options, Mapping) else None
+    if not isinstance(base_url, str) or base_url.rstrip("/") != omniroute_base_url():
+        raise OpenCodeOmniRouteConfigurationError(
+            "OpenCode route expected OmniRoute at 127.0.0.1:20128, but the effective "
+            "provider configuration points to a direct upstream."
+        )
 
 
 @dataclass(frozen=True)
