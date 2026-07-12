@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatStore } from "@/store/chatStore";
 import { ApprovalCard } from "./ApprovalCard";
@@ -1189,5 +1189,75 @@ describe("ApprovalCard — ExitPlanMode plan review", () => {
     expect(screen.getByTestId("plan-rejection-feedback").textContent).toContain(
       "Too risky, split it up.",
     );
+  });
+});
+
+describe("ApprovalCard — route-proposal responded states", () => {
+  const PROPOSAL = {
+    proposal_source_label: "Router recommendation",
+    recommended_harness: "OpenCode Native",
+    omniroute_route_id: "auto/coding",
+    reasoning_effort: "medium",
+    permission_mode: "default",
+    billing_summary: "Pro: $5 / 1M; Premium: $20 / 1M",
+    omniroute_requires_explicit_approval: true,
+    rationale: ["Suited for non-trivial coding tasks."],
+  };
+
+  const baseProps = {
+    elicitationId: "elicit_route_1",
+    message: "Approve the suggested route?",
+    phase: "policy_routing",
+    policyName: "omnigent_route_approval",
+    contentPreview: "",
+    requestedSchema: {},
+    routeProposal: PROPOSAL,
+  };
+
+  it("renders RouteApprovalCard on accept with collapsed details by default", () => {
+    render(<ApprovalCard {...baseProps} status="responded" response={{ action: "accept" }} />);
+    const card = screen.getByTestId("route-approval-card");
+    expect(card.getAttribute("data-state")).toBe("approved");
+    expect(card.textContent).toContain("Approved");
+    // Toggle is collapsed by default.
+    const toggle = screen.getByTestId("route-approval-details-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe(
+      "route-approval-details-" + baseProps.elicitationId,
+    );
+    // The summary carries the actionable fields (route id, harness, reasoning).
+    const summary = screen.getByTestId("route-approval-summary");
+    expect(summary.textContent).toContain("auto/coding");
+    expect(summary.textContent).toContain("OpenCode Native");
+    expect(summary.textContent).toContain("medium");
+    // Full proposal payload isn't rendered yet.
+    expect(screen.queryByTestId("route-approval-details")).toBeNull();
+  });
+
+  it("expanding the toggle reveals the full RouteProposalCard payload after approval", () => {
+    render(<ApprovalCard {...baseProps} status="responded" response={{ action: "accept" }} />);
+    fireEvent.click(screen.getByTestId("route-approval-details-toggle"));
+    const details = screen.getByTestId("route-approval-details");
+    expect(details).toBeDefined();
+    // Full payload re-rendered under the toggle.
+    expect(within(details).getByTestId("route-proposal-card")).toBeDefined();
+    expect(within(details).getByText(/Suited for non-trivial coding tasks/)).toBeDefined();
+    // Toggle stays in sync.
+    expect(screen.getByTestId("route-approval-details-toggle").getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+  });
+
+  it("decline keeps all route-proposal details available behind the same toggle (no permanent loss)", () => {
+    render(<ApprovalCard {...baseProps} status="responded" response={{ action: "decline" }} />);
+    const card = screen.getByTestId("route-approval-card");
+    expect(card.getAttribute("data-state")).toBe("rejected");
+    expect(card.textContent).toContain("Rejected");
+    // Even on decline, the operator can still inspect the proposal to
+    // understand what was rejected and pick another route.
+    fireEvent.click(screen.getByTestId("route-approval-details-toggle"));
+    expect(
+      within(screen.getByTestId("route-approval-details")).getByTestId("route-proposal-card"),
+    ).toBeDefined();
   });
 });

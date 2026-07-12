@@ -54,6 +54,7 @@ import type { RememberScope } from "@/lib/types";
 import { useChatStore } from "@/store/chatStore";
 import { AskUserQuestionForm, type AskUserQuestionAnswers } from "./AskUserQuestionForm";
 import { ExitPlanModeReview } from "./ExitPlanModeReview";
+import { RouteApprovalCard } from "./RouteApprovalCard";
 import { RouteProposalCard } from "./RouteProposalCard";
 
 /**
@@ -342,6 +343,25 @@ export function ApprovalCard({
   );
 
   if (status === "responded" && response) {
+    // Route-proposal approvals keep the original proposal payload
+    // visible across the lifecycle (collapsed by default with a
+    // "Show details" toggle) so accepting a route recommendation
+    // never destroys the rationale, risk note, evaluator decision
+    // id, etc. Delegated to RouteApprovalCard rather than dropping
+    // back to a flat "Approved" pill — that pill collapsed the route
+    // info away and made follow-up forensics impossible. Falling
+    // through to the generic responded branch when no proposal is
+    // present keeps the prior "Approved" / "Rejected" pill intact
+    // for ordinary elicitations.
+    if (isRouteProposal && routeProposal) {
+      return (
+        <RouteApprovalCard
+          proposal={routeProposal}
+          action={response.action}
+          elicitationId={elicitationId}
+        />
+      );
+    }
     const autoResolved = response.action === "auto_resolved";
     const accepted = response.action === "accept";
 

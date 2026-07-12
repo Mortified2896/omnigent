@@ -3135,6 +3135,21 @@ function AssistantBubble({
   const hasElicitation = bubble.items.some((it) => it.kind === "elicitation");
   const isWide = hasElicitation || containsMarkdownTable(bubble.items);
 
+  // The task outcome card is rendered as an IMMEDIATE SIBLING of the
+  // assistant bubble's <Message>, not as a child of it. Anchoring to
+  // the bubble's responseId means the card always sits directly after
+  // the matching assistant response in DOM / visual order, regardless
+  // of how the user navigated, reflowed, or rehydrated the transcript.
+  // The previous "render as child inside <Message>" placement coupled
+  // the card to whatever the <Message> wrapper happened to render —
+  // good most of the time, but loose enough that a stray CSS
+  // reflow or a fragmentary stream could let the card surface above
+  // prior assistant turns. The explicit sibling relationship makes the
+  // placement bulletproof and trivial to assert in tests via
+  // `data-response-id`.
+  const showOutcome =
+    renderOutcome && bubble.lifecycle !== "streaming" && outcomeSessionId !== undefined;
+
   return (
     <>
       <Message
@@ -3142,6 +3157,7 @@ function AssistantBubble({
         data-testid="message-bubble"
         data-role="assistant"
         className={isWide ? "max-w-full" : "max-w-3xl"}
+        data-response-id={bubble.responseId}
       >
         <MessageContent className={isWide ? "w-full" : undefined}>
           <BlockRenderer items={bubble.items} sessionStatus={sessionStatus} />
@@ -3154,9 +3170,6 @@ function AssistantBubble({
             <XIcon className="size-3" aria-hidden="true" />
             <span>Interrupted</span>
           </p>
-        )}
-        {renderOutcome && bubble.lifecycle !== "streaming" && outcomeSessionId && (
-          <TaskOutcomeBriefCard sessionId={outcomeSessionId} responseId={bubble.responseId} />
         )}
         {markdownText && (
           <MessageActions className="mt-1 opacity-40 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -3179,6 +3192,15 @@ function AssistantBubble({
           </MessageActions>
         )}
       </Message>
+      {showOutcome && (
+        <div
+          data-testid="assistant-outcome-slot"
+          data-response-id={bubble.responseId}
+          className="max-w-3xl"
+        >
+          <TaskOutcomeBriefCard sessionId={outcomeSessionId ?? ""} responseId={bubble.responseId} />
+        </div>
+      )}
 
       {bubble.lifecycle === "failed" && (
         <p className="text-destructive text-xs">Error: {bubble.error}</p>
