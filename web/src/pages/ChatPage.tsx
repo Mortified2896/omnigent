@@ -55,7 +55,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
 import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
-import { ownsOutcomeCard, useTaskOutcomeAnchors, useTaskOutcomeRuns } from "@/lib/taskOutcomes";
+import { useTaskOutcomeAnchors, useTaskOutcomeRuns } from "@/lib/taskOutcomes";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
@@ -1702,24 +1702,26 @@ function MainAgentSurface({
               )
             ) : (
               <>
-                {streamBubbles.map((bubble, index) => (
-                  <BubbleView
-                    key={bubbleKey(bubble)}
-                    bubble={bubble}
-                    renderOutcome={
-                      bubble.kind === "assistant" &&
-                      bubble.lifecycle === "completed" &&
-                      ownsOutcomeCard(streamBubbles, index)
-                    }
-                    taskRunResponseId={
-                      bubble.kind === "assistant" &&
-                      bubble.lifecycle === "completed" &&
-                      ownsOutcomeCard(streamBubbles, index)
-                        ? taskOutcomeAnchors.get(bubble.responseId) ?? bubble.responseId
-                        : undefined
-                    }
-                  />
-                ))}
+                {streamBubbles.map((bubble) => {
+                  // Get the task run response ID from the authoritative mapping.
+                  // The mapping is keyed by bubble.stableId and only contains
+                  // bubbles with visible final text content that have an
+                  // unambiguous association to a task run.
+                  // NO FALLBACK: if there's no mapping, no outcome card renders.
+                  const taskRunResponseId =
+                    bubble.kind === "assistant" && bubble.lifecycle === "completed"
+                      ? taskOutcomeAnchors.get(bubble.stableId)
+                      : undefined;
+
+                  return (
+                    <BubbleView
+                      key={bubbleKey(bubble)}
+                      bubble={bubble}
+                      renderOutcome={taskRunResponseId !== undefined}
+                      taskRunResponseId={taskRunResponseId}
+                    />
+                  );
+                })}
                 {/* Pending elicitation cards, floated to the bottom of the
                     chat so an outstanding question stays in view (stick-to-
                     bottom) no matter how much text the agent streamed after

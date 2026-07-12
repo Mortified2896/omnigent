@@ -73,9 +73,36 @@ export function canonicalOutcomeResponseIds(bubbles: readonly Bubble[]): Readonl
   return ids;
 }
 
+/**
+ * Returns true if the given bubble has visible final text content that
+ * qualifies it as a "final answer" eligible to own a task outcome card.
+ *
+ * A reasoning-only bubble, tool-only bubble, or bubble with no text content
+ * does NOT qualify as the final answer.
+ */
+export function hasVisibleFinalText(bubble: Bubble): boolean {
+  if (bubble.kind !== "assistant") return false;
+  return bubble.items.some(
+    (item) =>
+      item.kind === "text" &&
+      item.final !== false &&
+      item.text.trim().length > 0,
+  );
+}
+
+/**
+ * Returns true if the bubble at the given index could theoretically own an
+ * outcome card (completed assistant, last with its responseId).
+ *
+ * Note: This is a pre-filter. The authoritative mapping from
+ * `resolveTaskOutcomeAnchors` still determines whether a card actually renders.
+ * This function is kept for backward compatibility with `BubbleView` logic but
+ * is NOT sufficient on its own to determine card placement.
+ */
 export function ownsOutcomeCard(bubbles: readonly Bubble[], bubbleIndex: number): boolean {
   const bubble = bubbles[bubbleIndex];
   if (!bubble || bubble.kind !== "assistant" || bubble.lifecycle === "streaming") return false;
+  // Not the last occurrence of this responseId
   return !bubbles.some(
     (candidate, index) =>
       index > bubbleIndex &&
@@ -86,72 +113,89 @@ export function ownsOutcomeCard(bubbles: readonly Bubble[], bubbleIndex: number)
 }
 
 /**
- * Authoritative mapping from completed assistant bubble positions to their
+ * Authoritative mapping from completed assistant bubble stableId to their
  * task run response IDs.
  *
  * Association rules:
  * 1. Exact match: if `task_run.response_id` exactly matches a completed
- *    assistant bubble's `responseId`, use that bubble.
+ *    assistant bubble's `responseId` AND that bubble has visible final text
+ *    content, use that bubble's stableId.
  * 2. Triggering-message bridge: for native transcript ID mismatches (e.g.
  *    OpenCode-native), use `task_run.triggering_message_id` to find the
- *    user bubble that triggered the run, then attach to the final completed
- *    assistant result BEFORE the next real user bubble.
+ *    user bubble that triggered the run, then attach to the first completed
+ *    assistant bubble with visible final text BEFORE the next real user bubble.
  * 3. Fail closed: if neither exact match nor triggering_message_id gives an
  *    unambiguous association, no mapping is created for that run.
  * 4. Uniqueness: at most one outcome card per task run; at most one task run
  *    per assistant result bubble.
+ * 5. Content requirement: ONLY bubbles with visible final text content qualify.
+ *    Reasoning-only, tool-only, or empty bubbles do NOT own the task outcome.
  *
  * @param bubbles - The full bubble list in DOM order.
  * @param taskRuns - Persisted task run summaries for the session.
- * @returns Map of bubble responseId → task_run.response_id for bubbles
- *   that have an authoritative outcome association.
+ * @returns Map of bubble stableId → task_run.response_id for bubbles
+ *   that have an authoritative outcome association. No fallback to bubble.responseId.
  */
 export function resolveTaskOutcomeAnchors(
   bubbles: readonly Bubble[],
   taskRuns: readonly TaskRunSummary[],
 ): ReadonlyMap<string, string> {
-  // Build lookup structures.
-  // Map from assistant responseId → taskRunResponseId for exact matches.
-  const exactMatches = new Map<string, string>();
-  // Map from triggering_message_id → taskRun for the triggering bridge.
-  const byTriggeringMessage = new Map<string, TaskRunSummary>();
-  // Set of responseIds that already have an exact match (uniqueness).
-  const takenByExactMatch = new Set<string>();
+  // Map<bubbleStableId, taskRunResponseId>
+  const result = new Map<string, string>();
 
-  // First pass: build exact match map from runs with non-null response_id.
+  // Track which stableIds have already been assigned (uniqueness enforcement)
+  const takenStableIds = new Set<string>();
+  // Track which responseIds have been matched by exact match (for conflict detection)
+  const exactMatchedResponseIds = new Set<string>();
+
+  // Track runs that need triggering-message bridge resolution
+  // Map<triggeringMessageId, taskRun>
+  const triggeringBridgeCandidates = new Map<string, TaskRunSummary>();
+
+  // First pass: exact matches by responseId
+  // Only bubbles with VISIBLE FINAL TEXT content qualify.
   for (const run of taskRuns) {
     if (run.response_id == null) continue;
-    // Check if any bubble has this exact responseId.
-    const hasExactMatch = bubbles.some(
-      (b) => b.kind === "assistant" && b.responseId === run.response_id,
+
+    // Find eligible bubbles with this exact responseId that have visible final text
+    const eligibleBubble = bubbles.find(
+      (b): b is Extract<Bubble, { kind: "assistant" }> =>
+        b.kind === "assistant" &&
+        b.responseId === run.response_id &&
+        b.lifecycle !== "streaming" &&
+        !takenStableIds.has(b.stableId) &&
+        hasVisibleFinalText(b),
     );
-    if (hasExactMatch) {
-      exactMatches.set(run.response_id, run.response_id);
-      takenByExactMatch.add(run.response_id);
+
+    if (eligibleBubble) {
+      // For exact matches where the bubble's responseId equals the task_run's response_id,
+      // the mapped value equals the bubble's responseId (for API lookup compatibility).
+      result.set(eligibleBubble.stableId, run.response_id);
+      takenStableIds.add(eligibleBubble.stableId);
+      exactMatchedResponseIds.add(run.response_id);
     } else if (run.triggering_message_id != null) {
-      // No exact match; record for triggering-message bridge.
+      // No exact match eligible bubble found; record for triggering-message bridge.
       // Only store if we haven't already recorded a run for this triggering message.
-      if (!byTriggeringMessage.has(run.triggering_message_id)) {
-        byTriggeringMessage.set(run.triggering_message_id, run);
+      if (!triggeringBridgeCandidates.has(run.triggering_message_id)) {
+        triggeringBridgeCandidates.set(run.triggering_message_id, run);
       }
     }
   }
 
-  // Second pass: resolve triggering-message associations.
+  // Second pass: triggering-message bridge
   // For each user bubble whose itemId matches a triggering_message_id,
-  // find the NEXT completed assistant bubble before the next user bubble.
-  const result = new Map<string, string>(exactMatches);
-
+  // find the FIRST completed assistant bubble with visible final text
+  // before the next user bubble.
   for (let userIdx = 0; userIdx < bubbles.length; userIdx++) {
     const userBubble = bubbles[userIdx];
     if (userBubble.kind !== "user") continue;
 
-    const triggeringRun = byTriggeringMessage.get(userBubble.itemId);
+    const triggeringRun = triggeringBridgeCandidates.get(userBubble.itemId);
     if (!triggeringRun || triggeringRun.response_id == null) continue;
 
-    // Find the final completed assistant bubble after this user bubble,
-    // but before the next user bubble.
-    let targetAssistantIdx: number | null = null;
+    // Find the first eligible assistant bubble with visible final text
+    // after this user bubble, but before the next user bubble.
+    let targetBubble: Extract<Bubble, { kind: "assistant" }> | null = null;
 
     for (let i = userIdx + 1; i < bubbles.length; i++) {
       const candidate = bubbles[i]!;
@@ -159,28 +203,20 @@ export function resolveTaskOutcomeAnchors(
       if (
         candidate.kind === "assistant" &&
         candidate.lifecycle !== "streaming" &&
-        candidate.lifecycle !== undefined // completed, failed, cancelled
+        !takenStableIds.has(candidate.stableId) &&
+        hasVisibleFinalText(candidate)
       ) {
-        // Found a completed assistant bubble - this becomes the target.
-        // Continue to see if there's another one before the next user bubble.
-        targetAssistantIdx = i;
+        // Found the first eligible bubble - this is the target.
+        // Stop searching so we always pick the first, not the last.
+        targetBubble = candidate;
+        break;
       }
     }
 
-    // Attach to the final completed assistant bubble found.
-    if (targetAssistantIdx !== null) {
-      const targetBubble = bubbles[targetAssistantIdx]!;
-      // targetBubble is guaranteed to be assistant (set only in that branch)
-      const assistantBubble = targetBubble as Extract<Bubble, { kind: "assistant" }>;
-      // Only attach if:
-      // 1. This assistant bubble doesn't already have a mapping (uniqueness).
-      // 2. This responseId is NOT already taken by an exact match (uniqueness).
-      if (
-        !result.has(assistantBubble.responseId) &&
-        !takenByExactMatch.has(assistantBubble.responseId)
-      ) {
-        result.set(assistantBubble.responseId, triggeringRun.response_id);
-      }
+    // Attach to the found bubble.
+    if (targetBubble !== null) {
+      result.set(targetBubble.stableId, triggeringRun.response_id);
+      takenStableIds.add(targetBubble.stableId);
     }
   }
 
