@@ -99,6 +99,12 @@ vi.mock("@/lib/useTaskRunReadiness", () => ({
 interface ConversationPieceProps {
   bubbles: Bubble[];
   /**
+   * Map from bubble responseId to the task_run.response_id to use for API calls.
+   * This is derived from `resolveTaskOutcomeAnchors` in production.
+   * When omitted, the bubble responseId is used directly (backward compat).
+   */
+  bubbleToTaskRunResponseId?: ReadonlyMap<string, string> | null;
+  /**
    * Set of response ids that have a registered task outcome
    * (ChatPage's `taskOutcomeResponseIds.has(responseId)` gate). When
    * omitted, all assistant bubbles are eligible (testing the
@@ -107,7 +113,7 @@ interface ConversationPieceProps {
   renderOutcomesFor?: ReadonlySet<string> | null;
 }
 
-function ConversationPiece({ bubbles, renderOutcomesFor = null }: ConversationPieceProps) {
+function ConversationPiece({ bubbles, bubbleToTaskRunResponseId = null, renderOutcomesFor = null }: ConversationPieceProps) {
   // Use BubbleView directly — same component ChatPage uses. The
   // rendered DOM is faithful to the deployed conversation surface.
   return (
@@ -117,6 +123,7 @@ function ConversationPiece({ bubbles, renderOutcomesFor = null }: ConversationPi
           // Mirror the production gating exactly so tests reflect
           // what ChatPage renders, including the registry gate.
           let renderOutcome = false;
+          let taskRunResponseId: string | undefined;
           if (bubble.kind === "assistant" && bubble.lifecycle === "completed") {
             if (renderOutcomesFor === null) {
               renderOutcome = true;
@@ -131,8 +138,17 @@ function ConversationPiece({ bubbles, renderOutcomesFor = null }: ConversationPi
                     candidate.responseId === bubble.responseId,
                 );
             }
+            // Get the mapped task run response ID, falling back to bubble responseId.
+            taskRunResponseId = bubbleToTaskRunResponseId?.get(bubble.responseId) ?? bubble.responseId;
           }
-          return <BubbleView key={index} bubble={bubble} renderOutcome={renderOutcome} />;
+          return (
+            <BubbleView
+              key={index}
+              bubble={bubble}
+              renderOutcome={renderOutcome}
+              taskRunResponseId={renderOutcome ? taskRunResponseId : undefined}
+            />
+          );
         })}
       </div>
     </FileViewerContext.Provider>
@@ -452,5 +468,260 @@ describe("Task outcome card anchoring — DOM order", () => {
       expect(second.getAllByTestId("task-outcome-brief-card")).toHaveLength(1);
     });
     second.unmount();
+  });
+});
+
+describe("OpenCode-native response ID association", () => {
+  it("attaches outcome card to OpenCode assistant bubble with mapped response ID", async () => {
+    // Setup: OpenCode-native uses different IDs for transcript vs execution:
+    // - user bubble itemId = msg_user_1 (transcript ID)
+    // - assistant bubble responseId = msg_opencode_assistant_1 (native transcript ID)
+    // - task run response_id = resp_omni_1 (Omnigent execution ID)
+    // - task run triggering_message_id = msg_user_1
+    setFixture("conv-x:resp_omni_1", READY_DETAIL);
+
+    const bubbles: Bubble[] = [
+      userBubble("Hi"),
+      assistantBubble("msg_opencode_assistant_1", "completed", "Processing your request..."),
+    ];
+
+    // Mapping from bubble responseId to task run response_id
+    const anchors = new Map<string, string>([
+      ["msg_opencode_assistant_1", "resp_omni_1"],
+    ]);
+
+    const { container } = render(
+      <ConversationPiece
+        bubbles={bubbles}
+        bubbleToTaskRunResponseId={anchors}
+        renderOutcomesFor={new Set(["msg_opencode_assistant_1"])}
+      />,
+    );
+
+    // The card should appear below the OpenCode assistant bubble
+    const card = await screen.findByTestId("task-outcome-brief-card");
+    expect(card).toBeInTheDocument();
+
+    // The slot should have both IDs:
+    // - data-response-id = the bubble's native transcript ID
+    // - data-task-run-response-id = the Omnigent execution ID for API calls
+    const slot = screen.getByTestId("assistant-outcome-slot");
+    expect(slot.getAttribute("data-response-id")).toBe("msg_opencode_assistant_1");
+    expect(slot.getAttribute("data-task-run-response-id")).toBe("resp_omni_1");
+
+    // The card should fetch using the Omnigent response ID, not the transcript ID
+    expect(card.getAttribute("data-task-run-id")).toBe("run-1");
+
+    // Verify DOM order: user → assistant → outcome card
+    const flow = container.querySelector('[data-testid="conversation-flow"]')!;
+    const userMsg = flow.children[0] as HTMLElement;
+    const assistantMsg = flow.children[1] as HTMLElement;
+    const outcomeSlot = flow.children[2] as HTMLElement;
+
+    expect(
+      (userMsg.compareDocumentPosition(assistantMsg) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      (assistantMsg.compareDocumentPosition(outcomeSlot) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("handles multiple OpenCode-native turns with independent outcome cards", async () => {
+    // Two turns, each with OpenCode-native IDs
+    const detail1 = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "run-1", response_id: "resp_omni_1" },
+    };
+    const detail2 = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "run-2", response_id: "resp_omni_2" },
+    };
+    setFixture("conv-x:resp_omni_1", detail1);
+    setFixture("conv-x:resp_omni_2", detail2);
+
+    const bubbles: Bubble[] = [
+      userBubble("Hi"),
+      assistantBubble("msg_opencode_1", "completed", "First response"),
+      userBubble("Second request"),
+      assistantBubble("msg_opencode_2", "completed", "Second response"),
+    ];
+
+    // Mappings: each bubble maps to its own task run
+    const anchors = new Map<string, string>([
+      ["msg_opencode_1", "resp_omni_1"],
+      ["msg_opencode_2", "resp_omni_2"],
+    ]);
+
+    render(
+      <ConversationPiece
+        bubbles={bubbles}
+        bubbleToTaskRunResponseId={anchors}
+        renderOutcomesFor={new Set(["msg_opencode_1", "msg_opencode_2"])}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("assistant-outcome-slot")).toHaveLength(2);
+    });
+
+    const slots = screen.getAllByTestId("assistant-outcome-slot");
+    const cards = screen.getAllByTestId("task-outcome-brief-card");
+
+    expect(slots).toHaveLength(2);
+    expect(cards).toHaveLength(2);
+
+    // First card uses resp_omni_1
+    expect(slots[0].getAttribute("data-response-id")).toBe("msg_opencode_1");
+    expect(slots[0].getAttribute("data-task-run-response-id")).toBe("resp_omni_1");
+    expect(cards[0].getAttribute("data-task-run-id")).toBe("run-1");
+
+    // Second card uses resp_omni_2
+    expect(slots[1].getAttribute("data-response-id")).toBe("msg_opencode_2");
+    expect(slots[1].getAttribute("data-task-run-response-id")).toBe("resp_omni_2");
+    expect(cards[1].getAttribute("data-task-run-id")).toBe("run-2");
+  });
+
+  it("does not attach card when triggering_message_id has no matching user bubble", async () => {
+    // Task run has triggering_message_id that doesn't match any user bubble
+    // Should NOT fall back to latest response
+    setFixture("conv-x:resp_omni_1", READY_DETAIL);
+
+    const bubbles: Bubble[] = [
+      userBubble("Real user message"),
+      assistantBubble("msg_opencode_1", "completed", "Response"),
+    ];
+
+    // Empty anchor map - this bubble has NO authoritative association
+    // The bubble should NOT appear in renderOutcomesFor
+    const anchors = new Map<string, string>(); // Empty - no valid association
+
+    render(
+      <ConversationPiece
+        bubbles={bubbles}
+        bubbleToTaskRunResponseId={anchors}
+        renderOutcomesFor={new Set()} // Empty - no bubbles qualify
+      />,
+    );
+
+    // No card should appear - fail closed when there's no association
+    expect(screen.queryByTestId("task-outcome-brief-card")).toBeNull();
+    expect(screen.queryByTestId("assistant-outcome-slot")).toBeNull();
+  });
+
+  it("handles mixed harness types: exact match and OpenCode-native", async () => {
+    // First turn: normal harness with exact match (resp_1)
+    // Second turn: OpenCode-native mismatch (msg_opencode_2 → resp_omni_2)
+    const detail1 = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "run-1", response_id: "resp_1" },
+    };
+    const detail2 = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "run-2", response_id: "resp_omni_2" },
+    };
+    setFixture("conv-x:resp_1", detail1);
+    setFixture("conv-x:resp_omni_2", detail2);
+
+    const bubbles: Bubble[] = [
+      userBubble("Normal request"),
+      assistantBubble("resp_1", "completed", "Normal response"),
+      userBubble("OpenCode request"),
+      assistantBubble("msg_opencode_2", "completed", "OpenCode response"),
+    ];
+
+    // Mixed anchor mapping
+    const anchors = new Map<string, string>([
+      ["resp_1", "resp_1"], // exact match
+      ["msg_opencode_2", "resp_omni_2"], // OpenCode-native mismatch
+    ]);
+
+    render(
+      <ConversationPiece
+        bubbles={bubbles}
+        bubbleToTaskRunResponseId={anchors}
+        renderOutcomesFor={new Set(["resp_1", "msg_opencode_2"])}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("assistant-outcome-slot")).toHaveLength(2);
+    });
+
+    const slots = screen.getAllByTestId("assistant-outcome-slot");
+
+    // First slot: exact match - both IDs are the same
+    expect(slots[0].getAttribute("data-response-id")).toBe("resp_1");
+    expect(slots[0].getAttribute("data-task-run-response-id")).toBe("resp_1");
+
+    // Second slot: OpenCode-native - different IDs
+    expect(slots[1].getAttribute("data-response-id")).toBe("msg_opencode_2");
+    expect(slots[1].getAttribute("data-task-run-response-id")).toBe("resp_omni_2");
+  });
+
+  it("no outcome card during streaming for OpenCode-native", () => {
+    // OpenCode streaming bubble should not show a card
+    const bubbles: Bubble[] = [
+      userBubble("OpenCode request"),
+      assistantBubble("msg_opencode_streaming", "streaming", "Streaming..."),
+    ];
+
+    const anchors = new Map<string, string>([
+      ["msg_opencode_streaming", "resp_omni_1"],
+    ]);
+
+    render(
+      <ConversationPiece
+        bubbles={bubbles}
+        bubbleToTaskRunResponseId={anchors}
+        renderOutcomesFor={new Set(["msg_opencode_streaming"])}
+      />,
+    );
+
+    // No slot appears for streaming bubbles
+    expect(screen.queryByTestId("assistant-outcome-slot")).toBeNull();
+    expect(screen.queryByTestId("task-outcome-brief-card")).toBeNull();
+  });
+
+  it("DOM order preserved: user bubble → OpenCode assistant bubble → outcome card", async () => {
+    setFixture("conv-x:resp_omni_1", READY_DETAIL);
+
+    const bubbles: Bubble[] = [
+      userBubble("OpenCode user"),
+      assistantBubble("msg_opencode_assistant", "completed", "OpenCode response"),
+    ];
+
+    const anchors = new Map<string, string>([
+      ["msg_opencode_assistant", "resp_omni_1"],
+    ]);
+
+    const { container } = render(
+      <ConversationPiece
+        bubbles={bubbles}
+        bubbleToTaskRunResponseId={anchors}
+        renderOutcomesFor={new Set(["msg_opencode_assistant"])}
+      />,
+    );
+
+    await screen.findByTestId("task-outcome-brief-card");
+
+    const flow = container.querySelector('[data-testid="conversation-flow"]')!;
+    const userMsg = flow.children[0] as HTMLElement;
+    const assistantMsg = flow.children[1] as HTMLElement;
+    const outcomeSlot = flow.children[2] as HTMLElement;
+
+    // Verify strict ordering: never user → outcome → assistant
+    expect(
+      (userMsg.compareDocumentPosition(assistantMsg) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      (assistantMsg.compareDocumentPosition(outcomeSlot) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Outcome is after user (not between user and assistant)
+    expect(
+      (userMsg.compareDocumentPosition(outcomeSlot) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Verify the outcome slot is a sibling of the assistant message, not a child
+    expect(flow.children.length).toBe(3);
   });
 });

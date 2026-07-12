@@ -55,7 +55,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
 import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
-import { ownsOutcomeCard, useTaskOutcomeResponseIds } from "@/lib/taskOutcomes";
+import { ownsOutcomeCard, useTaskOutcomeAnchors, useTaskOutcomeRuns } from "@/lib/taskOutcomes";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
@@ -1494,7 +1494,10 @@ function MainAgentSurface({
     () => (pendingElicitations.length === 0 ? bubbles : stripPendingElicitations(bubbles)),
     [bubbles, pendingElicitations.length],
   );
-  const taskOutcomeResponseIds = useTaskOutcomeResponseIds(conversationId, status);
+  // Load full task run summaries for accurate bubble-to-task-run mapping.
+  const taskOutcomeRuns = useTaskOutcomeRuns(conversationId, status);
+  // Derive the bubble responseId → task_run.response_id mapping.
+  const taskOutcomeAnchors = useTaskOutcomeAnchors(streamBubbles, taskOutcomeRuns);
 
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) — guarded so the composer's
   // own unmodified ArrowUp/Down history-recall still works.
@@ -1706,8 +1709,14 @@ function MainAgentSurface({
                     renderOutcome={
                       bubble.kind === "assistant" &&
                       bubble.lifecycle === "completed" &&
-                      taskOutcomeResponseIds.has(bubble.responseId) &&
                       ownsOutcomeCard(streamBubbles, index)
+                    }
+                    taskRunResponseId={
+                      bubble.kind === "assistant" &&
+                      bubble.lifecycle === "completed" &&
+                      ownsOutcomeCard(streamBubbles, index)
+                        ? taskOutcomeAnchors.get(bubble.responseId) ?? bubble.responseId
+                        : undefined
                     }
                   />
                 ))}
@@ -2868,9 +2877,15 @@ export const BubbleView = memo(
   function BubbleView({
     bubble,
     renderOutcome = true,
+    taskRunResponseId,
   }: {
     bubble: Bubble;
     renderOutcome?: boolean;
+    /** The task run response ID to use for the API call. For exact matches,
+     *  this equals `bubble.responseId`. For OpenCode-native mismatches,
+     *  this is the Omnigent execution response ID (resp_*) while the
+     *  bubble's responseId is the native transcript ID (msg_*). */
+    taskRunResponseId?: string;
   }) {
     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
     if (bubble.kind === "compaction_loading") {
@@ -2887,10 +2902,12 @@ export const BubbleView = memo(
         />
       );
     }
-    return <AssistantBubble bubble={bubble} renderOutcome={renderOutcome} />;
+    return <AssistantBubble bubble={bubble} renderOutcome={renderOutcome} taskRunResponseId={taskRunResponseId} />;
   },
   (prev, next) =>
-    prev.renderOutcome === next.renderOutcome && bubblesEqual(prev.bubble, next.bubble),
+    prev.renderOutcome === next.renderOutcome &&
+    prev.taskRunResponseId === next.taskRunResponseId &&
+    bubblesEqual(prev.bubble, next.bubble),
 );
 
 /**
@@ -3109,9 +3126,14 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
 function AssistantBubble({
   bubble,
   renderOutcome = true,
+  taskRunResponseId,
 }: {
   bubble: Extract<Bubble, { kind: "assistant" }>;
   renderOutcome?: boolean;
+  /** The task run response ID to use for the API call.
+   *  For OpenCode-native, this differs from bubble.responseId.
+   *  Falls back to bubble.responseId when not provided. */
+  taskRunResponseId?: string;
 }) {
   const { conversationId: outcomeSessionId } = useParams<{ conversationId: string }>();
   // The walker only emits an assistant bubble when at least one
@@ -3196,9 +3218,13 @@ function AssistantBubble({
         <div
           data-testid="assistant-outcome-slot"
           data-response-id={bubble.responseId}
+          data-task-run-response-id={taskRunResponseId}
           className="max-w-3xl"
         >
-          <TaskOutcomeBriefCard sessionId={outcomeSessionId ?? ""} responseId={bubble.responseId} />
+          <TaskOutcomeBriefCard
+            sessionId={outcomeSessionId ?? ""}
+            responseId={taskRunResponseId ?? bubble.responseId}
+          />
         </div>
       )}
 
