@@ -81,6 +81,13 @@ class OpenCodeNativeExecutor(NativeServerHarness):
         reasoning_effort = os.environ.get("HARNESS_OPENCODE_NATIVE_REASONING_EFFORT") or (
             state.reasoning_effort if state is not None else None
         )
+        # An approved route may never degrade to an unpinned OpenCode prompt:
+        # that would permit OpenCode's built-in provider to choose the model.
+        if state is not None and state.route_approved:
+            if not model or not model.startswith("omniroute/"):
+                raise RuntimeError("approved OpenCode route has no valid OmniRoute model pin")
+            if not reasoning_effort:
+                raise RuntimeError("approved OpenCode route has no reasoning effort pin")
         updates: dict[str, str] = {}
         if model:
             updates["model"] = model

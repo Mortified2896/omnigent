@@ -239,6 +239,9 @@ class OpenCodeNativeBridgeState:
     model_override: str | None = None
     reasoning_effort: str | None = None
     permission_mode: str | None = None
+    # Set only by the approval gate.  The executor uses this to reject a
+    # missing pin rather than letting OpenCode select its built-in provider.
+    route_approved: bool = False
     workspace: str | None = None
     last_event_id: str | None = None
 
@@ -549,6 +552,7 @@ def write_bridge_state(bridge_dir: Path, state: OpenCodeNativeBridgeState) -> No
                     "model_override": state.model_override,
                     "reasoning_effort": state.reasoning_effort,
                     "permission_mode": state.permission_mode,
+                    "route_approved": state.route_approved,
                     "workspace": state.workspace,
                     "last_event_id": state.last_event_id,
                 },
@@ -624,6 +628,7 @@ def read_bridge_state(bridge_dir: Path) -> OpenCodeNativeBridgeState | None:
         model_override=_opt_str("model_override"),
         reasoning_effort=_opt_str("reasoning_effort"),
         permission_mode=_opt_str("permission_mode"),
+        route_approved=bool(raw.get("route_approved", False)),
         workspace=_opt_str("workspace"),
         last_event_id=_opt_str("last_event_id"),
     )
@@ -702,6 +707,7 @@ def update_execution_package(
             model_override=model,
             reasoning_effort=reasoning_effort.strip() if reasoning_effort else None,
             permission_mode=permission_mode.strip() if permission_mode else None,
+            route_approved=True,
         ),
     )
     return True
