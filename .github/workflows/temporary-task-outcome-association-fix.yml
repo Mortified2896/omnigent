@@ -1,0 +1,551 @@
+name: Temporary task outcome association fix
+
+on:
+  push:
+    branches:
+      - feat/model-routing-agent
+    paths:
+      - .github/workflows/temporary-task-outcome-association-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feat/model-routing-agent
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Apply response-association fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          task_path = Path("web/src/lib/taskOutcomes.ts")
+          task = task_path.read_text()
+          task = replace_once(
+              task,
+              'import { useEffect, useRef, useState } from "react";',
+              'import { useEffect, useMemo, useRef, useState } from "react";',
+              "taskOutcomes React import",
+          )
+          task = replace_once(
+              task,
+              '  response_id: string | null;\n  terminal_status: TaskRun["terminal_status"];',
+              '  response_id: string | null;\n  /** Persisted user message that triggered this run; bridges native transcript ids. */\n  triggering_message_id?: string | null;\n  terminal_status: TaskRun["terminal_status"];',
+              "TaskRunSummary triggering_message_id",
+          )
+
+          anchor_code = r'''
+/**
+ * Map each completed assistant bubble to the persisted task-run response id
+ * whose outcome card it owns.
+ *
+ * Normal Responses-style sessions use the same response id in the transcript
+ * and task_run row, so the direct match is authoritative. Native OpenCode is
+ * different by design: its forwarder groups transcript items under the
+ * OpenCode assistant message id (msg_*), while the task recorder tracks the
+ * Omnigent relay response id (resp_*). For that case, the persisted
+ * triggering_message_id is the stable bridge: find that exact user bubble and
+ * anchor the run to the final completed assistant result before the next user
+ * turn. No latest-response, timing, or polling-order heuristic is used.
+ *
+ * The returned map is keyed by Bubble.stableId (the rendered bubble identity)
+ * and stores the real task_run.response_id used by the by-response endpoint.
+ */
+export function resolveTaskOutcomeAnchors(
+  bubbles: readonly Bubble[],
+  runs: readonly TaskRunSummary[],
+): ReadonlyMap<string, string> {
+  const anchors = new Map<string, string>();
+  const claimedBubbleIds = new Set<string>();
+  const unresolved: TaskRunSummary[] = [];
+
+  const isResultBubble = (
+    bubble: Bubble | undefined,
+  ): bubble is Extract<Bubble, { kind: "assistant" }> =>
+    bubble?.kind === "assistant" &&
+    bubble.lifecycle === "completed" &&
+    bubble.items.some((item) => item.kind !== "elicitation");
+
+  // First preserve the ordinary, exact response-id contract. Walk from the
+  // end so a reconnect duplicate resolves to the canonical final occurrence.
+  for (const run of runs) {
+    if (!run.response_id || run.terminal_status === "running") continue;
+    let match: Extract<Bubble, { kind: "assistant" }> | undefined;
+    for (let index = bubbles.length - 1; index >= 0; index -= 1) {
+      const bubble = bubbles[index];
+      if (isResultBubble(bubble) && bubble.responseId === run.response_id) {
+        match = bubble;
+        break;
+      }
+    }
+    if (match && !claimedBubbleIds.has(match.stableId)) {
+      anchors.set(match.stableId, run.response_id);
+      claimedBubbleIds.add(match.stableId);
+    } else if (!match) {
+      unresolved.push(run);
+    }
+  }
+
+  // Native transcript ids can differ from task-run response ids. Resolve only
+  // through the persisted triggering user item; without that exact identity we
+  // fail closed rather than attaching an outcome to a nearby/latest response.
+  for (const run of unresolved) {
+    if (!run.response_id || !run.triggering_message_id) continue;
+    const userIndex = bubbles.findIndex(
+      (bubble) => bubble.kind === "user" && bubble.itemId === run.triggering_message_id,
+    );
+    if (userIndex < 0) continue;
+
+    let turnEnd = bubbles.length;
+    for (let index = userIndex + 1; index < bubbles.length; index += 1) {
+      if (bubbles[index]?.kind === "user") {
+        turnEnd = index;
+        break;
+      }
+    }
+
+    for (let index = turnEnd - 1; index > userIndex; index -= 1) {
+      const bubble = bubbles[index];
+      if (!isResultBubble(bubble) || claimedBubbleIds.has(bubble.stableId)) continue;
+      anchors.set(bubble.stableId, run.response_id);
+      claimedBubbleIds.add(bubble.stableId);
+      break;
+    }
+  }
+
+  return anchors;
+}
+'''.strip("\n")
+
+          marker = "export async function getTaskRunForResponse("
+          if task.count(marker) != 1:
+              raise SystemExit("getTaskRunForResponse marker not unique")
+          task = task.replace(marker, anchor_code + "\n\n" + marker, 1)
+
+          hook_pattern = re.compile(
+              r"/\*\*\n \* Authoritative, session-scoped eligibility for inline outcome cards\..*?"
+              r"const EMPTY_TASK_OUTCOME_RESPONSE_IDS: ReadonlySet<string> = new Set\(\);",
+              re.S,
+          )
+          hook_replacement = r'''/**
+ * Session-scoped task-run registry for inline outcome cards. The list is
+ * fetched once on session load and once when a streaming turn reaches idle;
+ * individual historical bubbles never start their own registry requests.
+ */
+export function useTaskOutcomeRuns(
+  sessionId: string | null | undefined,
+  streamStatus: "idle" | "streaming",
+): readonly TaskRunSummary[] {
+  const [registry, setRegistry] = useState<{
+    sessionId: string | null;
+    runs: readonly TaskRunSummary[];
+  }>({ sessionId: null, runs: EMPTY_TASK_OUTCOME_RUNS });
+  const statusRef = useRef(streamStatus);
+  const statusSessionRef = useRef(sessionId ?? null);
+
+  const load = (activeSessionId: string, signal: AbortSignal) =>
+    listSessionTaskRuns(activeSessionId, 200, signal).then(({ runs }) => {
+      if (!signal.aborted) setRegistry({ sessionId: activeSessionId, runs });
+    });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!sessionId) {
+      setRegistry({ sessionId: null, runs: EMPTY_TASK_OUTCOME_RUNS });
+      return () => controller.abort();
+    }
+    setRegistry({ sessionId, runs: EMPTY_TASK_OUTCOME_RUNS });
+    void load(sessionId, controller.signal).catch((error) => {
+      if (!controller.signal.aborted) console.warn("Failed to load task outcome registry", error);
+    });
+    return () => controller.abort();
+  }, [sessionId]);
+
+  useEffect(() => {
+    const sessionChanged = statusSessionRef.current !== (sessionId ?? null);
+    statusSessionRef.current = sessionId ?? null;
+    const wasStreaming = statusRef.current === "streaming";
+    statusRef.current = streamStatus;
+    if (sessionChanged || !sessionId || !wasStreaming || streamStatus !== "idle") return;
+    const controller = new AbortController();
+    void load(sessionId, controller.signal).catch((error) => {
+      if (!controller.signal.aborted)
+        console.warn("Failed to refresh task outcome registry", error);
+    });
+    return () => controller.abort();
+  }, [sessionId, streamStatus]);
+
+  return registry.sessionId === sessionId ? registry.runs : EMPTY_TASK_OUTCOME_RUNS;
+}
+
+/** Backwards-compatible exact-id view for non-transcript consumers. */
+export function useTaskOutcomeResponseIds(
+  sessionId: string | null | undefined,
+  streamStatus: "idle" | "streaming",
+): ReadonlySet<string> {
+  const runs = useTaskOutcomeRuns(sessionId, streamStatus);
+  return useMemo(
+    () => new Set(runs.flatMap((run) => (run.response_id ? [run.response_id] : []))),
+    [runs],
+  );
+}
+
+const EMPTY_TASK_OUTCOME_RUNS: readonly TaskRunSummary[] = Object.freeze([]);
+'''.strip("\n")
+          task, count = hook_pattern.subn(hook_replacement, task, count=1)
+          if count != 1:
+              raise SystemExit(f"task outcome hook block: expected one match, found {count}")
+          task_path.write_text(task)
+
+          chat_path = Path("web/src/pages/ChatPage.tsx")
+          chat = chat_path.read_text()
+          chat = replace_once(
+              chat,
+              'import { ownsOutcomeCard, useTaskOutcomeResponseIds } from "@/lib/taskOutcomes";',
+              'import { resolveTaskOutcomeAnchors, useTaskOutcomeRuns } from "@/lib/taskOutcomes";',
+              "ChatPage task outcome import",
+          )
+          chat = replace_once(
+              chat,
+              '  const taskOutcomeResponseIds = useTaskOutcomeResponseIds(conversationId, status);',
+              '  const taskOutcomeRuns = useTaskOutcomeRuns(conversationId, status);\n  const taskOutcomeAnchors = useMemo(\n    () => resolveTaskOutcomeAnchors(streamBubbles, taskOutcomeRuns),\n    [streamBubbles, taskOutcomeRuns],\n  );',
+              "ChatPage task outcome registry",
+          )
+          chat = replace_once(
+              chat,
+              '''                {streamBubbles.map((bubble, index) => (
+                  <BubbleView
+                    key={bubbleKey(bubble)}
+                    bubble={bubble}
+                    renderOutcome={
+                      bubble.kind === "assistant" &&
+                      bubble.lifecycle === "completed" &&
+                      taskOutcomeResponseIds.has(bubble.responseId) &&
+                      ownsOutcomeCard(streamBubbles, index)
+                    }
+                  />
+                ))}''',
+              '''                {streamBubbles.map((bubble) => (
+                  <BubbleView
+                    key={bubbleKey(bubble)}
+                    bubble={bubble}
+                    outcomeResponseId={
+                      bubble.kind === "assistant"
+                        ? (taskOutcomeAnchors.get(bubble.stableId) ?? null)
+                        : null
+                    }
+                  />
+                ))}''',
+              "ChatPage transcript mapping",
+          )
+          chat = replace_once(
+              chat,
+              '''function AssistantBubble({
+  bubble,
+  renderOutcome = true,
+}: {
+  bubble: Extract<Bubble, { kind: "assistant" }>;
+  renderOutcome?: boolean;
+}) {''',
+              '''function AssistantBubble({
+  bubble,
+  outcomeResponseId = null,
+}: {
+  bubble: Extract<Bubble, { kind: "assistant" }>;
+  /** Actual task_run.response_id; may differ from the native transcript id. */
+  outcomeResponseId?: string | null;
+}) {''',
+              "AssistantBubble props",
+          )
+          chat = replace_once(
+              chat,
+              '''  const showOutcome =
+    renderOutcome && bubble.lifecycle !== "streaming" && outcomeSessionId !== undefined;''',
+              '''  const showOutcome =
+    outcomeResponseId !== null &&
+    bubble.lifecycle === "completed" &&
+    outcomeSessionId !== undefined;''',
+              "AssistantBubble outcome gate",
+          )
+          chat = replace_once(
+              chat,
+              '''          data-testid="assistant-outcome-slot"
+          data-response-id={bubble.responseId}
+          className="max-w-3xl"
+        >
+          <TaskOutcomeBriefCard sessionId={outcomeSessionId ?? ""} responseId={bubble.responseId} />''',
+              '''          data-testid="assistant-outcome-slot"
+          data-response-id={bubble.responseId}
+          data-task-run-response-id={outcomeResponseId}
+          className="max-w-3xl"
+        >
+          <TaskOutcomeBriefCard
+            sessionId={outcomeSessionId ?? ""}
+            responseId={outcomeResponseId}
+          />''',
+              "AssistantBubble outcome slot",
+          )
+          chat = replace_once(
+              chat,
+              '''  function BubbleView({
+    bubble,
+    renderOutcome = true,
+  }: {
+    bubble: Bubble;
+    renderOutcome?: boolean;
+  }) {''',
+              '''  function BubbleView({
+    bubble,
+    outcomeResponseId = null,
+  }: {
+    bubble: Bubble;
+    outcomeResponseId?: string | null;
+  }) {''',
+              "BubbleView props",
+          )
+          chat = replace_once(
+              chat,
+              '    return <AssistantBubble bubble={bubble} renderOutcome={renderOutcome} />;',
+              '    return <AssistantBubble bubble={bubble} outcomeResponseId={outcomeResponseId} />;',
+              "BubbleView assistant delegation",
+          )
+          chat = replace_once(
+              chat,
+              '''  (prev, next) =>
+    prev.renderOutcome === next.renderOutcome && bubblesEqual(prev.bubble, next.bubble),''',
+              '''  (prev, next) =>
+    prev.outcomeResponseId === next.outcomeResponseId && bubblesEqual(prev.bubble, next.bubble),''',
+              "BubbleView memo comparator",
+          )
+          chat_path.write_text(chat)
+
+          ordering_path = Path("web/src/pages/ChatPage.taskOutcomeOrdering.test.tsx")
+          ordering = ordering_path.read_text()
+          ordering = replace_once(
+              ordering,
+              '''          let renderOutcome = false;
+          if (bubble.kind === "assistant" && bubble.lifecycle === "completed") {
+            if (renderOutcomesFor === null) {
+              renderOutcome = true;
+            } else {
+              renderOutcome =
+                renderOutcomesFor.has(bubble.responseId) &&
+                !bubbles.some(
+                  (candidate, j) =>
+                    j > index &&
+                    candidate.kind === "assistant" &&
+                    candidate.lifecycle !== "streaming" &&
+                    candidate.responseId === bubble.responseId,
+                );
+            }
+          }
+          return <BubbleView key={index} bubble={bubble} renderOutcome={renderOutcome} />;''',
+              '''          let outcomeResponseId: string | null = null;
+          if (bubble.kind === "assistant" && bubble.lifecycle === "completed") {
+            const ownsOutcome =
+              renderOutcomesFor === null ||
+              (renderOutcomesFor.has(bubble.responseId) &&
+                !bubbles.some(
+                  (candidate, j) =>
+                    j > index &&
+                    candidate.kind === "assistant" &&
+                    candidate.lifecycle !== "streaming" &&
+                    candidate.responseId === bubble.responseId,
+                ));
+            if (ownsOutcome) outcomeResponseId = bubble.responseId;
+          }
+          return (
+            <BubbleView
+              key={index}
+              bubble={bubble}
+              outcomeResponseId={outcomeResponseId}
+            />
+          );''',
+              "ordering test ConversationPiece",
+          )
+          ordering_path.write_text(ordering)
+
+          anchor_test = r'''import { describe, expect, it } from "vitest";
+import type { Bubble } from "./renderItems";
+import {
+  resolveTaskOutcomeAnchors,
+  type TaskRunSummary,
+} from "./taskOutcomes";
+
+function user(itemId: string, text = "prompt"): Extract<Bubble, { kind: "user" }> {
+  return { kind: "user", itemId, content: [{ type: "input_text", text }] };
+}
+
+function assistant(
+  responseId: string,
+  stableId = responseId,
+  text = "result",
+): Extract<Bubble, { kind: "assistant" }> {
+  return {
+    kind: "assistant",
+    responseId,
+    stableId,
+    lifecycle: "completed",
+    error: null,
+    items: [{ kind: "text", itemId: `${stableId}:text`, text, final: true }],
+  };
+}
+
+function run(overrides: Partial<TaskRunSummary>): TaskRunSummary {
+  return {
+    id: "run_1",
+    conversation_id: "conv_1",
+    response_id: "resp_1",
+    triggering_message_id: "msg_user_1",
+    terminal_status: "completed",
+    started_at: null,
+    terminal_at: null,
+    duration_ms: null,
+    selected_provider: null,
+    selected_model: null,
+    requested_route_id: null,
+    fallback_used: null,
+    harness_id: null,
+    proposed_task_family: null,
+    input_tokens: null,
+    output_tokens: null,
+    total_cost_usd: null,
+    commit_sha: null,
+    changed_files_count: null,
+    failure_error_code: null,
+    langfuse_trace_id: null,
+    created_at: 0,
+    updated_at: 0,
+    ...overrides,
+  };
+}
+
+describe("resolveTaskOutcomeAnchors", () => {
+  it("keeps the ordinary exact response-id association", () => {
+    const bubbles: Bubble[] = [user("msg_user_1"), assistant("resp_1")];
+    expect(resolveTaskOutcomeAnchors(bubbles, [run({})]).get("resp_1")).toBe("resp_1");
+  });
+
+  it("bridges OpenCode msg_* transcript ids to the persisted resp_* task run", () => {
+    const bubbles: Bubble[] = [
+      user("msg_user_1", "Hi"),
+      assistant("msg_opencode_assistant_1", "bubble_1", "Hello"),
+    ];
+    const anchors = resolveTaskOutcomeAnchors(bubbles, [
+      run({
+        response_id: "resp_omni_1",
+        triggering_message_id: "msg_user_1",
+        harness_id: "opencode-native",
+      }),
+    ]);
+    expect(anchors.get("bubble_1")).toBe("resp_omni_1");
+    expect(anchors.has("resp_omni_1")).toBe(false);
+  });
+
+  it("anchors to the final completed result in the triggering user turn", () => {
+    const bubbles: Bubble[] = [
+      user("msg_user_1"),
+      { ...assistant("msg_intermediate", "intermediate"), items: [] },
+      assistant("msg_final", "final"),
+      user("msg_user_2"),
+      assistant("msg_next", "next"),
+    ];
+    const anchors = resolveTaskOutcomeAnchors(bubbles, [
+      run({ response_id: "resp_omni_1", triggering_message_id: "msg_user_1" }),
+    ]);
+    expect(anchors.get("final")).toBe("resp_omni_1");
+    expect(anchors.has("next")).toBe(false);
+  });
+
+  it("keeps two reversed task-run results attached to their own user turns", () => {
+    const bubbles: Bubble[] = [
+      user("msg_user_1"),
+      assistant("msg_assistant_1", "bubble_1"),
+      user("msg_user_2"),
+      assistant("msg_assistant_2", "bubble_2"),
+    ];
+    const anchors = resolveTaskOutcomeAnchors(bubbles, [
+      run({ id: "run_2", response_id: "resp_2", triggering_message_id: "msg_user_2" }),
+      run({ id: "run_1", response_id: "resp_1", triggering_message_id: "msg_user_1" }),
+    ]);
+    expect(anchors.get("bubble_1")).toBe("resp_1");
+    expect(anchors.get("bubble_2")).toBe("resp_2");
+  });
+
+  it("fails closed when neither response id nor triggering message identity matches", () => {
+    const bubbles: Bubble[] = [user("another_user"), assistant("msg_assistant", "bubble")];
+    const anchors = resolveTaskOutcomeAnchors(bubbles, [
+      run({ response_id: "resp_unknown", triggering_message_id: "msg_missing" }),
+    ]);
+    expect(anchors.size).toBe(0);
+  });
+});
+'''
+          Path("web/src/lib/taskOutcomeAnchors.test.ts").write_text(anchor_test)
+
+          # Guard against stale production prop names after the refactor.
+          production_render_outcomes = []
+          for path in Path("web/src").rglob("*.tsx"):
+              if path.name.endswith(".test.tsx"):
+                  continue
+              if "renderOutcome" in path.read_text():
+                  production_render_outcomes.append(str(path))
+          if production_render_outcomes:
+              raise SystemExit(f"stale renderOutcome production references: {production_render_outcomes}")
+          PY
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run focused tests
+        working-directory: web
+        run: >-
+          npx vitest run
+          src/lib/taskOutcomeAnchors.test.ts
+          src/pages/ChatPage.taskOutcomeOrdering.test.tsx
+          src/components/blocks/TaskOutcomeBriefCard.test.tsx
+          src/components/blocks/RouteApprovalCard.test.tsx
+          src/components/blocks/ApprovalCard.test.tsx
+
+      - name: Type-check
+        working-directory: web
+        run: npx tsc -b
+
+      - name: Build
+        working-directory: web
+        run: npx vite build
+
+      - name: Commit verified fix and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/temporary-task-outcome-association-fix.yml
+          git config user.name "OpenAI"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/src/lib/taskOutcomes.ts \
+                  web/src/lib/taskOutcomeAnchors.test.ts \
+                  web/src/pages/ChatPage.tsx \
+                  web/src/pages/ChatPage.taskOutcomeOrdering.test.tsx \
+                  .github/workflows/temporary-task-outcome-association-fix.yml
+          git commit -m "fix(web): associate native task outcomes with their turns"
+          git push origin HEAD:feat/model-routing-agent
