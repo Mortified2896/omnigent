@@ -22,6 +22,7 @@ from omnigent.opencode_native_provider import (
     build_opencode_omnigent_mcp_server,
     build_opencode_provider_config,
     maybe_merge_user_provider_config,
+    merge_omniroute_combo_catalog,
     qualify_omniroute_model,
     resolve_databricks_gateway,
     validate_omniroute_provider_config,
@@ -82,6 +83,34 @@ def test_approved_route_accepts_local_omniroute_provider() -> None:
     validate_omniroute_provider_config(
         {"provider": {"omniroute": {"options": {"baseURL": OMNIROUTE_BASE_URL}}}}
     )
+
+
+def test_combo_catalog_merges_without_losing_existing_provider_options() -> None:
+    config = {
+        "plugin": ["/custom/plugin.js"],
+        "provider": {
+            "omniroute": {
+                "options": {"apiKey": "reference-only", "custom": "kept"},
+                "models": {"concrete": {"name": "Concrete"}},
+            }
+        },
+    }
+    merged = merge_omniroute_combo_catalog(
+        config,
+        combos={"auto/coding:reliable": {"name": "auto/coding:reliable"}},
+        approved_route="auto/coding:reliable",
+    )
+    provider = merged["provider"]["omniroute"]
+    assert provider["models"]["concrete"] == {"name": "Concrete"}
+    assert provider["models"]["auto/coding:reliable"] == {"name": "auto/coding:reliable"}
+    assert provider["options"]["apiKey"] == "reference-only"
+    assert provider["options"]["custom"] == "kept"
+    assert merged["plugin"] == ["/custom/plugin.js"]
+
+
+def test_combo_catalog_rejects_route_not_exposed_by_omniroute() -> None:
+    with pytest.raises(OpenCodeOmniRouteConfigurationError, match="not exposed"):
+        merge_omniroute_combo_catalog({}, combos={}, approved_route="auto/coding:reliable")
 
 
 def test_qualified_model_joins_provider_and_endpoint() -> None:

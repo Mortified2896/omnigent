@@ -927,6 +927,7 @@ class _OpenCodeNativeLaunchConfig:
     terminal_launch_args: list[str] | None
     model_override: str | None
     reasoning_effort: str | None
+    permission_mode: str | None
     external_session_id: str | None
     omniroute_route_expected: bool = False
     fork_carry_history: bool = False
@@ -998,6 +999,11 @@ async def _opencode_native_launch_config(
                 f"Invalid model_override for OpenCode session {session_id!r}: {exc}"
             ) from exc
     reasoning_effort = snapshot.get("reasoning_effort")
+    permission_mode = snapshot.get("permission_mode")
+    if permission_mode is not None and (
+        not isinstance(permission_mode, str) or not permission_mode
+    ):
+        raise RuntimeError(f"Invalid permission_mode for OpenCode session {session_id!r}.")
     if reasoning_effort is not None and (
         not isinstance(reasoning_effort, str) or not reasoning_effort
     ):
@@ -1027,6 +1033,7 @@ async def _opencode_native_launch_config(
         terminal_launch_args=terminal_launch_args,
         model_override=model_override,
         reasoning_effort=reasoning_effort,
+        permission_mode=permission_mode,
         external_session_id=external_session_id,
         omniroute_route_expected=omniroute_route_expected,
         fork_carry_history=fork_carry_history,
@@ -1115,7 +1122,10 @@ async def _auto_create_opencode_terminal(
         build_opencode_model_default_config,
         build_opencode_omnigent_mcp_server,
         build_opencode_provider_config,
+        fetch_omniroute_combo_models,
         maybe_merge_user_provider_config,
+        merge_omniroute_combo_catalog,
+        omniroute_api_key_from_config,
         resolve_databricks_gateway,
         validate_omniroute_provider_config,
         write_opencode_provider_config,
@@ -1191,6 +1201,26 @@ async def _auto_create_opencode_terminal(
     # hides the user's ~/.config/opencode/opencode.jsonc, so without this
     # merge, custom providers with non-default base URLs are invisible.
     config = maybe_merge_user_provider_config(config)
+    # OpenCode validates prompt model IDs against its per-session provider
+    # catalog. Populate it from OmniRoute, not a stale hand-maintained list.
+    # A pre-approval bridge may start while OmniRoute is unavailable, but an
+    # approved route is strictly fail-closed below.
+    try:
+        combos = await fetch_omniroute_combo_models(api_key=omniroute_api_key_from_config(config))
+    except Exception:
+        if launch_config.omniroute_route_expected:
+            raise
+    else:
+        if combos or launch_config.omniroute_route_expected:
+            config = merge_omniroute_combo_catalog(
+                config,
+                combos=combos,
+                approved_route=(
+                    launch_config.model_override.split("/", 1)[1]
+                    if launch_config.omniroute_route_expected and launch_config.model_override
+                    else next(iter(combos), "")
+                ),
+            )
     if launch_config.omniroute_route_expected:
         # Do not repair a wrong endpoint silently: a route-approved turn must
         # fail before OpenCode can open a direct provider connection.
@@ -1275,6 +1305,7 @@ async def _auto_create_opencode_terminal(
                 xdg_config_home=str(server.xdg_config_home),
                 model_override=model_override,
                 reasoning_effort=launch_config.reasoning_effort,
+                permission_mode=launch_config.permission_mode,
                 workspace=workspace,
             ),
         )
@@ -12031,6 +12062,61 @@ def create_runner_app(
             await client.aclose()
         return Response(status_code=200)
 
+    async def _sync_opencode_native_approved_package(conv_id: str) -> None:
+        """Fail-closed refresh of a live bridge immediately before dispatch."""
+        launch = await _opencode_native_launch_config(
+            session_id=conv_id, server_client=server_client
+        )
+        if not launch.omniroute_route_expected or not launch.model_override:
+            return
+        from omnigent.opencode_native_bridge import (
+            bridge_dir_for_bridge_id,
+            read_bridge_state,
+            update_execution_package,
+            xdg_config_home_for_bridge_dir,
+        )
+        from omnigent.opencode_native_provider import (
+            fetch_omniroute_combo_models,
+            merge_omniroute_combo_catalog,
+            omniroute_api_key_from_config,
+            write_opencode_provider_config,
+        )
+
+        bridge_dir = bridge_dir_for_bridge_id(conv_id)
+        state = await asyncio.to_thread(read_bridge_state, bridge_dir)
+        if state is None:
+            raise RuntimeError(
+                "OpenCode bridge is unavailable; approved route was not dispatched."
+            )
+        route_id = launch.model_override.split("/", 1)[1]
+        config_path = xdg_config_home_for_bridge_dir(bridge_dir) / "opencode" / "opencode.json"
+        try:
+            existing = (
+                json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+            )
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("OpenCode provider configuration could not be refreshed.") from exc
+        if not isinstance(existing, dict):
+            raise RuntimeError("OpenCode provider configuration is invalid.")
+        combos = await fetch_omniroute_combo_models(
+            api_key=omniroute_api_key_from_config(existing)
+        )
+        config = merge_omniroute_combo_catalog(existing, combos=combos, approved_route=route_id)
+        await asyncio.to_thread(
+            write_opencode_provider_config,
+            xdg_config_home_for_bridge_dir(bridge_dir),
+            config,
+        )
+        updated = await asyncio.to_thread(
+            update_execution_package,
+            bridge_dir,
+            model_override=launch.model_override,
+            reasoning_effort=launch.reasoning_effort,
+            permission_mode=launch.permission_mode,
+        )
+        if not updated:
+            raise RuntimeError("OpenCode bridge disappeared; approved route was not dispatched.")
+
     async def _handle_opencode_native_model_change(conv_id: str, model: str | None) -> Response:
         """
         Apply an Omnigent-initiated model switch to an opencode-native session.
@@ -14884,6 +14970,28 @@ def create_runner_app(
                             "detail": ("Message buffered; active turn will process it."),
                         },
                     )
+
+                # The route approval can occur after the native terminal was
+                # auto-created. Refresh its shared state and catalog before a
+                # harness process can receive this first approved prompt.
+                if _session_harness_name(conversation_id) == "opencode-native":
+                    try:
+                        await _sync_opencode_native_approved_package(conversation_id)
+                    except Exception as exc:
+                        _logger.exception(
+                            "OpenCode approved-package synchronization failed for %s",
+                            conversation_id,
+                        )
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "error": "opencode_route_synchronization_failed",
+                                "detail": _client_safe_error_detail(
+                                    exc, context="approved OpenCode route"
+                                ),
+                                "execution_started": False,
+                            },
+                        )
 
                 # Make the new user message visible to the turn. On the
                 # first touch of a conversation after a runner restart the
