@@ -9,6 +9,7 @@ by evaluator code.
 Revision ID: z9a2b3c4d5e6
 Revises: z8a2b3c4d5e6
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -22,8 +23,14 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("task_runs") as batch:
-        batch.add_column(sa.Column("execution_status", sa.String(32), nullable=False, server_default="running"))
-        batch.add_column(sa.Column("evaluation_status", sa.String(32), nullable=False, server_default="not_requested"))
+        batch.add_column(
+            sa.Column("execution_status", sa.String(32), nullable=False, server_default="running")
+        )
+        batch.add_column(
+            sa.Column(
+                "evaluation_status", sa.String(32), nullable=False, server_default="not_requested"
+            )
+        )
         batch.add_column(sa.Column("execution_started_at", sa.BigInteger(), nullable=True))
         batch.add_column(sa.Column("execution_finished_at", sa.BigInteger(), nullable=True))
         batch.add_column(sa.Column("execution_duration_ms", sa.BigInteger(), nullable=True))
@@ -34,10 +41,25 @@ def upgrade() -> None:
         batch.add_column(sa.Column("actual_provider", sa.String(128), nullable=True))
         batch.add_column(sa.Column("actual_provider_model", sa.String(128), nullable=True))
         batch.add_column(sa.Column("actual_provenance_verified", sa.Boolean(), nullable=True))
-    op.execute("UPDATE task_runs SET execution_status = CASE terminal_status WHEN 1 THEN 'running' WHEN 2 THEN 'completed' WHEN 3 THEN 'failed' WHEN 4 THEN 'cancelled' ELSE 'failed' END, execution_started_at = started_at, execution_finished_at = terminal_at, execution_duration_ms = duration_ms, actual_provider = selected_provider, actual_provider_model = selected_model, actual_provenance_verified = 0")
+    op.execute(
+        "UPDATE task_runs SET execution_status = CASE terminal_status WHEN 1 THEN 'running' WHEN 2 THEN 'completed' WHEN 3 THEN 'failed' WHEN 4 THEN 'cancelled' ELSE 'failed' END, execution_started_at = started_at, execution_finished_at = terminal_at, execution_duration_ms = duration_ms, actual_provider = selected_provider, actual_provider_model = selected_model, actual_provenance_verified = 0"
+    )
 
 
 def downgrade() -> None:
     with op.batch_alter_table("task_runs") as batch:
-        for name in ("actual_provenance_verified", "actual_provider_model", "actual_provider", "last_useful_activity_at", "timeout_type", "evaluation_finished_at", "evaluation_started_at", "execution_duration_ms", "execution_finished_at", "execution_started_at", "evaluation_status", "execution_status"):
+        for name in (
+            "actual_provenance_verified",
+            "actual_provider_model",
+            "actual_provider",
+            "last_useful_activity_at",
+            "timeout_type",
+            "evaluation_finished_at",
+            "evaluation_started_at",
+            "execution_duration_ms",
+            "execution_finished_at",
+            "execution_started_at",
+            "evaluation_status",
+            "execution_status",
+        ):
             batch.drop_column(name)

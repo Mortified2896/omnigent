@@ -293,6 +293,27 @@ export async function deleteConversation(id: string, deleteBranch = false): Prom
 }
 
 /**
+ * Bulk-delete multiple conversations via `POST /v1/sessions/bulk-delete`.
+ *
+ * Returns the server-confirmed lists of deleted and failed IDs.
+ */
+export async function bulkDeleteConversations(
+  ids: string[],
+): Promise<{ deleted: string[]; failed: { id: string; error: string; code: string }[] }> {
+  const res = await authenticatedFetch("/v1/sessions/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const body = await res.json();
+  for (const id of body.deleted ?? []) {
+    useChatStore.getState().clearQueuedMessages(id);
+  }
+  return body;
+}
+
+/**
  * Rename a conversation via `PATCH /v1/sessions/{id}`.
  *
  * Patches the new title into every cached list/snapshot query in
@@ -509,40 +530,23 @@ export function useBulkArchiveConversations() {
 }
 
 /**
- * Delete multiple conversations in parallel (stop + delete each).
+ * Delete multiple conversations via the bulk-delete endpoint.
  *
- * Each session is stopped (best-effort) then deleted independently.
+ * Uses the server-side `POST /v1/sessions/bulk-delete` endpoint
+ * which handles stop + cleanup + deletion atomically per session.
  * The conversations list cache is patched to remove successful
- * deletions. Returns an array of session IDs that failed.
+ * deletions.
  */
 export function useBulkDeleteConversations() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(
-        ids.map(async (id) => {
-          try {
-            await stopSession(id);
-          } catch {
-            // Best-effort stop
-          }
-          await deleteConversation(id);
-        }),
-      );
-      const succeeded: string[] = [];
-      const failed: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].status === "fulfilled") succeeded.push(ids[i]);
-        else failed.push(ids[i]);
-      }
-      if (failed.length > 0) throw { failed, succeeded, total: ids.length };
-      return { succeeded, failed };
+      const result = await bulkDeleteConversations(ids);
+      if (result.failed.length > 0) throw result;
+      return result;
     },
-    onSuccess: (_data, ids) => {
-      const idSet = new Set(ids);
-      // Splice deleted rows out of the global list AND every project folder's
-      // own paginated list (same page shape) so filed sessions leave their
-      // folder without a refresh.
+    onSuccess: (data: { deleted: string[]; failed: any[] }) => {
+      const idSet = new Set(data.deleted);
       for (const queryKey of [["conversations"], ["project-sessions"]]) {
         for (const [key, data] of queryClient.getQueriesData<ConversationsInfiniteData>({
           queryKey,
@@ -551,17 +555,15 @@ export function useBulkDeleteConversations() {
           if (removed) queryClient.setQueryData(key, next);
         }
       }
-      for (const id of ids) {
+      for (const id of data.deleted) {
         queryClient.removeQueries({ queryKey: ["conversation-backfill", id] });
         queryClient.removeQueries({ queryKey: ["session", id] });
       }
-      // Refresh the project list so a project emptied by these deletes drops
-      // its now-empty folder (DB-direct read, no search-index lag).
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (err: any) => {
-      if (err?.succeeded) {
-        const idSet = new Set(err.succeeded as string[]);
+      if (err?.deleted && err.deleted.length > 0) {
+        const idSet = new Set(err.deleted as string[]);
         for (const queryKey of [["conversations"], ["project-sessions"]]) {
           for (const [key, data] of queryClient.getQueriesData<ConversationsInfiniteData>({
             queryKey,
@@ -570,7 +572,7 @@ export function useBulkDeleteConversations() {
             if (removed) queryClient.setQueryData(key, next);
           }
         }
-        for (const id of err.succeeded) {
+        for (const id of err.deleted) {
           queryClient.removeQueries({ queryKey: ["conversation-backfill", id] });
           queryClient.removeQueries({ queryKey: ["session", id] });
         }

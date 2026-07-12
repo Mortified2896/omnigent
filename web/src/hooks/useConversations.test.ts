@@ -9,6 +9,7 @@ import type { ConversationsInfiniteData } from "@/lib/sessionListCache";
 import type { Session } from "@/lib/types";
 import { useSessionUpdatesConnected } from "./useSessionUpdatesConnected";
 import {
+  bulkDeleteConversations,
   deleteConversation,
   renameConversation,
   useArchiveConversation,
@@ -183,6 +184,39 @@ describe("deleteConversation", () => {
   it("throws on non-2xx", async () => {
     fetchMock.mockResolvedValueOnce(mockResponse({}, { ok: false, status: 404 }));
     await expect(deleteConversation("missing")).rejects.toThrow(/404/);
+  });
+});
+
+describe("bulkDeleteConversations", () => {
+  it("POSTs to /v1/sessions/bulk-delete with the ids", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({ deleted: ["conv_a", "conv_b"], failed: [] }));
+
+    const result = await bulkDeleteConversations(["conv_a", "conv_b"]);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/sessions/bulk-delete");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ ids: ["conv_a", "conv_b"] });
+    expect(result).toEqual({ deleted: ["conv_a", "conv_b"], failed: [] });
+  });
+
+  it("returns deleted and failed arrays from the server", async () => {
+    const serverBody = {
+      deleted: ["conv_a"],
+      failed: [{ id: "conv_b", error: "Not found", code: "NOT_FOUND" }],
+    };
+    fetchMock.mockResolvedValueOnce(mockResponse(serverBody));
+
+    const result = await bulkDeleteConversations(["conv_a", "conv_b"]);
+
+    expect(result.deleted).toEqual(["conv_a"]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].id).toBe("conv_b");
+  });
+
+  it("throws on non-2xx", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({}, { ok: false, status: 500 }));
+    await expect(bulkDeleteConversations(["conv_x"])).rejects.toThrow(/500/);
   });
 });
 
@@ -598,29 +632,31 @@ describe("useBulkDeleteConversations", () => {
     return { queryClient, rendered };
   }
 
-  it("stops and deletes each session, then removes them from cache", async () => {
-    // For each id: stop (POST) then delete (DELETE) = 4 calls for 2 ids.
-    fetchMock
-      .mockResolvedValueOnce(mockResponse({ queued: false })) // stop conv_a
-      .mockResolvedValueOnce(mockResponse({ deleted: true })) // delete conv_a
-      .mockResolvedValueOnce(mockResponse({ queued: false })) // stop conv_b
-      .mockResolvedValueOnce(mockResponse({ deleted: true })); // delete conv_b
+  it("POSTs to bulk-delete and removes deleted IDs from cache on success", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({ deleted: ["conv_a", "conv_b"], failed: [] }));
 
     const { queryClient, rendered } = renderBulkDeleteHook();
     rendered.result.current.mutate(["conv_a", "conv_b"]);
     await waitFor(() => expect(rendered.result.current.isSuccess).toBe(true));
 
+    // Exactly one POST to the bulk endpoint.
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/sessions/bulk-delete");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ ids: ["conv_a", "conv_b"] });
+
+    // Deleted rows are removed from cache.
     const data = queryClient.getQueryData<ConversationsInfiniteData>(["conversations", "", false]);
     expect(data!.pages[0].data.map((c) => c.id)).toEqual(["conv_keep"]);
   });
 
-  it("evicts succeeded ids from cache even when some deletes fail", async () => {
-    // conv_a succeeds (stop+delete), conv_b fails on delete.
-    fetchMock
-      .mockResolvedValueOnce(mockResponse({ queued: false })) // stop conv_a
-      .mockResolvedValueOnce(mockResponse({ deleted: true })) // delete conv_a
-      .mockResolvedValueOnce(mockResponse({ queued: false })) // stop conv_b
-      .mockResolvedValueOnce(mockResponse({}, { ok: false, status: 500 })); // delete conv_b fails
+  it("evicts succeeded ids from cache when some deletes fail", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        deleted: ["conv_a"],
+        failed: [{ id: "conv_b", error: "Session not found", code: "NOT_FOUND" }],
+      }),
+    );
 
     const { queryClient, rendered } = renderBulkDeleteHook();
     rendered.result.current.mutate(["conv_a", "conv_b"]);
@@ -632,6 +668,28 @@ describe("useBulkDeleteConversations", () => {
     expect(ids).not.toContain("conv_a");
     expect(ids).toContain("conv_b");
     expect(ids).toContain("conv_keep");
+  });
+
+  it("throws the result body with deleted/failed arrays on partial failure", async () => {
+    const body = {
+      deleted: ["conv_a"],
+      failed: [{ id: "conv_b", error: "Forbidden", code: "FORBIDDEN" }],
+    };
+    fetchMock.mockResolvedValueOnce(mockResponse(body));
+
+    const { rendered } = renderBulkDeleteHook();
+    rendered.result.current.mutate(["conv_a", "conv_b"]);
+    await waitFor(() => expect(rendered.result.current.isError).toBe(true));
+
+    expect(rendered.result.current.error).toEqual(body);
+  });
+
+  it("rejects on network error", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({}, { ok: false, status: 500 }));
+
+    const { rendered } = renderBulkDeleteHook();
+    rendered.result.current.mutate(["conv_a"]);
+    await waitFor(() => expect(rendered.result.current.isError).toBe(true));
   });
 });
 

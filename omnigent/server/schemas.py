@@ -669,6 +669,45 @@ class ConversationDeleted(BaseModel):
     deleted: bool = True
 
 
+class BulkDeleteRequest(BaseModel):
+    """
+    Request body for bulk-deleting multiple sessions.
+
+    :param ids: List of session/conversation identifiers to delete.
+    """
+
+    ids: list[str]
+
+
+class BulkDeleteFailure(BaseModel):
+    """
+    A single failure within a bulk-delete operation.
+
+    :param id: The session/conversation identifier that could not
+        be deleted, e.g. ``"conv_abc123"``.
+    :param error: Human-readable error description.
+    :param code: Machine-readable error code.
+    """
+
+    id: str
+    error: str
+    code: str = "UNKNOWN"
+
+
+class BulkDeleteResult(BaseModel):
+    """
+    Result of a bulk-delete operation.
+
+    :param deleted: List of session/conversation identifiers that
+        were successfully deleted.
+    :param failed: List of :class:`BulkDeleteFailure` entries for
+        sessions that could not be deleted.
+    """
+
+    deleted: list[str]
+    failed: list[BulkDeleteFailure]
+
+
 class ConversationRef(BaseModel):
     """
     Lightweight reference to a conversation, used in request and

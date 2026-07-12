@@ -208,6 +208,9 @@ from omnigent.server.routing_agent import (
 )
 from omnigent.server.schemas import (
     AgentObject,
+    BulkDeleteFailure,
+    BulkDeleteRequest,
+    BulkDeleteResult,
     ChildSessionList,
     ChildSessionSummary,
     CompletedEvent,
@@ -20624,6 +20627,126 @@ def create_sessions_router(
                     getattr(request.app.state, "sandbox_config", None),
                 )
         return ConversationDeleted(id=session_id)
+
+    # ── POST /sessions/bulk-delete ───────────────────────────────
+
+    @router.post(
+        "/sessions/bulk-delete",
+        response_model=None,
+        responses={200: {"model": BulkDeleteResult}},
+    )
+    async def bulk_delete_sessions(
+        request: Request,
+        body: BulkDeleteRequest,
+    ) -> BulkDeleteResult:
+        """Delete multiple sessions in bulk.
+
+        Accepts a list of session IDs and deletes each one, collecting
+        successes and failures. Each session is deleted atomically —
+        a failure for one does not affect the others. Authorization is
+        checked per session: the caller must own (or be admin of) each
+        session.
+
+        :param request: The incoming FastAPI request (for auth).
+        :param body: The :class:`BulkDeleteRequest` with session IDs.
+        :returns: A :class:`BulkDeleteResult` with ``deleted`` and
+            ``failed`` lists.
+        """
+        user_id = _require_user(request, auth_provider)
+        deleted: list[str] = []
+        failed: list[BulkDeleteFailure] = []
+
+        for session_id in body.ids:
+            try:
+                # Authorisation check — same as delete_session.
+                if permission_store is not None and user_id is not None:
+                    is_admin = await asyncio.to_thread(permission_store.is_admin, user_id)
+                    if not is_admin:
+                        grant = await asyncio.to_thread(permission_store.get, user_id, session_id)
+                        if grant is None or grant.level < LEVEL_OWNER:
+                            if grant is not None:
+                                raise OmnigentError(
+                                    "Only the session owner can delete this session",
+                                    code=ErrorCode.FORBIDDEN,
+                                )
+                            raise OmnigentError(
+                                "Conversation not found",
+                                code=ErrorCode.NOT_FOUND,
+                            )
+
+                conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+                if conv is None:
+                    raise OmnigentError(
+                        "Session not found",
+                        code=ErrorCode.NOT_FOUND,
+                    )
+
+                # Runner-side resource cleanup is best-effort.
+                runner_client: httpx.AsyncClient | None = None
+                try:
+                    runner_client = await _get_runner_client_for_resource_access(session_id)
+                except OmnigentError as exc:
+                    _logger.info(
+                        "Skipping runner-side cleanup for %s; proceeding: %s",
+                        session_id,
+                        exc,
+                    )
+                if runner_client is not None:
+                    try:
+                        await runner_client.delete(
+                            f"/v1/sessions/{session_id}/resources",
+                            timeout=10.0,
+                        )
+                    except (httpx.HTTPError, ConnectionError):
+                        _logger.warning(
+                            "Runner cleanup failed for %s, falling back",
+                            session_id,
+                        )
+
+                # Session file cleanup.
+                if file_store is not None and artifact_store is not None:
+                    deleted_file_ids = await asyncio.to_thread(
+                        file_store.delete_all_for_session, session_id
+                    )
+                    for fid in deleted_file_ids:
+                        await asyncio.to_thread(artifact_store.delete, fid)
+
+                _interrupt_fenced_sessions.discard(session_id)
+                db_deleted = await conversation_store.delete_conversation(session_id)
+                if not db_deleted:
+                    raise OmnigentError(
+                        "Session not found",
+                        code=ErrorCode.NOT_FOUND,
+                    )
+
+                # Cache cleanup.
+                _session_sandbox_status_cache.pop(session_id, None)
+                _prune_session_read_state(session_id)
+                managed_launches = getattr(request.app.state, "managed_launches", None)
+                if managed_launches is not None:
+                    managed_launches.finish(session_id)
+
+                deleted.append(session_id)
+
+            except OmnigentError as exc:
+                failed.append(
+                    BulkDeleteFailure(
+                        id=session_id,
+                        error=exc.message,
+                        code=exc.code,
+                    )
+                )
+            except Exception as exc:
+                _logger.exception("Unexpected error deleting session %s", session_id)
+                failed.append(
+                    BulkDeleteFailure(
+                        id=session_id,
+                        error=str(exc),
+                        code="INTERNAL",
+                    )
+                )
+
+        return BulkDeleteResult(deleted=deleted, failed=failed)
 
     # ── Permission management endpoints ──────────────────────────
 

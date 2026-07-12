@@ -3374,12 +3374,38 @@ function BulkActionBar({
     if (ids.length === 0) return;
     setConfirmDeleteOpen(false);
     bulkDelete.mutate(ids, {
-      onSuccess: () => {
+      onSuccess: (data: { deleted: string[]; failed: any[] }) => {
+        const deletedCount = data.deleted.length;
+        showToast(
+          <span>
+            Deleted <strong>{deletedCount}</strong> session{deletedCount !== 1 ? "s" : ""}.
+          </span>,
+        );
         if (activeId && ids.includes(activeId)) navigate("/", { replace: true });
         onDeselectAll();
       },
       onError: (err: any) => {
-        if (activeId && err?.succeeded?.includes(activeId)) navigate("/", { replace: true });
+        const deleted = (err?.deleted ?? []) as string[];
+        const failed = (err?.failed ?? []) as { id: string; error: string }[];
+        if (activeId && deleted.includes(activeId)) navigate("/", { replace: true });
+        if (failed.length > 0 && deleted.length > 0) {
+          showToast(
+            <span>
+              Deleted <strong>{deleted.length}</strong> session
+              {deleted.length !== 1 ? "s" : ""}, but <strong>{failed.length}</strong> could not be
+              deleted. The remaining selection is preserved for retry.
+            </span>,
+            { duration: 10_000 },
+          );
+        } else if (failed.length > 0) {
+          showToast(
+            <span>
+              Could not delete <strong>{failed.length}</strong> session
+              {failed.length !== 1 ? "s" : ""}. The selection is preserved for retry.
+            </span>,
+            { duration: 10_000 },
+          );
+        }
       },
     });
   }
@@ -3482,12 +3508,6 @@ function BulkActionBar({
             Delete {ownedSelected.length > 0 ? ownedSelected.length : ""}
           </Button>
         </div>
-
-        {(bulkArchive.isError || bulkDelete.isError) && (
-          <p className="text-xs text-destructive" role="alert">
-            Some actions failed. Retry or dismiss.
-          </p>
-        )}
       </div>
 
       <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>

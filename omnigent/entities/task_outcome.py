@@ -97,10 +97,22 @@ EVALUATOR_ACCURACY_VALUES: tuple[str, ...] = (
 # ``terminal_status`` is retained for API compatibility and is always derived
 # from ``execution_status``. Evaluation activity must never change it.
 TASK_RUN_STATUSES: tuple[str, ...] = (
-    "queued", "starting", "running", "cancelling", "cancelled", "completed", "failed", "timed_out", "incomplete", # legacy wire value
+    "queued",
+    "starting",
+    "running",
+    "cancelling",
+    "cancelled",
+    "completed",
+    "failed",
+    "timed_out",
+    "incomplete",  # legacy wire value
 )
 EVALUATION_STATUSES: tuple[str, ...] = (
-    "not_requested", "pending", "completed", "skipped", "failed",
+    "not_requested",
+    "pending",
+    "completed",
+    "skipped",
+    "failed",
 )
 OUTBOX_STATUSES: tuple[str, ...] = (
     "pending",

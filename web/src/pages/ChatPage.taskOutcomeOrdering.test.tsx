@@ -94,10 +94,7 @@ interface ConversationPieceProps {
   bubbleToTaskRunResponseId?: ReadonlyMap<string, string> | null;
 }
 
-function ConversationPiece({
-  bubbles,
-  bubbleToTaskRunResponseId = null,
-}: ConversationPieceProps) {
+function ConversationPiece({ bubbles, bubbleToTaskRunResponseId = null }: ConversationPieceProps) {
   return (
     <FileViewerContext.Provider value={FILE_VIEWER_NOOP}>
       <div data-testid="conversation-flow">
@@ -290,8 +287,12 @@ describe("Task outcome card anchoring — DOM order", () => {
     expect(slot.getAttribute("data-response-id")).toBe("resp_1");
     expect(within(slot).getByTestId("task-outcome-brief-card")).toBe(card);
 
-    const userMessage = container.querySelector('[data-role="user"][data-testid="message-bubble"]')!;
-    const assistantMessage = container.querySelector('[data-role="assistant"][data-testid="message-bubble"]')!;
+    const userMessage = container.querySelector(
+      '[data-role="user"][data-testid="message-bubble"]',
+    )!;
+    const assistantMessage = container.querySelector(
+      '[data-role="assistant"][data-testid="message-bubble"]',
+    )!;
     const outcomeSlot = container.querySelector('[data-testid="assistant-outcome-slot"]')!;
 
     expect(
@@ -316,8 +317,14 @@ describe("Task outcome card anchoring — DOM order", () => {
   });
 
   it("preserves per-response association for multiple turns", async () => {
-    const detailA = { ...READY_DETAIL, run: { ...READY_DETAIL.run, id: "runA", response_id: "resp_1" } };
-    const detailB = { ...READY_DETAIL, run: { ...READY_DETAIL.run, id: "runB", response_id: "resp_2" } };
+    const detailA = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "runA", response_id: "resp_1" },
+    };
+    const detailB = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "runB", response_id: "resp_2" },
+    };
     setFixture("conv-x:resp_1", detailA);
     setFixture("conv-x:resp_2", detailB);
     const bubbles: Bubble[] = [
@@ -345,7 +352,8 @@ describe("Task outcome card anchoring — DOM order", () => {
 
     const flow = container.querySelector('[data-testid="conversation-flow"]')!;
     const roleChain = Array.from(flow.children).map(
-      (el) => `${el.getAttribute("data-role") ?? "-"}/${el.getAttribute("data-response-id") ?? "-"}`,
+      (el) =>
+        `${el.getAttribute("data-role") ?? "-"}/${el.getAttribute("data-response-id") ?? "-"}`,
     );
     expect(roleChain).toEqual([
       "user/-",
@@ -424,16 +432,16 @@ describe("Reasoning bubble should NOT get outcome - the core fix", () => {
     ];
     const anchors = new Map<string, string>([["msg_final-stable", "resp_omni"]]);
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     await screen.findByTestId("task-outcome-brief-card");
 
     const slots = screen.getAllByTestId("assistant-outcome-slot");
     expect(slots).toHaveLength(1);
     expect(slots[0].getAttribute("data-response-id")).toBe("msg_final");
-    expect(screen.queryByTestId("assistant-outcome-slot[data-response-id='msg_reasoning']")).toBeNull();
+    expect(
+      screen.queryByTestId("assistant-outcome-slot[data-response-id='msg_reasoning']"),
+    ).toBeNull();
   });
 
   it("reasoning bubble with matching responseId does NOT get outcome", async () => {
@@ -445,16 +453,16 @@ describe("Reasoning bubble should NOT get outcome - the core fix", () => {
     ];
     const anchors = new Map<string, string>([["msg_final-stable", "msg_reasoning"]]);
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     await screen.findByTestId("task-outcome-brief-card");
 
     const slots = screen.getAllByTestId("assistant-outcome-slot");
     expect(slots).toHaveLength(1);
     expect(slots[0].getAttribute("data-response-id")).toBe("msg_final");
-    expect(screen.queryByTestId("assistant-outcome-slot[data-response-id='msg_reasoning']")).toBeNull();
+    expect(
+      screen.queryByTestId("assistant-outcome-slot[data-response-id='msg_reasoning']"),
+    ).toBeNull();
   });
 
   it("DOM order: reasoning → final answer → outcome slot", async () => {
@@ -498,9 +506,7 @@ describe("OpenCode-native response ID association", () => {
       userBubble("Hi"),
       assistantBubble("msg_opencode_assistant_1", "completed", "Processing..."),
     ];
-    const anchors = new Map<string, string>([
-      ["msg_opencode_assistant_1-stable", "resp_omni_1"],
-    ]);
+    const anchors = new Map<string, string>([["msg_opencode_assistant_1-stable", "resp_omni_1"]]);
     const { container } = render(
       <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
     );
@@ -525,8 +531,14 @@ describe("OpenCode-native response ID association", () => {
   });
 
   it("handles multiple OpenCode-native turns", async () => {
-    const detail1 = { ...READY_DETAIL, run: { ...READY_DETAIL.run, id: "run-1", response_id: "resp_omni_1" } };
-    const detail2 = { ...READY_DETAIL, run: { ...READY_DETAIL.run, id: "run-2", response_id: "resp_omni_2" } };
+    const detail1 = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "run-1", response_id: "resp_omni_1" },
+    };
+    const detail2 = {
+      ...READY_DETAIL,
+      run: { ...READY_DETAIL.run, id: "run-2", response_id: "resp_omni_2" },
+    };
     setFixture("conv-x:resp_omni_1", detail1);
     setFixture("conv-x:resp_omni_2", detail2);
 
@@ -541,9 +553,7 @@ describe("OpenCode-native response ID association", () => {
       ["msg_opencode_2-stable", "resp_omni_2"],
     ]);
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     await waitFor(() => {
       expect(screen.getAllByTestId("assistant-outcome-slot")).toHaveLength(2);
@@ -562,9 +572,7 @@ describe("OpenCode-native response ID association", () => {
     ];
     const anchors = new Map<string, string>();
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     expect(screen.queryByTestId("task-outcome-brief-card")).toBeNull();
     expect(screen.queryByTestId("assistant-outcome-slot")).toBeNull();
@@ -581,9 +589,7 @@ describe("No mapping means no card - the critical invariant", () => {
     ];
     const anchors = new Map<string, string>();
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     expect(screen.queryByTestId("assistant-outcome-slot")).toBeNull();
     expect(screen.queryByTestId("task-outcome-brief-card")).toBeNull();
@@ -599,9 +605,7 @@ describe("No mapping means no card - the critical invariant", () => {
     ];
     const anchors = new Map<string, string>([["resp_2-stable", "resp_2"]]);
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     await waitFor(() => {
       expect(screen.queryByTestId("task-outcome-brief-card")).not.toBeNull();
@@ -619,9 +623,7 @@ describe("No mapping means no card - the critical invariant", () => {
     ];
     const anchors = new Map<string, string>([["other-stable", "other"]]);
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     expect(screen.queryByTestId("assistant-outcome-slot")).toBeNull();
     expect(screen.queryByTestId("task-outcome-brief-card")).toBeNull();
@@ -638,9 +640,7 @@ describe("Reconnect duplicates", () => {
     ];
     const anchors = new Map<string, string>([["resp_1-stable", "resp_1"]]);
 
-    render(
-      <ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />,
-    );
+    render(<ConversationPiece bubbles={bubbles} bubbleToTaskRunResponseId={anchors} />);
 
     await waitFor(() => {
       expect(screen.getAllByTestId("task-outcome-brief-card")).toHaveLength(1);

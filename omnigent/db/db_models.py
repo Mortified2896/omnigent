@@ -1203,8 +1203,12 @@ class SqlTaskRun(Base):
     fallback_used: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # Legacy projection of execution_status. Never written by evaluation code.
     terminal_status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
-    execution_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="running")
-    evaluation_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="not_requested")
+    execution_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="running"
+    )
+    evaluation_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="not_requested"
+    )
     execution_started_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     execution_finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     execution_duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

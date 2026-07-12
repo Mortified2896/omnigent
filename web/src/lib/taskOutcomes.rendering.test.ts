@@ -20,7 +20,9 @@ function assistant(
     stableId: `${responseId}-stable`,
     lifecycle,
     error: null,
-    items: items ?? [{ kind: "text" as const, itemId: `${responseId}-item`, text: "Hello", final: true }],
+    items: items ?? [
+      { kind: "text" as const, itemId: `${responseId}-item`, text: "Hello", final: true },
+    ],
   };
 }
 
@@ -32,7 +34,12 @@ function reasoningBubble(responseId: string): Bubble {
     lifecycle: "completed",
     error: null,
     items: [
-      { kind: "reasoning" as const, itemId: `${responseId}-reasoning`, text: "Thinking...", duration: 0.5 },
+      {
+        kind: "reasoning" as const,
+        itemId: `${responseId}-reasoning`,
+        text: "Thinking...",
+        duration: 0.5,
+      },
     ],
   };
 }
@@ -45,7 +52,12 @@ function mixedBubble(responseId: string): Bubble {
     lifecycle: "completed",
     error: null,
     items: [
-      { kind: "reasoning" as const, itemId: `${responseId}-reasoning`, text: "Thinking...", duration: 0.5 },
+      {
+        kind: "reasoning" as const,
+        itemId: `${responseId}-reasoning`,
+        text: "Thinking...",
+        duration: 0.5,
+      },
       { kind: "text" as const, itemId: `${responseId}-text`, text: "Final answer", final: true },
     ],
   };
@@ -196,11 +208,7 @@ describe("resolveTaskOutcomeAnchors", () => {
     it("reasoning-only bubble with matching responseId does NOT get the mapping", () => {
       // Task run's response_id matches a reasoning-only bubble's responseId
       // The reasoning bubble should NOT get the mapping because it has no visible final text
-      const bubbles = [
-        user("u1"),
-        reasoningBubble("msg_reasoning"),
-        assistant("msg_final"),
-      ];
+      const bubbles = [user("u1"), reasoningBubble("msg_reasoning"), assistant("msg_final")];
       const runs = [run("msg_reasoning", null)]; // run with reasoning bubble's responseId
 
       const anchors = resolveTaskOutcomeAnchors(bubbles, runs);
@@ -216,11 +224,7 @@ describe("resolveTaskOutcomeAnchors", () => {
       // - reasoning-only bubble has responseId matching task_run.response_id
       // - final answer bubble is separate
       // The final answer should get the mapping via triggering-message bridge
-      const bubbles = [
-        user("u1"),
-        reasoningBubble("msg_reasoning"),
-        assistant("msg_final"),
-      ];
+      const bubbles = [user("u1"), reasoningBubble("msg_reasoning"), assistant("msg_final")];
       const runs = [run("msg_reasoning", "u1")]; // task_run.response_id = reasoning bubble's responseId
 
       const anchors = resolveTaskOutcomeAnchors(bubbles, runs);
@@ -308,12 +312,7 @@ describe("resolveTaskOutcomeAnchors", () => {
     it("handles mixed exact matches and triggering-message associations", () => {
       // First turn: exact match (normal harness)
       // Second turn: OpenCode-native mismatch
-      const bubbles = [
-        user("u1"),
-        assistant("resp_1"),
-        user("u2"),
-        assistant("msg_opencode_2"),
-      ];
+      const bubbles = [user("u1"), assistant("resp_1"), user("u2"), assistant("msg_opencode_2")];
       const runs = [
         run("resp_1", null), // exact match
         run("resp_omni_2", "u2"), // triggering message bridge
