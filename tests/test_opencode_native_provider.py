@@ -12,7 +12,9 @@ import pytest
 
 from omnigent.opencode_native_provider import (
     DEFAULT_DATABRICKS_GATEWAY_MODEL,
+    OMNIROUTE_BASE_URL,
     OpenCodeGatewayResolution,
+    OpenCodeOmniRouteConfigurationError,
     _gateway_endpoint_for_model,
     _strip_jsonc_comments,
     _strip_trailing_commas,
@@ -20,7 +22,9 @@ from omnigent.opencode_native_provider import (
     build_opencode_omnigent_mcp_server,
     build_opencode_provider_config,
     maybe_merge_user_provider_config,
+    qualify_omniroute_model,
     resolve_databricks_gateway,
+    validate_omniroute_provider_config,
     write_opencode_provider_config,
 )
 
@@ -59,6 +63,25 @@ def test_model_default_config_round_trips_through_writer(tmp_path: Path) -> None
     )
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["model"] == "openai/gpt-5.5"
+
+
+def test_approved_route_is_qualified_for_the_local_omniroute_provider() -> None:
+    assert qualify_omniroute_model("auto/coding") == "omniroute/auto/coding"
+
+
+def test_approved_route_rejects_missing_or_direct_provider_config() -> None:
+    with pytest.raises(OpenCodeOmniRouteConfigurationError, match="expected OmniRoute"):
+        validate_omniroute_provider_config({})
+    with pytest.raises(OpenCodeOmniRouteConfigurationError, match="direct upstream"):
+        validate_omniroute_provider_config(
+            {"provider": {"omniroute": {"options": {"baseURL": "https://api.example/v1"}}}}
+        )
+
+
+def test_approved_route_accepts_local_omniroute_provider() -> None:
+    validate_omniroute_provider_config(
+        {"provider": {"omniroute": {"options": {"baseURL": OMNIROUTE_BASE_URL}}}}
+    )
 
 
 def test_qualified_model_joins_provider_and_endpoint() -> None:

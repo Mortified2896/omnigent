@@ -10124,19 +10124,36 @@ async def _relay_runner_stream(
                                     session_id,
                                 )
                                 _project_path = _conv.workspace if _conv is not None else None
-                                # The triggering user message is the
-                                # most recent message item in the
-                                # conversation before the current
-                                # response_id's first item. We
-                                # deliberately don't try to look up
-                                # the exact message id here — the
-                                # relay re-runs over hundreds of
-                                # events per turn and a per-event
-                                # ``list_items`` lookup would be
-                                # expensive. ``triggering_message_id``
-                                # is best-effort metadata for the
-                                # review-card UI; it's ``None`` when
-                                # the lookup is skipped.
+                                # The native response id is not the user
+                                # bubble id. Resolve the latest persisted user
+                                # item once per response so the UI can bridge
+                                # the two identities without guessing.
+                                _recent_items = await asyncio.to_thread(
+                                    conversation_store.list_items,
+                                    session_id,
+                                    limit=100,
+                                    order="desc",
+                                )
+                                _trigger = next(
+                                    (
+                                        item
+                                        for item in _recent_items.data
+                                        if item.type == "message"
+                                        and isinstance(item.data, MessageData)
+                                        and item.data.role == "user"
+                                        and not item.data.is_meta
+                                    ),
+                                    None,
+                                )
+                                if _trigger is not None:
+                                    current_triggering_message_id = _trigger.id
+                                    _trigger_text = [
+                                        block.get("text", "")
+                                        for block in (_trigger.data.content or [])
+                                        if isinstance(block, dict)
+                                        and isinstance(block.get("text"), str)
+                                    ]
+                                    current_user_message_summary = "\n".join(_trigger_text)[:2000]
                                 current_task_run_id = (
                                     task_outcome_recorder.on_response_in_progress(
                                         session_id=session_id,
@@ -10471,9 +10488,41 @@ async def _relay_runner_stream(
                                         if isinstance(_total_cost, (int, float))
                                         else None
                                     )
+                                    # Native bridges can persist the user item
+                                    # after response.in_progress. Resolve it
+                                    # again at terminal time before finalizing
+                                    # the run, when the transcript is complete.
+                                    if current_triggering_message_id is None:
+                                        try:
+                                            _terminal_items = await asyncio.to_thread(
+                                                conversation_store.list_items,
+                                                session_id,
+                                                limit=100,
+                                                order="desc",
+                                            )
+                                            _terminal_user = next(
+                                                (
+                                                    item
+                                                    for item in _terminal_items.data
+                                                    if item.type == "message"
+                                                    and isinstance(item.data, MessageData)
+                                                    and item.data.role == "user"
+                                                    and not item.data.is_meta
+                                                ),
+                                                None,
+                                            )
+                                            if _terminal_user is not None:
+                                                current_triggering_message_id = _terminal_user.id
+                                        except Exception:  # noqa: BLE001
+                                            _logger.debug(
+                                                "Relay: unable to resolve terminal "
+                                                "triggering message",
+                                                exc_info=True,
+                                            )
                                     task_outcome_recorder.on_response_terminal(
                                         task_run_id=current_task_run_id,
                                         terminal_status=_terminal_status,
+                                        triggering_message_id=current_triggering_message_id,
                                         terminal_at=int(time.time()),
                                         response_summary=_summary_text,
                                         changed_files=_changed_files_list,

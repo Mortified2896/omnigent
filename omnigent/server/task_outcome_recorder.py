@@ -314,6 +314,7 @@ class TaskOutcomeRecorder:
         output_tokens: int | None = None,
         total_cost_usd: float | None = None,
         response_id: str | None = None,
+        triggering_message_id: str | None = None,
     ) -> None:
         """Update a :class:`TaskRun` row with terminal data.
 
@@ -349,6 +350,7 @@ class TaskOutcomeRecorder:
                     terminal_status=terminal_status,
                     terminal_at=terminal_at,
                     response_id=response_id,
+                    triggering_message_id=triggering_message_id,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_cost_usd=total_cost_usd,

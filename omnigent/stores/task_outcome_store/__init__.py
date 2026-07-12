@@ -129,6 +129,7 @@ class UpdateTaskRunTerminalInput:
     terminal_status: str
     terminal_at: int
     response_id: str | None = None
+    triggering_message_id: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_cost_usd: float | None = None

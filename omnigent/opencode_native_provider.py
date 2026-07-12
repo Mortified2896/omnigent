@@ -42,6 +42,38 @@ _SERVING_ENDPOINTS_PATH = "serving-endpoints"
 # Fallback chat model when neither the spec nor config names one.
 DEFAULT_DATABRICKS_GATEWAY_MODEL = "databricks-claude-sonnet-4-6"
 
+# Route-approved turns must use this local OpenAI-compatible provider rather
+# than OpenCode's built-in ``opencode`` provider, which talks to Zen directly.
+OMNIROUTE_PROVIDER_ID = "omniroute"
+OMNIROUTE_BASE_URL = "http://127.0.0.1:20128/v1"
+
+
+class OpenCodeOmniRouteConfigurationError(RuntimeError):
+    """Raised when an approved OmniRoute turn would bypass the local router."""
+
+
+def qualify_omniroute_model(route_id: str) -> str:
+    """Return the OpenCode model reference for an approved OmniRoute route."""
+    return f"{OMNIROUTE_PROVIDER_ID}/{route_id}"
+
+
+def validate_omniroute_provider_config(config: Mapping[str, object]) -> None:
+    """Require the local OmniRoute provider for a route-approved OpenCode turn.
+
+    The error deliberately omits provider credentials and the configured remote
+    URL. A direct upstream here would make OpenCode bypass OmniRoute's routing,
+    provenance, and timeout policy.
+    """
+    providers = config.get("provider")
+    provider = providers.get(OMNIROUTE_PROVIDER_ID) if isinstance(providers, Mapping) else None
+    options = provider.get("options") if isinstance(provider, Mapping) else None
+    base_url = options.get("baseURL") if isinstance(options, Mapping) else None
+    if not isinstance(base_url, str) or base_url.rstrip("/") != OMNIROUTE_BASE_URL:
+        raise OpenCodeOmniRouteConfigurationError(
+            "OpenCode route expected OmniRoute at 127.0.0.1:20128, but the effective "
+            "provider configuration points to a direct upstream."
+        )
+
 
 @dataclass(frozen=True)
 class OpenCodeGatewayResolution:

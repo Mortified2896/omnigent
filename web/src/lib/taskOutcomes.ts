@@ -50,7 +50,10 @@ export class TaskRunResponseIdentityError extends TaskRunFetchError {
  */
 export type TaskRunReadinessPhase = "loading" | "waiting" | "ready" | "exhausted" | "failed";
 
-/** Backoff schedule (ms) for follow-up readiness polls. */
+/** Session-level discovery retries after a turn becomes idle. */
+export const TASK_RUN_DISCOVERY_DELAYS_MS: readonly number[] = [800, 1_600, 3_200, 6_400] as const;
+
+/** Backoff schedule (ms) for evaluation readiness polls. */
 export const TASK_RUN_READINESS_DELAYS_MS: readonly number[] = [800, 1_600, 3_200, 6_400] as const;
 
 /** Maximum number of follow-up attempts after the initial fetch. */
@@ -83,10 +86,7 @@ export function canonicalOutcomeResponseIds(bubbles: readonly Bubble[]): Readonl
 export function hasVisibleFinalText(bubble: Bubble): boolean {
   if (bubble.kind !== "assistant") return false;
   return bubble.items.some(
-    (item) =>
-      item.kind === "text" &&
-      item.final !== false &&
-      item.text.trim().length > 0,
+    (item) => item.kind === "text" && item.final !== false && item.text.trim().length > 0,
   );
 }
 
@@ -245,7 +245,15 @@ export interface TaskRun {
   fallback_used: boolean | null;
   /** Legacy execution projection; evaluator activity never changes this. */
   terminal_status: "running" | "completed" | "failed" | "cancelled" | "incomplete";
-  execution_status?: "queued" | "starting" | "running" | "cancelling" | "cancelled" | "completed" | "failed" | "timed_out";
+  execution_status?:
+    | "queued"
+    | "starting"
+    | "running"
+    | "cancelling"
+    | "cancelled"
+    | "completed"
+    | "failed"
+    | "timed_out";
   evaluation_status?: "not_requested" | "pending" | "completed" | "skipped" | "failed";
   execution_started_at?: number | null;
   execution_finished_at?: number | null;
@@ -477,30 +485,45 @@ export async function getTaskRunForResponse(
 export function useTaskOutcomeRuns(
   sessionId: string | null | undefined,
   streamStatus: "idle" | "streaming",
+  bubbles: readonly Bubble[] = [],
 ): readonly TaskRunSummary[] {
   const [registry, setRegistry] = useState<{
     sessionId: string | null;
     runs: readonly TaskRunSummary[];
-  }>({
-    sessionId: null,
-    runs: [],
-  });
+  }>({ sessionId: null, runs: [] });
   const statusRef = useRef(streamStatus);
   const statusSessionRef = useRef(sessionId ?? null);
+  const registryRef = useRef(registry);
+  const bubblesRef = useRef(bubbles);
+  registryRef.current = registry;
+  bubblesRef.current = bubbles;
+
+  const updateRegistry = (currentSessionId: string, incoming: readonly TaskRunSummary[]) => {
+    const previous = registryRef.current;
+    if (previous.sessionId !== currentSessionId) return;
+    const byId = new Map(previous.runs.map((run) => [run.id, run]));
+    for (const run of incoming) byId.set(run.id, run);
+    const next = { sessionId: currentSessionId, runs: [...byId.values()] };
+    registryRef.current = next;
+    setRegistry(next);
+  };
 
   useEffect(() => {
     const controller = new AbortController();
     if (!sessionId) {
+      registryRef.current = { sessionId: null, runs: [] };
       setRegistry({ sessionId: null, runs: [] });
       return () => controller.abort();
     }
-    // Clear synchronously in the effect and retain the session key in state so
-    // a previous session's runs can never qualify the new session while loading.
-    setRegistry({ sessionId, runs: [] });
+    // Clear synchronously so a previous session can never qualify the new one.
+    const empty = { sessionId, runs: [] as readonly TaskRunSummary[] };
+    registryRef.current = empty;
+    setRegistry(empty);
     void listSessionTaskRuns(sessionId, 200, controller.signal)
       .then(({ runs }) => {
-        if (controller.signal.aborted) return;
-        setRegistry({ sessionId, runs });
+        if (!controller.signal.aborted && registryRef.current.sessionId === sessionId) {
+          updateRegistry(sessionId, runs);
+        }
       })
       .catch((error) => {
         if (!controller.signal.aborted) console.warn("Failed to load task outcome registry", error);
@@ -514,20 +537,45 @@ export function useTaskOutcomeRuns(
     const wasStreaming = statusRef.current === "streaming";
     statusRef.current = streamStatus;
     if (sessionChanged || !sessionId || !wasStreaming || streamStatus !== "idle") return;
+
     const controller = new AbortController();
-    // A terminal response can precede persistence of its task_run row. Refresh
-    // once at the terminal boundary rather than probing every assistant bubble.
-    void listSessionTaskRuns(sessionId, 200, controller.signal)
-      .then(({ runs }) => {
+    // Snapshot the registry before completion. A run is a discovery result only
+    // when its persisted ID was not present at the terminal boundary.
+    const baselineIds = new Set(registryRef.current.runs.map((run) => run.id));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delayIndex = -1; // -1 is the immediate request; then 800..6400ms.
+
+    const discover = async (): Promise<void> => {
+      if (controller.signal.aborted) return;
+      try {
+        const { runs } = await listSessionTaskRuns(sessionId, 200, controller.signal);
+        if (controller.signal.aborted) return;
+        updateRegistry(sessionId, runs);
+        const merged = registryRef.current.runs;
+        const discovered = merged.some(
+          (run) =>
+            !baselineIds.has(run.id) &&
+            resolveTaskOutcomeAnchors(bubblesRef.current, [run]).size > 0,
+        );
+        if (discovered) return;
+        delayIndex += 1;
+        if (delayIndex >= TASK_RUN_DISCOVERY_DELAYS_MS.length) return;
+        timer = setTimeout(() => void discover(), TASK_RUN_DISCOVERY_DELAYS_MS[delayIndex]);
+      } catch (error) {
         if (!controller.signal.aborted) {
-          setRegistry({ sessionId, runs });
+          console.warn("Failed to discover task outcome registry", error);
+          delayIndex += 1;
+          if (delayIndex < TASK_RUN_DISCOVERY_DELAYS_MS.length) {
+            timer = setTimeout(() => void discover(), TASK_RUN_DISCOVERY_DELAYS_MS[delayIndex]);
+          }
         }
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted)
-          console.warn("Failed to refresh task outcome registry", error);
-      });
-    return () => controller.abort();
+      }
+    };
+    void discover();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
   }, [sessionId, streamStatus]);
 
   return registry.sessionId === sessionId ? registry.runs : EMPTY_TASK_OUTCOME_RUNS;
@@ -549,7 +597,10 @@ export function useTaskOutcomeResponseIds(
   const runs = useTaskOutcomeRuns(sessionId, streamStatus);
   // For backward compatibility: return the bubble responseIds that exactly match task run response_ids.
   // This is the same behavior as before, which works for non-OpenCode-native harnesses.
-  return useMemo(() => new Set(runs.flatMap((run) => (run.response_id ? [run.response_id] : []))), [runs]);
+  return useMemo(
+    () => new Set(runs.flatMap((run) => (run.response_id ? [run.response_id] : []))),
+    [runs],
+  );
 }
 
 /**

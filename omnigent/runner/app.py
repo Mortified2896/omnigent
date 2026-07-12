@@ -928,6 +928,7 @@ class _OpenCodeNativeLaunchConfig:
     model_override: str | None
     reasoning_effort: str | None
     external_session_id: str | None
+    omniroute_route_expected: bool = False
     fork_carry_history: bool = False
 
 
@@ -977,11 +978,16 @@ async def _opencode_native_launch_config(
         raise RuntimeError(f"Invalid terminal_launch_args for OpenCode session {session_id!r}.")
     route_approval_enabled = snapshot.get("route_approval_enabled") is True
     route_model_override = snapshot.get("omniroute_route_id") if route_approval_enabled else None
-    model_override = (
-        route_model_override
-        if isinstance(route_model_override, str) and route_model_override
-        else snapshot.get("model_override")
-    )
+    omniroute_route_expected = isinstance(route_model_override, str) and bool(route_model_override)
+    if omniroute_route_expected:
+        # OpenCode interprets the prefix as its transport provider.  Preserve
+        # the approved route as the model portion, but force it through the
+        # local compatible provider instead of its built-in Zen provider.
+        from omnigent.opencode_native_provider import qualify_omniroute_model
+
+        model_override = qualify_omniroute_model(route_model_override)
+    else:
+        model_override = snapshot.get("model_override")
     if model_override is not None:
         if not isinstance(model_override, str) or not model_override:
             raise RuntimeError(f"Invalid model_override for OpenCode session {session_id!r}.")
@@ -1022,6 +1028,7 @@ async def _opencode_native_launch_config(
         model_override=model_override,
         reasoning_effort=reasoning_effort,
         external_session_id=external_session_id,
+        omniroute_route_expected=omniroute_route_expected,
         fork_carry_history=fork_carry_history,
     )
 
@@ -1110,6 +1117,7 @@ async def _auto_create_opencode_terminal(
         build_opencode_provider_config,
         maybe_merge_user_provider_config,
         resolve_databricks_gateway,
+        validate_omniroute_provider_config,
         write_opencode_provider_config,
     )
 
@@ -1183,6 +1191,10 @@ async def _auto_create_opencode_terminal(
     # hides the user's ~/.config/opencode/opencode.jsonc, so without this
     # merge, custom providers with non-default base URLs are invisible.
     config = maybe_merge_user_provider_config(config)
+    if launch_config.omniroute_route_expected:
+        # Do not repair a wrong endpoint silently: a route-approved turn must
+        # fail before OpenCode can open a direct provider connection.
+        validate_omniroute_provider_config(config)
 
     if config:
         write_opencode_provider_config(xdg_config_home_for_bridge_dir(bridge_dir), config)
@@ -11934,6 +11946,34 @@ def create_runner_app(
             )
         return Response(status_code=200)
 
+    async def _handle_opencode_native_interrupt(conv_id: str) -> Response:
+        """Abort exactly the active OpenCode session without stopping shared resources."""
+        from omnigent.opencode_native_bridge import bridge_dir_for_bridge_id, read_bridge_state
+        from omnigent.opencode_native_client import OpenCodeClientError
+
+        server = _AUTO_OPENCODE_SERVERS.get(conv_id)
+        state = read_bridge_state(bridge_dir_for_bridge_id(conv_id))
+        if server is None or state is None or not state.opencode_session_id:
+            _logger.info("OpenCode abort skipped for %s: no owned live session", conv_id)
+            return Response(status_code=204)
+        client = server.client()
+        try:
+            aborted = await client.abort(state.opencode_session_id)
+        except (httpx.HTTPError, OpenCodeClientError, RuntimeError) as exc:
+            _logger.warning("OpenCode abort failed for %s: %s", conv_id, exc)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "opencode_native_abort_failed",
+                    "detail": "OpenCode abort failed.",
+                },
+            )
+        finally:
+            await client.aclose()
+        _interrupted_sessions.add(conv_id)
+        _logger.info("OpenCode abort requested for %s (accepted=%s)", conv_id, aborted)
+        return Response(status_code=204)
+
     async def _handle_opencode_native_compact(conv_id: str) -> Response:
         """
         Compact an opencode-native session via ``POST /session/{id}/summarize``.
@@ -14948,6 +14988,8 @@ def create_runner_app(
                 return await _handle_claude_native_interrupt(conversation_id)
             if _harness == "codex-native":
                 return await _handle_codex_native_interrupt(conversation_id)
+            if _harness == "opencode-native":
+                return await _handle_opencode_native_interrupt(conversation_id)
             if _harness == "pi-native":
                 # The pi-native turn lives in the Pi TUI process; the runner's
                 # harness task already returned, so the cancel floor has nothing
@@ -15047,6 +15089,8 @@ def create_runner_app(
                 return await _handle_claude_native_stop(conversation_id)
             if _harness == "codex-native":
                 return await _handle_codex_native_interrupt(conversation_id)
+            if _harness == "opencode-native":
+                return await _handle_opencode_native_interrupt(conversation_id)
             if _harness == "pi-native":
                 # Pi has no separate session-kill; abort the active turn via the
                 # extension (mirrors codex-native reusing its interrupt handler).

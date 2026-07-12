@@ -1495,7 +1495,7 @@ function MainAgentSurface({
     [bubbles, pendingElicitations.length],
   );
   // Load full task run summaries for accurate bubble-to-task-run mapping.
-  const taskOutcomeRuns = useTaskOutcomeRuns(conversationId, status);
+  const taskOutcomeRuns = useTaskOutcomeRuns(conversationId, status, streamBubbles);
   // Derive the bubble responseId → task_run.response_id mapping.
   const taskOutcomeAnchors = useTaskOutcomeAnchors(streamBubbles, taskOutcomeRuns);
 
@@ -2904,7 +2904,13 @@ export const BubbleView = memo(
         />
       );
     }
-    return <AssistantBubble bubble={bubble} renderOutcome={renderOutcome} taskRunResponseId={taskRunResponseId} />;
+    return (
+      <AssistantBubble
+        bubble={bubble}
+        renderOutcome={renderOutcome}
+        taskRunResponseId={taskRunResponseId}
+      />
+    );
   },
   (prev, next) =>
     prev.renderOutcome === next.renderOutcome &&
@@ -3132,9 +3138,7 @@ function AssistantBubble({
 }: {
   bubble: Extract<Bubble, { kind: "assistant" }>;
   renderOutcome?: boolean;
-  /** The task run response ID to use for the API call.
-   *  For OpenCode-native, this differs from bubble.responseId.
-   *  Falls back to bubble.responseId when not provided. */
+  /** The authoritative task-run response ID to use for the API call. */
   taskRunResponseId?: string;
 }) {
   const { conversationId: outcomeSessionId } = useParams<{ conversationId: string }>();
@@ -3172,7 +3176,10 @@ function AssistantBubble({
   // placement bulletproof and trivial to assert in tests via
   // `data-response-id`.
   const showOutcome =
-    renderOutcome && bubble.lifecycle !== "streaming" && outcomeSessionId !== undefined;
+    renderOutcome &&
+    taskRunResponseId !== undefined &&
+    bubble.lifecycle !== "streaming" &&
+    outcomeSessionId !== undefined;
 
   return (
     <>
@@ -3225,7 +3232,7 @@ function AssistantBubble({
         >
           <TaskOutcomeBriefCard
             sessionId={outcomeSessionId ?? ""}
-            responseId={taskRunResponseId ?? bubble.responseId}
+            responseId={taskRunResponseId!}
           />
         </div>
       )}

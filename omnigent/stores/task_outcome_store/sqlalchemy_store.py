@@ -311,7 +311,12 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 row.updated_at = now
                 session.flush()
                 return _run_row_to_entity(row)
-            status = "timed_out" if data.terminal_status == "incomplete" and data.failure_error_code in {"timeout", "deadline_exceeded"} else data.terminal_status
+            status = (
+                "timed_out"
+                if data.terminal_status == "incomplete"
+                and data.failure_error_code in {"timeout", "deadline_exceeded"}
+                else data.terminal_status
+            )
             if status not in {"completed", "failed", "cancelled", "timed_out"}:
                 raise ValueError(f"invalid execution terminal status: {status}")
             legacy_status = "failed" if status == "timed_out" else status
@@ -327,6 +332,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 row.timeout_type = data.failure_error_code or "stream_inactivity"
             if data.response_id is not None:
                 row.response_id = data.response_id
+            if data.triggering_message_id is not None:
+                row.triggering_message_id = data.triggering_message_id
             if data.input_tokens is not None:
                 row.input_tokens = data.input_tokens
             if data.output_tokens is not None:
@@ -450,7 +457,9 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             # an execution terminal transition.  Crucially this update never
             # touches execution_status or the legacy terminal projection.
             if run.execution_status in {"completed", "failed", "cancelled", "timed_out"}:
-                run.evaluation_status = "skipped" if data.verdict == "inconclusive" else "completed"
+                run.evaluation_status = (
+                    "skipped" if data.verdict == "inconclusive" else "completed"
+                )
                 run.evaluation_finished_at = now
                 run.updated_at = now
             session.flush()
