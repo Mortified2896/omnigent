@@ -40,6 +40,7 @@ reviewable via the same endpoint.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -54,6 +55,7 @@ from omnigent.entities import (
     REVIEW_VERDICTS,
     ROUTE_FIT_VALUES,
     TASK_FAMILIES,
+    MessageData,
     TaskRun,
 )
 from omnigent.errors import ErrorCode, OmnigentError
@@ -250,6 +252,40 @@ class UpsertReviewRequest(BaseModel):
 # ── Router factory ───────────────────────────────────────────────────────
 
 
+async def _hydrate_missing_triggering_message_ids(
+    runs: list[TaskRun],
+    session_id: str,
+    conversation_store: ConversationStore | None,
+) -> list[dict[str, Any]]:
+    """Bridge legacy runs whose recorder missed the user item race.
+
+    Only hydrate when the session has exactly one user message and one
+    unresolved run; otherwise the association remains fail-closed.
+    """
+    summaries = [_run_to_summary_dict(run) for run in runs]
+    missing = [summary for summary in summaries if summary["triggering_message_id"] is None]
+    if not missing or len(missing) != 1 or conversation_store is None:
+        return summaries
+    items = await asyncio.to_thread(
+        conversation_store.list_items,
+        session_id,
+        limit=200,
+        order="asc",
+    )
+    user_ids = [
+        item.id
+        for item in items.data
+        if item.type == "message"
+        and isinstance(item.data, MessageData)
+        and item.data.role == "user"
+        and not item.data.is_meta
+    ]
+    if len(user_ids) != 1:
+        return summaries
+    missing[0]["triggering_message_id"] = user_ids[0]
+    return summaries
+
+
 def create_task_outcomes_router(
     store: TaskOutcomeStore,
     conversation_store: ConversationStore,
@@ -305,7 +341,9 @@ def create_task_outcomes_router(
         )
         return {
             "object": "list",
-            "runs": [_run_to_summary_dict(r) for r in runs],
+            "runs": await _hydrate_missing_triggering_message_ids(
+                runs, session_id, conversation_store
+            ),
         }
 
     # ── GET /sessions/{id}/unreviewed-task-outcomes ─────────────────
@@ -355,8 +393,14 @@ def create_task_outcomes_router(
         if run is None:
             raise OmnigentError("Task run not found", code=ErrorCode.NOT_FOUND)
         detail = await _call_store(store.get_run_detail, task_run_id=run.id)
+        run_payload = _serialise_run(detail.run)
+        if run_payload["triggering_message_id"] is None:
+            hydrated = await _hydrate_missing_triggering_message_ids(
+                [detail.run], session_id, conversation_store
+            )
+            run_payload["triggering_message_id"] = hydrated[0]["triggering_message_id"]
         return {
-            "run": _serialise_run(detail.run),
+            "run": run_payload,
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(
                 await _call_store(
