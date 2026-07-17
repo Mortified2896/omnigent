@@ -2416,6 +2416,7 @@ def _build_session_response(
     pending_elicitation_events: list[dict[str, Any]] | None = None,
     subtree_usage: dict[str, Any] | None = None,
     model_options: list[dict[str, Any]] | None = None,
+    omniroute_combos: list[dict[str, Any]] | None = None,
 ) -> SessionResponse:
     """
     Build a :class:`SessionResponse` from store-side entities.
@@ -2571,6 +2572,7 @@ def _build_session_response(
         todos=_session_todos_cache.get(conv.id, []),
         skills=skills or [],
         model_options=model_options or [],
+        omniroute_combos=omniroute_combos or [],
         # Replay terminal spin-up state so a client connecting while the
         # runner is still creating a terminal-first session's terminal
         # sees the Terminal-pill spinner. Populated by the runner SSE
@@ -21360,6 +21362,26 @@ async def _get_session_snapshot(
     # and cache-backed like skills so a snapshot poll cannot wedge the
     # runner while a turn is active.
     model_options = await _fetch_model_options(runner_client, session_id, conv)
+    # Live OmniRoute combo catalog for the web UI's model picker. Uses
+    # the catalog module's TTL-cached resolver (5-minute TTL) so a busy
+    # server does not hammer the OmniRoute endpoint on every snapshot;
+    # the curated fallback guarantees non-empty rows when the endpoint
+    # is unreachable and no cache is available.
+    try:
+        from omnigent.server.omniroute_catalog import (
+            fetch_omniroute_combo_catalog,
+        )
+
+        _omniroute_combos_entries, _ = await fetch_omniroute_combo_catalog()
+        omniroute_combos = [combo.to_wire() for combo in _omniroute_combos_entries]
+    except Exception as exc:  # noqa: BLE001  # never break the snapshot over picker
+        _logger.debug(
+            "snapshot: omniroute combo catalog lookup failed (%s); serving curated fallback",
+            type(exc).__name__,
+        )
+        from omnigent.server.omniroute_catalog import curated_combo_catalog
+
+        omniroute_combos = [combo.to_wire() for combo in curated_combo_catalog()]
     # Dynamic override from the forwarder (real Claude Code window).
     # Only present after the first statusLine tick; before that the
     # spec default applies.
@@ -21410,6 +21432,7 @@ async def _get_session_snapshot(
         agent_name=agent_name,
         skills=skills,
         model_options=model_options,
+        omniroute_combos=omniroute_combos,
         runner_online=runner_online,
         host_online=host_online,
         host_resumable=host_resumable,

@@ -18,6 +18,7 @@ import type {
   CodexModelOption,
   ModelUsage,
   NestedSessionItem,
+  OmniRouteCombo,
   SandboxStatus,
   Session,
   SessionEventInput,
@@ -202,6 +203,8 @@ interface SessionResponseWire {
    */
   skills?: SkillSummary[];
   model_options?: CodexModelOption[];
+  omniroute_combos?: OmniRouteCombo[];
+  omniroute_combos_source?: "live" | "cache" | "fallback_curated" | null;
   /**
    * True while the runner is auto-creating a terminal-first session's
    * terminal. Drives the Terminal-pill spinner; absent on older
@@ -305,6 +308,8 @@ function sessionFromWire(wire: SessionResponseWire): Session {
     todos: wire.todos ?? [],
     skills: wire.skills ?? [],
     codexModelOptions: wire.model_options ?? [],
+    omnirouteCombos: wire.omniroute_combos ?? [],
+    omnirouteCombosSource: wire.omniroute_combos_source ?? null,
     terminalPending: wire.terminal_pending ?? false,
     sandboxStatus: wire.sandbox_status ?? null,
     activeResponseId: wire.active_response_id ?? null,

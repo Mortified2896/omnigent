@@ -84,6 +84,7 @@ import type {
   ContentBlock,
   CodexModelOption,
   ModelUsage,
+  OmniRouteCombo,
   PendingInput,
   SandboxStatus,
   Session,
@@ -493,6 +494,20 @@ export interface ChatState {
    * background Codex ``model/list`` fetch lands.
    */
   codexModelOptions: CodexModelOption[];
+  /**
+   * Live OmniRoute combo catalog for the active session's picker. Populated
+   * from the session snapshot's ``omniroute_combos`` field. Surfaced as a
+   * dedicated "OmniRoute" group so the curated coding combos
+   * (``auto/best-coding``, ``auto/coding:fast``, ``auto/coding:reliable``)
+   * are always selectable; an empty array just hides the group.
+   */
+  omnirouteCombos: OmniRouteCombo[];
+  /**
+   * Catalog source the server reported (``"live"`` / ``"cache"`` /
+   * ``"fallback_curated"``). Lets the UI surface a "live" badge or a
+   * "catalog degraded" hint when the catalog isn't freshly read.
+   */
+  omnirouteCombosSource: "live" | "cache" | "fallback_curated" | null;
   /**
    * True while the runner is auto-creating the terminal for a
    * terminal-first session (claude-native / codex-native). Seeded from
@@ -918,6 +933,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   todos: [],
   skills: [],
   codexModelOptions: [],
+  omnirouteCombos: [],
+  omnirouteCombosSource: null,
   terminalPending: false,
   viewers: [],
   sandboxStatus: null,
@@ -1613,6 +1630,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         todos: [],
         skills: [],
         codexModelOptions: [],
+        omnirouteCombos: [],
+        omnirouteCombosSource: null,
         terminalPending: false,
         viewers: [],
         // Drop any queued "Attach to agent" chip that the outgoing session's
@@ -2100,6 +2119,8 @@ function sessionBindingPatch(
   | "gitBranch"
   | "skills"
   | "codexModelOptions"
+  | "omnirouteCombos"
+  | "omnirouteCombosSource"
   | "terminalPending"
   | "sandboxStatus"
 > {
@@ -2125,6 +2146,8 @@ function sessionBindingPatch(
     gitBranch: session.gitBranch ?? null,
     skills: session.skills ?? [],
     codexModelOptions: session.codexModelOptions ?? [],
+    omnirouteCombos: session.omnirouteCombos ?? [],
+    omnirouteCombosSource: session.omnirouteCombosSource ?? null,
     terminalPending: session.terminalPending ?? false,
     sandboxStatus: session.sandboxStatus ?? null,
   };
@@ -3741,6 +3764,8 @@ async function refetchRunnerBackedSessionState(
       : {
           skills: session.skills ?? [],
           codexModelOptions: session.codexModelOptions ?? [],
+          omnirouteCombos: session.omnirouteCombos ?? [],
+          omnirouteCombosSource: session.omnirouteCombosSource ?? null,
         },
   );
 }
