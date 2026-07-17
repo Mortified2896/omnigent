@@ -49,6 +49,7 @@ from omnigent.entities.task_outcome import (
     TaskEvaluation,
     TaskReview,
     TaskRun,
+    TaskRunModelCall,
     decode_json_list,
     encode_json_list,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "TaskEvaluation",
     "TaskReview",
     "TaskRun",
+    "TaskRunModelCall",
     "TerminalCommandData",
     "decode_json_list",
     "encode_json_list",

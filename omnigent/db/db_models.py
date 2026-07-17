@@ -1269,6 +1269,65 @@ class SqlTaskRun(Base):
     )
 
 
+class SqlTaskRunModelCall(Base):
+    """Sanitized, per-request runtime evidence captured by the provenance proxy."""
+
+    __tablename__ = "task_run_model_calls"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    opencode_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    requested_provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_reasoning: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    effective_reasoning: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stream: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    selected_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    selected_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    omniroute_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    omniroute_decision_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    fallback_used: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    selection_strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    billing_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provenance_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    request_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="in_progress"
+    )
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failure_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    first_response_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "correlation_id", name="uq_task_run_model_calls_correlation"
+        ),
+        UniqueConstraint(
+            "workspace_id", "task_run_id", "ordinal", name="uq_task_run_model_calls_ordinal"
+        ),
+        UniqueConstraint(
+            "workspace_id", "omniroute_request_id", name="uq_task_run_model_calls_request"
+        ),
+        Index("ix_task_run_model_calls_run_ordinal", "workspace_id", "task_run_id", "ordinal"),
+    )
+
+
 class SqlTaskEvaluation(Base):
     """
     SQLAlchemy model for the ``task_evaluations`` table.

@@ -108,6 +108,30 @@ def test_combo_catalog_merges_without_losing_existing_provider_options() -> None
     assert merged["plugin"] == ["/custom/plugin.js"]
 
 
+def test_approved_route_can_use_a_registered_loopback_proxy_without_changing_combo() -> None:
+    proxy_url = "http://127.0.0.1:39123/opaque-token/v1"
+    merged = merge_omniroute_combo_catalog(
+        {
+            "provider": {
+                "omniroute": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {"apiKey": "key"},
+                }
+            },
+            "plugin": ["/plugin.js"],
+        },
+        combos={"auto/coding:reliable": {"name": "auto/coding:reliable"}},
+        approved_route="auto/coding:reliable",
+        provider_base_url=proxy_url,
+    )
+    provider = merged["provider"]["omniroute"]
+    assert provider["options"]["baseURL"] == proxy_url
+    assert provider["models"]["auto/coding:reliable"] == {"name": "auto/coding:reliable"}
+    assert provider["npm"] == "@ai-sdk/openai-compatible"
+    assert merged["plugin"] == ["/plugin.js"]
+    validate_omniroute_provider_config(merged, expected_base_url=proxy_url)
+
+
 def test_combo_catalog_rejects_route_not_exposed_by_omniroute() -> None:
     with pytest.raises(OpenCodeOmniRouteConfigurationError, match="not exposed"):
         merge_omniroute_combo_catalog({}, combos={}, approved_route="auto/coding:reliable")

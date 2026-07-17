@@ -29,6 +29,7 @@ from omnigent.db.db_models import (
     SqlTaskEvaluation,
     SqlTaskReview,
     SqlTaskRun,
+    SqlTaskRunModelCall,
     current_workspace_id,
 )
 from omnigent.db.enum_codecs import (
@@ -45,12 +46,15 @@ from omnigent.entities import (
     TaskEvaluation,
     TaskReview,
     TaskRun,
+    TaskRunModelCall,
     decode_json_list,
     encode_json_list,
 )
 from omnigent.stores.task_outcome_store import (
+    CompleteTaskRunModelCallInput,
     CreateTaskEvaluationInput,
     CreateTaskRunInput,
+    CreateTaskRunModelCallInput,
     EnqueueLangfuseEventInput,
     TaskOutcomeStore,
     TaskRunDetail,
@@ -83,6 +87,43 @@ def _generate_review_id() -> str:
 def _generate_outbox_id() -> str:
     """Mint a fresh ``langfuse_sync_outbox.id`` UUID with the ``lfs_`` prefix."""
     return f"lfs_{uuid.uuid4().hex}"
+
+
+def _generate_model_call_id() -> str:
+    return f"tmc_{uuid.uuid4().hex}"
+
+
+def _model_call_row_to_entity(row: SqlTaskRunModelCall) -> TaskRunModelCall:
+    return TaskRunModelCall(
+        id=row.id,
+        task_run_id=row.task_run_id,
+        conversation_id=row.conversation_id,
+        ordinal=row.ordinal,
+        correlation_id=row.correlation_id,
+        requested_provider=row.requested_provider,
+        requested_model=row.requested_model,
+        started_at=row.started_at,
+        request_status=row.request_status,
+        requested_reasoning=row.requested_reasoning,
+        effective_reasoning=row.effective_reasoning,
+        stream=row.stream,
+        opencode_session_id=row.opencode_session_id,
+        selected_provider=row.selected_provider,
+        selected_model=row.selected_model,
+        omniroute_request_id=row.omniroute_request_id,
+        omniroute_decision_id=row.omniroute_decision_id,
+        fallback_used=row.fallback_used,
+        selection_strategy=row.selection_strategy,
+        billing_class=row.billing_class,
+        provenance_verified=row.provenance_verified,
+        http_status=row.http_status,
+        failure_stage=row.failure_stage,
+        error_code=row.error_code,
+        error_message=row.error_message,
+        first_response_at=row.first_response_at,
+        finished_at=row.finished_at,
+        duration_ms=row.duration_ms,
+    )
 
 
 def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
@@ -355,6 +396,89 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             row.updated_at = now
             session.flush()
             return _run_row_to_entity(row)
+
+    def create_model_call(self, data: CreateTaskRunModelCallInput) -> TaskRunModelCall:
+        with self._session() as session:
+            existing = (
+                session.execute(
+                    select(SqlTaskRunModelCall).where(
+                        SqlTaskRunModelCall.workspace_id == current_workspace_id(),
+                        SqlTaskRunModelCall.correlation_id == data.correlation_id,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if existing is not None:
+                return _model_call_row_to_entity(existing)
+            row = SqlTaskRunModelCall(
+                id=_generate_model_call_id(),
+                task_run_id=data.task_run_id,
+                conversation_id=data.conversation_id,
+                ordinal=data.ordinal,
+                correlation_id=data.correlation_id,
+                requested_provider=data.requested_provider,
+                requested_model=data.requested_model,
+                requested_reasoning=data.requested_reasoning,
+                effective_reasoning=data.effective_reasoning,
+                stream=data.stream,
+                opencode_session_id=data.opencode_session_id,
+                started_at=data.started_at,
+            )
+            session.add(row)
+            session.flush()
+            return _model_call_row_to_entity(row)
+
+    def complete_model_call(self, data: CompleteTaskRunModelCallInput) -> TaskRunModelCall | None:
+        with self._session() as session:
+            row = (
+                session.execute(
+                    select(SqlTaskRunModelCall).where(
+                        SqlTaskRunModelCall.workspace_id == current_workspace_id(),
+                        SqlTaskRunModelCall.task_run_id == data.task_run_id,
+                        SqlTaskRunModelCall.correlation_id == data.correlation_id,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return None
+            if row.request_status != "in_progress":
+                return _model_call_row_to_entity(row)
+            row.request_status = data.request_status
+            row.finished_at = data.finished_at
+            row.duration_ms = max(0, (data.finished_at - row.started_at) * 1000)
+            row.http_status = data.http_status
+            row.selected_provider = data.selected_provider
+            row.selected_model = data.selected_model
+            row.omniroute_request_id = data.omniroute_request_id
+            row.omniroute_decision_id = data.omniroute_decision_id
+            row.fallback_used = data.fallback_used
+            row.selection_strategy = data.selection_strategy
+            row.billing_class = data.billing_class
+            row.provenance_verified = data.provenance_verified
+            row.failure_stage = data.failure_stage
+            row.error_code = data.error_code
+            row.error_message = data.error_message
+            session.flush()
+            return _model_call_row_to_entity(row)
+
+    def list_model_calls(self, task_run_id: str) -> list[TaskRunModelCall]:
+        with self._session() as session:
+            rows = (
+                session.execute(
+                    select(SqlTaskRunModelCall)
+                    .where(
+                        SqlTaskRunModelCall.workspace_id == current_workspace_id(),
+                        SqlTaskRunModelCall.task_run_id == task_run_id,
+                    )
+                    .order_by(SqlTaskRunModelCall.ordinal.asc())
+                )
+                .scalars()
+                .all()
+            )
+            return [_model_call_row_to_entity(row) for row in rows]
 
     def list_runs_for_conversation(
         self,

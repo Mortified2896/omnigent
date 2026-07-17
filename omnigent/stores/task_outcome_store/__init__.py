@@ -33,6 +33,7 @@ from omnigent.entities import (
     TaskEvaluation,
     TaskReview,
     TaskRun,
+    TaskRunModelCall,
 )
 
 
@@ -138,6 +139,43 @@ class UpdateTaskRunTerminalInput:
     commit_sha: str | None = None
     failure_error_code: str | None = None
     failure_error_message: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class CreateTaskRunModelCallInput:
+    """Sanitized metadata extracted from a single outbound model request."""
+
+    task_run_id: str
+    conversation_id: str
+    ordinal: int
+    correlation_id: str
+    requested_provider: str
+    requested_model: str
+    started_at: int
+    requested_reasoning: str | None = None
+    effective_reasoning: str | None = None
+    stream: bool | None = None
+    opencode_session_id: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class CompleteTaskRunModelCallInput:
+    task_run_id: str
+    correlation_id: str
+    request_status: str
+    finished_at: int
+    http_status: int | None = None
+    selected_provider: str | None = None
+    selected_model: str | None = None
+    omniroute_request_id: str | None = None
+    omniroute_decision_id: str | None = None
+    fallback_used: bool | None = None
+    selection_strategy: str | None = None
+    billing_class: str | None = None
+    provenance_verified: bool = False
+    failure_stage: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -275,6 +313,18 @@ class TaskOutcomeStore(ABC):
         success. Returns the updated row, or ``None`` when the id
         doesn't exist.
         """
+
+    @abstractmethod
+    def create_model_call(self, data: CreateTaskRunModelCallInput) -> TaskRunModelCall:
+        """Create an individual model request; duplicate correlations are idempotent."""
+
+    @abstractmethod
+    def complete_model_call(self, data: CompleteTaskRunModelCallInput) -> TaskRunModelCall | None:
+        """Complete a call without allowing a completed call to regress."""
+
+    @abstractmethod
+    def list_model_calls(self, task_run_id: str) -> list[TaskRunModelCall]:
+        """Return model calls in deterministic request ordinal order."""
 
     @abstractmethod
     def list_runs_for_conversation(

@@ -231,6 +231,44 @@ class TaskRun:
 
 
 @dataclasses.dataclass
+class TaskRunModelCall:
+    """One observed OpenCode-to-OmniRoute execution request.
+
+    This deliberately contains extracted metadata only; prompts, tool inputs,
+    credentials, and response bytes never enter the task-outcome database.
+    """
+
+    id: str
+    task_run_id: str
+    conversation_id: str
+    ordinal: int
+    correlation_id: str
+    requested_provider: str
+    requested_model: str
+    started_at: int
+    request_status: str = "in_progress"
+    requested_reasoning: str | None = None
+    effective_reasoning: str | None = None
+    stream: bool | None = None
+    opencode_session_id: str | None = None
+    selected_provider: str | None = None
+    selected_model: str | None = None
+    omniroute_request_id: str | None = None
+    omniroute_decision_id: str | None = None
+    fallback_used: bool | None = None
+    selection_strategy: str | None = None
+    billing_class: str | None = None
+    provenance_verified: bool = False
+    http_status: int | None = None
+    failure_stage: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    first_response_at: int | None = None
+    finished_at: int | None = None
+    duration_ms: int | None = None
+
+
+@dataclasses.dataclass
 class TaskEvaluation:
     """One append-only automated evaluation of a :class:`TaskRun`.
 

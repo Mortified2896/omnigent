@@ -131,6 +131,38 @@ def _serialise_run(run: TaskRun) -> dict[str, Any]:
     }
 
 
+def _serialise_model_call(call: Any) -> dict[str, Any]:
+    """Serialize sanitized per-request runtime provenance in ordinal order."""
+    return {
+        "id": call.id,
+        "task_run_id": call.task_run_id,
+        "ordinal": call.ordinal,
+        "correlation_id": call.correlation_id,
+        "requested_provider": call.requested_provider,
+        "requested_model": call.requested_model,
+        "requested_reasoning": call.requested_reasoning,
+        "effective_reasoning": call.effective_reasoning,
+        "stream": call.stream,
+        "selected_provider": call.selected_provider,
+        "selected_model": call.selected_model,
+        "omniroute_request_id": call.omniroute_request_id,
+        "omniroute_decision_id": call.omniroute_decision_id,
+        "fallback_used": call.fallback_used,
+        "selection_strategy": call.selection_strategy,
+        "billing_class": call.billing_class,
+        "provenance_verified": call.provenance_verified,
+        "request_status": call.request_status,
+        "http_status": call.http_status,
+        "failure_stage": call.failure_stage,
+        "error_code": call.error_code,
+        "error_message": call.error_message,
+        "started_at": call.started_at,
+        "first_response_at": call.first_response_at,
+        "finished_at": call.finished_at,
+        "duration_ms": call.duration_ms,
+    }
+
+
 def _serialise_evaluation(evaluation: Any | None) -> dict[str, Any] | None:
     """Render a :class:`TaskEvaluation` as an API JSON dict, or ``None``."""
     if evaluation is None:
@@ -411,6 +443,10 @@ def create_task_outcomes_router(
             run_payload["triggering_message_id"] = hydrated[0]["triggering_message_id"]
         return {
             "run": run_payload,
+            "model_calls": [
+                _serialise_model_call(call)
+                for call in await _call_store(store.list_model_calls, task_run_id=run.id)
+            ],
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(
                 await _call_store(
@@ -458,6 +494,10 @@ def create_task_outcomes_router(
         )
         return {
             "run": _serialise_run(detail.run),
+            "model_calls": [
+                _serialise_model_call(call)
+                for call in await _call_store(store.list_model_calls, task_run_id=task_run_id)
+            ],
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(review_for_caller),
             "any_review": _serialise_review(detail.review),
