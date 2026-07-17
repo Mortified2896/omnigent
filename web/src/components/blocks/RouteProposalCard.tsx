@@ -1,7 +1,15 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { getOmniRouteComboDisplayName, isCuratedOmniRouteCombo } from "@/lib/omnirouteCombos";
 
 export interface RouteProposalCardProps {
   proposal: Record<string, unknown>;
+  /**
+   * Optional override of the lookup map used to resolve a combo id to a
+   * curated display name. Defaults to the bundled
+   * ``OMNIROUTE_COMBO_DISPLAY_NAMES``; callers that fetch a live catalog
+   * can pass a richer map so the card mirrors what the picker showed.
+   */
+  comboDisplayNames?: Record<string, string>;
 }
 
 function text(value: unknown): string {
@@ -14,11 +22,16 @@ function list(value: unknown): string {
     : "";
 }
 
-export function RouteProposalCard({ proposal }: RouteProposalCardProps) {
+export function RouteProposalCard({ proposal, comboDisplayNames }: RouteProposalCardProps) {
   const explicit = proposal.omniroute_requires_explicit_approval === true;
   const rationale = Array.isArray(proposal.rationale)
     ? proposal.rationale.filter((v): v is string => typeof v === "string")
     : [];
+  const routeId = text(proposal.omniroute_route_id);
+  const lookup = comboDisplayNames ?? undefined;
+  const routeDisplayName =
+    (lookup && routeId && lookup[routeId]) || getOmniRouteComboDisplayName(routeId);
+  const isCurated = isCuratedOmniRouteCombo(routeId);
   return (
     <Alert
       data-testid="route-proposal-card"
@@ -29,8 +42,18 @@ export function RouteProposalCard({ proposal }: RouteProposalCardProps) {
       </AlertTitle>
       <AlertDescription className="mt-2 flex flex-col gap-1 text-sm">
         <div>Harness: {text(proposal.recommended_harness) || "OpenCode Native"}</div>
-        <div>
-          OmniRoute route: <code>{text(proposal.omniroute_route_id)}</code>
+        <div data-testid="route-proposal-provider">Provider: OmniRoute</div>
+        <div data-testid="route-proposal-route">
+          <span>Route: </span>
+          {isCurated ? (
+            <>
+              <span data-testid="route-proposal-route-display-name">{routeDisplayName}</span>
+              <span> </span>
+              <code data-testid="route-proposal-route-id">{routeId}</code>
+            </>
+          ) : (
+            <code data-testid="route-proposal-route-id">{routeId}</code>
+          )}
         </div>
         <div>Reasoning effort: {text(proposal.reasoning_effort)}</div>
         <div>Permission mode: {text(proposal.permission_mode)}</div>

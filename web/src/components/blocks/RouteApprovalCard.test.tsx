@@ -170,3 +170,118 @@ describe("RouteApprovalCard", () => {
     expect(screen.getAllByTestId("route-proposal-card")).toHaveLength(1);
   });
 });
+
+describe("RouteApprovalCard curated OmniRoute combos", () => {
+  it("renders the curated display name alongside the raw id for auto/best-coding", () => {
+    render(
+      <RouteApprovalCard
+        proposal={{ omniroute_route_id: "auto/best-coding", reasoning_effort: "medium" }}
+        action="accept"
+        elicitationId="elicit_best"
+      />,
+    );
+    const summary = within(screen.getByTestId("route-approval-card")).getByTestId(
+      "route-approval-summary",
+    );
+    // Display name + raw id both present (the user must see BOTH so a
+    // pick on the picker matches what's running).
+    expect(
+      within(summary).getByTestId("route-approval-summary-route-display-name").textContent,
+    ).toBe("OmniRoute Coding Best");
+    expect(within(summary).getByTestId("route-approval-summary-route-id").textContent).toBe(
+      "auto/best-coding",
+    );
+    // Provider line is explicit (so the user understands this routes
+    // through OmniRoute, not a concrete provider).
+    expect(
+      within(screen.getByTestId("route-approval-card")).getByTestId("route-approval-provider"),
+    ).toHaveTextContent("OmniRoute");
+  });
+
+  it("preserves the colon in auto/coding:fast and shows the curated label", () => {
+    render(
+      <RouteApprovalCard
+        proposal={{ omniroute_route_id: "auto/coding:fast", reasoning_effort: "low" }}
+        action="accept"
+        elicitationId="elicit_fast"
+      />,
+    );
+    const summary = within(screen.getByTestId("route-approval-card")).getByTestId(
+      "route-approval-summary",
+    );
+    expect(
+      within(summary).getByTestId("route-approval-summary-route-display-name").textContent,
+    ).toBe("OmniRoute Coding Fast");
+    expect(within(summary).getByTestId("route-approval-summary-route-id").textContent).toBe(
+      "auto/coding:fast",
+    );
+  });
+
+  it("preserves the colon in auto/coding:reliable and shows the curated label", () => {
+    render(
+      <RouteApprovalCard
+        proposal={{ omniroute_route_id: "auto/coding:reliable", reasoning_effort: "high" }}
+        action="accept"
+        elicitationId="elicit_reliable"
+      />,
+    );
+    const summary = within(screen.getByTestId("route-approval-card")).getByTestId(
+      "route-approval-summary",
+    );
+    expect(
+      within(summary).getByTestId("route-approval-summary-route-display-name").textContent,
+    ).toBe("OmniRoute Coding Reliable");
+    expect(within(summary).getByTestId("route-approval-summary-route-id").textContent).toBe(
+      "auto/coding:reliable",
+    );
+  });
+
+  it("falls back to the raw id when the combo id is not in the curated map", () => {
+    // A combo OmniRoute may discover after the curated list shipped
+    // (e.g. a new ``auto/pro-coding``). The card must still render the
+    // raw id verbatim (colons + slashes) so the runner dispatches the
+    // exact combo the routing agent picked.
+    render(
+      <RouteApprovalCard
+        proposal={{ omniroute_route_id: "auto/some-future", reasoning_effort: "medium" }}
+        action="accept"
+        elicitationId="elicit_future"
+      />,
+    );
+    const summary = within(screen.getByTestId("route-approval-card")).getByTestId(
+      "route-approval-summary",
+    );
+    expect(within(summary).getByTestId("route-approval-summary-route-id").textContent).toBe(
+      "auto/some-future",
+    );
+    // No curated display-name testid when the combo is not curated.
+    expect(within(summary).queryByTestId("route-approval-summary-route-display-name")).toBeNull();
+  });
+
+  it("shows the curated display name + id together in the RouteProposalCard details", () => {
+    // When the user expands the card, the full proposal view must also
+    // show both the curated name and the raw id — the operator pinpoints
+    // what's actually running end-to-end.
+    render(
+      <RouteApprovalCard
+        proposal={{ omniroute_route_id: "auto/best-coding", reasoning_effort: "medium" }}
+        action="accept"
+        elicitationId="elicit_expand"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("route-approval-details-toggle"));
+    const details = within(screen.getByTestId("route-approval-details")).getByTestId(
+      "route-proposal-card",
+    );
+    expect(within(details).getByTestId("route-proposal-route-display-name").textContent).toBe(
+      "OmniRoute Coding Best",
+    );
+    expect(within(details).getByTestId("route-proposal-route-id").textContent).toBe(
+      "auto/best-coding",
+    );
+    // Provider line is explicit.
+    expect(within(details).getByTestId("route-proposal-provider").textContent).toContain(
+      "OmniRoute",
+    );
+  });
+});

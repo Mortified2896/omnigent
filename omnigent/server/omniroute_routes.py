@@ -23,6 +23,9 @@ class OmniRouteProfile:
     requires_coding_capability: bool
     requires_reasoning_support: bool
     risk_note: str
+    # Curated human label for the web UI's model picker. Defaults to
+    # ``route_id`` when not provided so older catalogs keep rendering.
+    display_name: str = ""
 
 
 _PROFILES = [
@@ -41,6 +44,7 @@ _PROFILES = [
         False,
         False,
         "General automatic route; avoid for specialized hard coding.",
+        "OmniRoute Auto",
     ),
     OmniRouteProfile(
         "auto/cheap",
@@ -57,6 +61,7 @@ _PROFILES = [
         False,
         False,
         "Low-cost route; not for serious repo edits.",
+        "OmniRoute Cheap",
     ),
     OmniRouteProfile(
         "auto/best-free",
@@ -73,6 +78,7 @@ _PROFILES = [
         False,
         False,
         "Free route may trade quality/reliability for zero cost.",
+        "OmniRoute Best Free",
     ),
     OmniRouteProfile(
         "auto/coding",
@@ -89,6 +95,7 @@ _PROFILES = [
         True,
         False,
         "Standard coding route.",
+        "OmniRoute Coding",
     ),
     OmniRouteProfile(
         "auto/coding:fast",
@@ -105,6 +112,7 @@ _PROFILES = [
         True,
         False,
         "Fast coding route; use for small changes.",
+        "OmniRoute Coding Fast",
     ),
     OmniRouteProfile(
         "auto/coding:cheap",
@@ -121,6 +129,7 @@ _PROFILES = [
         True,
         False,
         "Cheap coding route; avoid serious repo edits.",
+        "OmniRoute Coding Cheap",
     ),
     OmniRouteProfile(
         "auto/coding:free",
@@ -137,6 +146,7 @@ _PROFILES = [
         True,
         False,
         "Free coding route; use only when quality/reliability tradeoff is acceptable.",
+        "OmniRoute Coding Free",
     ),
     OmniRouteProfile(
         "auto/coding:pro",
@@ -153,6 +163,7 @@ _PROFILES = [
         True,
         True,
         "Explicit approval required; may use pro/premium routing.",
+        "OmniRoute Coding Pro",
     ),
     OmniRouteProfile(
         "auto/coding:reliable",
@@ -169,6 +180,7 @@ _PROFILES = [
         True,
         False,
         "Prioritizes reliability over cost/speed.",
+        "OmniRoute Coding Reliable",
     ),
     OmniRouteProfile(
         "auto/smart",
@@ -185,6 +197,7 @@ _PROFILES = [
         False,
         False,
         "Explicit approval recommended for broad quality routing.",
+        "OmniRoute Smart",
     ),
     OmniRouteProfile(
         "auto/fast",
@@ -201,6 +214,7 @@ _PROFILES = [
         False,
         False,
         "Fast route; not for hard tasks.",
+        "OmniRoute Fast",
     ),
     OmniRouteProfile(
         "auto/reasoning",
@@ -217,6 +231,7 @@ _PROFILES = [
         False,
         True,
         "Reasoning-capable pool; reasoning effort is still selected separately.",
+        "OmniRoute Reasoning",
     ),
     OmniRouteProfile(
         "auto/reasoning:pro",
@@ -233,6 +248,7 @@ _PROFILES = [
         False,
         True,
         "Explicit approval required; may use pro/premium reasoning routes.",
+        "OmniRoute Reasoning Pro",
     ),
     OmniRouteProfile(
         "auto/vision",
@@ -249,6 +265,7 @@ _PROFILES = [
         False,
         False,
         "Use only for image/vision input.",
+        "OmniRoute Vision",
     ),
     OmniRouteProfile(
         "auto/multimodal",
@@ -265,6 +282,29 @@ _PROFILES = [
         False,
         False,
         "Use only for multimodal input.",
+        "OmniRoute Multimodal",
+    ),
+    # Curated "best coding" route: full quality tier with the same effort
+    # range as ``auto/coding:reliable`` so the web UI's model picker can
+    # surface it as the recommended coding combo. The id preserves its
+    # slash verbatim so the runtime can round-trip it through
+    # :func:`omnigent.opencode_native_provider.qualify_omniroute_model`.
+    OmniRouteProfile(
+        "auto/best-coding",
+        "auto_builtin",
+        "best coding, repo edits, and reviews",
+        "quality",
+        "medium",
+        "high",
+        ("medium", "high"),
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+        "Best coding route; default quality tier for repo-grade work.",
+        "OmniRoute Coding Best",
     ),
 ]
 
@@ -278,6 +318,20 @@ def get_route_profile(route_id: str) -> OmniRouteProfile | None:
 
 def is_known_route_id(route_id: str) -> bool:
     return route_id in OMNIROUTE_ROUTE_CATALOG
+
+
+def get_route_display_name(route_id: str) -> str:
+    """Return a curated display label for *route_id*, falling back to the id.
+
+    Used by the web UI's model picker when a chosen route is not present in
+    the runtime catalog (so :func:`get_route_profile` returns ``None``).
+    Preserves the raw id verbatim — never rewrites colons, slashes, or
+    brackets — because the id is what the runner dispatches on.
+    """
+    profile = get_route_profile(route_id)
+    if profile is not None and profile.display_name:
+        return profile.display_name
+    return route_id
 
 
 def reasoning_lte(value: str, max_value: str) -> bool:

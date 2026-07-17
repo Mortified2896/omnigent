@@ -1887,6 +1887,20 @@ class SessionResponse(BaseModel):
     todos: list[dict[str, Any]] = Field(default_factory=list)
     skills: list[SkillSummary] = Field(default_factory=list)
     model_options: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    Live OmniRoute combo catalog for the web UI's model picker.
+
+    Each entry is the JSON-shaped dict produced by
+    :meth:`omnigent.server.omniroute_catalog.OmniRouteComboEntry.to_wire`:
+    ``id`` (verbatim native id, including colons / slashes / brackets),
+    ``display_name`` (curated, e.g. ``"OmniRoute Coding Fast"``),
+    ``provider`` (always ``"omniroute"``), ``kind`` (always
+    ``"combo"``), ``reasoning_efforts`` (allowed efforts as a list of
+    strings), ``max_reasoning_effort``, ``default_reasoning_effort``,
+    ``requires_explicit_approval``. Empty list when no combos are
+    resolvable (mirrors :attr:`model_options`).
+    """
+    omniroute_combos: list[dict[str, Any]] = Field(default_factory=list)
     terminal_pending: bool = False
     sandbox_status: SandboxStatus | None = None
     active_response_id: str | None = None

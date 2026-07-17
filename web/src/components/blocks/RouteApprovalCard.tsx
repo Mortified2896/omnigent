@@ -14,6 +14,7 @@ import { useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, CheckIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { getOmniRouteComboDisplayName, isCuratedOmniRouteCombo } from "@/lib/omnirouteCombos";
 import { RouteProposalCard } from "./RouteProposalCard";
 
 export interface RouteApprovalCardProps {
@@ -27,6 +28,13 @@ export interface RouteApprovalCardProps {
   action: "accept" | "decline" | "auto_resolved" | "cancel";
   /** Stable identifier used to key React nodes across re-renders. */
   elicitationId: string;
+  /**
+   * Optional override of the lookup map used to resolve a combo id to a
+   * curated display name. Defaults to the bundled curated map; callers
+   * can pass a live-catalog-derived map so the card matches what the
+   * picker showed when the user made the pick.
+   */
+  comboDisplayNames?: Record<string, string>;
 }
 
 function text(value: unknown): string {
@@ -39,7 +47,12 @@ function list(value: unknown): string {
     : "";
 }
 
-export function RouteApprovalCard({ proposal, action, elicitationId }: RouteApprovalCardProps) {
+export function RouteApprovalCard({
+  proposal,
+  action,
+  elicitationId,
+  comboDisplayNames,
+}: RouteApprovalCardProps) {
   // Default-collapsed — the summary above carries the essential
   // selected route info the operator needs at a glance; the toggle is
   // there for "what was the rationale?" follow-ups.
@@ -58,6 +71,10 @@ export function RouteApprovalCard({ proposal, action, elicitationId }: RouteAppr
   // clip.
   const harness = text(proposal.recommended_harness) || "OpenCode Native";
   const routeId = text(proposal.omniroute_route_id);
+  const lookup = comboDisplayNames ?? undefined;
+  const routeDisplayName =
+    (lookup && routeId && lookup[routeId]) || getOmniRouteComboDisplayName(routeId);
+  const isCurated = isCuratedOmniRouteCombo(routeId);
   const reasoning = text(proposal.reasoning_effort);
   const permission = text(proposal.permission_mode);
   const billing =
@@ -91,7 +108,20 @@ export function RouteApprovalCard({ proposal, action, elicitationId }: RouteAppr
         <span data-testid="route-approval-card-label">{labelMap[action]}</span>
         {routeId ? (
           <span className="text-muted-foreground text-xs" data-testid="route-approval-route-id">
-            · Route <code>{routeId}</code>
+            · Provider OmniRoute
+            {isCurated ? (
+              <>
+                {" "}
+                · Route{" "}
+                <span data-testid="route-approval-route-display-name">{routeDisplayName}</span>{" "}
+                <code data-testid="route-approval-route-id-code">{routeId}</code>
+              </>
+            ) : (
+              <>
+                {" "}
+                · Route <code data-testid="route-approval-route-id-code">{routeId}</code>
+              </>
+            )}
           </span>
         ) : null}
         <Button
@@ -121,9 +151,22 @@ export function RouteApprovalCard({ proposal, action, elicitationId }: RouteAppr
         >
           <div className="text-muted-foreground">Harness</div>
           <div className="break-words">{harness}</div>
+          <div className="text-muted-foreground">Provider</div>
+          <div className="break-words" data-testid="route-approval-provider">
+            OmniRoute
+          </div>
           <div className="text-muted-foreground">Route</div>
-          <div className="break-words">
-            <code>{routeId || "—"}</code>
+          <div className="break-words" data-testid="route-approval-route-cell">
+            {isCurated && routeId ? (
+              <>
+                <span data-testid="route-approval-summary-route-display-name">
+                  {routeDisplayName}
+                </span>{" "}
+                <code data-testid="route-approval-summary-route-id">{routeId}</code>
+              </>
+            ) : (
+              <code data-testid="route-approval-summary-route-id">{routeId || "—"}</code>
+            )}
           </div>
           {reasoning ? (
             <>
@@ -164,7 +207,7 @@ export function RouteApprovalCard({ proposal, action, elicitationId }: RouteAppr
             data-testid="route-approval-details"
             className="mt-2 overflow-visible"
           >
-            <RouteProposalCard proposal={proposal} />
+            <RouteProposalCard proposal={proposal} comboDisplayNames={comboDisplayNames} />
           </div>
         ) : null}
       </AlertDescription>

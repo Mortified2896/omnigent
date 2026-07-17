@@ -32,6 +32,12 @@ from omnigent.model_override import (
         "databricks/databricks-gpt-5-4",
         "vendor:tag",
         "o3",
+        # OmniRoute curated combos: colons, slashes, brackets must all
+        # survive validation so the wire id matches what the runner
+        # dispatches against the local OmniRoute endpoint.
+        "auto/best-coding",
+        "auto/coding:fast",
+        "auto/coding:reliable",
     ],
 )
 def test_validate_model_override_accepts_real_id_shapes(value: str) -> None:

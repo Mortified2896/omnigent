@@ -104,6 +104,7 @@ import {
 } from "@/lib/renderItems";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
+import { getOmniRouteComboDisplayName } from "@/lib/omnirouteCombos";
 import { codexEffortLevelsForModel, findCodexModelOption } from "@/lib/codexNativeModels";
 import {
   composerAttachmentKey,
@@ -3484,7 +3485,15 @@ export function formatStatusModelLabel(
   if (codexOption) return codexOption.displayName ?? codexOption.id;
   const known = CLAUDE_NATIVE_MODELS.find((m) => m.id === lower);
   if (known) return known.label;
-  return raw;
+  // OmniRoute combo id: surface the curated display name when the
+  // picker has one. Falls back to the raw id (preserved verbatim) so
+  // an unknown combo still reads sensibly. The store lookup is the
+  // live catalog (server-fetched); getOmniRouteComboDisplayName
+  // provides the bundled curated fallback.
+  const omnirouteCombos = useChatStore.getState().omnirouteCombos;
+  const omnirouteMatch = omnirouteCombos.find((c) => c.id === raw);
+  if (omnirouteMatch) return omnirouteMatch.display_name || omnirouteMatch.id;
+  return getOmniRouteComboDisplayName(raw);
 }
 
 function formatStatusEffortLabel(effort: string | null, raw = false): string | null {
@@ -5406,7 +5415,24 @@ function AgentPicker({
     showEffort && selectedEffort
       ? formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex")
       : null;
-  const hasPickerActions = showAgents || modelOptions.length > 0 || showEffort;
+  // Live OmniRoute combo catalog for the picker (sourced from the
+  // session snapshot's ``omniroute_combos`` field). Surfaced as a
+  // dedicated group under the model rows so the curated coding combos
+  // (``auto/best-coding``, ``auto/coding:fast``,
+  // ``auto/coding:reliable``) are always selectable on harnesses that
+  // route through OmniRoute (opencode-native is the primary target).
+  // Empty array hides the section.
+  const omnirouteCombos = useChatStore((s) => s.omnirouteCombos);
+  // Only show the OmniRoute group when the active picker kind actually
+  // routes through OmniRoute — today that's opencode-native. Other
+  // harnesses have no `omniroute/...` provider plumbing so offering the
+  // rows would be misleading.
+  const supportsOmniRoutePicker = modelPickerKind === "opencode" || modelPickerKind === null;
+  const visibleOmniRouteCombos =
+    supportsOmniRoutePicker && omnirouteCombos && omnirouteCombos.length > 0 ? omnirouteCombos : [];
+  const showOmniRouteGroup = visibleOmniRouteCombos.length > 0;
+  const hasPickerActions =
+    showAgents || modelOptions.length > 0 || showOmniRouteGroup || showEffort;
 
   // Until kiro mirrors its live model (its first session ``.json`` write), there
   // is no resolved model to show; fall back to the catalog default (e.g. "Auto")
@@ -5533,11 +5559,49 @@ function AgentPicker({
             })}
           </>
         )}
+        {showOmniRouteGroup && (
+          <>
+            <DropdownMenuSeparator className="my-1" />
+            <PickerSectionHeader>OmniRoute</PickerSectionHeader>
+            {visibleOmniRouteCombos.map((combo) => {
+              const isActive = pickerSelectedModel === combo.id;
+              return (
+                <DropdownMenuItem
+                  key={combo.id}
+                  data-testid="omniroute-combo-picker-item"
+                  data-combo-id={combo.id}
+                  data-active={isActive ? "true" : undefined}
+                  onSelect={() =>
+                    void useChatStore
+                      .getState()
+                      .setModel(combo.id)
+                      .catch(() => {})
+                  }
+                  className={cn(
+                    "items-center gap-2 rounded-sm px-2 py-1.5 text-xs",
+                    "data-[active=true]:bg-accent/60 data-[active=true]:text-foreground",
+                  )}
+                >
+                  <span className="flex flex-1 flex-col gap-0.5">
+                    <span className="truncate" data-testid="omniroute-combo-picker-display-name">
+                      {combo.display_name || combo.id}
+                    </span>
+                    <span className="truncate text-[10px] text-muted-foreground">
+                      <code>{combo.id}</code>
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              );
+            })}
+          </>
+        )}
         {/* Skip the leading rule when Effort is the only section, so the
             dropdown doesn't open with a stray divider at the top. */}
         {showEffort && (
           <>
-            {(showAgents || modelOptions.length > 0) && <DropdownMenuSeparator className="my-1" />}
+            {(showAgents || modelOptions.length > 0 || showOmniRouteGroup) && (
+              <DropdownMenuSeparator className="my-1" />
+            )}
             <PickerSectionHeader>Effort</PickerSectionHeader>
             {effortLevels.map((level) => (
               <DropdownMenuItem

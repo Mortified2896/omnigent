@@ -14,6 +14,7 @@ def test_native_route_ids_catalog_complete():
         "auto",
         "auto/cheap",
         "auto/best-free",
+        "auto/best-coding",
         "auto/coding",
         "auto/coding:fast",
         "auto/coding:cheap",
@@ -28,6 +29,15 @@ def test_native_route_ids_catalog_complete():
         "auto/multimodal",
     }
     assert set(NATIVE_OMNIROUTE_ROUTE_IDS) == expected
+
+
+def test_curated_coding_combos_accepted_in_create():
+    """The three curated coding combos must be persisted end-to-end."""
+    for combo in ("auto/best-coding", "auto/coding:fast", "auto/coding:reliable"):
+        body = SessionCreateRequest.model_validate(
+            {"agent_id": "ag_1", "omniroute_route_id": combo, "reasoning_effort": "medium"}
+        )
+        assert body.omniroute_route_id == combo
 
 
 def test_unknown_route_id_is_rejected_in_create():

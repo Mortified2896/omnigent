@@ -100,6 +100,8 @@ describe("createSession", () => {
       todos: [],
       skills: [],
       codexModelOptions: [],
+      omnirouteCombos: [],
+      omnirouteCombosSource: null,
       terminalPending: false,
       sandboxStatus: null,
       activeResponseId: null,
