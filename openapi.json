@@ -193,6 +193,78 @@
         "title": "Body_upload_session_file_v1_sessions__session_id__resources_files_post",
         "type": "object"
       },
+      "BulkDeleteFailure": {
+        "description": "A single failure within a bulk-delete operation.",
+        "properties": {
+          "code": {
+            "default": "UNKNOWN",
+            "description": "Machine-readable error code.",
+            "title": "Code",
+            "type": "string"
+          },
+          "error": {
+            "description": "Human-readable error description.",
+            "title": "Error",
+            "type": "string"
+          },
+          "id": {
+            "description": "The session/conversation identifier that could not be deleted, e.g. `\"conv_abc123\"`.",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "error"
+        ],
+        "title": "BulkDeleteFailure",
+        "type": "object"
+      },
+      "BulkDeleteRequest": {
+        "description": "Request body for bulk-deleting multiple sessions.",
+        "properties": {
+          "ids": {
+            "description": "List of session/conversation identifiers to delete.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "BulkDeleteRequest",
+        "type": "object"
+      },
+      "BulkDeleteResult": {
+        "description": "Result of a bulk-delete operation.",
+        "properties": {
+          "deleted": {
+            "description": "List of session/conversation identifiers that were successfully deleted.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Deleted",
+            "type": "array"
+          },
+          "failed": {
+            "description": "List of `BulkDeleteFailure` entries for sessions that could not be deleted.",
+            "items": {
+              "$ref": "#/components/schemas/BulkDeleteFailure"
+            },
+            "title": "Failed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "deleted",
+          "failed"
+        ],
+        "title": "BulkDeleteResult",
+        "type": "object"
+      },
       "CancelledEvent": {
         "description": "Terminal event for a turn cancelled before completion.",
         "properties": {
@@ -4519,6 +4591,36 @@
             "description": "Per-session LLM model override, e.g. `\"claude-opus-4-7\"`. `None` means no override is active (the agent's `llm_model` applies). Set via `PATCH /v1/sessions/{id}` or the REPL's `/model` command; both write the same column so the web UI and the TUI stay in sync.",
             "title": "Model Override"
           },
+          "omniroute_combos": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Omniroute Combos",
+            "type": "array"
+          },
+          "omniroute_requires_explicit_approval": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Omniroute Requires Explicit Approval"
+          },
+          "omniroute_route_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Omniroute Route Id"
+          },
           "parent_session_id": {
             "anyOf": [
               {
@@ -4561,6 +4663,17 @@
             "description": "The requesting user's numeric permission level on this session: `1` = read, `2` = edit, `3` = manage. `None` when permissions are disabled (single-user mode without a permission store).",
             "title": "Permission Level"
           },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission Mode"
+          },
           "reasoning_effort": {
             "anyOf": [
               {
@@ -4584,6 +4697,17 @@
             ],
             "description": "The id of this session's spawn-tree root, e.g. `\"conv_root1\"`. Equals `id` for top-level sessions; for sub-agents it points at the top-level ancestor. Lets orchestration tools (e.g. `sys_session_close`) confirm a target shares the caller's spawn tree over the REST path. `None` only when the underlying row predates the `root_conversation_id` column (not expected post-migration).",
             "title": "Root Conversation Id"
+          },
+          "route_approval_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Approval Enabled"
           },
           "runner_id": {
             "anyOf": [
@@ -5728,6 +5852,39 @@
             "description": "Per-session LLM model override, e.g. `\"claude-opus-4-7\"`. The value is forwarded as-is to the executor at turn start; the server does not enumerate valid models. Clear aliases such as `\"default\"`, `\"off\"`, or `\"reset\"` remove the override (matching the REPL's `/model` semantics). `None` leaves unchanged.",
             "title": "Model Override"
           },
+          "omniroute_requires_explicit_approval": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Omniroute Requires Explicit Approval"
+          },
+          "omniroute_route_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Omniroute Route Id"
+          },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission Mode"
+          },
           "reasoning_effort": {
             "anyOf": [
               {
@@ -5739,6 +5896,17 @@
             ],
             "description": "Per-session reasoning-effort hint. Accepted metadata values are `\"none\"`, `\"minimal\"`, `\"low\"`, `\"medium\"`, `\"high\"`, `\"xhigh\"`, and `\"max\"`. Provider-specific support is validated when a turn executes. Clear aliases such as `\"default\"` remove the session override. `None` leaves unchanged.",
             "title": "Reasoning Effort"
+          },
+          "route_approval_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Approval Enabled"
           },
           "runner_id": {
             "anyOf": [
@@ -6727,6 +6895,27 @@
         ]
       }
     },
+    "/v1/omniroute/combos": {
+      "get": {
+        "description": "Return the live OmniRoute combo catalog for the web UI's model picker.\n\nDrives the new chat / composer \"OmniRoute Coding Best/Fast/Reliable\"\nrows. Unauthenticated (matches :http`/v1/info`) so the SPA\ncan populate the picker before any session cookie is held. The\ncatalog is data-only \u2014 no credentials, no per-user state.\n\nAlways returns 200 with a non-empty `combos` array even when\nOmniRoute is unreachable: the resolver falls back to the cached\nlisting, then to the curated fallback. `source` reports which\npath served the response so the UI can surface a \"live\" badge\nvs. a \"catalog degraded\" hint when needed.\n\n**Returns:** `{\"combos\": [...], \"source\": \"live\"|\"cache\"| \"fallback_curated\", \"verified\": bool}`. `verified` is `True` when the rows were read from the OmniRoute endpoint (live or cache replay); `False` when the server served the curated fallback because the endpoint was unreachable AND no cache was available.",
+        "operationId": "omniroute_combos_v1_omniroute_combos_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Omniroute Combos V1 Omniroute Combos Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Omniroute Combos"
+      }
+    },
     "/v1/policies": {
       "get": {
         "description": "List all default policies.\n\nRequires authentication in multi-user mode.\n\n**Returns:** `{\"object\": \"list\", \"data\": [...]}`.\n\n**Raises**\n\n- `OmnigentError` \u2014 401 if unauthenticated in multi-user mode.",
@@ -7309,6 +7498,48 @@
           }
         },
         "summary": "Create Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/bulk-delete": {
+      "post": {
+        "description": "Delete multiple sessions in bulk.\n\nAccepts a list of session IDs and deletes each one, collecting\nsuccesses and failures. Each session is deleted atomically \u2014\na failure for one does not affect the others. Authorization is\nchecked per session: the caller must own (or be admin of) each\nsession.\n\n**Parameters**\n\n- `body` \u2014 The `BulkDeleteRequest` with session IDs.\n\n**Returns:** A `BulkDeleteResult` with `deleted` and `failed` lists.",
+        "operationId": "bulk_delete_sessions_v1_sessions_bulk_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Delete Sessions",
         "tags": [
           "sessions"
         ]
