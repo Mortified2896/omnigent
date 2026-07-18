@@ -314,6 +314,17 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # test_run_omnigent_resumption suite). Not a secret; safe to propagate to
         # any subprocess.
         "OMNIGENT_AUTH_PROVIDER",
+        # Local OmniRoute bearer used by the host runner's
+        # ``fetch_omniroute_combo_models`` call. The runner reads it from
+        # /etc/omnigent/router.env on the host (same env file the web
+        # backend reads via omnigent-eval-web.service.d/router.conf), but
+        # the runner subprocess only inherits values in this allowlist
+        # (or explicit runner passthroughs); missing the var from the
+        # inherited env makes /v1/models return 401 and surfaces as
+        # ``native_terminal_start_failed`` for any OpenCode route-approved
+        # session. Not a user secret — it is the local-router key the
+        # OmniRoute server trusts on the same loopback.
+        "OMNIGENT_ROUTER_API_KEY",
         # Multi-user opt-in switch (create_auth_provider): OMNIGENT_AUTH_ENABLED
         # turns the env-unset header/local default into accounts (or oidc, when
         # OMNIGENT_OIDC_* is set); =0 opts back out. Must propagate down the

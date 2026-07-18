@@ -916,6 +916,14 @@ class _OpenCodeNativeLaunchConfig:
     :param terminal_launch_args: User pass-through OpenCode CLI args.
     :param model_override: Persisted model override, or ``None``.
     :param external_session_id: Existing OpenCode session id to resume.
+    :param omniroute_route_expected: ``True`` when the session has
+        ``route_approval_enabled=True`` set on the snapshot, i.e. the user
+        opted into per-session route approval and any model override is an
+        approved OmniRoute combo id. The runner uses this to drive the
+        fail-closed behavior of the OpenCode startup: an approved route
+        must validate against the local OmniRoute catalog before OpenCode
+        boots, and a missing/invalid catalog is a hard start failure
+        (not a silent fallback to a direct provider).
     :param fork_carry_history: ``True`` on a forked clone whose prior
         transcript should be seeded as a text preamble
         (``omnigent.fork.carry_history``); opencode has no native session to
@@ -929,6 +937,7 @@ class _OpenCodeNativeLaunchConfig:
     reasoning_effort: str | None
     permission_mode: str | None
     external_session_id: str | None
+    omniroute_route_expected: bool = False
     fork_carry_history: bool = False
 
 
@@ -1029,6 +1038,7 @@ async def _opencode_native_launch_config(
         reasoning_effort=reasoning_effort,
         permission_mode=permission_mode,
         external_session_id=external_session_id,
+        omniroute_route_expected=route_approval_enabled,
         fork_carry_history=fork_carry_history,
     )
 
@@ -1120,6 +1130,7 @@ async def _auto_create_opencode_terminal(
         merge_omniroute_combo_catalog,
         omniroute_api_key_from_config,
         resolve_databricks_gateway,
+        validate_omniroute_provider_config,
         write_opencode_provider_config,
     )
 
