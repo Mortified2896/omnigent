@@ -491,11 +491,30 @@ class HostStore:
         """
         Refresh a host's last-seen timestamp while its tunnel is alive.
 
-        Bumps ``updated_at`` to now so the liveness freshness gate
-        (see :data:`HOST_LIVENESS_TTL_S`) keeps treating the host as
-        online. Called from the host tunnel's ping loop every
-        ``PING_INTERVAL_S``. Does not change ``status`` — a host whose
-        ping loop is running is, by construction, still ``"online"``.
+        Bumps ``updated_at`` to now AND pins ``status`` to
+        ``"online"``. Called from the host tunnel's ping loop every
+        ``PING_INTERVAL_S``.
+
+        The ``status`` write is load-bearing, not cosmetic:
+        :func:`host_is_live` (which backs :meth:`is_online` and
+        ``GET /v1/hosts``) is the conjunction of ``status == "online"``
+        AND ``updated_at`` fresh. If only the timestamp is refreshed,
+        a single ``set_offline`` that fires during tunnel churn
+        (exception, graceful close, FIRST_COMPLETED across the three
+        tunnel tasks) leaves the row stuck at ``status="offline"``
+        while the heartbeat keeps the freshness half satisfied — and
+        the host appears offline in the picker for as long as the WS
+        tunnel stays alive without a fresh ``upsert_on_connect``. The
+        ping loop's own docstring says a host whose ping loop is
+        running is, by construction, still ``"online"``; co-writing
+        ``status`` makes that contract real on disk, not just in
+        commentary.
+
+        ``set_offline`` still wins for a freshly-disconnected tunnel
+        (the cleanup path that runs AFTER the ping loop is cancelled
+        sets ``status="offline"`` directly); a heartbeat firing AFTER
+        ``set_offline`` flips it back on the next tick. The
+        ``set_offline`` writer is unaffected by this change.
 
         No-op if the host does not exist.
 
@@ -512,7 +531,10 @@ class HostStore:
                     SqlHost.workspace_id == current_workspace_id(),
                     SqlHost.host_id == host_id,
                 )
-                .values(updated_at=now_epoch())
+                .values(
+                    status=encode_host_status("online"),
+                    updated_at=now_epoch(),
+                )
             )
 
     def is_online(self, host_id: str) -> bool:
