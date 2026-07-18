@@ -463,6 +463,7 @@ export interface ElicitationBlock {
    * Absent/null for all other elicitations.
    */
   rememberScope?: RememberScope | null;
+  routeProposal?: Record<string, unknown> | null;
 }
 
 /** Union of all block types. */

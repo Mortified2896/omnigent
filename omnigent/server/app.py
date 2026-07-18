@@ -1837,6 +1837,14 @@ def create_app(
             )
         except ImportError:
             smart_routing_enabled = False
+        # route_approval_enabled: true when the LLM-backed Model Routing Agent
+        # gate is on. Independent of smart_routing_enabled — the two systems
+        # are separate: smart-routing is the older cost-aware control, while
+        # route-approval is the LLM-agent proposal/approval flow for native
+        # OmniRoute routes. Each is gated by its own server-side feature flag.
+        from omnigent.server.routing_agent import route_approval_gate_enabled
+
+        route_approval_enabled = route_approval_gate_enabled()
         return {
             "accounts_enabled": accounts_enabled,
             "login_url": login_url,
@@ -1846,6 +1854,55 @@ def create_app(
             "sandbox_provider": sandbox_provider,
             "server_version": _server_version(),
             "smart_routing_enabled": smart_routing_enabled,
+            "route_approval_enabled": route_approval_enabled,
+        }
+
+    @app.get("/v1/omniroute/combos")
+    async def omniroute_combos() -> dict[str, Any]:
+        """Return the live OmniRoute combo catalog for the web UI's model picker.
+
+        Drives the new chat / composer "OmniRoute Coding Best/Fast/Reliable"
+        rows. Unauthenticated (matches :http:get:`/v1/info`) so the SPA
+        can populate the picker before any session cookie is held. The
+        catalog is data-only — no credentials, no per-user state.
+
+        Always returns 200 with a non-empty ``combos`` array even when
+        OmniRoute is unreachable: the resolver falls back to the cached
+        listing, then to the curated fallback. ``source`` reports which
+        path served the response so the UI can surface a "live" badge
+        vs. a "catalog degraded" hint when needed.
+
+        :returns: ``{"combos": [...], "source": "live"|"cache"|
+            "fallback_curated", "verified": bool}``.
+
+            ``verified`` is ``True`` when the rows were read from the
+            OmniRoute endpoint (live or cache replay); ``False`` when the
+            server served the curated fallback because the endpoint was
+            unreachable AND no cache was available.
+        """
+        try:
+            from omnigent.server.omniroute_catalog import (
+                fetch_omniroute_combo_catalog,
+            )
+
+            combos, source = await fetch_omniroute_combo_catalog()
+        except Exception as exc:  # noqa: BLE001 - fail-closed to curated fallback.
+            _logger.warning(
+                "omniroute /v1/omniroute/combos resolver raised (%s); serving curated fallback",
+                type(exc).__name__,
+            )
+            from omnigent.server.omniroute_catalog import curated_combo_catalog
+
+            combos = curated_combo_catalog()
+            source = "fallback_curated"
+        # The typed dict is JSON-friendly: ``to_wire()`` already emits
+        # JSON-safe sequences (the tuple in ``reasoning_efforts`` is
+        # converted to a list) so the SPA reads the camelCase / snake_case
+        # fields directly without further translation.
+        return {
+            "combos": [combo.to_wire() for combo in combos],
+            "source": source,
+            "verified": source != "fallback_curated",
         }
 
     @app.get("/v1/me", response_model=None)  # Union return type (dict | JSONResponse)

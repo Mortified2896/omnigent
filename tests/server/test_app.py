@@ -390,6 +390,65 @@ async def test_info_includes_server_version(
 
 
 @pytest.mark.asyncio
+async def test_info_includes_route_approval_enabled(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``GET /v1/info`` surfaces ``route_approval_enabled`` so the SPA can
+    mount the new Model Routing Agent selector on the new-chat screen
+    and in the composer without a second probe. The flag follows the
+    ``OMNIGENT_ROUTE_APPROVAL_GATE`` env var and is independent of the
+    legacy ``smart_routing_enabled`` capability.
+    """
+    from omnigent.server.routing_agent import route_approval_gate_enabled
+
+    # Sanity check: the test fixture's runtime env must have the gate
+    # on (matching the live drop-in environment), otherwise the
+    # post-condition assertion is vacuous.
+    assert route_approval_gate_enabled() is True
+
+    resp = await client.get("/v1/info")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "route_approval_enabled" in body
+    assert body["route_approval_enabled"] is True
+    # Independent of smart_routing_enabled — the new flow does not
+    # piggy-back on the legacy cost-aware routing capability.
+    assert "smart_routing_enabled" in body
+    assert body["smart_routing_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_info_route_approval_follows_gate_env(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    When ``OMNIGENT_ROUTE_APPROVAL_GATE`` is disabled, ``/v1/info``
+    reports ``route_approval_enabled=false`` — and crucially the value
+    is independent of the legacy ``smart_routing_enabled`` flag, so
+    the two flows can be toggled on/off separately.
+    """
+    from omnigent.server import routing_agent
+
+    monkeypatch.setattr(
+        routing_agent,
+        "route_approval_gate_enabled",
+        lambda: False,
+    )
+
+    resp = await client.get("/v1/info")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["route_approval_enabled"] is False
+    # smart_routing_enabled is computed separately and must remain
+    # unaffected by the route-approval gate (the conftest's app has no
+    # routing client wired, so the value is False here).
+    assert body["smart_routing_enabled"] is False
+
+
+@pytest.mark.asyncio
 async def test_health_bare_returns_status_ok(db_uri: str, tmp_path: Path) -> None:
     """
     ``GET /health`` with no session params still returns the bare

@@ -68,6 +68,14 @@ export interface ServerInfo {
    * (``OMNIGENT_SMART_ROUTING=1`` + ``llm:`` config). Hidden by default.
    */
   smart_routing_enabled: boolean;
+  /**
+   * True when the LLM-backed Model Routing Agent gate is on
+   * (``OMNIGENT_ROUTE_APPROVAL_GATE`` not disabled). Drives the new
+   * Model Routing Agent selector in the composer and new-chat dialog.
+   * Independent of ``smart_routing_enabled`` — the two flows are
+   * separate systems with their own feature flags.
+   */
+  route_approval_enabled: boolean;
 }
 
 /** Sentinel used when the probe fails — accounts is off, no login URL. */
@@ -80,6 +88,7 @@ const _OFF: ServerInfo = {
   sandbox_provider: null,
   server_version: null,
   smart_routing_enabled: false,
+  route_approval_enabled: false,
 };
 
 let _cached: ServerInfo | null = null;
@@ -114,6 +123,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
             typeof data.sandbox_provider === "string" ? data.sandbox_provider : null,
           server_version: typeof data.server_version === "string" ? data.server_version : null,
           smart_routing_enabled: data.smart_routing_enabled === true,
+          route_approval_enabled: data.route_approval_enabled === true,
         };
         return _cached;
       }

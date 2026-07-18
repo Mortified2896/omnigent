@@ -314,6 +314,15 @@ export interface Session {
    * "Cost Optimized" toggle.
    */
   costControlModeOverride?: "on" | "off" | null;
+  /**
+   * Per-session LLM-backed Model Routing Agent toggle. `true` engages
+   * the routing agent at the start of every turn (proposes a harness,
+   * native OmniRoute route, reasoning effort, and permission mode,
+   * and publishes an approval card before execution). `false` /
+   * `null` defers to the user's manual model/harness/effort picks.
+   * Driven by the "Model Routing Agent" toggle.
+   */
+  routeApprovalEnabled?: boolean | null;
   /** Model context window size in tokens as looked up server-side. */
   contextWindow?: number | null;
   /**
@@ -416,6 +425,27 @@ export interface Session {
    */
   codexModelOptions?: CodexModelOption[];
   /**
+   * Live OmniRoute combo catalog for the web UI's model picker. Each
+   * entry has a curated display name plus the verbatim native combo id
+   * (preserved end-to-end, including colons / slashes / brackets). When
+   * populated, the picker renders these rows under an "OmniRoute" group
+   * so the curated coding combos (``auto/best-coding``,
+   * ``auto/coding:fast``, ``auto/coding:reliable``) are always selectable.
+   *
+   * Sourced from ``GET /v1/omniroute/combos`` and cached on the server
+   * with a 5-minute TTL; an empty array means OmniRoute was unreachable
+   * AND no cache was available, in which case the curated fallback is
+   * still served through the dedicated combos endpoint even if it
+   * hasn't reached the snapshot yet.
+   */
+  omnirouteCombos?: OmniRouteCombo[];
+  /**
+   * The catalog source the server reported (``"live"`` / ``"cache"`` /
+   * ``"fallback_curated"``). Lets the UI surface a "live" badge or a
+   * "catalog degraded" hint when the catalog isn't freshly read.
+   */
+  omnirouteCombosSource?: "live" | "cache" | "fallback_curated" | null;
+  /**
    * True while the runner is auto-creating the terminal for a
    * terminal-first session (claude-native / codex-native). Sourced
    * from the server's `_session_terminal_pending_cache` at snapshot
@@ -512,4 +542,35 @@ export interface CodexModelOption {
   isDefault?: boolean;
   /** Additional Codex metadata. */
   [key: string]: unknown;
+}
+
+/**
+ * One live row from the OmniRoute combo catalog. Combos are routing
+ * combinations (e.g. ``auto/best-coding``) — NOT concrete models —
+ * which the local OmniRoute runtime resolves to a concrete
+ * provider/model on each request. The web UI surfaces them as
+ * selectable picker rows under an "OmniRoute" group while preserving
+ * the native id verbatim so the runner can dispatch the combo
+ * unchanged.
+ *
+ * Mirrors the JSON wire shape produced by ``GET /v1/omniroute/combos``
+ * (snake_case) and the session snapshot's ``omniroute_combos`` field.
+ */
+export interface OmniRouteCombo {
+  /** Verbatim native combo id, e.g. ``"auto/coding:fast"``. */
+  id: string;
+  /** Curated display name, e.g. ``"OmniRoute Coding Fast"``. */
+  display_name: string;
+  /** Always ``"omniroute"`` for entries from this catalog. */
+  provider: "omniroute";
+  /** Always ``"combo"`` — distinguishes a curated combo from a concrete model. */
+  kind: "combo";
+  /** Allowed reasoning-effort values for this combo, e.g. ``["low", "medium"]``. */
+  reasoning_efforts: string[];
+  /** Highest effort the combo accepts, e.g. ``"high"``. */
+  max_reasoning_effort: string;
+  /** Recommended effort, e.g. ``"medium"``. */
+  default_reasoning_effort: string;
+  /** True when the routing agent gates this combo on a confirm step. */
+  requires_explicit_approval: boolean;
 }

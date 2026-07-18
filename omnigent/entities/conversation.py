@@ -199,6 +199,10 @@ class Conversation:
     model_override: str | None = None
     cost_control_mode_override: str | None = None
     harness_override: str | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
     sub_agent_name: str | None = None
     external_session_id: str | None = None
     terminal_launch_args: list[str] | None = None

@@ -223,6 +223,7 @@ class OpenCodeNativeBridgeState:
     :param status: Coarse status, ``"idle"`` or ``"busy"``.
     :param model_override: Persisted model override, e.g.
         ``"anthropic/claude-opus-4"``, or ``None``.
+    :param reasoning_effort: Persisted normalized reasoning effort, or ``None``.
     :param workspace: Workspace cwd the session runs in.
     :param last_event_id: Last SSE event id seen, for resume/debug.
     """
@@ -236,6 +237,11 @@ class OpenCodeNativeBridgeState:
     active_message_id: str | None = None
     status: str = "idle"
     model_override: str | None = None
+    reasoning_effort: str | None = None
+    permission_mode: str | None = None
+    # Set only by the approval gate.  The executor uses this to reject a
+    # missing pin rather than letting OpenCode select its built-in provider.
+    route_approved: bool = False
     workspace: str | None = None
     last_event_id: str | None = None
 
@@ -544,6 +550,9 @@ def write_bridge_state(bridge_dir: Path, state: OpenCodeNativeBridgeState) -> No
                     "active_message_id": state.active_message_id,
                     "status": state.status,
                     "model_override": state.model_override,
+                    "reasoning_effort": state.reasoning_effort,
+                    "permission_mode": state.permission_mode,
+                    "route_approved": state.route_approved,
                     "workspace": state.workspace,
                     "last_event_id": state.last_event_id,
                 },
@@ -617,6 +626,9 @@ def read_bridge_state(bridge_dir: Path) -> OpenCodeNativeBridgeState | None:
         active_message_id=_opt_str("active_message_id"),
         status=status if isinstance(status, str) and status else "idle",
         model_override=_opt_str("model_override"),
+        reasoning_effort=_opt_str("reasoning_effort"),
+        permission_mode=_opt_str("permission_mode"),
+        route_approved=bool(raw.get("route_approved", False)),
         workspace=_opt_str("workspace"),
         last_event_id=_opt_str("last_event_id"),
     )
@@ -666,6 +678,39 @@ def update_last_event_id(bridge_dir: Path, last_event_id: str) -> None:
     import dataclasses
 
     write_bridge_state(bridge_dir, dataclasses.replace(state, last_event_id=last_event_id))
+
+
+def update_execution_package(
+    bridge_dir: Path,
+    *,
+    model_override: str,
+    reasoning_effort: str | None,
+    permission_mode: str | None,
+) -> bool:
+    """Atomically install the approved package used by the next prompt.
+
+    Returning ``False`` is deliberately distinct from clearing a model: callers
+    must fail the dispatch rather than allowing OpenCode to choose its default.
+    """
+    state = read_bridge_state(bridge_dir)
+    if state is None:
+        return False
+    import dataclasses
+
+    model = model_override.strip()
+    if not model:
+        raise ValueError("route-approved OpenCode execution requires a model")
+    write_bridge_state(
+        bridge_dir,
+        dataclasses.replace(
+            state,
+            model_override=model,
+            reasoning_effort=reasoning_effort.strip() if reasoning_effort else None,
+            permission_mode=permission_mode.strip() if permission_mode else None,
+            route_approved=True,
+        ),
+    )
+    return True
 
 
 def update_model_override(bridge_dir: Path, model_override: str | None) -> bool:

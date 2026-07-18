@@ -41,6 +41,12 @@ def test_build_prompt_payload_bare_model_id_is_dropped() -> None:
     assert "model" not in build_prompt_payload(NativePrompt(text="hi", model="just-a-name"))
 
 
+def test_build_prompt_payload_variant_reasoning_effort() -> None:
+    body = build_prompt_payload(NativePrompt(text="hi", variant="medium"))
+    assert body["variant"] == "medium"
+    assert body["reasoning_effort"] == "medium"
+
+
 def test_build_prompt_payload_image_and_file_attachments() -> None:
     prompt = NativePrompt(
         text="look",

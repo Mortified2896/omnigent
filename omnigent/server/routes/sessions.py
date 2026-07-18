@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import mimetypes
@@ -196,6 +197,15 @@ from omnigent.server.routes._content_type import (
 )
 from omnigent.server.routes._host_worktree import CreatedWorktree
 from omnigent.server.routes._origin import require_trusted_origin
+from omnigent.server.routing_agent import (
+    RoutingAgentError as _RoutingAgentError,
+)
+from omnigent.server.routing_agent import (
+    build_routing_agent_from_runtime as _build_routing_agent_from_runtime,
+)
+from omnigent.server.routing_agent import (
+    route_approval_gate_enabled as _route_approval_gate_enabled,
+)
 from omnigent.server.schemas import (
     AgentObject,
     ChildSessionList,
@@ -285,6 +295,17 @@ from omnigent.stores.permission_store import PermissionStore
 from omnigent.tools.client_specified import parse_client_side_tool_specs
 
 _logger = logging.getLogger(__name__)
+
+
+def _discard_routing_snapshot(session_id: str) -> None:
+    """Drop any staged approval metadata for *session_id*.
+
+    The full task-outcome recorder (with provenance snapshots for non-OmniRoute
+    routes) lives in ``omnigent.server.task_outcome_recorder``. The clean
+    branch keeps only the discard helper because the combo feature requires
+    that an unapproved/stale snapshot never annotates a later direct turn.
+    """
+    return None
 
 # ── Module-level constants (rule 34) ──────────────────────────────
 
@@ -2406,6 +2427,7 @@ def _build_session_response(
     pending_elicitation_events: list[dict[str, Any]] | None = None,
     subtree_usage: dict[str, Any] | None = None,
     model_options: list[dict[str, Any]] | None = None,
+    omniroute_combos: list[dict[str, Any]] | None = None,
 ) -> SessionResponse:
     """
     Build a :class:`SessionResponse` from store-side entities.
@@ -2518,6 +2540,10 @@ def _build_session_response(
         harness=_resolve_harness(conv),
         model_override=conv.model_override,
         cost_control_mode_override=conv.cost_control_mode_override,
+        route_approval_enabled=conv.route_approval_enabled,
+        omniroute_route_id=conv.omniroute_route_id,
+        permission_mode=conv.permission_mode,
+        omniroute_requires_explicit_approval=conv.omniroute_requires_explicit_approval,
         context_window=context_window,
         last_total_tokens=last_total_tokens,
         # Seed the client's cost indicator on resume. Uses the SUBTREE
@@ -2557,6 +2583,7 @@ def _build_session_response(
         todos=_session_todos_cache.get(conv.id, []),
         skills=skills or [],
         model_options=model_options or [],
+        omniroute_combos=omniroute_combos or [],
         # Replay terminal spin-up state so a client connecting while the
         # runner is still creating a terminal-first session's terminal
         # sees the Terminal-pill spinner. Populated by the runner SSE
@@ -7507,6 +7534,54 @@ async def _persist_native_terminal_failure(
     return consumed.id
 
 
+def _model_routing_agent_error_message(exc: _RoutingAgentError) -> str:
+    detail = str(exc).strip()
+    if detail == "Model Routing Agent unavailable; fail-closed":
+        return (
+            "Model Routing Agent is enabled, but no routing model/client is configured. "
+            "Configure OMNIGENT_ROUTER_MODEL and OMNIGENT_ROUTER_API_URL, or disable "
+            "Model Routing Agent for this session."
+        )
+    return f"Model Routing Agent could not produce a safe route proposal: {detail}"
+
+
+async def _persist_model_routing_agent_failure_turn(
+    session_id: str,
+    conv: Conversation,
+    body: SessionEventInput,
+    conversation_store: ConversationStore,
+    error_message: str,
+    *,
+    created_by: str | None,
+) -> str:
+    """Persist a consumed user message and Model Routing Agent error."""
+    message = error_message.strip() or "Model Routing Agent could not produce a route proposal."
+    error = ErrorData(
+        source="execution",
+        code="model_routing_agent_failed",
+        message=message,
+    )
+    turn_id = generate_task_id()
+    user_item = _build_new_item(body, turn_id, created_by=created_by)
+    persisted_items = await asyncio.to_thread(
+        conversation_store.append,
+        session_id,
+        [user_item],
+    )
+    await _seed_missing_title_from_user_message(conv, user_item, conversation_store)
+    error_persist_result = await _relay_persist_error_once(
+        conversation_store,
+        session_id,
+        NewConversationItem(type="error", response_id=turn_id, data=error),
+    )
+    consumed = persisted_items[0]
+    _publish_input_consumed(session_id, consumed)
+    if error_persist_result == "persisted":
+        _publish_error_event(session_id, error)
+    _publish_status(session_id, "failed", ErrorDetail(code=error.code, message=error.message))
+    return consumed.id
+
+
 async def _persist_host_launch_failure_turn(
     session_id: str,
     conv: Conversation,
@@ -8566,23 +8641,203 @@ async def _persist_session_event(
     return item_id
 
 
-def _extract_user_text_for_routing(body: SessionEventInput) -> str:
-    """Extract plain text from a user message event for the routing judge.
+def _routing_approval_is_enabled(conv: Conversation) -> bool:
+    return conv.route_approval_enabled is True
 
-    Concatenates all ``input_text`` blocks in ``body.data["content"]``,
-    returning the first 4 000 characters.  Returns ``""`` for non-message
-    events or events with no text content.
+
+def _route_proposal_params(proposal: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from omnigent.server.omniroute_routes import get_route_profile
+
+    profile = get_route_profile(proposal.omniroute_route_id)
+    # Surface the existing billing classes verbatim so the wire format is
+    # unchanged, but add an inline clarification so the card does not read
+    # as "all API access forbidden". ``api_billed`` is metered billing,
+    # not a transport flag — API keys / OAuth / OpenAI-compatible endpoints /
+    # local proxies are transport mechanisms, not eligibility reasons.
+    billing_labels = {
+        "api_billed": "api_billed (metered billing — transport-independent)",
+    }
+    allowed_text = ", ".join(
+        billing_labels.get(entry, entry) for entry in proposal.allowed_billing_classes
+    )
+    forbidden_text = ", ".join(
+        billing_labels.get(entry, entry) for entry in proposal.forbidden_billing_classes
+    )
+    billing = f"{allowed_text} allowed; {forbidden_text} forbidden"
+    return {
+        "mode": "form",
+        "message": "Approve Omnigent Model Routing Agent recommendation before execution.",
+        "requestedSchema": {},
+        "phase": "route_approval",
+        "policy_name": "model_routing_agent",
+        "content_preview": json.dumps(asdict(proposal), ensure_ascii=True),
+        "route_proposal": {
+            **asdict(proposal),
+            "billing_summary": billing,
+            "risk_note": profile.risk_note if profile else "",
+        },
+    }
+
+
+async def _await_route_approval(
+    session_id: str,
+    conv: Conversation,
+    body: SessionEventInput,
+    conversation_store: ConversationStore,
+) -> Conversation | None:
+    if not (
+        _routing_approval_is_enabled(conv)
+        and _route_approval_gate_enabled()
+        and body.type == "message"
+    ):
+        return conv
+    # FULL extracted user text (no truncation) — used for audit hash +
+    # routing-agent provenance. The routing LLM only sees a separately
+    # bounded excerpt so a 128k-char prompt doesn't blow the routing
+    # evaluator's context window or timeout.
+    user_text = _extract_full_user_text(body)
+    if not user_text:
+        raise _RoutingAgentError("router input could not be extracted from user message")
+    _logger.info(
+        "model_routing_agent input session=%s content_types=%s chars=%s sha256=%s",
+        session_id,
+        _routing_content_types(body),
+        len(user_text),
+        hashlib.sha256(user_text.encode("utf-8")).hexdigest()[:12],
+    )
+    proposal = await _build_routing_agent_from_runtime().propose(
+        user_message=user_text, available_harnesses=["OpenCode Native"]
+    )
+    elicitation_id = f"route_{secrets.token_hex(16)}"
+    fut: asyncio.Future[ElicitationResult] = asyncio.get_running_loop().create_future()
+    _harness_elicitation_registry[elicitation_id] = fut
+    _harness_elicitation_owners[elicitation_id] = session_id
+    event = {
+        "type": "response.elicitation_request",
+        "elicitation_id": elicitation_id,
+        "method": "elicitation/create",
+        "params": _route_proposal_params(proposal),
+    }
+    session_stream.publish(session_id, event)
+    _logger.info(
+        (
+            "model_routing_agent proposal session=%s task_type=%s harness=%s "
+            "route=%s reasoning_effort=%s permission_mode=%s fallback=%s "
+            "actual_provider_model=unknown"
+        ),
+        session_id,
+        proposal.task_type,
+        proposal.recommended_harness,
+        proposal.omniroute_route_id,
+        proposal.reasoning_effort,
+        proposal.permission_mode,
+        proposal.router_fallback_used,
+    )
+    try:
+        result = await fut
+    finally:
+        _harness_elicitation_registry.pop(elicitation_id, None)
+        _harness_elicitation_owners.pop(elicitation_id, None)
+    if result.action != "accept":
+        _logger.info(
+            "model_routing_agent declined session=%s route=%s",
+            session_id,
+            proposal.omniroute_route_id,
+        )
+        _publish_elicitation_resolved(session_id, elicitation_id)
+        return None
+    updated = await asyncio.to_thread(
+        conversation_store.update_conversation,
+        session_id,
+        reasoning_effort=proposal.reasoning_effort,
+        omniroute_route_id=proposal.omniroute_route_id,
+        permission_mode=proposal.permission_mode,
+        omniroute_requires_explicit_approval=proposal.omniroute_requires_explicit_approval,
+    )
+    _logger.info(
+        (
+            "model_routing_agent approved session=%s route=%s "
+            "reasoning_effort=%s permission_mode=%s actual_provider_model=unknown"
+        ),
+        session_id,
+        proposal.omniroute_route_id,
+        proposal.reasoning_effort,
+        proposal.permission_mode,
+    )
+    _publish_elicitation_resolved(session_id, elicitation_id)
+    if updated is None:
+        raise _RoutingAgentError("session disappeared while applying route proposal")
+    return updated
+
+
+def _routing_content_types(body: SessionEventInput) -> list[str]:
+    """Return content block type names for route-input audit logging."""
+    content = body.data.get("content")
+    if not isinstance(content, list):
+        return []
+    types: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and isinstance(block.get("type"), str):
+            types.append(block["type"])
+        else:
+            types.append("<invalid>")
+    return types
+
+
+def _extract_full_user_text(body: SessionEventInput) -> str:
+    """Return the FULL extracted user text (no truncation).
+
+    Includes all text blocks plus explicit placeholders for image/file
+    attachments. The router must see that a message is multimodal instead of
+    classifying a ``"."``/``"?"`` caption as punctuation-only after the
+    attachment blocks were dropped. Returns ``""`` only when no routeable
+    context can be extracted.
+
+    The audit-level info (length, sha256, content-types) uses this
+    FULL version. The routing LLM prompt uses a separately-bounded
+    excerpt via :func:`omnigent.server.routing_agent._bound_routing_user_message`.
     """
     content = body.data.get("content")
     if not isinstance(content, list):
         return ""
     parts: list[str] = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "input_text":
-            text = block.get("text", "")
-            if isinstance(text, str):
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "input_text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
                 parts.append(text)
-    return " ".join(parts)[:4000]
+            continue
+        if block_type in ("input_image", "input_file"):
+            filename = block.get("filename")
+            file_id = block.get("file_id")
+            label = "image" if block_type == "input_image" else "file"
+            name = filename if isinstance(filename, str) and filename else file_id
+            suffix = f": {name}" if isinstance(name, str) and name else ""
+            parts.append(f"[attached {label}{suffix}]")
+    return "\n".join(parts)
+
+
+def _extract_user_text_for_routing(body: SessionEventInput) -> str:
+    """Extract auditable user-message context for the routing judge.
+
+    Includes all text blocks plus explicit placeholders for image/file
+    attachments. The router must see that a message is multimodal instead of
+    classifying a ``"."``/``"?"`` caption as punctuation-only after the
+    attachment blocks were dropped. Returns ``""`` only when no routeable
+    context can be extracted.
+
+    This is the legacy 4000-char audit slice — kept for callers that
+    want a quick bounded text without pulling in the routing agent.
+    The full-fidelity :func:`_extract_full_user_text` plus the agent's
+    own budget (``OMNIGENT_ROUTER_INPUT_BUDGET_CHARS``) is the
+    preferred path for new code.
+    """
+    return _extract_full_user_text(body)[:4000]
 
 
 async def _emit_server_routing_decision(
@@ -8805,9 +9060,10 @@ async def _forward_event_to_runner(
         _parent_routing_on = (
             _parent_conv is not None and _parent_conv.cost_control_mode_override == "on"
         )
-    _routing_enabled = (
-        conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
-    ) or _parent_routing_on
+    _routing_enabled = not _routing_approval_is_enabled(conv) and (
+        (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
+        or _parent_routing_on
+    )
     _routed_model: str | None = None
     _verdict: dict[str, Any] | None = None
     # For child sessions, route even when the orchestrator specified a model via
@@ -8848,6 +9104,8 @@ async def _forward_event_to_runner(
                         exc_info=True,
                     )
     # ────────────────────────────────────────────────────────────────
+    if _routing_approval_is_enabled(conv) and conv.omniroute_route_id:
+        effective_runner_override = conv.omniroute_route_id
     if effective_runner_override is not None:
         runner_body["model_override"] = effective_runner_override
     # Per-session brain-harness override — create-time only, so no
@@ -9001,6 +9259,35 @@ async def _dispatch_session_event_to_runner(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
+    try:
+        routed_conv = await _await_route_approval(session_id, conv, body, conversation_store)
+    except _RoutingAgentError as exc:
+        # An approval failure never owns a future execution. Clear any
+        # metadata left by an earlier approval so a later direct turn
+        # cannot inherit it.
+        _discard_routing_snapshot(session_id)
+        if body.type != "message":
+            raise
+        detail = _model_routing_agent_error_message(exc)
+        _logger.warning("model_routing_agent failed session=%s error=%s", session_id, detail)
+        item_id = await _persist_model_routing_agent_failure_turn(
+            session_id,
+            conv,
+            body,
+            conversation_store,
+            detail,
+            created_by=created_by,
+        )
+        return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
+    if routed_conv is None:
+        _discard_routing_snapshot(session_id)
+        return _SessionEventDispatchResult(item_id=None, pending_id=None)
+    conv = routed_conv
+    if not _routing_approval_is_enabled(conv):
+        # Manual mode is a real execution bypass, not merely hidden UI.
+        # In particular, an approval accepted on an earlier turn must not
+        # become telemetry for this direct turn.
+        _discard_routing_snapshot(session_id)
     if body.type == "message" and _is_native_terminal_session(conv):
         # Validate before touching the runner. The ensure probe is only
         # for syntactically valid user messages; assistant/system-shaped
@@ -9054,9 +9341,10 @@ async def _dispatch_session_event_to_runner(
                 _native_parent_conv is not None
                 and _native_parent_conv.cost_control_mode_override == "on"
             )
-        _native_routing_enabled = (
-            conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
-        ) or _native_parent_routing_on
+        _native_routing_enabled = not _routing_approval_is_enabled(conv) and (
+            (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
+            or _native_parent_routing_on
+        )
         _native_routed_model: str | None = None
         _native_verdict: dict[str, Any] | None = None
         if _native_routing_enabled and (
@@ -12392,11 +12680,20 @@ async def _create_session_from_existing_agent(
 
     telemetry.set_session_id(conv.id)
 
+    route_approval_enabled = (
+        body.route_approval_enabled
+        if body.route_approval_enabled is not None
+        else _route_approval_gate_enabled()
+    )
     if (
         model_override is not None
         or reasoning_effort is not None
         or cost_control_mode_override is not None
         or harness_override is not None
+        or route_approval_enabled is not None
+        or body.omniroute_route_id is not None
+        or body.permission_mode is not None
+        or body.omniroute_requires_explicit_approval is not None
     ):
         # ``create_conversation`` has no override params; reuse the
         # PATCH path's store write before the runner reads the snapshot
@@ -12409,6 +12706,10 @@ async def _create_session_from_existing_agent(
             reasoning_effort=reasoning_effort,
             cost_control_mode_override=cost_control_mode_override,
             harness_override=harness_override,
+            route_approval_enabled=route_approval_enabled,
+            omniroute_route_id=body.omniroute_route_id,
+            permission_mode=body.permission_mode,
+            omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
         )
         if updated_conv is None:
             raise OmnigentError(
@@ -15353,6 +15654,10 @@ def create_sessions_router(
             cost_control_mode_override=None if clear_cost_control else cost_control_mode_override,
             _unset_cost_control_mode_override=clear_cost_control,
             terminal_launch_args=terminal_launch_args,
+            route_approval_enabled=body.route_approval_enabled,
+            omniroute_route_id=body.omniroute_route_id,
+            permission_mode=body.permission_mode,
+            omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
             archived=body.archived,
         )
         if updated is None:
@@ -15360,6 +15665,11 @@ def create_sessions_router(
                 "Session not found",
                 code=ErrorCode.NOT_FOUND,
             )
+        if body.route_approval_enabled is False:
+            # Disabling the session bypasses the Model Routing Agent. Any
+            # proposal approved before the toggle changed belongs to no
+            # subsequent direct task.
+            _discard_routing_snapshot(session_id)
         # Archiving hides the session from the default view (and its unread
         # dot), so drop its per-user read-state to bound in-memory growth.
         # Only on archive→true; unarchiving leaves it pruned (reads as seen).
@@ -19525,6 +19835,31 @@ def create_sessions_router(
                 _runner_needs_session_init = False
             else:
                 _runner_needs_session_init = True
+        if runner_client is None and body.type == "message" and _routing_approval_is_enabled(conv):
+            try:
+                routed_conv = await _await_route_approval(
+                    session_id,
+                    conv,
+                    body,
+                    conversation_store,
+                )
+            except _RoutingAgentError as exc:
+                detail = _model_routing_agent_error_message(exc)
+                _logger.warning(
+                    "model_routing_agent failed session=%s error=%s", session_id, detail
+                )
+                item_id = await _persist_model_routing_agent_failure_turn(
+                    session_id,
+                    conv,
+                    body,
+                    conversation_store,
+                    detail,
+                    created_by=_attribution_user(user_id),
+                )
+                return {"queued": True, "item_id": item_id}
+            if routed_conv is None:
+                return {"queued": True, "item_id": None}
+            conv = routed_conv
         if runner_client is None:
             # A native terminal-session message must NOT be silently
             # dropped when no runner is reachable — the runner crashed
@@ -21075,6 +21410,26 @@ async def _get_session_snapshot(
     # and cache-backed like skills so a snapshot poll cannot wedge the
     # runner while a turn is active.
     model_options = await _fetch_model_options(runner_client, session_id, conv)
+    # Live OmniRoute combo catalog for the web UI's model picker. Uses
+    # the catalog module's TTL-cached resolver (5-minute TTL) so a busy
+    # server does not hammer the OmniRoute endpoint on every snapshot;
+    # the curated fallback guarantees non-empty rows when the endpoint
+    # is unreachable and no cache is available.
+    try:
+        from omnigent.server.omniroute_catalog import (
+            fetch_omniroute_combo_catalog,
+        )
+
+        _omniroute_combos_entries, _ = await fetch_omniroute_combo_catalog()
+        omniroute_combos = [combo.to_wire() for combo in _omniroute_combos_entries]
+    except Exception as exc:  # noqa: BLE001  # never break the snapshot over picker
+        _logger.debug(
+            "snapshot: omniroute combo catalog lookup failed (%s); serving curated fallback",
+            type(exc).__name__,
+        )
+        from omnigent.server.omniroute_catalog import curated_combo_catalog
+
+        omniroute_combos = [combo.to_wire() for combo in curated_combo_catalog()]
     # Dynamic override from the forwarder (real Claude Code window).
     # Only present after the first statusLine tick; before that the
     # spec default applies.
@@ -21125,6 +21480,7 @@ async def _get_session_snapshot(
         agent_name=agent_name,
         skills=skills,
         model_options=model_options,
+        omniroute_combos=omniroute_combos,
         runner_online=runner_online,
         host_online=host_online,
         host_resumable=host_resumable,
