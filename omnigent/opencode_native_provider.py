@@ -63,11 +63,21 @@ async def fetch_omniroute_combo_models(
 
     A route is valid only when runtime metadata marks it as a combo; no static
     allow-list is maintained in Omnigent.
+
+    The bearer token is picked from the explicit ``api_key`` override first,
+    then from any of the env vars used elsewhere in the local
+    OmniRoute/Omnigent pair: ``OMNIGENT_OMNIROUTE_API_KEY`` (the canonical
+    name for the runner-side call), ``OMNIGENT_ROUTER_API_KEY`` (the backend
+    RoutingAgent uses the same value to reach the same gateway), and
+    ``OMNIROUTE_API_KEY`` (mirrors the OmniRoute server's own env).
+    Mirroring all three keeps host runners and the backend in lockstep
+    without forcing every deployment to set the same variable twice.
     """
     endpoint = (base_url or omniroute_base_url()).rstrip("/") + "/models"
     token = (
         api_key
         or os.environ.get("OMNIGENT_OMNIROUTE_API_KEY")
+        or os.environ.get("OMNIGENT_ROUTER_API_KEY")
         or os.environ.get("OMNIROUTE_API_KEY")
     )
     headers = {"Authorization": f"Bearer {token}"} if token else None
@@ -96,13 +106,44 @@ async def fetch_omniroute_combo_models(
     return combos
 
 
+def _resolve_omniroute_api_key_str(raw: object) -> str | None:
+    """Resolve the OpenCode ``{env:NAME}`` placeholder to a real env value.
+
+    OpenCode's provider-config layer accepts ``apiKey: "{env:OMNIROUTE_API_KEY}"``
+    so the same JSON works on hosts where the secret is sourced from the
+    shell. The Omnigent runner-side helper does not run through OpenCode's
+    own config loader, so an unresolved placeholder leaks to OmniRoute's
+    auth check as a literal token (HTTP 401). Strip the wrapper, look the
+    variable up, and treat a missing env as 'no key' so the helper's
+    env fallback can take over.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    stripped = raw.strip()
+    if stripped.startswith("{env:") and stripped.endswith("}"):
+        env_name = stripped[len("{env:"):-1].strip()
+        if not env_name:
+            return None
+        value = os.environ.get(env_name)
+        return value if isinstance(value, str) and value else None
+    return stripped
+
+
 def omniroute_api_key_from_config(config: Mapping[str, object]) -> str | None:
-    """Extract a local provider key without logging or serializing it elsewhere."""
+    """Extract a local provider key without logging or serializing it elsewhere.
+
+    OpenCode allows ``apiKey: "{env:NAME}"`` placeholders; resolve those to
+    the host's actual env value before returning. A missing or unresolved
+    placeholder returns ``None`` so the caller can fall back to runner-side
+    env vars (``OMNIGENT_OMNIROUTE_API_KEY`` / ``OMNIGENT_ROUTER_API_KEY``),
+    rather than shipping a literal ``"{env:...}"`` as a bearer token.
+    """
     providers = config.get("provider")
     provider = providers.get(OMNIROUTE_PROVIDER_ID) if isinstance(providers, Mapping) else None
     options = provider.get("options") if isinstance(provider, Mapping) else None
     api_key = options.get("apiKey") if isinstance(options, Mapping) else None
-    return api_key if isinstance(api_key, str) and api_key else None
+    resolved = _resolve_omniroute_api_key_str(api_key)
+    return resolved if isinstance(resolved, str) and resolved else None
 
 
 def merge_omniroute_combo_catalog(
