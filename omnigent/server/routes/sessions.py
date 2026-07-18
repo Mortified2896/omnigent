@@ -8693,6 +8693,22 @@ async def _await_route_approval(
         and body.type == "message"
     ):
         return conv
+    # Skip routing approval when the session or the event already
+    # carries an explicit routing decision, or when the session's
+    # harness is a native terminal wrapper. The agent is for messages
+    # where the user has *not* picked a model/harness/route and the
+    # agent itself doesn't already drive the terminal — it should never
+    # overwrite an explicit user choice, and intercepting these messages
+    # makes existing runner paths (overrides, native sub-agent forward,
+    # native runner-offline persistence) regress.
+    if (
+        conv.omniroute_route_id is not None
+        or conv.model_override is not None
+        or conv.harness_override is not None
+        or body.model_override is not None
+        or _is_native_terminal_session(conv)
+    ):
+        return conv
     # FULL extracted user text (no truncation) — used for audit hash +
     # routing-agent provenance. The routing LLM only sees a separately
     # bounded excerpt so a 128k-char prompt doesn't blow the routing
@@ -9060,7 +9076,7 @@ async def _forward_event_to_runner(
         _parent_routing_on = (
             _parent_conv is not None and _parent_conv.cost_control_mode_override == "on"
         )
-    _routing_enabled = not _routing_approval_is_enabled(conv) and (
+    _routing_enabled = (
         (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
         or _parent_routing_on
     )
@@ -9069,6 +9085,11 @@ async def _forward_event_to_runner(
     # For child sessions, route even when the orchestrator specified a model via
     # sys_session_send (effective_runner_override is already set). Smart routing
     # always wins over the LLM's own model choice when the parent toggle is on.
+    # Smart routing is independent of the Model Routing Agent gate: the latter
+    # gates the approval card for native OmniRoute routing decisions; smart
+    # routing is the older judge-based model pick for cost control. The two
+    # can coexist (parent toggle on + route approval on) and smart routing
+    # must still run when its toggle is on.
     _should_route = (
         _routing_enabled
         and body.type == "message"
@@ -9341,7 +9362,7 @@ async def _dispatch_session_event_to_runner(
                 _native_parent_conv is not None
                 and _native_parent_conv.cost_control_mode_override == "on"
             )
-        _native_routing_enabled = not _routing_approval_is_enabled(conv) and (
+        _native_routing_enabled = (
             (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
             or _native_parent_routing_on
         )
@@ -19835,31 +19856,6 @@ def create_sessions_router(
                 _runner_needs_session_init = False
             else:
                 _runner_needs_session_init = True
-        if runner_client is None and body.type == "message" and _routing_approval_is_enabled(conv):
-            try:
-                routed_conv = await _await_route_approval(
-                    session_id,
-                    conv,
-                    body,
-                    conversation_store,
-                )
-            except _RoutingAgentError as exc:
-                detail = _model_routing_agent_error_message(exc)
-                _logger.warning(
-                    "model_routing_agent failed session=%s error=%s", session_id, detail
-                )
-                item_id = await _persist_model_routing_agent_failure_turn(
-                    session_id,
-                    conv,
-                    body,
-                    conversation_store,
-                    detail,
-                    created_by=_attribution_user(user_id),
-                )
-                return {"queued": True, "item_id": item_id}
-            if routed_conv is None:
-                return {"queued": True, "item_id": None}
-            conv = routed_conv
         if runner_client is None:
             # A native terminal-session message must NOT be silently
             # dropped when no runner is reachable — the runner crashed

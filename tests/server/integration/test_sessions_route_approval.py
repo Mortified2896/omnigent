@@ -494,3 +494,159 @@ async def test_routing_on_greeting_passes_through_permission_floor(monkeypatch):
     # path is reachable for a greeting without crashing.
     assert captured.permission_mode == "ask_before_edits"
     assert agent.calls == 0  # _await_route_approval stub did not re-call
+
+
+# ── Routing-approval must not regress existing runner paths ──
+
+
+class _NativeTerminalNoOpAgent:
+    """Routing agent that would fail loudly — to prove we never call it."""
+
+    def __call__(self) -> _NativeTerminalNoOpAgent:
+        return self
+
+    async def propose(self, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("routing agent must not run for native terminal sessions")
+
+
+@pytest.mark.asyncio
+async def test_await_route_approval_skips_when_omniroute_route_id_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An approved/seeded ``omniroute_route_id`` is itself a routing decision;
+    the agent must NOT re-evaluate the message and risk changing the route.
+    """
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    agent = _NativeTerminalNoOpAgent()
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    conv = _conv(route_approval_enabled=True, omniroute_route_id="auto/coding")
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+
+    out = await routes_sessions._await_route_approval(
+        "conv_test",
+        conv,
+        body,
+        None,  # type: ignore[arg-type]
+    )
+    assert out is conv, "must return the same conv unchanged when route is already chosen"
+
+
+@pytest.mark.asyncio
+async def test_await_route_approval_skips_when_model_override_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persisted ``model_override`` is a user-chosen model; routing approval
+    must not be invoked and must not silently swap the model.
+    """
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    agent = _NativeTerminalNoOpAgent()
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    conv = _conv(route_approval_enabled=True, model_override="claude-opus-4-7")
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+
+    out = await routes_sessions._await_route_approval(
+        "conv_test",
+        conv,
+        body,
+        None,  # type: ignore[arg-type]
+    )
+    assert out is conv
+
+
+@pytest.mark.asyncio
+async def test_await_route_approval_skips_when_harness_override_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persisted ``harness_override`` is a user-chosen harness; routing approval
+    must not be invoked and must not silently swap the harness.
+    """
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    agent = _NativeTerminalNoOpAgent()
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    conv = _conv(route_approval_enabled=True, harness_override="pi")
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+
+    out = await routes_sessions._await_route_approval(
+        "conv_test",
+        conv,
+        body,
+        None,  # type: ignore[arg-type]
+    )
+    assert out is conv
+
+
+@pytest.mark.asyncio
+async def test_await_route_approval_skips_when_body_model_override_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-event ``model_override`` is the user's explicit per-turn choice;
+    routing approval must not be invoked.
+    """
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    agent = _NativeTerminalNoOpAgent()
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    conv = _conv(route_approval_enabled=True)
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            "model_override": "claude-sonnet-4-6",
+        }
+    )
+
+    out = await routes_sessions._await_route_approval(
+        "conv_test",
+        conv,
+        body,
+        None,  # type: ignore[arg-type]
+    )
+    assert out is conv
+
+
+@pytest.mark.asyncio
+async def test_await_route_approval_skips_native_terminal_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native terminal sessions own their own dispatch path (the native
+    forwarder is the single writer). Routing approval must never intercept
+    these messages, even when the toggle is on and no overrides are set —
+    otherwise it would silently bypass the native terminal bypass.
+    """
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    agent = _NativeTerminalNoOpAgent()
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    monkeypatch.setattr(
+        routes_sessions,
+        "_is_native_terminal_session",
+        lambda _conv: True,
+    )
+    conv = _conv(route_approval_enabled=True)
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+
+    out = await routes_sessions._await_route_approval(
+        "conv_test",
+        conv,
+        body,
+        None,  # type: ignore[arg-type]
+    )
+    assert out is conv
