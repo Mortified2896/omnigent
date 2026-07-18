@@ -359,17 +359,30 @@ def test_set_offline_noop_for_unknown_host(
     host_store.set_offline("host_nonexistent")
 
 
-def test_heartbeat_advances_updated_at_without_changing_status(
+def test_heartbeat_advances_updated_at_and_keeps_status_online(
     host_store: HostStore,
     db_uri: str,
 ) -> None:
     """
-    Verify heartbeat refreshes last-seen but leaves status alone.
+    Verify heartbeat refreshes last-seen AND pins ``status`` to ``"online"``.
 
     The ping loop calls this every interval to keep a live host fresh.
-    If it doesn't advance ``updated_at``, a long-lived host would age
-    past the TTL and wrongly drop offline; if it flipped ``status``,
-    it would fight the connect/disconnect writers.
+    Pinning ``status`` alongside ``updated_at`` realises the docstring's
+    "by construction, still online" guarantee: if the ping loop just
+    succeeded in talking to the host, the host is alive, so the row
+    must read as online regardless of any prior
+    ``set_offline``/``upsert_on_connect`` race. Without this write, a
+    host that ``set_offline`` flipped to ``"offline"`` once would stay
+    there even though the heartbeat keeps advancing — and
+    :meth:`is_online` would correctly return ``False`` for a row whose
+    freshness is fine.
+
+    Regression for the production incident: ``hermes-agent`` was
+    showing as ``OFFLINE`` on the host picker while ``updated_at``
+    kept advancing every ~30 s (heartbeat working) and the WebSocket
+    tunnel was alive. The picker reads ``host_is_live()``, which
+    requires BOTH ``status == "online"`` AND ``updated_at`` fresh; a
+    stale ``status`` flips it offline even though freshness is fine.
     """
     host_store.upsert_on_connect("host_hb", "laptop", "alice@example.com")
     # Stand last-seen well in the past, as if the last touch was long ago.
@@ -382,8 +395,48 @@ def test_heartbeat_advances_updated_at_without_changing_status(
     # Last-seen jumped back to ~now (within a generous window for clock
     # granularity), proving the heartbeat wrote a fresh timestamp.
     assert fetched.updated_at >= now_epoch() - 5
-    # Status is untouched — heartbeat only refreshes liveness.
+    # Status is pinned to online — a healthy heartbeat keeps the
+    # host alive in the picker.
     assert fetched.status == "online"
+
+
+def test_heartbeat_revives_offline_row_to_online(
+    host_store: HostStore,
+    db_uri: str,
+) -> None:
+    """
+    A row that ``set_offline`` flipped to ``"offline"`` must come back
+    to ``"online"`` on the next heartbeat.
+
+    This is the exact ``hermes-agent`` regression: ``set_offline``
+    runs whenever the tunnel handler exits (any reason — exception,
+    graceful close, FIRST_COMPLETED across the three tunnel tasks),
+    and on a long-lived tunnel where the host never reconnects from
+    scratch the ``status`` column would otherwise stay ``"offline"``
+    forever even though the heartbeat keeps the freshness timestamp
+    ticking. ``heartbeat()`` is the writer that proves the host is
+    alive right now; co-writing ``status`` is what flips the picker
+    to ``ONLINE``.
+    """
+    host_store.upsert_on_connect("host_rev", "laptop", "alice@example.com")
+    host_store.set_offline("host_rev")
+    # Sanity: the row is offline before the heartbeat, otherwise this
+    # test would never exercise the fix path.
+    assert host_store.get_host("host_rev").status == "offline"
+
+    # Fresh update_at stands in for the heartbeats that already fired
+    # during the disconnect/connect churn (the freshness half of
+    # host_is_live is already satisfied; only ``status`` is stale).
+    _set_updated_at(db_uri, "host_rev", now_epoch() - 5)
+
+    host_store.heartbeat("host_rev")
+
+    fetched = host_store.get_host("host_rev")
+    assert fetched is not None
+    # The fix: heartbeat now revives the row to online.
+    assert fetched.status == "online"
+    # Picker classification now agrees with the freshness check.
+    assert host_store.is_online("host_rev") is True
 
 
 def test_heartbeat_noop_for_unknown_host(host_store: HostStore) -> None:
