@@ -298,14 +298,11 @@ _logger = logging.getLogger(__name__)
 
 
 def _discard_routing_snapshot(session_id: str) -> None:
-    """Drop any staged approval metadata for *session_id*.
+    """Drop staged approval metadata before any direct/manual dispatch."""
+    from omnigent.server.task_outcome_recorder import discard_routing_snapshot
 
-    The full task-outcome recorder (with provenance snapshots for non-OmniRoute
-    routes) lives in ``omnigent.server.task_outcome_recorder``. The clean
-    branch keeps only the discard helper because the combo feature requires
-    that an unapproved/stale snapshot never annotates a later direct turn.
-    """
-    return None
+    discard_routing_snapshot(session_id)
+
 
 # ── Module-level constants (rule 34) ──────────────────────────────
 
@@ -8645,10 +8642,18 @@ def _routing_approval_is_enabled(conv: Conversation) -> bool:
     return conv.route_approval_enabled is True
 
 
-def _route_proposal_params(proposal: Any) -> dict[str, Any]:
+def _route_proposal_params(
+    proposal: Any, *, routing_proposal_id: str | None = None
+) -> dict[str, Any]:
     from dataclasses import asdict
 
-    from omnigent.server.omniroute_routes import get_route_profile
+    from omnigent.reasoning_effort import EFFORT_VALUES
+    from omnigent.server.omniroute_routes import (
+        NATIVE_OMNIROUTE_ROUTE_IDS,
+        REASONING_ORDER,
+        get_route_profile,
+    )
+    from omnigent.server.routing_agent import KNOWN_PERMISSION_MODES
 
     profile = get_route_profile(proposal.omniroute_route_id)
     # Surface the existing billing classes verbatim so the wire format is
@@ -8675,9 +8680,65 @@ def _route_proposal_params(proposal: Any) -> dict[str, Any]:
         "content_preview": json.dumps(asdict(proposal), ensure_ascii=True),
         "route_proposal": {
             **asdict(proposal),
+            "routing_proposal_id": routing_proposal_id,
             "billing_summary": billing,
             "risk_note": profile.risk_note if profile else "",
+            "eligible_route_ids": list(NATIVE_OMNIROUTE_ROUTE_IDS),
+            "eligible_reasoning_efforts": sorted(
+                EFFORT_VALUES, key=lambda effort: REASONING_ORDER[effort]
+            ),
+            "eligible_permission_modes": sorted(KNOWN_PERMISSION_MODES),
         },
+    }
+
+
+def _validated_route_approval_selection(
+    proposal: Any, result: ElicitationResult
+) -> dict[str, Any]:
+    """Resolve a route response against the OmniRoute-only approval vocabulary."""
+    from omnigent.server.omniroute_routes import get_route_profile
+    from omnigent.server.routing_agent import KNOWN_PERMISSION_MODES
+
+    content = result.content or {}
+    if result.action != "accept":
+        return {
+            "action": "declined",
+            "route_id": None,
+            "harness": None,
+            "provider": None,
+            "model": None,
+            "reasoning_effort": None,
+            "permission_mode": None,
+            "content": content,
+        }
+    allowed_keys = {"omniroute_route_id", "reasoning_effort", "permission_mode"}
+    unexpected = sorted(set(content) - allowed_keys)
+    if unexpected:
+        raise _RoutingAgentError(
+            "routing adjustment contains unsupported fields: " + ", ".join(unexpected)
+        )
+    route_id = content.get("omniroute_route_id", proposal.omniroute_route_id)
+    effort = content.get("reasoning_effort", proposal.reasoning_effort)
+    permission = content.get("permission_mode", proposal.permission_mode)
+    if not isinstance(route_id, str) or (profile := get_route_profile(route_id)) is None:
+        raise _RoutingAgentError(
+            f"routing adjustment selected unknown OmniRoute route: {route_id!r}"
+        )
+    if not isinstance(effort, str) or effort not in profile.allowed_reasoning_efforts:
+        raise _RoutingAgentError(
+            f"routing adjustment effort {effort!r} is not allowed for {route_id}"
+        )
+    if not isinstance(permission, str) or permission not in KNOWN_PERMISSION_MODES:
+        raise _RoutingAgentError(f"routing adjustment selected unknown permission: {permission!r}")
+    return {
+        "action": "changed" if content else "approved",
+        "route_id": route_id,
+        "harness": proposal.recommended_harness,
+        "provider": None,
+        "model": None,
+        "reasoning_effort": effort,
+        "permission_mode": permission,
+        "content": content,
     }
 
 
@@ -8693,20 +8754,18 @@ async def _await_route_approval(
         and body.type == "message"
     ):
         return conv
-    # Skip routing approval when the session or the event already
-    # carries an explicit routing decision, or when the session's
-    # harness is a native terminal wrapper. The agent is for messages
-    # where the user has *not* picked a model/harness/route and the
-    # agent itself doesn't already drive the terminal — it should never
-    # overwrite an explicit user choice, and intercepting these messages
-    # makes existing runner paths (overrides, native sub-agent forward,
-    # native runner-offline persistence) regress.
-    if (
+    # A per-event override is always an explicit choice. Persisted choices
+    # bypass only when they are manual (including legacy NULL provenance).
+    # Route-approved choices are the previous turn's package, so they must not
+    # suppress a fresh proposal for this user message. Native sessions remain
+    # eligible here; their transcript forwarder is still the single writer.
+    persisted_selection = (
         conv.omniroute_route_id is not None
         or conv.model_override is not None
         or conv.harness_override is not None
-        or body.model_override is not None
-        or _is_native_terminal_session(conv)
+    )
+    if body.model_override is not None or (
+        persisted_selection and conv.routing_selection_source != "route_approval"
     ):
         return conv
     # FULL extracted user text (no truncation) — used for audit hash +
@@ -8727,6 +8786,52 @@ async def _await_route_approval(
         user_message=user_text, available_harnesses=["OpenCode Native"]
     )
     elicitation_id = f"route_{secrets.token_hex(16)}"
+
+    # Persist the immutable recommendation before exposing an approval card.
+    # The recorder is optional for legacy/test apps, but production wiring
+    # always installs it alongside the task-outcome store.
+    from dataclasses import asdict
+
+    from omnigent.server.task_outcome_recorder import (
+        RoutingSnapshot,
+        get_recorder,
+        stage_routing_snapshot,
+    )
+    from omnigent.stores.task_outcome_store import (
+        CreateRoutingDecisionInput,
+        CreateRoutingProposalInput,
+        RoutingDecisionConflictError,
+    )
+
+    recorder = get_recorder()
+    durable_proposal = None
+    if recorder is not None:
+        try:
+            durable_proposal = await asyncio.to_thread(
+                recorder.store.create_routing_proposal,
+                CreateRoutingProposalInput(
+                    conversation_id=session_id,
+                    elicitation_id=elicitation_id,
+                    user_message=user_text,
+                    content_types=_routing_content_types(body),
+                    original_route_id=proposal.omniroute_route_id,
+                    original_harness=proposal.recommended_harness,
+                    original_reasoning_effort=proposal.reasoning_effort,
+                    original_permission_mode=proposal.permission_mode,
+                    requires_explicit_approval=proposal.omniroute_requires_explicit_approval,
+                    evaluator_route_id=proposal.router_evaluator_route,
+                    evaluator_provider=proposal.actual_evaluator_provider,
+                    evaluator_model=proposal.actual_evaluator_model,
+                    evaluator_billing_class=proposal.evaluator_billing_class,
+                    evaluator_fallback_used=proposal.evaluator_fallback_used,
+                    evaluator_decision_id=proposal.evaluator_decision_id,
+                    evaluator_selection_strategy=proposal.evaluator_selection_strategy,
+                    proposal_payload=cast(dict[str, object], asdict(proposal)),
+                ),
+            )
+        except Exception as exc:
+            raise _RoutingAgentError("routing proposal audit persistence failed") from exc
+
     fut: asyncio.Future[ElicitationResult] = asyncio.get_running_loop().create_future()
     _harness_elicitation_registry[elicitation_id] = fut
     _harness_elicitation_owners[elicitation_id] = session_id
@@ -8734,7 +8839,10 @@ async def _await_route_approval(
         "type": "response.elicitation_request",
         "elicitation_id": elicitation_id,
         "method": "elicitation/create",
-        "params": _route_proposal_params(proposal),
+        "params": _route_proposal_params(
+            proposal,
+            routing_proposal_id=durable_proposal.id if durable_proposal else None,
+        ),
     }
     session_stream.publish(session_id, event)
     _logger.info(
@@ -8756,7 +8864,43 @@ async def _await_route_approval(
     finally:
         _harness_elicitation_registry.pop(elicitation_id, None)
         _harness_elicitation_owners.pop(elicitation_id, None)
-    if result.action != "accept":
+
+    selection = _validated_route_approval_selection(proposal, result)
+    content = selection["content"]
+    action = selection["action"]
+    final_route_id = selection["route_id"]
+    final_harness = selection["harness"]
+    final_provider = selection["provider"]
+    final_model = selection["model"]
+    final_effort = selection["reasoning_effort"]
+    final_permission = selection["permission_mode"]
+
+    durable_decision = None
+    if recorder is not None and durable_proposal is not None:
+        try:
+            durable_decision = await asyncio.to_thread(
+                recorder.store.create_routing_decision,
+                CreateRoutingDecisionInput(
+                    proposal_id=durable_proposal.id,
+                    action=action,
+                    decision_payload={
+                        "action": result.action,
+                        "content": cast(dict[str, object], content),
+                    },
+                    final_harness=final_harness,
+                    final_provider=final_provider,
+                    final_model=final_model,
+                    final_route_id=final_route_id,
+                    final_reasoning_effort=final_effort,
+                    final_permission_mode=final_permission,
+                ),
+            )
+        except RoutingDecisionConflictError as exc:
+            raise _RoutingAgentError("routing decision is stale or conflicts") from exc
+        except Exception as exc:
+            raise _RoutingAgentError("routing decision audit persistence failed") from exc
+
+    if action == "declined":
         _logger.info(
             "model_routing_agent declined session=%s route=%s",
             session_id,
@@ -8764,27 +8908,55 @@ async def _await_route_approval(
         )
         _publish_elicitation_resolved(session_id, elicitation_id)
         return None
+
+    direct_model = final_model
+    if direct_model is not None and final_provider is not None and "/" not in direct_model:
+        direct_model = f"{final_provider}/{direct_model}"
     updated = await asyncio.to_thread(
         conversation_store.update_conversation,
         session_id,
-        reasoning_effort=proposal.reasoning_effort,
-        omniroute_route_id=proposal.omniroute_route_id,
-        permission_mode=proposal.permission_mode,
+        reasoning_effort=final_effort,
+        model_override=direct_model,
+        _unset_model_override=direct_model is None,
+        harness_override="opencode-native",
+        routing_selection_source="route_approval",
+        omniroute_route_id=None if direct_model is not None else final_route_id,
+        _unset_omniroute_route_id=direct_model is not None,
+        permission_mode=final_permission,
         omniroute_requires_explicit_approval=proposal.omniroute_requires_explicit_approval,
     )
-    _logger.info(
-        (
-            "model_routing_agent approved session=%s route=%s "
-            "reasoning_effort=%s permission_mode=%s actual_provider_model=unknown"
-        ),
-        session_id,
-        proposal.omniroute_route_id,
-        proposal.reasoning_effort,
-        proposal.permission_mode,
-    )
-    _publish_elicitation_resolved(session_id, elicitation_id)
     if updated is None:
         raise _RoutingAgentError("session disappeared while applying route proposal")
+    stage_routing_snapshot(
+        session_id,
+        RoutingSnapshot(
+            routing_proposal_id=durable_proposal.id if durable_proposal else None,
+            routing_decision_id=durable_decision.id if durable_decision else None,
+            requested_route_id=None if direct_model is not None else final_route_id,
+            reasoning_effort=final_effort,
+            permission_mode=final_permission,
+            omniroute_decision_id=proposal.evaluator_decision_id,
+            selection_strategy=proposal.evaluator_selection_strategy,
+            billing_class=proposal.evaluator_billing_class,
+            fallback_used=proposal.router_fallback_used,
+            proposed_harness=final_harness,
+            evaluator_route_id=proposal.router_evaluator_route,
+            evaluator_model=proposal.actual_evaluator_model,
+            evaluator_provider=proposal.actual_evaluator_provider,
+            evaluator_billing_class=proposal.evaluator_billing_class,
+            evaluator_fallback_used=proposal.evaluator_fallback_used,
+            evaluator_decision_id=proposal.evaluator_decision_id,
+        ),
+    )
+    _logger.info(
+        "model_routing_agent %s session=%s route=%s reasoning_effort=%s permission_mode=%s",
+        action,
+        session_id,
+        final_route_id,
+        final_effort,
+        final_permission,
+    )
+    _publish_elicitation_resolved(session_id, elicitation_id)
     return updated
 
 
@@ -9077,9 +9249,8 @@ async def _forward_event_to_runner(
             _parent_conv is not None and _parent_conv.cost_control_mode_override == "on"
         )
     _routing_enabled = (
-        (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
-        or _parent_routing_on
-    )
+        conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
+    ) or _parent_routing_on
     _routed_model: str | None = None
     _verdict: dict[str, Any] | None = None
     # For child sessions, route even when the orchestrator specified a model via
@@ -9125,7 +9296,11 @@ async def _forward_event_to_runner(
                         exc_info=True,
                     )
     # ────────────────────────────────────────────────────────────────
-    if _routing_approval_is_enabled(conv) and conv.omniroute_route_id:
+    if (
+        effective_runner_override is None
+        and _routing_approval_is_enabled(conv)
+        and conv.omniroute_route_id
+    ):
         effective_runner_override = conv.omniroute_route_id
     if effective_runner_override is not None:
         runner_body["model_override"] = effective_runner_override
@@ -9363,9 +9538,8 @@ async def _dispatch_session_event_to_runner(
                 and _native_parent_conv.cost_control_mode_override == "on"
             )
         _native_routing_enabled = (
-            (conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None)
-            or _native_parent_routing_on
-        )
+            conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
+        ) or _native_parent_routing_on
         _native_routed_model: str | None = None
         _native_verdict: dict[str, Any] | None = None
         if _native_routing_enabled and (
@@ -9928,12 +10102,17 @@ async def _relay_runner_stream(
         startup readiness.
     """
     from omnigent.runtime import session_stream
+    from omnigent.server.task_outcome_recorder import get_recorder
 
     text_acc: list[str] = []
     current_response_id: str | None = None
     # Model/agent label from the turn header, stamped on text segments
     # flushed at tool-call boundaries (the boundary event carries no model).
     current_model: str | None = None
+    task_outcome_recorder = get_recorder()
+    current_task_run_id: str | None = None
+    current_task_summary: list[str] = []
+    current_triggering_message_id: str | None = None
     # Map tool call_id → response_id so a function_call_output that
     # arrives after a new response.in_progress (different response_id)
     # still pairs with its matching function_call. Without this, the
@@ -10066,6 +10245,58 @@ async def _relay_runner_stream(
                         _model = resp_obj.get("model")
                         if isinstance(_model, str) and _model:
                             current_model = _model
+                        if (
+                            task_outcome_recorder is not None
+                            and isinstance(_rid, str)
+                            and _rid
+                            and current_task_run_id is None
+                        ):
+                            try:
+                                _conv = await asyncio.to_thread(
+                                    conversation_store.get_conversation, session_id
+                                )
+                                if _conv is not None:
+                                    _recent = await asyncio.to_thread(
+                                        conversation_store.list_items,
+                                        session_id,
+                                        limit=100,
+                                        order="desc",
+                                    )
+                                    _trigger = next(
+                                        (
+                                            item
+                                            for item in _recent.data
+                                            if item.type == "message"
+                                            and isinstance(item.data, MessageData)
+                                            and item.data.role == "user"
+                                            and not item.data.is_meta
+                                        ),
+                                        None,
+                                    )
+                                    _summary = None
+                                    if _trigger is not None:
+                                        current_triggering_message_id = _trigger.id
+                                        _summary = "\n".join(
+                                            block.get("text", "")
+                                            for block in (_trigger.data.content or [])
+                                            if isinstance(block, dict)
+                                            and isinstance(block.get("text"), str)
+                                        )[:2000]
+                                    current_task_run_id = await asyncio.to_thread(
+                                        task_outcome_recorder.on_response_in_progress,
+                                        session_id=session_id,
+                                        conversation=_conv,
+                                        response_id=_rid,
+                                        model_id=(_model if isinstance(_model, str) else None),
+                                        user_message_id=current_triggering_message_id,
+                                        user_message_summary=_summary,
+                                        project_path=_conv.workspace,
+                                    )
+                            except Exception:
+                                _logger.exception(
+                                    "Relay: task-outcome start failed for session=%s",
+                                    session_id,
+                                )
 
                     # Accumulate response-scoped (scaffold) text deltas for
                     # persistence. Native message-scoped deltas (with a
@@ -10077,6 +10308,7 @@ async def _relay_runner_stream(
                         _delta = event.get("delta")
                         if isinstance(_delta, str) and _delta:
                             text_acc.append(_delta)
+                            current_task_summary.append(_delta)
 
                     # Track tool call_id → response_id so a
                     # function_call_output that arrives under a later
@@ -10298,6 +10530,69 @@ async def _relay_runner_stream(
                     # terminal event so it doesn't leak to the
                     # next turn.
                     if evt_type in _TERMINAL_RESPONSE_EVENT_TYPES:
+                        if task_outcome_recorder is not None and current_task_run_id is not None:
+                            try:
+                                terminal_status = {
+                                    "response.completed": "completed",
+                                    "response.failed": "failed",
+                                    "response.cancelled": "cancelled",
+                                    "response.incomplete": "incomplete",
+                                }[evt_type]
+                                response_obj = event.get("response")
+                                response_dict = (
+                                    response_obj if isinstance(response_obj, dict) else {}
+                                )
+                                usage_obj = response_dict.get("usage")
+                                usage = usage_obj if isinstance(usage_obj, dict) else {}
+                                error_obj = response_dict.get("error") or event.get("error")
+                                if evt_type == "response.incomplete":
+                                    error_obj = response_dict.get("incomplete_details")
+                                error = error_obj if isinstance(error_obj, dict) else {}
+                                summary = "".join(current_task_summary)
+                                await asyncio.to_thread(
+                                    task_outcome_recorder.on_response_terminal,
+                                    task_run_id=current_task_run_id,
+                                    terminal_status=terminal_status,
+                                    terminal_at=int(time.time()),
+                                    response_id=current_response_id,
+                                    triggering_message_id=current_triggering_message_id,
+                                    response_summary=summary[:2000] or None,
+                                    failure_error_code=(
+                                        error.get("code")
+                                        if isinstance(error.get("code"), str)
+                                        else None
+                                    ),
+                                    failure_error_message=(
+                                        error.get("message") or error.get("reason")
+                                        if isinstance(
+                                            error.get("message") or error.get("reason"), str
+                                        )
+                                        else None
+                                    ),
+                                    input_tokens=(
+                                        usage.get("input_tokens")
+                                        if isinstance(usage.get("input_tokens"), int)
+                                        else None
+                                    ),
+                                    output_tokens=(
+                                        usage.get("output_tokens")
+                                        if isinstance(usage.get("output_tokens"), int)
+                                        else None
+                                    ),
+                                    total_cost_usd=(
+                                        float(usage["total_cost_usd"])
+                                        if isinstance(usage.get("total_cost_usd"), (int, float))
+                                        else None
+                                    ),
+                                )
+                            except Exception:
+                                _logger.exception(
+                                    "Relay: task-outcome terminal failed for session=%s",
+                                    session_id,
+                                )
+                            current_task_run_id = None
+                            current_task_summary.clear()
+                            current_triggering_message_id = None
                         current_response_id = None
 
                     # Patch the live event's response_id for
@@ -12728,6 +13023,13 @@ async def _create_session_from_existing_agent(
             cost_control_mode_override=cost_control_mode_override,
             harness_override=harness_override,
             route_approval_enabled=route_approval_enabled,
+            routing_selection_source=(
+                "manual"
+                if model_override is not None
+                or harness_override is not None
+                or body.omniroute_route_id is not None
+                else None
+            ),
             omniroute_route_id=body.omniroute_route_id,
             permission_mode=body.permission_mode,
             omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
@@ -15676,7 +15978,13 @@ def create_sessions_router(
             _unset_cost_control_mode_override=clear_cost_control,
             terminal_launch_args=terminal_launch_args,
             route_approval_enabled=body.route_approval_enabled,
+            routing_selection_source=(
+                "manual"
+                if "model_override" in body.model_fields_set or body.omniroute_route_id is not None
+                else None
+            ),
             omniroute_route_id=body.omniroute_route_id,
+            _unset_omniroute_route_id=model_override is not None and not clear_model,
             permission_mode=body.permission_mode,
             omniroute_requires_explicit_approval=body.omniroute_requires_explicit_approval,
             archived=body.archived,

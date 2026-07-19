@@ -6,6 +6,7 @@ covering manual-mode preservation, approval-flow execution, and decline.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -40,6 +41,7 @@ def _conv(**overrides):
         "cost_control_mode_override": None,
         "harness_override": None,
         "route_approval_enabled": None,
+        "routing_selection_source": None,
         "omniroute_route_id": None,
         "permission_mode": None,
         "omniroute_requires_explicit_approval": None,
@@ -88,12 +90,46 @@ class _FakeRoutingAgent:
         return self.proposal
 
 
+class _CaptureRunner:
+    def __init__(self) -> None:
+        self.body: dict[str, Any] | None = None
+
+    async def post(self, _path: str, *, json: dict[str, Any], **_kwargs):
+        self.body = json
+        return SimpleNamespace(status_code=202, headers={}, text="")
+
+
 class _FailingRoutingAgent:
     def __call__(self) -> _FailingRoutingAgent:
         return self
 
     async def propose(self, **kwargs) -> RouteProposal:
         raise routes_sessions._RoutingAgentError("Model Routing Agent unavailable; fail-closed")
+
+
+class _RoutingSelectionStore:
+    def __init__(self, conv: Conversation) -> None:
+        self.conv = conv
+        self.update_calls: list[dict[str, Any]] = []
+        self.appended: list[NewConversationItem] = []
+
+    def append(self, _session_id: str, items: list[NewConversationItem]) -> list[Any]:
+        self.appended.extend(items)
+        return []
+
+    def update_conversation(self, _session_id: str, **fields: Any) -> Conversation:
+        self.update_calls.append(fields)
+        changes = {
+            key: value
+            for key, value in fields.items()
+            if not key.startswith("_") and value is not None
+        }
+        if fields.get("_unset_model_override"):
+            changes["model_override"] = None
+        if fields.get("_unset_omniroute_route_id"):
+            changes["omniroute_route_id"] = None
+        self.conv = replace(self.conv, **changes)
+        return self.conv
 
 
 class _FakeStore:
@@ -139,6 +175,80 @@ def test_route_proposal_payload_includes_evaluator_provenance():
     assert route_proposal["evaluator_fallback_used"] is False
     assert route_proposal["evaluator_decision_id"] == "decision-123"
     assert route_proposal["evaluator_selection_strategy"] == "auto"
+    assert "auto/coding" in route_proposal["eligible_route_ids"]
+    assert route_proposal["eligible_reasoning_efforts"] == [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert "read_only" in route_proposal["eligible_permission_modes"]
+
+
+def test_route_approval_preserves_exact_proposed_package_on_approve():
+    proposal = _proposal()
+    selection = routes_sessions._validated_route_approval_selection(
+        proposal,
+        routes_sessions.ElicitationResult(action="accept"),
+    )
+    assert selection == {
+        "action": "approved",
+        "route_id": proposal.omniroute_route_id,
+        "harness": proposal.recommended_harness,
+        "provider": None,
+        "model": None,
+        "reasoning_effort": proposal.reasoning_effort,
+        "permission_mode": proposal.permission_mode,
+        "content": {},
+    }
+
+
+def test_route_approval_applies_exact_valid_omniroute_change():
+    selection = routes_sessions._validated_route_approval_selection(
+        _proposal(),
+        routes_sessions.ElicitationResult(
+            action="accept",
+            content={
+                "omniroute_route_id": "auto/coding:reliable",
+                "reasoning_effort": "high",
+                "permission_mode": "read_only",
+            },
+        ),
+    )
+    assert selection["action"] == "changed"
+    assert selection["route_id"] == "auto/coding:reliable"
+    assert selection["reasoning_effort"] == "high"
+    assert selection["permission_mode"] == "read_only"
+    assert selection["harness"] == "OpenCode Native"
+    assert selection["provider"] is None
+    assert selection["model"] is None
+
+
+@pytest.mark.parametrize(
+    "content, message",
+    [
+        ({"provider": "crafted"}, "unsupported fields"),
+        ({"model": "crafted/model"}, "unsupported fields"),
+        ({"recommended_harness": "pi"}, "unsupported fields"),
+        ({"omniroute_route_id": "provider/model"}, "unknown OmniRoute route"),
+        (
+            {"omniroute_route_id": "auto/coding:pro", "reasoning_effort": "low"},
+            "not allowed",
+        ),
+        ({"permission_mode": "root"}, "unknown permission"),
+    ],
+)
+def test_route_approval_rejects_crafted_or_ineligible_adjustments_loudly(
+    content: dict[str, str], message: str
+):
+    with pytest.raises(routes_sessions._RoutingAgentError, match=message):
+        routes_sessions._validated_route_approval_selection(
+            _proposal(),
+            routes_sessions.ElicitationResult(action="accept", content=content),
+        )
 
 
 def test_route_proposal_payload_preserves_api_backed_provider_provenance():
@@ -401,6 +511,65 @@ async def test_route_approval_fails_loudly_when_input_cannot_be_extracted(monkey
     assert agent.calls == 0
 
 
+@pytest.mark.asyncio
+async def test_forwarder_body_override_beats_stale_approved_route():
+    store = _FakeStore()
+    runner = _CaptureRunner()
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+            "model_override": "opencode/openai/gpt-5",
+        }
+    )
+    await routes_sessions._forward_event_to_runner(
+        "conv_test",
+        _conv(
+            title="Existing",
+            route_approval_enabled=True,
+            omniroute_route_id="auto/coding",
+            model_override="persisted/stale",
+        ),
+        body,
+        store,  # type: ignore[arg-type]
+        runner,  # type: ignore[arg-type]
+    )
+    assert runner.body is not None
+    assert runner.body["model_override"] == "opencode/openai/gpt-5"
+
+
+@pytest.mark.asyncio
+async def test_forwarder_persisted_override_beats_stale_route_and_stays_exact():
+    store = _FakeStore()
+    runner = _CaptureRunner()
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+        }
+    )
+    await routes_sessions._forward_event_to_runner(
+        "conv_test",
+        _conv(
+            title="Existing",
+            route_approval_enabled=True,
+            omniroute_route_id="auto/coding",
+            model_override="opencode/openai/gpt-5",
+        ),
+        body,
+        store,  # type: ignore[arg-type]
+        runner,  # type: ignore[arg-type]
+    )
+    assert runner.body is not None
+    assert runner.body["model_override"] == "opencode/openai/gpt-5"
+
+
 def test_approved_route_id_is_forwarded_native(monkeypatch):
     """Approved omniroute_route_id must reach the executor as the model/route,
     not be resolved to a concrete provider/model."""
@@ -618,24 +787,36 @@ async def test_await_route_approval_skips_when_body_model_override_set(
     assert out is conv
 
 
+def _auto_accept_route_proposals(
+    monkeypatch: pytest.MonkeyPatch,
+    published: list[dict[str, Any]],
+) -> None:
+    def _publish(_session_id: str, event: dict[str, Any]) -> None:
+        published.append(event)
+        if event.get("type") == "response.elicitation_request":
+            elicitation_id = event["elicitation_id"]
+            routes_sessions._harness_elicitation_registry[elicitation_id].set_result(
+                routes_sessions.ElicitationResult(action="accept")
+            )
+
+    monkeypatch.setattr(routes_sessions.session_stream, "publish", _publish)
+    monkeypatch.setattr(routes_sessions, "_publish_elicitation_resolved", lambda *_args: None)
+    monkeypatch.setattr(
+        "omnigent.server.task_outcome_recorder.get_recorder",
+        lambda: None,
+    )
+
+
 @pytest.mark.asyncio
-async def test_await_route_approval_skips_native_terminal_session(
+async def test_route_approved_selection_allows_one_fresh_proposal_per_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Native terminal sessions own their own dispatch path (the native
-    forwarder is the single writer). Routing approval must never intercept
-    these messages, even when the toggle is on and no overrides are set —
-    otherwise it would silently bypass the native terminal bypass.
-    """
     monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
-    agent = _NativeTerminalNoOpAgent()
+    agent = _FakeRoutingAgent(_proposal())
     monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
-    monkeypatch.setattr(
-        routes_sessions,
-        "_is_native_terminal_session",
-        lambda _conv: True,
-    )
-    conv = _conv(route_approval_enabled=True)
+    published: list[dict[str, Any]] = []
+    _auto_accept_route_proposals(monkeypatch, published)
+    store = _RoutingSelectionStore(_conv(route_approval_enabled=True))
     body = routes_sessions.SessionEventInput.model_validate(
         {
             "type": "message",
@@ -643,10 +824,77 @@ async def test_await_route_approval_skips_native_terminal_session(
         }
     )
 
-    out = await routes_sessions._await_route_approval(
+    first = await routes_sessions._await_route_approval(
         "conv_test",
-        conv,
+        store.conv,
         body,
-        None,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
     )
-    assert out is conv
+    assert first is not None
+    second = await routes_sessions._await_route_approval(
+        "conv_test",
+        first,
+        body,
+        store,  # type: ignore[arg-type]
+    )
+
+    proposals = [
+        event for event in published if event.get("type") == "response.elicitation_request"
+    ]
+    assert second is not None
+    assert agent.calls == 2
+    assert len(proposals) == 2
+    assert len(store.update_calls) == 2
+    assert second.routing_selection_source == "route_approval"
+    assert second.harness_override == "opencode-native"
+
+
+@pytest.mark.asyncio
+async def test_native_route_approval_preserves_forwarder_as_single_user_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    agent = _FakeRoutingAgent(_proposal())
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    published: list[dict[str, Any]] = []
+    _auto_accept_route_proposals(monkeypatch, published)
+    monkeypatch.setattr(routes_sessions, "_is_native_terminal_session", lambda _conv: True)
+    monkeypatch.setattr(routes_sessions, "_build_native_terminal_message_event", lambda *_a: {})
+
+    async def _ready(*_args: Any, **_kwargs: Any):
+        return routes_sessions._NativeTerminalEnsureOutcome(error=None, policy_notice=None)
+
+    forwarded: list[str] = []
+
+    async def _forward(_runner: Any, session_id: str, *_args: Any, **_kwargs: Any) -> None:
+        forwarded.append(session_id)
+
+    monkeypatch.setattr(routes_sessions, "_ensure_native_terminal_ready", _ready)
+    monkeypatch.setattr(routes_sessions, "_forward_native_terminal_message", _forward)
+    store = _RoutingSelectionStore(_conv(route_approval_enabled=True))
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+
+    result = await routes_sessions._dispatch_session_event_to_runner(
+        "conv_test",
+        store.conv,
+        body,
+        store,  # type: ignore[arg-type]
+        SimpleNamespace(),  # type: ignore[arg-type]
+        agent_name="OpenCode Native",
+        file_store=None,
+        artifact_store=None,
+    )
+
+    assert result.item_id is None
+    assert forwarded == ["conv_test"]
+    assert agent.calls == 1
+    assert (
+        len([event for event in published if event.get("type") == "response.elicitation_request"])
+        == 1
+    )
+    assert store.appended == []

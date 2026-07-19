@@ -8765,6 +8765,104 @@ async def test_events_interrupt_on_native_session_injects_escape_without_marker(
     )
 
 
+@pytest.mark.asyncio
+async def test_opencode_native_message_syncs_approved_package_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from omnigent import opencode_native_bridge, opencode_native_provider
+    from omnigent.runner import app as runner_app
+    from omnigent.runner.app import _OpenCodeNativeLaunchConfig
+
+    session_id = "conv_opencode_approved"
+    spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "opencode-native"}),
+    )
+    launch = _OpenCodeNativeLaunchConfig(
+        workspace=tmp_path,
+        policy_server_url="http://server",
+        terminal_launch_args=None,
+        model_override="auto/coding",
+        reasoning_effort="high",
+        permission_mode="ask_before_edits",
+        external_session_id="ses_1",
+        omniroute_route_expected=True,
+    )
+    launch_fetches: list[str] = []
+    package_updates: list[dict[str, Any]] = []
+
+    async def _launch_config(*, session_id: str, server_client: Any):
+        del server_client
+        launch_fetches.append(session_id)
+        return launch
+
+    async def _skip_auto_create(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def _fetch_combos(**_kwargs: Any) -> list[Any]:
+        return []
+
+    def _update_package(_bridge_dir: Path, **package: Any) -> object:
+        package_updates.append(package)
+        return object()
+
+    monkeypatch.setattr(runner_app, "_opencode_native_launch_config", _launch_config)
+    monkeypatch.setattr(runner_app, "_auto_create_opencode_terminal", _skip_auto_create)
+    monkeypatch.setattr(
+        opencode_native_bridge, "bridge_dir_for_bridge_id", lambda _session_id: tmp_path
+    )
+    monkeypatch.setattr(opencode_native_bridge, "read_bridge_state", lambda _path: object())
+    monkeypatch.setattr(
+        opencode_native_bridge,
+        "xdg_config_home_for_bridge_dir",
+        lambda _path: tmp_path / "config",
+    )
+    monkeypatch.setattr(opencode_native_bridge, "update_execution_package", _update_package)
+    monkeypatch.setattr(opencode_native_provider, "fetch_omniroute_combo_models", _fetch_combos)
+    monkeypatch.setattr(
+        opencode_native_provider,
+        "merge_omniroute_combo_catalog",
+        lambda existing, **_kwargs: existing,
+    )
+    monkeypatch.setattr(opencode_native_provider, "omniroute_api_key_from_config", lambda _c: "k")
+    monkeypatch.setattr(
+        opencode_native_provider, "write_opencode_provider_config", lambda *_a: None
+    )
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=await _spec_resolver_returning(spec),
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    async with _runner_client(app) as client:
+        created = await client.post(
+            "/v1/sessions",
+            json={"session_id": session_id, "agent_id": "ag_1"},
+        )
+        assert created.status_code == 201, created.text
+        response = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "implement it"}],
+                "agent_id": "ag_1",
+            },
+        )
+
+    assert response.status_code in (200, 202), response.text
+    assert launch_fetches == [session_id]
+    assert package_updates == [
+        {
+            "model_override": "auto/coding",
+            "reasoning_effort": "high",
+            "permission_mode": "ask_before_edits",
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("harness", "expected_statuses"),
     [

@@ -627,7 +627,9 @@ class ConversationStore(ABC):
         _unset_cost_control_mode_override: bool = False,
         harness_override: str | None = None,
         route_approval_enabled: bool | None = None,
+        routing_selection_source: str | None = None,
         omniroute_route_id: str | None = None,
+        _unset_omniroute_route_id: bool = False,
         permission_mode: str | None = None,
         omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
@@ -636,10 +638,10 @@ class ConversationStore(ABC):
         """
         Update mutable fields on a conversation.
 
-        For ``reasoning_effort``, ``model_override``, and
-        ``cost_control_mode_override``, ``None`` means "leave
-        unchanged". To explicitly clear them back to ``None``, pass
-        the matching ``_unset_*`` flag.
+        For ``reasoning_effort``, ``model_override``,
+        ``cost_control_mode_override``, and ``omniroute_route_id``, ``None``
+        means "leave unchanged". To explicitly clear them back to ``None``,
+        pass the matching ``_unset_*`` flag.
 
         :param conversation_id: Unique conversation identifier,
             e.g. ``"conv_abc123"``.

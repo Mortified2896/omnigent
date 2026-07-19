@@ -54,7 +54,7 @@ import type { RememberScope } from "@/lib/types";
 import { useChatStore } from "@/store/chatStore";
 import { AskUserQuestionForm, type AskUserQuestionAnswers } from "./AskUserQuestionForm";
 import { ExitPlanModeReview } from "./ExitPlanModeReview";
-import { RouteProposalCard } from "./RouteProposalCard";
+import { PendingRouteApprovalCard, RouteApprovalCard } from "./RouteApprovalCard";
 
 /**
  * Extract the answer-option labels from an AskUserQuestion-shaped
@@ -84,7 +84,7 @@ export type SubmitApprovalFn = (
   elicitationId: string,
   action: "accept" | "decline",
   content?: Record<string, unknown>,
-) => void;
+) => void | Promise<void>;
 
 interface ApprovalCardProps {
   elicitationId: string;
@@ -342,6 +342,16 @@ export function ApprovalCard({
   );
 
   if (status === "responded" && response) {
+    if (isRouteProposal && routeProposal) {
+      return (
+        <RouteApprovalCard
+          proposal={routeProposal}
+          action={response.action}
+          elicitationId={elicitationId}
+          responseContent={response.content}
+        />
+      );
+    }
     const autoResolved = response.action === "auto_resolved";
     const accepted = response.action === "accept";
 
@@ -488,10 +498,11 @@ export function ApprovalCard({
       </AlertTitle>
       <AlertDescription className="flex flex-col gap-2">
         {isRouteProposal ? (
-          <>
-            <RouteProposalCard proposal={routeProposal} />
-            {binaryButtons}
-          </>
+          <PendingRouteApprovalCard
+            proposal={routeProposal}
+            elicitationId={elicitationId}
+            onSubmit={(action, content) => submit(elicitationId, action, content)}
+          />
         ) : isExitPlanMode ? (
           <>
             <span>Claude finished planning and wants to proceed.</span>
