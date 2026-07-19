@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from omnigent.harness_plugins import native_agents
 from omnigent.server.routes import harness_model_options as options
@@ -51,33 +53,78 @@ def test_opencode_groups_preserve_provider_model_ids_and_isolate_failures(
             ]
         },
     )
-    codex = _write(
-        tmp_path / "codex.json",
-        {
-            "models": [
-                {
-                    "id": "opencode/openai/gpt-5-codex",
-                    "name": "GPT-5 Codex",
-                    "model_source": "codex-subscription",
-                    "credential_source": "oauth:chatgpt",
-                    "credentials_present": True,
-                    "raw_metadata": {
-                        "reasoning_options": [{"type": "effort", "values": ["low", "high"]}]
-                    },
-                }
-            ]
-        },
-    )
+    oauth_state = type("OAuthState", (), {"provider_id": "openai"})()
     monkeypatch.setattr(options, "_OPENCODE_MODEL_CATALOG_PATH", models)
     monkeypatch.setattr(options, "_OPENCODE_AUTH_PATH", auth)
     monkeypatch.setattr(options, "_OPENCODE_MINIMAX_TOKEN_PLAN_CATALOG_PATH", minimax)
-    monkeypatch.setattr(options, "_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH", codex)
+    monkeypatch.setattr(
+        options, "discover_chatgpt_oauth_state", lambda **_kwargs: (oauth_state, None)
+    )
+    monkeypatch.setattr(
+        options,
+        "read_open_code_oauth_models",
+        lambda _state: (
+            [
+                {
+                    "id": "openai/gpt-5-codex",
+                    "metadata": {
+                        "name": "GPT-5 Codex",
+                        "variants": {
+                            "low": {"reasoningEffort": "low"},
+                            "high": {"reasoningEffort": "high"},
+                        },
+                    },
+                }
+            ],
+            None,
+        ),
+    )
 
     groups = [resolver() for resolver in options._HARNESS_MODEL_PROVIDERS["opencode-native"]]
     assert groups[0]["models"][0]["id"] == "anthropic/claude-fable-5"
     assert groups[1]["models"][0]["id"] == "openai/gpt-5-codex"
     assert groups[2]["models"][0]["id"] == "minimax-coding-plan/MiniMax-M3"
     assert groups[2]["models"][0]["reasoning_efforts"] == []
+
+
+def test_api_response_contains_only_sanitized_oauth_classification(monkeypatch) -> None:
+    fake_access = "fake-access-token-that-must-not-leak"
+    groups = [
+        {
+            "label": "Codex Subscription",
+            "source": "opencode-codex-subscription-catalog",
+            "error": None,
+            "models": [
+                {
+                    "id": "openai/gpt-5.4",
+                    "label": "GPT-5.4",
+                    "provider": "Codex Subscription",
+                    "source": "direct",
+                    "provider_id": "openai",
+                    "access_source": "codex-subscription",
+                    "credential_source": "oauth:chatgpt",
+                    "availability": "available",
+                    "reasoning_efforts": ["low", "high"],
+                }
+            ],
+        }
+    ]
+
+    async def resolved_groups():
+        return groups
+
+    monkeypatch.setattr(options, "_resolve_opencode_groups", resolved_groups)
+    app = FastAPI()
+    app.include_router(options.create_harness_model_options_router(), prefix="/v1")
+    response = TestClient(app).get("/v1/harness-model-options?harness=opencode-native")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["groups"][0]["models"][0]["credential_source"] == "oauth:chatgpt"
+    assert payload["models"] == payload["groups"][0]["models"]
+    serialized = response.text
+    assert fake_access not in serialized
+    sensitive_fields = ("access_token", "refresh_token", "accountId")
+    assert all(secret not in serialized for secret in sensitive_fields)
 
 
 def test_minimax_includes_all_and_only_authenticated_provider_ids(tmp_path, monkeypatch) -> None:
@@ -112,11 +159,11 @@ def test_minimax_includes_all_and_only_authenticated_provider_ids(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_codex_group_is_omitted_without_authenticated_oauth_entries(
-    tmp_path, monkeypatch
-) -> None:
+async def test_codex_group_has_scoped_unavailable_state(monkeypatch) -> None:
     monkeypatch.setattr(
-        options, "_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH", tmp_path / "missing.json"
+        options,
+        "discover_chatgpt_oauth_state",
+        lambda **_kwargs: (None, "OpenCode authentication is not present."),
     )
 
     async def unavailable_omniroute() -> dict[str, object]:
@@ -128,25 +175,47 @@ async def test_codex_group_is_omitted_without_authenticated_oauth_entries(
 
     monkeypatch.setattr(options, "_resolve_omniroute_models", unavailable_omniroute)
     groups = await options._resolve_opencode_groups()
-    assert "Codex Subscription" not in [group["label"] for group in groups]
-    assert groups[-1]["label"] == "OmniRoute"
-    assert groups[-1]["error"]
+    assert [group["label"] for group in groups] == [
+        "Codex Subscription",
+        "MiniMax Token Plan",
+        "OmniRoute Combos",
+        "Other OpenCode Models",
+    ]
+    assert groups[0]["models"] == []
+    assert groups[0]["error"] == "OpenCode authentication is not present."
+    assert groups[2]["error"] == "OmniRoute is currently unavailable."
 
 
-def test_codex_requires_open_code_oauth_catalog_marker(tmp_path, monkeypatch) -> None:
-    cache = _write(
-        tmp_path / "codex.json",
+@pytest.mark.asyncio
+async def test_codex_models_are_removed_from_other_group(monkeypatch) -> None:
+    duplicate = {"id": "openai/gpt-5.4", "label": "GPT-5.4"}
+    monkeypatch.setattr(
+        options,
+        "_resolve_existing_opencode_models",
+        lambda: {"models": [duplicate, {"id": "google/gemini", "label": "Gemini"}]},
+    )
+    monkeypatch.setattr(
+        options,
+        "_resolve_codex_subscription_models",
+        lambda: {"models": [duplicate], "source": "opencode-codex-subscription-catalog"},
+    )
+    monkeypatch.setattr(options, "_resolve_minimax_token_plan_models", lambda: {"models": []})
+    monkeypatch.setattr(
+        options,
+        "_HARNESS_MODEL_PROVIDERS",
         {
-            "models": [
-                {
-                    "id": "openai/gpt-5-codex",
-                    "model_source": "codex-subscription",
-                    "name": "unverified",
-                }
-            ]
+            "opencode-native": (
+                options._resolve_existing_opencode_models,
+                options._resolve_codex_subscription_models,
+                options._resolve_minimax_token_plan_models,
+            )
         },
     )
-    monkeypatch.setattr(options, "_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH", cache)
-    result = options._resolve_codex_subscription_models()
-    assert result["models"] == []
-    assert result["error"]
+
+    async def no_routes() -> dict[str, object]:
+        return {"models": [], "source": "omniroute"}
+
+    monkeypatch.setattr(options, "_resolve_omniroute_models", no_routes)
+    groups = await options._resolve_opencode_groups()
+    assert [model["id"] for model in groups[0]["models"]] == ["openai/gpt-5.4"]
+    assert [model["id"] for model in groups[3]["models"]] == ["google/gemini"]

@@ -33,6 +33,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from omnigent.opencode_subscription import discover_chatgpt_oauth_state
+
 # Env var the runner stamps on the harness process so the executor can
 # locate its bridge directory. Mirrors ``HARNESS_CODEX_NATIVE_BRIDGE_DIR``.
 OPENCODE_NATIVE_BRIDGE_DIR_ENV_VAR = "HARNESS_OPENCODE_NATIVE_BRIDGE_DIR"
@@ -40,6 +42,8 @@ OPENCODE_NATIVE_REQUEST_SESSION_ID_ENV_VAR = "HARNESS_OPENCODE_NATIVE_REQUEST_SE
 # Label key recording the bridge id on the conversation, mirroring the
 # codex-native ``omnigent.codex_native.bridge_id`` label.
 OPENCODE_NATIVE_BRIDGE_ID_LABEL_KEY = "omnigent.opencode_native.bridge_id"
+OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY = "omnigent.opencode_native.access_source"
+OPENCODE_NATIVE_CODEX_SUBSCRIPTION_ACCESS_SOURCE = "codex-subscription"
 
 # OpenCode server basic-auth env vars (see opencode ``attach``/``serve``).
 OPENCODE_SERVER_PASSWORD_ENV_VAR = "OPENCODE_SERVER_PASSWORD"
@@ -438,32 +442,52 @@ def user_opencode_config_path() -> Path | None:
 
 
 def seed_opencode_auth(bridge_dir: Path) -> Path | None:
-    """
-    Copy the user's OpenCode ``auth.json`` into the per-session ``XDG_DATA_HOME``.
+    """Seed a native session from current OpenCode credentials.
 
-    The runner spawns ``opencode serve`` with a per-session ``XDG_DATA_HOME``
-    that isolates session state — but it also hides the user's
-    ``opencode auth login`` credentials (in their real
-    ``~/.local/share/opencode/auth.json``). Without those, the server can only
-    reach OpenCode's no-auth default model (``opencode/big-pickle``), so a
-    user-selected provider/model never takes effect. Copy the credentials in
-    (best-effort, ``0600``) so the user's providers — and any pinned model that
-    needs them — work. Refreshed on every spawn so re-logins propagate.
+    The normal user data store remains authoritative. When authentication was
+    completed inside an isolated Omnigent OpenCode session, use the newest
+    validated ChatGPT OAuth store from this same harness as well. Provider
+    records are merged in memory and are never logged or returned.
 
-    :param bridge_dir: Native OpenCode bridge directory.
-    :returns: The destination path written, or ``None`` when there is no
-        source ``auth.json`` or the copy fails.
+    :param bridge_dir: OpenCode-native bridge directory.
+    :returns: The destination path written, or ``None`` when no source exists.
     """
-    src = user_opencode_auth_path()
-    if not src.is_file():
+    user_src = user_opencode_auth_path()
+    state, _ = discover_chatgpt_oauth_state(bridge_root=bridge_root())
+    oauth_src = state.auth_path if state is not None else None
+    sources = [path for path in (user_src, oauth_src) if path is not None and path.is_file()]
+    if not sources:
         return None
+
     dest_dir = xdg_data_home_for_bridge_dir(bridge_dir) / "opencode"
     try:
         dest_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         dest = dest_dir / "auth.json"
-        shutil.copyfile(src, dest)
+        unique_sources = list(dict.fromkeys(path.resolve() for path in sources))
+        if len(unique_sources) == 1:
+            if unique_sources[0] != dest.resolve():
+                shutil.copyfile(unique_sources[0], dest)
+        else:
+            merged: dict[str, object] = {}
+            for source in unique_sources:
+                try:
+                    value = json.loads(source.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if isinstance(value, dict):
+                    merged.update(value)
+            if not merged:
+                return None
+            fd, tmp_name = tempfile.mkstemp(prefix="auth.json.", dir=str(dest_dir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(merged, handle)
+                os.replace(tmp_name, dest)
+            finally:
+                if os.path.exists(tmp_name):
+                    os.unlink(tmp_name)
         os.chmod(dest, 0o600)
-    except OSError:
+    except (json.JSONDecodeError, OSError):
         return None
     return dest
 

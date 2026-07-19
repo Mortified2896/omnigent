@@ -916,6 +916,8 @@ class _OpenCodeNativeLaunchConfig:
     :param terminal_launch_args: User pass-through OpenCode CLI args.
     :param model_override: Persisted model override, or ``None``.
     :param external_session_id: Existing OpenCode session id to resume.
+    :param codex_subscription_expected: ``True`` only for a picker selection
+        proven to come from the OpenCode ChatGPT OAuth catalog.
     :param omniroute_route_expected: ``True`` only when the session has an
         explicit ``omniroute_route_id``. The runner uses this to drive the
         fail-closed behavior of the OpenCode startup: an explicit route must
@@ -934,6 +936,7 @@ class _OpenCodeNativeLaunchConfig:
     reasoning_effort: str | None
     permission_mode: str | None
     external_session_id: str | None
+    codex_subscription_expected: bool = False
     omniroute_route_expected: bool = False
     fork_carry_history: bool = False
 
@@ -1024,11 +1027,20 @@ async def _opencode_native_launch_config(
     # On a forked clone, the server stamps carry-history (opencode has no native
     # session to clone, so the runner rehydrates the copied transcript as a
     # noReply preamble — same path as a lost-session resume).
+    from omnigent.opencode_native_bridge import (
+        OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY,
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_ACCESS_SOURCE,
+    )
     from omnigent.stores.conversation_store import FORK_CARRY_HISTORY_LABEL_KEY
 
     labels = snapshot.get("labels")
     fork_carry_history = (
         isinstance(labels, dict) and labels.get(FORK_CARRY_HISTORY_LABEL_KEY) == "1"
+    )
+    codex_subscription_expected = (
+        isinstance(labels, dict)
+        and labels.get(OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY)
+        == OPENCODE_NATIVE_CODEX_SUBSCRIPTION_ACCESS_SOURCE
     )
     return _OpenCodeNativeLaunchConfig(
         workspace=_codex_session_workspace(session_workspace),
@@ -1038,6 +1050,7 @@ async def _opencode_native_launch_config(
         reasoning_effort=reasoning_effort,
         permission_mode=permission_mode,
         external_session_id=external_session_id,
+        codex_subscription_expected=codex_subscription_expected,
         omniroute_route_expected=has_explicit_omniroute_route,
         fork_carry_history=fork_carry_history,
     )
@@ -1075,6 +1088,7 @@ async def _auto_create_opencode_terminal(
     """
     from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
     from omnigent.opencode_native_app_server import (
+        OPENCODE_PROVIDER_ENV_DENY_VAR,
         OpenCodeNativeServer,
         build_opencode_attach_args,
         opencode_terminal_env,
@@ -1089,6 +1103,10 @@ async def _auto_create_opencode_terminal(
         write_relay_bridge_config,
     )
     from omnigent.opencode_native_forwarder import OpenCodeNativeForwarder
+    from omnigent.opencode_subscription import (
+        chatgpt_oauth_provider_for_auth_path,
+        chatgpt_provider_env,
+    )
 
     launch_config = await _opencode_native_launch_config(
         session_id=session_id,
@@ -1128,6 +1146,7 @@ async def _auto_create_opencode_terminal(
         maybe_merge_user_provider_config,
         merge_omniroute_combo_catalog,
         omniroute_api_key_from_config,
+        remove_provider_config,
         resolve_databricks_gateway,
         validate_omniroute_provider_config,
         write_opencode_provider_config,
@@ -1218,14 +1237,36 @@ async def _auto_create_opencode_terminal(
         # before OpenCode can open a direct provider connection.
         validate_omniroute_provider_config(config)
 
+    # The server runs with a per-session XDG_DATA_HOME, so seed OpenCode's
+    # current credentials before finalizing provider config.
+    seeded_auth = seed_opencode_auth(bridge_dir)
+    selected_provider = model_override.partition("/")[0] if model_override else None
+    subscription_env = (
+        chatgpt_provider_env(selected_provider) if selected_provider is not None else ()
+    )
+    if launch_config.codex_subscription_expected:
+        seeded_provider = (
+            chatgpt_oauth_provider_for_auth_path(seeded_auth)[0]
+            if seeded_auth is not None
+            else None
+        )
+        if (
+            selected_provider is None
+            or not subscription_env
+            or seeded_provider != selected_provider
+            or launch_config.omniroute_route_expected
+        ):
+            raise RuntimeError(
+                "OpenCode ChatGPT OAuth is unavailable for the selected subscription model."
+            )
+        # The OAuth catalog is authoritative for this provider. A global custom
+        # provider block could carry an API key or alternate endpoint, so omit
+        # that block and let OpenCode's authenticated built-in provider run it.
+        config = remove_provider_config(config, provider_id=selected_provider)
+        policy_env[OPENCODE_PROVIDER_ENV_DENY_VAR] = ",".join(subscription_env)
+
     if config:
         write_opencode_provider_config(xdg_config_home_for_bridge_dir(bridge_dir), config)
-
-    # The server runs with a per-session XDG_DATA_HOME, so copy the user's
-    # `opencode auth login` credentials in — otherwise it can't authenticate
-    # their providers and falls back to the no-auth default model. No-op on a
-    # remote runner (no local auth.json) / Databricks-gateway path.
-    seed_opencode_auth(bridge_dir)
 
     # Start the Omnigent builtin-tool relay BEFORE opencode boots, so
     # ``tool_relay.json`` exists when opencode launches the ``serve-mcp`` MCP
