@@ -425,6 +425,8 @@ _EXTERNAL_COMPACTION_STATUS_VALUES: frozenset[str] = frozenset(
 # forwarder). Persists ``context_tokens`` / ``context_window`` as
 # conversation labels and publishes a ``session.usage`` SSE event.
 _EXTERNAL_SESSION_USAGE_TYPE: str = "external_session_usage"
+# Structured provider/model metadata captured from OmniRoute response headers.
+_EXTERNAL_EXECUTION_PROVENANCE_TYPE: str = "external_execution_provenance"
 
 # Active-model switch observed inside the Claude Code terminal (a
 # ``/model`` command or the in-TUI picker). Persists ``model_override``
@@ -861,6 +863,7 @@ _ALLOWED_EVENT_TYPES: frozenset[str] = frozenset(ITEM_TYPE_TO_DATA_CLS.keys()) |
     _EXTERNAL_ELICITATION_RESOLVED_TYPE,
     _EXTERNAL_SESSION_STATUS_TYPE,
     _EXTERNAL_SESSION_USAGE_TYPE,
+    _EXTERNAL_EXECUTION_PROVENANCE_TYPE,
     _EXTERNAL_COMPACTION_STATUS_TYPE,
     _EXTERNAL_MODEL_CHANGE_TYPE,
     _EXTERNAL_REASONING_EFFORT_CHANGE_TYPE,
@@ -19411,6 +19414,7 @@ def create_sessions_router(
             _EXTERNAL_ELICITATION_RESOLVED_TYPE,
             _EXTERNAL_SESSION_STATUS_TYPE,
             _EXTERNAL_SESSION_USAGE_TYPE,
+            _EXTERNAL_EXECUTION_PROVENANCE_TYPE,
             _EXTERNAL_COMPACTION_STATUS_TYPE,
             _EXTERNAL_MODEL_CHANGE_TYPE,
             _EXTERNAL_REASONING_EFFORT_CHANGE_TYPE,
@@ -19925,6 +19929,54 @@ def create_sessions_router(
                 _publish_compaction_completed(session_id, None)
             else:
                 _publish_compaction_failed(session_id)
+            return {"queued": False}
+        if body.type == _EXTERNAL_EXECUTION_PROVENANCE_TYPE:
+            data = body.data
+            verified = data.get("actual_provenance_verified") is True
+            provider = data.get("actual_provider")
+            model = data.get("actual_provider_model")
+            if verified and not (
+                isinstance(provider, str)
+                and provider.strip()
+                and isinstance(model, str)
+                and model.strip()
+            ):
+                raise OmnigentError(
+                    "verified execution provenance requires provider and model",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            optional_strings = (
+                "omniroute_request_id",
+                "omniroute_decision_id",
+                "selection_strategy",
+                "billing_class",
+            )
+            if any(
+                data.get(key) is not None and not isinstance(data.get(key), str)
+                for key in optional_strings
+            ) or (
+                data.get("fallback_used") is not None
+                and not isinstance(data.get("fallback_used"), bool)
+            ):
+                raise OmnigentError(
+                    "execution provenance metadata has an invalid type",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            from omnigent.server.task_outcome_recorder import get_recorder
+
+            recorder = get_recorder()
+            if recorder is not None:
+                await asyncio.to_thread(
+                    recorder.on_response_provenance,
+                    session_id=session_id,
+                    actual_provider=provider if isinstance(provider, str) else None,
+                    actual_provider_model=model if isinstance(model, str) else None,
+                    actual_provenance_verified=verified,
+                    fallback_used=data.get("fallback_used"),
+                    omniroute_decision_id=data.get("omniroute_decision_id"),
+                    selection_strategy=data.get("selection_strategy"),
+                    billing_class=data.get("billing_class"),
+                )
             return {"queued": False}
         if body.type == _EXTERNAL_SESSION_USAGE_TYPE:
             # Persist the harness-reported cumulative usage so the

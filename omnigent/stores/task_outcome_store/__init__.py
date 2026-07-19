@@ -150,6 +150,20 @@ class CreateTaskRunInput:
 
 
 @dataclasses.dataclass(frozen=True)
+class UpdateTaskRunProvenanceInput:
+    """Structured runtime metadata for an existing task run."""
+
+    task_run_id: str
+    actual_provider: str | None = None
+    actual_provider_model: str | None = None
+    actual_provenance_verified: bool = False
+    fallback_used: bool | None = None
+    omniroute_decision_id: str | None = None
+    selection_strategy: str | None = None
+    billing_class: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class UpdateTaskRunTerminalInput:
     """All fields needed to mark a ``task_runs`` row terminal.
 
@@ -177,6 +191,13 @@ class UpdateTaskRunTerminalInput:
     :param commit_sha: Git commit SHA when surfaced.
     :param failure_error_code: Error code from the terminal event.
     :param failure_error_message: Truncated error message.
+    :param actual_provider: Concrete provider from structured runtime metadata.
+    :param actual_provider_model: Concrete provider model from the same metadata.
+    :param actual_provenance_verified: ``True`` only for structured runtime metadata.
+    :param fallback_used: Runtime fallback/substitution flag when reported.
+    :param omniroute_decision_id: Runtime routing decision id when reported.
+    :param selection_strategy: Runtime selection strategy when reported.
+    :param billing_class: Runtime billing class when reported.
     """
 
     task_run_id: str
@@ -192,6 +213,13 @@ class UpdateTaskRunTerminalInput:
     commit_sha: str | None = None
     failure_error_code: str | None = None
     failure_error_message: str | None = None
+    actual_provider: str | None = None
+    actual_provider_model: str | None = None
+    actual_provenance_verified: bool | None = None
+    fallback_used: bool | None = None
+    omniroute_decision_id: str | None = None
+    selection_strategy: str | None = None
+    billing_class: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -344,6 +372,10 @@ class TaskOutcomeStore(ABC):
         when the run doesn't exist OR exists but belongs to a
         different conversation.
         """
+
+    @abstractmethod
+    def update_run_provenance(self, data: UpdateTaskRunProvenanceInput) -> TaskRun | None:
+        """Attach structured execution provenance without changing lifecycle."""
 
     @abstractmethod
     def update_run_terminal(self, data: UpdateTaskRunTerminalInput) -> TaskRun | None:

@@ -380,6 +380,17 @@ _AUTO_CODEX_APP_SERVERS: dict[str, Any] = {}
 # mid-run (mirrors ``_AUTO_CODEX_APP_SERVERS``).
 _AUTO_OPENCODE_SERVERS: dict[str, Any] = {}
 
+
+async def shutdown_runner_opencode_native_servers() -> None:
+    """Close runner-owned OpenCode servers before the observer stops."""
+    for session_id in list(_AUTO_OPENCODE_SERVERS):
+        await _cancel_auto_forwarder_task(session_id)
+        server = _AUTO_OPENCODE_SERVERS.pop(session_id, None)
+        if server is not None:
+            with contextlib.suppress(Exception):
+                await server.close()
+
+
 # Bound repeated terminal GET miss logs from tight client poll loops.
 _TERMINAL_LOOKUP_MISS_LOG_INTERVAL_S = 10.0
 _terminal_lookup_miss_log_state: dict[tuple[str, str, str], float] = {}
@@ -1067,6 +1078,7 @@ async def _auto_create_opencode_terminal(
     agent_spec: Any | None = None,
     server_client: httpx.AsyncClient | None = None,
     ensure_comment_relay: Callable[..., Awaitable[None]] | None = None,
+    provenance_proxy: Any | None = None,
 ) -> SessionResourceView:
     """
     Auto-create an OpenCode terminal for an opencode-native session.
@@ -1155,6 +1167,22 @@ async def _auto_create_opencode_terminal(
         write_opencode_provider_config,
     )
 
+    proxy_provider_base_url: str | None = None
+    if launch_config.omniroute_route_expected:
+        if (
+            provenance_proxy is None
+            or launch_config.model_override is None
+            or launch_config.reasoning_effort is None
+        ):
+            raise RuntimeError(
+                "OpenCode provenance observer is unavailable for approved execution."
+            )
+        proxy_provider_base_url = provenance_proxy.register(
+            session_id=session_id,
+            approved_combo=launch_config.model_override.split("/", 1)[1],
+            reasoning=launch_config.reasoning_effort,
+        ).base_url
+
     # Accumulate the synthesized opencode.json: provider/model (Databricks
     # gateway or a pinned default) + the agent's MCP servers + force-ask.
     config: dict[str, object] = {}
@@ -1235,10 +1263,11 @@ async def _auto_create_opencode_terminal(
             approved_route=launch_config.model_override.split("/", 1)[1]
             if launch_config.model_override
             else "",
+            provider_base_url=proxy_provider_base_url,
         )
         # Do not repair a wrong endpoint silently: an explicit route must fail
         # before OpenCode can open a direct provider connection.
-        validate_omniroute_provider_config(config)
+        validate_omniroute_provider_config(config, expected_base_url=proxy_provider_base_url)
 
     # The server runs with a per-session XDG_DATA_HOME, so seed OpenCode's
     # current credentials before finalizing provider config.
@@ -1342,6 +1371,7 @@ async def _auto_create_opencode_terminal(
                 model_override=model_override,
                 reasoning_effort=launch_config.reasoning_effort,
                 permission_mode=launch_config.permission_mode,
+                route_approved=launch_config.omniroute_route_expected,
                 workspace=workspace,
             ),
         )
@@ -1375,7 +1405,9 @@ async def _auto_create_opencode_terminal(
             ),
         )
         forwarder_task = asyncio.create_task(
-            _supervise_opencode_forwarder(session_id, server, forwarder),
+            _supervise_opencode_forwarder(
+                session_id, server, forwarder, provenance_proxy=provenance_proxy
+            ),
             name=f"opencode-forwarder-{session_id}",
         )
         _register_auto_forwarder_task(session_id, forwarder_task)
@@ -1418,6 +1450,8 @@ async def _auto_create_opencode_terminal(
         await _cancel_auto_forwarder_task(session_id)
         await server.close()
         _AUTO_OPENCODE_SERVERS.pop(session_id, None)
+        if provenance_proxy is not None:
+            provenance_proxy.clear(session_id)
         raise
 
     _logger.info("Auto-created opencode terminal + forwarder for session %s", session_id)
@@ -1428,6 +1462,8 @@ async def _supervise_opencode_forwarder(
     session_id: str,
     server: Any,
     forwarder: Any,
+    *,
+    provenance_proxy: Any | None = None,
 ) -> None:
     """
     Run the OpenCode SSE forwarder, closing the server when it ends.
@@ -1445,6 +1481,8 @@ async def _supervise_opencode_forwarder(
     try:
         await forwarder.run()
     finally:
+        if provenance_proxy is not None:
+            provenance_proxy.clear(session_id)
         leftover = _AUTO_OPENCODE_SERVERS.pop(session_id, None)
         if leftover is not None:
             with contextlib.suppress(Exception):
@@ -7863,6 +7901,7 @@ def create_runner_app(
     per_session_workspace: bool = True,
     mcp_manager: Any | None = None,
     auth_token: str | None = None,
+    provenance_proxy: Any | None = None,
 ) -> FastAPI:
     """Build a fresh runner FastAPI app.
 
@@ -7895,6 +7934,8 @@ def create_runner_app(
         request except ``GET /health`` is rejected with 401 if
         the token is missing or wrong.  ``None``
         disables auth (in-process / test path).
+    :param provenance_proxy: Runner-owned observer for approved OpenCode
+        OmniRoute requests. ``None`` makes approved dispatch fail closed.
     """
     import hmac
 
@@ -9473,6 +9514,7 @@ def create_runner_app(
                             agent_spec=_opencode_spec,
                             server_client=server_client,
                             ensure_comment_relay=_ensure_comment_relay_started,
+                            provenance_proxy=provenance_proxy,
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -12091,6 +12133,7 @@ def create_runner_app(
             agent_spec=spec,
             server_client=server_client,
             ensure_comment_relay=_ensure_comment_relay_started,
+            provenance_proxy=provenance_proxy,
         )
 
     async def _handle_opencode_native_model_change(conv_id: str, model: str | None) -> Response:
@@ -12159,6 +12202,7 @@ def create_runner_app(
                 agent_spec=spec,
                 server_client=server_client,
                 ensure_comment_relay=_ensure_comment_relay_started,
+                provenance_proxy=provenance_proxy,
             )
         except Exception as exc:  # noqa: BLE001 - report relaunch failure to caller.
             return JSONResponse(
@@ -14119,6 +14163,7 @@ def create_runner_app(
                             agent_spec=_oc_spec,
                             server_client=server_client,
                             ensure_comment_relay=_ensure_comment_relay_started,
+                            provenance_proxy=provenance_proxy,
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -15911,6 +15956,7 @@ def create_runner_app(
                         agent_spec=opencode_agent_spec,
                         server_client=server_client,
                         ensure_comment_relay=_ensure_comment_relay_started,
+                        provenance_proxy=provenance_proxy,
                     )
                 except Exception as exc:
                     _logger.exception(

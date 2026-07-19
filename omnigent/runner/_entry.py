@@ -858,6 +858,11 @@ def create_app(
     :returns: A runner FastAPI app exposing the harness-contract subset.
     """
     from omnigent.cli_auth import databricks_request_headers
+    from omnigent.opencode_native_provider import omniroute_base_url
+    from omnigent.opencode_provenance_proxy import (
+        ActiveExecution,
+        StructuredRuntimeProvenance,
+    )
     from omnigent.runner.app import create_runner_app
     from omnigent.runner.identity import (
         OMNIGENT_INTERNAL_WS_ORIGIN,
@@ -866,6 +871,7 @@ def create_app(
         RUNNER_ID_ENV_VAR,
         get_stable_runner_id,
     )
+    from omnigent.runner.opencode_provenance import OpenCodeProvenanceProxyService
     from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
 
     server_url = _server_url_from_env()
@@ -995,6 +1001,33 @@ def create_app(
     # CLI launcher and this runner process via env var.
     runner_auth_token = _runner_tunnel_binding_token_from_env()
 
+    # The runner owns one observer for route-approved OpenCode traffic. It
+    # forwards authorization but records only allow-listed response metadata.
+    async def _record_opencode_runtime(
+        active: ActiveExecution, provenance: StructuredRuntimeProvenance
+    ) -> None:
+        payload = {
+            "type": "external_execution_provenance",
+            "data": {
+                "actual_provider": provenance.actual_provider,
+                "actual_provider_model": provenance.actual_provider_model,
+                "actual_provenance_verified": provenance.verified,
+                "fallback_used": provenance.fallback_used,
+                "omniroute_request_id": provenance.omniroute_request_id,
+                "omniroute_decision_id": provenance.omniroute_decision_id,
+                "selection_strategy": provenance.selection_strategy,
+                "billing_class": provenance.billing_class,
+            },
+        }
+        response = await server_client.post(
+            f"/v1/sessions/{active.conversation_id}/events", json=payload
+        )
+        response.raise_for_status()
+
+    provenance_proxy = OpenCodeProvenanceProxyService(
+        omniroute_base_url(), record_runtime=_record_opencode_runtime
+    )
+
     app = create_runner_app(
         process_manager=pm,
         spec_resolver=spec_resolver,
@@ -1004,10 +1037,12 @@ def create_app(
         per_session_workspace=isolate_session,
         mcp_manager=mcp_manager,
         auth_token=runner_auth_token,
+        provenance_proxy=provenance_proxy,
     )
 
     async def _start_pm() -> None:
         """Start harness process manager; register MCP prewarm metadata if requested."""
+        await provenance_proxy.start()
         await pm.start()
         prewarm_path = os.environ.get(_RUNNER_PREWARM_SPEC_PATH_ENV_VAR)
         if prewarm_path and mcp_manager is not None:
@@ -1040,6 +1075,10 @@ def create_app(
         _pane_reaper = getattr(app.state, "native_pane_reaper", None)
         if _pane_reaper is not None:
             await _pane_reaper.shutdown()
+        from omnigent.runner.app import shutdown_runner_opencode_native_servers
+
+        await shutdown_runner_opencode_native_servers()
+        await provenance_proxy.stop()
         await pm.shutdown()
         await _terminal_registry.shutdown()
         if mcp_manager is not None:

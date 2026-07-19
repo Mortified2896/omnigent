@@ -64,6 +64,7 @@ from omnigent.stores.task_outcome_store import (
     RoutingTurnAudit,
     TaskOutcomeStore,
     TaskRunDetail,
+    UpdateTaskRunProvenanceInput,
     UpdateTaskRunTerminalInput,
     UpsertTaskReviewInput,
 )
@@ -549,6 +550,45 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             row = session.get(SqlTaskRun, (current_workspace_id(), task_run_id))
             if row is None or row.conversation_id != conversation_id:
                 return None
+            return _run_row_to_entity(row)
+
+    def update_run_provenance(self, data: UpdateTaskRunProvenanceInput) -> TaskRun | None:
+        """Attach structured execution provenance without terminalizing the run."""
+        now = now_epoch()
+        with self._session() as session:
+            row = session.get(SqlTaskRun, (current_workspace_id(), data.task_run_id))
+            if row is None:
+                return None
+            # Null or unverified observations never erase a verified identity.
+            if (
+                data.actual_provenance_verified
+                and data.actual_provider is not None
+                and data.actual_provider_model is not None
+            ):
+                same_identity = (
+                    row.actual_provider == data.actual_provider
+                    and row.actual_provider_model == data.actual_provider_model
+                )
+                if (
+                    row.actual_provenance_verified is not True
+                    or same_identity
+                    or data.fallback_used is True
+                ):
+                    row.actual_provider = data.actual_provider
+                    row.actual_provider_model = data.actual_provider_model
+                    row.actual_provenance_verified = True
+            elif row.actual_provenance_verified is not True:
+                row.actual_provenance_verified = False
+            if data.fallback_used is not None:
+                row.fallback_used = data.fallback_used
+            if data.omniroute_decision_id is not None:
+                row.omniroute_decision_id = data.omniroute_decision_id
+            if data.selection_strategy is not None:
+                row.selection_strategy = data.selection_strategy
+            if data.billing_class is not None:
+                row.billing_class = data.billing_class
+            row.updated_at = now
+            session.flush()
             return _run_row_to_entity(row)
 
     def update_run_terminal(self, data: UpdateTaskRunTerminalInput) -> TaskRun | None:

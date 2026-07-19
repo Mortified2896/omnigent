@@ -48,6 +48,7 @@ from omnigent.stores.task_outcome_store import (
     CreateTaskRunInput,
     EnqueueLangfuseEventInput,
     TaskOutcomeStore,
+    UpdateTaskRunProvenanceInput,
     UpdateTaskRunTerminalInput,
 )
 
@@ -309,6 +310,61 @@ class TaskOutcomeRecorder:
         # the same response_id to ``on_response_terminal`` so the
         # store could look it up directly; this avoids that lookup.
         return run.id
+
+    def on_response_provenance(
+        self,
+        *,
+        session_id: str,
+        actual_provider: str | None,
+        actual_provider_model: str | None,
+        actual_provenance_verified: bool,
+        fallback_used: bool | None = None,
+        omniroute_decision_id: str | None = None,
+        selection_strategy: str | None = None,
+        billing_class: str | None = None,
+    ) -> None:
+        """Attach structured runtime metadata to the active routed run.
+
+        The update is deliberately separate from terminalization because
+        OmniRoute response headers arrive before OpenCode emits its terminal
+        message. Only a run with both durable routing links is eligible.
+        """
+        try:
+            runs = self.store.list_runs_for_conversation(session_id, limit=20)
+            run = next(
+                (
+                    item
+                    for item in runs
+                    if item.execution_status in {"queued", "starting", "running", "cancelling"}
+                    and item.routing_proposal_id is not None
+                    and item.routing_decision_id is not None
+                ),
+                None,
+            )
+            if run is None:
+                _logger.warning(
+                    "task_outcome_recorder: no active routed run for provenance session=%s",
+                    session_id,
+                )
+                return
+            self.store.update_run_provenance(
+                UpdateTaskRunProvenanceInput(
+                    task_run_id=run.id,
+                    actual_provider=actual_provider,
+                    actual_provider_model=actual_provider_model,
+                    actual_provenance_verified=actual_provenance_verified,
+                    fallback_used=fallback_used,
+                    omniroute_decision_id=omniroute_decision_id,
+                    selection_strategy=selection_strategy,
+                    billing_class=billing_class,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - provenance cannot break execution.
+            _logger.warning(
+                "task_outcome_recorder: failed to record provenance for session=%s: %s",
+                session_id,
+                exc,
+            )
 
     # ── terminal ──────────────────────────────────────────────────────
 

@@ -147,7 +147,11 @@ def omniroute_api_key_from_config(config: Mapping[str, object]) -> str | None:
 
 
 def merge_omniroute_combo_catalog(
-    config: dict[str, object], *, combos: Mapping[str, Mapping[str, object]], approved_route: str
+    config: dict[str, object],
+    *,
+    combos: Mapping[str, Mapping[str, object]],
+    approved_route: str,
+    provider_base_url: str | None = None,
 ) -> dict[str, object]:
     """Merge live combos into the local provider without discarding user config."""
     if approved_route not in combos:
@@ -159,7 +163,7 @@ def merge_omniroute_combo_catalog(
     existing = providers.get(OMNIROUTE_PROVIDER_ID)
     provider = dict(existing) if isinstance(existing, Mapping) else {}
     options = dict(provider.get("options") or {})
-    options["baseURL"] = omniroute_base_url()
+    options["baseURL"] = (provider_base_url or omniroute_base_url()).rstrip("/")
     if _resolve_omniroute_api_key_str(options.get("apiKey")) is None:
         for env_name in (
             "OMNIGENT_OMNIROUTE_API_KEY",
@@ -191,7 +195,9 @@ def qualify_omniroute_model(route_id: str) -> str:
     return f"{OMNIROUTE_PROVIDER_ID}/{route_id}"
 
 
-def validate_omniroute_provider_config(config: Mapping[str, object]) -> None:
+def validate_omniroute_provider_config(
+    config: Mapping[str, object], *, expected_base_url: str | None = None
+) -> None:
     """Require the local OmniRoute provider for a route-approved OpenCode turn.
 
     The error deliberately omits provider credentials and the configured remote
@@ -202,10 +208,11 @@ def validate_omniroute_provider_config(config: Mapping[str, object]) -> None:
     provider = providers.get(OMNIROUTE_PROVIDER_ID) if isinstance(providers, Mapping) else None
     options = provider.get("options") if isinstance(provider, Mapping) else None
     base_url = options.get("baseURL") if isinstance(options, Mapping) else None
-    if not isinstance(base_url, str) or base_url.rstrip("/") != omniroute_base_url():
+    expected = (expected_base_url or omniroute_base_url()).rstrip("/")
+    if not isinstance(base_url, str) or base_url.rstrip("/") != expected:
         raise OpenCodeOmniRouteConfigurationError(
-            "OpenCode route expected OmniRoute at 127.0.0.1:20128, but the effective "
-            "provider configuration points to a direct upstream."
+            "OpenCode route expected the registered OmniRoute endpoint, but the effective "
+            "provider configuration points elsewhere."
         )
 
 
