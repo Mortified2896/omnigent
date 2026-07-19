@@ -60,6 +60,7 @@ from omnigent.server.performance_metrics import (
 from omnigent.server.routes.builtin_agents import create_builtin_agents_router
 from omnigent.server.routes.comments import create_comments_router
 from omnigent.server.routes.default_policies import create_default_policies_router
+from omnigent.server.routes.harness_model_options import create_harness_model_options_router
 from omnigent.server.routes.harnesses import create_harnesses_router
 from omnigent.server.routes.policy_registry import create_policy_registry_router
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
@@ -1989,6 +1990,11 @@ def create_app(
         ),
         prefix="/v1",
         tags=["agents"],
+    )
+    app.include_router(
+        create_harness_model_options_router(auth_provider=auth_provider),
+        prefix="/v1",
+        tags=["harness_model_options"],
     )
     app.include_router(
         create_harnesses_router(auth_provider=auth_provider),

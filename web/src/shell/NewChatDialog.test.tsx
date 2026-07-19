@@ -43,6 +43,13 @@ vi.mock("@/lib/identity", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/useHosts", () => ({ useHosts: vi.fn() }));
 vi.mock("@/hooks/useAvailableAgents", () => ({ useAvailableAgents: vi.fn() }));
+vi.mock("@/hooks/useHarnessModelOptions", () => ({
+  useHarnessModelOptions: () => ({
+    data: { groups: [], models: [] },
+    isLoading: false,
+    error: null,
+  }),
+}));
 vi.mock("@/hooks/useHostFilesystem", () => ({
   useHostFilesystem: vi.fn(),
   // WorkspacePicker (rendered by the file browser) reads this on mount;
