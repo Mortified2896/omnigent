@@ -185,6 +185,7 @@ export function reconcileRoutingTurnBubbles(
 ): Bubble[] {
   const byElicitation = new Map(records.map((record) => [record.elicitation_id, record]));
   const consumed = new Set<string>();
+  const livePositions = new Map<string, number>();
   const reconciled: Bubble[] = [];
 
   for (const bubble of bubbles) {
@@ -202,6 +203,7 @@ export function reconcileRoutingTurnBubbles(
         return [];
       }
       consumed.add(record.elicitation_id);
+      livePositions.set(record.elicitation_id, reconciled.length);
       changed = true;
       return [turnItem(record)];
     });
@@ -209,23 +211,107 @@ export function reconcileRoutingTurnBubbles(
   }
 
   if (!loaded) return reconciled;
-  const sorted = [...records].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+  const sorted = [...records].sort((a, b) => {
+    const aCreated = a.created_at;
+    const bCreated = b.created_at;
+    if (aCreated !== undefined && bCreated !== undefined && aCreated !== bCreated) {
+      return aCreated - bCreated;
+    }
+    if (aCreated === undefined && bCreated !== undefined) return 1;
+    if (aCreated !== undefined && bCreated === undefined) return -1;
+    return a.id.localeCompare(b.id) || a.elicitation_id.localeCompare(b.elicitation_id);
+  });
   const userIndexes = reconciled.flatMap((bubble, index) =>
     bubble.kind === "user" ? [index] : [],
   );
+  const claimedUsers = new Set<number>();
   const insertAfter = new Map<number, RoutingTurnRecord[]>();
   const trailing: RoutingTurnRecord[] = [];
-  sorted.forEach((record, ordinal) => {
-    if (consumed.has(record.elicitation_id)) return;
-    const exactIndex =
-      record.triggering_message_id == null
-        ? -1
-        : reconciled.findIndex(
-            (bubble) => bubble.kind === "user" && bubble.itemId === record.triggering_message_id,
-          );
-    const target = exactIndex >= 0 ? exactIndex : userIndexes[ordinal];
-    if (target === undefined) trailing.push(record);
-    else insertAfter.set(target, [...(insertAfter.get(target) ?? []), record]);
+  const assigned = new Set(consumed);
+
+  const exactUserIndex = (record: RoutingTurnRecord): number =>
+    record.triggering_message_id == null
+      ? -1
+      : reconciled.findIndex(
+          (bubble) => bubble.kind === "user" && bubble.itemId === record.triggering_message_id,
+        );
+  const responseUserIndex = (record: RoutingTurnRecord): number => {
+    if (record.response_id == null) return -1;
+    const responseIndex = reconciled.findIndex(
+      (bubble) =>
+        bubble.kind === "assistant" &&
+        bubble.items.every((item) => item.kind !== "elicitation") &&
+        (bubble.responseId === record.response_id || bubble.stableId === record.response_id),
+    );
+    if (responseIndex < 0) return -1;
+    let nearest = -1;
+    for (const index of userIndexes) {
+      if (index < responseIndex) nearest = index;
+    }
+    return nearest === -1 ? -1 : nearest;
+  };
+  const assign = (record: RoutingTurnRecord, userIndex: number): boolean => {
+    if (userIndex < 0 || claimedUsers.has(userIndex)) return false;
+    claimedUsers.add(userIndex);
+    assigned.add(record.elicitation_id);
+    insertAfter.set(userIndex, [...(insertAfter.get(userIndex) ?? []), record]);
+    return true;
+  };
+
+  // Existing live cards stay exactly where the stream placed them, but their
+  // user turns are reserved so ordinal hydration cannot reuse those prompts.
+  for (const record of sorted) {
+    if (!consumed.has(record.elicitation_id)) continue;
+    const exact = exactUserIndex(record);
+    if (exact >= 0) {
+      claimedUsers.add(exact);
+      continue;
+    }
+    const liveIndex = livePositions.get(record.elicitation_id);
+    const preceding =
+      liveIndex === undefined
+        ? undefined
+        : (() => {
+            let nearest: number | undefined;
+            for (const index of userIndexes) {
+              if (index < liveIndex) nearest = index;
+            }
+            return nearest;
+          })();
+    if (preceding !== undefined) claimedUsers.add(preceding);
+  }
+
+  // Strong identifiers win globally before any ordinal slot is consumed.
+  for (const record of sorted) {
+    if (assigned.has(record.elicitation_id)) continue;
+    const exact = exactUserIndex(record);
+    if (exact >= 0) {
+      if (!assign(record, exact)) trailing.push(record);
+      continue;
+    }
+    const linked = responseUserIndex(record);
+    if (linked >= 0) {
+      if (!assign(record, linked)) trailing.push(record);
+      continue;
+    }
+    // A present but stale trigger is stronger than an ordinal guess. Keep it
+    // trailing rather than attaching the card to a different user prompt.
+    if (record.triggering_message_id != null) {
+      assigned.add(record.elicitation_id);
+      trailing.push(record);
+    }
+  }
+
+  const unmatchedRecords = sorted.filter((record) => !assigned.has(record.elicitation_id));
+  const unmatchedUsers = userIndexes.filter((index) => !claimedUsers.has(index));
+  unmatchedRecords.forEach((record, ordinal) => {
+    const target = unmatchedUsers[ordinal];
+    if (target === undefined) {
+      trailing.push(record);
+      assigned.add(record.elicitation_id);
+    } else {
+      assign(record, target);
+    }
   });
 
   const durableBubble = (record: RoutingTurnRecord): Bubble => ({
