@@ -160,6 +160,15 @@ def merge_omniroute_combo_catalog(
     provider = dict(existing) if isinstance(existing, Mapping) else {}
     options = dict(provider.get("options") or {})
     options["baseURL"] = omniroute_base_url()
+    if _resolve_omniroute_api_key_str(options.get("apiKey")) is None:
+        for env_name in (
+            "OMNIGENT_OMNIROUTE_API_KEY",
+            "OMNIGENT_ROUTER_API_KEY",
+            "OMNIROUTE_API_KEY",
+        ):
+            if os.environ.get(env_name):
+                options["apiKey"] = f"{{env:{env_name}}}"
+                break
     provider.setdefault("npm", "@ai-sdk/openai-compatible")
     provider.setdefault("name", "OmniRoute")
     provider["options"] = options

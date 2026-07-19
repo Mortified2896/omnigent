@@ -16,8 +16,9 @@ import pytest
 
 from omnigent.opencode_native_provider import (
     OMNIROUTE_PROVIDER_ID,
-    omniroute_api_key_from_config,
     _resolve_omniroute_api_key_str,
+    merge_omniroute_combo_catalog,
+    omniroute_api_key_from_config,
 )
 
 
@@ -111,8 +112,32 @@ def test_omniroute_api_key_from_config_returns_none_for_unresolved_placeholder(
     )
 
 
+def test_merge_replaces_unresolved_placeholder_with_available_host_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
+    monkeypatch.delenv("OMNIGENT_OMNIROUTE_API_KEY", raising=False)
+    monkeypatch.setenv("OMNIGENT_ROUTER_API_KEY", "host-secret")
+    config = {
+        "provider": {OMNIROUTE_PROVIDER_ID: {"options": {"apiKey": "{env:OMNIROUTE_API_KEY}"}}}
+    }
+
+    merged = merge_omniroute_combo_catalog(
+        config,
+        combos={"auto/coding": {"name": "auto/coding"}},
+        approved_route="auto/coding",
+    )
+
+    options = merged["provider"][OMNIROUTE_PROVIDER_ID]["options"]
+    assert options["apiKey"] == "{env:OMNIGENT_ROUTER_API_KEY}"
+    assert "host-secret" not in str(merged)
+
+
 def test_omniroute_api_key_from_config_returns_none_without_omniroute_provider() -> None:
     """An empty/non-omniroute config returns ``None``."""
     assert omniroute_api_key_from_config({}) is None
     assert omniroute_api_key_from_config({"provider": {}}) is None
-    assert omniroute_api_key_from_config({"provider": {"openai": {"options": {"apiKey": "x"}}}}) is None
+    assert (
+        omniroute_api_key_from_config({"provider": {"openai": {"options": {"apiKey": "x"}}}})
+        is None
+    )
