@@ -149,7 +149,7 @@ async def test_explicit_omniroute_route_surfaces_as_omniroute_route_expected(
     assert cfg.omniroute_route_expected is True
     # The approved route id is the only model_override that survives — the
     # runner qualifies it (omniroute/<id>) once the catalog is loaded.
-    assert cfg.model_override == "auto/coding"
+    assert cfg.model_override == "omniroute/auto/coding"
 
 
 @pytest.mark.asyncio

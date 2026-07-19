@@ -992,9 +992,12 @@ async def _opencode_native_launch_config(
     has_explicit_omniroute_route = isinstance(route_model_override, str) and bool(
         route_model_override
     )
-    model_override = (
-        route_model_override if has_explicit_omniroute_route else snapshot.get("model_override")
-    )
+    if has_explicit_omniroute_route:
+        from omnigent.opencode_native_provider import qualify_omniroute_model
+
+        model_override = qualify_omniroute_model(route_model_override)
+    else:
+        model_override = snapshot.get("model_override")
     if model_override is not None:
         if not isinstance(model_override, str) or not model_override:
             raise RuntimeError(f"Invalid model_override for OpenCode session {session_id!r}.")
