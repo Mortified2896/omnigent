@@ -8791,6 +8791,7 @@ async def test_opencode_native_message_syncs_approved_package_before_dispatch(
         omniroute_route_expected=True,
     )
     launch_fetches: list[str] = []
+    relaunches: list[str] = []
     package_updates: list[dict[str, Any]] = []
 
     async def _launch_config(*, session_id: str, server_client: Any):
@@ -8798,8 +8799,8 @@ async def test_opencode_native_message_syncs_approved_package_before_dispatch(
         launch_fetches.append(session_id)
         return launch
 
-    async def _skip_auto_create(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def _skip_auto_create(session_id: str, *_args: Any, **_kwargs: Any) -> None:
+        relaunches.append(session_id)
 
     async def _fetch_combos(**_kwargs: Any) -> list[Any]:
         return []
@@ -8854,13 +8855,8 @@ async def test_opencode_native_message_syncs_approved_package_before_dispatch(
 
     assert response.status_code in (200, 202), response.text
     assert launch_fetches == [session_id]
-    assert package_updates == [
-        {
-            "model_override": "auto/coding",
-            "reasoning_effort": "high",
-            "permission_mode": "ask_before_edits",
-        }
-    ]
+    assert relaunches == [session_id, session_id]
+    assert package_updates == []
 
 
 @pytest.mark.parametrize(

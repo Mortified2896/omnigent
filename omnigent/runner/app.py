@@ -12071,59 +12071,27 @@ def create_runner_app(
         return Response(status_code=200)
 
     async def _sync_opencode_native_approved_package(conv_id: str) -> None:
-        """Fail-closed refresh of a live bridge immediately before dispatch."""
+        """Load an approved route into OpenCode before dispatching its prompt.
+
+        OpenCode reads custom provider models only at server startup. A route
+        approved after terminal auto-creation therefore requires one relaunch;
+        writing opencode.json beside a running server does not update its model
+        registry.
+        """
         launch = await _opencode_native_launch_config(
             session_id=conv_id, server_client=server_client
         )
         if not launch.omniroute_route_expected or not launch.model_override:
             return
-        from omnigent.opencode_native_bridge import (
-            bridge_dir_for_bridge_id,
-            read_bridge_state,
-            update_execution_package,
-            xdg_config_home_for_bridge_dir,
+        spec = await _resolve_session_agent_spec(conv_id)
+        await _auto_create_opencode_terminal(
+            conv_id,
+            resource_registry,
+            _publish_event,
+            agent_spec=spec,
+            server_client=server_client,
+            ensure_comment_relay=_ensure_comment_relay_started,
         )
-        from omnigent.opencode_native_provider import (
-            fetch_omniroute_combo_models,
-            merge_omniroute_combo_catalog,
-            omniroute_api_key_from_config,
-            write_opencode_provider_config,
-        )
-
-        bridge_dir = bridge_dir_for_bridge_id(conv_id)
-        state = await asyncio.to_thread(read_bridge_state, bridge_dir)
-        if state is None:
-            raise RuntimeError(
-                "OpenCode bridge is unavailable; approved route was not dispatched."
-            )
-        route_id = launch.model_override.split("/", 1)[1]
-        config_path = xdg_config_home_for_bridge_dir(bridge_dir) / "opencode" / "opencode.json"
-        try:
-            existing = (
-                json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
-            )
-        except (OSError, ValueError) as exc:
-            raise RuntimeError("OpenCode provider configuration could not be refreshed.") from exc
-        if not isinstance(existing, dict):
-            raise RuntimeError("OpenCode provider configuration is invalid.")
-        combos = await fetch_omniroute_combo_models(
-            api_key=omniroute_api_key_from_config(existing)
-        )
-        config = merge_omniroute_combo_catalog(existing, combos=combos, approved_route=route_id)
-        await asyncio.to_thread(
-            write_opencode_provider_config,
-            xdg_config_home_for_bridge_dir(bridge_dir),
-            config,
-        )
-        updated = await asyncio.to_thread(
-            update_execution_package,
-            bridge_dir,
-            model_override=launch.model_override,
-            reasoning_effort=launch.reasoning_effort,
-            permission_mode=launch.permission_mode,
-        )
-        if not updated:
-            raise RuntimeError("OpenCode bridge disappeared; approved route was not dispatched.")
 
     async def _handle_opencode_native_model_change(conv_id: str, model: str | None) -> Response:
         """
