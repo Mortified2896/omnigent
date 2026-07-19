@@ -112,29 +112,39 @@ def upgrade() -> None:
         ["workspace_id", "created_at", "id"],
     )
 
-    with op.batch_alter_table("task_runs") as batch:
-        batch.add_column(sa.Column("routing_proposal_id", sa.String(64), nullable=True))
-        batch.add_column(sa.Column("routing_decision_id", sa.String(64), nullable=True))
-        batch.create_foreign_key(
-            "fk_task_runs_routing_proposal",
-            "routing_proposals",
-            ["workspace_id", "routing_proposal_id"],
-            ["workspace_id", "id"],
-        )
-        batch.create_foreign_key(
-            "fk_task_runs_routing_decision",
-            "routing_decisions",
-            ["workspace_id", "routing_decision_id"],
-            ["workspace_id", "id"],
-        )
+    if op.get_bind().dialect.name == "sqlite":
+        # SQLite cannot add these foreign keys without rebuilding task_runs,
+        # which is itself referenced by historical evaluations and reviews.
+        op.add_column("task_runs", sa.Column("routing_proposal_id", sa.String(64), nullable=True))
+        op.add_column("task_runs", sa.Column("routing_decision_id", sa.String(64), nullable=True))
+    else:
+        with op.batch_alter_table("task_runs") as batch:
+            batch.add_column(sa.Column("routing_proposal_id", sa.String(64), nullable=True))
+            batch.add_column(sa.Column("routing_decision_id", sa.String(64), nullable=True))
+            batch.create_foreign_key(
+                "fk_task_runs_routing_proposal",
+                "routing_proposals",
+                ["workspace_id", "routing_proposal_id"],
+                ["workspace_id", "id"],
+            )
+            batch.create_foreign_key(
+                "fk_task_runs_routing_decision",
+                "routing_decisions",
+                ["workspace_id", "routing_decision_id"],
+                ["workspace_id", "id"],
+            )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("task_runs") as batch:
-        batch.drop_constraint("fk_task_runs_routing_decision", type_="foreignkey")
-        batch.drop_constraint("fk_task_runs_routing_proposal", type_="foreignkey")
-        batch.drop_column("routing_decision_id")
-        batch.drop_column("routing_proposal_id")
+    if op.get_bind().dialect.name == "sqlite":
+        op.drop_column("task_runs", "routing_decision_id")
+        op.drop_column("task_runs", "routing_proposal_id")
+    else:
+        with op.batch_alter_table("task_runs") as batch:
+            batch.drop_constraint("fk_task_runs_routing_decision", type_="foreignkey")
+            batch.drop_constraint("fk_task_runs_routing_proposal", type_="foreignkey")
+            batch.drop_column("routing_decision_id")
+            batch.drop_column("routing_proposal_id")
     op.drop_index("ix_routing_decisions_created", table_name="routing_decisions")
     op.drop_table("routing_decisions")
     op.drop_index("ix_routing_proposals_conversation_created", table_name="routing_proposals")

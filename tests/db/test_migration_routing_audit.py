@@ -36,9 +36,12 @@ def test_routing_audit_tables_and_task_run_links(db_engine: Engine) -> None:
     assert run_columns["routing_proposal_id"]["nullable"] is True
     assert run_columns["routing_decision_id"]["nullable"] is True
 
-    run_fks = {fk["name"]: fk for fk in inspector.get_foreign_keys("task_runs")}
-    assert run_fks["fk_task_runs_routing_proposal"]["referred_table"] == "routing_proposals"
-    assert run_fks["fk_task_runs_routing_decision"]["referred_table"] == "routing_decisions"
+    # SQLite adds these nullable linkage columns in place because rebuilding
+    # task_runs would violate its historical evaluation/review references.
+    if db_engine.dialect.name != "sqlite":
+        run_fks = {fk["name"]: fk for fk in inspector.get_foreign_keys("task_runs")}
+        assert run_fks["fk_task_runs_routing_proposal"]["referred_table"] == "routing_proposals"
+        assert run_fks["fk_task_runs_routing_decision"]["referred_table"] == "routing_decisions"
 
 
 def test_routing_decision_is_unique_per_proposal(db_engine: Engine) -> None:
