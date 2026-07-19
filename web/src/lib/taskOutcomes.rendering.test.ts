@@ -205,6 +205,17 @@ describe("resolveTaskOutcomeAnchors", () => {
       expect(anchors.size).toBe(0);
     });
 
+    it("does not attach routing review cards to direct manual runs", () => {
+      const bubbles = [user("u1"), assistant("resp_1")];
+      const directRun = {
+        ...run("resp_1", "u1"),
+        routing_proposal_id: null,
+        routing_decision_id: null,
+      };
+
+      expect(resolveTaskOutcomeAnchors(bubbles, [directRun]).size).toBe(0);
+    });
+
     it("reasoning-only bubble with matching responseId does NOT get the mapping", () => {
       // Task run's response_id matches a reasoning-only bubble's responseId
       // The reasoning bubble should NOT get the mapping because it has no visible final text
