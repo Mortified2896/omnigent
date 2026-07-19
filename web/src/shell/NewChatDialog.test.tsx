@@ -2260,8 +2260,8 @@ describe("NewChatLandingScreen agent picker (mobile)", () => {
   it("drills into an agent's knobs in place when the row is tapped (no hover flyout) and selects it", () => {
     renderLanding();
     openPicker();
-    // Start-align keeps the fixed-width mobile menu inside a narrow viewport.
-    expect(screen.getByRole("menu")).toHaveAttribute("data-align", "start");
+    // Center-align keeps the fixed-width mobile menu inside a narrow viewport.
+    expect(screen.getByRole("menu")).toHaveAttribute("data-align", "center");
     // The list is showing and the knobs are not — there's no hover flyout.
     expect(screen.getByTestId("new-chat-landing-agent-a1")).toBeTruthy();
     expect(screen.queryByTestId("new-chat-landing-approval-full-access")).toBeNull();
