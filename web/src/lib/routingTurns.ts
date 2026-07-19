@@ -209,18 +209,38 @@ export function reconcileRoutingTurnBubbles(
   }
 
   if (!loaded) return reconciled;
-  const missing = records
-    .filter((record) => !consumed.has(record.elicitation_id))
-    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
-  for (const record of missing) {
-    reconciled.push({
-      kind: "assistant",
-      responseId: record.response_id ?? `routing-turn:${record.id}`,
-      stableId: `routing-turn:${record.id}`,
-      lifecycle: "completed",
-      error: null,
-      items: [turnItem(record)],
-    });
-  }
-  return reconciled;
+  const sorted = [...records].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+  const userIndexes = reconciled.flatMap((bubble, index) =>
+    bubble.kind === "user" ? [index] : [],
+  );
+  const insertAfter = new Map<number, RoutingTurnRecord[]>();
+  const trailing: RoutingTurnRecord[] = [];
+  sorted.forEach((record, ordinal) => {
+    if (consumed.has(record.elicitation_id)) return;
+    const exactIndex =
+      record.triggering_message_id == null
+        ? -1
+        : reconciled.findIndex(
+            (bubble) => bubble.kind === "user" && bubble.itemId === record.triggering_message_id,
+          );
+    const target = exactIndex >= 0 ? exactIndex : userIndexes[ordinal];
+    if (target === undefined) trailing.push(record);
+    else insertAfter.set(target, [...(insertAfter.get(target) ?? []), record]);
+  });
+
+  const durableBubble = (record: RoutingTurnRecord): Bubble => ({
+    kind: "assistant",
+    responseId: record.response_id ?? `routing-turn:${record.id}`,
+    stableId: `routing-turn:${record.id}`,
+    lifecycle: "completed",
+    error: null,
+    items: [turnItem(record)],
+  });
+  const placed: Bubble[] = [];
+  reconciled.forEach((bubble, index) => {
+    placed.push(bubble);
+    for (const record of insertAfter.get(index) ?? []) placed.push(durableBubble(record));
+  });
+  placed.push(...trailing.map(durableBubble));
+  return placed;
 }

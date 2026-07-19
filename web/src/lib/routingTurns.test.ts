@@ -113,4 +113,31 @@ describe("routing turn hydration", () => {
       items: [{ kind: "elicitation", elicitationId: "route_1" }],
     });
   });
+
+  it("places a hydrated decision between its user prompt and execution response", () => {
+    const user: Bubble = {
+      kind: "user",
+      itemId: "msg_user",
+      stableKey: "msg_user",
+      content: [{ type: "input_text", text: "Inspect the repository" }],
+    };
+    const response: Bubble = {
+      kind: "assistant",
+      responseId: "msg_response",
+      stableId: "msg_response",
+      lifecycle: "completed",
+      error: null,
+      items: [{ kind: "text", itemId: "msg_response", text: "Repository is clean", final: true }],
+    };
+
+    const bubbles = reconcileRoutingTurnBubbles(
+      [user, response],
+      [record({ triggering_message_id: "msg_user" })],
+      true,
+    );
+
+    expect(bubbles.map((bubble) => bubble.kind)).toEqual(["user", "assistant", "assistant"]);
+    expect(bubbles[1]).toMatchObject({ stableId: "routing-turn:turn_1" });
+    expect(bubbles[2]).toMatchObject({ stableId: "msg_response" });
+  });
 });
