@@ -1078,6 +1078,7 @@ def create_app(
     admins: list[str] | None = None,
     allowed_domains: list[str] | None = None,
     sandbox_config: ManagedSandboxConfig | None = None,
+    task_outcome_store: Any | None = None,
 ) -> FastAPI:
     """
     Build and return the FastAPI application with all routes mounted.
@@ -1196,6 +1197,12 @@ def create_app(
     _mcp_pool = ServerMcpPool()
     server_metrics = ServerPerformanceMetrics()
     server_metrics_otel = ServerMetricsOtelPublisher()
+
+    from omnigent.server.task_outcome_recorder import TaskOutcomeRecorder, set_recorder
+
+    set_recorder(
+        TaskOutcomeRecorder(store=task_outcome_store) if task_outcome_store is not None else None
+    )
 
     @asynccontextmanager
     async def _lifespan(
@@ -2033,6 +2040,19 @@ def create_app(
             ),
             prefix="/v1",
             tags=["comments"],
+        )
+    if task_outcome_store is not None:
+        from omnigent.server.routes.task_outcomes import create_task_outcomes_router
+
+        app.include_router(
+            create_task_outcomes_router(
+                task_outcome_store,
+                conversation_store=conversation_store,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
+            prefix="/v1",
+            tags=["task_outcomes"],
         )
     if policy_store is not None:
         app.include_router(

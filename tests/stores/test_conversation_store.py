@@ -4480,3 +4480,39 @@ def test_list_conversations_owned_by_excludes_shared_sessions(
         ).data
     }
     assert ids == {mine.id}
+
+
+def test_routing_selection_source_round_trips(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    assert conv.routing_selection_source is None
+
+    updated = conversation_store.update_conversation(
+        conv.id,
+        model_override="openai/gpt-5.4",
+        routing_selection_source="manual",
+    )
+
+    assert updated is not None
+    assert updated.routing_selection_source == "manual"
+    assert conversation_store.get_conversation(conv.id) == updated
+
+    approved = conversation_store.update_conversation(
+        conv.id,
+        omniroute_route_id="auto/coding",
+        routing_selection_source="route_approval",
+    )
+    assert approved is not None
+    assert approved.routing_selection_source == "route_approval"
+
+
+def test_routing_selection_source_rejects_unknown_value(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    with pytest.raises(ValueError, match="routing_selection_source"):
+        conversation_store.update_conversation(
+            conv.id,
+            routing_selection_source="automatic",
+        )

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { RouteApprovalCard } from "./RouteApprovalCard";
+import { PendingRouteApprovalCard, RouteApprovalCard } from "./RouteApprovalCard";
 
 const FULL_PROPOSAL = {
   proposal_source_label: "Router recommendation",
@@ -34,9 +34,10 @@ describe("RouteApprovalCard", () => {
     expect(card).toHaveAttribute("data-elicitation-id", "elicit_1");
     const summary = within(card).getByTestId("route-approval-summary");
     expect(within(summary).getByText("OpenCode Native")).toBeInTheDocument();
-    expect(within(summary).getByText("auto/coding")).toBeInTheDocument();
-    expect(within(summary).getByText("medium")).toBeInTheDocument();
-    expect(within(summary).getByText("default")).toBeInTheDocument();
+    const original = within(summary).getByRole("region", { name: "Original recommendation" });
+    expect(within(original).getByText("auto/coding")).toBeInTheDocument();
+    expect(within(original).getByText("medium")).toBeInTheDocument();
+    expect(within(original).getByText("default")).toBeInTheDocument();
     expect(within(summary).getByText(/Pro: \$5/)).toBeInTheDocument();
     // Fallback shown.
     expect(within(summary).getByText("no")).toBeInTheDocument();
@@ -101,7 +102,9 @@ describe("RouteApprovalCard", () => {
     );
     // …but the summary above still carries the actionable fields.
     expect(
-      within(within(card).getByTestId("route-approval-summary")).getByText("auto/coding"),
+      within(within(card).getByRole("region", { name: "Original recommendation" })).getByText(
+        "auto/coding",
+      ),
     ).toBeInTheDocument();
     // …and a fresh expand reveals the full details.
     fireEvent.click(within(card).getByTestId("route-approval-details-toggle"));
@@ -152,8 +155,9 @@ describe("RouteApprovalCard", () => {
     );
     const card = screen.getByTestId("route-approval-card");
     const summary = within(card).getByTestId("route-approval-summary");
-    expect(within(summary).getByText("auto/easy")).toBeInTheDocument();
-    expect(within(summary).getByText("low")).toBeInTheDocument();
+    const original = within(summary).getByRole("region", { name: "Original recommendation" });
+    expect(within(original).getByText("auto/easy")).toBeInTheDocument();
+    expect(within(original).getByText("low")).toBeInTheDocument();
     // No `truncate` / `line-clamp` markup on the rendered fields.
     const cells = summary.querySelectorAll<HTMLElement>("[class*='break-words']");
     for (const cell of cells) {
@@ -168,5 +172,78 @@ describe("RouteApprovalCard", () => {
     );
     fireEvent.click(screen.getByTestId("route-approval-details-toggle"));
     expect(screen.getAllByTestId("route-proposal-card")).toHaveLength(1);
+  });
+
+  it("shows original and adjusted final selections in the responded state", () => {
+    render(
+      <RouteApprovalCard
+        proposal={FULL_PROPOSAL}
+        action="accept"
+        elicitationId="elicit_adjusted"
+        responseContent={{
+          route_adjustment: {
+            omniroute_route_id: "auto/easy",
+            reasoning_effort: "low",
+            permission_mode: "read_only",
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("route-approval-card-label")).toHaveTextContent(
+      "Approved with changes",
+    );
+    const original = screen.getByRole("region", { name: "Original recommendation" });
+    const final = screen.getByRole("region", { name: "Final selection" });
+    expect(within(original).getByText("auto/coding")).toBeInTheDocument();
+    expect(within(final).getByText("auto/easy")).toBeInTheDocument();
+    expect(within(final).getByText("read_only")).toBeInTheDocument();
+  });
+});
+
+describe("PendingRouteApprovalCard", () => {
+  const proposal = {
+    ...FULL_PROPOSAL,
+    eligible_route_ids: ["auto/coding", "auto/easy"],
+    eligible_reasoning_efforts: ["low", "medium"],
+    eligible_permission_modes: ["read_only", "default"],
+  };
+
+  it("offers route-specific, accessible, mobile-friendly controls", () => {
+    render(
+      <PendingRouteApprovalCard proposal={proposal} elicitationId="route_1" onSubmit={vi.fn()} />,
+    );
+    for (const name of ["Approve", "Change / Adjust", "Reject"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.className).toContain("min-h-11");
+      expect(button.className).toContain("w-full");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Change / Adjust" }));
+    expect(screen.getByLabelText("Route")).toBeInTheDocument();
+    expect(screen.getByLabelText("Reasoning effort")).toBeInTheDocument();
+    expect(screen.getByLabelText("Permission mode")).toBeInTheDocument();
+  });
+
+  it("submits eligible adjustments once and disables repeat mutation", () => {
+    const submit = vi.fn(() => new Promise<void>(() => undefined));
+    render(
+      <PendingRouteApprovalCard proposal={proposal} elicitationId="route_2" onSubmit={submit} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change / Adjust" }));
+    fireEvent.change(screen.getByLabelText("Route"), { target: { value: "auto/easy" } });
+    fireEvent.change(screen.getByLabelText("Reasoning effort"), { target: { value: "low" } });
+    fireEvent.change(screen.getByLabelText("Permission mode"), {
+      target: { value: "read_only" },
+    });
+    const apply = screen.getByRole("button", { name: "Apply changes" });
+    fireEvent.click(apply);
+    fireEvent.click(apply);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("accept", {
+      omniroute_route_id: "auto/easy",
+      reasoning_effort: "low",
+      permission_mode: "read_only",
+    });
+    expect(apply).toBeDisabled();
+    expect(screen.getByTestId("pending-route-approval-card")).toHaveAttribute("aria-busy", "true");
   });
 });

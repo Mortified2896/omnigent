@@ -200,6 +200,7 @@ class Conversation:
     cost_control_mode_override: str | None = None
     harness_override: str | None = None
     route_approval_enabled: bool | None = None
+    routing_selection_source: Literal["manual", "route_approval"] | None = None
     omniroute_route_id: str | None = None
     permission_mode: str | None = None
     omniroute_requires_explicit_approval: bool | None = None

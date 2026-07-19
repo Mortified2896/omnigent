@@ -376,6 +376,29 @@ async def test_runner_path_forwards_persisted_model_override(
     )
 
 
+async def test_patch_model_override_clears_stale_omniroute_route(
+    client: httpx.AsyncClient,
+) -> None:
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+    routed = await client.patch(
+        f"/v1/sessions/{sid}",
+        json={"omniroute_route_id": "auto/coding", "route_approval_enabled": True},
+    )
+    assert routed.status_code == 200, routed.text
+    assert routed.json()["omniroute_route_id"] == "auto/coding"
+
+    selected = await client.patch(
+        f"/v1/sessions/{sid}",
+        json={"model_override": "opencode/openai/gpt-5"},
+    )
+
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["model_override"] == "opencode/openai/gpt-5"
+    assert selected.json()["omniroute_route_id"] is None
+
+
 async def test_create_time_model_override_forwards_on_first_event(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

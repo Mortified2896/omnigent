@@ -54,6 +54,9 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
+import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
+import { ownsOutcomeCard, useTaskOutcomeAnchors, useTaskOutcomeRuns } from "@/lib/taskOutcomes";
+import { reconcileRoutingTurnBubbles, useRoutingTurns } from "@/lib/routingTurns";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
@@ -1488,11 +1491,22 @@ function MainAgentSurface({
   // Answered cards stay inline at their natural spot. `streamBubbles` keeps
   // `bubbles`' reference when nothing is pending, so the common case allocates
   // nothing.
-  const pendingElicitations = useMemo(() => collectPendingElicitations(bubbles), [bubbles]);
-  const streamBubbles = useMemo(
-    () => (pendingElicitations.length === 0 ? bubbles : stripPendingElicitations(bubbles)),
-    [bubbles, pendingElicitations.length],
+  const routingTurns = useRoutingTurns(conversationId, status);
+  const durableBubbles = useMemo(
+    () => reconcileRoutingTurnBubbles(bubbles, routingTurns.turns, routingTurns.loaded),
+    [bubbles, routingTurns.loaded, routingTurns.turns],
   );
+  const pendingElicitations = useMemo(
+    () => collectPendingElicitations(durableBubbles),
+    [durableBubbles],
+  );
+  const streamBubbles = useMemo(
+    () =>
+      pendingElicitations.length === 0 ? durableBubbles : stripPendingElicitations(durableBubbles),
+    [durableBubbles, pendingElicitations.length],
+  );
+  const taskOutcomeRuns = useTaskOutcomeRuns(conversationId, status, streamBubbles);
+  const taskOutcomeAnchors = useTaskOutcomeAnchors(streamBubbles, taskOutcomeRuns);
 
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) — guarded so the composer's
   // own unmodified ArrowUp/Down history-recall still works.
@@ -1670,7 +1684,7 @@ function MainAgentSurface({
               hasMoreHistory={hasMoreHistory}
               loadingMoreHistory={loadingMoreHistory}
             />
-            {bubbles.length === 0 && !showWorkingIndicator ? (
+            {durableBubbles.length === 0 && !showWorkingIndicator ? (
               // Cold launch: a centered spinner instead of the "ready to
               // type" empty state (the create-then-send path uses the
               // "row" variant). Two launch shapes land here: a
@@ -1697,9 +1711,22 @@ function MainAgentSurface({
               )
             ) : (
               <>
-                {streamBubbles.map((bubble) => (
-                  <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
-                ))}
+                {streamBubbles.map((bubble, bubbleIndex) => {
+                  const taskRunResponseId =
+                    bubble.kind === "assistant" &&
+                    bubble.lifecycle === "completed" &&
+                    ownsOutcomeCard(streamBubbles, bubbleIndex)
+                      ? taskOutcomeAnchors.get(bubble.stableId)
+                      : undefined;
+                  return (
+                    <BubbleView
+                      key={bubbleKey(bubble)}
+                      bubble={bubble}
+                      renderOutcome={taskRunResponseId !== undefined}
+                      taskRunResponseId={taskRunResponseId}
+                    />
+                  );
+                })}
                 {/* Pending elicitation cards, floated to the bottom of the
                     chat so an outstanding question stays in view (stick-to-
                     bottom) no matter how much text the agent streamed after
@@ -2854,7 +2881,15 @@ function CompactionLoadingIndicator() {
 // markdown/syntax-highlighting subtree. See `bubblesEqual`. Exported for
 // the user-bubble markdown render tests.
 export const BubbleView = memo(
-  function BubbleView({ bubble }: { bubble: Bubble }) {
+  function BubbleView({
+    bubble,
+    renderOutcome = true,
+    taskRunResponseId,
+  }: {
+    bubble: Bubble;
+    renderOutcome?: boolean;
+    taskRunResponseId?: string;
+  }) {
     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
     if (bubble.kind === "compaction_loading") {
       return <CompactionLoadingIndicator />;
@@ -2870,9 +2905,18 @@ export const BubbleView = memo(
         />
       );
     }
-    return <AssistantBubble bubble={bubble} />;
+    return (
+      <AssistantBubble
+        bubble={bubble}
+        renderOutcome={renderOutcome}
+        taskRunResponseId={taskRunResponseId}
+      />
+    );
   },
-  (prev, next) => bubblesEqual(prev.bubble, next.bubble),
+  (prev, next) =>
+    prev.renderOutcome === next.renderOutcome &&
+    prev.taskRunResponseId === next.taskRunResponseId &&
+    bubblesEqual(prev.bubble, next.bubble),
 );
 
 /**
@@ -3088,7 +3132,16 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
   );
 }
 
-function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistant" }> }) {
+function AssistantBubble({
+  bubble,
+  renderOutcome = true,
+  taskRunResponseId,
+}: {
+  bubble: Extract<Bubble, { kind: "assistant" }>;
+  renderOutcome?: boolean;
+  taskRunResponseId?: string;
+}) {
+  const { conversationId: outcomeSessionId } = useParams<{ conversationId: string }>();
   // The walker only emits an assistant bubble when at least one
   // assistant-side block exists, so `items` is non-empty here in the
   // common case. The "Working…" shimmer for the empty-items / streaming
@@ -3109,6 +3162,11 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
   // width to match the composer, not the default w-fit shrink-to-content.
   const hasElicitation = bubble.items.some((it) => it.kind === "elicitation");
   const isWide = hasElicitation || containsMarkdownTable(bubble.items);
+  const showOutcome =
+    renderOutcome &&
+    taskRunResponseId !== undefined &&
+    bubble.lifecycle !== "streaming" &&
+    outcomeSessionId !== undefined;
 
   return (
     <>
@@ -3116,6 +3174,7 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
         from="assistant"
         data-testid="message-bubble"
         data-role="assistant"
+        data-response-id={bubble.responseId}
         className={isWide ? "max-w-full" : "max-w-3xl"}
       >
         <MessageContent className={isWide ? "w-full" : undefined}>
@@ -3151,6 +3210,16 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
           </MessageActions>
         )}
       </Message>
+      {showOutcome && (
+        <div
+          data-testid="assistant-outcome-slot"
+          data-response-id={bubble.responseId}
+          data-task-run-response-id={taskRunResponseId}
+          className="max-w-3xl"
+        >
+          <TaskOutcomeBriefCard sessionId={outcomeSessionId} responseId={taskRunResponseId} />
+        </div>
+      )}
 
       {bubble.lifecycle === "failed" && (
         <p className="text-destructive text-xs">Error: {bubble.error}</p>

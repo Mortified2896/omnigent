@@ -123,6 +123,7 @@ def _to_conversation(
         cost_control_mode_override=row.cost_control_mode_override,
         harness_override=row.harness_override,
         route_approval_enabled=row.route_approval_enabled,
+        routing_selection_source=row.routing_selection_source,
         omniroute_route_id=row.omniroute_route_id,
         permission_mode=row.permission_mode,
         omniroute_requires_explicit_approval=row.omniroute_requires_explicit_approval,
@@ -1987,7 +1988,9 @@ class SqlAlchemyConversationStore(ConversationStore):
         _unset_cost_control_mode_override: bool = False,
         harness_override: str | None = None,
         route_approval_enabled: bool | None = None,
+        routing_selection_source: str | None = None,
         omniroute_route_id: str | None = None,
+        _unset_omniroute_route_id: bool = False,
         permission_mode: str | None = None,
         omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
@@ -2060,7 +2063,17 @@ class SqlAlchemyConversationStore(ConversationStore):
             if route_approval_enabled is not None:
                 row.route_approval_enabled = route_approval_enabled
                 changed = True
-            if omniroute_route_id is not None:
+            if routing_selection_source is not None:
+                if routing_selection_source not in ("manual", "route_approval"):
+                    raise ValueError(
+                        "routing_selection_source must be 'manual' or 'route_approval'"
+                    )
+                row.routing_selection_source = routing_selection_source
+                changed = True
+            if _unset_omniroute_route_id:
+                row.omniroute_route_id = None
+                changed = True
+            elif omniroute_route_id is not None:
                 row.omniroute_route_id = omniroute_route_id
                 changed = True
             if permission_mode is not None:
