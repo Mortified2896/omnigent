@@ -16,13 +16,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("conversations") as batch:
-        batch.add_column(sa.Column("routing_selection_source", sa.String(32), nullable=True))
-        batch.create_check_constraint(
-            "ck_conversations_routing_selection_source",
-            "routing_selection_source IS NULL OR "
-            "routing_selection_source IN ('manual','route_approval')",
-        )
+    # This nullable column can be added in place on SQLite. Rebuilding the
+    # heavily referenced conversations table would violate live foreign keys.
+    op.add_column(
+        "conversations",
+        sa.Column("routing_selection_source", sa.String(32), nullable=True),
+    )
 
     op.create_table(
         "routing_proposals",
@@ -140,6 +139,4 @@ def downgrade() -> None:
     op.drop_table("routing_decisions")
     op.drop_index("ix_routing_proposals_conversation_created", table_name="routing_proposals")
     op.drop_table("routing_proposals")
-    with op.batch_alter_table("conversations") as batch:
-        batch.drop_constraint("ck_conversations_routing_selection_source", type_="check")
-        batch.drop_column("routing_selection_source")
+    op.drop_column("conversations", "routing_selection_source")

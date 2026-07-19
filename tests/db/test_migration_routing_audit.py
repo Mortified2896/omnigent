@@ -31,10 +31,6 @@ def test_routing_audit_tables_and_task_run_links(db_engine: Engine) -> None:
         column["name"]: column for column in inspector.get_columns("conversations")
     }
     assert conversation_columns["routing_selection_source"]["nullable"] is True
-    conversation_checks = {
-        check["name"]: check for check in inspector.get_check_constraints("conversations")
-    }
-    assert "ck_conversations_routing_selection_source" in conversation_checks
 
     run_columns = {column["name"]: column for column in inspector.get_columns("task_runs")}
     assert run_columns["routing_proposal_id"]["nullable"] is True
