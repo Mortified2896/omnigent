@@ -431,6 +431,8 @@ _BASE_HARNESS_CREDENTIAL_ENV_VARS: frozenset[str] = frozenset(
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "GEMINI_API_KEY",
+        "MINIMAX_API_KEY",
+        "MINIMAX_BASE_URL",
         "GIT_TOKEN",
         "GIT_USERNAME",
     }
