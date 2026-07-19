@@ -121,7 +121,7 @@ def _resolve_omniroute_api_key_str(raw: object) -> str | None:
         return None
     stripped = raw.strip()
     if stripped.startswith("{env:") and stripped.endswith("}"):
-        env_name = stripped[len("{env:"):-1].strip()
+        env_name = stripped[len("{env:") : -1].strip()
         if not env_name:
             return None
         value = os.environ.get(env_name)
@@ -221,6 +221,22 @@ class OpenCodeGatewayResolution:
     def qualified_model(self) -> str:
         """:returns: The per-prompt ``provider/model`` id opencode expects."""
         return f"{self.provider_id}/{self.model_id}"
+
+
+def remove_provider_config(config: dict[str, object], *, provider_id: str) -> dict[str, object]:
+    """Remove one provider block while preserving unrelated OpenCode config."""
+
+    result = dict(config)
+    providers = result.get("provider")
+    if not isinstance(providers, Mapping):
+        return result
+    remaining = dict(providers)
+    remaining.pop(provider_id, None)
+    if remaining:
+        result["provider"] = remaining
+    else:
+        result.pop("provider", None)
+    return result
 
 
 def build_opencode_model_default_config(model: str) -> dict[str, object]:

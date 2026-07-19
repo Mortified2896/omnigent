@@ -53,6 +53,7 @@ from omnigent.opencode_native_client import (
     OPENCODE_MIN_VERSION,
     OpenCodeClient,
 )
+from omnigent.opencode_subscription import chatgpt_oauth_provider_for_auth_path
 
 _logger = logging.getLogger(__name__)
 
@@ -87,6 +88,8 @@ _ENV_PASSTHROUGH_KEYS = (
 # config/model/permission settings the parent shell has set. Dropped from
 # the passthrough even though they match the ``OPENCODE_`` prefix, so an
 # isolated session never inherits unrelated global OpenCode config.
+OPENCODE_PROVIDER_ENV_DENY_VAR = "OMNIGENT_OPENCODE_PROVIDER_ENV_DENY"
+
 _ENV_OPENCODE_CONFIG_DENYLIST = frozenset(
     {
         "OPENCODE_CONFIG",
@@ -282,7 +285,14 @@ def filtered_server_env(
             continue
         if key in _ENV_PASSTHROUGH_KEYS or key.startswith(_ENV_PASSTHROUGH_PREFIXES):
             env[key] = value
-    env.update(extra_env or {})
+    safe_extra_env = dict(extra_env or {})
+    explicit_deny = safe_extra_env.pop(OPENCODE_PROVIDER_ENV_DENY_VAR, "")
+    env.update(safe_extra_env)
+    auth_path = xdg_data_home_for_bridge_dir(bridge_dir) / "opencode" / "auth.json"
+    _, oauth_provider_env = chatgpt_oauth_provider_for_auth_path(auth_path)
+    for key in {*oauth_provider_env, *explicit_deny.split(",")}:
+        if key:
+            env.pop(key, None)
     env["XDG_DATA_HOME"] = str(xdg_data_home_for_bridge_dir(bridge_dir))
     env["XDG_CONFIG_HOME"] = str(xdg_config_home_for_bridge_dir(bridge_dir))
     env[OPENCODE_SERVER_PASSWORD_ENV_VAR] = auth_secret

@@ -69,11 +69,11 @@ vi.mock("@/hooks/useHarnessModelOptions", () => ({
       reasoning_efforts: ["low", "high"],
     };
     const codex = {
-      id: "openai-codex/gpt-5.3-codex",
-      label: "GPT-5.3 Codex",
+      id: "openai/gpt-5.4",
+      label: "GPT-5.4",
       provider: "Codex Subscription",
       source: "direct",
-      provider_id: "openai-codex",
+      provider_id: "openai",
       access_source: "codex-subscription",
       availability: "available",
     };
@@ -924,6 +924,71 @@ describe("NewChatLandingScreen create flow", () => {
     const body = JSON.parse(init.body as string);
     expect(body).toMatchObject({ model_override: "minimax-coding-plan/MiniMax-M2.5" });
     expect(body.omniroute_route_id).toBeUndefined();
+  });
+
+  it("persists and posts an exact Codex Subscription model through OpenCode", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_codex" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4"));
+    expect(JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")).toMatchObject(
+      { "opencode-native": { model: "openai/gpt-5.4", route: "" } },
+    );
+    closeMenu();
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.model_override).toBe("openai/gpt-5.4");
+    expect(body.omniroute_route_id).toBeUndefined();
+    expect(body.labels?.["omnigent.wrapper"]).toBe("opencode-native-ui");
+    expect(body.labels?.["omnigent.opencode_native.access_source"]).toBe("codex-subscription");
+  });
+
+  it("finds a Codex model only in the subscription group", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.change(screen.getByTestId("new-chat-landing-opencode-search"), {
+      target: { value: "openai/gpt-5.4" },
+    });
+
+    expect(screen.getByTestId("new-chat-landing-opencode-group-codex")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-chat-landing-opencode-group-other")).toBeNull();
+    expect(
+      screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4"),
+    ).toBeInTheDocument();
+  });
+
+  it("restores a selected Codex model with its group expanded", async () => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "openai/gpt-5.4", route: "" } }),
+    );
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+
+    expect(screen.getByTestId("new-chat-landing-opencode-group-codex")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   it("restores and posts an OmniRoute combo without a direct model override", async () => {

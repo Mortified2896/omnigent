@@ -103,6 +103,19 @@ def test_filtered_server_env_sets_xdg_and_password(
     assert "RANDOM_UNRELATED" not in env  # unrelated env filtered out
 
 
+def test_filtered_server_env_denies_api_key_for_subscription_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    env = filtered_server_env(
+        bridge_dir=tmp_path,
+        auth_secret="pw",
+        extra_env={appsrv.OPENCODE_PROVIDER_ENV_DENY_VAR: "OPENAI_API_KEY"},
+    )
+    assert "OPENAI_API_KEY" not in env
+    assert appsrv.OPENCODE_PROVIDER_ENV_DENY_VAR not in env
+
+
 def test_filtered_server_env_drops_global_opencode_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

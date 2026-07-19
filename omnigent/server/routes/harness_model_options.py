@@ -7,6 +7,7 @@ unavailable.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -15,6 +16,10 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from omnigent.opencode_subscription import (
+    discover_chatgpt_oauth_state,
+    read_open_code_oauth_models,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -26,9 +31,7 @@ _OPENCODE_FREE_CATALOG_PATH = Path.home() / ".cache" / "homelab" / "opencode-fre
 _OPENCODE_MINIMAX_TOKEN_PLAN_CATALOG_PATH = (
     Path.home() / ".cache" / "homelab" / "opencode-minimax-token-plan-models.json"
 )
-_OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH = (
-    Path.home() / ".cache" / "homelab" / "opencode-codex-subscription-models.json"
-)
+_OPENCODE_NATIVE_BRIDGE_ROOT = Path.home() / ".omnigent" / "opencode-native"
 _OPENCODE_PREFIX = "opencode/"
 _MINIMAX_PROVIDERS = frozenset({"minimax-coding-plan", "minimax-cn-coding-plan"})
 
@@ -61,18 +64,26 @@ def _bare_model_id(value: object) -> str:
 
 
 def _reasoning_efforts(metadata: object) -> list[str]:
-    """Extract only explicit OpenCode effort values, never adaptive variants."""
+    """Extract explicit effort values from generated or live OpenCode metadata."""
     if not isinstance(metadata, dict):
         return []
     options = metadata.get("reasoning_options")
-    if not isinstance(options, list):
+    if isinstance(options, list):
+        for option in options:
+            if isinstance(option, dict) and option.get("type") == "effort":
+                values = option.get("values")
+                if isinstance(values, list) and all(isinstance(value, str) for value in values):
+                    return values
+    variants = metadata.get("variants")
+    if not isinstance(variants, dict):
         return []
-    for option in options:
-        if isinstance(option, dict) and option.get("type") == "effort":
-            values = option.get("values")
-            if isinstance(values, list) and all(isinstance(value, str) for value in values):
-                return values
-    return []
+    return list(
+        dict.fromkeys(
+            variant.get("reasoningEffort")
+            for variant in variants.values()
+            if isinstance(variant, dict) and isinstance(variant.get("reasoningEffort"), str)
+        )
+    )
 
 
 def _model_option(
@@ -230,42 +241,41 @@ async def _resolve_omniroute_models() -> dict[str, Any]:
 
 
 def _resolve_codex_subscription_models() -> dict[str, Any]:
-    """Use only the OpenCode OAuth-backed Codex catalog, never codex-native."""
+    """Read only the live model catalog backed by OpenCode ChatGPT OAuth."""
     source = "opencode-codex-subscription-catalog"
-    raw = _read_catalog(
-        _OPENCODE_CODEX_SUBSCRIPTION_CATALOG_PATH,
-        source,
-        "Codex Subscription is not authenticated in OpenCode.",
+    state, error = discover_chatgpt_oauth_state(
+        bridge_root=_OPENCODE_NATIVE_BRIDGE_ROOT,
+        catalog_path=_OPENCODE_MODEL_CATALOG_PATH,
     )
-    if "error" in raw:
-        return raw
+    if state is None:
+        return _catalog_error(source, error or "Codex Subscription is unavailable.")
+    entries, error = read_open_code_oauth_models(state)
+    if error:
+        return _catalog_error(source, error)
+
     models: list[dict[str, Any]] = []
-    for entry in raw.get("models", []):
-        if not isinstance(entry, dict) or entry.get("model_source") != "codex-subscription":
+    for entry in entries:
+        model_id = entry.get("id")
+        metadata = entry.get("metadata")
+        if not isinstance(model_id, str) or not isinstance(metadata, dict):
             continue
-        model_id = _bare_model_id(entry.get("id"))
-        provider_id = model_id.partition("/")[0]
-        if not provider_id or not model_id or entry.get("credential_source") != "oauth:chatgpt":
-            continue
+        label = metadata.get("name") if isinstance(metadata.get("name"), str) else model_id
         models.append(
             _model_option(
                 model_id=model_id,
-                label=str(entry.get("name") or entry.get("model_name") or model_id),
+                label=label,
                 provider="Codex Subscription",
-                metadata=entry.get("raw_metadata"),
+                metadata=metadata,
                 source="direct",
-                provider_id=provider_id,
+                provider_id=state.provider_id,
                 access_source="codex-subscription",
-                availability="available" if entry.get("credentials_present") else "needs-auth",
+                credential_source="oauth:chatgpt",
+                availability="available",
             )
         )
-    error = None if models else "Codex Subscription is not authenticated in OpenCode."
-    return {
-        "models": models,
-        "source": source,
-        "last_synced_at": raw.get("last_synced_at"),
-        "error": error,
-    }
+    if not models:
+        return _catalog_error(source, "OpenCode exposes no ChatGPT OAuth models.")
+    return {"models": models, "source": source, "last_synced_at": None, "error": None}
 
 
 # Provider plans have exactly one executor: the existing OpenCode native harness.
@@ -279,22 +289,19 @@ _HARNESS_MODEL_PROVIDERS: dict[str, tuple[Callable[[], dict[str, Any]], ...]] = 
 
 
 async def _resolve_opencode_groups() -> list[dict[str, Any]]:
-    existing, codex, minimax = (
-        resolver() for resolver in _HARNESS_MODEL_PROVIDERS["opencode-native"]
+    existing, codex, minimax = await asyncio.gather(
+        *(asyncio.to_thread(resolver) for resolver in _HARNESS_MODEL_PROVIDERS["opencode-native"])
     )
-    existing["label"] = "Existing OpenCode models"
+    codex_ids = {model["id"] for model in codex["models"]}
+    existing["models"] = [
+        model for model in existing["models"] if model.get("id") not in codex_ids
+    ]
+    codex["label"] = "Codex Subscription"
     minimax["label"] = "MiniMax Token Plan"
-    groups = [existing]
-    # Do not advertise Codex Subscription until OpenCode has supplied
-    # authenticated OAuth-backed entries for it.
-    if codex["models"]:
-        codex["label"] = "Codex Subscription"
-        groups.append(codex)
-    groups.append(minimax)
     omniroute = await _resolve_omniroute_models()
-    omniroute["label"] = "OmniRoute"
-    groups.append(omniroute)
-    return groups
+    omniroute["label"] = "OmniRoute Combos"
+    existing["label"] = "Other OpenCode Models"
+    return [codex, minimax, omniroute, existing]
 
 
 def create_harness_model_options_router(auth_provider: AuthProvider | None = None) -> APIRouter:

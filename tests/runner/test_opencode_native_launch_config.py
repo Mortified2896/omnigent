@@ -172,6 +172,32 @@ async def test_no_explicit_route_keeps_omniroute_route_expected_false(
 
 
 @pytest.mark.asyncio
+async def test_codex_subscription_model_remains_direct_opencode_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A subscription choice stays direct and never becomes an OmniRoute route."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.setenv("OMNIGENT_RUNNER_WORKSPACE", "/tmp/repo")
+    model_id = "openai/gpt-5.4"
+    cfg = await _run(
+        _Client(
+            _Resp(
+                200,
+                {
+                    "model_override": model_id,
+                    "omniroute_route_id": None,
+                    "route_approval_enabled": False,
+                    "labels": {"omnigent.opencode_native.access_source": "codex-subscription"},
+                },
+            )
+        )
+    )
+    assert cfg.model_override == model_id
+    assert cfg.codex_subscription_expected is True
+    assert cfg.omniroute_route_expected is False
+
+
+@pytest.mark.asyncio
 async def test_invalid_field_raises_invalid_permission_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

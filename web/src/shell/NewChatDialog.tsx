@@ -284,6 +284,7 @@ const CODEX_NATIVE_APPROVAL_MODES: {
 // approval-mode presets above: when bypass is on the runner strips any
 // `--sandbox` / `--ask-for-approval` flags those presets would emit.
 const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
+const OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY = "omnigent.opencode_native.access_source";
 // The exact phrase a user must TYPE (not just click) to arm full bypass.
 // A typed confirmation makes the dangerous mode impossible to enable by an
 // accidental click; the toggle stays off until this is entered verbatim.
@@ -1335,11 +1336,10 @@ export function OpenCodeModelOptions({
                         >
                           <span className="flex min-w-0 flex-col">
                             <span className="truncate">{item.label}</span>
-                            {indicator && (
-                              <span className="truncate text-[10px] text-muted-foreground">
-                                {indicator} · {item.id}
-                              </span>
-                            )}
+                            <span className="truncate text-[10px] text-muted-foreground">
+                              {indicator ? `${indicator} · ` : ""}
+                              {item.id}
+                            </span>
                           </span>
                         </DropdownMenuRadioItem>
                       );
@@ -2928,6 +2928,18 @@ export function NewChatLandingScreen() {
       const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
       const agentSupportsModelOptions = nativeAgentHasCapability(agent, "modelOptions");
+      const resolvedSessionLabels = {
+        ...(nativeLabels ?? {}),
+        ...(agentSupportsModelOptions &&
+        selectedOpenCodeModel?.access_source === "codex-subscription"
+          ? { [OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY]: "codex-subscription" }
+          : {}),
+        ...(agentSupportsApprovalMode && bypassSandbox
+          ? { [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
+          : {}),
+      };
+      const sessionLabels =
+        Object.keys(resolvedSessionLabels).length > 0 ? resolvedSessionLabels : undefined;
 
       let data: { id: string };
 
@@ -2992,10 +3004,7 @@ export function NewChatLandingScreen() {
             // label (only when the toggle is armed for a codex-native agent)
             // so the runner launches with --dangerously-bypass-approvals-and-
             // sandbox and the choice survives reload.
-            labels:
-              agentSupportsApprovalMode && bypassSandbox
-                ? { ...(nativeLabels ?? {}), [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
-                : nativeLabels,
+            labels: sessionLabels,
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
             terminal_launch_args:
