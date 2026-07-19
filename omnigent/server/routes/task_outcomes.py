@@ -239,6 +239,41 @@ def _serialise_routing_turn(turn: RoutingTurnAudit) -> dict[str, Any]:
     }
 
 
+def _serialise_routing_context_for_run(
+    store: TaskOutcomeStore, run: TaskRun
+) -> dict[str, Any] | None:
+    """Return proposed and final packages without conflating execution fields."""
+    if run.routing_proposal_id is None or run.routing_decision_id is None:
+        return None
+    proposal = store.get_routing_proposal(run.routing_proposal_id)
+    if proposal is None:
+        return None
+    decision = store.get_routing_decision_for_proposal(proposal.id)
+    if decision is None or decision.id != run.routing_decision_id:
+        return None
+    return {
+        "proposal_id": proposal.id,
+        "decision_id": decision.id,
+        "proposed": {
+            "harness": proposal.original_harness,
+            "provider": proposal.original_provider,
+            "model": proposal.original_model,
+            "route_id": proposal.original_route_id,
+            "reasoning_effort": proposal.original_reasoning_effort,
+            "permission_mode": proposal.original_permission_mode,
+        },
+        "approved": {
+            "harness": decision.final_harness,
+            "provider": decision.final_provider,
+            "model": decision.final_model,
+            "route_id": decision.final_route_id,
+            "reasoning_effort": decision.final_reasoning_effort,
+            "permission_mode": decision.final_permission_mode,
+            "action": decision.action,
+        },
+    }
+
+
 def _serialise_evaluation(evaluation: Any | None) -> dict[str, Any] | None:
     """Render a :class:`TaskEvaluation` as an API JSON dict, or ``None``."""
     if evaluation is None:
@@ -544,6 +579,9 @@ def create_task_outcomes_router(
             run_payload["triggering_message_id"] = hydrated[0]["triggering_message_id"]
         return {
             "run": run_payload,
+            "routing": await _call_store(
+                _serialise_routing_context_for_run, store=store, run=detail.run
+            ),
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(
                 await _call_store(
@@ -591,6 +629,9 @@ def create_task_outcomes_router(
         )
         return {
             "run": _serialise_run(detail.run),
+            "routing": await _call_store(
+                _serialise_routing_context_for_run, store=store, run=detail.run
+            ),
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(review_for_caller),
             "any_review": _serialise_review(detail.review),

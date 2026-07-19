@@ -307,7 +307,13 @@ export function TaskReviewCard({
               {error}
             </div>
           )}
-          {run && <TaskReviewCardBody run={run} evaluation={evaluation} />}
+          {run && (
+            <TaskReviewCardBody
+              run={run}
+              routing={detail?.routing ?? null}
+              evaluation={evaluation}
+            />
+          )}
           {run && (
             <TaskReviewForm
               outcome={outcome}
@@ -344,16 +350,50 @@ export function TaskReviewCard({
   );
 }
 
+function formatPackage(
+  value:
+    | {
+        harness: string | null;
+        provider: string | null;
+        model: string | null;
+        route_id: string | null;
+        reasoning_effort: string | null;
+        permission_mode: string | null;
+      }
+    | null
+    | undefined,
+): string {
+  if (!value) return "—";
+  return [
+    value.harness,
+    value.route_id ?? (value.provider && value.model ? `${value.provider}/${value.model}` : null),
+    value.reasoning_effort,
+    value.permission_mode,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function TaskReviewCardBody({
   run,
+  routing,
   evaluation,
 }: {
   run: TaskRun;
+  routing: TaskRunDetailResponse["routing"];
   evaluation: TaskEvaluation | null;
 }) {
   return (
     <div className="grid gap-3 pb-3">
       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+        <div>
+          <span className="text-slate-500">Proposed package</span>
+          <div className="font-medium text-slate-900">{formatPackage(routing?.proposed)}</div>
+        </div>
+        <div>
+          <span className="text-slate-500">Approved package</span>
+          <div className="font-medium text-slate-900">{formatPackage(routing?.approved)}</div>
+        </div>
         <div>
           <span className="text-slate-500">Requested route</span>
           <div className="font-medium text-slate-900">{run.requested_route_id ?? "—"}</div>
@@ -381,18 +421,18 @@ function TaskReviewCardBody({
           </div>
         </div>
         <div>
-          <span className="text-slate-500">Fallback used</span>
+          <span className="text-slate-500">Actual harness</span>
+          <div className="font-medium text-slate-900">{run.harness_id ?? "—"}</div>
+        </div>
+        <div>
+          <span className="text-slate-500">Fallback / substitution</span>
           <div className="font-medium text-slate-900">
-            {run.fallback_used === null ? "—" : run.fallback_used ? "yes" : "no"}
+            {run.fallback_used === null ? "Unavailable" : run.fallback_used ? "yes" : "no"}
           </div>
         </div>
         <div>
           <span className="text-slate-500">Duration</span>
           <div className="font-medium text-slate-900">{formatDuration(run.duration_ms)}</div>
-        </div>
-        <div>
-          <span className="text-slate-500">Harness</span>
-          <div className="font-medium text-slate-900">{run.harness_id ?? "—"}</div>
         </div>
         <div>
           <span className="text-slate-500">Tokens (in/out)</span>

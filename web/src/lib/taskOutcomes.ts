@@ -358,9 +358,26 @@ export interface TaskReview {
   updated_at: number;
 }
 
+export interface TaskRunRoutingContext {
+  proposal_id: string;
+  decision_id: string;
+  proposed: {
+    harness: string | null;
+    provider: string | null;
+    model: string | null;
+    route_id: string | null;
+    reasoning_effort: string | null;
+    permission_mode: string | null;
+  };
+  approved: TaskRunRoutingContext["proposed"] & {
+    action: "approved" | "changed" | "declined";
+  };
+}
+
 /** Aggregate response of `GET /v1/task-runs/{id}`. */
 export interface TaskRunDetailResponse {
   run: TaskRun;
+  routing?: TaskRunRoutingContext | null;
   evaluation: TaskEvaluation | null;
   /** Review submitted by the requesting user (``null`` when none). */
   review: TaskReview | null;
