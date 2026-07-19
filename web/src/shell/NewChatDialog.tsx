@@ -1872,7 +1872,7 @@ function AgentHarnessPicker({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align={isMobile ? "start" : "end"}
+        align={isMobile ? "center" : "end"}
         // Desktop keeps the default collision handling (the content never
         // resizes there — knobs live in hover flyouts). On mobile we force the
         // measured side and disable flipping so the in-place page swap holds
