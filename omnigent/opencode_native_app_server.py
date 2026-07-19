@@ -66,6 +66,7 @@ _ENV_PASSTHROUGH_PREFIXES = (
     "DATABRICKS_",
     "GEMINI_",
     "GOOGLE_",
+    "MINIMAX_",
     "HTTP_",
     "HTTPS_",
     "NO_PROXY",

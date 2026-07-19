@@ -91,6 +91,7 @@ def test_filtered_server_env_sets_xdg_and_password(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-key")
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-secret")
     monkeypatch.setenv("RANDOM_UNRELATED", "nope")
     env = filtered_server_env(bridge_dir=tmp_path, auth_secret="pw")
     assert env["XDG_DATA_HOME"] == str(tmp_path / "xdg-data")
@@ -98,6 +99,7 @@ def test_filtered_server_env_sets_xdg_and_password(
     assert env["OPENCODE_SERVER_PASSWORD"] == "pw"
     assert env["OPENCODE_SERVER_USERNAME"] == "opencode"
     assert env["ANTHROPIC_API_KEY"] == "secret-key"  # provider env passes through
+    assert env["MINIMAX_API_KEY"] == "minimax-secret"
     assert "RANDOM_UNRELATED" not in env  # unrelated env filtered out
 
 
