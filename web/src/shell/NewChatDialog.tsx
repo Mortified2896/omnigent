@@ -70,6 +70,10 @@ import {
 import { readLastHarness, writeLastHarness } from "@/lib/harnessPreferences";
 import { readDefaultBaseBranch } from "@/lib/baseBranchPreferences";
 import { readHarnessOptions, writeHarnessOption } from "@/lib/modePreferences";
+import {
+  useHarnessModelOptions,
+  type HarnessModelOptionGroup,
+} from "@/hooks/useHarnessModelOptions";
 import { useBrainHarnessLabels } from "@/lib/agentLabels";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import { sortAgentsForDisplay } from "@/lib/agentGrouping";
@@ -1165,6 +1169,95 @@ function BrainHarnessOptions({
  * The pick rides along to the create as ``model_override`` (the
  * version-agnostic alias) and ``reasoning_effort``.
  */
+function OpenCodeModelOptions({
+  groups,
+  loading,
+  error,
+  model,
+  route,
+  effort,
+  onModelChange,
+  onEffortChange,
+}: {
+  groups: HarnessModelOptionGroup[];
+  loading: boolean;
+  error: Error | null;
+  model: string;
+  route: string;
+  effort: string;
+  onModelChange: (model: string, source?: string) => void;
+  onEffortChange: (effort: string) => void;
+}) {
+  const selectedId = route || model;
+  const selected = groups.flatMap((group) => group.models).find((item) => item.id === selectedId);
+  // `variants` describes provider-specific controls such as MiniMax adaptive
+  // mode. Only an explicit reasoning_efforts list is an effort picker.
+  const efforts = selected?.reasoning_efforts ?? [];
+  if (loading) {
+    return <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading models…</div>;
+  }
+  if (error) {
+    return <div className="px-2 py-1.5 text-xs text-destructive">Could not load models.</div>;
+  }
+  return (
+    <>
+      {groups.map((group, index) => (
+        <div key={`${group.source ?? "provider"}-${index}`}>
+          {index > 0 && <DropdownMenuSeparator />}
+          <PickerSectionHeader>
+            {group.label ?? group.models[0]?.provider ?? group.source ?? "Models"}
+          </PickerSectionHeader>
+          {group.error ? (
+            <div className="px-2 py-1 text-xs text-destructive">{group.error}</div>
+          ) : group.models.length === 0 ? (
+            <div className="px-2 py-1 text-xs text-muted-foreground">No models available.</div>
+          ) : (
+            <DropdownMenuRadioGroup
+              value={group.source === "omniroute" ? route : model}
+              onValueChange={(value) => onModelChange(value, group.source)}
+            >
+              {group.models.map((item) => (
+                <DropdownMenuRadioItem
+                  key={item.id}
+                  value={item.id}
+                  data-testid={`new-chat-landing-opencode-model-${item.id}`}
+                  onSelect={(event) => event.preventDefault()}
+                  className="rounded-sm py-1 pl-2 text-xs"
+                  title={item.label}
+                >
+                  <span className="min-w-0 truncate">{item.label}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          )}
+        </div>
+      ))}
+      {groups.length === 0 && (
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">No models available.</div>
+      )}
+      {efforts.length > 0 && (
+        <>
+          <DropdownMenuSeparator />
+          <PickerSectionHeader>Effort</PickerSectionHeader>
+          <DropdownMenuRadioGroup value={effort} onValueChange={onEffortChange}>
+            {efforts.map((value) => (
+              <DropdownMenuRadioItem
+                key={value}
+                value={value}
+                data-testid={`new-chat-landing-opencode-effort-${value}`}
+                onSelect={(event) => event.preventDefault()}
+                className="rounded-sm py-1 pl-2 text-xs"
+              >
+                {value.charAt(0).toUpperCase() + value.slice(1)}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </>
+      )}
+    </>
+  );
+}
+
 function ModelEffortOptions({
   model,
   effort,
@@ -1229,8 +1322,9 @@ function PickerSectionHeader({ children }: { children: ReactNode }) {
  * native terminal CLIs — Claude Code, Codex, Cursor, …). **Level 2** is a
  * per-entry submenu of that entry's run-config knobs: model / effort /
  * permission mode for Claude Code, approval mode (+ bypass) for Codex,
- * approval mode for OpenCode, execution mode for Cursor, and the brain-harness
- * override for bundle agents. Entries with no knobs are plain selectable rows.
+ * direct provider model options for OpenCode, execution mode for Cursor, and
+ * the brain-harness override for bundle agents. Entries with no knobs are plain
+ * selectable rows.
  *
  * Holds no state of its own — the selected agent and every knob live in
  * {@link NewChatLandingScreen} and are threaded in. Replaces the old
@@ -1261,6 +1355,7 @@ function AgentHarnessPicker({
   cursorExecMode,
   bypassSandbox,
   pickedModel,
+  pickedOmniRouteRoute,
   pickedEffort,
   pickedHarness,
   setPermissionMode,
@@ -1268,8 +1363,12 @@ function AgentHarnessPicker({
   setCursorExecMode,
   setBypassSandbox,
   setPickedModel,
+  setPickedOmniRouteRoute,
   setPickedEffort,
   setPickedHarness,
+  opencodeModelGroups,
+  opencodeModelsLoading,
+  opencodeModelsError,
 }: {
   agentEntries: AvailableAgent[];
   harnessEntries: AvailableAgent[];
@@ -1288,6 +1387,7 @@ function AgentHarnessPicker({
   cursorExecMode: string;
   bypassSandbox: boolean;
   pickedModel: string;
+  pickedOmniRouteRoute: string;
   pickedEffort: string;
   pickedHarness: string | null;
   setPermissionMode: (mode: string) => void;
@@ -1295,8 +1395,12 @@ function AgentHarnessPicker({
   setCursorExecMode: (mode: string) => void;
   setBypassSandbox: (enabled: boolean) => void;
   setPickedModel: (model: string) => void;
+  setPickedOmniRouteRoute: (route: string) => void;
   setPickedEffort: (effort: string) => void;
   setPickedHarness: (harness: string | null, agentId?: string) => void;
+  opencodeModelGroups: HarnessModelOptionGroup[];
+  opencodeModelsLoading: boolean;
+  opencodeModelsError: Error | null;
 }) {
   // Controlled so clicking a knobbed row can commit the pick and close the
   // menu (see the sub-trigger onClick below) without diving into the submenu.
@@ -1324,6 +1428,7 @@ function AgentHarnessPicker({
     nativeAgentHasCapability(agent, "permissionMode") ||
     nativeAgentHasCapability(agent, "approvalMode") ||
     nativeAgentHasCapability(agent, "cursorMode") ||
+    nativeAgentHasCapability(agent, "modelOptions") ||
     (agent.harness != null && agent.harness in brainHarnessLabels);
 
   // The agent whose knobs page is open, resolved from the live entry lists so
@@ -1400,6 +1505,50 @@ function AgentHarnessPicker({
         ? stored.effort
         : "";
 
+    if (nativeAgentHasCapability(agent, "modelOptions")) {
+      const models = opencodeModelGroups.flatMap((group) => group.models);
+      const optionModel = isSelected ? pickedModel : (stored.model ?? "");
+      const optionRoute = isSelected ? pickedOmniRouteRoute : (stored.route ?? "");
+      const optionEffort = isSelected ? pickedEffort : (stored.effort ?? "");
+      const selectedOption = models.find((item) => item.id === (optionRoute || optionModel));
+      return (
+        <OpenCodeModelOptions
+          groups={opencodeModelGroups}
+          loading={opencodeModelsLoading}
+          error={opencodeModelsError}
+          model={selectedOption && !optionRoute ? optionModel : ""}
+          route={optionRoute}
+          effort={selectedOption?.reasoning_efforts?.includes(optionEffort) ? optionEffort : ""}
+          onModelChange={(value, source) => {
+            onSelectAgent(agent);
+            const isOmniRoute = source === "omniroute";
+            if (entryHarness) {
+              writeHarnessOption(
+                entryHarness,
+                isOmniRoute ? { model: "", route: value } : { model: value, route: "" },
+              );
+            }
+            if (isOmniRoute) {
+              setPickedOmniRouteRoute(value);
+              setPickedModel("");
+            } else {
+              setPickedOmniRouteRoute("");
+              setPickedModel(value);
+            }
+            const next = models.find((item) => item.id === value);
+            if (!next?.reasoning_efforts?.includes(optionEffort)) {
+              if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
+              setPickedEffort("");
+            }
+          }}
+          onEffortChange={(value) => {
+            onSelectAgent(agent);
+            if (entryHarness) writeHarnessOption(entryHarness, { effort: value });
+            setPickedEffort(value);
+          }}
+        />
+      );
+    }
     if (nativeAgentHasCapability(agent, "permissionMode")) {
       return (
         <>
@@ -1700,6 +1849,7 @@ type LandingDraft = {
   cursorExecMode: string;
   pickedHarness: string | null;
   pickedModel: string;
+  pickedOmniRouteRoute: string;
   pickedEffort: string;
   costControlMode: CostControlMode;
   routeApprovalEnabled: boolean;
@@ -1928,12 +2078,15 @@ export function NewChatLandingScreen() {
       landingDraft?.pickedHarness ??
       readLastHarness(landingDraft?.pickedAgentId ?? readLastAgentId()),
   );
-  // Per-session model + reasoning effort for the claude-native model picker.
-  // "" = unselected: nothing is checked and `model_override` / `reasoning_effort`
-  // are omitted from the create, so Claude Code uses its own configured model.
+  // Per-session model + reasoning effort for native model pickers. "" =
+  // unselected: nothing is checked and `model_override` / `reasoning_effort`
+  // are omitted from the create, so the native CLI uses its configured model.
   // An explicit pick rides along and is remembered (seeded back on a later visit
   // via the harness-seed effect below).
   const [pickedModel, _setPickedModel] = useState<string>(() => landingDraft?.pickedModel ?? "");
+  const [pickedOmniRouteRoute, setPickedOmniRouteRoute] = useState<string>(
+    () => landingDraft?.pickedOmniRouteRoute ?? "",
+  );
   const [pickedEffort, setPickedEffort] = useState<string>(() => landingDraft?.pickedEffort ?? "");
   // Per-session cost-control switch ("Cost Optimized" pill). Unset
   // (null) defers to the agent spec's default and is omitted from
@@ -1955,7 +2108,10 @@ export function NewChatLandingScreen() {
   // routing off.
   const setPickedModel = useCallback((model: string) => {
     _setPickedModel(model);
-    if (model) _setCostControlMode(null);
+    if (model) {
+      _setCostControlMode(null);
+      setRouteApprovalEnabled(false);
+    }
   }, []);
   const setCostControlMode = useCallback((mode: CostControlMode) => {
     _setCostControlMode(mode);
@@ -1993,6 +2149,7 @@ export function NewChatLandingScreen() {
     cursorExecMode,
     pickedHarness,
     pickedModel,
+    pickedOmniRouteRoute,
     pickedEffort,
     costControlMode,
     routeApprovalEnabled,
@@ -2141,6 +2298,7 @@ export function NewChatLandingScreen() {
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
+  const supportsModelOptions = nativeAgentHasCapability(selectedAgent, "modelOptions");
   // Defense in depth for the DANGEROUS bypass toggle: never let an armed
   // bypass carry across an agent change. Switching the picker to another
   // agent — or away from Codex and back — must require the typed confirmation
@@ -2155,6 +2313,15 @@ export function NewChatLandingScreen() {
   // model / effort), which are harness-specific. null for non-native agents,
   // which have no knobs to remember.
   const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  const {
+    data: opencodeModelOptions,
+    isLoading: opencodeModelsLoading,
+    error: opencodeModelsError,
+  } = useHarnessModelOptions(
+    selectedNativeHarness === "opencode-native" ? "opencode-native" : null,
+  );
+  const opencodeModelGroups = opencodeModelOptions?.groups ?? [];
+  const opencodeModels = opencodeModelOptions?.models ?? [];
   // Seed the harness's knobs from the user's last picks when the selected
   // harness changes (including the first mount), so a returning user starts a
   // new session on the options they used last for that harness instead of the
@@ -2190,6 +2357,10 @@ export function NewChatLandingScreen() {
           ? stored.effort
           : "",
       );
+    } else if (supportsModelOptions) {
+      setPickedModel(stored.model ?? "");
+      setPickedOmniRouteRoute(stored.route ?? "");
+      setPickedEffort(stored.effort ?? "");
     } else if (supportsApprovalMode) {
       setApprovalMode(resolve(CODEX_NATIVE_APPROVAL_MODES, CODEX_NATIVE_DEFAULT_APPROVAL_MODE));
     } else if (supportsCursorMode) {
@@ -2202,6 +2373,17 @@ export function NewChatLandingScreen() {
   // Native-terminal agents interpret slash commands inside their own CLI
   // (the runner injects the text verbatim), so the landing composer must
   // not intercept them — no skills menu, no slash_command routing.
+  // A cached choice can outlive the server's catalog. Never send it unless
+  // the current OpenCode catalog still explicitly exposes that model/effort.
+  const selectedOpenCodeModel = opencodeModels.find((model) => model.id === pickedModel);
+  const selectedOpenCodeRoute = opencodeModelGroups
+    .find((group) => group.source === "omniroute")
+    ?.models.find((model) => model.id === pickedOmniRouteRoute);
+  const selectedOpenCodeEffort = (
+    selectedOpenCodeRoute ?? selectedOpenCodeModel
+  )?.reasoning_efforts?.includes(pickedEffort)
+    ? pickedEffort
+    : "";
   const isNativeTerminalAgent = isNativeCodingAgent(selectedAgent);
   const selectedHost = allHosts.find((h) => h.host_id === selectedHostId);
   // Warn-only readiness signal for the agent picker: only meaningful when
@@ -2432,17 +2614,15 @@ export function NewChatLandingScreen() {
     if (mentionFsQuery.isPlaceholderData) return [];
     const rows = (mentionFsQuery.data?.entries ?? [])
       .filter((e) => e.type === "directory" || e.type === "file")
-      .map(
-        (e): WorkspaceFile => ({
-          path: e.path.startsWith(workspaceRoot)
-            ? e.path.slice(workspaceRoot.length).replace(/^\/+/, "")
-            : e.name,
-          name: e.name,
-          type: e.type === "directory" ? "directory" : "file",
-          bytes: e.bytes,
-          modified_at: e.modified_at,
-        }),
-      );
+      .map((e): WorkspaceFile => ({
+        path: e.path.startsWith(workspaceRoot)
+          ? e.path.slice(workspaceRoot.length).replace(/^\/+/, "")
+          : e.name,
+        name: e.name,
+        type: e.type === "directory" ? "directory" : "file",
+        bytes: e.bytes,
+        modified_at: e.modified_at,
+      }));
     return rankMentionEntries(rows, mentionFilter);
   }, [
     mentionEnabled,
@@ -2624,6 +2804,7 @@ export function NewChatLandingScreen() {
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
       const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
+      const agentSupportsModelOptions = nativeAgentHasCapability(agent, "modelOptions");
 
       let data: { id: string };
 
@@ -2704,13 +2885,25 @@ export function NewChatLandingScreen() {
                     ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ?? [])
                     : undefined,
             // Model + reasoning effort, persisted on the session row before
-            // the runner launches. Only claude-native surfaces the picker, so
-            // only its agents carry the choice; the runner reads them as
-            // `--model` / `--effort` at terminal launch. An unselected ("")
-            // knob is omitted so Claude Code keeps its own configured model.
-            model_override: agentSupportsPermissionMode && pickedModel ? pickedModel : undefined,
+            // the runner launches. Native model pickers carry the choice; an
+            // unselected ("") knob is omitted so the CLI keeps its configured
+            // model.
+            model_override:
+              agentSupportsPermissionMode && pickedModel
+                ? pickedModel
+                : agentSupportsModelOptions && selectedOpenCodeModel
+                  ? selectedOpenCodeModel.id
+                  : undefined,
+            omniroute_route_id:
+              agentSupportsModelOptions && selectedOpenCodeRoute
+                ? selectedOpenCodeRoute.id
+                : undefined,
             reasoning_effort:
-              agentSupportsPermissionMode && pickedEffort ? pickedEffort : undefined,
+              agentSupportsPermissionMode && pickedEffort
+                ? pickedEffort
+                : agentSupportsModelOptions && selectedOpenCodeEffort
+                  ? selectedOpenCodeEffort
+                  : undefined,
             // Smart routing toggle — server-side, available for any agent.
             cost_control_mode_override: costControlMode ?? undefined,
             // Model Routing Agent toggle — independent of smart routing
@@ -3099,8 +3292,8 @@ export function NewChatLandingScreen() {
                 {/* Unified agent / harness picker — selects the agent or
                   harness and exposes its run-config knobs in a per-entry
                   submenu (model / effort / permission mode for Claude Code,
-                  approval mode for Codex/OpenCode, exec mode for Cursor,
-                  brain-harness override for bundle agents). */}
+                  approval mode for Codex, direct models for OpenCode, exec
+                  mode for Cursor, brain-harness override for bundle agents). */}
                 <AgentHarnessPicker
                   agentEntries={agentEntries}
                   harnessEntries={harnessEntries}
@@ -3119,6 +3312,7 @@ export function NewChatLandingScreen() {
                   cursorExecMode={cursorExecMode}
                   bypassSandbox={bypassSandbox}
                   pickedModel={pickedModel}
+                  pickedOmniRouteRoute={pickedOmniRouteRoute}
                   pickedEffort={pickedEffort}
                   pickedHarness={pickedHarness}
                   setPermissionMode={setPermissionMode}
@@ -3126,8 +3320,17 @@ export function NewChatLandingScreen() {
                   setCursorExecMode={setCursorExecMode}
                   setBypassSandbox={setBypassSandbox}
                   setPickedModel={setPickedModel}
+                  setPickedOmniRouteRoute={(route) => {
+                    setPickedOmniRouteRoute(route);
+                    if (route) setRouteApprovalEnabled(true);
+                  }}
                   setPickedEffort={setPickedEffort}
                   setPickedHarness={handleSetPickedHarness}
+                  opencodeModelGroups={opencodeModelGroups}
+                  opencodeModelsLoading={opencodeModelsLoading}
+                  opencodeModelsError={
+                    opencodeModelsError instanceof Error ? opencodeModelsError : null
+                  }
                 />
                 {smartRoutingEnabled &&
                   selectedAgent &&

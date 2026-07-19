@@ -51,6 +51,33 @@ vi.mock("@/store/chatStore", () => ({
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("@/hooks/useHosts", () => ({ useHosts: vi.fn() }));
 vi.mock("@/hooks/useAvailableAgents", () => ({ useAvailableAgents: vi.fn() }));
+vi.mock("@/hooks/useHarnessModelOptions", () => ({
+  useHarnessModelOptions: () => {
+    const minimax = {
+      id: "minimax-coding-plan/MiniMax-M2.5",
+      label: "MiniMax M2.5",
+      provider: "MiniMax",
+      variants: ["adaptive", "toggle"],
+    };
+    const openai = {
+      id: "openai/gpt-5",
+      label: "GPT-5",
+      provider: "OpenAI",
+      reasoning_efforts: ["low", "high"],
+    };
+    return {
+      data: {
+        groups: [
+          { label: "MiniMax Token Plan", source: "minimax", models: [minimax] },
+          { label: "Codex Subscription", source: "openai", models: [openai] },
+        ],
+        models: [minimax, openai],
+      },
+      isLoading: false,
+      error: null,
+    };
+  },
+}));
 // The home listing is only consulted when there's no recent; the recent is
 // always set here, so keep this inert (returns no listing).
 vi.mock("@/hooks/useHostFilesystem", () => ({
@@ -649,11 +676,8 @@ describe("NewChatLandingScreen create flow", () => {
   });
 
   it("posts no launch args for opencode-native, even after a codex full-access pick", async () => {
-    // OpenCode declares no mode capability (no permission picker) — `opencode
-    // attach` has no permission/sandbox CLI flag, and emitting Codex's
-    // `--sandbox`/`--ask-for-approval` presets is exactly what crashed the TUI.
-    // So a "Full access" pick on Codex must NOT bleed into OpenCode's launch:
-    // switching to OpenCode posts no terminal_launch_args at all.
+    // OpenCode has a model catalog but no permission/sandbox launch flags.
+    // A "Full access" pick on Codex must not bleed into its launch.
     setAgents([
       agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" }),
       agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
@@ -669,8 +693,7 @@ describe("NewChatLandingScreen create flow", () => {
     openAgentConfig("ag_codex");
     fireEvent.click(screen.getByTestId("new-chat-landing-approval-full-access"));
 
-    // Switch to OpenCode by clicking its row (a plain row — no config submenu,
-    // since it has no mode knobs).
+    // Clicking OpenCode's configurable row commits the agent selection.
     selectAgent("ag_opencode");
 
     typeMessage("go");
@@ -680,6 +703,34 @@ describe("NewChatLandingScreen create flow", () => {
     const body = JSON.parse(init.body as string);
     expect(body.labels?.["omnigent.wrapper"]).toBe("opencode-native-ui");
     expect(body.terminal_launch_args).toBeUndefined();
+  });
+
+  it("posts a direct OpenCode MiniMax selection without an OmniRoute route", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_model" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    expect(screen.getByText("MiniMax Token Plan")).toBeTruthy();
+    expect(screen.getByText("Codex Subscription")).toBeTruthy();
+    fireEvent.click(
+      screen.getByTestId("new-chat-landing-opencode-model-minimax-coding-plan/MiniMax-M2.5"),
+    );
+    // MiniMax's variants are provider controls, not OpenAI-style efforts.
+    expect(screen.queryByTestId("new-chat-landing-opencode-effort-low")).toBeNull();
+    closeMenu();
+
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({ model_override: "minimax-coding-plan/MiniMax-M2.5" });
+    expect(body.omniroute_route_id).toBeUndefined();
   });
 
   it("omits terminal_launch_args when permission mode is left at default for claude-native", async () => {

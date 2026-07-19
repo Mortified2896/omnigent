@@ -916,14 +916,11 @@ class _OpenCodeNativeLaunchConfig:
     :param terminal_launch_args: User pass-through OpenCode CLI args.
     :param model_override: Persisted model override, or ``None``.
     :param external_session_id: Existing OpenCode session id to resume.
-    :param omniroute_route_expected: ``True`` when the session has
-        ``route_approval_enabled=True`` set on the snapshot, i.e. the user
-        opted into per-session route approval and any model override is an
-        approved OmniRoute combo id. The runner uses this to drive the
-        fail-closed behavior of the OpenCode startup: an approved route
-        must validate against the local OmniRoute catalog before OpenCode
-        boots, and a missing/invalid catalog is a hard start failure
-        (not a silent fallback to a direct provider).
+    :param omniroute_route_expected: ``True`` only when the session has an
+        explicit ``omniroute_route_id``. The runner uses this to drive the
+        fail-closed behavior of the OpenCode startup: an explicit route must
+        validate against the local OmniRoute catalog before OpenCode boots,
+        while direct provider/model selections remain independent of it.
     :param fork_carry_history: ``True`` on a forked clone whose prior
         transcript should be seeded as a text preamble
         (``omnigent.fork.carry_history``); opencode has no native session to
@@ -985,12 +982,15 @@ async def _opencode_native_launch_config(
         and all(isinstance(arg, str) for arg in terminal_launch_args)
     ):
         raise RuntimeError(f"Invalid terminal_launch_args for OpenCode session {session_id!r}.")
-    route_approval_enabled = snapshot.get("route_approval_enabled") is True
-    route_model_override = snapshot.get("omniroute_route_id") if route_approval_enabled else None
-    model_override = (
+    # An OmniRoute catalog is required only for an explicit persisted route.
+    # A manual direct provider/model choice may coexist with the session's
+    # routing preference, but it must never acquire an OmniRoute dependency.
+    route_model_override = snapshot.get("omniroute_route_id")
+    has_explicit_omniroute_route = isinstance(route_model_override, str) and bool(
         route_model_override
-        if isinstance(route_model_override, str) and route_model_override
-        else snapshot.get("model_override")
+    )
+    model_override = (
+        route_model_override if has_explicit_omniroute_route else snapshot.get("model_override")
     )
     if model_override is not None:
         if not isinstance(model_override, str) or not model_override:
@@ -1038,7 +1038,7 @@ async def _opencode_native_launch_config(
         reasoning_effort=reasoning_effort,
         permission_mode=permission_mode,
         external_session_id=external_session_id,
-        omniroute_route_expected=route_approval_enabled,
+        omniroute_route_expected=has_explicit_omniroute_route,
         fork_carry_history=fork_carry_history,
     )
 
@@ -1204,29 +1204,19 @@ async def _auto_create_opencode_terminal(
     # hides the user's ~/.config/opencode/opencode.jsonc, so without this
     # merge, custom providers with non-default base URLs are invisible.
     config = maybe_merge_user_provider_config(config)
-    # OpenCode validates prompt model IDs against its per-session provider
-    # catalog. Populate it from OmniRoute, not a stale hand-maintained list.
-    # A pre-approval bridge may start while OmniRoute is unavailable, but an
-    # approved route is strictly fail-closed below.
-    try:
-        combos = await fetch_omniroute_combo_models(api_key=omniroute_api_key_from_config(config))
-    except Exception:
-        if launch_config.omniroute_route_expected:
-            raise
-    else:
-        if combos or launch_config.omniroute_route_expected:
-            config = merge_omniroute_combo_catalog(
-                config,
-                combos=combos,
-                approved_route=(
-                    launch_config.model_override.split("/", 1)[1]
-                    if launch_config.omniroute_route_expected and launch_config.model_override
-                    else next(iter(combos), "")
-                ),
-            )
+    # Direct provider/model selections use OpenCode's own catalog and auth.
+    # Only an explicit OmniRoute route may fetch or validate OmniRoute.
     if launch_config.omniroute_route_expected:
-        # Do not repair a wrong endpoint silently: a route-approved turn must
-        # fail before OpenCode can open a direct provider connection.
+        combos = await fetch_omniroute_combo_models(api_key=omniroute_api_key_from_config(config))
+        config = merge_omniroute_combo_catalog(
+            config,
+            combos=combos,
+            approved_route=launch_config.model_override.split("/", 1)[1]
+            if launch_config.model_override
+            else "",
+        )
+        # Do not repair a wrong endpoint silently: an explicit route must fail
+        # before OpenCode can open a direct provider connection.
         validate_omniroute_provider_config(config)
 
     if config:

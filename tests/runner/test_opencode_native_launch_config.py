@@ -3,12 +3,10 @@
 The runner fetches a session snapshot over HTTP and validates it before
 launching a runner-owned OpenCode terminal. Two regressions are guarded:
 
-* The dataclass must surface the ``route_approval_enabled`` flag as
-  ``omniroute_route_expected`` so the OpenCode startup path can decide
-  between silent fallback (no approval) and strict validation (approval
-  enabled). A missing field used to raise ``AttributeError`` deep inside
-  the ``fetch_omniroute_combo_models`` except-arm and bubble up to the UI
-  as the generic ``native_terminal_start_failed`` banner.
+* The dataclass must surface an explicit persisted OmniRoute route as
+  ``omniroute_route_expected`` so the OpenCode startup path only loads and
+  validates OmniRoute for that route. A manual direct provider/model choice
+  must stay launchable while OmniRoute is unavailable.
 * The runner-side ``fetch_omniroute_combo_models`` helper must accept the
   same shared bearer token the backend uses (``OMNIGENT_ROUTER_API_KEY``)
   in addition to the canonical ``OMNIGENT_OMNIROUTE_API_KEY`` /
@@ -94,9 +92,7 @@ async def _run(
     client: _Client | None,
     session_id: str = "conv_1",
 ) -> Any:
-    return await _opencode_native_launch_config(
-        session_id=session_id, server_client=client
-    )
+    return await _opencode_native_launch_config(session_id=session_id, server_client=client)
 
 
 @pytest.mark.asyncio
@@ -139,18 +135,10 @@ async def test_non_dict_snapshot_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_route_approval_enabled_surfaces_as_omniroute_route_expected(
+async def test_explicit_omniroute_route_surfaces_as_omniroute_route_expected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``route_approval_enabled=True`` must round-trip into the launch config.
-
-    Regression: a previous merge dropped the dataclass field even though
-    ``_auto_create_opencode_terminal`` reads ``launch_config.omniroute_route_expected``
-    in four places. Re-asserting the field exists here means the failure
-    surfaces at construction time (where it is recoverable) rather than
-    deep inside the catalog-fetch except-arm (where it was masked as
-    ``native_terminal_start_failed``).
-    """
+    """Only an explicit route id enables OmniRoute launch configuration."""
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
     snapshot = {
         "workspace": "/tmp/repo",
@@ -158,29 +146,24 @@ async def test_route_approval_enabled_surfaces_as_omniroute_route_expected(
         "omniroute_route_id": "auto/coding",
     }
     cfg = await _run(_Client(_Resp(200, snapshot)))
-    assert cfg.omniroute_route_expected is True, (
-        "route_approval_enabled must round-trip into omniroute_route_expected."
-    )
+    assert cfg.omniroute_route_expected is True
     # The approved route id is the only model_override that survives — the
     # runner qualifies it (omniroute/<id>) once the catalog is loaded.
     assert cfg.model_override == "auto/coding"
 
 
 @pytest.mark.asyncio
-async def test_route_approval_disabled_default_omniroute_route_expected_false(
+async def test_no_explicit_route_keeps_omniroute_route_expected_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``route_approval_enabled`` absent or False must default to False.
-
-    Keep the safe default. A session that didn't opt into route approval
-    must never be re-pinned to the OmniRoute catalog at start time.
-    """
+    """A routing preference alone cannot make a direct launch depend on OmniRoute."""
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
     monkeypatch.setenv("OMNIGENT_RUNNER_WORKSPACE", "/tmp/repo")
     for snapshot in (
         {},
         {"route_approval_enabled": False},
         {"route_approval_enabled": None},
+        {"route_approval_enabled": True, "model_override": "minimax-coding-plan/M2.5"},
     ):
         cfg = await _run(_Client(_Resp(200, snapshot)))
         assert cfg.omniroute_route_expected is False, (
@@ -311,9 +294,7 @@ async def test_fetch_omniroute_combo_models_picks_up_shared_bearer(
     assert combos == {}
     assert captured is not None
     assert captured.last_request_headers is not None
-    assert captured.last_request_headers["Authorization"] == (
-        "Bearer shared-bearer-token"
-    ), (
+    assert captured.last_request_headers["Authorization"] == ("Bearer shared-bearer-token"), (
         f"{env_var} must authenticate the runner-side /v1/models call."
     )
 

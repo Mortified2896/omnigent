@@ -295,6 +295,26 @@ async def _fetch_live_catalog(
     return out
 
 
+async def fetch_live_omniroute_combo_catalog(
+    base_url: str | None = None,
+    api_key: str | None = None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> list[OmniRouteComboEntry]:
+    """Return only currently reachable OmniRoute combos.
+
+    This deliberately bypasses the cache and curated fallback for entry points
+    that must not advertise a route while OmniRoute is down.
+    """
+    return dedupe_preserve_order(
+        await _fetch_live_catalog(
+            base_url=_resolve_base_url(base_url),
+            api_key=_resolve_api_key(api_key),
+            transport=transport,
+        )
+    )
+
+
 async def fetch_omniroute_combo_catalog(
     base_url: str | None = None,
     api_key: str | None = None,
@@ -390,6 +410,7 @@ __all__ = [
     "OmniRouteComboEntry",
     "curated_combo_catalog",
     "dedupe_preserve_order",
+    "fetch_live_omniroute_combo_catalog",
     "fetch_omniroute_combo_catalog",
     "omniroute_combo_display_name",
     "reset_omniroute_catalog_cache",
