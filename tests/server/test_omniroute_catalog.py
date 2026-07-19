@@ -33,6 +33,7 @@ from omnigent.server.omniroute_catalog import (
     CURATED_COMBO_IDS,
     OmniRouteComboEntry,
     _clear_cache_for_tests,
+    _resolve_api_key,
     curated_combo_catalog,
     dedupe_preserve_order,
     fetch_omniroute_combo_catalog,
@@ -227,6 +228,14 @@ class _FailingTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("simulated offline", request=request)
+
+
+def test_router_api_key_alias_is_used_for_live_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OMNIGENT_OMNIROUTE_API_KEY", raising=False)
+    monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
+    monkeypatch.setenv("OMNIGENT_ROUTER_API_KEY", "router-key")
+
+    assert _resolve_api_key(None) == "router-key"
 
 
 def test_live_fetch_returns_curated_three_with_friendly_names():

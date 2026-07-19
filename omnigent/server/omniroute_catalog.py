@@ -156,7 +156,11 @@ def _resolve_api_key(api_key: str | None) -> str | None:
     """Resolve the OmniRoute API key without logging it."""
     if api_key:
         return api_key
-    for env_name in ("OMNIGENT_OMNIROUTE_API_KEY", "OMNIROUTE_API_KEY"):
+    for env_name in (
+        "OMNIGENT_OMNIROUTE_API_KEY",
+        "OMNIGENT_ROUTER_API_KEY",
+        "OMNIROUTE_API_KEY",
+    ):
         value = os.environ.get(env_name)
         if value:
             return value
