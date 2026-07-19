@@ -1122,7 +1122,6 @@ async def _auto_create_opencode_terminal(
     from omnigent.opencode_native_bridge import xdg_config_home_for_bridge_dir
     from omnigent.opencode_native_provider import (
         build_opencode_mcp_block,
-        build_opencode_model_default_config,
         build_opencode_omnigent_mcp_server,
         build_opencode_provider_config,
         fetch_omniroute_combo_models,
@@ -1147,12 +1146,12 @@ async def _auto_create_opencode_terminal(
         config = dict(build_opencode_provider_config(gateway))
         config["model"] = model_override
     elif model_override:
-        # No custom provider, but a model is pinned (``omni opencode --model`` or
-        # the ``omni setup`` OpenCode default): write opencode's default model so
-        # the native TUI and the first turn use it instead of ``opencode/big-pickle``.
-        # OpenCode resolves the provider from the model-id prefix against its own
-        # auth.json, so no provider block is needed.
-        config = dict(build_opencode_model_default_config(model_override))
+        # OpenCode resolves direct provider/model selections from its local
+        # catalog. Do not write the qualified id to config["model"]: recent
+        # OpenCode versions treat that string as an unqualified model id and
+        # reject it before the per-prompt {providerID, modelID} pin is applied.
+        # The bridge executor supplies that structured pin on every web turn.
+        pass
 
     # Build opencode's ``mcp`` block: the Omnigent builtin-tool relay (so the
     # model can call sys_*/load_skill/web_fetch — the real "connects to Omnigent
