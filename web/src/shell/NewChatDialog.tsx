@@ -50,6 +50,13 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { authenticatedFetch } from "@/lib/identity";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
+import {
+  miniMaxProviderIndicator,
+  openCodeModelMatches,
+  openCodeOptionValue,
+  organizeOpenCodeModelGroups,
+  type OpenCodeGroupKey,
+} from "@/lib/openCodeModelGroups";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { sandboxOptionLabel } from "@/lib/capabilities";
@@ -1169,7 +1176,7 @@ function BrainHarnessOptions({
  * The pick rides along to the create as ``model_override`` (the
  * version-agnostic alias) and ``reasoning_effort``.
  */
-function OpenCodeModelOptions({
+export function OpenCodeModelOptions({
   groups,
   loading,
   error,
@@ -1188,8 +1195,35 @@ function OpenCodeModelOptions({
   onModelChange: (model: string, source?: string) => void;
   onEffortChange: (effort: string) => void;
 }) {
+  const organizedGroups = useMemo(() => organizeOpenCodeModelGroups(groups), [groups]);
   const selectedId = route || model;
-  const selected = groups.flatMap((group) => group.models).find((item) => item.id === selectedId);
+  const selectedGroup = organizedGroups.find((group) =>
+    group.models.some((item) => openCodeOptionValue(group, item) === selectedId),
+  );
+  const selected = selectedGroup?.models.find(
+    (item) => openCodeOptionValue(selectedGroup, item) === selectedId,
+  );
+  const [query, setQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [expanded, setExpanded] = useState<Set<OpenCodeGroupKey>>(
+    () => new Set(["codex", "minimax", "omniroute"]),
+  );
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedGroup) return;
+    setExpanded((current) => {
+      if (current.has(selectedGroup.key)) return current;
+      const next = new Set(current);
+      next.add(selectedGroup.key);
+      return next;
+    });
+  }, [selectedGroup]);
+
   // `variants` describes provider-specific controls such as MiniMax adaptive
   // mode. Only an explicit reasoning_efforts list is an effort picker.
   const efforts = selected?.reasoning_efforts ?? [];
@@ -1199,41 +1233,126 @@ function OpenCodeModelOptions({
   if (error) {
     return <div className="px-2 py-1.5 text-xs text-destructive">Could not load models.</div>;
   }
+
+  const searching = query.trim().length > 0;
+  const visibleGroups = organizedGroups
+    .map((group) => ({
+      ...group,
+      visibleModels: group.models.filter((item) => openCodeModelMatches(item, query)),
+    }))
+    .filter((group) => !searching || group.visibleModels.length > 0);
+
   return (
     <>
-      {groups.map((group, index) => (
-        <div key={`${group.source ?? "provider"}-${index}`}>
-          {index > 0 && <DropdownMenuSeparator />}
-          <PickerSectionHeader>
-            {group.label ?? group.models[0]?.provider ?? group.source ?? "Models"}
-          </PickerSectionHeader>
-          {group.error ? (
-            <div className="px-2 py-1 text-xs text-destructive">{group.error}</div>
-          ) : group.models.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-muted-foreground">No models available.</div>
-          ) : (
-            <DropdownMenuRadioGroup
-              value={group.source === "omniroute" ? route : model}
-              onValueChange={(value) => onModelChange(value, group.source)}
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-popover px-2 py-1.5">
+        <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          ref={searchInputRef}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              event.currentTarget
+                .closest('[role="menu"]')
+                ?.querySelector<HTMLElement>('[data-testid^="new-chat-landing-opencode-group-"]')
+                ?.focus();
+              return;
+            }
+            if (event.key === "Escape" && query) {
+              event.preventDefault();
+              event.stopPropagation();
+              setQuery("");
+              return;
+            }
+            if (event.key !== "Escape") event.stopPropagation();
+          }}
+          placeholder="Search OpenCode models"
+          aria-label="Search OpenCode models"
+          data-testid="new-chat-landing-opencode-search"
+          className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      {visibleGroups.map((group, index) => {
+        const isExpanded = searching || expanded.has(group.key);
+        const contentId = `opencode-group-${group.key}`;
+        const providerIndicator = group.key === "minimax";
+        return (
+          <div key={group.key}>
+            {index > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              aria-expanded={isExpanded}
+              aria-controls={contentId}
+              data-testid={`new-chat-landing-opencode-group-${group.key}`}
+              onSelect={(event) => {
+                event.preventDefault();
+                setExpanded((current) => {
+                  const next = new Set(current);
+                  if (next.has(group.key)) next.delete(group.key);
+                  else next.add(group.key);
+                  return next;
+                });
+              }}
+              className="sticky top-8 z-[5] flex items-center gap-2 rounded-sm bg-popover px-2 py-1.5 text-xs font-medium"
             >
-              {group.models.map((item) => (
-                <DropdownMenuRadioItem
-                  key={item.id}
-                  value={item.id}
-                  data-testid={`new-chat-landing-opencode-model-${item.id}`}
-                  onSelect={(event) => event.preventDefault()}
-                  className="rounded-sm py-1 pl-2 text-xs"
-                  title={item.label}
-                >
-                  <span className="min-w-0 truncate">{item.label}</span>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          )}
-        </div>
-      ))}
-      {groups.length === 0 && (
-        <div className="px-2 py-1.5 text-xs text-muted-foreground">No models available.</div>
+              {isExpanded ? (
+                <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1 truncate">{group.label}</span>
+              <span className="tabular-nums text-[11px] text-muted-foreground">
+                {group.models.length}
+              </span>
+            </DropdownMenuItem>
+            {isExpanded && (
+              <div id={contentId}>
+                {group.error && group.models.length === 0 ? (
+                  <div className="px-7 py-1 text-xs text-muted-foreground">Unavailable</div>
+                ) : group.visibleModels.length === 0 ? (
+                  <div className="px-7 py-1 text-xs text-muted-foreground">
+                    {group.key === "other" ? "No models available." : "Unavailable"}
+                  </div>
+                ) : (
+                  <DropdownMenuRadioGroup
+                    value={group.key === "omniroute" ? route : model}
+                    onValueChange={(value) =>
+                      onModelChange(value, group.key === "omniroute" ? "omniroute" : group.source)
+                    }
+                  >
+                    {group.visibleModels.map((item) => {
+                      const indicator = providerIndicator
+                        ? miniMaxProviderIndicator(item.provider_id)
+                        : null;
+                      return (
+                        <DropdownMenuRadioItem
+                          key={item.id}
+                          value={openCodeOptionValue(group, item)}
+                          data-testid={`new-chat-landing-opencode-model-${item.id}`}
+                          onSelect={(event) => event.preventDefault()}
+                          className="items-start rounded-sm py-1 pl-2 text-xs"
+                          title={item.id}
+                        >
+                          <span className="flex min-w-0 flex-col">
+                            <span className="truncate">{item.label}</span>
+                            {indicator && (
+                              <span className="truncate text-[10px] text-muted-foreground">
+                                {indicator} · {item.id}
+                              </span>
+                            )}
+                          </span>
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
+                  </DropdownMenuRadioGroup>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {searching && visibleGroups.length === 0 && (
+        <div className="px-2 py-2 text-xs text-muted-foreground">No matching models.</div>
       )}
       {efforts.length > 0 && (
         <>
@@ -1510,7 +1629,9 @@ function AgentHarnessPicker({
       const optionModel = isSelected ? pickedModel : (stored.model ?? "");
       const optionRoute = isSelected ? pickedOmniRouteRoute : (stored.route ?? "");
       const optionEffort = isSelected ? pickedEffort : (stored.effort ?? "");
-      const selectedOption = models.find((item) => item.id === (optionRoute || optionModel));
+      const selectedOption = models.find(
+        (item) => item.id === (optionRoute || optionModel) || item.route_id === optionRoute,
+      );
       return (
         <OpenCodeModelOptions
           groups={opencodeModelGroups}
@@ -1535,7 +1656,7 @@ function AgentHarnessPicker({
               setPickedOmniRouteRoute("");
               setPickedModel(value);
             }
-            const next = models.find((item) => item.id === value);
+            const next = models.find((item) => item.id === value || item.route_id === value);
             if (!next?.reasoning_efforts?.includes(optionEffort)) {
               if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
               setPickedEffort("");

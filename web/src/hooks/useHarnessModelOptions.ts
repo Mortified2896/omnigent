@@ -5,6 +5,11 @@ export interface HarnessModelOption {
   id: string;
   label: string;
   provider: string;
+  source?: string;
+  provider_id?: string;
+  access_source?: string;
+  availability?: string;
+  route_id?: string;
   reasoning_efforts?: string[];
   variants?: string[];
 }
@@ -40,6 +45,11 @@ function parseModel(value: unknown): HarnessModelOption | null {
     id: row.id,
     label: row.label,
     provider: row.provider,
+    source: typeof row.source === "string" ? row.source : undefined,
+    provider_id: typeof row.provider_id === "string" ? row.provider_id : undefined,
+    access_source: typeof row.access_source === "string" ? row.access_source : undefined,
+    availability: typeof row.availability === "string" ? row.availability : undefined,
+    route_id: typeof row.route_id === "string" ? row.route_id : undefined,
     reasoning_efforts: stringList(row.reasoning_efforts),
     variants: stringList(row.variants),
   };
