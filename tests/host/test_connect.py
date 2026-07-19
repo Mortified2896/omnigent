@@ -1310,6 +1310,8 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
         "OPENAI_API_KEY": "sk-o",
         "OPENAI_BASE_URL": "https://gateway.example.com/openai",
         "GEMINI_API_KEY": "g-key",
+        "MINIMAX_API_KEY": "minimax-key",
+        "MINIMAX_BASE_URL": "https://api.minimax.example/anthropic/v1",
         "AWS_BEARER_TOKEN_BEDROCK": "absk-fwd",
         "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-runtime.us-east-1.amazonaws.com",
     }
@@ -1331,6 +1333,8 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "GEMINI_API_KEY",
+        "MINIMAX_API_KEY",
+        "MINIMAX_BASE_URL",
         "AWS_BEARER_TOKEN_BEDROCK",
         "ANTHROPIC_BEDROCK_BASE_URL",
     ):
