@@ -112,7 +112,7 @@ def test_omniroute_api_key_from_config_returns_none_for_unresolved_placeholder(
     )
 
 
-def test_merge_replaces_unresolved_placeholder_with_available_host_env(
+def test_merge_replaces_unresolved_placeholder_with_available_host_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
@@ -129,8 +129,7 @@ def test_merge_replaces_unresolved_placeholder_with_available_host_env(
     )
 
     options = merged["provider"][OMNIROUTE_PROVIDER_ID]["options"]
-    assert options["apiKey"] == "{env:OMNIGENT_ROUTER_API_KEY}"
-    assert "host-secret" not in str(merged)
+    assert options["apiKey"] == "host-secret"
 
 
 def test_omniroute_api_key_from_config_returns_none_without_omniroute_provider() -> None:

@@ -166,8 +166,9 @@ def merge_omniroute_combo_catalog(
             "OMNIGENT_ROUTER_API_KEY",
             "OMNIROUTE_API_KEY",
         ):
-            if os.environ.get(env_name):
-                options["apiKey"] = f"{{env:{env_name}}}"
+            token = os.environ.get(env_name)
+            if token:
+                options["apiKey"] = token
                 break
     provider.setdefault("npm", "@ai-sdk/openai-compatible")
     provider.setdefault("name", "OmniRoute")
