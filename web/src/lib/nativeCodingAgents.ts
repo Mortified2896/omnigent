@@ -62,10 +62,11 @@ export const NATIVE_CODING_AGENTS = [
     displayName: "OpenCode",
     iconKind: "opencode",
     sortRank: 25,
-    // OpenCode has no launch-time permission-mode surface: its build/plan
-    // agents are switched inside the TUI. Its direct provider catalog does
-    // expose model choices, however.
-    capabilities: ["modelOptions"],
+    // OpenCode exposes both direct model options AND a session-launch
+    // permission-mode surface (Default / Auto / Accept edits / Plan /
+    // Don't ask / Bypass permissions), translated by the runner into
+    // OpenCode's ``permission`` + ``default_agent`` config fields.
+    capabilities: ["modelOptions", "permissionMode"],
   },
   {
     key: "cursor",

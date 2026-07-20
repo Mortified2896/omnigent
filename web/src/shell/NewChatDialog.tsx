@@ -184,6 +184,49 @@ const CLAUDE_NATIVE_PERMISSION_MODES: { value: string; label: string; descriptio
   },
 ];
 
+// OpenCode-native permission-mode vocabulary. The user-visible labels are
+// pinned by the UX brief: Default / Auto / Accept edits / Plan / Don't ask
+// / Bypass permissions. The wire-level values match the shared
+// ``KNOWN_PERMISSION_MODES`` enum server-side (omnigent.server.routing_agent);
+// the runner translates them into OpenCode's config surface (permission /
+// default_agent) so a "Default" session never injects an override and the
+// "Bypass permissions" toggle never relaxes the outer sandbox / network
+// guard.
+const OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE = "default";
+const OPENCODE_NATIVE_PERMISSION_MODES: { value: string; label: string; description: string }[] = [
+  {
+    value: "default",
+    label: "Default",
+    description: "Preserves OpenCode's default behaviour (prompts on edits and commands)",
+  },
+  {
+    value: "auto",
+    label: "Auto",
+    description: "Auto-approves non-denied operations; explicit deny rules remain denied",
+  },
+  {
+    value: "accept_edits",
+    label: "Accept edits",
+    description: "Allows file edits without prompting; shell commands still ask",
+  },
+  {
+    value: "plan",
+    label: "Plan",
+    description: "Uses OpenCode's plan agent; cannot edit files",
+  },
+  {
+    value: "dont_ask",
+    label: "Don't ask",
+    description: "Never prompts; ask-level operations are rejected",
+  },
+  {
+    value: "bypass",
+    label: "Bypass permissions",
+    description:
+      "Allows every OpenCode tool permission; outer sandbox and host policy remain active",
+  },
+];
+
 // Claude-native reasoning-effort options for the new-session model/effort
 // picker. There is deliberately no hardcoded model/effort default: a fresh
 // session leaves both unselected and omits `model_override` / `reasoning_effort`
@@ -938,6 +981,72 @@ function PermissionModeOptions({
 }
 
 /**
+ * The OpenCode-native permission-mode radio rows + previewed-description
+ * footer, rendered inside the OpenCode submenu in the agent/harness picker.
+ *
+ * The shape mirrors {@link PermissionModeOptions} (Claude Code's variant);
+ * the only difference is the option list and the warning copy that follows
+ * the ``bypass`` row (the OpenCode harness can run unsafe operations, so the
+ * user gets an inline danger treatment).
+ *
+ * @param value Currently selected mode, e.g. ``"default"``.
+ * @param onValueChange Selection callback (receives the mode value).
+ */
+function OpenCodePermissionModeOptions({
+  value,
+  onValueChange,
+}: {
+  value: string;
+  onValueChange: (mode: string) => void;
+}) {
+  const [previewed, setPreviewed] = useState<string | null>(null);
+  const detail = OPENCODE_NATIVE_PERMISSION_MODES.find(
+    (m) => m.value === (previewed ?? value),
+  )?.description;
+  const isBypass = (previewed ?? value) === "bypass";
+  return (
+    <>
+      <DropdownMenuRadioGroup value={value} onValueChange={onValueChange}>
+        {OPENCODE_NATIVE_PERMISSION_MODES.map((mode) => (
+          <DropdownMenuRadioItem
+            key={mode.value}
+            value={mode.value}
+            data-testid={`new-chat-landing-opencode-permission-${mode.value}`}
+            onFocus={() => setPreviewed(mode.value)}
+            onPointerEnter={() => setPreviewed(mode.value)}
+            onSelect={(event) => event.preventDefault()}
+            className="rounded-sm pl-2 py-1 text-xs"
+          >
+            {mode.label}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator />
+      <p
+        data-testid="new-chat-landing-opencode-permission-detail"
+        className="min-h-5 px-2 pt-0.5 pb-1 text-xs leading-relaxed text-muted-foreground"
+      >
+        {detail}
+      </p>
+      {isBypass && (
+        <div
+          role="alert"
+          data-testid="new-chat-landing-opencode-permission-bypass-warning"
+          className="mx-2 mt-1 mb-1.5 flex items-start gap-1.5 rounded-md border border-destructive bg-destructive/10 px-2 py-1.5 text-[11px] font-medium leading-relaxed text-destructive"
+        >
+          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            Bypass permissions lets the session run every OpenCode tool without
+            asking. Omnigent sandboxing, network policy, and host policy still
+            apply — only OpenCode's local permission gate is relaxed.
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * Codex approval-mode radio rows, rendered inside the Advanced settings
  * menu in the composer footer. Mirror of {@link PermissionModeOptions}
  * for the Codex-native agent.
@@ -1470,6 +1579,7 @@ function AgentHarnessPicker({
   onSelectPending,
   onCreateCustomAgent,
   permissionMode,
+  opencodePermissionMode,
   approvalMode,
   cursorExecMode,
   bypassSandbox,
@@ -1478,6 +1588,7 @@ function AgentHarnessPicker({
   pickedEffort,
   pickedHarness,
   setPermissionMode,
+  setOpencodePermissionMode,
   setApprovalMode,
   setCursorExecMode,
   setBypassSandbox,
@@ -1502,6 +1613,7 @@ function AgentHarnessPicker({
   onSelectPending: () => void;
   onCreateCustomAgent: () => void;
   permissionMode: string;
+  opencodePermissionMode: string;
   approvalMode: string;
   cursorExecMode: string;
   bypassSandbox: boolean;
@@ -1510,6 +1622,7 @@ function AgentHarnessPicker({
   pickedEffort: string;
   pickedHarness: string | null;
   setPermissionMode: (mode: string) => void;
+  setOpencodePermissionMode: (mode: string) => void;
   setApprovalMode: (mode: string) => void;
   setCursorExecMode: (mode: string) => void;
   setBypassSandbox: (enabled: boolean) => void;
@@ -1633,41 +1746,55 @@ function AgentHarnessPicker({
         (item) => item.id === (optionRoute || optionModel) || item.route_id === optionRoute,
       );
       return (
-        <OpenCodeModelOptions
-          groups={opencodeModelGroups}
-          loading={opencodeModelsLoading}
-          error={opencodeModelsError}
-          model={selectedOption && !optionRoute ? optionModel : ""}
-          route={optionRoute}
-          effort={selectedOption?.reasoning_efforts?.includes(optionEffort) ? optionEffort : ""}
-          onModelChange={(value, source) => {
-            onSelectAgent(agent);
-            const isOmniRoute = source === "omniroute";
-            if (entryHarness) {
-              writeHarnessOption(
-                entryHarness,
-                isOmniRoute ? { model: "", route: value } : { model: value, route: "" },
+        <>
+          <OpenCodeModelOptions
+            groups={opencodeModelGroups}
+            loading={opencodeModelsLoading}
+            error={opencodeModelsError}
+            model={selectedOption && !optionRoute ? optionModel : ""}
+            route={optionRoute}
+            effort={selectedOption?.reasoning_efforts?.includes(optionEffort) ? optionEffort : ""}
+            onModelChange={(value, source) => {
+              onSelectAgent(agent);
+              const isOmniRoute = source === "omniroute";
+              if (entryHarness) {
+                writeHarnessOption(
+                  entryHarness,
+                  isOmniRoute ? { model: "", route: value } : { model: value, route: "" },
+                );
+              }
+              if (isOmniRoute) {
+                setPickedOmniRouteRoute(value);
+                setPickedModel("");
+              } else {
+                setPickedOmniRouteRoute("");
+                setPickedModel(value);
+              }
+              const next = models.find(
+                (item) => item.id === value || item.route_id === value,
               );
-            }
-            if (isOmniRoute) {
-              setPickedOmniRouteRoute(value);
-              setPickedModel("");
-            } else {
-              setPickedOmniRouteRoute("");
-              setPickedModel(value);
-            }
-            const next = models.find((item) => item.id === value || item.route_id === value);
-            if (!next?.reasoning_efforts?.includes(optionEffort)) {
-              if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
-              setPickedEffort("");
-            }
-          }}
-          onEffortChange={(value) => {
-            onSelectAgent(agent);
-            if (entryHarness) writeHarnessOption(entryHarness, { effort: value });
-            setPickedEffort(value);
-          }}
-        />
+              if (!next?.reasoning_efforts?.includes(optionEffort)) {
+                if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
+                setPickedEffort("");
+              }
+            }}
+            onEffortChange={(value) => {
+              onSelectAgent(agent);
+              if (entryHarness) writeHarnessOption(entryHarness, { effort: value });
+              setPickedEffort(value);
+            }}
+          />
+          <DropdownMenuSeparator />
+          <PickerSectionHeader>Permission Mode</PickerSectionHeader>
+          <OpenCodePermissionModeOptions
+            value={modeValue(
+              OPENCODE_NATIVE_PERMISSION_MODES,
+              OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE,
+              opencodePermissionMode,
+            )}
+            onValueChange={onModeChange(setOpencodePermissionMode)}
+          />
+        </>
       );
     }
     if (nativeAgentHasCapability(agent, "permissionMode")) {
@@ -1965,6 +2092,7 @@ type LandingDraft = {
   branchName: string;
   prefilledBranch: string;
   permissionMode: string;
+  opencodePermissionMode: string;
   approvalMode: string;
   bypassSandbox: boolean;
   cursorExecMode: string;
@@ -2172,6 +2300,15 @@ export function NewChatLandingScreen() {
   const [permissionMode, setPermissionMode] = useState<string>(
     () => landingDraft?.permissionMode ?? CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE,
   );
+  // Permission mode for OpenCode-native. Lands on the session as
+  // ``permission_mode`` (``default`` / ``auto`` / ``accept_edits`` / ``plan``
+  // / ``dont_ask`` / ``bypass``) and is translated by the runner into
+  // OpenCode's ``permission`` + ``default_agent`` config surface. Distinct
+  // from Claude's ``permissionMode`` because the wire values differ; an
+  // OpenCode "Auto" session is NOT the same as a Claude "Auto" session.
+  const [opencodePermissionMode, setOpencodePermissionMode] = useState<string>(
+    () => landingDraft?.opencodePermissionMode ?? OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE,
+  );
   // Approval mode for Codex (codex --approval-mode). Only meaningful for
   // the codex-native wrapper; ignored otherwise. Lives in the footer
   // tray's Advanced settings menu.
@@ -2265,6 +2402,7 @@ export function NewChatLandingScreen() {
     branchName,
     prefilledBranch,
     permissionMode,
+    opencodePermissionMode,
     approvalMode,
     bypassSandbox,
     cursorExecMode,
@@ -2460,7 +2598,19 @@ export function NewChatLandingScreen() {
     // the current list resolves to the default for the same reason.
     const resolve = (modes: readonly { value: string }[], dflt: string) =>
       stored.mode != null && modes.some((m) => m.value === stored.mode) ? stored.mode : dflt;
-    if (supportsPermissionMode) {
+    if (supportsModelOptions) {
+      setPickedModel(stored.model ?? "");
+      setPickedOmniRouteRoute(stored.route ?? "");
+      setPickedEffort(stored.effort ?? "");
+      // OpenCode-native owns its own permission-mode state so the
+      // Claude/Codex cursor strings can't leak into the OpenCode create.
+      // Resolves a stored value if it's still in the opencode vocab, else
+      // drops to "default" — never leaves a stale codex "full-access" in
+      // place when the user later switches back to OpenCode.
+      setOpencodePermissionMode(
+        resolve(OPENCODE_NATIVE_PERMISSION_MODES, OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE),
+      );
+    } else if (supportsPermissionMode) {
       setPermissionMode(
         resolve(CLAUDE_NATIVE_PERMISSION_MODES, CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE),
       );
@@ -2478,10 +2628,6 @@ export function NewChatLandingScreen() {
           ? stored.effort
           : "",
       );
-    } else if (supportsModelOptions) {
-      setPickedModel(stored.model ?? "");
-      setPickedOmniRouteRoute(stored.route ?? "");
-      setPickedEffort(stored.effort ?? "");
     } else if (supportsApprovalMode) {
       setApprovalMode(resolve(CODEX_NATIVE_APPROVAL_MODES, CODEX_NATIVE_DEFAULT_APPROVAL_MODE));
     } else if (supportsCursorMode) {
@@ -3036,6 +3182,19 @@ export function NewChatLandingScreen() {
                 : agentSupportsModelOptions && selectedOpenCodeEffort
                   ? selectedOpenCodeEffort
                   : undefined,
+            // OpenCode-native permission mode (Default / Auto / Accept edits /
+            // Plan / Don't ask / Bypass permissions). Distinct from the
+            // Claude ``permissionMode`` field because the wire values
+            // differ; the runner applies it to OpenCode's ``permission`` /
+            // ``default_agent`` config surface rather than a CLI flag.
+            // Omitted for ``default`` so the server keeps no override and
+            // OpenCode runs with its own built-in behaviour; non-native
+            // agents never see this field even if a stale value is set.
+            permission_mode:
+              agentSupportsModelOptions &&
+              opencodePermissionMode !== OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE
+                ? opencodePermissionMode
+                : undefined,
             // Smart routing toggle — server-side, available for any agent.
             cost_control_mode_override: costControlMode ?? undefined,
             // Model Routing Agent toggle — independent of smart routing
@@ -3440,6 +3599,7 @@ export function NewChatLandingScreen() {
                   onSelectPending={handleSelectPending}
                   onCreateCustomAgent={() => setCreateAgentOpen(true)}
                   permissionMode={permissionMode}
+                  opencodePermissionMode={opencodePermissionMode}
                   approvalMode={approvalMode}
                   cursorExecMode={cursorExecMode}
                   bypassSandbox={bypassSandbox}
@@ -3448,6 +3608,7 @@ export function NewChatLandingScreen() {
                   pickedEffort={pickedEffort}
                   pickedHarness={pickedHarness}
                   setPermissionMode={setPermissionMode}
+                  setOpencodePermissionMode={setOpencodePermissionMode}
                   setApprovalMode={setApprovalMode}
                   setCursorExecMode={setCursorExecMode}
                   setBypassSandbox={setBypassSandbox}

@@ -181,7 +181,34 @@ def hash_user_message(user_message: str) -> str:
     return hashlib.sha256(user_message.encode("utf-8")).hexdigest()[:12]
 
 
+# All permission-mode values the session-create/update API accepts. The router
+# agent proposes a subset (``ROUTER_PROPOSABLE_PERMISSION_MODES`` below);
+# session-create additionally accepts the OpenCode-native UI's user-facing
+# values (``default`` / ``auto`` / ``accept_edits`` / ``plan`` / ``dont_ask``)
+# so the same wire enum is reused end-to-end without a parallel type.
 KNOWN_PERMISSION_MODES = frozenset(
+    {
+        # Router-proposed modes.
+        "ask_before_edits",
+        "ask_before_commands",
+        "read_only",
+        "auto_accept_edits",
+        "bypass",
+        # OpenCode-native UI user-facing modes (default = omit; auto /
+        # accept_edits / plan / dont_ask / bypass are real values).
+        "default",
+        "auto",
+        "accept_edits",
+        "plan",
+        "dont_ask",
+    }
+)
+# Subset the model-routing agent is allowed to emit. The user-facing
+# OpenCode-native modes are deliberately excluded — only the user may set
+# ``auto`` / ``accept_edits`` / ``plan`` / ``dont_ask`` from the landing
+# composer. ``bypass`` stays allowed because the existing router prompt
+# already forbids it (and gating it server-side is defense in depth).
+ROUTER_PROPOSABLE_PERMISSION_MODES = frozenset(
     {
         "ask_before_edits",
         "ask_before_commands",
@@ -629,8 +656,11 @@ def validate_route_proposal(proposal: RouteProposal) -> RouteProposal:
         raise RoutingAgentError(f"reasoning effort {effort!r} not allowed for {profile.route_id}")
     if not reasoning_lte(effort, profile.max_reasoning_effort):
         raise RoutingAgentError(f"reasoning effort {effort!r} exceeds max for {profile.route_id}")
-    if proposal.permission_mode not in KNOWN_PERMISSION_MODES:
-        raise RoutingAgentError(f"unknown permission mode: {proposal.permission_mode}")
+    if proposal.permission_mode not in ROUTER_PROPOSABLE_PERMISSION_MODES:
+        raise RoutingAgentError(
+            f"unknown permission mode for router: {proposal.permission_mode!r}; "
+            f"router may only propose one of {sorted(ROUTER_PROPOSABLE_PERMISSION_MODES)}"
+        )
     allowed = set(proposal.allowed_billing_classes)
     if "api_billed" in allowed and not profile.allow_api_billed:
         raise RoutingAgentError(f"api_billed forbidden for {profile.route_id}")

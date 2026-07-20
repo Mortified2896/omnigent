@@ -1153,6 +1153,9 @@ async def _auto_create_opencode_terminal(
     # databricks-sdk absent, auth failure), opencode falls back to whatever
     # provider config the ambient env/global config already gives it.
     from omnigent.opencode_native_bridge import xdg_config_home_for_bridge_dir
+    from omnigent.opencode_native_permission_mode_config import (
+        apply_opencode_permission_mode,
+    )
     from omnigent.opencode_native_provider import (
         build_opencode_mcp_block,
         build_opencode_omnigent_mcp_server,
@@ -1263,6 +1266,14 @@ async def _auto_create_opencode_terminal(
         # Do not repair a wrong endpoint silently: an explicit route must fail
         # before OpenCode can open a direct provider connection.
         validate_omniroute_provider_config(config, expected_base_url=proxy_provider_base_url)
+
+    # Apply the user-facing OpenCode-native permission mode (Default / Auto /
+    # Accept edits / Plan / Don't ask / Bypass). The merge happens AFTER every
+    # provider / MCP / plugin step so the mode overrides the ``"permission":
+    # "ask"`` default the MCP block sets, but preserves provider blocks,
+    # plugins, explicit deny rules, and the user's merged providers. Outer
+    # sandbox / network / host policy remain in force regardless of mode.
+    config = apply_opencode_permission_mode(config, mode=launch_config.permission_mode)
 
     # The server runs with a per-session XDG_DATA_HOME, so seed OpenCode's
     # current credentials before finalizing provider config.
