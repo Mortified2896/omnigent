@@ -665,6 +665,24 @@ export async function getTaskRun(taskRunId: string): Promise<TaskRunDetailRespon
   return resp.json();
 }
 
+export async function reEvaluateTaskRun(
+  taskRunId: string,
+): Promise<{ status: "queued" | "already_present" | string }> {
+  const url = `/v1/task-runs/${encodeURIComponent(taskRunId)}/evaluate`;
+  const resp = await authenticatedFetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+  });
+  if (!resp.ok && resp.status !== 409) {
+    const text = await resp.text().catch(() => "");
+    throw new TaskRunFetchError(
+      resp.status,
+      `reEvaluateTaskRun failed: ${resp.status} ${text.slice(0, 200)}`,
+    );
+  }
+  return resp.json();
+}
+
 export async function submitTaskRunReview(
   taskRunId: string,
   body: UpsertReviewRequest,

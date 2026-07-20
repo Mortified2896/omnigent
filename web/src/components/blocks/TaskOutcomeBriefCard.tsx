@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, LoaderIcon, PencilIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { submitTaskRunReview } from "@/lib/taskOutcomes";
+import { reEvaluateTaskRun, submitTaskRunReview } from "@/lib/taskOutcomes";
 import type { TaskRunDetailResponse } from "@/lib/taskOutcomes";
 import { useTaskRunForResponse } from "@/lib/useTaskRunReadiness";
 import { TaskReviewCard } from "./TaskReviewCard";
@@ -68,6 +68,8 @@ export function TaskOutcomeBriefCard({
   const [editing, setEditing] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [reEvaluating, setReEvaluating] = useState(false);
+  const [reEvaluateError, setReEvaluateError] = useState<string | null>(null);
   // sessionStorage-scoped dismissal. The task remains in the
   // unreviewed-outcomes queue — this only hides the inline card
   // for the current tab until the tab is closed.
@@ -93,15 +95,38 @@ export function TaskOutcomeBriefCard({
     setEditing(false);
   };
 
+  const reEvaluate = async () => {
+    if (reEvaluating) return;
+    const taskRunId = detail?.run?.id;
+    if (!taskRunId) {
+      setReEvaluateError("Task run is not available for re-evaluation.");
+      return;
+    }
+    setReEvaluating(true);
+    setReEvaluateError(null);
+    try {
+      await reEvaluateTaskRun(taskRunId);
+      retry();
+    } catch (cause) {
+      setReEvaluateError(
+        cause instanceof Error ? cause.message : "Could not queue the outcome evaluation",
+      );
+    } finally {
+      setReEvaluating(false);
+    }
+  };
+
   // The registry selected this response, but never trust an endpoint that
   // violates the same identity. Rendering nothing prevents misattachment.
   if (identityMismatch) return null;
 
   if (phase === "loading" || phase === "waiting") {
+    const evaluationPending =
+      phase === "loading" || Boolean(detail?.run && detail.evaluation === null);
     return (
       <div className="mt-2 text-xs text-muted-foreground" data-testid="outcome-brief-pending">
         <LoaderIcon className="mr-1 inline size-3 animate-spin" />
-        Preparing outcome brief…
+        {evaluationPending ? "Evaluating outcome…" : "Preparing outcome brief…"}
       </div>
     );
   }
@@ -201,10 +226,24 @@ export function TaskOutcomeBriefCard({
           <PencilIcon className="mr-1 inline size-3" />
           Adjust
         </button>
-        <button className="underline" onClick={retry} data-testid="outcome-brief-retry">
-          <RefreshCwIcon className="mr-1 inline size-3" />
-          Retry
+        <button
+          className="underline disabled:opacity-50"
+          onClick={() => void reEvaluate()}
+          disabled={reEvaluating}
+          data-testid="outcome-brief-retry"
+        >
+          {reEvaluating ? (
+            <LoaderIcon className="mr-1 inline size-3 animate-spin" />
+          ) : (
+            <RefreshCwIcon className="mr-1 inline size-3" />
+          )}
+          {reEvaluating ? "Re-evaluating…" : "Retry"}
         </button>
+        {reEvaluateError ? (
+          <span role="alert" className="text-destructive">
+            {reEvaluateError}
+          </span>
+        ) : null}
         <button
           className="rounded border px-2 py-1"
           data-testid="outcome-review-later"
@@ -384,6 +423,12 @@ function renderReadyCard(args: {
         Evidence: ✓ {evidence} · Commit {run.commit_sha?.slice(0, 8) ?? "—"} · Evaluator confidence:{" "}
         {confidence}
       </div>
+      {evaluation?.verdict === "inconclusive" && evaluation.reasoning ? (
+        <details className="mt-2 text-muted-foreground" data-testid="inconclusive-reasoning">
+          <summary className="cursor-pointer">Why the evaluation was inconclusive</summary>
+          <p className="mt-1 whitespace-pre-wrap">{evaluation.reasoning}</p>
+        </details>
+      ) : null}
       {mutationError && (
         <p role="alert" className="mt-2 text-destructive">
           {mutationError}

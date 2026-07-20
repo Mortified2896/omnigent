@@ -7,6 +7,7 @@ import type { TaskRunDetailResponse } from "@/lib/taskOutcomes";
 const mocks = vi.hoisted(() => ({
   getTaskRunForResponse: vi.fn(),
   getTaskRun: vi.fn(),
+  reEvaluateTaskRun: vi.fn(),
   submitTaskRunReview: vi.fn(),
 }));
 vi.mock("@/lib/taskOutcomes", async (importOriginal) => {
@@ -169,6 +170,7 @@ describe("TaskOutcomeBriefCard actions", () => {
     vi.clearAllMocks();
     mocks.getTaskRunForResponse.mockResolvedValue(detail);
     mocks.getTaskRun.mockResolvedValue(detail);
+    mocks.reEvaluateTaskRun.mockResolvedValue({ status: "queued" });
     mocks.submitTaskRunReview.mockImplementation(
       async (_runId: string, body: { action?: string }) => {
         if (body?.action === "decline") return review;
@@ -316,9 +318,7 @@ describe("TaskOutcomeBriefCard actions", () => {
     render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
     await flushAsync();
     expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("outcome-brief-pending")).toHaveTextContent(
-      /Preparing outcome brief/,
-    );
+    expect(screen.getByTestId("outcome-brief-pending")).toHaveTextContent(/Evaluating outcome/);
 
     await advanceTimers(800);
     expect(screen.getByTestId("task-outcome-brief-card")).toBeInTheDocument();
@@ -388,6 +388,69 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(5);
     expect(screen.queryByText(/Likely unsure/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Accept/ })).not.toBeInTheDocument();
+  });
+
+  it("Retry queues re-evaluation for an exhausted evaluation", async () => {
+    vi.useFakeTimers();
+    mocks.getTaskRunForResponse.mockResolvedValue(detailFor({ evaluation: null }));
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    await advanceTimers(800);
+    await advanceTimers(1_600);
+    await advanceTimers(3_200);
+    await advanceTimers(6_400);
+
+    fireEvent.click(screen.getByTestId("outcome-brief-retry"));
+    await flushAsync();
+
+    expect(mocks.reEvaluateTaskRun).toHaveBeenCalledWith("run-1");
+  });
+
+  it("resumes readiness polling after re-evaluation is queued", async () => {
+    vi.useFakeTimers();
+    let fetchCount = 0;
+    mocks.getTaskRunForResponse.mockImplementation(async () => {
+      fetchCount += 1;
+      return fetchCount >= 7 ? detail : detailFor({ evaluation: null });
+    });
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await flushAsync();
+    await advanceTimers(800);
+    await advanceTimers(1_600);
+    await advanceTimers(3_200);
+    await advanceTimers(6_400);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(5);
+
+    fireEvent.click(screen.getByTestId("outcome-brief-retry"));
+    await flushAsync();
+    expect(mocks.reEvaluateTaskRun).toHaveBeenCalledWith("run-1");
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(6);
+    expect(screen.getByTestId("outcome-brief-pending")).toHaveTextContent(/Evaluating outcome/);
+
+    await advanceTimers(800);
+    expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(7);
+    expect(screen.getByTestId("task-outcome-brief-card")).toBeInTheDocument();
+  });
+
+  it("renders inconclusive evaluation reasoning in expandable details", async () => {
+    const reasoning =
+      "Automated evaluation unavailable: no event loop available to schedule the LLM evaluator.";
+    mocks.getTaskRunForResponse.mockResolvedValue(
+      detailFor({
+        evaluation: {
+          ...detail.evaluation!,
+          verdict: "inconclusive",
+          reasoning,
+        },
+      }),
+    );
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+
+    const details = await screen.findByTestId("inconclusive-reasoning");
+    expect(within(details).getByText(reasoning)).toBeInTheDocument();
   });
 
   it("unmount cancels a scheduled poll and aborts the in-flight request", async () => {

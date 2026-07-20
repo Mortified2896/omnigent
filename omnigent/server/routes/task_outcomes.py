@@ -76,6 +76,7 @@ from omnigent.server.routes._auth_helpers import (
 )
 from omnigent.server.routing_agent import KNOWN_PERMISSION_MODES
 from omnigent.server.task_outcome_recorder import (
+    TaskOutcomeRecorder,
     get_recorder,
 )
 from omnigent.stores.conversation_store import ConversationStore
@@ -283,8 +284,7 @@ def _serialise_selection_context(run: TaskRun) -> dict[str, Any]:
     elif run.selected_model is not None:
         source = "user_selected_model"
     elif any(
-        value is not None
-        for value in (run.harness_id, run.reasoning_effort, run.permission_mode)
+        value is not None for value in (run.harness_id, run.reasoning_effort, run.permission_mode)
     ):
         source = "session_default"
     else:
@@ -667,6 +667,48 @@ def create_task_outcomes_router(
             "any_review": _serialise_review(detail.review),
             "langfuse_pending": detail.langfuse_pending,
         }
+
+    # ── POST /task-runs/{id}/evaluate ───────────────────────────────
+
+    @router.post("/task-runs/{task_run_id}/evaluate", status_code=202)
+    async def evaluate_task_run(
+        request: Request,
+        task_run_id: str,
+    ) -> dict[str, str]:
+        """Queue the missing automated evaluation for a terminal run.
+
+        The endpoint is intentionally repair-only: an existing evaluation is
+        immutable and returns 409 rather than spawning a duplicate. Store and
+        recorder calls run in worker threads because both APIs are synchronous.
+        """
+        user_id = require_user(request, auth_provider)
+        run = await _call_store(store.get_run, task_run_id=task_run_id)
+        if run is None:
+            raise OmnigentError("Task run not found", code=ErrorCode.NOT_FOUND)
+        await require_access(
+            user_id,
+            run.conversation_id,
+            LEVEL_EDIT,
+            permission_store,
+            conversation_store,
+        )
+        if run.terminal_status not in {"completed", "failed", "cancelled", "incomplete"}:
+            raise OmnigentError("Task run is not terminal", code=ErrorCode.INVALID_INPUT)
+        evaluation = await _call_store(
+            store.get_evaluation_for_run,
+            task_run_id=task_run_id,
+        )
+        if evaluation is not None:
+            raise HTTPException(status_code=409, detail="evaluation already exists")
+
+        recorder = get_recorder()
+        if recorder is None or recorder.store is not store:
+            recorder = TaskOutcomeRecorder(store=store)
+        status = await _call_store(recorder.re_evaluate, task_run_id=task_run_id)
+        if status == "already_present":
+            # Close the race between the explicit check above and scheduling.
+            raise HTTPException(status_code=409, detail="evaluation already exists")
+        return {"status": status}
 
     # ── POST /task-runs/{id}/review ─────────────────────────────────
 

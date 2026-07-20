@@ -17,17 +17,16 @@ into the four task-outcome tables. Three call sites in the relay:
   from ``response.completed.usage``, capture the
   ``response.failed.error.code`` / ``message`` /
   ``response.incomplete.incomplete_details.reason``, and enqueue
-  the LLM evaluator via :func:`asyncio.create_task` so the relay
-  loop returns immediately.
+  the LLM evaluator on the FastAPI event loop so the relay worker
+  thread returns immediately.
 
 - **session lookup** — translate a harness-side
   ``response_id`` into a :class:`TaskRun` for the review-card
   UI. Used by the API layer.
 
 The recorder is intentionally a thin module-level façade: it
-doesn't own its own task loop, doesn't import the relay's local
-state, and doesn't spawn any background work beyond the
-evaluator :func:`asyncio.create_task` per terminal event.
+holds the FastAPI event loop captured at lifespan startup but
+doesn't own its own task loop or import the relay's local state.
 """
 
 from __future__ import annotations
@@ -35,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +45,7 @@ from omnigent.server.langfuse_sync import (
 )
 from omnigent.server.task_outcome_evaluator import evaluate_task_outcome
 from omnigent.stores.task_outcome_store import (
+    CreateTaskEvaluationInput,
     CreateTaskRunInput,
     EnqueueLangfuseEventInput,
     TaskOutcomeStore,
@@ -273,6 +274,18 @@ def set_recorder(recorder: TaskOutcomeRecorder | None) -> None:
         _recorder = recorder
 
 
+def set_recorder_loop(loop: asyncio.AbstractEventLoop | None) -> None:
+    """Attach the FastAPI event loop to the process-wide recorder.
+
+    Terminal relay callbacks run in ``asyncio.to_thread`` workers, so they
+    cannot discover the server loop themselves. The lifespan installs the
+    running loop here and clears it during shutdown.
+    """
+    with _recorder_lock:
+        if _recorder is not None:
+            _recorder._loop = loop
+
+
 def get_recorder() -> TaskOutcomeRecorder | None:
     """Return the process-wide recorder (or ``None`` when unset)."""
     with _recorder_lock:
@@ -298,10 +311,13 @@ class TaskOutcomeRecorder:
     """
 
     store: TaskOutcomeStore
-    # Optional override for tests; production code uses the
-    # default asyncio.create_task dispatch.
-    _task_spawner: Any = field(
-        default=lambda coro: asyncio.create_task(coro),
+    # Set by the FastAPI lifespan. Terminal callbacks execute in worker
+    # threads and must dispatch back to this loop.
+    _loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
+    # Optional scheduler override for tests. Production resolves
+    # ``asyncio.run_coroutine_threadsafe`` at call time so it can be patched.
+    _task_spawner: Callable[[Coroutine[Any, Any, None]], Any] | None = field(
+        default=None,
         repr=False,
     )
 
@@ -576,42 +592,141 @@ class TaskOutcomeRecorder:
 
     # ── convenience: resolution helpers ────────────────────────────────
 
-    @staticmethod
-    def _spawn_evaluator(run: Any) -> None:
-        """Spawn the LLM evaluator as a fire-and-forget task.
+    def _spawn_evaluator(self, run: Any) -> str:
+        """Schedule the LLM evaluator without ever dropping the outcome.
 
-        Reads ``task_run_id`` + the current user-message summary
-        (best-effort) from the run row. The evaluator never
-        raises; on failure it persists ``verdict='inconclusive'``.
+        The relay invokes this method from an ``asyncio.to_thread`` worker,
+        where no event loop is running. Dispatch therefore targets the loop
+        captured by the FastAPI lifespan. If dispatch is unavailable, an
+        ``inconclusive`` evaluation is persisted synchronously before this
+        method returns.
+
+        :returns: ``"queued"``, ``"already_present"``, or
+            ``"failed_persisted"``.
         """
-        recorder = get_recorder()
-        if recorder is None:
-            return
+        try:
+            if self.store.get_evaluation_for_run(run.id) is not None:
+                return "already_present"
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "task_outcome_recorder: failed to check existing evaluation for run=%s",
+                run.id,
+                exc_info=True,
+            )
+        return self._evaluate_safely(run)
+
+    def re_evaluate(self, task_run_id: str) -> str:
+        """Queue the missing evaluation for a terminal task run.
+
+        :param task_run_id: Existing terminal :class:`TaskRun` id.
+        :returns: ``"queued"``, ``"already_present"``, or
+            ``"failed_persisted"``.
+        :raises LookupError: When the task run does not exist.
+        :raises ValueError: When the task run is not terminal.
+        """
+        run = self.store.get_run(task_run_id)
+        if run is None:
+            raise LookupError(f"task run not found: {task_run_id}")
+        if run.terminal_status not in {"completed", "failed", "cancelled", "incomplete"}:
+            raise ValueError(f"task run is not terminal: {task_run_id}")
+        return self._spawn_evaluator(run)
+
+    def _evaluate_safely(self, run: Any) -> str:
+        """Dispatch one evaluator coroutine or persist the scheduling failure."""
 
         async def _evaluate() -> None:
             try:
+                # Re-check on the server loop to close the window between the
+                # worker-thread idempotency check and coroutine execution.
+                if self.store.get_evaluation_for_run(run.id) is not None:
+                    return
                 outcome = await evaluate_task_outcome(
-                    recorder.store,
+                    self.store,
                     run,
                     triggering_message_summary=run.task_description,
                 )
-                # After the evaluator lands, re-enqueue Langfuse
-                # so the llm-verdict score can ship too.
-                recorder._enqueue_langfuse_for_evaluation(run, outcome.evaluation)
-            except Exception as exc:  # noqa: BLE001  # never propagate
+                # After the evaluator lands, re-enqueue Langfuse so the
+                # llm-verdict score can ship too.
+                self._enqueue_langfuse_for_evaluation(run, outcome.evaluation)
+            except Exception as exc:  # noqa: BLE001
                 _logger.warning(
                     "task_outcome_recorder: evaluator dispatch failed for run=%s: %s",
                     run.id,
                     exc,
                 )
+                self._persist_inconclusive(
+                    run.id,
+                    reasoning=(
+                        "Automated evaluation unavailable: evaluator execution failed "
+                        f"({type(exc).__name__}: {str(exc)[:400]})."
+                    ),
+                )
 
+        loop = self._loop
+        no_loop_reason = (
+            "Automated evaluation unavailable: no event loop available to "
+            "schedule the LLM evaluator."
+        )
         try:
-            recorder._task_spawner(_evaluate())
-        except RuntimeError:
-            # No event loop (e.g. tests that don't install one).
-            _logger.debug(
-                "task_outcome_recorder: skipping evaluator spawn (no event loop) for run=%s",
+            loop_available = loop is not None and loop.is_running() and not loop.is_closed()
+        except Exception:  # noqa: BLE001
+            loop_available = False
+        if not loop_available or loop is None:
+            _logger.warning(
+                "task_outcome_recorder: no FastAPI event loop available for run=%s; "
+                "recording inconclusive evaluation",
                 run.id,
+            )
+            self._persist_inconclusive(run.id, reasoning=no_loop_reason)
+            return "failed_persisted"
+
+        coroutine = _evaluate()
+        try:
+            if self._task_spawner is not None:
+                self._task_spawner(coroutine)
+            else:
+                asyncio.run_coroutine_threadsafe(coroutine, loop)
+            return "queued"
+        except Exception as exc:  # noqa: BLE001
+            # A coroutine rejected by the scheduler must be explicitly closed;
+            # otherwise Python emits the same "was never awaited" warning that
+            # exposed the original data-loss bug.
+            coroutine.close()
+            _logger.warning(
+                "task_outcome_recorder: evaluator scheduling failed for run=%s: %s; "
+                "recording inconclusive evaluation",
+                run.id,
+                exc,
+            )
+            self._persist_inconclusive(
+                run.id,
+                reasoning=(
+                    "Automated evaluation unavailable: failed to schedule the LLM "
+                    f"evaluator ({type(exc).__name__}: {str(exc)[:400]})."
+                ),
+            )
+            return "failed_persisted"
+
+    def _persist_inconclusive(self, task_run_id: str, *, reasoning: str) -> None:
+        """Synchronously persist the evaluator fallback, idempotently."""
+        try:
+            if self.store.get_evaluation_for_run(task_run_id) is not None:
+                return
+            self.store.create_evaluation(
+                CreateTaskEvaluationInput(
+                    task_run_id=task_run_id,
+                    evaluator_type="llm",
+                    verdict="inconclusive",
+                    reasoning=reasoning,
+                )
+            )
+        except Exception:
+            # Persistence can only fail when the store itself is unavailable.
+            # Log loudly rather than recreating the original silent hole.
+            _logger.exception(
+                "task_outcome_recorder: CRITICAL: failed to persist inconclusive "
+                "evaluation for run=%s",
+                task_run_id,
             )
 
     def _enqueue_langfuse_for_run(self, run: Any) -> None:
@@ -849,6 +964,7 @@ __all__ = [
     "get_recorder",
     "peek_routing_snapshot",
     "set_recorder",
+    "set_recorder_loop",
     "stage_routing_snapshot",
     "summarise_run_for_log",
 ]

@@ -25,6 +25,7 @@ from omnigent.stores.conversation_store.sqlalchemy_store import (
 from omnigent.stores.task_outcome_store import (
     CreateRoutingDecisionInput,
     CreateRoutingProposalInput,
+    CreateTaskEvaluationInput,
     CreateTaskRunInput,
     TaskOutcomeStore,
     UpdateTaskRunTerminalInput,
@@ -388,6 +389,70 @@ def test_submit_direct_review_does_not_require_routing_links(
     detail = client.get(f"/v1/task-runs/{run.id}").json()
     assert detail["routing"] is None
     assert detail["review"]["id"] == response.json()["id"]
+
+
+# ── evaluate_task_run ─────────────────────────────────────────────────
+
+
+def test_evaluate_endpoint_creates_evaluation_for_terminal_run(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    store, client = store_and_app
+    run_id = _seed_terminalised(store)
+
+    response = client.post(f"/v1/task-runs/{run_id}/evaluate")
+
+    assert response.status_code == 202
+    assert response.json()["status"] in {"queued", "failed_persisted"}
+    evaluation = store.get_evaluation_for_run(run_id)
+    assert evaluation is not None
+    assert evaluation.verdict == "inconclusive"
+
+
+def test_evaluate_endpoint_returns_409_when_evaluation_exists(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    store, client = store_and_app
+    run_id = _seed_terminalised(store)
+    store.create_evaluation(
+        CreateTaskEvaluationInput(
+            task_run_id=run_id,
+            evaluator_type="llm",
+            verdict="inconclusive",
+            reasoning="Already evaluated.",
+        )
+    )
+
+    response = client.post(f"/v1/task-runs/{run_id}/evaluate")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "evaluation already exists"
+
+
+def test_evaluate_endpoint_returns_404_for_unknown_run(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    _store, client = store_and_app
+
+    response = client.post("/v1/task-runs/unknown/evaluate")
+
+    assert response.status_code == 404
+
+
+def test_evaluate_endpoint_returns_400_for_non_terminal_run(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    store, client = store_and_app
+    run = store.create_run(
+        CreateTaskRunInput(
+            conversation_id="c1",
+            response_id="r-running-evaluation",
+        )
+    )
+
+    response = client.post(f"/v1/task-runs/{run.id}/evaluate")
+
+    assert response.status_code == 400
 
 
 # ── submit_task_run_review ──────────────────────────────────────────────

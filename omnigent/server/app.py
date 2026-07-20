@@ -1198,7 +1198,11 @@ def create_app(
     server_metrics = ServerPerformanceMetrics()
     server_metrics_otel = ServerMetricsOtelPublisher()
 
-    from omnigent.server.task_outcome_recorder import TaskOutcomeRecorder, set_recorder
+    from omnigent.server.task_outcome_recorder import (
+        TaskOutcomeRecorder,
+        set_recorder,
+        set_recorder_loop,
+    )
 
     set_recorder(
         TaskOutcomeRecorder(store=task_outcome_store) if task_outcome_store is not None else None
@@ -1228,6 +1232,11 @@ def create_app(
         :param app_inst: The FastAPI app, used to attach
             per-AP state via ``app_inst.state.*``.
         """
+        # Relay terminal callbacks run in ``asyncio.to_thread`` workers.
+        # Capture the server loop once so the recorder can dispatch evaluator
+        # coroutines back here instead of looking for a loop in the worker.
+        set_recorder_loop(asyncio.get_running_loop())
+
         # Bump AnyIO default thread limiter from 40 → 200; every
         # ``asyncio.to_thread`` and FastAPI sync route grabs one.
         from anyio import to_thread as _to_thread
@@ -1350,6 +1359,7 @@ def create_app(
             # endpoint. Best-effort — individual close failures are logged
             # inside shutdown_all().
             await _mcp_pool.shutdown_all()
+            set_recorder_loop(None)
 
     app = FastAPI(title="Omnigent Server", lifespan=_lifespan)
     from omnigent.runtime import telemetry

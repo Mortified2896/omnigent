@@ -9,6 +9,7 @@ event loop.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -27,7 +28,10 @@ from omnigent.server.task_outcome_recorder import (
     stage_routing_snapshot,
 )
 from omnigent.stores.task_outcome_store import (
+    CreateTaskEvaluationInput,
+    CreateTaskRunInput,
     TaskOutcomeStore,
+    UpdateTaskRunTerminalInput,
 )
 from omnigent.stores.task_outcome_store.sqlalchemy_store import (
     SqlAlchemyTaskOutcomeStore,
@@ -304,6 +308,135 @@ def test_recorder_terminal_unknown_run_is_noop(
     # No evaluator / Langfuse side-effects fire on a missing row.
     assert spawn_evaluator.call_count == 0
     assert enqueue_langfuse.call_count == 0
+
+
+def test_spawn_evaluator_persists_inconclusive_when_no_loop(
+    store: TaskOutcomeStore,
+) -> None:
+    """A worker without the lifespan loop still gets a durable evaluation."""
+    recorder = TaskOutcomeRecorder(store=store)
+    run_id = recorder.on_response_in_progress(
+        session_id="c1",
+        conversation=_conversation(),
+        response_id="r-no-loop",
+        model_id=None,
+        user_message_id=None,
+        user_message_summary="Say hi",
+        project_path=None,
+    )
+
+    recorder.on_response_terminal(
+        task_run_id=run_id,
+        terminal_status="completed",
+        terminal_at=200,
+        response_summary="Hi",
+    )
+
+    evaluation = store.get_evaluation_for_run(run_id)
+    assert evaluation is not None
+    assert evaluation.verdict == "inconclusive"
+    assert "no event loop available" in (evaluation.reasoning or "")
+
+
+def test_spawn_evaluator_idempotent_when_evaluation_exists(
+    store: TaskOutcomeStore,
+) -> None:
+    """Terminal dispatch does not append a second evaluation row."""
+    recorder = TaskOutcomeRecorder(store=store)
+    run_id = recorder.on_response_in_progress(
+        session_id="c1",
+        conversation=_conversation(),
+        response_id="r-existing-evaluation",
+        model_id=None,
+        user_message_id=None,
+        user_message_summary=None,
+        project_path=None,
+    )
+    existing = store.create_evaluation(
+        CreateTaskEvaluationInput(
+            task_run_id=run_id,
+            evaluator_type="llm",
+            verdict="inconclusive",
+            reasoning="Already evaluated.",
+        )
+    )
+
+    recorder.on_response_terminal(
+        task_run_id=run_id,
+        terminal_status="completed",
+        terminal_at=200,
+    )
+
+    persisted = store.get_evaluation_for_run(run_id)
+    assert persisted is not None
+    assert persisted.id == existing.id
+
+
+def test_spawn_evaluator_uses_main_loop_when_available(
+    store: TaskOutcomeStore,
+) -> None:
+    """The worker dispatches through the captured FastAPI event loop."""
+    loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    loop.is_running.return_value = True
+    loop.is_closed.return_value = False
+    spawner_calls: list[tuple[Any, asyncio.AbstractEventLoop]] = []
+
+    def _spawner(coroutine: Any) -> Any:
+        spawner_calls.append((coroutine, loop))
+        coroutine.close()
+        return MagicMock()
+
+    recorder = TaskOutcomeRecorder(store=store, _loop=loop, _task_spawner=_spawner)
+    run_id = recorder.on_response_in_progress(
+        session_id="c1",
+        conversation=_conversation(),
+        response_id="r-main-loop",
+        model_id=None,
+        user_message_id=None,
+        user_message_summary=None,
+        project_path=None,
+    )
+
+    recorder.on_response_terminal(
+        task_run_id=run_id,
+        terminal_status="completed",
+        terminal_at=200,
+    )
+
+    assert len(spawner_calls) == 1
+    coroutine, scheduled_loop = spawner_calls[0]
+    assert scheduled_loop is loop
+    assert asyncio.iscoroutine(coroutine)
+    coroutine.close()  # mirroring the spawner's duty; safe to call again
+    assert store.get_evaluation_for_run(run_id) is None
+
+
+def test_re_evaluate_terminal_run_creates_evaluation(
+    store: TaskOutcomeStore,
+) -> None:
+    """Manual repair uses the same durable no-loop fallback."""
+    run = store.create_run(
+        CreateTaskRunInput(
+            conversation_id="c1",
+            response_id="r-manual-evaluate",
+            task_description="Repair the missing outcome.",
+        )
+    )
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run.id,
+            terminal_status="completed",
+            terminal_at=200,
+        )
+    )
+    recorder = TaskOutcomeRecorder(store=store)
+
+    status = recorder.re_evaluate(run.id)
+
+    assert status == "failed_persisted"
+    evaluation = store.get_evaluation_for_run(run.id)
+    assert evaluation is not None
+    assert evaluation.verdict == "inconclusive"
 
 
 # ── recorder: langfuse sync dispatch ────────────────────────────────────
