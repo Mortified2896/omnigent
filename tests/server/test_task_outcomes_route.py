@@ -278,6 +278,118 @@ def test_get_task_run_404_when_missing(
     assert response.status_code == 404
 
 
+def test_get_direct_exact_model_run_returns_selection_context(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    store, client = store_and_app
+    run = store.create_run(
+        CreateTaskRunInput(
+            conversation_id="c1",
+            response_id="resp_direct_model",
+            harness_id="opencode-native",
+            selected_provider="openai",
+            selected_model="openai/gpt-5.4",
+        )
+    )
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run.id,
+            terminal_status="completed",
+            terminal_at=200,
+        )
+    )
+
+    response = client.get(f"/v1/task-runs/{run.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["routing"] is None
+    assert body["selection"] == {
+        "source": "user_selected_model",
+        "requested": {
+            "harness": "opencode-native",
+            "provider": "openai",
+            "model": "openai/gpt-5.4",
+            "route_id": None,
+            "reasoning_effort": None,
+            "permission_mode": None,
+        },
+    }
+
+
+def test_get_direct_omniroute_run_returns_selection_context(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    store, client = store_and_app
+    run = store.create_run(
+        CreateTaskRunInput(
+            conversation_id="c1",
+            response_id="resp_direct_route",
+            harness_id="opencode-native",
+            requested_route_id="auto/coding:reliable",
+            selected_provider="omniroute",
+            selected_model="auto/coding:reliable",
+        )
+    )
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run.id,
+            terminal_status="completed",
+            terminal_at=200,
+        )
+    )
+
+    response = client.get(f"/v1/task-runs/{run.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["routing"] is None
+    assert body["selection"] == {
+        "source": "user_selected_route",
+        "requested": {
+            "harness": "opencode-native",
+            "provider": "omniroute",
+            "model": "auto/coding:reliable",
+            "route_id": "auto/coding:reliable",
+            "reasoning_effort": None,
+            "permission_mode": None,
+        },
+    }
+
+
+def test_submit_direct_review_does_not_require_routing_links(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    store, client = store_and_app
+    run = store.create_run(
+        CreateTaskRunInput(
+            conversation_id="c1",
+            response_id="resp_direct_review",
+            harness_id="opencode-native",
+            selected_provider="openai",
+            selected_model="openai/gpt-5.4",
+        )
+    )
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run.id,
+            terminal_status="completed",
+            terminal_at=200,
+        )
+    )
+
+    response = client.post(
+        f"/v1/task-runs/{run.id}/review",
+        json={"action": "adjust", "verdict": "success", "quality_score": 5},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["verdict"] == "success"
+    detail = client.get(f"/v1/task-runs/{run.id}").json()
+    assert detail["routing"] is None
+    assert detail["review"]["id"] == response.json()["id"]
+
+
 # ── submit_task_run_review ──────────────────────────────────────────────
 
 

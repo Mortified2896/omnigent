@@ -156,7 +156,7 @@ export function resolveTaskOutcomeAnchors(
   // Only bubbles with VISIBLE FINAL TEXT content qualify.
   for (const run of taskRuns) {
     if (run.response_id == null) continue;
-    if (run.routing_proposal_id === null || run.routing_decision_id === null) continue;
+    if (run.terminal_status !== "completed") continue;
 
     // Find eligible bubbles with this exact responseId that have visible final text
     let eligibleBubble: Extract<Bubble, { kind: "assistant" }> | undefined;
@@ -374,10 +374,28 @@ export interface TaskRunRoutingContext {
   };
 }
 
+export interface TaskRunSelectionContext {
+  source:
+    | "routing_agent"
+    | "user_selected_model"
+    | "user_selected_route"
+    | "session_default"
+    | "unknown";
+  requested: {
+    harness: string | null;
+    provider: string | null;
+    model: string | null;
+    route_id: string | null;
+    reasoning_effort: string | null;
+    permission_mode: string | null;
+  };
+}
+
 /** Aggregate response of `GET /v1/task-runs/{id}`. */
 export interface TaskRunDetailResponse {
   run: TaskRun;
   routing?: TaskRunRoutingContext | null;
+  selection: TaskRunSelectionContext;
   evaluation: TaskEvaluation | null;
   /** Review submitted by the requesting user (``null`` when none). */
   review: TaskReview | null;

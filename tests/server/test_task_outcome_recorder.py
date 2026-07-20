@@ -56,6 +56,7 @@ def _conversation() -> Any:
     conv.workspace = "/home/user/repo"
     conv.harness_override = None
     conv.agent_id = "ag_abc"
+    conv.omniroute_route_id = None
     return conv
 
 
@@ -160,6 +161,32 @@ def test_recorder_creates_run_when_no_snapshot(
     assert run.requested_route_id is None
     assert run.selected_model == "openai/gpt-5-mini"
     assert run.selected_provider == "openai"
+
+
+def test_recorder_creates_manual_omniroute_run_from_session_selection(
+    store: TaskOutcomeStore,
+) -> None:
+    recorder = TaskOutcomeRecorder(store=store)
+    conversation = _conversation()
+    conversation.omniroute_route_id = "auto/coding:reliable"
+
+    run_id = recorder.on_response_in_progress(
+        session_id="c1",
+        conversation=conversation,
+        response_id="r-direct-route",
+        model_id="auto/coding:reliable",
+        user_message_id="msg-1",
+        user_message_summary="Inspect status",
+        project_path=None,
+    )
+
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.routing_proposal_id is None
+    assert run.routing_decision_id is None
+    assert run.requested_route_id == "auto/coding:reliable"
+    assert run.selected_provider == "omniroute"
+    assert run.selected_model == "auto/coding:reliable"
 
 
 def test_recorder_handles_in_progress_failure_gracefully(

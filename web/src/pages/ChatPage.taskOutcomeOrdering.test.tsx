@@ -237,6 +237,17 @@ const READY_DETAIL: TaskRunDetailResponse = {
     created_at: 0,
     updated_at: 0,
   },
+  selection: {
+    source: "routing_agent",
+    requested: {
+      harness: "h1",
+      provider: "anthropic",
+      model: "claude-4.7",
+      route_id: "auto/coding",
+      reasoning_effort: "medium",
+      permission_mode: null,
+    },
+  },
   evaluation: {
     id: "eval-1",
     task_run_id: "run-1",

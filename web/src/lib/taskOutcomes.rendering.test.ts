@@ -205,10 +205,24 @@ describe("resolveTaskOutcomeAnchors", () => {
       expect(anchors.size).toBe(0);
     });
 
-    it("does not attach routing review cards to direct manual runs", () => {
+    it("attaches execution review cards to direct manual runs", () => {
       const bubbles = [user("u1"), assistant("resp_1")];
       const directRun = {
         ...run("resp_1", "u1"),
+        routing_proposal_id: null,
+        routing_decision_id: null,
+      };
+
+      expect(resolveTaskOutcomeAnchors(bubbles, [directRun])).toEqual(
+        new Map([["resp_1-stable", "resp_1"]]),
+      );
+    });
+
+    it("does not attach pending or running direct runs", () => {
+      const bubbles = [user("u1"), assistant("resp_1")];
+      const directRun = {
+        ...run("resp_1", "u1"),
+        terminal_status: "running" as const,
         routing_proposal_id: null,
         routing_decision_id: null,
       };

@@ -274,6 +274,34 @@ def _serialise_routing_context_for_run(
     }
 
 
+def _serialise_selection_context(run: TaskRun) -> dict[str, Any]:
+    """Return the persisted execution request and its authoritative source."""
+    if run.routing_proposal_id is not None and run.routing_decision_id is not None:
+        source = "routing_agent"
+    elif run.requested_route_id is not None:
+        source = "user_selected_route"
+    elif run.selected_model is not None:
+        source = "user_selected_model"
+    elif any(
+        value is not None
+        for value in (run.harness_id, run.reasoning_effort, run.permission_mode)
+    ):
+        source = "session_default"
+    else:
+        source = "unknown"
+    return {
+        "source": source,
+        "requested": {
+            "harness": run.harness_id,
+            "provider": run.selected_provider,
+            "model": run.selected_model,
+            "route_id": run.requested_route_id,
+            "reasoning_effort": run.reasoning_effort,
+            "permission_mode": run.permission_mode,
+        },
+    }
+
+
 def _serialise_evaluation(evaluation: Any | None) -> dict[str, Any] | None:
     """Render a :class:`TaskEvaluation` as an API JSON dict, or ``None``."""
     if evaluation is None:
@@ -582,6 +610,7 @@ def create_task_outcomes_router(
             "routing": await _call_store(
                 _serialise_routing_context_for_run, store=store, run=detail.run
             ),
+            "selection": _serialise_selection_context(detail.run),
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(
                 await _call_store(
@@ -632,6 +661,7 @@ def create_task_outcomes_router(
             "routing": await _call_store(
                 _serialise_routing_context_for_run, store=store, run=detail.run
             ),
+            "selection": _serialise_selection_context(detail.run),
             "evaluation": _serialise_evaluation(detail.evaluation),
             "review": _serialise_review(review_for_caller),
             "any_review": _serialise_review(detail.review),

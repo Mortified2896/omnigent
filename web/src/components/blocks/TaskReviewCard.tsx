@@ -311,6 +311,7 @@ export function TaskReviewCard({
             <TaskReviewCardBody
               run={run}
               routing={detail?.routing ?? null}
+              selection={detail?.selection ?? null}
               evaluation={evaluation}
             />
           )}
@@ -374,40 +375,70 @@ function formatPackage(
     .join(" · ");
 }
 
+function selectionSourceLabel(source: TaskRunDetailResponse["selection"]["source"]): string {
+  return {
+    routing_agent: "Routing Agent",
+    user_selected_model: "User-selected model",
+    user_selected_route: "User-selected route",
+    session_default: "Session default",
+    unknown: "Unknown",
+  }[source];
+}
+
 function TaskReviewCardBody({
   run,
   routing,
+  selection,
   evaluation,
 }: {
   run: TaskRun;
   routing: TaskRunDetailResponse["routing"];
+  selection: TaskRunDetailResponse["selection"] | null;
   evaluation: TaskEvaluation | null;
 }) {
+  const requested = selection?.requested;
+  const requestedPackage = requested
+    ? formatPackage({ ...requested, route_id: null })
+    : "—";
   return (
     <div className="grid gap-3 pb-3">
       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
         <div>
-          <span className="text-slate-500">Proposed package</span>
-          <div className="font-medium text-slate-900">{formatPackage(routing?.proposed)}</div>
-        </div>
-        <div>
-          <span className="text-slate-500">Approved package</span>
-          <div className="font-medium text-slate-900">{formatPackage(routing?.approved)}</div>
-        </div>
-        <div>
-          <span className="text-slate-500">Requested route</span>
-          <div className="font-medium text-slate-900">{run.requested_route_id ?? "—"}</div>
-        </div>
-        <div>
-          <span className="text-slate-500">Execution requested</span>
+          <span className="text-slate-500">Selection source</span>
           <div className="font-medium text-slate-900">
-            {run.selected_provider
-              ? `${run.selected_provider}/${run.selected_model ?? "?"}`
-              : (run.selected_model ?? "—")}
+            {selection ? selectionSourceLabel(selection.source) : "Unknown"}
+          </div>
+        </div>
+        {routing && (
+          <>
+            <div>
+              <span className="text-slate-500">Proposed package</span>
+              <div className="font-medium text-slate-900">{formatPackage(routing.proposed)}</div>
+            </div>
+            <div>
+              <span className="text-slate-500">Approved package</span>
+              <div className="font-medium text-slate-900">{formatPackage(routing.approved)}</div>
+            </div>
+          </>
+        )}
+        {requested?.route_id && (
+          <div>
+            <span className="text-slate-500">Requested route</span>
+            <div className="font-medium text-slate-900">{requested.route_id}</div>
+          </div>
+        )}
+        <div>
+          <span className="text-slate-500">Requested package</span>
+          <div className="font-medium text-slate-900">
+            {requested?.route_id ? "OmniRoute combo" : requestedPackage}
           </div>
         </div>
         <div>
-          <span className="text-slate-500">Executed provider/model</span>
+          <span className="text-slate-500">Actual harness</span>
+          <div className="font-medium text-slate-900">{run.harness_id ?? "Unavailable"}</div>
+        </div>
+        <div>
+          <span className="text-slate-500">Actual provider/model</span>
           <div className="font-medium text-slate-900">
             {run.actual_provider && run.actual_provider_model
               ? `${run.actual_provider}/${run.actual_provider_model}`
@@ -417,12 +448,8 @@ function TaskReviewCardBody({
         <div>
           <span className="text-slate-500">Execution provenance</span>
           <div className="font-medium text-slate-900">
-            {run.actual_provenance_verified ? "Verified" : "Unverified"}
+            {run.actual_provenance_verified ? "Verified" : "Unavailable"}
           </div>
-        </div>
-        <div>
-          <span className="text-slate-500">Actual harness</span>
-          <div className="font-medium text-slate-900">{run.harness_id ?? "—"}</div>
         </div>
         <div>
           <span className="text-slate-500">Fallback / substitution</span>

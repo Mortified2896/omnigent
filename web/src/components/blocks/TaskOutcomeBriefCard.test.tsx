@@ -111,6 +111,38 @@ const detail: TaskRunDetailResponse = {
     created_at: 0,
     updated_at: 0,
   },
+  routing: {
+    proposal_id: "proposal-1",
+    decision_id: "decision-1",
+    proposed: {
+      harness: "opencode-native",
+      provider: null,
+      model: null,
+      route_id: "auto/coding",
+      reasoning_effort: "low",
+      permission_mode: null,
+    },
+    approved: {
+      harness: "opencode-native",
+      provider: null,
+      model: null,
+      route_id: "auto/coding:reliable",
+      reasoning_effort: "low",
+      permission_mode: null,
+      action: "changed",
+    },
+  },
+  selection: {
+    source: "routing_agent",
+    requested: {
+      harness: "h",
+      provider: "provider",
+      model: "model",
+      route_id: "route",
+      reasoning_effort: "low",
+      permission_mode: null,
+    },
+  },
   evaluation: {
     id: "eval-1",
     task_run_id: "run-1",
@@ -449,6 +481,130 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(screen.queryByTestId("outcome-brief-pending")).not.toBeInTheDocument();
     expect(screen.queryByTestId("outcome-brief-failed")).not.toBeInTheDocument();
     expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows routed proposed and approved packages", async () => {
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await screen.findByTestId("task-outcome-brief-card");
+    fireEvent.click(screen.getByRole("button", { name: /Adjust/ }));
+    const card = await screen.findByTestId("task-review-card");
+
+    expect(within(card).getByText("Routing Agent")).toBeInTheDocument();
+    expect(within(card).getByText(/opencode-native · auto\/coding · low/)).toBeInTheDocument();
+    expect(
+      within(card).getByText(/opencode-native · auto\/coding:reliable · low/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows direct exact-model selection without routing-only rows", async () => {
+    const direct = detailFor({
+      routing: null,
+      selection: {
+        source: "user_selected_model",
+        requested: {
+          harness: "opencode-native",
+          provider: "openai",
+          model: "openai/gpt-5.4",
+          route_id: null,
+          reasoning_effort: null,
+          permission_mode: null,
+        },
+      },
+      run: {
+        requested_route_id: null,
+        selected_provider: "openai",
+        selected_model: "openai/gpt-5.4",
+        harness_id: "opencode-native",
+        actual_provider: null,
+        actual_provider_model: null,
+        actual_provenance_verified: false,
+      },
+    });
+    mocks.getTaskRunForResponse.mockResolvedValue(direct);
+    mocks.getTaskRun.mockResolvedValue(direct);
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await screen.findByTestId("task-outcome-brief-card");
+    fireEvent.click(screen.getByRole("button", { name: /Adjust/ }));
+    const card = await screen.findByTestId("task-review-card");
+
+    expect(within(card).getByText("User-selected model")).toBeInTheDocument();
+    expect(within(card).queryByText("Proposed package")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Approved package")).not.toBeInTheDocument();
+    expect(within(card).getByText(/openai\/gpt-5.4/)).toBeInTheDocument();
+    expect(within(card).getAllByText("Unavailable").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps a requested OmniRoute combo separate from actual execution", async () => {
+    const directRoute = detailFor({
+      routing: null,
+      selection: {
+        source: "user_selected_route",
+        requested: {
+          harness: "opencode-native",
+          provider: "omniroute",
+          model: "auto/coding:reliable",
+          route_id: "auto/coding:reliable",
+          reasoning_effort: null,
+          permission_mode: null,
+        },
+      },
+      run: {
+        requested_route_id: "auto/coding:reliable",
+        selected_provider: "omniroute",
+        selected_model: "auto/coding:reliable",
+        harness_id: "opencode-native",
+        actual_provider: "openai",
+        actual_provider_model: "gpt-5.4",
+        actual_provenance_verified: true,
+      },
+    });
+    mocks.getTaskRunForResponse.mockResolvedValue(directRoute);
+    mocks.getTaskRun.mockResolvedValue(directRoute);
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await screen.findByTestId("task-outcome-brief-card");
+    fireEvent.click(screen.getByRole("button", { name: /Adjust/ }));
+    const card = await screen.findByTestId("task-review-card");
+
+    expect(within(card).getByText("User-selected route")).toBeInTheDocument();
+    expect(within(card).getByText("auto/coding:reliable")).toBeInTheDocument();
+    expect(within(card).getByText("OmniRoute combo")).toBeInTheDocument();
+    expect(within(card).getByText("openai/gpt-5.4")).toBeInTheDocument();
+    expect(within(card).getByText("Verified")).toBeInTheDocument();
+  });
+
+  it("submits a direct run review", async () => {
+    const direct = detailFor({
+      routing: null,
+      selection: {
+        source: "user_selected_model",
+        requested: {
+          harness: "opencode-native",
+          provider: "openai",
+          model: "openai/gpt-5.4",
+          route_id: null,
+          reasoning_effort: null,
+          permission_mode: null,
+        },
+      },
+    });
+    mocks.getTaskRunForResponse.mockResolvedValue(direct);
+    mocks.getTaskRun.mockResolvedValue(direct);
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await screen.findByTestId("task-outcome-brief-card");
+    fireEvent.click(screen.getByRole("button", { name: /Adjust/ }));
+    const card = await screen.findByTestId("task-review-card");
+    fireEvent.click(within(card).getByText("Successful"));
+    fireEvent.click(within(card).getByRole("button", { name: /Save review/ }));
+
+    await waitFor(() =>
+      expect(mocks.submitTaskRunReview).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ action: "adjust", verdict: "success" }),
+      ),
+    );
   });
 
   it("saving Adjust submits action=adjust with the corrected fields", async () => {
