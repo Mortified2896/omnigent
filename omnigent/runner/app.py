@@ -1079,6 +1079,7 @@ async def _auto_create_opencode_terminal(
     server_client: httpx.AsyncClient | None = None,
     ensure_comment_relay: Callable[..., Awaitable[None]] | None = None,
     provenance_proxy: Any | None = None,
+    runtime_pool: Any | None = None,
 ) -> SessionResourceView:
     """
     Auto-create an OpenCode terminal for an opencode-native session.
@@ -1099,6 +1100,9 @@ async def _auto_create_opencode_terminal(
         relay for this session's bridge dir (the nested
         ``_ensure_comment_relay_started``). ``None`` skips wiring the Omnigent
         MCP relay (tests / no server).
+    :param runtime_pool: Optional opencode runtime pool the conversation
+        should be registered with. ``None`` skips pool bookkeeping
+        (registry-less test doubles / direct module callers).
     :returns: The created terminal resource view.
     """
     from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
@@ -1385,6 +1389,21 @@ async def _auto_create_opencode_terminal(
                 workspace=workspace,
             ),
         )
+        # Register / refresh the opencode runtime pool entry so the
+        # bounded pool (default 2 warm servers) and the idle reaper
+        # (default 300 s) know this conversation owns a live server.
+        # Done AFTER bridge state is written so the entry's
+        # ``external_session_id`` matches the durable OpenCode session id.
+        # The pool is a no-op when not provided (registry-less test
+        # doubles / module-level direct callers).
+        if runtime_pool is not None:
+            await _register_opencode_runtime_after_boot(
+                pool=runtime_pool,
+                session_id=session_id,
+                bridge_dir=bridge_dir,
+                opencode_session_id=opencode_session_id,
+                resource_registry=resource_registry,
+            )
     except Exception:
         await server.close()
         _AUTO_OPENCODE_SERVERS.pop(session_id, None)
@@ -1416,7 +1435,11 @@ async def _auto_create_opencode_terminal(
         )
         forwarder_task = asyncio.create_task(
             _supervise_opencode_forwarder(
-                session_id, server, forwarder, provenance_proxy=provenance_proxy
+                session_id,
+                server,
+                forwarder,
+                provenance_proxy=provenance_proxy,
+                runtime_pool=runtime_pool,
             ),
             name=f"opencode-forwarder-{session_id}",
         )
@@ -1474,6 +1497,7 @@ async def _supervise_opencode_forwarder(
     forwarder: Any,
     *,
     provenance_proxy: Any | None = None,
+    runtime_pool: Any | None = None,
 ) -> None:
     """
     Run the OpenCode SSE forwarder, closing the server when it ends.
@@ -1486,6 +1510,13 @@ async def _supervise_opencode_forwarder(
     :param session_id: Session/conversation id, e.g. ``"conv_abc123"``.
     :param server: The :class:`OpenCodeNativeServer` to close on exit.
     :param forwarder: The :class:`OpenCodeNativeForwarder` to run.
+    :param provenance_proxy: Optional provenance observer to clear on exit.
+    :param runtime_pool: Optional opencode runtime pool. When the
+        supervisor finishes, the pool's bookkeeping entry for
+        *session_id* is moved to ``STOPPING`` so the bounded pool sees
+        the live ``opencode serve`` slot freed even when the supervisor
+        runs without a prior ``register`` call (e.g. an
+        archive/delete-driven restart loop).
     :returns: None.
     """
     try:
@@ -1500,6 +1531,14 @@ async def _supervise_opencode_forwarder(
         elif server is not None:
             with contextlib.suppress(Exception):
                 await server.close()
+        # Mirror the supervisor teardown into the runtime pool so the
+        # bounded count stays accurate even when the supervisor fires
+        # without a prior ``_register_opencode_runtime_after_boot`` call
+        # (e.g. archive/delete-driven restart loops). ``pop`` keeps the
+        # registry bounded.
+        if runtime_pool is not None and runtime_pool.has_entry(session_id):
+            with contextlib.suppress(Exception):
+                await runtime_pool.terminate(session_id, reason="forwarder_exit")
 
 
 # Permission decisions can park a human approval card server-side
@@ -5326,6 +5365,182 @@ def _native_terminal_start_error_response(exc: BaseException, runtime_name: str)
         status_code=500,
         content={"error": _native_terminal_start_error_payload(exc, runtime_name)},
     )
+
+
+def _opencode_pool_from_app(app: FastAPI) -> Any | None:
+    """Return the opencode runtime pool attached to *app*, or ``None``.
+
+    Used by helpers that want to participate in the pool without taking
+    a direct dependency on the optional ``app.state`` attribute (set by
+    :func:`create_runner_app` and absent in the registry-less lightweight
+    factory and minimal test doubles).
+    """
+    return getattr(app.state, "opencode_runtime_pool", None)
+
+
+async def _register_opencode_runtime_after_boot(
+    *,
+    pool: Any,
+    session_id: str,
+    bridge_dir: Path,
+    opencode_session_id: str | None,
+    resource_registry: Any,
+) -> None:
+    """Register / refresh a runtime entry once ``opencode serve`` is up.
+
+    Captures safe diagnostic metadata (port, PIDs when available) and
+    flips the entry state to ``AWAKE``. Refreshes the entry's idle clock
+    so a freshly-launched runtime gets a full grace window before the
+    reaper picks it up.
+    """
+    from omnigent.runner.opencode_runtime_manager import (
+        LifecycleState,
+        OpenCodeRuntimeEntry,
+    )
+
+    entry = pool.get(session_id)
+    metadata: dict[str, Any] = {}
+    server = _AUTO_OPENCODE_SERVERS.get(session_id)
+    if server is not None:
+        port = getattr(server, "port", None)
+        if isinstance(port, int):
+            metadata["port"] = port
+        process = getattr(server, "process", None)
+        if process is not None:
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, int):
+                metadata["server_pid"] = pid
+    tr = (
+        getattr(resource_registry, "terminal_registry", None)
+        if resource_registry is not None
+        else None
+    )
+    if tr is not None:
+        term = tr.get(session_id, "opencode", "main")
+        if term is not None and getattr(term, "pid", None) is not None:
+            metadata["attach_pid"] = int(term.pid)
+    if entry is None:
+        entry = OpenCodeRuntimeEntry(
+            conversation_id=session_id,
+            external_session_id=opencode_session_id,
+            state=LifecycleState.AWAKE,
+            adapter_metadata=metadata,
+        )
+    else:
+        entry.external_session_id = opencode_session_id
+        entry.adapter_metadata = metadata
+    pool.register(session_id, entry)
+    # Mark the bridge session-id on the entry so resume / orphan
+    # classification can cross-check against the persisted
+    # ``external_session_id`` later.
+    del bridge_dir  # placeholder for future per-bridge metadata if needed
+
+
+async def _maybe_hibernate_opencode_for_capacity(
+    *,
+    pool: Any,
+    requesting_session_id: str,
+) -> None:
+    """Best-effort hibernate an LRU candidate before launching a new runtime.
+
+    Invoked from the opencode cold-boot path before
+    :func:`_auto_create_opencode_terminal`. The actual capacity check
+    lives in :meth:`OpenCodeRuntimePool.ensure_awake`; this helper exists
+    to surface the explicit hook on the cold-boot path so a future
+    watcher can correlate "we almost ran out of capacity here" with
+    operator telemetry. Currently a no-op when the pool is below
+    capacity; the real decision is made inside ``ensure_awake`` once the
+    launch is requested.
+
+    :param pool: The :class:`OpenCodeRuntimePool` (or ``None``).
+    :param requesting_session_id: Conversation id that will wake.
+    """
+    if pool is None:
+        return
+    if not pool.has_entry(requesting_session_id):
+        # No-op here; the real capacity decision is in ``ensure_awake``. Hook
+        # is reserved for a future pre-warm hibernate (e.g. start a
+        # hibernation in the background while the new launch is still
+        # preparing) without blocking the prompt.
+        return
+
+
+async def _ensure_opencode_awake(
+    *,
+    pool: Any,
+    requesting_session_id: str,
+    server_client: httpx.AsyncClient | None,
+    resource_registry: Any,
+    publish_event: Callable[[str, dict[str, Any]], None],
+    ensure_comment_relay: Callable[..., Awaitable[None]] | None,
+    provenance_proxy: Any | None,
+    resolve_spec: Callable[[str], Awaitable[Any]] | None = None,
+) -> bool:
+    """Ensure the opencode runtime for *requesting_session_id* is awake.
+
+    Returns ``True`` when the pool accepted the wake request (no action
+    was needed because the runtime was already awake, or the runtime
+    was freshly woken). Returns ``False`` when the pool rejected the
+    wake because the configured capacity is full and the bounded wait
+    timed out — callers MUST surface that as a documented retryable
+    capacity error (HTTP 429 / 503 per existing API conventions) and
+    MUST NOT raise :class:`runner_failed_to_start`.
+
+    On a hibernated session, this function restarts the opencode server
+    via the same :func:`_auto_create_opencode_terminal` path that handled
+    the cold-boot ensure, so resume transparently uses the durable
+    ``external_session_id`` already persisted on the conversation row.
+    """
+    from omnigent.runner.opencode_runtime_manager import CapacityBusyError
+
+    if pool is None:
+        return True
+    entry = pool.get(requesting_session_id)
+    if entry is not None and entry.state.value not in ("hibernated",):
+        return True
+    # Try to acquire a capacity slot (may evict an LRU idle candidate).
+    try:
+        await pool.ensure_awake(requesting_session_id)
+    except CapacityBusyError as exc:
+        _logger.info(
+            "opencode pool capacity busy: %s (requesting=%s, warm=%d, capacity=%d)",
+            exc,
+            requesting_session_id,
+            pool.warm_count(),
+            pool.max_warm_servers,
+        )
+        return False
+    # The runtime is registered but HIBERNATED — restart the server.
+    # We delegate to the existing auto-create path so resume semantics
+    # are identical to cold boot (provider config, MCP relay, forwarder,
+    # terminal attach, etc.).
+    spec = None
+    if resolve_spec is not None:
+        try:
+            spec = await resolve_spec(requesting_session_id)
+        except Exception:  # noqa: BLE001 - resolve_spec is best-effort.
+            spec = None
+    try:
+        _publish_terminal_pending(publish_event, requesting_session_id, True)
+        await _auto_create_opencode_terminal(
+            requesting_session_id,
+            resource_registry,
+            publish_event,
+            agent_spec=spec,
+            server_client=server_client,
+            ensure_comment_relay=ensure_comment_relay,
+            provenance_proxy=provenance_proxy,
+        )
+    except Exception as exc:
+        _logger.exception(
+            "opencode pool: wake failed for %s: %s",
+            requesting_session_id,
+            exc,
+        )
+        return False
+    finally:
+        _publish_terminal_pending(publish_event, requesting_session_id, False)
+    return True
 
 
 def _codex_ensure_response_with_policy_notice(
@@ -9525,6 +9740,7 @@ def create_runner_app(
                             server_client=server_client,
                             ensure_comment_relay=_ensure_comment_relay_started,
                             provenance_proxy=provenance_proxy,
+                            runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -9955,6 +10171,17 @@ def create_runner_app(
         # supervisor would poll a dead store and POST to a deleted session
         # forever. Idempotent when no forwarder was registered.
         await _cancel_auto_forwarder_task(session_id)
+
+        # OpenCode runtime pool: terminate the entry so its capacity slot
+        # is freed before the rest of the delete teardown. Hibernation
+        # cleanup (server + attach + bridge URL clear) is owned by the
+        # adapter; bridge directory cleanup is owned by
+        # ``_delete_native_bridge_dirs`` further below. ``pool`` is ``None``
+        # on the registry-less lightweight factory / minimal test doubles.
+        _oc_pool = getattr(app.state, "opencode_runtime_pool", None)
+        if _oc_pool is not None:
+            with contextlib.suppress(Exception):
+                await _oc_pool.terminate(session_id, reason="delete_session")
 
         if process_manager is not None:
             await process_manager.forward_cancel(session_id)
@@ -12144,6 +12371,7 @@ def create_runner_app(
             server_client=server_client,
             ensure_comment_relay=_ensure_comment_relay_started,
             provenance_proxy=provenance_proxy,
+            runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
         )
 
     async def _handle_opencode_native_model_change(conv_id: str, model: str | None) -> Response:
@@ -12213,6 +12441,7 @@ def create_runner_app(
                 server_client=server_client,
                 ensure_comment_relay=_ensure_comment_relay_started,
                 provenance_proxy=provenance_proxy,
+                runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
             )
         except Exception as exc:  # noqa: BLE001 - report relaunch failure to caller.
             return JSONResponse(
@@ -14160,6 +14389,33 @@ def create_runner_app(
                     _oc_tr is not None and _oc_tr.get(conv_id, "opencode", "main") is not None
                 )
                 if not _oc_ready:
+                    # Capacity check before launching a new server. A hibernated
+                    # session surfaces as ``not ready`` here; the bounded wait
+                    # frees an LRU idle runtime within the configured window. A
+                    # genuine all-busy capacity return yields a documented
+                    # retryable 503 (``opencode_capacity_busy``) instead of a
+                    # ``runner_failed_to_start`` failure card.
+                    _oc_pool = getattr(app.state, "opencode_runtime_pool", None)
+                    if _oc_pool is not None:
+                        from omnigent.runner.opencode_runtime_manager import CapacityBusyError
+
+                        try:
+                            await _oc_pool.ensure_awake(conv_id)
+                        except CapacityBusyError as exc:
+                            _logger.info(
+                                "opencode-native capacity busy at cold-boot for %s: %s",
+                                conv_id,
+                                exc,
+                            )
+                            return JSONResponse(
+                                status_code=503,
+                                content={
+                                    "error": "opencode_capacity_busy",
+                                    "detail": _client_safe_error_detail(
+                                        exc, context="opencode capacity"
+                                    ),
+                                },
+                            )
                     _publish_terminal_pending(_publish_event, conv_id, True)
                     try:
                         try:
@@ -14174,6 +14430,7 @@ def create_runner_app(
                             server_client=server_client,
                             ensure_comment_relay=_ensure_comment_relay_started,
                             provenance_proxy=provenance_proxy,
+                            runtime_pool=_oc_pool,
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -15967,6 +16224,7 @@ def create_runner_app(
                         server_client=server_client,
                         ensure_comment_relay=_ensure_comment_relay_started,
                         provenance_proxy=provenance_proxy,
+                        runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
                     )
                 except Exception as exc:
                     _logger.exception(
@@ -18789,6 +19047,13 @@ def create_runner_app(
     # ``_CapturingResourceRegistry`` / ``_TrackingTerminalRegistry`` doubles
     # don't break app construction — they just get no reaper).
     _pane_reaper_registry = getattr(resource_registry, "terminal_registry", None)
+    # ``_list_tmux_clients`` is used by BOTH the pane reaper (when its
+    # branch runs) and the opencode runtime pool's adapter (always).
+    # Import it once at the function scope so the adapter sees a defined
+    # symbol even on the lightweight / test paths where the pane reaper
+    # branch is skipped.
+    from omnigent.native_cost_popup import _list_tmux_clients
+
     if (
         resource_registry is not None
         and _pane_reaper_registry is not None
@@ -18800,9 +19065,12 @@ def create_runner_app(
         # would rebind it as a create_runner_app local for the WHOLE function,
         # leaving those earlier uses unbound on any path where this branch does
         # not run (registry-less app factory / test doubles) → NameError.
-        from omnigent.native_cost_popup import _list_tmux_clients
         from omnigent.runner.tool_dispatch import _publish_terminal_deleted_event
-        from omnigent.terminals.pane_reaper import NativePaneReaper, PaneRef
+        from omnigent.terminals.pane_reaper import (
+            NativePaneReaper,
+            PaneRef,
+            resolve_native_pane_idle_timeout_for,
+        )
 
         def _native_panes_for_reaper() -> list[PaneRef]:
             panes: list[PaneRef] = []
@@ -18848,15 +19116,259 @@ def create_runner_app(
                     publish_event=_publish_event,
                 )
 
+        def _idle_timeout_for(terminal_name: str) -> float:
+            """Per-harness native-pane idle window (opencode ≈ 2 min, others default).
+
+            The opencode pane drags in a heavier MCP fleet (~300 MB RSS per idle
+            session) than the other native harnesses; we reap its pane after ~2
+            minutes of idle so idle opencode sessions don't accumulate. Other
+            harnesses keep their existing 30-minute default so this knob is a
+            strict narrow for opencode. ``resolve_native_pane_idle_timeout_for``
+            honors ``OMNIGENT_NATIVE_PANE_OPENCODE_IDLE_TIMEOUT_S`` (0 disables
+            opencode reaping) and falls back to the global default for
+            unrecognized names.
+            """
+            return resolve_native_pane_idle_timeout_for(terminal_name)
+
         app.state.native_pane_reaper = NativePaneReaper(
             list_native_panes=_native_panes_for_reaper,
             is_busy=_native_pane_is_busy,
             reap=_reap_native_pane,
+            idle_timeout_for=_idle_timeout_for,
         )
     else:
         app.state.native_pane_reaper = None
 
+    # OpenCode runtime pool (memory-safety). Bounded persistent pool of
+    # runner-owned ``opencode serve`` instances with idle hibernation
+    # (default 300 s) and a hard warm-server cap (default 2). Hibernates an
+    # idle opencode server + its SSE forwarder + the embedded attach TUI
+    # without losing the durable opencode session id, so the next prompt
+    # resumes transparently. Started/stopped by the runner lifespan
+    # (``omnigent.runner._entry``). ``app.state.opencode_runtime_pool`` is
+    # ``None`` for the registry-less lightweight app factory and minimal
+    # test doubles (mirrors the pane reaper's ``None`` fallback) so those
+    # surfaces stay constructible.
+    from omnigent.runner.opencode_runtime_manager import OpenCodeRuntimePool
+
+    # Build the opencode runtime pool. ``_OpenCodeAdapter`` is a thin
+    # closure over the runner's existing state (``_AUTO_OPENCODE_SERVERS``,
+    # ``resource_registry``, ``_active_turns``, ``_native_pane_status``,
+    # ``process_manager``, ``_publish_event``) so hibernation reuses the
+    # proven teardown path instead of inventing a parallel
+    # process-management code path.
+    app.state.opencode_runtime_pool = OpenCodeRuntimePool(
+        adapter=_OpenCodeAdapter(
+            resource_registry=resource_registry,
+            process_manager=process_manager,
+            publish_event=_publish_event,
+            cancel_forwarder=_cancel_auto_forwarder_task,
+            auto_servers=_AUTO_OPENCODE_SERVERS,
+            active_turns=_active_turns,
+            native_pane_status=_native_pane_status,
+            list_tmux_clients=_list_tmux_clients,
+        )
+    )
+    _logger.info(
+        "opencode runtime pool attached (idle_timeout=%ss, max_warm=%d, "
+        "attach_timeout=%ss, capacity_wait=%ss)",
+        app.state.opencode_runtime_pool.idle_timeout_s,
+        app.state.opencode_runtime_pool.max_warm_servers,
+        app.state.opencode_runtime_pool.attach_idle_timeout_s,
+        app.state.opencode_runtime_pool.capacity_wait_timeout_s,
+    )
+
     return app
+
+
+class _OpenCodeAdapter:
+    """Adapter the opencode pool delegates side-effects to.
+
+    Pure dependency-injected adapter: every closure variable the adapter
+    needs (``resource_registry``, ``_AUTO_OPENCODE_SERVERS``, etc.) is
+    passed explicitly so the adapter can be unit-tested with fakes and
+    so the production wiring in :func:`create_runner_app` is a
+    constructor call rather than a nested class. The adapter delegates
+    to the runner's existing teardown helpers (``close_terminal``,
+    ``_cancel_auto_forwarder_task``, ``_publish_terminal_deleted_event``)
+    so the opencode hibernation path reuses the proven teardown rather
+    than inventing a parallel process-management code path.
+    """
+
+    def __init__(
+        self,
+        *,
+        resource_registry: Any,
+        process_manager: Any | None,
+        publish_event: Callable[[str, dict[str, Any]], None],
+        cancel_forwarder: Callable[[str], Awaitable[bool]],
+        auto_servers: dict[str, Any],
+        active_turns: dict[str, Any],
+        native_pane_status: dict[str, str],
+        list_tmux_clients: Callable[..., Any],
+    ) -> None:
+        self._resource_registry = resource_registry
+        self._process_manager = process_manager
+        self._publish_event = publish_event
+        self._cancel_forwarder = cancel_forwarder
+        self._auto_servers = auto_servers
+        self._active_turns = active_turns
+        self._native_pane_status = native_pane_status
+        self._list_tmux_clients = list_tmux_clients
+
+    async def is_busy(self, conversation_id: str) -> bool:
+        if conversation_id in self._active_turns:
+            return True
+        if self._process_manager is not None and self._process_manager.has_active_turn(
+            conversation_id
+        ):
+            return True
+        if self._native_pane_status.get(conversation_id) == "running":
+            return True
+        return False
+
+    async def has_attached_tmux_client(self, conversation_id: str) -> bool:
+        tr = (
+            getattr(self._resource_registry, "terminal_registry", None)
+            if self._resource_registry is not None
+            else None
+        )
+        if tr is None:
+            return False
+        entry = tr.get(conversation_id, "opencode", "main")
+        if entry is None or not entry.running:
+            return False
+        try:
+            clients = await asyncio.to_thread(
+                self._list_tmux_clients, str(entry.socket_path), "main"
+            )
+        except Exception:  # noqa: BLE001 - tmux probe errors mean "not attached".
+            return False
+        return bool(clients)
+
+    def warm_count(self) -> int:
+        return len(self._auto_servers)
+
+    def attach_pid(self, conversation_id: str) -> int | None:
+        tr = (
+            getattr(self._resource_registry, "terminal_registry", None)
+            if self._resource_registry is not None
+            else None
+        )
+        if tr is None:
+            return None
+        entry = tr.get(conversation_id, "opencode", "main")
+        if entry is None or not entry.running:
+            return None
+        return getattr(entry, "pid", None)
+
+    async def hibernate(self, conversation_id: str, *, reason: str = "") -> bool:
+        """Stop the opencode runtime for *conversation_id*.
+
+        Mirrors the existing ``shutdown_runner_opencode_native_servers``
+        path for ONE conversation. Order matches
+        ``_supervise_opencode_forwarder``'s ``finally``: cancel forwarder
+        → close attach → close server. ``reason`` is reserved by the
+        pool's adapter protocol for log correlation (and surfaced through
+        the teardown paths below).
+        """
+        del reason  # surfaced by the pool itself; not consumed here.
+        any_closed = False
+        forwarder_cancelled = await self._cancel_forwarder(conversation_id)
+        any_closed = any_closed or forwarder_cancelled
+        tr = (
+            getattr(self._resource_registry, "terminal_registry", None)
+            if self._resource_registry is not None
+            else None
+        )
+        if tr is not None:
+            terminal_id = terminal_resource_id("opencode", "main")
+            try:
+                instance = tr.get(conversation_id, "opencode", "main")
+            except Exception:  # noqa: BLE001 - registry errors mean "no terminal".
+                instance = None
+            if instance is not None and instance.running:
+                try:
+                    await self._resource_registry.close_terminal(conversation_id, terminal_id)
+                except Exception:
+                    _logger.exception(
+                        "opencode pool: close_terminal failed (conversation_id=%s)",
+                        conversation_id,
+                    )
+                finally:
+                    from omnigent.runner.tool_dispatch import (
+                        _publish_terminal_deleted_event,
+                    )
+
+                    _publish_terminal_deleted_event(
+                        conversation_id=conversation_id,
+                        terminal_name="opencode",
+                        session_key="main",
+                        publish_event=self._publish_event,
+                    )
+                any_closed = True
+        server = self._auto_servers.pop(conversation_id, None)
+        if server is not None:
+            with contextlib.suppress(Exception):
+                await server.close()
+            any_closed = True
+        # Clear the live bridge coords so a stale URL doesn't look like a
+        # live server. ``external_session_id`` and the durable selection
+        # (``model_override`` / ``reasoning_effort`` / ``permission_mode``
+        # / ``route_approved``) survive — the resume path reads them back.
+        try:
+            from omnigent.opencode_native_bridge import (
+                bridge_dir_for_bridge_id,
+                read_bridge_state,
+                write_bridge_state,
+            )
+        except ImportError:
+            read_bridge_state = None  # type: ignore[assignment]
+        if read_bridge_state is not None:
+            with contextlib.suppress(Exception):
+                bd = bridge_dir_for_bridge_id(conversation_id)
+                state = read_bridge_state(bd)
+                if state is not None:
+                    import dataclasses as _dc
+
+                    # ``server_base_url`` is the load-bearing live-coord
+                    # field — the harness subprocess routes prompts through
+                    # it. ``read_bridge_state`` requires a non-empty string
+                    # here, so we use ``about:blank`` as a sentinel for a
+                    # hibernated runtime (the executor treats it as "server
+                    # gone; resume will restart and refresh"). ``auth_secret``
+                    # is cleared so the hibernated bridge state never carries
+                    # a usable credential.
+                    write_bridge_state(
+                        bd,
+                        _dc.replace(
+                            state,
+                            server_base_url="about:blank",
+                            auth_secret=None,
+                            active_message_id=None,
+                            status="idle",
+                            last_event_id=None,
+                        ),
+                    )
+        return any_closed
+
+    async def terminate(self, conversation_id: str, *, reason: str = "") -> bool:
+        """Permanently stop the runtime.
+
+        Hibernation-equivalent teardown; bridge dir cleanup is owned by
+        ``_delete_native_bridge_dirs`` (delete_session path) and NOT run
+        here so an archive that is later restored still has its
+        resumable session. ``reason`` is forwarded for log correlation.
+        """
+        return await self.hibernate(conversation_id, reason=reason)
+
+    async def shutdown(self) -> None:
+        for conv_id in list(self._auto_servers):
+            await self._cancel_forwarder(conv_id)
+            server = self._auto_servers.pop(conv_id, None)
+            if server is not None:
+                with contextlib.suppress(Exception):
+                    await server.close()
 
 
 def create_runner_app_from_env() -> FastAPI:

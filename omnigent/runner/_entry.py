@@ -1066,6 +1066,13 @@ def create_app(
         _pane_reaper = getattr(app.state, "native_pane_reaper", None)
         if _pane_reaper is not None:
             await _pane_reaper.start()
+        # OpenCode runtime pool: bounded persistent pool with idle
+        # hibernation (default 300 s) and capacity cap (default 2).
+        # Started AFTER the pane reaper so the OpenCode pool's
+        # ``warm_count`` reads the post-pane-reap state on its first scan.
+        _opencode_pool = getattr(app.state, "opencode_runtime_pool", None)
+        if _opencode_pool is not None:
+            await _opencode_pool.start()
 
     async def _stop_pm() -> None:
         """Stop runner-owned resources for graceful process exit.
@@ -1075,6 +1082,9 @@ def create_app(
         _pane_reaper = getattr(app.state, "native_pane_reaper", None)
         if _pane_reaper is not None:
             await _pane_reaper.shutdown()
+        _opencode_pool = getattr(app.state, "opencode_runtime_pool", None)
+        if _opencode_pool is not None:
+            await _opencode_pool.shutdown()
         from omnigent.runner.app import shutdown_runner_opencode_native_servers
 
         await shutdown_runner_opencode_native_servers()
