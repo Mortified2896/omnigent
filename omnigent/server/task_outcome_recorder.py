@@ -79,6 +79,78 @@ _routing_snapshots_lock = threading.Lock()
 _routing_snapshots: dict[str, RoutingSnapshot] = {}
 
 
+@dataclass(frozen=True)
+class ProvenanceSnapshot:
+    """Buffered structured-runtime provenance until the run is created.
+
+    The OpenCode observer fires the provenance event as soon as
+    OmniRoute returns headers. The relay creates the run only once
+    ``response.in_progress`` arrives, so the recorder buffers here
+    keyed by ``conversation_id`` and consumes the buffer the first
+    time it persists a run row for that session.
+    """
+
+    actual_provider: str | None = None
+    actual_provider_model: str | None = None
+    actual_provenance_verified: bool = False
+    fallback_used: bool | None = None
+    omniroute_decision_id: str | None = None
+    selection_strategy: str | None = None
+    billing_class: str | None = None
+
+
+_provenance_snapshots_lock = threading.Lock()
+_provenance_snapshots: dict[str, ProvenanceSnapshot] = {}
+
+
+def stage_provenance_snapshot(session_id: str, snapshot: ProvenanceSnapshot) -> None:
+    """Stage *snapshot* for *session_id* — consumed on run creation."""
+    with _provenance_snapshots_lock:
+        existing = _provenance_snapshots.get(session_id)
+        if existing is None:
+            _provenance_snapshots[session_id] = snapshot
+            return
+        # Later (verified) callbacks override an earlier unverified one
+        # so the strongest claim wins, mirroring the SQL writer.
+        if snapshot.actual_provenance_verified and not existing.actual_provenance_verified:
+            _provenance_snapshots[session_id] = snapshot
+            return
+        if existing.actual_provenance_verified and not snapshot.actual_provenance_verified:
+            return
+        merged = ProvenanceSnapshot(
+            actual_provider=snapshot.actual_provider or existing.actual_provider,
+            actual_provider_model=(
+                snapshot.actual_provider_model or existing.actual_provider_model
+            ),
+            actual_provenance_verified=(
+                snapshot.actual_provenance_verified or existing.actual_provenance_verified
+            ),
+            fallback_used=(
+                snapshot.fallback_used
+                if snapshot.fallback_used is not None
+                else existing.fallback_used
+            ),
+            omniroute_decision_id=(
+                snapshot.omniroute_decision_id or existing.omniroute_decision_id
+            ),
+            selection_strategy=snapshot.selection_strategy or existing.selection_strategy,
+            billing_class=snapshot.billing_class or existing.billing_class,
+        )
+        _provenance_snapshots[session_id] = merged
+
+
+def consume_provenance_snapshot(session_id: str) -> ProvenanceSnapshot | None:
+    """Atomically read+clear the staged provenance for *session_id*."""
+    with _provenance_snapshots_lock:
+        return _provenance_snapshots.pop(session_id, None)
+
+
+def discard_provenance_snapshot(session_id: str) -> None:
+    """Drop a session's staged provenance without applying it."""
+    with _provenance_snapshots_lock:
+        _provenance_snapshots.pop(session_id, None)
+
+
 @dataclass
 class RoutingSnapshot:
     """A snapshot of the routing-agent proposal at task start.
@@ -267,6 +339,12 @@ class TaskOutcomeRecorder:
             existing = None
         if existing is not None and isinstance(existing.id, str):
             return existing.id
+        # When no routing snapshot was staged, fall back to the
+        # session's pre-set ``omniroute_route_id`` so a route-approved
+        # turn that bypasses the routing-agent flow still carries the
+        # requested route into the run row.
+        if snapshot is None and conversation is not None and conversation.omniroute_route_id:
+            snapshot = RoutingSnapshot(requested_route_id=conversation.omniroute_route_id)
         harness_id = (
             conversation.harness_override
             or (conversation.agent_id if conversation else None)
@@ -305,6 +383,31 @@ class TaskOutcomeRecorder:
                 exc,
             )
             return None
+        # Apply any provenance staged earlier by ``on_response_provenance``
+        # (the observer proxy fires before the relay creates the run).
+        staged = consume_provenance_snapshot(session_id)
+        if staged is not None:
+            try:
+                self.store.update_run_provenance(
+                    UpdateTaskRunProvenanceInput(
+                        task_run_id=run.id,
+                        actual_provider=staged.actual_provider,
+                        actual_provider_model=staged.actual_provider_model,
+                        actual_provenance_verified=staged.actual_provenance_verified,
+                        fallback_used=staged.fallback_used,
+                        omniroute_decision_id=staged.omniroute_decision_id,
+                        selection_strategy=staged.selection_strategy,
+                        billing_class=staged.billing_class,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "task_outcome_recorder: failed to apply staged provenance "
+                    "for session=%s run=%s: %s",
+                    session_id,
+                    run.id,
+                    exc,
+                )
         # Stamp the run id back onto the relay-local state so the
         # terminal handler can find the same row. The relay passes
         # the same response_id to ``on_response_terminal`` so the
@@ -323,40 +426,59 @@ class TaskOutcomeRecorder:
         selection_strategy: str | None = None,
         billing_class: str | None = None,
     ) -> None:
-        """Attach structured runtime metadata to the active routed run.
+        """Stage structured runtime metadata until the run row is created.
 
-        The update is deliberately separate from terminalization because
-        OmniRoute response headers arrive before OpenCode emits its terminal
-        message. Only a run with both durable routing links is eligible.
+        The observer proxy fires this callback the moment OmniRoute
+        returns response headers — typically before the relay has
+        created the run row. The recorder buffers the snapshot and
+        applies it the first time ``on_response_in_progress`` persists
+        a run for that session. If the run already exists (the proxy
+        often finishes streaming before the relay creates the row)
+        the recorder applies the update immediately. Provenance may
+        even arrive after the run is terminal — the SQL writer is
+        idempotent and refuses to overwrite verified identity, so
+        late callbacks are safe to apply against the latest matching
+        run.
         """
         try:
+            staged = ProvenanceSnapshot(
+                actual_provider=actual_provider,
+                actual_provider_model=actual_provider_model,
+                actual_provenance_verified=actual_provenance_verified,
+                fallback_used=fallback_used,
+                omniroute_decision_id=omniroute_decision_id,
+                selection_strategy=selection_strategy,
+                billing_class=billing_class,
+            )
             runs = self.store.list_runs_for_conversation(session_id, limit=20)
             run = next(
                 (
                     item
                     for item in runs
-                    if item.execution_status in {"queued", "starting", "running", "cancelling"}
-                    and item.routing_proposal_id is not None
-                    and item.routing_decision_id is not None
+                    if (
+                        (
+                            item.routing_proposal_id is not None
+                            and item.routing_decision_id is not None
+                        )
+                        or item.requested_route_id is not None
+                    )
                 ),
                 None,
             )
             if run is None:
-                _logger.warning(
-                    "task_outcome_recorder: no active routed run for provenance session=%s",
-                    session_id,
-                )
+                # Most common path: stage until run creation applies it.
+                stage_provenance_snapshot(session_id, staged)
                 return
             self.store.update_run_provenance(
                 UpdateTaskRunProvenanceInput(
                     task_run_id=run.id,
-                    actual_provider=actual_provider,
-                    actual_provider_model=actual_provider_model,
-                    actual_provenance_verified=actual_provenance_verified,
-                    fallback_used=fallback_used,
-                    omniroute_decision_id=omniroute_decision_id,
-                    selection_strategy=selection_strategy,
-                    billing_class=billing_class,
+                    actual_provider=staged.actual_provider,
+                    actual_provider_model=staged.actual_provider_model,
+                    actual_provenance_verified=staged.actual_provenance_verified,
+                    fallback_used=staged.fallback_used,
+                    omniroute_decision_id=staged.omniroute_decision_id,
+                    selection_strategy=staged.selection_strategy,
+                    billing_class=staged.billing_class,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - provenance cannot break execution.

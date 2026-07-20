@@ -27,6 +27,8 @@ _HOP_BY_HOP = frozenset(
 )
 _PROVENANCE_HEADERS = (
     "x-omniroute-requested-model",
+    "x-omniroute-provider",
+    "x-omniroute-model",
     "x-omniroute-selected-provider",
     "x-omniroute-selected-model",
     "x-omniroute-decision-id",
@@ -102,8 +104,12 @@ def structured_runtime_provenance(
     from the approved combo.
     """
     requested = _nonempty(headers.get("x-omniroute-requested-model"))
-    provider = _nonempty(headers.get("x-omniroute-selected-provider"))
-    model = _nonempty(headers.get("x-omniroute-selected-model"))
+    provider = _nonempty(
+        headers.get("x-omniroute-selected-provider") or headers.get("x-omniroute-provider")
+    )
+    model = _nonempty(
+        headers.get("x-omniroute-selected-model") or headers.get("x-omniroute-model")
+    )
     lowered_model = model.lower() if model is not None else ""
     verified = bool(
         provider
@@ -184,6 +190,13 @@ class OpenCodeProvenanceProxy:
         return "upstream_error"
 
     async def _record(self, active: ActiveExecution, captured: Mapping[str, str]) -> None:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "opencode provenance observer captured session=%s headers=%s",
+            active.conversation_id,
+            sorted(captured.keys()),
+        )
         if self._record_runtime is None:
             return
         provenance = structured_runtime_provenance(captured, approved_combo=active.approved_combo)
@@ -208,6 +221,14 @@ class OpenCodeProvenanceProxy:
 
         @app.api_route("/{bridge_id}/{path:path}", methods=["POST"])
         async def forward(bridge_id: str, path: str, request: Request) -> Response:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "opencode provenance observer forwarding bridge_id=%s path=%s method=%s",
+                bridge_id[:8],
+                path,
+                request.method,
+            )
             route_path = "/" + path
             if route_path not in _ALLOWED_PATHS:
                 return JSONResponse(
@@ -252,7 +273,11 @@ class OpenCodeProvenanceProxy:
                     },
                     status_code=422,
                 )
-            if metadata.reasoning != active.approved_reasoning:
+            if (
+                metadata.reasoning is not None
+                and active.approved_reasoning
+                and metadata.reasoning != active.approved_reasoning
+            ):
                 return JSONResponse(
                     {
                         "error": {
@@ -292,53 +317,75 @@ class OpenCodeProvenanceProxy:
                     },
                     status_code=502,
                 )
-            captured = {
-                name: upstream.headers[name]
-                for name in _PROVENANCE_HEADERS
-                if name in upstream.headers
-            }
-            if upstream.is_success:
-                await self._record(active, captured)
-            else:
-                failure = self._safe_error(await upstream.aread())
-                await upstream.aclose()
-                await client.aclose()
-                return JSONResponse(
-                    {"error": {"code": failure, "message": "OmniRoute request failed"}},
-                    status_code=upstream.status_code,
-                )
-            response_headers = {
-                key: value
-                for key, value in upstream.headers.items()
-                if key.lower() not in _HOP_BY_HOP
-            }
-            stream_requested = metadata.stream is True
-            if not stream_requested:
-                content = await upstream.aread()
-                await upstream.aclose()
-                await client.aclose()
-                return Response(
-                    content=content,
-                    status_code=upstream.status_code,
-                    headers=response_headers,
-                )
+            return await self._handle_upstream(active, upstream, metadata)
 
-            # Consume the headers into a captured snapshot before the body
-            # stream begins; ``httpx.Response`` marks the body as consumed
-            # once the first aiter_raw chunk is read, so we must not read
-            # headers from the response again.
-            async def stream() -> Any:
-                try:
-                    async for chunk in upstream.aiter_raw():
-                        yield chunk
-                finally:
-                    await upstream.aclose()
-                    await client.aclose()
+        return app
 
-            return StreamingResponse(
-                stream(),
+    async def _handle_upstream(
+        self,
+        active: ActiveExecution,
+        upstream: httpx.Response,
+        metadata: ModelRequest,
+    ) -> Response:
+        """Forward the response to the OpenCode client and capture provenance."""
+        captured = {
+            name: upstream.headers[name]
+            for name in _PROVENANCE_HEADERS
+            if name in upstream.headers
+        }
+        if upstream.is_success:
+            await self._record(active, captured)
+        else:
+            failure = self._safe_error(await upstream.aread())
+            return JSONResponse(
+                {"error": {"code": failure, "message": "OmniRoute request failed"}},
+                status_code=upstream.status_code,
+            )
+        response_headers = {
+            key: value for key, value in upstream.headers.items() if key.lower() not in _HOP_BY_HOP
+        }
+        if metadata.stream is not True:
+            content = await upstream.aread()
+            return Response(
+                content=content,
                 status_code=upstream.status_code,
                 headers=response_headers,
             )
 
-        return app
+        async def stream() -> Any:
+            try:
+                pending_metadata: dict[str, str] = {}
+                buffer = b""
+                async for chunk in upstream.aiter_raw():
+                    yield chunk
+                    buffer += chunk
+                    # OmniRoute streams provenance as SSE comment lines
+                    # at the end of the body (``: x-omniroute-provider=foo``).
+                    # Parse them out so ``_record`` can verify the
+                    # concrete provider/model once the body is fully read.
+                    while b"\n" in buffer:
+                        line, _, buffer = buffer.partition(b"\n")
+                        stripped = line.strip()
+                        if not stripped.startswith(b":"):
+                            continue
+                        head = stripped[1:].strip()
+                        if b"=" not in head:
+                            continue
+                        name, _, value = head.partition(b"=")
+                        try:
+                            name_str = name.decode("ascii").strip().lower()
+                            value_str = value.decode("utf-8").strip()
+                        except UnicodeDecodeError:
+                            continue
+                        if name_str in _PROVENANCE_HEADERS and value_str:
+                            pending_metadata[name_str] = value_str
+                if pending_metadata:
+                    await self._record(active, pending_metadata)
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(
+            stream(),
+            status_code=upstream.status_code,
+            headers=response_headers,
+        )

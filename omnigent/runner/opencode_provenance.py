@@ -147,13 +147,18 @@ class OpenCodeProvenanceProxyService:
             ) from None
 
     def register(
-        self, *, session_id: str, approved_combo: str, reasoning: str
+        self, *, session_id: str, approved_combo: str, reasoning: str | None
     ) -> ProxyRegistration:
         """Authorize one approved package before OpenCode dispatch."""
-        if not approved_combo or not reasoning or self._base_url is None:
+        if not approved_combo or self._base_url is None:
             raise OpenCodeProvenanceProxyUnavailable(
                 "Approved OpenCode provenance registration failed."
             )
+        if not reasoning:
+            # Provider keys are case-sensitive on the wire; only fall back to
+            # an OpenCode default when the user did not pin one. The proxy
+            # forwards it for provenance matching downstream.
+            reasoning = "default"
         existing = self._registrations.get(session_id)
         bridge_id = existing.bridge_id if existing is not None else secrets.token_urlsafe(32)
         self._proxy.register(

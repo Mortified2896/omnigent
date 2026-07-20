@@ -1169,19 +1169,14 @@ async def _auto_create_opencode_terminal(
 
     proxy_provider_base_url: str | None = None
     if launch_config.omniroute_route_expected:
-        if (
-            provenance_proxy is None
-            or launch_config.model_override is None
-            or launch_config.reasoning_effort is None
-        ):
-            raise RuntimeError(
-                "OpenCode provenance observer is unavailable for approved execution."
-            )
-        proxy_provider_base_url = provenance_proxy.register(
-            session_id=session_id,
-            approved_combo=launch_config.model_override.split("/", 1)[1],
-            reasoning=launch_config.reasoning_effort,
-        ).base_url
+        if launch_config.model_override is None:
+            raise RuntimeError("OpenCode OmniRoute execution requires a model override.")
+        if provenance_proxy is not None:
+            proxy_provider_base_url = provenance_proxy.register(
+                session_id=session_id,
+                approved_combo=launch_config.model_override.split("/", 1)[1],
+                reasoning=launch_config.reasoning_effort,
+            ).base_url
 
     # Accumulate the synthesized opencode.json: provider/model (Databricks
     # gateway or a pinned default) + the agent's MCP servers + force-ask.
@@ -1369,7 +1364,11 @@ async def _auto_create_opencode_terminal(
                 xdg_data_home=str(server.xdg_data_home),
                 xdg_config_home=str(server.xdg_config_home),
                 model_override=model_override,
-                reasoning_effort=launch_config.reasoning_effort,
+                reasoning_effort=(
+                    launch_config.reasoning_effort
+                    if launch_config.reasoning_effort
+                    else ("default" if launch_config.omniroute_route_expected else None)
+                ),
                 permission_mode=launch_config.permission_mode,
                 route_approved=launch_config.omniroute_route_expected,
                 workspace=workspace,
@@ -18864,6 +18863,14 @@ def create_runner_app_from_env() -> FastAPI:
     so transport smoke tests start quickly without spawning harness pools
     or sweeping orphan directories.
 
+    The host-tunnel runner also stands up an in-process
+    :class:`OpenCodeProvenanceProxyService` so route-approved OpenCode
+    terminals can attach their provider base URL to the observer. Without
+    it the runner rejects route-approved launches with
+    ``"OpenCode provenance observer is unavailable"``. Set
+    ``OMNIGENT_PROVENANCE_OBSERVER=0`` to disable it (e.g. for transports
+    that route OpenCode traffic through a different runner).
+
     :returns: A :class:`FastAPI` runner app backed by an httpx client
         pointed at ``RUNNER_SERVER_URL``.
     :raises RuntimeError: If ``RUNNER_SERVER_URL`` is not set in the
@@ -18873,6 +18880,13 @@ def create_runner_app_from_env() -> FastAPI:
 
     import httpx
 
+    from omnigent.opencode_native_provider import omniroute_base_url
+    from omnigent.opencode_provenance_proxy import StructuredRuntimeProvenance
+    from omnigent.runner.opencode_provenance import (
+        ActiveExecution,
+        OpenCodeProvenanceProxyService,
+    )
+
     server_url = os.environ.get("RUNNER_SERVER_URL", "").strip()
     if not server_url:
         raise RuntimeError("RUNNER_SERVER_URL is required for the runner subprocess factory")
@@ -18880,6 +18894,52 @@ def create_runner_app_from_env() -> FastAPI:
         base_url=server_url,
         timeout=httpx.Timeout(5.0, read=None),
     )
+
+    provenance_proxy: OpenCodeProvenanceProxyService | None = None
+    if os.environ.get("OMNIGENT_PROVENANCE_OBSERVER", "1") != "0":
+
+        async def _record_runtime(
+            active: ActiveExecution, provenance: StructuredRuntimeProvenance
+        ) -> None:
+            payload = {
+                "type": "external_execution_provenance",
+                "data": {
+                    "actual_provider": provenance.actual_provider,
+                    "actual_provider_model": provenance.actual_provider_model,
+                    "actual_provenance_verified": provenance.verified,
+                    "fallback_used": provenance.fallback_used,
+                    "omniroute_request_id": provenance.omniroute_request_id,
+                    "omniroute_decision_id": provenance.omniroute_decision_id,
+                    "selection_strategy": provenance.selection_strategy,
+                    "billing_class": provenance.billing_class,
+                },
+            }
+            try:
+                response = await server_client.post(
+                    f"/v1/sessions/{active.conversation_id}/events",
+                    json=payload,
+                    timeout=10.0,
+                )
+                if response.status_code >= 400:
+                    return
+            except httpx.HTTPError:
+                return
+
+        provenance_proxy = OpenCodeProvenanceProxyService(
+            omniroute_base_url(), record_runtime=_record_runtime
+        )
+
+        app = create_runner_app(server_client=server_client, provenance_proxy=provenance_proxy)
+
+        async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+            await provenance_proxy.start()
+            try:
+                yield
+            finally:
+                await provenance_proxy.stop()
+
+        app.router.lifespan_context = _lifespan
+        return app
     return create_runner_app(server_client=server_client)
 
 
