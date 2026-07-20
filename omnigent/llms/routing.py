@@ -21,6 +21,9 @@ PROVIDER_CONFIGS: dict[str, str | None] = {
     # Transport-only prefix for OpenAI-compatible gateways. The suffix can
     # itself be provider-qualified, e.g. ``minimax/MiniMax-M3``.
     "omniroute": None,
+    # The bare concrete M3 model id; preserve the provider prefix when
+    # routing through the local OmniRoute so the gateway sees the full id.
+    "minimax": None,
     "anthropic": "https://api.anthropic.com/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta",
     "bedrock": None,

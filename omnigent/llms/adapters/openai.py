@@ -17,6 +17,7 @@ import httpx
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.llms.adapters.base import BaseAdapter
+from omnigent.llms.errors import RetryableLLMError
 from omnigent.llms.types import (
     NATIVE_TOOL_OUTPUT_TYPES,
     FunctionCallOutput,
@@ -34,6 +35,7 @@ from omnigent.llms.types import (
     Usage,
 )
 
+# Module-level logger for the openai adapter.
 _logger = logging.getLogger(__name__)
 
 # Timeout for non-streaming requests (seconds)
@@ -208,6 +210,23 @@ class OpenAICompatibleAdapter(BaseAdapter):
                 json=payload,
             )
             resp.raise_for_status()
+            if not resp.text or not resp.text.strip():
+                _logger.error(
+                    "openai_adapter: empty 200 body from %s; content-type=%s, length=%d",
+                    url,
+                    resp.headers.get("content-type"),
+                    len(resp.text or ""),
+                )
+                # A 200 OK with an empty/whitespace body is not a valid OpenAI
+                # response. Treat it as a transient transport failure so the
+                # evaluator defers (or fails after the budget) instead of
+                # fabricating a judgment. Some gateways (e.g. minimax/MiniMax-M3
+                # today) return a 200 event-stream with 0 chunks; calling .json()
+                # on the empty body would otherwise raise JSONDecodeError.
+                raise RetryableLLMError(
+                    "LLM call returned an empty 200 response body",
+                    code="empty_response_body",
+                )
             result: dict[str, Any] = resp.json()
             metadata = _sanitized_provider_metadata(resp.headers)
             if metadata:

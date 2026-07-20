@@ -54,6 +54,9 @@ def _create_adapter(provider: str, **kwargs: Any) -> BaseAdapter:
         # ``omniroute`` is a transport-only prefix. The model portion remains
         # the concrete gateway model id, e.g. minimax/MiniMax-M3.
         "omniroute": None,
+        # The bare concrete M3 model id; preserve the provider prefix when
+        # routing through the local OmniRoute so the gateway sees the full id.
+        "minimax": None,
         "groq": "https://api.groq.com/openai/v1",
         "deepseek": "https://api.deepseek.com/v1",
         "xai": "https://api.x.ai/v1",

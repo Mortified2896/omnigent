@@ -568,12 +568,14 @@ def _configured_policy_client() -> tuple[Any | None, EvaluatorFailure | None]:
             False,
         )
     configured_model = getattr(server_llm, "model", None)
-    if configured_model != _OMNIROUTE_TRANSPORT_MODEL:
+    # The bare concrete model id is routed through the configured gateway.
+    allowed_models = {FIXED_EVALUATOR_MODEL, _OMNIROUTE_TRANSPORT_MODEL}
+    if configured_model not in allowed_models:
         return None, EvaluatorFailure(
             "configuration",
             "invalid_evaluator_model",
-            f"Evaluator transport must target {FIXED_EVALUATOR_MODEL}; "
-            f"configured model is {_sanitize_error(configured_model)!r}.",
+            f"Evaluator must target {FIXED_EVALUATOR_MODEL} "
+            f"(got {_sanitize_error(configured_model)!r}).",
             False,
         )
     try:
