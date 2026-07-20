@@ -68,6 +68,19 @@ def _create_run(store: TaskOutcomeStore, *, conv: str = "c1", **kwargs) -> str:
     return store.create_run(CreateTaskRunInput(**defaults)).id
 
 
+def _terminal_and_request(store: TaskOutcomeStore, run_id: str) -> None:
+    run = store.get_run(run_id)
+    assert run is not None
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run_id,
+            terminal_status="completed",
+            terminal_at=(run.started_at or 0) + 1,
+        )
+    )
+    assert store.request_evaluation(run_id, "minimax/MiniMax-M3").status == "queued"
+
+
 def _create_proposal(store: TaskOutcomeStore):
     return store.create_routing_proposal(
         CreateRoutingProposalInput(
@@ -254,6 +267,7 @@ def test_create_evaluation_persists_and_reads_back(
 ) -> None:
     """``create_evaluation`` writes + reads a :class:`TaskEvaluation` row."""
     run_id = _create_run(store)
+    _terminal_and_request(store, run_id)
     eval_id = store.create_evaluation(
         CreateTaskEvaluationInput(
             task_run_id=run_id,
@@ -285,14 +299,10 @@ def test_create_evaluation_persists_and_reads_back(
 def test_create_evaluation_inconclusive_is_persisted(
     store: TaskOutcomeStore,
 ) -> None:
-    """A failed-evaluator call lands as a single ``inconclusive`` row.
+    """A genuine inconclusive evaluator judgment is a completed result."""
 
-    Schema invariant: the review-card UI can rely on "always
-    exactly one evaluation per task run" — the store records the
-    failure as a verdict='inconclusive' row rather than dropping
-    it, so the UI's LEFT JOIN logic stays simple.
-    """
     run_id = _create_run(store)
+    _terminal_and_request(store, run_id)
     store.create_evaluation(
         CreateTaskEvaluationInput(
             task_run_id=run_id,
@@ -305,6 +315,77 @@ def test_create_evaluation_inconclusive_is_persisted(
     assert eval_row is not None
     assert eval_row.verdict == "inconclusive"
     assert eval_row.reasoning == "LLM call failed (timeout)."
+
+
+def test_durable_evaluation_lifecycle(store: TaskOutcomeStore) -> None:
+    run_id = _create_run(store)
+    run = store.get_run(run_id)
+    assert run is not None
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run_id, terminal_status="completed", terminal_at=(run.started_at or 0) + 1
+        )
+    )
+
+    first = store.request_evaluation(run_id, "minimax/MiniMax-M3", now=100)
+    second = store.request_evaluation(run_id, "minimax/MiniMax-M3", now=101)
+    assert first.status == "queued"
+    assert second.status == "already_pending"
+    assert first.run.evaluation_attempt_count == 1
+
+    deferred = store.mark_evaluation_deferred(
+        run_id,
+        error_kind="availability",
+        error_code="ALL_ACCOUNTS_INACTIVE",
+        error_message="provider cooldown",
+        next_retry_at=200,
+    )
+    assert deferred is not None
+    assert deferred.evaluation_status == "deferred"
+    assert store.claim_due_evaluations(now=199, max_attempts=3) == []
+    claimed = store.claim_due_evaluations(now=200, max_attempts=3)
+    assert [item.id for item in claimed] == [run_id]
+    assert claimed[0].evaluation_attempt_count == 2
+
+    evaluation = store.create_evaluation(
+        CreateTaskEvaluationInput(
+            task_run_id=run_id,
+            evaluator_type="llm",
+            evaluator_provider="minimax",
+            evaluator_model="minimax/MiniMax-M3",
+            evaluator_fallback_used=False,
+            verdict="inconclusive",
+            reasoning="M3 found the available evidence insufficient.",
+        )
+    )
+    persisted = store.get_run(run_id)
+    assert persisted is not None
+    assert persisted.evaluation_status == "completed"
+    assert persisted.evaluation_error_code is None
+    assert store.request_evaluation(run_id, "minimax/MiniMax-M3").status == "already_completed"
+    assert (
+        store.create_evaluation(
+            CreateTaskEvaluationInput(task_run_id=run_id, evaluator_type="llm", verdict="success")
+        ).id
+        == evaluation.id
+    )
+
+
+def test_retry_budget_leaves_deferred_manually_retryable(store: TaskOutcomeStore) -> None:
+    run_id = _create_run(store)
+    _terminal_and_request(store, run_id)
+    store.mark_evaluation_deferred(
+        run_id,
+        error_kind="availability",
+        error_code="429",
+        error_message="quota exhausted",
+        next_retry_at=1,
+    )
+    assert store.claim_due_evaluations(now=2, max_attempts=1) == []
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.evaluation_status == "deferred"
+    assert store.request_evaluation(run_id, "minimax/MiniMax-M3").status == "queued"
 
 
 def test_upsert_review_creates_then_updates_in_place(
@@ -549,6 +630,7 @@ def test_get_run_detail_aggregates(store: TaskOutcomeStore) -> None:
             task_run_id=run_id, terminal_status="completed", terminal_at=200
         )
     )
+    assert store.request_evaluation(run_id, "minimax/MiniMax-M3").status == "queued"
     store.create_evaluation(
         CreateTaskEvaluationInput(task_run_id=run_id, evaluator_type="llm", verdict="success")
     )
@@ -602,6 +684,7 @@ def test_changed_files_round_trip(store: TaskOutcomeStore) -> None:
 def test_evidence_json_round_trip(store: TaskOutcomeStore) -> None:
     """``evidence`` + ``unresolved_issues`` round-trip as JSON lists."""
     run_id = _create_run(store)
+    _terminal_and_request(store, run_id)
     store.create_evaluation(
         CreateTaskEvaluationInput(
             task_run_id=run_id,
@@ -648,8 +731,8 @@ def test_update_run_terminal_preserves_unset_fields(
     assert run.input_tokens == 500
     assert run.output_tokens == 100
     assert run.response_summary == "First pass summary."
-    # terminal_at updated.
-    assert run.terminal_at == 300
+    # Duplicate terminal callbacks preserve the first terminal snapshot.
+    assert run.terminal_at == 200
 
 
 def test_reviewer_unique_constraint_rejects_duplicate(

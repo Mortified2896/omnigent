@@ -53,11 +53,16 @@ type DetailOverrides = Omit<Partial<TaskRunDetailResponse>, "run" | "evaluation"
 };
 
 function detailFor(overrides: DetailOverrides = {}): TaskRunDetailResponse {
+  const evaluation = overrides.evaluation === undefined ? detail.evaluation : overrides.evaluation;
+  const implicitEvaluationStatus =
+    evaluation === null && overrides.run?.evaluation_status === undefined
+      ? { evaluation_status: "pending" as const }
+      : {};
   return {
     ...detail,
     ...overrides,
-    run: { ...detail.run, ...overrides.run },
-    evaluation: overrides.evaluation === undefined ? detail.evaluation : overrides.evaluation,
+    run: { ...detail.run, ...implicitEvaluationStatus, ...overrides.run },
+    evaluation,
     review: overrides.review === undefined ? detail.review : overrides.review,
   };
 }
@@ -96,6 +101,14 @@ const detail: TaskRunDetailResponse = {
     billing_class: null,
     fallback_used: false,
     terminal_status: "completed",
+    evaluation_status: "completed",
+    evaluation_attempt_count: 1,
+    evaluation_last_attempt_at: 1_700_000_000,
+    evaluation_next_retry_at: null,
+    evaluation_error_kind: null,
+    evaluation_error_code: null,
+    evaluation_error_message: null,
+    evaluation_requested_model: "minimax/MiniMax-M3",
     started_at: null,
     terminal_at: null,
     duration_ms: null,
@@ -150,7 +163,9 @@ const detail: TaskRunDetailResponse = {
     evaluator_type: "llm",
     evaluator_provider: null,
     evaluator_model: null,
-    evaluator_route_id: null,
+    evaluator_route_id: "minimax/MiniMax-M3",
+    evaluator_fallback_used: false,
+    evaluator_decision_id: "decision-1",
     verdict: "success",
     confidence: 0.9,
     quality_score: 5,
@@ -323,7 +338,7 @@ describe("TaskOutcomeBriefCard actions", () => {
     await advanceTimers(800);
     expect(screen.getByTestId("task-outcome-brief-card")).toBeInTheDocument();
     expect(mocks.getTaskRunForResponse).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/Likely success · small_bug_fix · Quality 5\/5/)).toBeInTheDocument();
+    expect(screen.getByText(/success · small_bug_fix · Quality 5\/5/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
     await flushAsync();
@@ -451,6 +466,83 @@ describe("TaskOutcomeBriefCard actions", () => {
 
     const details = await screen.findByTestId("inconclusive-reasoning");
     expect(within(details).getByText(reasoning)).toBeInTheDocument();
+  });
+
+  it("shows the fixed MiniMax-M3 pending copy", async () => {
+    let resolve!: (value: TaskRunDetailResponse) => void;
+    mocks.getTaskRunForResponse.mockReturnValue(
+      new Promise<TaskRunDetailResponse>((done) => {
+        resolve = done;
+      }),
+    );
+    const rendered = render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    expect(screen.getByTestId("outcome-brief-pending")).toHaveTextContent(
+      "Evaluating outcome with MiniMax-M3…",
+    );
+    rendered.unmount();
+    resolve(detail);
+  });
+
+  it("renders deferred lifecycle with no-fallback proof and retry metadata", async () => {
+    const deferred = detailFor({
+      evaluation: null,
+      run: {
+        evaluation_status: "deferred",
+        evaluation_attempt_count: 2,
+        evaluation_last_attempt_at: 1_700_000_000,
+        evaluation_next_retry_at: 1_700_001_800,
+        evaluation_error_kind: "availability",
+        evaluation_error_code: "ALL_ACCOUNTS_INACTIVE",
+        evaluation_error_message: "MiniMax provider cooldown",
+      },
+    });
+    mocks.getTaskRunForResponse.mockResolvedValue(deferred);
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    const card = await screen.findByTestId("outcome-brief-deferred");
+    expect(within(card).getByText("Outcome evaluation deferred")).toBeInTheDocument();
+    expect(within(card).getByText("MiniMax-M3 is currently unavailable.")).toBeInTheDocument();
+    expect(within(card).getByText("No fallback model was used.")).toBeInTheDocument();
+    expect(within(card).getByText(/Attempts: 2/)).toBeInTheDocument();
+    expect(within(card).getByText(/MiniMax provider cooldown/)).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Retry now/ }));
+    await waitFor(() => expect(mocks.reEvaluateTaskRun).toHaveBeenCalledWith("run-1"));
+  });
+
+  it("keeps deferred details visible when Retry now fails", async () => {
+    mocks.getTaskRunForResponse.mockResolvedValue(
+      detailFor({
+        evaluation: null,
+        run: {
+          evaluation_status: "deferred",
+          evaluation_error_message: "Quota exhausted",
+        },
+      }),
+    );
+    mocks.reEvaluateTaskRun.mockRejectedValue(new Error("retry endpoint unavailable"));
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    const card = await screen.findByTestId("outcome-brief-deferred");
+    fireEvent.click(within(card).getByRole("button", { name: /Retry now/ }));
+    expect(await within(card).findByRole("alert")).toHaveTextContent("retry endpoint unavailable");
+    expect(within(card).getByText(/Quota exhausted/)).toBeInTheDocument();
+  });
+
+  it("renders loud failed lifecycle without fabricated scores", async () => {
+    mocks.getTaskRunForResponse.mockResolvedValue(
+      detailFor({
+        evaluation: null,
+        run: {
+          evaluation_status: "failed",
+          evaluation_error_kind: "authentication",
+          evaluation_error_message: "OmniRoute credential was rejected",
+        },
+      }),
+    );
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    const card = await screen.findByTestId("outcome-brief-evaluator-failed");
+    expect(within(card).getByText("Outcome evaluator requires attention")).toBeInTheDocument();
+    expect(within(card).getByText(/authentication/)).toBeInTheDocument();
+    expect(within(card).getByText("No fallback model was used.")).toBeInTheDocument();
+    expect(within(card).queryByText(/Quality|confidence|small_bug_fix/)).not.toBeInTheDocument();
   });
 
   it("unmount cancels a scheduled poll and aborts the in-flight request", async () => {

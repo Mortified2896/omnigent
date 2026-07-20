@@ -1,3 +1,9 @@
+# Fixed server-level Task Outcome Evaluator.
+# The `omniroute/` prefix selects Omnigent's OpenAI-compatible transport;
+# the suffix is the concrete model sent to the local gateway.
 llm:
-  model: databricks-claude-haiku-4-5
-  profile: oss
+  model: omniroute/minimax/MiniMax-M3
+  connection:
+    base_url: ${OMNIGENT_EVALUATOR_BASE_URL}
+    api_key: ${OMNIGENT_ROUTER_API_KEY}
+  request_timeout: 180

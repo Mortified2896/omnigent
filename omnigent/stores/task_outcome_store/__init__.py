@@ -147,6 +147,7 @@ class CreateTaskRunInput:
     selection_strategy: str | None = None
     billing_class: str | None = None
     fallback_used: bool | None = None
+    evaluation_requested_model: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,6 +224,14 @@ class UpdateTaskRunTerminalInput:
 
 
 @dataclasses.dataclass(frozen=True)
+class EvaluationRequestResult:
+    """Result of an atomic request to start one evaluator attempt."""
+
+    status: str
+    run: TaskRun
+
+
+@dataclasses.dataclass(frozen=True)
 class CreateTaskEvaluationInput:
     """All fields needed to create a ``task_evaluations`` row.
 
@@ -236,6 +245,8 @@ class CreateTaskEvaluationInput:
     evaluator_provider: str | None = None
     evaluator_model: str | None = None
     evaluator_route_id: str | None = None
+    evaluator_fallback_used: bool | None = None
+    evaluator_decision_id: str | None = None
     confidence: float | None = None
     quality_score: int | None = None
     proposed_task_family: str | None = None
@@ -430,6 +441,52 @@ class TaskOutcomeStore(ABC):
         """
 
     # ── task_evaluations ──────────────────────────────────────────────
+
+    @abstractmethod
+    def request_evaluation(
+        self,
+        task_run_id: str,
+        requested_model: str,
+        now: int | None = None,
+    ) -> EvaluationRequestResult:
+        """Atomically queue one manual or terminal-triggered attempt."""
+
+    @abstractmethod
+    def mark_evaluation_deferred(
+        self,
+        task_run_id: str,
+        *,
+        error_kind: str,
+        error_code: str,
+        error_message: str,
+        next_retry_at: int | None,
+    ) -> TaskRun | None:
+        """Move an active attempt to durable deferred state."""
+
+    @abstractmethod
+    def mark_evaluation_failed(
+        self,
+        task_run_id: str,
+        *,
+        error_kind: str,
+        error_code: str,
+        error_message: str,
+    ) -> TaskRun | None:
+        """Move an active attempt to an operator-visible failure."""
+
+    @abstractmethod
+    def recover_stale_pending_evaluations(self, *, now: int, stale_before: int) -> int:
+        """Defer pending attempts whose process lease expired."""
+
+    @abstractmethod
+    def claim_due_evaluations(
+        self,
+        *,
+        now: int,
+        max_attempts: int,
+        limit: int = 10,
+    ) -> list[TaskRun]:
+        """Atomically claim deferred attempts that are due."""
 
     @abstractmethod
     def create_evaluation(self, data: CreateTaskEvaluationInput) -> TaskEvaluation:

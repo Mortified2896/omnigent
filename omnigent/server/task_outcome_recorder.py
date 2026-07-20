@@ -43,9 +43,11 @@ from omnigent.server.langfuse_sync import (
     build_score_payloads,
     langfuse_configured,
 )
-from omnigent.server.task_outcome_evaluator import evaluate_task_outcome
+from omnigent.server.task_outcome_evaluator import (
+    FIXED_EVALUATOR_MODEL,
+    evaluate_task_outcome,
+)
 from omnigent.stores.task_outcome_store import (
-    CreateTaskEvaluationInput,
     CreateTaskRunInput,
     EnqueueLangfuseEventInput,
     TaskOutcomeStore,
@@ -389,6 +391,7 @@ class TaskOutcomeRecorder:
                     selection_strategy=(snapshot.selection_strategy if snapshot else None),
                     billing_class=(snapshot.billing_class if snapshot else None),
                     fallback_used=(snapshot.fallback_used if snapshot is not None else None),
+                    evaluation_requested_model=FIXED_EVALUATOR_MODEL,
                 )
             )
         except Exception as exc:  # noqa: BLE001  # never propagate
@@ -592,93 +595,84 @@ class TaskOutcomeRecorder:
 
     # ── convenience: resolution helpers ────────────────────────────────
 
-    def _spawn_evaluator(self, run: Any) -> str:
-        """Schedule the LLM evaluator without ever dropping the outcome.
-
-        The relay invokes this method from an ``asyncio.to_thread`` worker,
-        where no event loop is running. Dispatch therefore targets the loop
-        captured by the FastAPI lifespan. If dispatch is unavailable, an
-        ``inconclusive`` evaluation is persisted synchronously before this
-        method returns.
-
-        :returns: ``"queued"``, ``"already_present"``, or
-            ``"failed_persisted"``.
-        """
-        try:
-            if self.store.get_evaluation_for_run(run.id) is not None:
+    def _spawn_evaluator(self, run: Any, *, claimed: bool = False) -> str:
+        """Claim and schedule the fixed evaluator without dropping failures."""
+        if not claimed:
+            try:
+                requested = self.store.request_evaluation(run.id, FIXED_EVALUATOR_MODEL)
+            except Exception:
+                _logger.exception(
+                    "task_outcome_recorder: failed to persist evaluator request for run=%s",
+                    run.id,
+                )
+                return "scheduling_failed"
+            if requested.status == "already_completed":
                 return "already_present"
-        except Exception:  # noqa: BLE001
-            _logger.warning(
-                "task_outcome_recorder: failed to check existing evaluation for run=%s",
-                run.id,
-                exc_info=True,
-            )
+            if requested.status == "already_pending":
+                return "already_pending"
+            run = requested.run
         return self._evaluate_safely(run)
 
     def re_evaluate(self, task_run_id: str) -> str:
-        """Queue the missing evaluation for a terminal task run.
-
-        :param task_run_id: Existing terminal :class:`TaskRun` id.
-        :returns: ``"queued"``, ``"already_present"``, or
-            ``"failed_persisted"``.
-        :raises LookupError: When the task run does not exist.
-        :raises ValueError: When the task run is not terminal.
-        """
+        """Atomically queue one manual fixed-M3 attempt for a terminal run."""
         run = self.store.get_run(task_run_id)
         if run is None:
             raise LookupError(f"task run not found: {task_run_id}")
-        if run.terminal_status not in {"completed", "failed", "cancelled", "incomplete"}:
+        if run.execution_status not in {"completed", "failed", "cancelled", "timed_out"}:
             raise ValueError(f"task run is not terminal: {task_run_id}")
         return self._spawn_evaluator(run)
 
+    def dispatch_claimed_evaluation(self, run: Any) -> str:
+        """Schedule a run atomically claimed by the durable retry worker."""
+        return self._spawn_evaluator(run, claimed=True)
+
     def _evaluate_safely(self, run: Any) -> str:
-        """Dispatch one evaluator coroutine or persist the scheduling failure."""
+        """Dispatch one claimed evaluator coroutine or persist scheduling failure."""
 
         async def _evaluate() -> None:
             try:
-                # Re-check on the server loop to close the window between the
-                # worker-thread idempotency check and coroutine execution.
-                if self.store.get_evaluation_for_run(run.id) is not None:
+                current = self.store.get_run(run.id)
+                if current is None or current.evaluation_status != "pending":
                     return
                 outcome = await evaluate_task_outcome(
                     self.store,
-                    run,
-                    triggering_message_summary=run.task_description,
+                    current,
+                    triggering_message_summary=current.task_description,
                 )
-                # After the evaluator lands, re-enqueue Langfuse so the
-                # llm-verdict score can ship too.
-                self._enqueue_langfuse_for_evaluation(run, outcome.evaluation)
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning(
-                    "task_outcome_recorder: evaluator dispatch failed for run=%s: %s",
+                if outcome.evaluation is not None:
+                    self._enqueue_langfuse_for_evaluation(current, outcome.evaluation)
+            except Exception as exc:
+                _logger.exception(
+                    "task_outcome_recorder: evaluator internal failure for run=%s",
                     run.id,
-                    exc,
                 )
-                self._persist_inconclusive(
-                    run.id,
-                    reasoning=(
-                        "Automated evaluation unavailable: evaluator execution failed "
-                        f"({type(exc).__name__}: {str(exc)[:400]})."
-                    ),
-                )
+                try:
+                    self.store.mark_evaluation_failed(
+                        run.id,
+                        error_kind="internal",
+                        error_code="evaluator_internal_error",
+                        error_message=f"{type(exc).__name__}: {str(exc)[:800]}",
+                    )
+                except Exception:
+                    _logger.exception(
+                        "task_outcome_recorder: CRITICAL: failed to persist evaluator "
+                        "internal failure for run=%s",
+                        run.id,
+                    )
 
         loop = self._loop
-        no_loop_reason = (
-            "Automated evaluation unavailable: no event loop available to "
-            "schedule the LLM evaluator."
-        )
         try:
             loop_available = loop is not None and loop.is_running() and not loop.is_closed()
         except Exception:  # noqa: BLE001
             loop_available = False
         if not loop_available or loop is None:
-            _logger.warning(
-                "task_outcome_recorder: no FastAPI event loop available for run=%s; "
-                "recording inconclusive evaluation",
+            self.store.mark_evaluation_failed(
                 run.id,
+                error_kind="scheduling",
+                error_code="event_loop_unavailable",
+                error_message="No server event loop is available to schedule MiniMax-M3.",
             )
-            self._persist_inconclusive(run.id, reasoning=no_loop_reason)
-            return "failed_persisted"
+            return "scheduling_failed"
 
         coroutine = _evaluate()
         try:
@@ -687,47 +681,21 @@ class TaskOutcomeRecorder:
             else:
                 asyncio.run_coroutine_threadsafe(coroutine, loop)
             return "queued"
-        except Exception as exc:  # noqa: BLE001
-            # A coroutine rejected by the scheduler must be explicitly closed;
-            # otherwise Python emits the same "was never awaited" warning that
-            # exposed the original data-loss bug.
+        except Exception as exc:
             coroutine.close()
-            _logger.warning(
-                "task_outcome_recorder: evaluator scheduling failed for run=%s: %s; "
-                "recording inconclusive evaluation",
+            _logger.exception(
+                "task_outcome_recorder: evaluator scheduling failed for run=%s",
                 run.id,
-                exc,
             )
-            self._persist_inconclusive(
+            self.store.mark_evaluation_failed(
                 run.id,
-                reasoning=(
-                    "Automated evaluation unavailable: failed to schedule the LLM "
-                    f"evaluator ({type(exc).__name__}: {str(exc)[:400]})."
+                error_kind="scheduling",
+                error_code="dispatch_failed",
+                error_message=(
+                    f"Could not schedule MiniMax-M3 ({type(exc).__name__}: {str(exc)[:800]})."
                 ),
             )
-            return "failed_persisted"
-
-    def _persist_inconclusive(self, task_run_id: str, *, reasoning: str) -> None:
-        """Synchronously persist the evaluator fallback, idempotently."""
-        try:
-            if self.store.get_evaluation_for_run(task_run_id) is not None:
-                return
-            self.store.create_evaluation(
-                CreateTaskEvaluationInput(
-                    task_run_id=task_run_id,
-                    evaluator_type="llm",
-                    verdict="inconclusive",
-                    reasoning=reasoning,
-                )
-            )
-        except Exception:
-            # Persistence can only fail when the store itself is unavailable.
-            # Log loudly rather than recreating the original silent hole.
-            _logger.exception(
-                "task_outcome_recorder: CRITICAL: failed to persist inconclusive "
-                "evaluation for run=%s",
-                task_run_id,
-            )
+            return "scheduling_failed"
 
     def _enqueue_langfuse_for_run(self, run: Any) -> None:
         """Enqueue Langfuse sync events for a terminalised :class:`TaskRun`.

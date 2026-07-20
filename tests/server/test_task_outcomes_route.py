@@ -403,10 +403,12 @@ def test_evaluate_endpoint_creates_evaluation_for_terminal_run(
     response = client.post(f"/v1/task-runs/{run_id}/evaluate")
 
     assert response.status_code == 202
-    assert response.json()["status"] in {"queued", "failed_persisted"}
+    assert response.json()["status"] in {"queued", "scheduling_failed"}
     evaluation = store.get_evaluation_for_run(run_id)
-    assert evaluation is not None
-    assert evaluation.verdict == "inconclusive"
+    assert evaluation is None
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.evaluation_status in {"pending", "failed"}
 
 
 def test_evaluate_endpoint_returns_409_when_evaluation_exists(
@@ -414,12 +416,13 @@ def test_evaluate_endpoint_returns_409_when_evaluation_exists(
 ) -> None:
     store, client = store_and_app
     run_id = _seed_terminalised(store)
+    store.request_evaluation(run_id, "minimax/MiniMax-M3")
     store.create_evaluation(
         CreateTaskEvaluationInput(
             task_run_id=run_id,
             evaluator_type="llm",
             verdict="inconclusive",
-            reasoning="Already evaluated.",
+            reasoning="M3 found the evidence insufficient.",
         )
     )
 

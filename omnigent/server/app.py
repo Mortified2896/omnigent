@@ -1200,6 +1200,7 @@ def create_app(
 
     from omnigent.server.task_outcome_recorder import (
         TaskOutcomeRecorder,
+        get_recorder,
         set_recorder,
         set_recorder_loop,
     )
@@ -1333,9 +1334,22 @@ def create_app(
                 otel_publisher=server_metrics_otel,
             )
         )
+        evaluation_retry_task: asyncio.Task[None] | None = None
+        outcome_recorder = get_recorder()
+        if outcome_recorder is not None:
+            from omnigent.server.task_outcome_retry import run_evaluation_retry_worker
+
+            evaluation_retry_task = asyncio.create_task(
+                run_evaluation_retry_worker(outcome_recorder),
+                name="task-outcome-evaluation-retry",
+            )
         try:
             yield
         finally:
+            if evaluation_retry_task is not None:
+                evaluation_retry_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await evaluation_retry_task
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task

@@ -18,6 +18,9 @@ from omnigent.errors import ErrorCode, OmnigentError
 # for their base URL (Bedrock, Vertex, Databricks) have None here.
 PROVIDER_CONFIGS: dict[str, str | None] = {
     "openai": "https://api.openai.com/v1",
+    # Transport-only prefix for OpenAI-compatible gateways. The suffix can
+    # itself be provider-qualified, e.g. ``minimax/MiniMax-M3``.
+    "omniroute": None,
     "anthropic": "https://api.anthropic.com/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta",
     "bedrock": None,

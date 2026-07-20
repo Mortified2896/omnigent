@@ -23,7 +23,7 @@ import hashlib
 import json
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import (
@@ -60,6 +60,7 @@ from omnigent.stores.task_outcome_store import (
     CreateTaskEvaluationInput,
     CreateTaskRunInput,
     EnqueueLangfuseEventInput,
+    EvaluationRequestResult,
     RoutingDecisionConflictError,
     RoutingTurnAudit,
     TaskOutcomeStore,
@@ -70,6 +71,16 @@ from omnigent.stores.task_outcome_store import (
 )
 
 _AUDIT_EXCERPT_CHARS = 4096
+_EVALUATION_ERROR_KIND_CHARS = 64
+_EVALUATION_ERROR_CODE_CHARS = 128
+_EVALUATION_ERROR_MESSAGE_CHARS = 1000
+
+
+def _bounded(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    return cleaned[:limit] or None
 
 
 def _canonical_payload(payload: dict[str, object]) -> tuple[str, str]:
@@ -181,6 +192,13 @@ def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
         execution_duration_ms=row.execution_duration_ms,
         evaluation_started_at=row.evaluation_started_at,
         evaluation_finished_at=row.evaluation_finished_at,
+        evaluation_attempt_count=row.evaluation_attempt_count,
+        evaluation_last_attempt_at=row.evaluation_last_attempt_at,
+        evaluation_next_retry_at=row.evaluation_next_retry_at,
+        evaluation_error_kind=row.evaluation_error_kind,
+        evaluation_error_code=row.evaluation_error_code,
+        evaluation_error_message=row.evaluation_error_message,
+        evaluation_requested_model=row.evaluation_requested_model,
         timeout_type=row.timeout_type,
         last_useful_activity_at=row.last_useful_activity_at,
         actual_provider=row.actual_provider,
@@ -231,6 +249,8 @@ def _evaluation_row_to_entity(row: SqlTaskEvaluation) -> TaskEvaluation:
         evaluator_provider=row.evaluator_provider,
         evaluator_model=row.evaluator_model,
         evaluator_route_id=row.evaluator_route_id,
+        evaluator_fallback_used=row.evaluator_fallback_used,
+        evaluator_decision_id=row.evaluator_decision_id,
         confidence=row.confidence,
         quality_score=row.quality_score,
         proposed_task_family=row.proposed_task_family,
@@ -507,6 +527,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             terminal_status=encode_task_run_status("running"),
             execution_status="running",
             evaluation_status="not_requested",
+            evaluation_attempt_count=0,
+            evaluation_requested_model=data.evaluation_requested_model,
             execution_started_at=now,
             last_useful_activity_at=now,
             # A routing proposal is not execution evidence.  These fields are
@@ -601,12 +623,9 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             # Compare-and-set: late terminal callbacks cannot resurrect a
             # cancelled/timed-out run or overwrite its first finish time.
             if row.execution_status not in {"queued", "starting", "running", "cancelling"}:
-                # Preserve historical API behaviour for duplicate callbacks;
-                # authoritative execution_finished_at remains immutable.
-                row.terminal_at = data.terminal_at
-                row.updated_at = now
-                session.flush()
-                return _run_row_to_entity(row)
+                # Duplicate terminal callbacks are no-ops. This preserves the
+                # first finish timestamp and suppresses duplicate side effects.
+                return None
             status = (
                 "timed_out"
                 if data.terminal_status == "incomplete"
@@ -724,6 +743,204 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
 
     # ── task_evaluations ──────────────────────────────────────────────
 
+    def request_evaluation(
+        self,
+        task_run_id: str,
+        requested_model: str,
+        now: int | None = None,
+    ) -> EvaluationRequestResult:
+        attempt_at = now if now is not None else now_epoch()
+        workspace_id = current_workspace_id()
+        active_statuses = {"completed", "failed", "cancelled", "timed_out"}
+        with self._session() as session:
+            row = session.get(SqlTaskRun, (workspace_id, task_run_id))
+            if row is None:
+                raise LookupError(f"task run not found: {task_run_id}")
+            if row.execution_status not in active_statuses:
+                raise ValueError(f"task run is not terminal: {task_run_id}")
+            if row.evaluation_status == "completed":
+                return EvaluationRequestResult("already_completed", _run_row_to_entity(row))
+            if row.evaluation_status == "pending":
+                return EvaluationRequestResult("already_pending", _run_row_to_entity(row))
+            result = session.execute(
+                update(SqlTaskRun)
+                .where(
+                    SqlTaskRun.workspace_id == workspace_id,
+                    SqlTaskRun.id == task_run_id,
+                    SqlTaskRun.evaluation_status.in_(
+                        ("not_requested", "deferred", "failed", "skipped")
+                    ),
+                )
+                .values(
+                    evaluation_status="pending",
+                    evaluation_attempt_count=SqlTaskRun.evaluation_attempt_count + 1,
+                    evaluation_last_attempt_at=attempt_at,
+                    evaluation_started_at=attempt_at,
+                    evaluation_finished_at=None,
+                    evaluation_next_retry_at=None,
+                    evaluation_requested_model=requested_model[:128],
+                    updated_at=attempt_at,
+                )
+            )
+            session.flush()
+            session.expire_all()
+            row = session.get(SqlTaskRun, (workspace_id, task_run_id))
+            assert row is not None
+            status = "queued" if result.rowcount == 1 else "already_pending"
+            if row.evaluation_status == "completed":
+                status = "already_completed"
+            return EvaluationRequestResult(status, _run_row_to_entity(row))
+
+    def mark_evaluation_deferred(
+        self,
+        task_run_id: str,
+        *,
+        error_kind: str,
+        error_code: str,
+        error_message: str,
+        next_retry_at: int | None,
+    ) -> TaskRun | None:
+        return self._finish_evaluation_attempt(
+            task_run_id,
+            status="deferred",
+            error_kind=error_kind,
+            error_code=error_code,
+            error_message=error_message,
+            next_retry_at=next_retry_at,
+        )
+
+    def mark_evaluation_failed(
+        self,
+        task_run_id: str,
+        *,
+        error_kind: str,
+        error_code: str,
+        error_message: str,
+    ) -> TaskRun | None:
+        return self._finish_evaluation_attempt(
+            task_run_id,
+            status="failed",
+            error_kind=error_kind,
+            error_code=error_code,
+            error_message=error_message,
+            next_retry_at=None,
+        )
+
+    def _finish_evaluation_attempt(
+        self,
+        task_run_id: str,
+        *,
+        status: str,
+        error_kind: str,
+        error_code: str,
+        error_message: str,
+        next_retry_at: int | None,
+    ) -> TaskRun | None:
+        now = now_epoch()
+        workspace_id = current_workspace_id()
+        with self._session() as session:
+            result = session.execute(
+                update(SqlTaskRun)
+                .where(
+                    SqlTaskRun.workspace_id == workspace_id,
+                    SqlTaskRun.id == task_run_id,
+                    SqlTaskRun.evaluation_status == "pending",
+                )
+                .values(
+                    evaluation_status=status,
+                    evaluation_finished_at=now if status == "failed" else None,
+                    evaluation_next_retry_at=next_retry_at,
+                    evaluation_error_kind=_bounded(error_kind, _EVALUATION_ERROR_KIND_CHARS),
+                    evaluation_error_code=_bounded(error_code, _EVALUATION_ERROR_CODE_CHARS),
+                    evaluation_error_message=_bounded(
+                        error_message, _EVALUATION_ERROR_MESSAGE_CHARS
+                    ),
+                    updated_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                return None
+            session.flush()
+            row = session.get(SqlTaskRun, (workspace_id, task_run_id))
+            return _run_row_to_entity(row) if row is not None else None
+
+    def recover_stale_pending_evaluations(self, *, now: int, stale_before: int) -> int:
+        with self._session() as session:
+            result = session.execute(
+                update(SqlTaskRun)
+                .where(
+                    SqlTaskRun.workspace_id == current_workspace_id(),
+                    SqlTaskRun.evaluation_status == "pending",
+                    SqlTaskRun.evaluation_last_attempt_at.is_not(None),
+                    SqlTaskRun.evaluation_last_attempt_at <= stale_before,
+                )
+                .values(
+                    evaluation_status="deferred",
+                    evaluation_next_retry_at=now,
+                    evaluation_error_kind="scheduling",
+                    evaluation_error_code="stale_pending",
+                    evaluation_error_message=(
+                        "Evaluator process stopped before the attempt reached a durable result."
+                    ),
+                    updated_at=now,
+                )
+            )
+            return int(result.rowcount or 0)
+
+    def claim_due_evaluations(
+        self,
+        *,
+        now: int,
+        max_attempts: int,
+        limit: int = 10,
+    ) -> list[TaskRun]:
+        workspace_id = current_workspace_id()
+        with self._session() as session:
+            ids = list(
+                session.execute(
+                    select(SqlTaskRun.id)
+                    .where(
+                        SqlTaskRun.workspace_id == workspace_id,
+                        SqlTaskRun.evaluation_status == "deferred",
+                        SqlTaskRun.evaluation_next_retry_at.is_not(None),
+                        SqlTaskRun.evaluation_next_retry_at <= now,
+                        SqlTaskRun.evaluation_attempt_count < max_attempts,
+                    )
+                    .order_by(SqlTaskRun.evaluation_next_retry_at, SqlTaskRun.id)
+                    .limit(limit)
+                ).scalars()
+            )
+            claimed_ids: list[str] = []
+            for run_id in ids:
+                result = session.execute(
+                    update(SqlTaskRun)
+                    .where(
+                        SqlTaskRun.workspace_id == workspace_id,
+                        SqlTaskRun.id == run_id,
+                        SqlTaskRun.evaluation_status == "deferred",
+                        SqlTaskRun.evaluation_next_retry_at.is_not(None),
+                        SqlTaskRun.evaluation_next_retry_at <= now,
+                        SqlTaskRun.evaluation_attempt_count < max_attempts,
+                    )
+                    .values(
+                        evaluation_status="pending",
+                        evaluation_attempt_count=SqlTaskRun.evaluation_attempt_count + 1,
+                        evaluation_last_attempt_at=now,
+                        evaluation_started_at=now,
+                        evaluation_finished_at=None,
+                        evaluation_next_retry_at=None,
+                        updated_at=now,
+                    )
+                )
+                if result.rowcount == 1:
+                    claimed_ids.append(run_id)
+            session.flush()
+            return [
+                _run_row_to_entity(row)
+                for run_id in claimed_ids
+                if (row := session.get(SqlTaskRun, (workspace_id, run_id))) is not None
+            ]
+
     def create_evaluation(self, data: CreateTaskEvaluationInput) -> TaskEvaluation:
         """INSERT a ``task_evaluations`` row. See base class."""
         now = now_epoch()
@@ -734,6 +951,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             evaluator_provider=data.evaluator_provider,
             evaluator_model=data.evaluator_model,
             evaluator_route_id=data.evaluator_route_id,
+            evaluator_fallback_used=data.evaluator_fallback_used,
+            evaluator_decision_id=data.evaluator_decision_id,
             verdict=data.verdict,
             confidence=data.confidence,
             quality_score=data.quality_score,
@@ -743,21 +962,55 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             unresolved_issues_json=encode_json_list(data.unresolved_issues),
             created_at=now,
         )
+        workspace_id = current_workspace_id()
         with self._session() as session:
-            run = session.get(SqlTaskRun, (current_workspace_id(), data.task_run_id))
+            run = session.get(SqlTaskRun, (workspace_id, data.task_run_id))
             if run is None:
                 raise ValueError(f"unknown task run: {data.task_run_id}")
-            session.add(row)
-            # Store callers may create deterministic evidence while running;
-            # only the recorder schedules LLM evaluation and it does so after
-            # an execution terminal transition.  Crucially this update never
-            # touches execution_status or the legacy terminal projection.
-            if run.execution_status in {"completed", "failed", "cancelled", "timed_out"}:
-                run.evaluation_status = (
-                    "skipped" if data.verdict == "inconclusive" else "completed"
+            existing = (
+                session.execute(
+                    select(SqlTaskEvaluation).where(
+                        SqlTaskEvaluation.workspace_id == workspace_id,
+                        SqlTaskEvaluation.task_run_id == data.task_run_id,
+                    )
                 )
-                run.evaluation_finished_at = now
-                run.updated_at = now
+                .scalars()
+                .first()
+            )
+            if existing is not None:
+                return _evaluation_row_to_entity(existing)
+            if run.execution_status not in {"completed", "failed", "cancelled", "timed_out"}:
+                raise ValueError(f"task run is not terminal: {data.task_run_id}")
+            if run.evaluation_status != "pending":
+                raise ValueError(
+                    f"task run evaluation is not pending: {data.task_run_id} "
+                    f"({run.evaluation_status})"
+                )
+            try:
+                with session.begin_nested():
+                    session.add(row)
+                    session.flush()
+            except IntegrityError:
+                winner = (
+                    session.execute(
+                        select(SqlTaskEvaluation).where(
+                            SqlTaskEvaluation.workspace_id == workspace_id,
+                            SqlTaskEvaluation.task_run_id == data.task_run_id,
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if winner is None:
+                    raise
+                return _evaluation_row_to_entity(winner)
+            run.evaluation_status = "completed"
+            run.evaluation_finished_at = now
+            run.evaluation_next_retry_at = None
+            run.evaluation_error_kind = None
+            run.evaluation_error_code = None
+            run.evaluation_error_message = None
+            run.updated_at = now
             session.flush()
             return _evaluation_row_to_entity(row)
 

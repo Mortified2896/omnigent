@@ -11,10 +11,33 @@ from omnigent.llms.adapters.openai import (
     OpenAIAdapter,
     OpenAICompatibleAdapter,
     _parse_sse_line,
+    _sanitized_provider_metadata,
 )
 from omnigent.llms.types import ResponseTextDeltaEvent
 
 # ── Payload building ─────────────────────────────────────
+
+
+def test_provider_metadata_headers_are_sanitized() -> None:
+    headers = httpx.Headers(
+        {
+            "x-omniroute-requested-model": "minimax/MiniMax-M3",
+            "x-omniroute-selected-provider": "minimax",
+            "x-omniroute-selected-model": "minimax/MiniMax-M3",
+            "x-omniroute-fallback-used": "false",
+            "x-omniroute-decision-id": "dec-1",
+            "authorization": "Bearer <redacted>",
+        }
+    )
+    sanitized = _sanitized_provider_metadata(headers)
+    assert sanitized == {
+        "x-omniroute-requested-model": "minimax/MiniMax-M3",
+        "x-omniroute-selected-provider": "minimax",
+        "x-omniroute-selected-model": "minimax/MiniMax-M3",
+        "x-omniroute-fallback-used": "false",
+        "x-omniroute-decision-id": "dec-1",
+    }
+    assert "authorization" not in sanitized
 
 
 def test_basic_payload_structure() -> None:

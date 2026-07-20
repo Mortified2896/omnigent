@@ -80,6 +80,7 @@ def store(tmp_path_factory) -> TaskOutcomeStore:
             commit_sha="abc1234567",
         )
     )
+    s.request_evaluation(run.id, "minimax/MiniMax-M3")
     return s
 
 
@@ -93,6 +94,13 @@ def _ok_response(payload: dict[str, Any]) -> MagicMock:
     """Build a successful ``PolicyLLMClient.create`` response."""
     resp = MagicMock()
     resp.output = [MagicMock(content=[MagicMock(text=json.dumps(payload))])]
+    resp.provider_metadata = {
+        "x-omniroute-requested-model": "minimax/MiniMax-M3",
+        "x-omniroute-selected-provider": "minimax",
+        "x-omniroute-selected-model": "minimax/MiniMax-M3",
+        "x-omniroute-fallback-used": "false",
+        "x-omniroute-decision-id": "decision-test",
+    }
     return resp
 
 
@@ -104,7 +112,7 @@ def _make_client(return_value_or_exc: Any) -> MagicMock:
     through to SQL parameter binding without TypeErrors.
     """
     client = MagicMock()
-    client._model = "databricks/databricks-claude-sonnet-4-6"
+    client._model = "omniroute/minimax/MiniMax-M3"
     client._connection = None
     client._request_timeout = 60
     if isinstance(return_value_or_exc, BaseException):
@@ -233,8 +241,8 @@ async def test_evaluator_records_success(store: TaskOutcomeStore) -> None:
         "unresolved_issues": [],
     }
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(_ok_response(ok_payload)),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(_ok_response(ok_payload)), None),
     ):
         outcome = await evaluate_task_outcome(
             store, run, triggering_message_summary="Fix login bug"
@@ -261,8 +269,8 @@ async def test_evaluator_records_partial(store: TaskOutcomeStore) -> None:
         "unresolved_issues": ["flaky integration test"],
     }
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(_ok_response(payload)),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(_ok_response(payload)), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
     assert outcome.evaluation.verdict == "partial"
@@ -283,8 +291,8 @@ async def test_evaluator_records_failure(store: TaskOutcomeStore) -> None:
         "unresolved_issues": ["permission denied on test"],
     }
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(_ok_response(payload)),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(_ok_response(payload)), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
     assert outcome.evaluation.verdict == "failure"
@@ -294,35 +302,48 @@ async def test_evaluator_records_failure(store: TaskOutcomeStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_evaluator_inconclusive_when_no_llm_configured(
+async def test_evaluator_failed_when_no_llm_configured(
     store: TaskOutcomeStore,
 ) -> None:
-    """When ``RuntimeCaps.llm`` is None, the evaluator records
-    ``verdict='inconclusive'`` with a clear reasoning message."""
+    """Missing server configuration is visible and creates no judgment row."""
     run = _run(store)
+    from omnigent.server.task_outcome_evaluator import EvaluatorFailure
+
+    failure = EvaluatorFailure(
+        "configuration", "missing_evaluator_config", "RuntimeCaps.llm is None", False
+    )
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=None,
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(None, failure),
     ):
         outcome = await evaluate_task_outcome(store, run)
-    assert outcome.evaluation.verdict == "inconclusive"
-    assert "Automated evaluation unavailable" in (outcome.evaluation.reasoning or "")
-    assert "RuntimeCaps.llm" in (outcome.evaluation.reasoning or "")
+    assert outcome.status == "failed"
+    assert outcome.evaluation is None
+    assert store.get_evaluation_for_run(run.id) is None
+    persisted = store.get_run(run.id)
+    assert persisted is not None
+    assert persisted.evaluation_status == "failed"
+    assert persisted.evaluation_error_code == "missing_evaluator_config"
 
 
 @pytest.mark.asyncio
-async def test_evaluator_inconclusive_on_llm_timeout(
+async def test_evaluator_deferred_on_llm_timeout(
     store: TaskOutcomeStore,
 ) -> None:
-    """An LLM call timeout → inconclusive row (NOT a task failure)."""
+    """A timeout defers M3 and creates no judgment row."""
     run = _run(store)
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(TimeoutError("upstream timeout")),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(TimeoutError("upstream timeout")), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
-    assert outcome.evaluation.verdict == "inconclusive"
-    assert "TimeoutError" in (outcome.evaluation.reasoning or "")
+    assert outcome.status == "deferred"
+    assert outcome.evaluation is None
+    assert store.get_evaluation_for_run(run.id) is None
+    persisted = store.get_run(run.id)
+    assert persisted is not None
+    assert persisted.evaluation_status == "deferred"
+    assert persisted.evaluation_error_code == "timeout"
 
 
 @pytest.mark.asyncio
@@ -333,12 +354,18 @@ async def test_evaluator_inconclusive_on_invalid_json(
     run = _run(store)
     bad = MagicMock()
     bad.output = [MagicMock(content=[MagicMock(text="not json at all")])]
+    bad.provider_metadata = _ok_response({}).provider_metadata
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(bad),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(bad), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
-    assert outcome.evaluation.verdict == "inconclusive"
+    assert outcome.status == "failed"
+    assert outcome.evaluation is None
+    assert store.get_evaluation_for_run(run.id) is None
+    persisted = store.get_run(run.id)
+    assert persisted is not None
+    assert persisted.evaluation_error_code == "malformed_structured_output"
 
 
 @pytest.mark.asyncio
@@ -356,12 +383,16 @@ async def test_evaluator_inconclusive_on_schema_violation(
         "unresolved_issues": [],
     }
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(_ok_response(bad_payload)),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(_ok_response(bad_payload)), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
-    assert outcome.evaluation.verdict == "inconclusive"
-    assert "verdict" in (outcome.evaluation.reasoning or "").lower()
+    assert outcome.status == "failed"
+    assert outcome.evaluation is None
+    assert store.get_evaluation_for_run(run.id) is None
+    persisted = store.get_run(run.id)
+    assert persisted is not None
+    assert persisted.evaluation_error_code == "malformed_structured_output"
 
 
 @pytest.mark.asyncio
@@ -372,12 +403,18 @@ async def test_evaluator_inconclusive_on_missing_text(
     run = _run(store)
     bad = MagicMock()
     bad.output = [MagicMock(content=[MagicMock(text="")])]
+    bad.provider_metadata = _ok_response({}).provider_metadata
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(bad),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(bad), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
-    assert outcome.evaluation.verdict == "inconclusive"
+    assert outcome.status == "failed"
+    assert outcome.evaluation is None
+    assert store.get_evaluation_for_run(run.id) is None
+    persisted = store.get_run(run.id)
+    assert persisted is not None
+    assert persisted.evaluation_error_code == "malformed_structured_output"
 
 
 # ── shape invariants ────────────────────────────────────────────────────
@@ -399,11 +436,10 @@ async def test_evaluator_records_provenance_when_present(
         "unresolved_issues": [],
     }
     with patch(
-        "omnigent.server.task_outcome_evaluator._policy_llm_client_or_none",
-        return_value=_make_client(_ok_response(payload)),
+        "omnigent.server.task_outcome_evaluator._configured_policy_client",
+        return_value=(_make_client(_ok_response(payload)), None),
     ):
         outcome = await evaluate_task_outcome(store, run)
-    # The mock client's `_model` is `databricks/databricks-...` —
-    # the provider is the leading `databricks/` segment.
-    assert outcome.evaluation.evaluator_provider == "databricks"
-    assert outcome.evaluation.evaluator_model == "databricks/databricks-claude-sonnet-4-6"
+    assert outcome.evaluation.evaluator_provider == "minimax"
+    assert outcome.evaluation.evaluator_model == "minimax/MiniMax-M3"
+    assert outcome.evaluation.evaluator_fallback_used is False

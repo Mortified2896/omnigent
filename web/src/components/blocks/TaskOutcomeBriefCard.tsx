@@ -126,7 +126,9 @@ export function TaskOutcomeBriefCard({
     return (
       <div className="mt-2 text-xs text-muted-foreground" data-testid="outcome-brief-pending">
         <LoaderIcon className="mr-1 inline size-3 animate-spin" />
-        {evaluationPending ? "Evaluating outcome…" : "Preparing outcome brief…"}
+        {evaluationPending
+          ? `Evaluating outcome with MiniMax-M3…${detail?.run.evaluation_attempt_count ? ` Attempt ${detail.run.evaluation_attempt_count}` : ""}`
+          : "Preparing outcome brief…"}
       </div>
     );
   }
@@ -259,9 +261,43 @@ export function TaskOutcomeBriefCard({
     );
   }
 
-  // phase === "ready" — detail must exist and have either an evaluation
-  // or a human review. Defensive guard kept for clarity.
+  // phase === "ready" — detail contains either an evaluation, review, or an
+  // explicit durable deferred/failed/skipped lifecycle.
   if (!detail) return null;
+  if (!detail.review && !detail.evaluation && detail.run.evaluation_status === "deferred") {
+    return renderEvaluationIssueCard({
+      detail,
+      kind: "deferred",
+      editing,
+      setEditing,
+      sessionId,
+      postponed,
+      postponedPersisted,
+      setPostponed,
+      setPostponedPersisted,
+      retry,
+      reEvaluating,
+      reEvaluate,
+      reEvaluateError,
+    });
+  }
+  if (!detail.review && !detail.evaluation && detail.run.evaluation_status === "failed") {
+    return renderEvaluationIssueCard({
+      detail,
+      kind: "failed",
+      editing,
+      setEditing,
+      sessionId,
+      postponed,
+      postponedPersisted,
+      setPostponed,
+      setPostponedPersisted,
+      retry,
+      reEvaluating,
+      reEvaluate,
+      reEvaluateError,
+    });
+  }
   return renderReadyCard({
     detail,
     editing,
@@ -278,6 +314,148 @@ export function TaskOutcomeBriefCard({
     mutationError,
     setMutationError,
   });
+}
+
+function formatTimestamp(epoch: number | null | undefined): string {
+  if (epoch == null) return "Not scheduled";
+  return new Date(epoch * 1000).toLocaleString();
+}
+
+function renderEvaluationIssueCard(args: {
+  detail: TaskRunDetailResponse;
+  kind: "deferred" | "failed";
+  editing: boolean;
+  setEditing: (value: boolean) => void;
+  sessionId: string;
+  postponed: boolean;
+  postponedPersisted: boolean;
+  setPostponed: (value: boolean) => void;
+  setPostponedPersisted: (value: boolean) => void;
+  retry: () => void;
+  reEvaluating: boolean;
+  reEvaluate: () => Promise<void>;
+  reEvaluateError: string | null;
+}) {
+  const {
+    detail,
+    kind,
+    editing,
+    setEditing,
+    sessionId,
+    postponed,
+    postponedPersisted,
+    setPostponed,
+    setPostponedPersisted,
+    retry,
+    reEvaluating,
+    reEvaluate,
+    reEvaluateError,
+  } = args;
+  const { run } = detail;
+  const postpone = () => {
+    writePostponed(sessionId, run.id);
+    setPostponedPersisted(true);
+    setPostponed(true);
+  };
+  if (editing) {
+    return (
+      <TaskReviewCard
+        taskRunId={run.id}
+        initialRun={run}
+        isOpen
+        onOpenChange={() => setEditing(false)}
+        onReviewed={() => {
+          setEditing(false);
+          retry();
+        }}
+        onReviewLater={postpone}
+      />
+    );
+  }
+  if (postponed) {
+    return (
+      <div
+        className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
+        data-testid="outcome-brief-postponed"
+        data-task-run-id={run.id}
+      >
+        <span>Outcome review postponed</span>
+        <button
+          className="ml-auto underline"
+          onClick={() => {
+            if (postponedPersisted) clearPostponed(sessionId, run.id);
+            setPostponedPersisted(false);
+            setPostponed(false);
+          }}
+        >
+          Review now
+        </button>
+      </div>
+    );
+  }
+  const deferred = kind === "deferred";
+  return (
+    <div
+      className={`mt-2 rounded-md border px-3 py-3 text-xs shadow-sm ${deferred ? "border-amber-500/60 bg-amber-500/5" : "border-destructive bg-destructive/5"}`}
+      data-testid={deferred ? "outcome-brief-deferred" : "outcome-brief-evaluator-failed"}
+      data-task-run-id={run.id}
+    >
+      <div className="font-semibold">
+        {deferred ? "Outcome evaluation deferred" : "Outcome evaluator requires attention"}
+      </div>
+      <p className="mt-1">
+        {deferred
+          ? "MiniMax-M3 is currently unavailable."
+          : `Category: ${run.evaluation_error_kind ?? "operator attention"}.`}
+      </p>
+      <p className="mt-1 font-medium">No fallback model was used.</p>
+      <dl className="mt-2 grid gap-1 text-muted-foreground">
+        <div>
+          Requested evaluator model: {run.evaluation_requested_model ?? "minimax/MiniMax-M3"}
+        </div>
+        <div>Attempts: {run.evaluation_attempt_count ?? 0}</div>
+        <div>Last attempt: {formatTimestamp(run.evaluation_last_attempt_at)}</div>
+        {deferred && run.evaluation_next_retry_at != null ? (
+          <div>Next automatic retry: {formatTimestamp(run.evaluation_next_retry_at)}</div>
+        ) : null}
+        <div>
+          Reason:{" "}
+          {run.evaluation_error_message ?? run.evaluation_error_code ?? "Unknown evaluator error"}
+        </div>
+      </dl>
+      {reEvaluateError ? (
+        <p role="alert" className="mt-2 text-destructive">
+          {reEvaluateError}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <button
+          className="min-h-11 rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50"
+          onClick={() => void reEvaluate()}
+          disabled={reEvaluating}
+          data-testid="outcome-brief-retry"
+        >
+          {reEvaluating ? (
+            <LoaderIcon className="mr-1 inline size-3 animate-spin" />
+          ) : (
+            <RefreshCwIcon className="mr-1 inline size-3" />
+          )}
+          Retry now
+        </button>
+        <button className="min-h-11 rounded border px-2 py-1" onClick={() => setEditing(true)}>
+          <PencilIcon className="mr-1 inline size-3" />
+          {deferred ? "Adjust / Review manually" : "Review manually"}
+        </button>
+        <button
+          className="min-h-11 underline sm:ml-auto"
+          data-testid="outcome-review-later"
+          onClick={postpone}
+        >
+          Review later
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function renderReadyCard(args: {
@@ -348,8 +526,8 @@ function renderReadyCard(args: {
       />
     );
   }
-  const verdict = evaluation?.verdict ?? "unsure";
-  const family = evaluation?.proposed_task_family ?? run.proposed_task_family ?? "—";
+  const verdict = evaluation?.verdict;
+  const family = evaluation?.proposed_task_family ?? "—";
   const confidence =
     evaluation?.confidence == null ? "—" : `${Math.round(evaluation.confidence * 100)}%`;
   const evidence = run.changed_files?.length ? `${run.changed_files.length} files changed` : "—";
@@ -405,7 +583,7 @@ function renderReadyCard(args: {
     >
       <div className="font-medium">Task outcome</div>
       <div className="mt-1 text-sm">
-        Likely {verdict} · {family} · Quality {evaluation?.quality_score ?? "—"}/5
+        {verdict} · {family} · Quality {evaluation?.quality_score ?? "—"}/5
       </div>
       <div className="mt-1 text-muted-foreground">
         Requested combo: {run.requested_route_id ?? "—"} · Requested reasoning:{" "}
@@ -422,6 +600,11 @@ function renderReadyCard(args: {
       <div className="mt-1 text-muted-foreground">
         Evidence: ✓ {evidence} · Commit {run.commit_sha?.slice(0, 8) ?? "—"} · Evaluator confidence:{" "}
         {confidence}
+      </div>
+      <div className="mt-1 text-muted-foreground">
+        Evaluator: {evaluation?.evaluator_provider ?? "—"} / {evaluation?.evaluator_model ?? "—"}
+        {" · "}Fallback: {evaluation?.evaluator_fallback_used ? "yes" : "no"}
+        {evaluation?.evaluator_decision_id ? ` · Decision ${evaluation.evaluator_decision_id}` : ""}
       </div>
       {evaluation?.verdict === "inconclusive" && evaluation.reasoning ? (
         <details className="mt-2 text-muted-foreground" data-testid="inconclusive-reasoning">

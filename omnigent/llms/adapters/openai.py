@@ -43,6 +43,21 @@ _REQUEST_TIMEOUT = 120
 _STREAM_TIMEOUT = 300
 
 
+_PROVENANCE_HEADERS = (
+    "x-omniroute-requested-model",
+    "x-omniroute-selected-provider",
+    "x-omniroute-selected-model",
+    "x-omniroute-fallback-used",
+    "x-omniroute-decision-id",
+    "x-omniroute-selection-strategy",
+)
+
+
+def _sanitized_provider_metadata(headers: httpx.Headers) -> dict[str, str]:
+    """Copy only non-secret model provenance headers."""
+    return {name: value for name in _PROVENANCE_HEADERS if (value := headers.get(name))}
+
+
 class OpenAICompatibleAdapter(BaseAdapter):
     """
     Adapter for providers using the OpenAI Chat Completions format.
@@ -182,7 +197,8 @@ class OpenAICompatibleAdapter(BaseAdapter):
         :param headers: HTTP headers.
         :param payload: JSON payload.
         :param timeout: Request timeout in seconds, e.g. ``120``.
-        :returns: Parsed JSON response dict.
+        :returns: Parsed JSON response dict, including a private sanitized
+            metadata key with OmniRoute provenance when present.
         :raises httpx.HTTPStatusError: On non-2xx status.
         """
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -193,6 +209,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
             )
             resp.raise_for_status()
             result: dict[str, Any] = resp.json()
+            metadata = _sanitized_provider_metadata(resp.headers)
+            if metadata:
+                result["_omnigent_provider_metadata"] = metadata
             return result
 
     async def _stream_request(

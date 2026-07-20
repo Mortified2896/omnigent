@@ -117,6 +117,16 @@ def _serialise_run(run: TaskRun) -> dict[str, Any]:
         "execution_started_at": run.execution_started_at,
         "execution_finished_at": run.execution_finished_at,
         "execution_duration_ms": run.execution_duration_ms,
+        "evaluation_status": run.evaluation_status,
+        "evaluation_started_at": run.evaluation_started_at,
+        "evaluation_finished_at": run.evaluation_finished_at,
+        "evaluation_attempt_count": run.evaluation_attempt_count,
+        "evaluation_last_attempt_at": run.evaluation_last_attempt_at,
+        "evaluation_next_retry_at": run.evaluation_next_retry_at,
+        "evaluation_error_kind": run.evaluation_error_kind,
+        "evaluation_error_code": run.evaluation_error_code,
+        "evaluation_error_message": run.evaluation_error_message,
+        "evaluation_requested_model": run.evaluation_requested_model,
         "selected_provider": run.selected_provider,
         "selected_model": run.selected_model,
         "reasoning_effort": run.reasoning_effort,
@@ -313,6 +323,8 @@ def _serialise_evaluation(evaluation: Any | None) -> dict[str, Any] | None:
         "evaluator_provider": evaluation.evaluator_provider,
         "evaluator_model": evaluation.evaluator_model,
         "evaluator_route_id": evaluation.evaluator_route_id,
+        "evaluator_fallback_used": evaluation.evaluator_fallback_used,
+        "evaluator_decision_id": evaluation.evaluator_decision_id,
         "verdict": evaluation.verdict,
         "confidence": evaluation.confidence,
         "quality_score": evaluation.quality_score,
@@ -350,6 +362,18 @@ def _serialise_review(review: Any | None) -> dict[str, Any] | None:
     }
 
 
+def _queue_state(run: TaskRun) -> str:
+    """Distinguish durable evaluator/review states in queue listings."""
+    return {
+        "not_requested": "awaiting_evaluation",
+        "pending": "awaiting_evaluation",
+        "deferred": "evaluation_deferred",
+        "failed": "evaluator_failed",
+        "completed": "evaluated_awaiting_human_review",
+        "skipped": "intentionally_skipped",
+    }.get(run.evaluation_status, "awaiting_evaluation")
+
+
 def _run_to_summary_dict(run: TaskRun) -> dict[str, Any]:
     """Lighter-weight summary used by the listing endpoint.
 
@@ -365,6 +389,16 @@ def _run_to_summary_dict(run: TaskRun) -> dict[str, Any]:
         "response_id": run.response_id,
         "triggering_message_id": run.triggering_message_id,
         "terminal_status": run.terminal_status,
+        "execution_status": run.execution_status,
+        "evaluation_status": run.evaluation_status,
+        "evaluation_attempt_count": run.evaluation_attempt_count,
+        "evaluation_last_attempt_at": run.evaluation_last_attempt_at,
+        "evaluation_next_retry_at": run.evaluation_next_retry_at,
+        "evaluation_error_kind": run.evaluation_error_kind,
+        "evaluation_error_code": run.evaluation_error_code,
+        "evaluation_error_message": run.evaluation_error_message,
+        "evaluation_requested_model": run.evaluation_requested_model,
+        "queue_state": _queue_state(run),
         "started_at": run.started_at,
         "terminal_at": run.terminal_at,
         "duration_ms": run.duration_ms,
@@ -675,12 +709,7 @@ def create_task_outcomes_router(
         request: Request,
         task_run_id: str,
     ) -> dict[str, str]:
-        """Queue the missing automated evaluation for a terminal run.
-
-        The endpoint is intentionally repair-only: an existing evaluation is
-        immutable and returns 409 rather than spawning a duplicate. Store and
-        recorder calls run in worker threads because both APIs are synchronous.
-        """
+        """Atomically queue a fixed-M3 attempt for a terminal run."""
         user_id = require_user(request, auth_provider)
         run = await _call_store(store.get_run, task_run_id=task_run_id)
         if run is None:
@@ -692,21 +721,16 @@ def create_task_outcomes_router(
             permission_store,
             conversation_store,
         )
-        if run.terminal_status not in {"completed", "failed", "cancelled", "incomplete"}:
+        if run.execution_status not in {"completed", "failed", "cancelled", "timed_out"}:
             raise OmnigentError("Task run is not terminal", code=ErrorCode.INVALID_INPUT)
-        evaluation = await _call_store(
-            store.get_evaluation_for_run,
-            task_run_id=task_run_id,
-        )
-        if evaluation is not None:
+        if run.evaluation_status == "completed":
             raise HTTPException(status_code=409, detail="evaluation already exists")
 
         recorder = get_recorder()
         if recorder is None or recorder.store is not store:
             recorder = TaskOutcomeRecorder(store=store)
         status = await _call_store(recorder.re_evaluate, task_run_id=task_run_id)
-        if status == "already_present":
-            # Close the race between the explicit check above and scheduling.
+        if status in {"already_present", "already_completed"}:
             raise HTTPException(status_code=409, detail="evaluation already exists")
         return {"status": status}
 

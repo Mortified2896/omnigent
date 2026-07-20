@@ -1326,6 +1326,15 @@ class SqlTaskRun(Base):
     execution_duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     evaluation_started_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     evaluation_finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    evaluation_attempt_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
+    evaluation_last_attempt_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    evaluation_next_retry_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    evaluation_error_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluation_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    evaluation_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evaluation_requested_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     timeout_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_useful_activity_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     actual_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -1352,6 +1361,15 @@ class SqlTaskRun(Base):
             "terminal_status IN (1, 2, 3, 4, 5)",
             name="ck_task_runs_terminal_status",
         ),
+        CheckConstraint(
+            "evaluation_status IN "
+            "('not_requested','pending','completed','deferred','skipped','failed')",
+            name="ck_task_runs_evaluation_status",
+        ),
+        CheckConstraint(
+            "evaluation_attempt_count >= 0",
+            name="ck_task_runs_evaluation_attempt_count",
+        ),
         # (workspace_id, conversation_id, started_at DESC) — the listing
         # path's WHERE + ORDER BY index, id trailing to complete the PK.
         Index(
@@ -1368,6 +1386,13 @@ class SqlTaskRun(Base):
             "ix_task_runs_response_id",
             "workspace_id",
             "response_id",
+            "id",
+        ),
+        Index(
+            "ix_task_runs_evaluation_due",
+            "workspace_id",
+            "evaluation_status",
+            "evaluation_next_retry_at",
             "id",
         ),
         # (workspace_id, terminal_status, id) — powers the unreviewed /
@@ -1387,11 +1412,10 @@ class SqlTaskEvaluation(Base):
 
     Append-only: each row is one immutable automated evaluation. LLM
     evaluations are produced by ``omnigent.server.task_outcome_evaluator``
-    after the task reaches a terminal state. When the evaluator fails,
-    a single ``verdict='inconclusive'`` row is still recorded so the
-    schema contract is "always exactly one evaluation per task run"
-    rather than "sometimes missing" (the schema avoids a JOIN on the
-    review card to decide whether evaluation ran).
+    after the task reaches a terminal state. A row exists only after the
+    fixed evaluator returned valid structured output with verified provenance;
+    request failures remain on ``task_runs`` as deferred or failed lifecycle
+    metadata.
 
     :param id: UUID for the evaluation, e.g. ``"tev_abc123"``.
     :param task_run_id: Owning :class:`SqlTaskRun.id`.
@@ -1405,16 +1429,14 @@ class SqlTaskEvaluation(Base):
         evaluator used, when known (the same ``PolicyLLMClient`` the
         routing agent uses, so it inherits the same routing path).
     :param verdict: ``success`` / ``partial`` / ``failure`` /
-        ``inconclusive``. ``inconclusive`` is recorded both when the
-        evaluator returns it AND when the evaluator call itself
-        fails (the failure is captured in ``reasoning``).
+        ``inconclusive``. ``inconclusive`` means the evaluator successfully
+        judged that the available evidence was insufficient.
     :param confidence: 0.0–1.0 confidence from the LLM. ``None``
         when the evaluator didn't produce one (deterministic / failed).
     :param quality_score: 1–5 from the LLM. ``None`` when not
         produced.
     :param proposed_task_family: Family the evaluator proposes.
-    :param reasoning: Free-text reasoning from the evaluator (or a
-        bounded error message when the evaluator call failed).
+    :param reasoning: Free-text reasoning from the evaluator.
     :param evidence_json: JSON-encoded list of strings (evidence
         items the evaluator cited).
     :param unresolved_issues_json: JSON-encoded list of strings
@@ -1437,6 +1459,8 @@ class SqlTaskEvaluation(Base):
     evaluator_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
     evaluator_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     evaluator_route_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluator_fallback_used: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    evaluator_decision_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     verdict: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     quality_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
@@ -1451,6 +1475,11 @@ class SqlTaskEvaluation(Base):
         CheckConstraint(
             "verdict IN ('success','partial','failure','inconclusive')",
             name="ck_task_evaluations_verdict",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "task_run_id",
+            name="uq_task_evaluations_run",
         ),
         # (workspace_id, task_run_id, created_at, id) — listing all
         # evaluations for a run ordered by time.

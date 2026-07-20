@@ -25,6 +25,47 @@ from omnigent.llms.types import (
 # ── Input direction: Responses API -> Chat Completions ────
 
 
+def test_response_preserves_omnigent_provider_metadata() -> None:
+    from omnigent.llms._responses_to_chat import chat_response_to_response
+
+    payload = {
+        "_omnigent_provider_metadata": {
+            "x-omniroute-requested-model": "minimax/MiniMax-M3",
+            "x-omniroute-selected-provider": "minimax",
+            "x-omniroute-selected-model": "minimax/MiniMax-M3",
+            "x-omniroute-fallback-used": "false",
+            "x-omniroute-decision-id": "dec-1",
+        },
+        "model": "minimax/MiniMax-M3",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    response = chat_response_to_response(payload)
+    assert response.provider_metadata == payload["_omnigent_provider_metadata"]
+
+
+def test_response_without_metadata_is_none() -> None:
+    from omnigent.llms._responses_to_chat import chat_response_to_response
+
+    payload = {
+        "model": "minimax/MiniMax-M3",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    response = chat_response_to_response(payload)
+    assert response.provider_metadata is None
+
+
 def test_instructions_become_system_message() -> None:
     messages = responses_input_to_chat_messages([], "Be helpful.")
     assert messages == [{"role": "system", "content": "Be helpful."}]

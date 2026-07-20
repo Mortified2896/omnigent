@@ -111,6 +111,7 @@ EVALUATION_STATUSES: tuple[str, ...] = (
     "not_requested",
     "pending",
     "completed",
+    "deferred",
     "skipped",
     "failed",
 )
@@ -250,6 +251,13 @@ class TaskRun:
     execution_duration_ms: int | None = None
     evaluation_started_at: int | None = None
     evaluation_finished_at: int | None = None
+    evaluation_attempt_count: int = 0
+    evaluation_last_attempt_at: int | None = None
+    evaluation_next_retry_at: int | None = None
+    evaluation_error_kind: str | None = None
+    evaluation_error_code: str | None = None
+    evaluation_error_message: str | None = None
+    evaluation_requested_model: str | None = None
     timeout_type: str | None = None
     last_useful_activity_at: int | None = None
     actual_provider: str | None = None
@@ -292,12 +300,9 @@ class TaskRun:
 class TaskEvaluation:
     """One append-only automated evaluation of a :class:`TaskRun`.
 
-    LLM evaluations record the evaluator's verdict / confidence /
-    quality / family / reasoning / evidence / unresolved-issues. When
-    the evaluator call itself fails, a single ``verdict='inconclusive'``
-    row is recorded with the failure captured in ``reasoning`` so the
-    schema contract is "always exactly one evaluation per task run"
-    rather than "sometimes missing".
+    A row exists only when the automated evaluator successfully returned a
+    valid structured judgment. Transport, configuration, provenance, and
+    protocol failures are recorded on :class:`TaskRun` instead.
 
     :param id: UUID, e.g. ``"tev_abc123"``.
     :param task_run_id: Owning :class:`TaskRun.id`.
@@ -330,6 +335,8 @@ class TaskEvaluation:
     evaluator_provider: str | None = None
     evaluator_model: str | None = None
     evaluator_route_id: str | None = None
+    evaluator_fallback_used: bool | None = None
+    evaluator_decision_id: str | None = None
     confidence: float | None = None
     quality_score: int | None = None
     proposed_task_family: str | None = None

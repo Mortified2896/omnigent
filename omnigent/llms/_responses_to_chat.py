@@ -237,6 +237,7 @@ def chat_response_to_response(
         output=output,
         model=chat_dict["model"],
         usage=usage,
+        provider_metadata=chat_dict.get("_omnigent_provider_metadata"),
     )
 
 

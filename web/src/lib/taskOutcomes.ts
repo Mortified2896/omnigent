@@ -255,7 +255,14 @@ export interface TaskRun {
     | "completed"
     | "failed"
     | "timed_out";
-  evaluation_status?: "not_requested" | "pending" | "completed" | "skipped" | "failed";
+  evaluation_status?: "not_requested" | "pending" | "completed" | "deferred" | "skipped" | "failed";
+  evaluation_attempt_count?: number;
+  evaluation_last_attempt_at?: number | null;
+  evaluation_next_retry_at?: number | null;
+  evaluation_error_kind?: string | null;
+  evaluation_error_code?: string | null;
+  evaluation_error_message?: string | null;
+  evaluation_requested_model?: string | null;
   execution_started_at?: number | null;
   execution_finished_at?: number | null;
   execution_duration_ms?: number | null;
@@ -296,6 +303,21 @@ export interface TaskRunSummary {
    */
   triggering_message_id: string | null;
   terminal_status: TaskRun["terminal_status"];
+  execution_status?: NonNullable<TaskRun["execution_status"]>;
+  evaluation_status?: TaskRun["evaluation_status"];
+  evaluation_attempt_count?: number;
+  evaluation_last_attempt_at?: number | null;
+  evaluation_next_retry_at?: number | null;
+  evaluation_error_kind?: string | null;
+  evaluation_error_code?: string | null;
+  evaluation_error_message?: string | null;
+  evaluation_requested_model?: string | null;
+  queue_state?:
+    | "awaiting_evaluation"
+    | "evaluation_deferred"
+    | "evaluator_failed"
+    | "evaluated_awaiting_human_review"
+    | "intentionally_skipped";
   started_at: number | null;
   terminal_at: number | null;
   duration_ms: number | null;
@@ -326,6 +348,8 @@ export interface TaskEvaluation {
   evaluator_provider: string | null;
   evaluator_model: string | null;
   evaluator_route_id: string | null;
+  evaluator_fallback_used?: boolean | null;
+  evaluator_decision_id?: string | null;
   verdict: "success" | "partial" | "failure" | "inconclusive";
   confidence: number | null;
   quality_score: number | null;
@@ -673,7 +697,7 @@ export async function reEvaluateTaskRun(
     method: "POST",
     credentials: "same-origin",
   });
-  if (!resp.ok && resp.status !== 409) {
+  if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new TaskRunFetchError(
       resp.status,

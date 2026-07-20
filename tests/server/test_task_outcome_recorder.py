@@ -310,10 +310,10 @@ def test_recorder_terminal_unknown_run_is_noop(
     assert enqueue_langfuse.call_count == 0
 
 
-def test_spawn_evaluator_persists_inconclusive_when_no_loop(
+def test_spawn_evaluator_marks_failed_when_no_loop(
     store: TaskOutcomeStore,
 ) -> None:
-    """A worker without the lifespan loop still gets a durable evaluation."""
+    """A missing event loop is a durable scheduling failure, not a verdict."""
     recorder = TaskOutcomeRecorder(store=store)
     run_id = recorder.on_response_in_progress(
         session_id="c1",
@@ -333,9 +333,11 @@ def test_spawn_evaluator_persists_inconclusive_when_no_loop(
     )
 
     evaluation = store.get_evaluation_for_run(run_id)
-    assert evaluation is not None
-    assert evaluation.verdict == "inconclusive"
-    assert "no event loop available" in (evaluation.reasoning or "")
+    assert evaluation is None
+    persisted = store.get_run(run_id)
+    assert persisted is not None
+    assert persisted.evaluation_status == "failed"
+    assert persisted.evaluation_error_code == "event_loop_unavailable"
 
 
 def test_spawn_evaluator_idempotent_when_evaluation_exists(
@@ -352,6 +354,12 @@ def test_spawn_evaluator_idempotent_when_evaluation_exists(
         user_message_summary=None,
         project_path=None,
     )
+    store.update_run_terminal(
+        UpdateTaskRunTerminalInput(
+            task_run_id=run_id, terminal_status="completed", terminal_at=200
+        )
+    )
+    store.request_evaluation(run_id, "minimax/MiniMax-M3")
     existing = store.create_evaluation(
         CreateTaskEvaluationInput(
             task_run_id=run_id,
@@ -433,10 +441,12 @@ def test_re_evaluate_terminal_run_creates_evaluation(
 
     status = recorder.re_evaluate(run.id)
 
-    assert status == "failed_persisted"
+    assert status == "scheduling_failed"
     evaluation = store.get_evaluation_for_run(run.id)
-    assert evaluation is not None
-    assert evaluation.verdict == "inconclusive"
+    assert evaluation is None
+    persisted = store.get_run(run.id)
+    assert persisted is not None
+    assert persisted.evaluation_status == "failed"
 
 
 # ── recorder: langfuse sync dispatch ────────────────────────────────────

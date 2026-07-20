@@ -8,25 +8,16 @@ client is built from ``RuntimeCaps.llm`` so every inference goes
 ``Omnigent → OmniRoute → selected evaluator model`` with no
 direct OpenAI / Anthropic / OpenRouter / etc. provider calls.
 
-The evaluator produces a single :class:`TaskEvaluation` row. On
-failure (HTTP error, invalid JSON, schema violation) it records a
-``verdict='inconclusive'`` row so the schema contract is "always
-exactly one evaluation per task run" — the review-card UI never
-needs to JOIN to know whether the evaluator ran.
+The evaluator produces a :class:`TaskEvaluation` row only after the fixed
+``minimax/MiniMax-M3`` model returned valid structured output and OmniRoute
+proved that no fallback occurred. Availability failures remain durable on the
+run as ``deferred``; operator/configuration/protocol failures become ``failed``.
 
 Evaluation budget
 -----------------
-A single ``PolicyLLMClient.create()`` call. Bounded prompt (~6 KB
-of sanitised task summary + provenance) so a hard-token-limit
-model can still answer. Strict JSON schema enforced by the
-underlying Responses API.
-
-We deliberately don't retry on transient failures — a stuck
-review card is worse than a missing evaluation. The relay
-schedules the next evaluation by simply waiting for the next
-``response.completed`` (we never re-evaluate an existing task
-run; if the evaluator fails, the row is ``inconclusive`` and
-the operator can re-evaluate manually via a future endpoint).
+One M3 call normally; malformed structured output permits one immediate retry.
+All later availability retries are durable, conservatively scheduled, and
+bounded by the server worker policy.
 
 What we never send
 ------------------
@@ -41,8 +32,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from omnigent.entities.task_outcome import (
     EVALUATOR_ACCURACY_VALUES,
@@ -51,6 +48,7 @@ from omnigent.entities.task_outcome import (
     TaskEvaluation,
     TaskRun,
 )
+from omnigent.llms.errors import PermanentLLMError, RetryableLLMError
 from omnigent.runtime.policies.builder import (
     _build_policy_llm_client,
     _resolve_server_llm_connection,
@@ -367,192 +365,328 @@ def build_evaluator_prompt(
     return prompt
 
 
-# ── Inference ─────────────────────────────────────────────────────────────
-
-
-def _policy_llm_client_or_none() -> Any:
-    """Build the server-level :class:`PolicyLLMClient`, or ``None``.
-
-    Reuses the same wiring :func:`build_routing_agent_from_runtime`
-    uses, so the LLM evaluator's inference path is bit-for-bit the
-    same OmniRoute-routed path the routing agent uses. The
-    underlying ``Client`` is created lazily; this function is
-    cheap to call and safe to invoke at any time.
-
-    :returns: A :class:`PolicyLLMClient` when ``RuntimeCaps.llm``
-        is configured; ``None`` otherwise.
-    """
-    try:
-        from omnigent.runtime._globals import get_caps
-    except ImportError:
-        return None
-
-    try:
-        caps = get_caps()
-    except Exception:  # noqa: BLE001  # never propagate
-        caps = None
-    server_llm = getattr(caps, "llm", None) if caps is not None else None
-    if server_llm is None:
-        return None
-    connection: dict[str, str] | None = None
-    factory = getattr(caps, "policy_llm_connection_factory", None) if caps is not None else None
-    if callable(factory):
-        try:
-            connection = factory()
-        except Exception:  # noqa: BLE001
-            connection = None
-    if not connection:
-        try:
-            connection = _resolve_server_llm_connection(server_llm)
-        except Exception:  # noqa: BLE001
-            connection = None
-    return _build_policy_llm_client(server_llm, connection)
+# ── Fixed M3 inference ───────────────────────────────────────────────────
 
 
 def _system_prompt() -> str:
-    """Return the evaluator's system prompt.
-
-    Returns:
-        System prompt string emphasising: strict JSON, no invented
-        evidence, bounded evidence interpretation, and the verdict
-        vocabulary.
-    """
     return (
-        "You are Omnigent's Task Outcome Evaluator. Given a sanitised "
-        "task summary, terminal execution status, available objective "
-        "evidence, and routing provenance, return strict JSON matching "
-        "the provided schema only. Never add markdown, prose, or extra "
-        "keys. Verdict vocabulary: "
+        "You are Omnigent's Task Outcome Evaluator. Given a sanitised task summary, "
+        "terminal execution status, available objective evidence, and routing provenance, "
+        "return strict JSON matching the provided schema only. Never add markdown, prose, "
+        "or extra keys. Verdict vocabulary: "
         + ", ".join(TASK_VERDICTS)
         + ". Task family vocabulary: "
         + ", ".join(TASK_FAMILIES)
-        + ". If a piece of evidence is unavailable (absent from the "
-        "evidence object), treat it as unavailable — never as passed. "
-        "Use 'inconclusive' when the evidence does not let you decide."
+        + ". Treat absent evidence as unavailable, never as passed. Use 'inconclusive' "
+        "when the evidence does not let you decide."
     )
 
 
 def _validate_evaluator_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Strict-validate an evaluator payload against :data:`EVALUATOR_JSON_SCHEMA`.
-
-    :param payload: Decoded JSON dict from the evaluator.
-    :returns: A normalised payload (coerced types, defaulted
-        ``quality``) safe to write to :class:`TaskEvaluation`.
-    :raises ValueError: When *payload* violates the schema. The
-        caller converts this to an ``inconclusive`` row.
-    """
     if not isinstance(payload, dict):
         raise ValueError("evaluator payload must be a JSON object")
     verdict = payload.get("verdict")
     if verdict not in TASK_VERDICTS:
-        raise ValueError(f"evaluator verdict must be one of {TASK_VERDICTS!r}, got {verdict!r}")
+        raise ValueError(f"evaluator verdict must be one of {TASK_VERDICTS!r}")
     confidence = payload.get("confidence")
-    if not isinstance(confidence, (int, float)):
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
         raise ValueError("evaluator confidence must be a number 0..1")
     confidence = float(confidence)
-    if not (0.0 <= confidence <= 1.0):
-        raise ValueError(f"evaluator confidence {confidence} out of range [0, 1]")
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("evaluator confidence is out of range")
     quality = payload.get("quality")
-    if quality is not None:
-        if not isinstance(quality, int) or isinstance(quality, bool):
-            raise ValueError("evaluator quality must be an integer 1..5")
-        if not (1 <= quality <= 5):
-            raise ValueError(f"evaluator quality {quality} out of range [1, 5]")
+    if quality is not None and (
+        not isinstance(quality, int) or isinstance(quality, bool) or not 1 <= quality <= 5
+    ):
+        raise ValueError("evaluator quality must be an integer 1..5")
     task_family = payload.get("task_family")
     if task_family not in TASK_FAMILIES:
-        raise ValueError(
-            f"evaluator task_family must be one of {TASK_FAMILIES!r}, got {task_family!r}"
-        )
+        raise ValueError(f"evaluator task_family must be one of {TASK_FAMILIES!r}")
     reasoning = payload.get("reasoning")
     if not isinstance(reasoning, str) or not reasoning.strip():
         raise ValueError("evaluator reasoning must be a non-empty string")
     evidence = payload.get("evidence")
-    if not isinstance(evidence, list) or not all(isinstance(x, str) for x in evidence):
+    if not isinstance(evidence, list) or not all(isinstance(item, str) for item in evidence):
         raise ValueError("evaluator evidence must be a list of strings")
-    evidence = list(evidence)[:_MAX_EVIDENCE_ITEMS]
-    unresolved_issues = payload.get("unresolved_issues")
-    if not isinstance(unresolved_issues, list) or not all(
-        isinstance(x, str) for x in unresolved_issues
-    ):
+    unresolved = payload.get("unresolved_issues")
+    if not isinstance(unresolved, list) or not all(isinstance(item, str) for item in unresolved):
         raise ValueError("evaluator unresolved_issues must be a list of strings")
-    unresolved_issues = list(unresolved_issues)[:_MAX_UNRESOLVED_ITEMS]
-
     return {
         "verdict": verdict,
         "confidence": confidence,
         "quality": quality,
         "task_family": task_family,
         "reasoning": reasoning.strip(),
-        "evidence": evidence,
-        "unresolved_issues": unresolved_issues,
+        "evidence": list(evidence)[:_MAX_EVIDENCE_ITEMS],
+        "unresolved_issues": list(unresolved)[:_MAX_UNRESOLVED_ITEMS],
     }
 
 
-def _extract_provenance(policy_client: Any) -> dict[str, Any]:
-    """Pull evaluator provenance from the configured :class:`PolicyLLMClient`.
-
-    The :class:`PolicyLLMClient` doesn't expose its model +
-    connection directly (those are private to the
-    ``Client.responses.create`` call), so we read what the
-    routing-agent path already records: the configured model on
-    ``RuntimeCaps.llm``, the resolved connection, and the policy
-    LLM client's request timeout. The trace of the actual
-    OmniRoute-routed call is captured per-request via the same
-    response headers the routing agent uses — a future iteration
-    can plumb that through. For now the configured model + route
-    are the best provenance we can record at this layer.
-
-    :param policy_client: The configured
-        :class:`PolicyLLMClient` (or ``None``).
-    :returns: A dict of ``evaluator_provider`` / ``evaluator_model``
-        / ``evaluator_route_id`` for the ``task_evaluations`` row.
-        Empty when ``policy_client`` is ``None`` (the call will
-        fail anyway).
-    """
-    if policy_client is None:
-        return {}
-    model = getattr(policy_client, "_model", None) or None
-    provider = None
-    if isinstance(model, str) and "/" in model:
-        provider = model.split("/", 1)[0]
-    route_id = None
-    # ``RuntimeCaps.llm`` is the configured ``LLMConfig``; when the
-    # spec uses ``route_id`` we record that as the evaluator's
-    # ``route_id`` so the row tracks the routing path.
-    try:
-        from omnigent.runtime._globals import get_caps
-
-        caps = get_caps()
-    except ImportError:
-        caps = None
-    server_llm = getattr(caps, "llm", None) if caps is not None else None
-    if server_llm is not None:
-        route_id = getattr(server_llm, "route_id", None)
-    return {
-        "evaluator_provider": provider,
-        "evaluator_model": model,
-        "evaluator_route_id": route_id,
-    }
+FIXED_EVALUATOR_MODEL = "minimax/MiniMax-M3"
+_OMNIROUTE_TRANSPORT_MODEL = f"omniroute/{FIXED_EVALUATOR_MODEL}"
+_EXPECTED_PROVIDER = "minimax"
+_DEFAULT_AUTO_RETRY_DELAYS = (300, 1_800, 7_200, 21_600, 43_200)
+_TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 502, 503, 504})
+_TRANSIENT_MARKERS = (
+    "all_accounts_inactive",
+    "all accounts inactive",
+    "cooldown",
+    "quota",
+    "rate limit",
+    "rate_limit",
+    "plan exhausted",
+    "credits exhausted",
+    "temporarily unavailable",
+    "provider unavailable",
+)
+_SECRET_PATTERN = re.compile(
+    r"(?i)(authorization|bearer|api[_-]?key|token|secret|password)(\s*[:=]?\s*)([^\s,;]+)"
+)
 
 
-# ── Public entrypoint ─────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class EvaluatorFailure:
+    """Sanitized classification for a failed M3 attempt."""
+
+    kind: str
+    code: str
+    message: str
+    transient: bool
+
+
+@dataclass(frozen=True)
+class EvaluatorProvenance:
+    """Verified OmniRoute response provenance."""
+
+    provider: str
+    model: str
+    fallback_used: bool
+    decision_id: str | None = None
 
 
 @dataclass(frozen=True)
 class EvaluatorOutcome:
-    """Result of one :func:`evaluate_task_outcome` call.
+    """Durable result of one requested evaluator attempt."""
 
-    :param evaluation: The persisted :class:`TaskEvaluation` row
-        (always present — a failure is recorded as
-        ``verdict='inconclusive'``).
-    :param langfuse_evaluation_id: Stable ``id`` field for the
-        Langfuse score (== ``langfuse_idempotency_key(run, "llm-verdict")``).
-        Pre-computed so the relay can enqueue without a second
-        hash.
-    """
+    status: str
+    evaluation: TaskEvaluation | None = None
+    failure: EvaluatorFailure | None = None
+    langfuse_evaluation_id: str | None = None
 
-    evaluation: TaskEvaluation
-    langfuse_evaluation_id: str
+
+def _sanitize_error(value: object, limit: int = 1000) -> str:
+    text = " ".join(str(value).split())
+    text = _SECRET_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}<redacted>", text)
+    return (text or "Evaluator request failed")[:limit]
+
+
+def _error_detail(exc: BaseException) -> tuple[int | None, str | None, str]:
+    """Extract HTTP status, structured code, and bounded text from a chain."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    status: int | None = None
+    code: str | None = None
+    parts: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        detail = getattr(current, "detail", None)
+        detail_status = getattr(detail, "status_code", None)
+        if isinstance(detail_status, int):
+            status = detail_status
+        detail_body = getattr(detail, "response_body", None)
+        if detail_body:
+            parts.append(str(detail_body))
+        current_code = getattr(current, "code", None)
+        if current_code is not None:
+            code = str(current_code)
+        if isinstance(current, httpx.HTTPStatusError):
+            status = current.response.status_code
+            with suppress(Exception):
+                parts.append(current.response.text)
+        parts.append(str(current))
+        chained = current.__cause__ or current.__context__
+        current = chained if isinstance(chained, BaseException) else None
+    rendered = _sanitize_error(" | ".join(part for part in parts if part))
+    try:
+        parsed = json.loads(rendered.split(" | ", 1)[0])
+        error = parsed.get("error", parsed) if isinstance(parsed, dict) else None
+        if isinstance(error, dict):
+            structured_code = error.get("code") or error.get("type")
+            if structured_code:
+                code = str(structured_code)
+            structured_message = error.get("message")
+            if structured_message:
+                rendered = _sanitize_error(structured_message)
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return status, code, rendered
+
+
+def classify_evaluator_error(exc: BaseException) -> EvaluatorFailure:
+    """Classify one failure without turning it into an evaluator verdict."""
+    status, structured_code, message = _error_detail(exc)
+    lowered = f"{structured_code or ''} {message}".lower()
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return EvaluatorFailure("availability", "timeout", message, True)
+    if isinstance(exc, (ConnectionError, httpx.NetworkError)):
+        return EvaluatorFailure("availability", "connection_error", message, True)
+    if isinstance(exc, RetryableLLMError):
+        code = structured_code or getattr(exc, "code", None) or "temporarily_unavailable"
+        return EvaluatorFailure("availability", str(code), message, True)
+    if status in _TRANSIENT_HTTP_STATUSES or any(
+        marker in lowered for marker in _TRANSIENT_MARKERS
+    ):
+        return EvaluatorFailure(
+            "availability", structured_code or str(status or "unavailable"), message, True
+        )
+    if status in {401, 403}:
+        return EvaluatorFailure("authentication", structured_code or str(status), message, False)
+    if status in {400, 404}:
+        return EvaluatorFailure("configuration", structured_code or str(status), message, False)
+    if isinstance(exc, PermanentLLMError):
+        return EvaluatorFailure(
+            "configuration", structured_code or "llm_request_rejected", message, False
+        )
+    return EvaluatorFailure("internal", structured_code or "internal_error", message, False)
+
+
+def _configured_policy_client() -> tuple[Any | None, EvaluatorFailure | None]:
+    try:
+        from omnigent.runtime import get_caps
+
+        caps = get_caps()
+    except Exception as exc:  # noqa: BLE001
+        return None, EvaluatorFailure(
+            "configuration", "runtime_caps_unavailable", _sanitize_error(exc), False
+        )
+    server_llm = getattr(caps, "llm", None)
+    if server_llm is None:
+        return None, EvaluatorFailure(
+            "configuration",
+            "missing_evaluator_config",
+            "Server-level evaluator configuration is missing (RuntimeCaps.llm is None).",
+            False,
+        )
+    configured_model = getattr(server_llm, "model", None)
+    if configured_model != _OMNIROUTE_TRANSPORT_MODEL:
+        return None, EvaluatorFailure(
+            "configuration",
+            "invalid_evaluator_model",
+            f"Evaluator transport must target {FIXED_EVALUATOR_MODEL}; "
+            f"configured model is {_sanitize_error(configured_model)!r}.",
+            False,
+        )
+    try:
+        connection = None
+        factory = getattr(caps, "policy_llm_connection_factory", None)
+        if callable(factory):
+            connection = factory()
+        if not connection:
+            connection = _resolve_server_llm_connection(server_llm)
+        if not isinstance(connection, dict) or not connection.get("base_url"):
+            return None, EvaluatorFailure(
+                "configuration",
+                "invalid_omniroute_endpoint",
+                "Evaluator OmniRoute connection is missing a base_url.",
+                False,
+            )
+        if not connection.get("api_key"):
+            return None, EvaluatorFailure(
+                "authentication",
+                "missing_omniroute_credential",
+                "Evaluator OmniRoute credential is missing.",
+                False,
+            )
+        return _build_policy_llm_client(server_llm, connection), None
+    except Exception as exc:  # noqa: BLE001
+        failure = classify_evaluator_error(exc)
+        return None, EvaluatorFailure("configuration", failure.code, failure.message, False)
+
+
+def _verify_provenance(
+    response: Any,
+) -> tuple[EvaluatorProvenance | None, EvaluatorFailure | None]:
+    metadata = getattr(response, "provider_metadata", None)
+    if not isinstance(metadata, dict):
+        return None, EvaluatorFailure(
+            "provenance",
+            "missing_provenance",
+            "OmniRoute response provenance headers are missing.",
+            False,
+        )
+    requested = metadata.get("x-omniroute-requested-model")
+    provider = metadata.get("x-omniroute-selected-provider")
+    model = metadata.get("x-omniroute-selected-model")
+    fallback = metadata.get("x-omniroute-fallback-used")
+    if requested != FIXED_EVALUATOR_MODEL:
+        return None, EvaluatorFailure(
+            "provenance",
+            "requested_model_mismatch",
+            f"OmniRoute reported requested model {requested!r}, not {FIXED_EVALUATOR_MODEL}.",
+            False,
+        )
+    if provider != _EXPECTED_PROVIDER or model != FIXED_EVALUATOR_MODEL:
+        return None, EvaluatorFailure(
+            "provenance",
+            "unexpected_evaluator_model",
+            "No-fallback invariant violated: OmniRoute selected "
+            f"{provider or 'unknown'}/{model or 'unknown'}.",
+            False,
+        )
+    if fallback != "false":
+        return None, EvaluatorFailure(
+            "provenance",
+            "fallback_detected",
+            "No-fallback invariant violated: OmniRoute reported fallback use.",
+            False,
+        )
+    return EvaluatorProvenance(
+        provider=provider,
+        model=model,
+        fallback_used=False,
+        decision_id=metadata.get("x-omniroute-decision-id"),
+    ), None
+
+
+def _extract_response_text(response: Any) -> str:
+    try:
+        text = response.output[0].content[0].text
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise ValueError("M3 response is missing text content") from exc
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("M3 response is missing text content")
+    return text
+
+
+def _protocol_payload(response: Any) -> dict[str, Any]:
+    text = _extract_response_text(response)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"M3 response is not valid JSON: {exc.msg}") from exc
+    return _validate_evaluator_payload(payload)
+
+
+def evaluator_retry_delays() -> tuple[int, ...]:
+    raw = os.environ.get("OMNIGENT_EVALUATOR_RETRY_DELAYS_SECONDS")
+    if not raw:
+        return _DEFAULT_AUTO_RETRY_DELAYS
+    try:
+        values = tuple(int(value.strip()) for value in raw.split(",") if value.strip())
+    except ValueError:
+        _logger.error("Invalid OMNIGENT_EVALUATOR_RETRY_DELAYS_SECONDS; using defaults")
+        return _DEFAULT_AUTO_RETRY_DELAYS
+    return (
+        values if values and all(value >= 60 for value in values) else _DEFAULT_AUTO_RETRY_DELAYS
+    )
+
+
+def next_retry_at(attempt_count: int, *, now: int | None = None) -> int | None:
+    delays = evaluator_retry_delays()
+    index = attempt_count - 1
+    if index < 0 or index >= len(delays):
+        return None
+    return (now if now is not None else int(time.time())) + delays[index]
 
 
 async def evaluate_task_outcome(
@@ -561,211 +695,145 @@ async def evaluate_task_outcome(
     *,
     triggering_message_summary: str | None = None,
 ) -> EvaluatorOutcome:
-    """Run the LLM evaluator and persist the :class:`TaskEvaluation` row.
-
-    Always writes exactly one row (success or
-    ``verdict='inconclusive'``); never raises. The review-card
-    UI depends on the schema invariant "always exactly one
-    evaluation per task run".
-
-    Inference goes through :class:`PolicyLLMClient` (i.e.
-    ``Omnigent → OmniRoute → selected evaluator model``). When
-    ``RuntimeCaps.llm`` is unset, the call is short-circuited
-    with an ``inconclusive`` row whose ``reasoning`` explains the
-    miss — no direct provider fallback.
-
-    :param store: The task-outcome store.
-    :param task_run: The terminalised :class:`TaskRun` row.
-    :param triggering_message_summary: Sanitised user-message
-        summary to feed the evaluator (``None`` when not
-        available; the prompt degrades gracefully).
-    :returns: The :class:`EvaluatorOutcome` (always present).
-    """
+    """Attempt one provenance-verified fixed M3 judgment and persist its lifecycle."""
     from omnigent.server.langfuse_sync import langfuse_idempotency_key
 
-    langfuse_evaluation_id = langfuse_idempotency_key(task_run.id, "llm-verdict")
+    if task_run.evaluation_status != "pending":
+        failure = EvaluatorFailure(
+            "scheduling",
+            "attempt_not_pending",
+            f"Run {task_run.id} was dispatched without a pending evaluator claim.",
+            False,
+        )
+        return EvaluatorOutcome("failed", failure=failure)
 
-    evidence = collect_evidence(task_run)
+    client, config_failure = _configured_policy_client()
+    if config_failure is not None or client is None:
+        failure = config_failure or EvaluatorFailure(
+            "configuration", "missing_client", "Evaluator client is unavailable.", False
+        )
+        store.mark_evaluation_failed(
+            task_run.id,
+            error_kind=failure.kind,
+            error_code=failure.code,
+            error_message=failure.message,
+        )
+        return EvaluatorOutcome("failed", failure=failure)
+
     prompt = build_evaluator_prompt(
         task_run,
         triggering_message_summary=triggering_message_summary,
-        evidence=evidence,
+        evidence=collect_evidence(task_run),
     )
-    policy_client = _policy_llm_client_or_none()
-    provenance = _extract_provenance(policy_client)
-
-    if policy_client is None:
-        _logger.info(
-            "task_outcome_evaluator: no server-level LLM configured for "
-            "run=%s; recording inconclusive",
-            task_run.id,
-        )
-        evaluation = store.create_evaluation(
-            CreateTaskEvaluationInput(
-                task_run_id=task_run.id,
-                evaluator_type="llm",
-                verdict="inconclusive",
-                reasoning=(
-                    "Automated evaluation unavailable: server-level LLM "
-                    "configuration is not set (RuntimeCaps.llm is None)."
-                ),
-                evidence=None,
-                unresolved_issues=None,
-                **provenance,
+    protocol_failure: EvaluatorFailure | None = None
+    for protocol_try in range(2):
+        try:
+            response = await client.create(
+                input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+                instructions=_system_prompt(),
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "task_outcome_evaluation",
+                        "strict": True,
+                        "schema": EVALUATOR_JSON_SCHEMA,
+                    }
+                },
             )
-        )
-        return EvaluatorOutcome(
-            evaluation=evaluation,
-            langfuse_evaluation_id=langfuse_evaluation_id,
-        )
-
-    try:
-        response = await policy_client.create(
-            input=[
-                {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": prompt}],
-                }
-            ],
-            instructions=_system_prompt(),
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "task_outcome_evaluation",
-                    "strict": True,
-                    "schema": EVALUATOR_JSON_SCHEMA,
-                }
-            },
-        )
-    except Exception as exc:  # noqa: BLE001  # never propagate
-        _logger.warning(
-            "task_outcome_evaluator: policy_client.create failed for run=%s: %s",
-            task_run.id,
-            exc,
-        )
-        evaluation = store.create_evaluation(
-            CreateTaskEvaluationInput(
-                task_run_id=task_run.id,
-                evaluator_type="llm",
-                verdict="inconclusive",
-                reasoning=(
-                    f"Automated evaluation unavailable: LLM call failed "
-                    f"({type(exc).__name__}: {str(exc)[:400]!r}). "
-                    "Human review still required."
-                ),
-                **provenance,
+        except Exception as exc:  # noqa: BLE001
+            failure = classify_evaluator_error(exc)
+            if failure.transient:
+                retry_at = next_retry_at(task_run.evaluation_attempt_count)
+                message = failure.message
+                if retry_at is None:
+                    message += " Automatic retry budget exhausted; manual retry remains available."
+                store.mark_evaluation_deferred(
+                    task_run.id,
+                    error_kind=failure.kind,
+                    error_code=failure.code,
+                    error_message=message,
+                    next_retry_at=retry_at,
+                )
+                return EvaluatorOutcome("deferred", failure=failure)
+            store.mark_evaluation_failed(
+                task_run.id,
+                error_kind=failure.kind,
+                error_code=failure.code,
+                error_message=failure.message,
             )
-        )
-        return EvaluatorOutcome(
-            evaluation=evaluation,
-            langfuse_evaluation_id=langfuse_evaluation_id,
-        )
+            return EvaluatorOutcome("failed", failure=failure)
 
-    # Parse + validate the response. ``response.output[0].content[0].text``
-    # is the Responses-API shape; tolerate other shapes defensively.
-    text = None
-    try:
-        text = response.output[0].content[0].text
-    except (AttributeError, IndexError, TypeError):
-        text = None
-    if not isinstance(text, str) or not text.strip():
-        _logger.warning(
-            "task_outcome_evaluator: missing text for run=%s response=%r",
-            task_run.id,
-            response,
-        )
-        evaluation = store.create_evaluation(
-            CreateTaskEvaluationInput(
-                task_run_id=task_run.id,
-                evaluator_type="llm",
-                verdict="inconclusive",
-                reasoning=("Automated evaluation unavailable: LLM response missing text content."),
-                **provenance,
+        provenance, provenance_failure = _verify_provenance(response)
+        if provenance_failure is not None or provenance is None:
+            failure = provenance_failure or EvaluatorFailure(
+                "provenance", "invalid_provenance", "M3 provenance validation failed.", False
             )
-        )
-        return EvaluatorOutcome(
-            evaluation=evaluation,
-            langfuse_evaluation_id=langfuse_evaluation_id,
-        )
-
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        _logger.warning(
-            "task_outcome_evaluator: invalid JSON for run=%s: %s; raw=%r",
-            task_run.id,
-            exc,
-            text[:200],
-        )
-        evaluation = store.create_evaluation(
-            CreateTaskEvaluationInput(
-                task_run_id=task_run.id,
-                evaluator_type="llm",
-                verdict="inconclusive",
-                reasoning=(
-                    f"Automated evaluation unavailable: LLM response "
-                    f"was not valid JSON ({exc.msg}). Human review still "
-                    f"required."
-                ),
-                **provenance,
+            store.mark_evaluation_failed(
+                task_run.id,
+                error_kind=failure.kind,
+                error_code=failure.code,
+                error_message=failure.message,
             )
-        )
-        return EvaluatorOutcome(
-            evaluation=evaluation,
-            langfuse_evaluation_id=langfuse_evaluation_id,
-        )
-
-    try:
-        normalised = _validate_evaluator_payload(payload)
-    except ValueError as exc:
-        _logger.warning(
-            "task_outcome_evaluator: schema violation for run=%s: %s",
-            task_run.id,
-            exc,
-        )
-        evaluation = store.create_evaluation(
-            CreateTaskEvaluationInput(
-                task_run_id=task_run.id,
-                evaluator_type="llm",
-                verdict="inconclusive",
-                reasoning=(
-                    f"Automated evaluation unavailable: LLM response "
-                    f"failed schema validation ({exc})."
-                ),
-                **provenance,
+            return EvaluatorOutcome("failed", failure=failure)
+        try:
+            normalized = _protocol_payload(response)
+            break
+        except ValueError as exc:
+            protocol_failure = EvaluatorFailure(
+                "protocol", "malformed_structured_output", _sanitize_error(exc), False
             )
-        )
-        return EvaluatorOutcome(
-            evaluation=evaluation,
-            langfuse_evaluation_id=langfuse_evaluation_id,
-        )
+            if protocol_try == 0:
+                _logger.warning(
+                    "M3 returned malformed output for run=%s; retrying once", task_run.id
+                )
+                continue
+            store.mark_evaluation_failed(
+                task_run.id,
+                error_kind=protocol_failure.kind,
+                error_code=protocol_failure.code,
+                error_message=protocol_failure.message,
+            )
+            return EvaluatorOutcome("failed", failure=protocol_failure)
+    else:  # pragma: no cover - loop always returns or breaks
+        assert protocol_failure is not None
+        return EvaluatorOutcome("failed", failure=protocol_failure)
 
     evaluation = store.create_evaluation(
         CreateTaskEvaluationInput(
             task_run_id=task_run.id,
             evaluator_type="llm",
-            verdict=normalised["verdict"],
-            confidence=normalised["confidence"],
-            quality_score=normalised["quality"],
-            proposed_task_family=normalised["task_family"],
-            reasoning=normalised["reasoning"],
-            evidence=normalised["evidence"],
-            unresolved_issues=normalised["unresolved_issues"],
-            **provenance,
+            evaluator_provider=provenance.provider,
+            evaluator_model=provenance.model,
+            evaluator_route_id=FIXED_EVALUATOR_MODEL,
+            evaluator_fallback_used=provenance.fallback_used,
+            evaluator_decision_id=provenance.decision_id,
+            verdict=normalized["verdict"],
+            confidence=normalized["confidence"],
+            quality_score=normalized["quality"],
+            proposed_task_family=normalized["task_family"],
+            reasoning=normalized["reasoning"],
+            evidence=normalized["evidence"],
+            unresolved_issues=normalized["unresolved_issues"],
         )
     )
     return EvaluatorOutcome(
+        "completed",
         evaluation=evaluation,
-        langfuse_evaluation_id=langfuse_evaluation_id,
+        langfuse_evaluation_id=langfuse_idempotency_key(task_run.id, "llm-verdict"),
     )
 
 
 __all__ = [
     "EVALUATOR_ACCURACY_VALUES",
     "EVALUATOR_JSON_SCHEMA",
+    "FIXED_EVALUATOR_MODEL",
     "EvaluatorEvidence",
+    "EvaluatorFailure",
     "EvaluatorOutcome",
     "build_evaluator_prompt",
+    "classify_evaluator_error",
     "collect_evidence",
     "evaluate_task_outcome",
+    "evaluator_retry_delays",
+    "next_retry_at",
 ]

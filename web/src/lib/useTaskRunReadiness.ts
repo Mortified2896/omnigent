@@ -96,7 +96,19 @@ export function useTaskRunForResponse(sessionId: string, responseId: string): Ta
           setPhase("ready");
           return;
         }
-        // Run row exists but evaluation still indexing — retry until budget is gone.
+        // Explicit durable terminal evaluator states render immediately even
+        // when deferred/failed intentionally have no evaluation row.
+        const evaluationStatus = next.run.evaluation_status ?? "pending";
+        if (["deferred", "failed", "skipped"].includes(evaluationStatus)) {
+          setPhase("ready");
+          return;
+        }
+        if (evaluationStatus === "completed") {
+          setError("Evaluation lifecycle invariant violated: completed without a judgment row.");
+          setPhase("failed");
+          return;
+        }
+        // Pending/not-requested rows are retried until the UI budget is gone.
         attempt += 1;
         if (attempt > TASK_RUN_READINESS_MAX_ATTEMPTS) {
           setPhase("exhausted");
