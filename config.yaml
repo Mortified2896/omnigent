@@ -1,8 +1,12 @@
 # Fixed server-level Task Outcome Evaluator.
 # The `omniroute/` prefix selects Omnigent's OpenAI-compatible transport;
-# the suffix is the concrete model sent to the local gateway.
+# the suffix is the persisted combo id served by OmniRoute. The combo
+# `custom/outcome-scoring` is M3-only by construction (see
+# omniroute-customizations/combos/custom-outcome-scoring.json) and pins
+# both active minimax accounts so an empty / invalid 200 from M3 fails
+# over to the second account before the evaluator declares failure.
 llm:
-  model: omniroute/minimax/MiniMax-M3
+  model: omniroute/custom/outcome-scoring
   connection:
     base_url: ${OMNIGENT_EVALUATOR_BASE_URL}
     api_key: ${OMNIGENT_ROUTER_API_KEY}

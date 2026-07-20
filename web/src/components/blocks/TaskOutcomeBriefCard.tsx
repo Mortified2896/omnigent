@@ -127,7 +127,7 @@ export function TaskOutcomeBriefCard({
       <div className="mt-2 text-xs text-muted-foreground" data-testid="outcome-brief-pending">
         <LoaderIcon className="mr-1 inline size-3 animate-spin" />
         {evaluationPending
-          ? `Evaluating outcome with MiniMax-M3…${detail?.run.evaluation_attempt_count ? ` Attempt ${detail.run.evaluation_attempt_count}` : ""}`
+          ? `Evaluating outcome via OmniRoute Outcome Scoring… Preferred evaluator: MiniMax-M3${detail?.run.evaluation_attempt_count ? ` · Attempt ${detail.run.evaluation_attempt_count}` : ""}`
           : "Preparing outcome brief…"}
       </div>
     );
@@ -405,13 +405,15 @@ function renderEvaluationIssueCard(args: {
       </div>
       <p className="mt-1">
         {deferred
-          ? "MiniMax-M3 is currently unavailable."
+          ? "MiniMax-M3 is currently unavailable on both evaluator accounts. No scoring model is currently available."
           : `Category: ${run.evaluation_error_kind ?? "operator attention"}.`}
       </p>
-      <p className="mt-1 font-medium">No fallback model was used.</p>
+      <p className="mt-1 text-muted-foreground">
+        Preferred evaluator: MiniMax-M3. The retry will reuse the same route.
+      </p>
       <dl className="mt-2 grid gap-1 text-muted-foreground">
         <div>
-          Requested evaluator model: {run.evaluation_requested_model ?? "minimax/MiniMax-M3"}
+          Requested evaluator route: {run.evaluation_requested_model ?? "custom/outcome-scoring"}
         </div>
         <div>Attempts: {run.evaluation_attempt_count ?? 0}</div>
         <div>Last attempt: {formatTimestamp(run.evaluation_last_attempt_at)}</div>

@@ -108,7 +108,7 @@ const detail: TaskRunDetailResponse = {
     evaluation_error_kind: null,
     evaluation_error_code: null,
     evaluation_error_message: null,
-    evaluation_requested_model: "minimax/MiniMax-M3",
+    evaluation_requested_model: "custom/outcome-scoring",
     started_at: null,
     terminal_at: null,
     duration_ms: null,
@@ -468,7 +468,7 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(within(details).getByText(reasoning)).toBeInTheDocument();
   });
 
-  it("shows the fixed MiniMax-M3 pending copy", async () => {
+  it("shows the Outcome Scoring pending copy with preferred evaluator", async () => {
     let resolve!: (value: TaskRunDetailResponse) => void;
     mocks.getTaskRunForResponse.mockReturnValue(
       new Promise<TaskRunDetailResponse>((done) => {
@@ -477,13 +477,13 @@ describe("TaskOutcomeBriefCard actions", () => {
     );
     const rendered = render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
     expect(screen.getByTestId("outcome-brief-pending")).toHaveTextContent(
-      "Evaluating outcome with MiniMax-M3…",
+      "Evaluating outcome via OmniRoute Outcome Scoring… Preferred evaluator: MiniMax-M3",
     );
     rendered.unmount();
     resolve(detail);
   });
 
-  it("renders deferred lifecycle with no-fallback proof and retry metadata", async () => {
+  it("renders deferred lifecycle with both-accounts-unavailable copy and retry metadata", async () => {
     const deferred = detailFor({
       evaluation: null,
       run: {
@@ -500,8 +500,13 @@ describe("TaskOutcomeBriefCard actions", () => {
     render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
     const card = await screen.findByTestId("outcome-brief-deferred");
     expect(within(card).getByText("Outcome evaluation deferred")).toBeInTheDocument();
-    expect(within(card).getByText("MiniMax-M3 is currently unavailable.")).toBeInTheDocument();
-    expect(within(card).getByText("No fallback model was used.")).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        "MiniMax-M3 is currently unavailable on both evaluator accounts. No scoring model is currently available.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText("No fallback model was used.")).not.toBeInTheDocument();
+    expect(within(card).getByText(/Requested evaluator route: custom\/outcome-scoring/)).toBeInTheDocument();
     expect(within(card).getByText(/Attempts: 2/)).toBeInTheDocument();
     expect(within(card).getByText(/MiniMax provider cooldown/)).toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: /Retry now/ }));
@@ -541,7 +546,8 @@ describe("TaskOutcomeBriefCard actions", () => {
     const card = await screen.findByTestId("outcome-brief-evaluator-failed");
     expect(within(card).getByText("Outcome evaluator requires attention")).toBeInTheDocument();
     expect(within(card).getByText(/authentication/)).toBeInTheDocument();
-    expect(within(card).getByText("No fallback model was used.")).toBeInTheDocument();
+    expect(within(card).queryByText("No fallback model was used.")).not.toBeInTheDocument();
+    expect(within(card).getByText(/Requested evaluator route: custom\/outcome-scoring/)).toBeInTheDocument();
     expect(within(card).queryByText(/Quality|confidence|small_bug_fix/)).not.toBeInTheDocument();
   });
 

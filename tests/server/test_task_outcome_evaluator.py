@@ -91,11 +91,16 @@ def _run(store: TaskOutcomeStore) -> TaskRun:
 
 
 def _ok_response(payload: dict[str, Any]) -> MagicMock:
-    """Build a successful ``PolicyLLMClient.create`` response."""
+    """Build a successful ``PolicyLLMClient.create`` response.
+
+    The persisted ``custom/outcome-scoring`` combo is M3-only by
+    construction. The wire id surface is the combo name while the
+    actual model identity stays ``minimax/MiniMax-M3``.
+    """
     resp = MagicMock()
     resp.output = [MagicMock(content=[MagicMock(text=json.dumps(payload))])]
     resp.provider_metadata = {
-        "x-omniroute-requested-model": "minimax/MiniMax-M3",
+        "x-omniroute-requested-model": "custom/outcome-scoring",
         "x-omniroute-selected-provider": "minimax",
         "x-omniroute-selected-model": "minimax/MiniMax-M3",
         "x-omniroute-fallback-used": "false",
@@ -112,7 +117,7 @@ def _make_client(return_value_or_exc: Any) -> MagicMock:
     through to SQL parameter binding without TypeErrors.
     """
     client = MagicMock()
-    client._model = "omniroute/minimax/MiniMax-M3"
+    client._model = "omniroute/custom/outcome-scoring"
     client._connection = None
     client._request_timeout = 60
     if isinstance(return_value_or_exc, BaseException):

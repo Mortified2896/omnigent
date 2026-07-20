@@ -45,6 +45,7 @@ from omnigent.server.langfuse_sync import (
 )
 from omnigent.server.task_outcome_evaluator import (
     FIXED_EVALUATOR_MODEL,
+    WIRE_EVALUATOR_ROUTE,
     evaluate_task_outcome,
 )
 from omnigent.stores.task_outcome_store import (
@@ -391,7 +392,7 @@ class TaskOutcomeRecorder:
                     selection_strategy=(snapshot.selection_strategy if snapshot else None),
                     billing_class=(snapshot.billing_class if snapshot else None),
                     fallback_used=(snapshot.fallback_used if snapshot is not None else None),
-                    evaluation_requested_model=FIXED_EVALUATOR_MODEL,
+                    evaluation_requested_model=WIRE_EVALUATOR_ROUTE,
                 )
             )
         except Exception as exc:  # noqa: BLE001  # never propagate

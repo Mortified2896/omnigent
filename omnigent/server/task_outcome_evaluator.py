@@ -423,8 +423,18 @@ def _validate_evaluator_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 FIXED_EVALUATOR_MODEL = "minimax/MiniMax-M3"
-_OMNIROUTE_TRANSPORT_MODEL = f"omniroute/{FIXED_EVALUATOR_MODEL}"
+# Wire id the evaluator requests from OmniRoute. The persisted combo
+# ``custom/outcome-scoring`` is M3-only by construction (see
+# ``omniroute-customizations/combos/custom-outcome-scoring.json``) so the
+# OmniRoute response always carries the concrete identity below while the
+# routing surface is the combo's persisted name. The bare ``minimax/MiniMax-M3``
+# wire id is retained as a legacy surface for direct-provider testing.
+WIRE_EVALUATOR_ROUTE = "custom/outcome-scoring"
+_OMNIROUTE_TRANSPORT_MODEL = f"omniroute/{WIRE_EVALUATOR_ROUTE}"
 _EXPECTED_PROVIDER = "minimax"
+# Pinned actual identity served by the combo; both pinned accounts serve
+# minimax/MiniMax-M3 so the (provider, model) tuple is invariant.
+_EXPECTED_MODEL = FIXED_EVALUATOR_MODEL
 _DEFAULT_AUTO_RETRY_DELAYS = (300, 1_800, 7_200, 21_600, 43_200)
 _TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 502, 503, 504})
 _TRANSIENT_MARKERS = (
@@ -568,13 +578,19 @@ def _configured_policy_client() -> tuple[Any | None, EvaluatorFailure | None]:
             False,
         )
     configured_model = getattr(server_llm, "model", None)
-    # The bare concrete model id is routed through the configured gateway.
-    allowed_models = {FIXED_EVALUATOR_MODEL, _OMNIROUTE_TRANSPORT_MODEL}
+    # The persisted ``custom/outcome-scoring`` combo is the canonical evaluator
+    # surface; the bare ``minimax/MiniMax-M3`` wire id is retained for direct-
+    # provider testing and as a legacy fallback.
+    allowed_models = {
+        WIRE_EVALUATOR_ROUTE,  # "custom/outcome-scoring"
+        _OMNIROUTE_TRANSPORT_MODEL,  # "omniroute/custom/outcome-scoring"
+        FIXED_EVALUATOR_MODEL,  # "minimax/MiniMax-M3" (legacy direct)
+    }
     if configured_model not in allowed_models:
         return None, EvaluatorFailure(
             "configuration",
             "invalid_evaluator_model",
-            f"Evaluator must target {FIXED_EVALUATOR_MODEL} "
+            f"Evaluator must target one of {sorted(allowed_models)!r} "
             f"(got {_sanitize_error(configured_model)!r}).",
             False,
         )
@@ -620,14 +636,14 @@ def _verify_provenance(
     provider = metadata.get("x-omniroute-selected-provider")
     model = metadata.get("x-omniroute-selected-model")
     fallback = metadata.get("x-omniroute-fallback-used")
-    if requested != FIXED_EVALUATOR_MODEL:
+    if requested != WIRE_EVALUATOR_ROUTE:
         return None, EvaluatorFailure(
             "provenance",
             "requested_model_mismatch",
-            f"OmniRoute reported requested model {requested!r}, not {FIXED_EVALUATOR_MODEL}.",
+            f"OmniRoute reported requested model {requested!r}, not {WIRE_EVALUATOR_ROUTE}.",
             False,
         )
-    if provider != _EXPECTED_PROVIDER or model != FIXED_EVALUATOR_MODEL:
+    if provider != _EXPECTED_PROVIDER or model != _EXPECTED_MODEL:
         return None, EvaluatorFailure(
             "provenance",
             "unexpected_evaluator_model",
@@ -806,7 +822,7 @@ async def evaluate_task_outcome(
             evaluator_type="llm",
             evaluator_provider=provenance.provider,
             evaluator_model=provenance.model,
-            evaluator_route_id=FIXED_EVALUATOR_MODEL,
+            evaluator_route_id=WIRE_EVALUATOR_ROUTE,
             evaluator_fallback_used=provenance.fallback_used,
             evaluator_decision_id=provenance.decision_id,
             verdict=normalized["verdict"],
@@ -829,6 +845,7 @@ __all__ = [
     "EVALUATOR_ACCURACY_VALUES",
     "EVALUATOR_JSON_SCHEMA",
     "FIXED_EVALUATOR_MODEL",
+    "WIRE_EVALUATOR_ROUTE",
     "EvaluatorEvidence",
     "EvaluatorFailure",
     "EvaluatorOutcome",

@@ -47,7 +47,12 @@ def pending_store(tmp_path) -> TaskOutcomeStore:
     return store
 
 
-def _response(*, model: str = FIXED_EVALUATOR_MODEL, fallback: str = "false") -> MagicMock:
+def _response(
+    *,
+    requested: str = "custom/outcome-scoring",
+    model: str = FIXED_EVALUATOR_MODEL,
+    fallback: str = "false",
+) -> MagicMock:
     payload = {
         "verdict": "inconclusive",
         "confidence": 0.4,
@@ -61,7 +66,7 @@ def _response(*, model: str = FIXED_EVALUATOR_MODEL, fallback: str = "false") ->
     response.output = [MagicMock(content=[MagicMock(text=json.dumps(payload))])]
     provider = model.split("/", 1)[0] if "/" in model else "unknown"
     response.provider_metadata = {
-        "x-omniroute-requested-model": FIXED_EVALUATOR_MODEL,
+        "x-omniroute-requested-model": requested,
         "x-omniroute-selected-provider": provider,
         "x-omniroute-selected-model": model,
         "x-omniroute-fallback-used": fallback,
@@ -116,7 +121,7 @@ def test_configuration_model_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
             "_caps",
             RuntimeCaps(
                 llm=LLMConfig(
-                    model="omniroute/minimax/MiniMax-M3",
+                    model="omniroute/custom/outcome-scoring",
                     connection={
                         "base_url": "http://127.0.0.1:20128/v1",
                         "api_key": "test",
@@ -127,7 +132,7 @@ def test_configuration_model_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
         client, failure = _configured_policy_client()
         assert failure is None
         assert client is not None
-        assert client._model == "omniroute/minimax/MiniMax-M3"
+        assert client._model == "omniroute/custom/outcome-scoring"
     finally:
         monkeypatch.setattr(_globals, "_caps", original)
 
@@ -172,14 +177,24 @@ async def test_restart_worker_recovers_due_deferred(pending_store: TaskOutcomeSt
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "fallback"),
-    [("openai/gpt-5.4", "false"), (FIXED_EVALUATOR_MODEL, "true")],
+    ("requested", "model", "fallback"),
+    [
+        ("custom/outcome-scoring", "openai/gpt-5.4", "false"),
+        ("custom/outcome-scoring", FIXED_EVALUATOR_MODEL, "true"),
+        # Bare minimax/MiniMax-M3 wire id is no longer accepted as a
+        # requested-model surface; the combo name is the canonical surface.
+        (FIXED_EVALUATOR_MODEL, FIXED_EVALUATOR_MODEL, "false"),
+    ],
 )
 async def test_provenance_violation_creates_no_evaluation(
-    pending_store: TaskOutcomeStore, model: str, fallback: str
+    pending_store: TaskOutcomeStore, requested: str, model: str, fallback: str
 ) -> None:
     run = pending_store.list_runs_for_conversation("c1")[0]
-    client = MagicMock(create=AsyncMock(return_value=_response(model=model, fallback=fallback)))
+    client = MagicMock(
+        create=AsyncMock(
+            return_value=_response(requested=requested, model=model, fallback=fallback)
+        )
+    )
     with patch(
         "omnigent.server.task_outcome_evaluator._configured_policy_client",
         return_value=(client, None),
