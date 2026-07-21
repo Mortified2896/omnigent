@@ -25,6 +25,7 @@ import {
   FolderOpenIcon,
   GitBranchIcon,
   InboxIcon,
+  InfoIcon,
   ListChecksIcon,
   Loader2Icon,
   MailIcon,
@@ -94,6 +95,7 @@ import {
   useArchiveConversation,
   useBulkArchiveConversations,
   useBulkDeleteConversations,
+  type BulkDeleteResult,
   useProjects,
   useProjectSessions,
   useConversations,
@@ -303,6 +305,22 @@ export function Sidebar({ open, onClose, dragProgress = null, onOpenSearch }: Si
 
   const deselectAll = useCallback(() => {
     setSelectedIds(new Set());
+  }, []);
+
+  // Drop specific ids from the selection without touching the rest.
+  // Used by the bulk-action bar to clear succeeded / already-deleted
+  // ids after a partial-failure run while keeping failed ids selected
+  // for retry.
+  const removeFromSelection = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of ids) {
+        if (next.delete(id)) changed = true;
+      }
+      return changed ? next : prev;
+    });
   }, []);
 
   const exitSelectionMode = useCallback(() => {
@@ -564,6 +582,7 @@ export function Sidebar({ open, onClose, dragProgress = null, onOpenSearch }: Si
                 onDeselectAll={deselectAll}
                 onClear={deselectAll}
                 onExit={exitSelectionMode}
+                onRemoveFromSelection={removeFromSelection}
               />
             ) : (
               <div className="relative mt-3 flex items-center gap-1.5">
@@ -3303,6 +3322,7 @@ function BulkActionBar({
   onDeselectAll,
   onClear,
   onExit,
+  onRemoveFromSelection,
 }: {
   selectedIds: Set<string>;
   allConversations: Conversation[];
@@ -3310,6 +3330,8 @@ function BulkActionBar({
   onDeselectAll: () => void;
   onClear: () => void;
   onExit: () => void;
+  /** Remove specific ids from the current selection (used after partial-failure cleanup). */
+  onRemoveFromSelection: (ids: string[]) => void;
 }) {
   const navigate = useNavigate();
   const { conversationId: activeId } = useParams<{ conversationId: string }>();
@@ -3340,10 +3362,20 @@ function BulkActionBar({
     ownedSelected.length > 0 && (archivedSelected.length === 0 || nonArchivedSelected.length === 0);
 
   const count = selectedIds.size;
+  const attemptedCount = ownedSelected.length;
+  // Selected ids that are not deletable: shared sessions (not owner), or
+  // ids the user selected but whose row isn't in the currently-loaded
+  // list (selected via paginated "Select all" then switched pages).
+  // Surfaced explicitly so the 164-selected / 120-deletable mismatch
+  // the bug reported is no longer silent.
+  const unavailableCount = Math.max(0, count - attemptedCount);
   const allSelected = count > 0 && count === allConversations.length;
   const isBusy = bulkArchive.isPending || bulkDelete.isPending;
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Last bulk-delete result for the partial-failure UI. Cleared when
+  // the user dismisses or starts a fresh selection.
+  const [lastDeleteError, setLastDeleteError] = useState<BulkDeleteResult | null>(null);
 
   function handleArchive() {
     if (nonArchivedSelected.length === 0) return;
@@ -3374,14 +3406,56 @@ function BulkActionBar({
     if (ids.length === 0) return;
     setConfirmDeleteOpen(false);
     bulkDelete.mutate(ids, {
-      onSuccess: () => {
-        if (activeId && ids.includes(activeId)) navigate("/", { replace: true });
-        onDeselectAll();
+      onSuccess: (result) => {
+        // All attempted ids succeeded or were already absent. Drop them
+        // from the selection along with the ids the user selected but
+        // weren't deletable (shared / not-loaded) — leaving the bar
+        // empty keeps the UX coherent.
+        onRemoveFromSelection([
+          ...result.succeeded,
+          ...result.alreadyDeleted,
+        ]);
+        if (activeId && result.succeeded.includes(activeId)) navigate("/", { replace: true });
+        setLastDeleteError(null);
       },
-      onError: (err: any) => {
-        if (activeId && err?.succeeded?.includes(activeId)) navigate("/", { replace: true });
+      onError: (err) => {
+        const result = err as unknown as BulkDeleteResult;
+        // Successful / already-deleted ids leave the selection so the
+        // user sees what *remains*; failed ids stay selected for Retry.
+        onRemoveFromSelection([...result.succeeded, ...result.alreadyDeleted]);
+        if (activeId && result.succeeded.includes(activeId)) navigate("/", { replace: true });
+        setLastDeleteError(result);
       },
     });
+  }
+
+  function handleRetryFailed() {
+    if (!lastDeleteError) return;
+    const retryIds = [
+      ...lastDeleteError.failed.map((f) => f.id),
+      ...lastDeleteError.activeSession.map((f) => f.id),
+    ];
+    if (retryIds.length === 0) {
+      setLastDeleteError(null);
+      return;
+    }
+    setLastDeleteError(null);
+    bulkDelete.mutate(retryIds, {
+      onSuccess: (result) => {
+        onRemoveFromSelection([...result.succeeded, ...result.alreadyDeleted]);
+      },
+      onError: (err) => {
+        const result = err as unknown as BulkDeleteResult;
+        onRemoveFromSelection([...result.succeeded, ...result.alreadyDeleted]);
+        setLastDeleteError(result);
+      },
+    });
+  }
+
+  function handleDismissBanner() {
+    // Clears the banner but preserves the failed-id selection so the
+    // user can still retry from the same selection, or clear manually.
+    setLastDeleteError(null);
   }
 
   return (
@@ -3465,25 +3539,59 @@ function BulkActionBar({
               Unarchive
             </Button>
           )}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={cn("h-7 gap-1.5 text-xs", ownedSelected.length > 0 && "text-destructive")}
-            disabled={isBusy || ownedSelected.length === 0}
-            onClick={() => setConfirmDeleteOpen(true)}
-            data-testid="bulk-delete"
-          >
-            {bulkDelete.isPending ? (
-              <Loader2Icon className="size-3 animate-spin" />
-            ) : (
-              <Trash2Icon className="size-3" />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={cn("h-7 gap-1.5 text-xs", attemptedCount > 0 && "text-destructive")}
+                disabled={isBusy || attemptedCount === 0}
+                onClick={() => setConfirmDeleteOpen(true)}
+                data-testid="bulk-delete"
+              >
+                {bulkDelete.isPending ? (
+                  <Loader2Icon className="size-3 animate-spin" />
+                ) : (
+                  <Trash2Icon className="size-3" />
+                )}
+                {attemptedCount > 0 ? (
+                  unavailableCount > 0 ? (
+                    <>
+                      Delete {attemptedCount}
+                      <span
+                        className="ml-1 rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground"
+                        data-testid="bulk-delete-unavailable"
+                      >
+                        {unavailableCount} unavailable
+                      </span>
+                    </>
+                  ) : (
+                    <>Delete {attemptedCount}</>
+                  )
+                ) : (
+                  "Delete"
+                )}
+              </Button>
+            </TooltipTrigger>
+            {unavailableCount > 0 && (
+              <TooltipContent side="bottom">
+                {unavailableCount} selected session{unavailableCount === 1 ? "" : "s"} can't be
+                deleted (shared with you or not loaded). The action will skip them.
+              </TooltipContent>
             )}
-            Delete {ownedSelected.length > 0 ? ownedSelected.length : ""}
-          </Button>
+          </Tooltip>
         </div>
 
-        {(bulkArchive.isError || bulkDelete.isError) && (
+        {lastDeleteError && (
+          <BulkDeleteFailurePanel
+            result={lastDeleteError}
+            onRetry={handleRetryFailed}
+            onDismiss={handleDismissBanner}
+            busy={bulkDelete.isPending}
+          />
+        )}
+        {bulkArchive.isError && (
           <p className="text-xs text-destructive" role="alert">
             Some actions failed. Retry or dismiss.
           </p>
@@ -3493,12 +3601,23 @@ function BulkActionBar({
       <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete {ownedSelected.length} session(s)?</DialogTitle>
+            <DialogTitle>Delete {attemptedCount} session(s)?</DialogTitle>
             <DialogDescription>
               This will permanently delete the selected sessions and all their history. This cannot
               be undone.
             </DialogDescription>
           </DialogHeader>
+          {unavailableCount > 0 && (
+            <p
+              className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
+              data-testid="confirm-delete-unavailable"
+            >
+              <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
+              {unavailableCount} of the {count} selected session{count === 1 ? "" : "s"} can't be
+              deleted (shared with you or not loaded). The action will skip{" "}
+              {unavailableCount === 1 ? "it" : "them"}.
+            </p>
+          )}
           <p className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-muted-foreground">
             <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
             Branches are not cleaned up. Use single-session delete for branch surgery.
@@ -3518,12 +3637,92 @@ function BulkActionBar({
               onClick={handleDelete}
               disabled={bulkDelete.isPending}
             >
-              Delete {ownedSelected.length} session(s)
+              Delete {attemptedCount} session(s)
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function BulkDeleteFailurePanel({
+  result,
+  onRetry,
+  onDismiss,
+  busy,
+}: {
+  result: BulkDeleteResult;
+  onRetry: () => void;
+  onDismiss: () => void;
+  busy: boolean;
+}) {
+  const succeededCount = result.succeeded.length + result.alreadyDeleted.length;
+  const failedTotal =
+    result.failed.length + result.forbidden.length + result.activeSession.length;
+  const retryableIds = result.failed.filter((f) => f.retryable).length;
+  return (
+    <div
+      className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"
+      data-testid="bulk-delete-failure"
+      role="alert"
+    >
+      <div className="flex items-start gap-2 text-destructive">
+        <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+        <div className="flex-1">
+          <p className="font-medium">
+            {succeededCount > 0 ? `${succeededCount} deleted` : "No deletions"}
+            {failedTotal > 0 ? `, ${failedTotal} could not be deleted` : ""}.
+          </p>
+        </div>
+      </div>
+      {failedTotal > 0 && (
+        <ul className="ml-5 list-disc space-y-0.5 text-muted-foreground">
+          {result.forbidden.slice(0, 3).map((f) => (
+            <li key={f.id}>
+              <span className="font-mono">{f.id}</span>: {f.reason}
+            </li>
+          ))}
+          {result.activeSession.slice(0, 3).map((f) => (
+            <li key={f.id}>
+              <span className="font-mono">{f.id}</span>: {f.reason}
+            </li>
+          ))}
+          {result.failed.slice(0, 3).map((f) => (
+            <li key={f.id}>
+              <span className="font-mono">{f.id}</span>: {f.reason}
+            </li>
+          ))}
+          {failedTotal > 3 && <li>…and {failedTotal - 3} more</li>}
+        </ul>
+      )}
+      <div className="flex items-center gap-2">
+        {retryableIds > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={onRetry}
+            disabled={busy}
+            data-testid="bulk-delete-retry"
+          >
+            {busy ? <Loader2Icon className="mr-1 size-3 animate-spin" /> : null}
+            Retry {retryableIds}
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs"
+          onClick={onDismiss}
+          data-testid="bulk-delete-dismiss"
+        >
+          Dismiss
+        </Button>
+      </div>
+    </div>
   );
 }
 

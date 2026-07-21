@@ -36,11 +36,20 @@ import {
 import { stopSession } from "@/lib/sessionsApi";
 import { useChatStore } from "@/store/chatStore";
 import type { Session } from "@/lib/types";
+import { runWithConcurrency } from "@/lib/concurrency";
+import { classifyDeleteResponse, type BulkDeleteOutcome } from "@/lib/bulkDeleteOutcomes";
 import { useSessionUpdatesConnected } from "./useSessionUpdatesConnected";
 import { markConversationSeen } from "./useUnseenConversations";
 
 export const CONNECTED_STREAM_REFETCH_INTERVAL_MS = 60_000;
 export const DISCONNECTED_STREAM_REFETCH_INTERVAL_MS = 45_000;
+
+// Bounded parallelism for fan-out bulk operations. The browser's
+// per-origin connection cap (HTTP/1.1 default 6, HTTP/2 variable by
+// host) and the uvicorn worker both struggle at full Promise.all fan-out
+// once N is in the hundreds; four keeps both comfortable for the
+// observed peak (≈170 selections in the reported bug).
+export const BULK_OP_CONCURRENCY = 4;
 
 export interface UseConversationsOptions {
   reconcileWhileConnected?: boolean;
@@ -474,31 +483,188 @@ export function useStopSession() {
 }
 
 /**
+ * Result of a bulk delete run, exposed on the mutation result for the
+ * sidebar to render partial-failure UI. Successful and no-op ids are
+ * removed from selection and the cached list pages; failed ids remain
+ * selected so the user can retry.
+ */
+export interface BulkDeleteResult {
+  attempted: string[];
+  succeeded: string[];
+  alreadyDeleted: string[];
+  forbidden: { id: string; reason: string }[];
+  activeSession: { id: string; reason: string }[];
+  failed: { id: string; reason: string; retryable: boolean }[];
+}
+
+/**
+ * Stop the session (best-effort) then delete it via the existing
+ * `DELETE /v1/sessions/{id}` endpoint, and classify the response into
+ * a {@link BulkDeleteOutcome} bucket. Network errors are treated as
+ * retryable failures so the Retry button does the right thing.
+ */
+async function stopAndDeleteOne(id: string): Promise<BulkDeleteOutcome> {
+  try {
+    await stopSession(id);
+  } catch {
+    // best-effort; the DELETE proceeds regardless
+  }
+  const res = await authenticatedFetch(`/v1/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  try {
+    return await classifyDeleteResponse(id, res);
+  } finally {
+    if (res.ok) {
+      // Bound to a dead conversation, queued messages could never flush.
+      useChatStore.getState().clearQueuedMessages(id);
+    }
+  }
+}
+
+/**
+ * Delete multiple conversations with bounded concurrency.
+ *
+ * Each session is stopped best-effort then deleted. Per-item results
+ * are classified (deleted / alreadyDeleted / forbidden / activeSession
+ * / failed). On any failure the mutation throws a {@link BulkDeleteResult}
+ * so the UI can show partial-success details; successful ids are
+ * spliced from every cached ["conversations", ...] page and per-session
+ * cache regardless. Retry attempts only the failed ids; Dismiss clears
+ * the banner while preserving the failed selection.
+ */
+export function useBulkDeleteConversations() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]): Promise<BulkDeleteResult> => {
+      const results = await runWithConcurrency(ids, (id) => stopAndDeleteOne(id), BULK_OP_CONCURRENCY);
+      const out: BulkDeleteResult = {
+        attempted: [...ids],
+        succeeded: [],
+        alreadyDeleted: [],
+        forbidden: [],
+        activeSession: [],
+        failed: [],
+      };
+      for (const r of results) {
+        if (r.error) {
+          out.failed.push({
+            id: ids[r.index],
+            reason: r.error instanceof Error ? r.error.message : String(r.error),
+            retryable: true,
+          });
+          continue;
+        }
+        const outcome = r.value as BulkDeleteOutcome;
+        switch (outcome.kind) {
+          case "deleted":
+            out.succeeded.push(outcome.id);
+            break;
+          case "alreadyDeleted":
+            out.alreadyDeleted.push(outcome.id);
+            break;
+          case "forbidden":
+            out.forbidden.push({ id: outcome.id, reason: outcome.reason });
+            break;
+          case "activeSession":
+            out.activeSession.push({ id: outcome.id, reason: outcome.reason });
+            break;
+          case "failed":
+            out.failed.push({
+              id: outcome.id,
+              reason: outcome.reason,
+              retryable: outcome.retryable,
+            });
+            break;
+        }
+      }
+      const hasPartial =
+        out.forbidden.length > 0 ||
+        out.activeSession.length > 0 ||
+        out.failed.length > 0;
+      if (hasPartial) throw out;
+      return out;
+    },
+    onSuccess: (result) => {
+      applyDeletedToCache(queryClient, [
+        ...result.succeeded,
+        ...result.alreadyDeleted,
+      ]);
+    },
+    onError: (err) => {
+      if (err && typeof err === "object" && "succeeded" in err) {
+        const result = err as unknown as BulkDeleteResult;
+        applyDeletedToCache(queryClient, [
+          ...result.succeeded,
+          ...result.alreadyDeleted,
+        ]);
+      }
+    },
+  });
+}
+
+/**
+ * Splice the given conversation ids out of every cached
+ * ["conversations", ...] / ["project-sessions", ...] page and drop the
+ * per-session caches, so the sidebar reflects the deletion without an
+ * invalidation round-trip (the server's search index reindexes async
+ * — invalidating would race it and resurrect the just-deleted row).
+ */
+function applyDeletedToCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  deletedIds: string[],
+) {
+  if (deletedIds.length === 0) return;
+  const idSet = new Set(deletedIds);
+  for (const queryKey of [["conversations"], ["project-sessions"]]) {
+    for (const [key, data] of queryClient.getQueriesData<ConversationsInfiniteData>({
+      queryKey,
+    })) {
+      const { data: next, removed } = removeIdsFromPages(data, idSet);
+      if (removed) queryClient.setQueryData(key, next);
+    }
+  }
+  for (const id of deletedIds) {
+    queryClient.removeQueries({ queryKey: ["conversation-backfill", id] });
+    queryClient.removeQueries({ queryKey: ["session", id] });
+  }
+  void queryClient.invalidateQueries({ queryKey: ["projects"] });
+}
+
+/**
  * Archive multiple conversations in parallel via `PATCH /v1/sessions/{id}`.
  *
  * Each session is archived independently — individual failures don't
  * block the rest. The conversations list is invalidated once on
- * completion so the sidebar refreshes. Returns an array of session IDs
- * that failed.
+ * completion so the sidebar refreshes. Throws on partial failure with
+ * a `{ failed, total, succeeded }` shape (preserved for the existing
+ * Sidebar tests).
  */
 export function useBulkArchiveConversations() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ ids, archived }: { ids: string[]; archived: boolean }) => {
-      const results = await Promise.allSettled(ids.map((id) => archiveConversation(id, archived)));
+      const results = await runWithConcurrency(
+        ids,
+        (id) => archiveConversation(id, archived),
+        BULK_OP_CONCURRENCY,
+      );
+      const succeeded: string[] = [];
       const failed: string[] = [];
       for (let i = 0; i < results.length; i++) {
-        if (results[i].status === "rejected") failed.push(ids[i]);
-        else
-          markConversationSeen(
-            ids[i],
-            (results[i] as PromiseFulfilledResult<Conversation>).value.updated_at,
-          );
+        const r = results[i];
+        if (r.error) {
+          failed.push(ids[r.index]);
+        } else {
+          succeeded.push(ids[r.index]);
+          const value = r.value as Conversation;
+          markConversationSeen(ids[r.index], value.updated_at);
+        }
       }
-      if (failed.length > 0) throw { failed, total: ids.length };
+      if (failed.length > 0) throw { failed, succeeded, total: ids.length };
       return results
-        .filter((r): r is PromiseFulfilledResult<Conversation> => r.status === "fulfilled")
-        .map((r) => r.value);
+        .filter((r): r is { index: number; value: unknown; error: undefined } => !r.error)
+        .map((r) => r.value as Conversation);
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
@@ -509,93 +675,26 @@ export function useBulkArchiveConversations() {
 }
 
 /**
- * Delete multiple conversations in parallel (stop + delete each).
- *
- * Each session is stopped (best-effort) then deleted independently.
- * The conversations list cache is patched to remove successful
- * deletions. Returns an array of session IDs that failed.
- */
-export function useBulkDeleteConversations() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(
-        ids.map(async (id) => {
-          try {
-            await stopSession(id);
-          } catch {
-            // Best-effort stop
-          }
-          await deleteConversation(id);
-        }),
-      );
-      const succeeded: string[] = [];
-      const failed: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].status === "fulfilled") succeeded.push(ids[i]);
-        else failed.push(ids[i]);
-      }
-      if (failed.length > 0) throw { failed, succeeded, total: ids.length };
-      return { succeeded, failed };
-    },
-    onSuccess: (_data, ids) => {
-      const idSet = new Set(ids);
-      // Splice deleted rows out of the global list AND every project folder's
-      // own paginated list (same page shape) so filed sessions leave their
-      // folder without a refresh.
-      for (const queryKey of [["conversations"], ["project-sessions"]]) {
-        for (const [key, data] of queryClient.getQueriesData<ConversationsInfiniteData>({
-          queryKey,
-        })) {
-          const { data: next, removed } = removeIdsFromPages(data, idSet);
-          if (removed) queryClient.setQueryData(key, next);
-        }
-      }
-      for (const id of ids) {
-        queryClient.removeQueries({ queryKey: ["conversation-backfill", id] });
-        queryClient.removeQueries({ queryKey: ["session", id] });
-      }
-      // Refresh the project list so a project emptied by these deletes drops
-      // its now-empty folder (DB-direct read, no search-index lag).
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
-    },
-    onError: (err: any) => {
-      if (err?.succeeded) {
-        const idSet = new Set(err.succeeded as string[]);
-        for (const queryKey of [["conversations"], ["project-sessions"]]) {
-          for (const [key, data] of queryClient.getQueriesData<ConversationsInfiniteData>({
-            queryKey,
-          })) {
-            const { data: next, removed } = removeIdsFromPages(data, idSet);
-            if (removed) queryClient.setQueryData(key, next);
-          }
-        }
-        for (const id of err.succeeded) {
-          queryClient.removeQueries({ queryKey: ["conversation-backfill", id] });
-          queryClient.removeQueries({ queryKey: ["session", id] });
-        }
-        void queryClient.invalidateQueries({ queryKey: ["projects"] });
-      }
-    },
-  });
-}
-
-/**
  * Stop multiple live sessions in parallel.
  *
  * Each session is stopped independently — individual failures don't
- * block the rest. Returns arrays of succeeded/failed IDs.
+ * block the rest. Throws `{ failed, succeeded, total }` on partial
+ * failure (preserved for existing tests).
  */
 export function useBulkStopSessions() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(ids.map((id) => stopSession(id)));
+      const results = await runWithConcurrency(
+        ids,
+        (id) => stopSession(id),
+        BULK_OP_CONCURRENCY,
+      );
       const succeeded: string[] = [];
       const failed: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].status === "fulfilled") succeeded.push(ids[i]);
-        else failed.push(ids[i]);
+      for (const r of results) {
+        if (r.error) failed.push(ids[r.index]);
+        else succeeded.push(ids[r.index]);
       }
       if (failed.length > 0) throw { failed, succeeded, total: ids.length };
       return { succeeded, failed };
