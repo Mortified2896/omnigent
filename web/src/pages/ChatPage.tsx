@@ -2730,7 +2730,7 @@ function useNativeChatTerminalBar(
     if (!native) return;
     setNativeViewMode({
       mode: view,
-      terminalEnabled: terminalsAvailable,
+      terminalEnabled: terminalsAvailable || terminalStartingUp,
       terminalStartingUp,
       visible,
     });
@@ -2770,10 +2770,13 @@ function ConnectedTerminalFirstPill({
 }) {
   // `terminalStartingUp` is the single loading signal — AppShell folds the
   // launch (liveness `starting`) and PTY-creation (`terminalPending`)
-  // sources into it. The button is disabled whenever no terminal is
-  // reachable: greyed-and-spinning reads as "loading", greyed-and-static as
-  // "no terminal / stopped".
+  // sources into it. Starting remains clickable so the user can enter the
+  // honest empty terminal surface while registration finishes. A stopped
+  // session with no resumable terminal is disabled with an explanation.
   const { view, setView, terminalsAvailable, terminalStartingUp } = ctx;
+  const terminalEnabled = terminalsAvailable || terminalStartingUp;
+  const unavailableReason =
+    "No terminal is available. Send a message to start or resume this session.";
 
   return (
     <div
@@ -2794,7 +2797,7 @@ function ConnectedTerminalFirstPill({
             aria-label="Chat"
             onClick={() => setView("chat")}
             className={cn(
-              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors",
+              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               view === "chat"
                 ? "bg-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -2807,11 +2810,18 @@ function ConnectedTerminalFirstPill({
             type="button"
             aria-pressed={view === "terminal"}
             aria-label="Terminal"
-            disabled={!terminalsAvailable}
-            title={terminalStartingUp ? "Terminal is starting up…" : undefined}
+            disabled={!terminalEnabled}
+            aria-describedby={terminalEnabled ? undefined : "terminal-unavailable-reason"}
+            title={
+              terminalStartingUp
+                ? "Terminal is starting up…"
+                : terminalEnabled
+                  ? undefined
+                  : unavailableReason
+            }
             onClick={() => setView("terminal")}
             className={cn(
-              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
               view === "terminal"
                 ? "bg-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -2824,6 +2834,11 @@ function ConnectedTerminalFirstPill({
             )}
             <span>Terminal</span>
           </button>
+          {!terminalEnabled && (
+            <span id="terminal-unavailable-reason" className="sr-only">
+              {unavailableReason}
+            </span>
+          )}
         </div>
       </div>
     </div>

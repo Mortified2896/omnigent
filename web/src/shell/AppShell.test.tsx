@@ -432,7 +432,12 @@ beforeEach(() => {
   // todo list from one test doesn't leak into the next.
   // Reset terminal-first startup signals so one test's terminalPending /
   // failed status can't leak into another's terminalStartingUp.
-  useChatStore.setState({ todos: [], terminalPending: false, sessionStatus: "idle" });
+  useChatStore.setState({
+    todos: [],
+    terminalPending: false,
+    sessionStatus: "idle",
+    activeResponse: null,
+  });
 });
 
 afterEach(cleanup);
@@ -489,6 +494,25 @@ describe("AppShell header", () => {
     renderShell("/c/conv_terminal");
 
     expect(screen.getByTestId("view-probe")).toHaveAttribute("data-terminal-starting-up", "true");
+  });
+
+  it("keeps Terminal starting and navigable when an active response has no terminal yet", () => {
+    mockConversations([
+      { id: "conv_terminal", permission_level: null, labels: { "omnigent.ui": "terminal" } },
+    ]);
+    useChatStore.setState({
+      terminalPending: false,
+      sessionStatus: "running",
+      activeResponse: { responseId: "resp_active", state: "streaming", error: null },
+    });
+
+    renderShell("/c/conv_terminal");
+
+    const probe = screen.getByTestId("view-probe");
+    expect(probe).toHaveAttribute("data-terminals-available", "false");
+    expect(probe).toHaveAttribute("data-terminal-starting-up", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    expect(probe).toHaveAttribute("data-view", "terminal");
   });
 
   it("suppresses the terminal-startup spinner once the session has failed", () => {

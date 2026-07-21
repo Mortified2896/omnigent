@@ -247,6 +247,7 @@ export function AppShell() {
   // the runner is auto-creating the terminal. Surfaced via
   // TerminalFirstContext below.
   const terminalPending = useChatStore((s) => s.terminalPending);
+  const activeResponse = useChatStore((s) => s.activeResponse);
   // Read the conversation's terminals here too so the FAB's dropdown
   // can show/hide its "Terminals" entry and route a click to the first
   // terminal. The hook is react-query-backed and dedup'd with the rail.
@@ -853,8 +854,8 @@ export function AppShell() {
         return next;
       });
     },
-    [setSearchParams],
-  ); // eslint-disable-line react-hooks/exhaustive-deps
+    [clearFileViewerUrl, setSearchParams],
+  );
 
   // Switch the workspace rail's tab. The side effect (closing any open
   // file + its comments + URL) lives here, not in WorkspacePanel, so the
@@ -997,8 +998,10 @@ export function AppShell() {
   const terminalsAvailable = terminals.length > 0;
   // Single pill-facing "loading" signal: not yet openable, but coming up —
   // either the runner is launching/relaunching (liveness `starting`, known the
-  // instant a message is sent) or it's up and auto-creating the PTY
-  // (`terminalPending`). Idle stopped sessions are neither → greyed, not spinning.
+  // instant a message is sent), it's up and auto-creating the PTY
+  // (`terminalPending`), or a hydrated active response proves that a turn is
+  // still in flight while terminal registration catches up. Idle stopped
+  // sessions are neither → greyed, not spinning.
   // Suppressed once the session has failed: a runner that crashed before
   // connecting (`runner_failed_to_start`), or a host that refused the launch
   // (`harness_not_configured`), sits in the `starting` grace window but can
@@ -1008,7 +1011,7 @@ export function AppShell() {
   const terminalStartingUp =
     !terminalsAvailable &&
     sessionStatus !== "failed" &&
-    (liveness.kind === "starting" || terminalPending);
+    (liveness.kind === "starting" || terminalPending || activeResponse?.state === "streaming");
   // A rail-opened shell (any open terminal key other than the agent's
   // own terminal) takes over the main view chrome-free:
   // ConnectionIndicator hides the Chat/Terminal pill while this is
