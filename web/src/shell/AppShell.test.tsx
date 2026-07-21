@@ -515,6 +515,55 @@ describe("AppShell header", () => {
     expect(probe).toHaveAttribute("data-view", "terminal");
   });
 
+  it("keeps Terminal navigable in the send()→SSE gap when status is streaming but activeResponse is null", () => {
+    // Regression: chatStore.send() flips `status: "streaming", activeResponse: null`
+    // for the window before the response.created SSE lands. The terminal pill
+    // must stay clickable in that gap so the user can land on the live
+    // terminal while a turn is in flight (e.g. an OpenCode run that hasn't
+    // yet registered a PTY, or a page refresh mid-turn where SSE replay is
+    // still in progress).
+    mockConversations([
+      { id: "conv_terminal", permission_level: null, labels: { "omnigent.ui": "terminal" } },
+    ]);
+    useChatStore.setState({
+      terminalPending: false,
+      sessionStatus: "running",
+      activeResponse: null,
+      status: "streaming",
+    });
+
+    renderShell("/c/conv_terminal");
+
+    const probe = screen.getByTestId("view-probe");
+    expect(probe).toHaveAttribute("data-terminals-available", "false");
+    expect(probe).toHaveAttribute("data-terminal-starting-up", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    expect(probe).toHaveAttribute("data-view", "terminal");
+  });
+
+  it("disables Terminal when no terminal exists and no turn is in flight", () => {
+    // Sanity guard: the broader "streaming status" clause must NOT
+    // override a genuinely dead session. A stopped session with no
+    // terminal and no streaming status stays disabled with the
+    // "send a message" explanation, so the wider gate can't accidentally
+    // enable the button on every idle reload.
+    mockConversations([
+      { id: "conv_terminal", permission_level: null, labels: { "omnigent.ui": "terminal" } },
+    ]);
+    useChatStore.setState({
+      terminalPending: false,
+      sessionStatus: "idle",
+      activeResponse: null,
+      status: "idle",
+    });
+
+    renderShell("/c/conv_terminal");
+
+    const probe = screen.getByTestId("view-probe");
+    expect(probe).toHaveAttribute("data-terminals-available", "false");
+    expect(probe).toHaveAttribute("data-terminal-starting-up", "false");
+  });
+
   it("suppresses the terminal-startup spinner once the session has failed", () => {
     // A runner that crashed before connecting sits in the startup window
     // (terminalPending/starting) but can never come up. The failed status
