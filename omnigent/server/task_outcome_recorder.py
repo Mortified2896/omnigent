@@ -44,7 +44,6 @@ from omnigent.server.langfuse_sync import (
     langfuse_configured,
 )
 from omnigent.server.task_outcome_evaluator import (
-    FIXED_EVALUATOR_MODEL,
     WIRE_EVALUATOR_ROUTE,
     evaluate_task_outcome,
 )
@@ -600,7 +599,7 @@ class TaskOutcomeRecorder:
         """Claim and schedule the fixed evaluator without dropping failures."""
         if not claimed:
             try:
-                requested = self.store.request_evaluation(run.id, FIXED_EVALUATOR_MODEL)
+                requested = self.store.request_evaluation(run.id, WIRE_EVALUATOR_ROUTE)
             except Exception:
                 _logger.exception(
                     "task_outcome_recorder: failed to persist evaluator request for run=%s",

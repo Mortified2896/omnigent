@@ -55,7 +55,11 @@ def test_basic_payload_structure() -> None:
     assert payload["model"] == "gpt-5.4"
     assert payload["messages"] == [{"role": "user", "content": "Hi"}]
     assert "tools" not in payload
-    assert "stream" not in payload
+    # ``stream`` is always pinned (False here). Some upstream gateways
+    # default to text/event-stream when the field is absent, breaking
+    # ``Response.json()`` on the evaluator path.
+    assert payload["stream"] is False
+    assert "stream_options" not in payload
 
 
 def test_tools_included_when_provided() -> None:

@@ -978,6 +978,20 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 .first()
             )
             if existing is not None:
+                # Recovery path: a previous evaluation already produced a row
+                # for this run but the run's status update was lost (e.g. after
+                # a manual reset for re-evaluation). If the run is still
+                # pending, sync it with the existing evaluation so the next
+                # dispatch doesn't loop forever waiting.
+                if run.evaluation_status == "pending":
+                    run.evaluation_status = "completed"
+                    run.evaluation_finished_at = now
+                    run.evaluation_next_retry_at = None
+                    run.evaluation_error_kind = None
+                    run.evaluation_error_code = None
+                    run.evaluation_error_message = None
+                    run.updated_at = now
+                    session.flush()
                 return _evaluation_row_to_entity(existing)
             if run.execution_status not in {"completed", "failed", "cancelled", "timed_out"}:
                 raise ValueError(f"task run is not terminal: {data.task_run_id}")

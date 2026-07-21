@@ -678,8 +678,18 @@ def _extract_response_text(response: Any) -> str:
 
 def _protocol_payload(response: Any) -> dict[str, Any]:
     text = _extract_response_text(response)
+    # M3 (via OmniRoute) frequently wraps its JSON output in a markdown
+    # ``\`\`\`json ... \`\`\`` fence despite the json_schema strict contract.
+    # Strip that fence before parsing so the evaluator gets the underlying
+    # object. We only strip when the entire payload is wrapped.
+    stripped = text.strip()
+    if stripped.startswith("\u0060\u0060\u0060"):
+        first_newline = stripped.find("\n")
+        last_fence = stripped.rfind("\u0060\u0060\u0060")
+        if first_newline != -1 and last_fence > first_newline:
+            stripped = stripped[first_newline + 1 : last_fence].strip()
     try:
-        payload = json.loads(text)
+        payload = json.loads(stripped)
     except json.JSONDecodeError as exc:
         raise ValueError(f"M3 response is not valid JSON: {exc.msg}") from exc
     return _validate_evaluator_payload(payload)

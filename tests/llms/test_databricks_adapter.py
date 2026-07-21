@@ -26,7 +26,8 @@ def test_stream_options_stripped_from_streaming_payload() -> None:
 
 
 def test_non_streaming_payload_has_no_stream_options() -> None:
-    """Non-streaming payloads never had stream_options; confirm still clean."""
+    """Non-streaming payloads never had stream_options; ``stream`` is pinned
+    False to prevent upstream gateways from defaulting to text/event-stream."""
     adapter = DatabricksAdapter()
     payload: dict[str, Any] = adapter._build_payload(
         messages=[{"role": "user", "content": "hi"}],
@@ -36,7 +37,7 @@ def test_non_streaming_payload_has_no_stream_options() -> None:
         extra={},
     )
     assert "stream_options" not in payload
-    assert "stream" not in payload
+    assert payload["stream"] is False
 
 
 def test_missing_base_url_raises_when_no_auto_resolve(monkeypatch: Any) -> None:

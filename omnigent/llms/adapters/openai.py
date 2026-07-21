@@ -122,8 +122,14 @@ class OpenAICompatibleAdapter(BaseAdapter):
         }
         if tools:
             payload["tools"] = tools
+        # Always pin stream explicitly. Some upstream gateways
+        # (notably OmniRoute when a combo routes to minimax/MiniMax-M3)
+        # default to text/event-stream when the field is absent, which
+        # then breaks ``httpx.Response.json()`` because the body is SSE
+        # text rather than a JSON object. Pinning ``stream=False`` here
+        # keeps the contract: ``stream=True`` opt-in via the adapter.
+        payload["stream"] = bool(stream)
         if stream:
-            payload["stream"] = True
             payload.setdefault("stream_options", {"include_usage": True})
         return payload
 
