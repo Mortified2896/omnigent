@@ -70,6 +70,24 @@ def test_approved_route_is_qualified_for_the_local_omniroute_provider() -> None:
     assert qualify_omniroute_model("auto/coding") == "omniroute/auto/coding"
 
 
+def test_approved_custom_best_coding_route_is_qualified_for_the_local_omniroute_provider() -> None:
+    """``custom/best-coding`` is the canonical interactive execution route."""
+    assert qualify_omniroute_model("custom/best-coding") == "omniroute/custom/best-coding"
+
+
+def test_custom_best_coding_combo_merges_into_provider_models() -> None:
+    """The canonical interactive combo must round-trip through the merge helper."""
+    config = {"provider": {"omniroute": {"options": {"custom": "kept"}}}}
+    merged = merge_omniroute_combo_catalog(
+        config,
+        combos={"custom/best-coding": {"name": "custom/best-coding"}},
+        approved_route="custom/best-coding",
+    )
+    provider = merged["provider"]["omniroute"]
+    assert provider["models"]["custom/best-coding"] == {"name": "custom/best-coding"}
+    assert provider["options"]["custom"] == "kept"
+
+
 def test_approved_route_rejects_missing_or_direct_provider_config() -> None:
     with pytest.raises(OpenCodeOmniRouteConfigurationError, match="OmniRoute"):
         validate_omniroute_provider_config({})
