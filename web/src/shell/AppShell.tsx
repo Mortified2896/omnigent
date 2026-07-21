@@ -999,9 +999,12 @@ export function AppShell() {
   // Single pill-facing "loading" signal: not yet openable, but coming up —
   // either the runner is launching/relaunching (liveness `starting`, known the
   // instant a message is sent), it's up and auto-creating the PTY
-  // (`terminalPending`), or a hydrated active response proves that a turn is
-  // still in flight while terminal registration catches up. Idle stopped
-  // sessions are neither → greyed, not spinning.
+  // (`terminalPending`), a hydrated active response proves that a turn is
+  // still in flight while terminal registration catches up, or the chat
+  // store's own streaming status proves a turn is in flight even before
+  // the response.created SSE lands (covers the send()→SSE gap and the
+  // post-completion window the activeResponse state misses). Idle stopped
+  // sessions are none of these → greyed, not spinning.
   // Suppressed once the session has failed: a runner that crashed before
   // connecting (`runner_failed_to_start`), or a host that refused the launch
   // (`harness_not_configured`), sits in the `starting` grace window but can
@@ -1011,7 +1014,10 @@ export function AppShell() {
   const terminalStartingUp =
     !terminalsAvailable &&
     sessionStatus !== "failed" &&
-    (liveness.kind === "starting" || terminalPending || activeResponse?.state === "streaming");
+    (liveness.kind === "starting" ||
+      terminalPending ||
+      activeResponse?.state === "streaming" ||
+      chatStatus === "streaming");
   // A rail-opened shell (any open terminal key other than the agent's
   // own terminal) takes over the main view chrome-free:
   // ConnectionIndicator hides the Chat/Terminal pill while this is
