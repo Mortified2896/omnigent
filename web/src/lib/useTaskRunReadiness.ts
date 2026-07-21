@@ -91,7 +91,7 @@ export function useTaskRunForResponse(sessionId: string, responseId: string): Ta
           setPhase("ready");
           return;
         }
-        // Evaluation present → ready. Accept/Adjust/Decline are now meaningful.
+        // Evaluation present → ready. Accept/Adjust/Don't log are now meaningful.
         if (next.evaluation) {
           setPhase("ready");
           return;

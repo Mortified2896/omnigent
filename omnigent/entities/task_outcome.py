@@ -77,7 +77,7 @@ FAILURE_ATTRIBUTION_VALUES: tuple[str, ...] = (
     "external_service",
     "unknown",
 )
-REVIEW_ACTIONS: tuple[str, ...] = ("accepted", "adjusted", "declined")
+REVIEW_ACTIONS: tuple[str, ...] = ("accepted", "adjusted", "declined", "not_logged")
 REASONING_EFFORT_VALUES: tuple[str, ...] = (
     "none",
     "minimal",

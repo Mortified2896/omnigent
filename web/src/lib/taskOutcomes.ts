@@ -370,7 +370,7 @@ export interface TaskReview {
   evaluator_accuracy: "correct" | "partly_correct" | "incorrect" | "unsure" | null;
   comments: string | null;
   created_by: string | null;
-  review_action: "accepted" | "adjusted" | "declined" | null;
+  review_action: "accepted" | "adjusted" | "declined" | "not_logged" | null;
   learning_eligible: boolean;
   route_fit: "appropriate" | "too_weak" | "overkill" | "wrong_capability" | "unsure" | null;
   failure_attribution: string | null;
@@ -464,7 +464,7 @@ export const EVALUATOR_ACCURACY_VALUES: readonly NonNullable<TaskReview["evaluat
 
 /** Body of `POST /v1/task-runs/{id}/review`. */
 export interface UpsertReviewRequest {
-  action?: "accept" | "adjust" | "decline";
+  action?: "accept" | "adjust" | "decline" | "dont_log";
   source_evaluation_id?: string | null;
   verdict?: TaskReview["verdict"];
   route_fit?: TaskReview["route_fit"];

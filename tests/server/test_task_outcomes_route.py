@@ -588,6 +588,162 @@ def test_decline_persists_negative_non_learning_review(
     assert run_id not in listing.json()["task_run_ids"]
 
 
+def test_dont_log_persists_not_logged_with_non_learning_fields_nulled(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    """``Don't log`` is a NEW persisted action distinct from ``declined``.
+
+    Frontend sends ``action=dont_log``; backend stores
+    ``review_action=not_logged``. Quality, family, route-fit, failure
+    attribution, preferred route / effort, evaluator accuracy are
+    all NULL. Real usage / cost stay on the TaskRun (cost
+    accounting must not be hidden by the exclusion).
+    """
+    store, client = store_and_app
+    run_id = _seed_terminalised(store)
+    response = client.post(
+        f"/v1/task-runs/{run_id}/review",
+        json={"action": "dont_log"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["review_action"] == "not_logged"
+    assert body["verdict"] == "skipped"
+    assert body["learning_eligible"] is False
+    # Quality / family / routing fields are explicitly nulled —
+    # the run must not influence quality, family, or route-fit
+    # averages after exclusion.
+    assert body["quality_score"] is None
+    assert body["final_task_family"] is None
+    assert body["evaluator_accuracy"] is None
+    assert body["route_fit"] is None
+    assert body["failure_attribution"] is None
+    assert body["preferred_route_id"] is None
+    assert body["preferred_reasoning_effort"] is None
+    assert body["comments"] is None
+    persisted = store.get_any_review_for_run(run_id)
+    assert persisted is not None
+    assert persisted.review_action == "not_logged"
+    assert persisted.verdict == "skipped"
+    assert persisted.learning_eligible is False
+    # The TaskRun itself is preserved — usage / cost accounting
+    # must NOT be hidden by the exclusion.
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.input_tokens == 1000
+    assert run.output_tokens == 200
+    assert run.total_cost_usd == 0.02
+    # A review row exists, so the run drops out of the unreviewed
+    # queue — but it is excluded, not "accepted".
+    listing = client.get("/v1/sessions/c1/unreviewed-task-outcomes")
+    assert run_id not in listing.json()["task_run_ids"]
+
+
+def test_dont_log_is_distinguishable_from_decline(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    """Don't-log must not be silently rewritten as declined.
+
+    Historical ``declined`` rows must remain readable; the new
+    action must remain queryable as ``not_logged`` so downstream
+    audits can tell them apart.
+    """
+    store, client = store_and_app
+    legacy_run = _seed_terminalised(store)
+    new_run = _seed_terminalised(store)
+    legacy_resp = client.post(
+        f"/v1/task-runs/{legacy_run}/review",
+        json={"action": "decline"},
+    )
+    new_resp = client.post(
+        f"/v1/task-runs/{new_run}/review",
+        json={"action": "dont_log"},
+    )
+    assert legacy_resp.json()["review_action"] == "declined"
+    assert new_resp.json()["review_action"] == "not_logged"
+    assert legacy_resp.json()["review_action"] != new_resp.json()["review_action"]
+    legacy_persisted = store.get_any_review_for_run(legacy_run)
+    new_persisted = store.get_any_review_for_run(new_run)
+    assert legacy_persisted is not None
+    assert new_persisted is not None
+    assert legacy_persisted.review_action == "declined"
+    assert new_persisted.review_action == "not_logged"
+
+
+def test_dont_log_does_not_enqueue_langfuse_review_events(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Don't log`` must NOT produce a new Langfuse export.
+
+    No review-driven score rows may be added on top of the audit
+    ``status='skipped'`` row already written at terminal time —
+    the exclusion itself must not flow into Langfuse learning.
+    """
+    from omnigent.server.langfuse_sync import langfuse_configured
+    from omnigent.server.task_outcome_recorder import (
+        TaskOutcomeRecorder,
+        set_recorder,
+    )
+
+    store, client = store_and_app
+    monkeypatch.setenv("LANGFUSE_HOST", "https://langfuse.example.com")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk_test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk_test")
+    assert langfuse_configured() is True
+    recorder = TaskOutcomeRecorder(store=store)
+    set_recorder(recorder)
+    try:
+        run_id = _seed_terminalised(store)
+        pre_count = store.count_pending_langfuse_events(run_id)
+        response = client.post(
+            f"/v1/task-runs/{run_id}/review",
+            json={"action": "dont_log"},
+        )
+        assert response.status_code == 200
+        post_count = store.count_pending_langfuse_events(run_id)
+        assert post_count == pre_count
+    finally:
+        set_recorder(None)
+
+
+def test_dont_log_rejects_evaluator_accuracy_or_route_fit_input(
+    store_and_app: tuple[TaskOutcomeStore, TestClient],
+) -> None:
+    """The minimal exclusion action ignores all grading inputs.
+
+    Even if a stale UI or scripting client sends evaluator_accuracy
+    / route_fit / quality_score with ``action=dont_log``, those
+    values must NOT be persisted — the exclusion has no grading
+    axis.
+    """
+    store, client = store_and_app
+    run_id = _seed_terminalised(store)
+    response = client.post(
+        f"/v1/task-runs/{run_id}/review",
+        json={
+            "action": "dont_log",
+            "quality_score": 5,
+            "evaluator_accuracy": "correct",
+            "route_fit": "too_weak",
+            "failure_attribution": "model",
+            "preferred_route_id": "auto/coding:reliable",
+            "preferred_reasoning_effort": "high",
+            "comments": "leaked from a stale UI",
+        },
+    )
+    assert response.status_code == 200
+    persisted = store.get_any_review_for_run(run_id)
+    assert persisted is not None
+    assert persisted.review_action == "not_logged"
+    assert persisted.quality_score is None
+    assert persisted.evaluator_accuracy is None
+    assert persisted.route_fit is None
+    assert persisted.failure_attribution is None
+    assert persisted.preferred_route_id is None
+    assert persisted.preferred_reasoning_effort is None
+
+
 def test_submit_review_skip_is_a_real_state(
     store_and_app: tuple[TaskOutcomeStore, TestClient],
 ) -> None:

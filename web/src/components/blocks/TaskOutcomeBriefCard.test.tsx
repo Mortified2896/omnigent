@@ -24,7 +24,7 @@ const review: NonNullable<TaskRunDetailResponse["review"]> = {
   evaluator_accuracy: null,
   comments: null,
   created_by: "user",
-  review_action: "declined",
+  review_action: "not_logged",
   learning_eligible: false,
   route_fit: null,
   failure_attribution: null,
@@ -188,7 +188,9 @@ describe("TaskOutcomeBriefCard actions", () => {
     mocks.reEvaluateTaskRun.mockResolvedValue({ status: "queued" });
     mocks.submitTaskRunReview.mockImplementation(
       async (_runId: string, body: { action?: string }) => {
-        if (body?.action === "decline") return review;
+        if (body?.action === "dont_log") {
+          return { ...review, review_action: "not_logged" };
+        }
         if (body?.action === "accept") return acceptedReview();
         return { ...review, review_action: body?.action ?? "accepted" };
       },
@@ -236,24 +238,24 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(mocks.submitTaskRunReview).not.toHaveBeenCalled();
   });
 
-  it("submits action=decline and the card collapses to the excluded status", async () => {
-    const declinedDetail: TaskRunDetailResponse = {
+  it("submits action=dont_log and the card collapses to the excluded status", async () => {
+    const notLoggedDetail: TaskRunDetailResponse = {
       ...detail,
       review,
     };
     // First fetch: no review yet (so the brief card renders). After
-    // Decline is submitted, the component re-loads and gets back a row
-    // with `review_action = declined` — the card then collapses to the
-    // "Excluded from routing learning" status.
+    // Don't log is submitted, the component re-loads and gets back a row
+    // with `review_action = not_logged` — the card then collapses to
+    // the "Excluded from routing learning" status.
     mocks.getTaskRunForResponse
       .mockResolvedValueOnce({ ...detail, review: null })
-      .mockResolvedValue(declinedDetail);
+      .mockResolvedValue(notLoggedDetail);
     render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
     await screen.findByTestId("task-outcome-brief-card");
-    fireEvent.click(screen.getByRole("button", { name: /Decline/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Don’t log/ }));
     await waitFor(() =>
       expect(mocks.submitTaskRunReview).toHaveBeenCalledWith("run-1", {
-        action: "decline",
+        action: "dont_log",
         source_evaluation_id: undefined,
         verdict: "skipped",
       }),
@@ -265,6 +267,41 @@ describe("TaskOutcomeBriefCard actions", () => {
     );
   });
 
+  it("Don't log persists as not_logged, not as declined", async () => {
+    // The new state must remain distinguishable from the legacy
+    // "declined" so historical rows stay readable and audit
+    // queries can separate the two semantics.
+    const notLoggedReview = {
+      ...review,
+      id: "review-not-logged",
+      review_action: "not_logged" as const,
+    };
+    mocks.submitTaskRunReview.mockResolvedValueOnce(notLoggedReview);
+    // First fetch: no review yet (so the brief card renders).
+    // Subsequent fetches: the review row with review_action=not_logged.
+    mocks.getTaskRunForResponse
+      .mockResolvedValueOnce({ ...detail, review: null })
+      .mockResolvedValue({ ...detail, review: notLoggedReview });
+
+    render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
+    await screen.findByTestId("task-outcome-brief-card");
+    fireEvent.click(screen.getByRole("button", { name: /Don’t log/ }));
+
+    await waitFor(() =>
+      expect(mocks.submitTaskRunReview).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ action: "dont_log", verdict: "skipped" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("outcome-brief-status")).toHaveTextContent(
+        /Excluded from routing learning/,
+      ),
+    );
+    expect(notLoggedReview.review_action).toBe("not_logged");
+    expect(notLoggedReview.review_action).not.toBe("declined");
+  });
+
   it("Review later does not call submit and shows the postponed compact status", async () => {
     render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
     await screen.findByTestId("task-outcome-brief-card");
@@ -272,7 +309,7 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(mocks.submitTaskRunReview).not.toHaveBeenCalled();
     await screen.findByTestId("outcome-brief-postponed");
     expect(screen.queryByText(/Excluded from routing learning/)).not.toBeInTheDocument();
-    // The full card should be gone — no Accept / Adjust / Decline buttons shown.
+    // The full card should be gone — no Accept / Adjust / Don't log buttons shown.
     expect(screen.queryByTestId("task-outcome-brief-card")).not.toBeInTheDocument();
   });
 
@@ -286,7 +323,7 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(mocks.submitTaskRunReview).not.toHaveBeenCalled();
   });
 
-  it("Review later and Decline are not equivalent", async () => {
+  it("Review later and Don’t log are not equivalent", async () => {
     render(<TaskOutcomeBriefCard sessionId="conv-1" responseId="resp-1" />);
     await screen.findByTestId("task-outcome-brief-card");
 
@@ -295,15 +332,15 @@ describe("TaskOutcomeBriefCard actions", () => {
     await screen.findByTestId("outcome-brief-postponed");
     expect(mocks.submitTaskRunReview).not.toHaveBeenCalled();
 
-    // Restore so we can click Decline in the same rendered card.
+    // Restore so we can click Don't log in the same rendered card.
     fireEvent.click(screen.getByRole("button", { name: /Review now/ }));
     await screen.findByTestId("task-outcome-brief-card");
 
-    fireEvent.click(screen.getByRole("button", { name: /Decline/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Don’t log/ }));
     await waitFor(() =>
       expect(mocks.submitTaskRunReview).toHaveBeenCalledWith(
         "run-1",
-        expect.objectContaining({ action: "decline", verdict: "skipped" }),
+        expect.objectContaining({ action: "dont_log", verdict: "skipped" }),
       ),
     );
   });
@@ -506,7 +543,9 @@ describe("TaskOutcomeBriefCard actions", () => {
       ),
     ).toBeInTheDocument();
     expect(within(card).queryByText("No fallback model was used.")).not.toBeInTheDocument();
-    expect(within(card).getByText(/Requested evaluator route: custom\/outcome-scoring/)).toBeInTheDocument();
+    expect(
+      within(card).getByText(/Requested evaluator route: custom\/outcome-scoring/),
+    ).toBeInTheDocument();
     expect(within(card).getByText(/Attempts: 2/)).toBeInTheDocument();
     expect(within(card).getByText(/MiniMax provider cooldown/)).toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: /Retry now/ }));
@@ -547,7 +586,9 @@ describe("TaskOutcomeBriefCard actions", () => {
     expect(within(card).getByText("Outcome evaluator requires attention")).toBeInTheDocument();
     expect(within(card).getByText(/authentication/)).toBeInTheDocument();
     expect(within(card).queryByText("No fallback model was used.")).not.toBeInTheDocument();
-    expect(within(card).getByText(/Requested evaluator route: custom\/outcome-scoring/)).toBeInTheDocument();
+    expect(
+      within(card).getByText(/Requested evaluator route: custom\/outcome-scoring/),
+    ).toBeInTheDocument();
     expect(within(card).queryByText(/Quality|confidence|small_bug_fix/)).not.toBeInTheDocument();
   });
 

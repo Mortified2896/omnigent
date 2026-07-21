@@ -768,7 +768,12 @@ def create_task_outcomes_router(
             conversation_store,
         )
         legacy_submission = body.action is None and body.source_evaluation_id is None
-        action = {"accept": "accepted", "adjust": "adjusted", "decline": "declined"}.get(
+        action = {
+            "accept": "accepted",
+            "adjust": "adjusted",
+            "decline": "declined",
+            "dont_log": "not_logged",
+        }.get(
             body.action or "",
             body.action or ("declined" if body.verdict == "skipped" else "accepted"),
         )
@@ -776,12 +781,13 @@ def create_task_outcomes_router(
             raise OmnigentError(
                 f"action must be one of {list(REVIEW_ACTIONS)!r}", code=ErrorCode.INVALID_INPUT
             )
-        if action == "declined":
+        if action in {"declined", "not_logged"}:
             verdict = "skipped"
         else:
             verdict = body.verdict
         if (action != "accepted" or legacy_submission) and (
-            verdict not in REVIEW_VERDICTS or (action != "declined" and verdict == "skipped")
+            verdict not in REVIEW_VERDICTS
+            or (action not in {"declined", "not_logged"} and verdict == "skipped")
         ):
             raise OmnigentError(
                 f"verdict must be one of {list(REVIEW_VERDICTS)!r}, got {verdict!r}",
@@ -802,8 +808,10 @@ def create_task_outcomes_router(
                 "an evaluation is required to accept", code=ErrorCode.INVALID_INPUT
             )
         else:
-            quality_score = None if action == "declined" else body.quality_score
-            final_task_family = None if action == "declined" else body.final_task_family
+            quality_score = None if action in {"declined", "not_logged"} else body.quality_score
+            final_task_family = (
+                None if action in {"declined", "not_logged"} else body.final_task_family
+            )
         if body.final_task_family is not None and body.final_task_family not in TASK_FAMILIES:
             raise OmnigentError(
                 f"final_task_family must be one of {list(TASK_FAMILIES)!r}, "
@@ -843,22 +851,32 @@ def create_task_outcomes_router(
                 created_by=attribution_user(user_id),
                 quality_score=quality_score,
                 final_task_family=final_task_family,
-                evaluator_accuracy=None if action == "declined" else body.evaluator_accuracy,
+                evaluator_accuracy=None
+                if action in {"declined", "not_logged"}
+                else body.evaluator_accuracy,
                 comments=body.comments,
                 review_action=action,
                 learning_eligible=action in ("accepted", "adjusted"),
-                route_fit=None if action == "declined" else body.route_fit,
-                failure_attribution=None if action == "declined" else body.failure_attribution,
-                preferred_route_id=None if action == "declined" else body.preferred_route_id,
+                route_fit=None if action in {"declined", "not_logged"} else body.route_fit,
+                failure_attribution=None
+                if action in {"declined", "not_logged"}
+                else body.failure_attribution,
+                preferred_route_id=None
+                if action in {"declined", "not_logged"}
+                else body.preferred_route_id,
                 preferred_reasoning_effort=None
-                if action == "declined"
+                if action in {"declined", "not_logged"}
                 else body.preferred_reasoning_effort,
                 source_evaluation_id=body.source_evaluation_id
                 or (evaluation.id if action == "accepted" and evaluation else None),
             ),
         )
         recorder = get_recorder()
-        if recorder is not None:
+        if recorder is not None and review.review_action != "not_logged":
+            # ``Don't log`` writes a minimal review row for audit /
+            # debugging / cost accounting, but must NOT produce a
+            # new review-driven Langfuse export — the exclusion
+            # itself must not influence downstream learning signals.
             try:
                 recorder.enqueue_langfuse_review(
                     task_run_id=task_run_id,

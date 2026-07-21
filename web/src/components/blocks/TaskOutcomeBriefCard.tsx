@@ -502,7 +502,7 @@ function renderReadyCard(args: {
         data-testid="outcome-brief-status"
       >
         <span>
-          {review.review_action === "declined"
+          {review.review_action === "declined" || review.review_action === "not_logged"
             ? "Excluded from routing learning"
             : `Outcome ${review.review_action === "adjusted" ? "adjusted" : "accepted"} · ${review.verdict}`}
         </span>
@@ -533,7 +533,7 @@ function renderReadyCard(args: {
   const confidence =
     evaluation?.confidence == null ? "—" : `${Math.round(evaluation.confidence * 100)}%`;
   const evidence = run.changed_files?.length ? `${run.changed_files.length} files changed` : "—";
-  const act = async (action: "accept" | "adjust" | "decline") => {
+  const act = async (action: "accept" | "adjust" | "decline" | "dont_log") => {
     if (mutating || (action === "accept" && !evaluation)) return;
     setMutating(true);
     setMutationError(null);
@@ -541,7 +541,7 @@ function renderReadyCard(args: {
       await submitTaskRunReview(run.id, {
         action,
         source_evaluation_id: action === "accept" ? evaluation?.id : undefined,
-        verdict: action === "decline" ? "skipped" : undefined,
+        verdict: action === "decline" || action === "dont_log" ? "skipped" : undefined,
       });
       onReviewed();
     } catch (cause) {
@@ -642,10 +642,10 @@ function renderReadyCard(args: {
         <button
           className="min-h-11 w-full rounded border px-2 py-1 sm:w-auto"
           disabled={mutating}
-          onClick={() => void act("decline")}
+          onClick={() => void act("dont_log")}
         >
           <XIcon className="mr-1 inline size-3" />
-          Decline
+          Don’t log
         </button>
         <button
           className="min-h-11 w-full sm:ml-auto sm:w-auto underline"

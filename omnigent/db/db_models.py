@@ -1563,7 +1563,8 @@ class SqlTaskReview(Base):
             name="ck_task_reviews_verdict",
         ),
         CheckConstraint(
-            "review_action IS NULL OR review_action IN ('accepted','adjusted','declined')",
+            "review_action IS NULL OR review_action IN "
+            "('accepted','adjusted','declined','not_logged')",
             name="ck_task_reviews_action",
         ),
         CheckConstraint(

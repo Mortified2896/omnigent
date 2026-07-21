@@ -32,5 +32,5 @@ def test_lifecycle_schema_and_historical_treatment(tmp_path) -> None:
     )
     with engine.connect() as connection:
         assert connection.execute(text("select version_num from alembic_version")).scalar() == (
-            "zb1b2c3d4e5f"
+            "zc1b2c3d4e5f"
         )
