@@ -31,8 +31,14 @@ from omnigent.db.db_models import (
     SqlConversation,
     SqlConversationItem,
     SqlConversationLabel,
+    SqlLangfuseSyncOutbox,
     SqlPolicy,
+    SqlRoutingDecision,
+    SqlRoutingProposal,
     SqlSessionPermission,
+    SqlTaskEvaluation,
+    SqlTaskReview,
+    SqlTaskRun,
     SqlUserDailyCost,
     current_workspace_id,
 )
@@ -2861,8 +2867,9 @@ class SqlAlchemyConversationStore(ConversationStore):
 
         Collects the full subtree of conversation IDs (the target plus
         all direct/indirect children), then deletes their items, labels,
-        comments, policies, and session-permission rows before deleting
-        the conversation rows themselves (children before parent).
+        comments, policies, routing proposals, task runs, and session-
+        permission rows before deleting the conversation rows themselves
+        (children before parent).
 
         :param conversation_id: Unique conversation identifier,
             e.g. ``"conv_abc123"``.
@@ -2892,6 +2899,24 @@ class SqlAlchemyConversationStore(ConversationStore):
             )
             subtree_ids_rows = session.execute(select(cte.c.id)).fetchall()
             subtree_ids = [r[0] for r in subtree_ids_rows]
+
+            # Collect routing_proposal and task_run ids for the subtree so we
+            # can cascade-delete through tables that reference those (not the
+            # conversation directly) before dropping the conversation row.
+            subtree_proposal_id_rows = session.execute(
+                select(SqlRoutingProposal.id).where(
+                    SqlRoutingProposal.workspace_id == current_workspace_id(),
+                    SqlRoutingProposal.conversation_id.in_(subtree_ids),
+                )
+            ).fetchall()
+            subtree_proposal_ids = [r[0] for r in subtree_proposal_id_rows]
+            subtree_task_run_id_rows = session.execute(
+                select(SqlTaskRun.id).where(
+                    SqlTaskRun.workspace_id == current_workspace_id(),
+                    SqlTaskRun.conversation_id.in_(subtree_ids),
+                )
+            ).fetchall()
+            subtree_task_run_ids = [r[0] for r in subtree_task_run_id_rows]
 
             # Delete per-conversation child rows for every conversation in
             # the subtree before touching the conversation rows themselves.
@@ -2926,6 +2951,44 @@ class SqlAlchemyConversationStore(ConversationStore):
                 delete(SqlSessionPermission).where(
                     SqlSessionPermission.workspace_id == current_workspace_id(),
                     SqlSessionPermission.conversation_id.in_(subtree_ids),
+                )
+            )
+            if subtree_proposal_ids:
+                session.execute(
+                    delete(SqlRoutingDecision).where(
+                        SqlRoutingDecision.workspace_id == current_workspace_id(),
+                        SqlRoutingDecision.proposal_id.in_(subtree_proposal_ids),
+                    )
+                )
+            session.execute(
+                delete(SqlRoutingProposal).where(
+                    SqlRoutingProposal.workspace_id == current_workspace_id(),
+                    SqlRoutingProposal.conversation_id.in_(subtree_ids),
+                )
+            )
+            if subtree_task_run_ids:
+                session.execute(
+                    delete(SqlTaskEvaluation).where(
+                        SqlTaskEvaluation.workspace_id == current_workspace_id(),
+                        SqlTaskEvaluation.task_run_id.in_(subtree_task_run_ids),
+                    )
+                )
+                session.execute(
+                    delete(SqlTaskReview).where(
+                        SqlTaskReview.workspace_id == current_workspace_id(),
+                        SqlTaskReview.task_run_id.in_(subtree_task_run_ids),
+                    )
+                )
+                session.execute(
+                    delete(SqlLangfuseSyncOutbox).where(
+                        SqlLangfuseSyncOutbox.workspace_id == current_workspace_id(),
+                        SqlLangfuseSyncOutbox.task_run_id.in_(subtree_task_run_ids),
+                    )
+                )
+            session.execute(
+                delete(SqlTaskRun).where(
+                    SqlTaskRun.workspace_id == current_workspace_id(),
+                    SqlTaskRun.conversation_id.in_(subtree_ids),
                 )
             )
 
