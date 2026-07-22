@@ -201,18 +201,40 @@ async def test_list_worktrees_returns_data(
     assert payload["data"][1]["is_main"] is False
 
 
-async def test_list_worktrees_non_git_path_400(
+async def test_list_worktrees_non_git_path_200_empty_list(
     wt_setup: tuple[FastAPI, HostRegistry, ApplicationCommunicator, dict[str, dict[str, Any]]],
 ) -> None:
-    """A non-git path (host reports failed) maps to 400 so the picker shows nothing."""
-    app, _reg, _comm, _replies = wt_setup
+    """A non-git directory now returns 200 with an empty worktree list."""
+    app, _reg, _comm, replies = wt_setup
+    replies["/tmp/not-a-repo"] = {"worktrees": []}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # No reply registered → the drain replies "failed: not a git repository".
         resp = await client.get(
             f"/v1/hosts/{_HOST_ID}/worktrees",
             params={"path": "/tmp/not-a-repo"},
         )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"object": "list", "data": []}
+
+
+async def test_list_worktrees_git_failure_still_400(
+    wt_setup: tuple[FastAPI, HostRegistry, ApplicationCommunicator, dict[str, dict[str, Any]]],
+) -> None:
+    """Other host git failures still surface as 400 errors."""
+    app, _reg, _comm, replies = wt_setup
+    replies["/tmp/bad-repo"] = {
+        "status": "failed",
+        "error": (
+            "git worktree list failed (exit 128): "
+            "fatal: bad config line 1 in file .git/config"
+        ),
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/hosts/{_HOST_ID}/worktrees",
+            params={"path": "/tmp/bad-repo"},
+        )
     assert resp.status_code == 400, resp.text
+    assert "bad config line" in resp.text
 
 
 async def test_list_worktrees_missing_path_param_422(
