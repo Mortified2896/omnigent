@@ -1216,7 +1216,7 @@ def build_routing_agent_from_runtime() -> RoutingAgent:
     the server does not necessarily have.
     """
     try:
-        from omnigent.runtime._globals import get_caps
+        from omnigent.runtime import get_caps
         from omnigent.runtime.policies.builder import (
             _build_policy_llm_client,
             _resolve_server_llm_connection,

@@ -462,6 +462,74 @@ def test_build_routing_agent_from_runtime_returns_agent():
     assert isinstance(agent, RoutingAgent)
 
 
+def test_build_routing_agent_from_runtime_uses_caps_policy_llm_client(
+    monkeypatch,
+):
+    """Regression: ``RuntimeCaps.llm`` must actually flow into the agent.
+
+    Prior to this fix, ``build_routing_agent_from_runtime`` imported
+    ``get_caps`` from ``omnigent.runtime._globals`` (which does NOT
+    export it), the import always silently failed, and the agent's
+    ``policy_llm_client`` was therefore never built even when the
+    server-level LLM was configured. The agent then fell back to
+    env-var httpx against OMNIGENT_ROUTER_API_URL — and failed
+    closed with "invalid JSON from router" on the deployment where
+    that URL serves plain prose. This test pins the helper to the
+    correct public ``omnigent.runtime.get_caps`` symbol so the bug
+    can't regress.
+    """
+    from omnigent.policies.types import PolicyLLMClient
+    from omnigent.runtime import _globals as runtime_globals
+    from omnigent.runtime.caps import RuntimeCaps
+    from omnigent.spec import parse_server_llm
+
+    server_llm = parse_server_llm(
+        {
+            "model": "minimax/MiniMax-M3",
+            "connection": {
+                "api_key": "test-router-key",
+                "base_url": "http://127.0.0.1:20128/v1",
+            },
+            "request_timeout": 30,
+        }
+    )
+    sentinel_client = PolicyLLMClient(
+        _client=object(),  # not invoked — propose path is mocked out below
+        _model=server_llm.model,
+        _connection={"api_key": "k", "base_url": "u"},
+        _request_timeout=30,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_build(server_llm_arg, connection):  # type: ignore[no-untyped-def]
+        captured["server_llm"] = server_llm_arg
+        captured["connection"] = connection
+        return sentinel_client
+
+    monkeypatch.setattr(
+        "omnigent.runtime.policies.builder._build_policy_llm_client",
+        _fake_build,
+        raising=False,
+    )
+
+    previous_caps = runtime_globals._caps
+    runtime_globals._caps = RuntimeCaps(llm=server_llm)
+    try:
+        agent = build_routing_agent_from_runtime()
+    finally:
+        runtime_globals._caps = previous_caps
+
+    assert agent.policy_llm_client is sentinel_client
+    assert captured["server_llm"] is server_llm
+    # When the policy_llm_client is the chosen path, the env-var
+    # httpx primary/fallback models must stay empty — the helper
+    # must not double-route.
+    assert agent.primary_model is None
+    assert agent.api_url is None
+    assert agent.fallback_model is None
+
+
 def test_proposal_json_schema_lists_required_fields():
     """The proposal schema carries every required key as advertised in the prompt."""
     required = set(PROPOSAL_JSON_SCHEMA["required"])
