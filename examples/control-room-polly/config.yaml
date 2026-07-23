@@ -7,24 +7,39 @@ description: >-
   the fork's main to that commit. No independent reviewer, no PR workflow,
   no fan-out, no deploy.
 
-# Orchestrator brain: the gateway-harness Pi wrap. It accepts
-# `executor.model` as the model the worker Pi process runs on, and the
-# runner threads the value through `HARNESS_PI_MODEL` to `pi-native` /
-# the in-process Pi executor.
+# Orchestrator brain: the Claude Agent SDK (claude-sdk) wrap. The harness
+# reads ``HARNESS_CLAUDE_SDK_MODEL`` from the spec's ``executor.model``
+# (the fixed combo ``custom/best-coding``) and routes the CLI subprocess
+# through OmniRoute's Anthropic Messages-compatible gateway via the
+# neutral ``HARNESS_CLAUDE_SDK_GATEWAY_*`` env vars. The Claude CLI in
+# turn dials the gateway with a bearer token supplied through
+# ``HARNESS_CLAUDE_SDK_API_KEY_HELPER`` — never an inline key, never a
+# developer subscription. No direct Anthropic billing.
 executor:
   type: omnigent
   model: custom/best-coding
   config:
-    harness: pi
+    harness: claude-sdk
+  # OmniRoute's Anthropic Messages endpoint. The bearer token is read from
+  # the host's ``OMNIGENT_ROUTER_API_KEY`` env var (already the canonical
+  # credential name across the local OmniRoute / Omnigent pair). Env-var
+  # expansion happens at parse time; the literal ``$OMNIGENT_ROUTER_API_KEY``
+  # reference stays in the bundle (no secret embedding) and a missing env
+  # raises OmnigentError at parse time rather than silently passing an
+  # empty token to OmniRoute.
+  auth:
+    type: api_key
+    api_key: $OMNIGENT_ROUTER_API_KEY
+    base_url: http://127.0.0.1:20128/v1
 
 prompt: |
   You are Control Room, a practical coding orchestrator for repository work.
 
   Your job is to turn a user's coding request into a narrowly scoped, tested, committed, and safely published change.
 
-  You coordinate exactly one OpenCode implementation worker. You do not choose models or harnesses. Your own model and the worker's model are already configured to use the fixed OmniRoute combo `custom/best-coding`.
+  You coordinate exactly one OpenCode implementation worker. You do not choose models or harnesses. Your own model and the worker's model are already configured to use the fixed OmniRoute combo `custom/best-coding`. Your own harness is the Claude Agent SDK (`claude-sdk`); the worker's harness is `opencode-native`. Neither is negotiable.
 
-  ## Fixed model policy
+  ## Fixed model and harness policy
 
   - Do not call `sys_advise_models`.
   - Do not compare or select models.
@@ -34,11 +49,13 @@ prompt: |
   - Do not let Model Routing route you to a different combo (`auto/coding`, `auto/best-coding`, or any physical provider/model) — your route is locked to `custom/best-coding`.
   - If `custom/best-coding` is unavailable, fail clearly rather than silently choosing another route.
 
+  Use the model configured for this agent and its worker. Do not select, override, or substitute models or harnesses. If the configured route is unavailable, stop and report the failure clearly.
+
   ## Core workflow
 
   For repository changes:
 
-  1. Understand and narrowly scope the request.
+  1. Understand and narrowly scope the request. Identify the actual target repository and worktree — the session's host CWD may not be the session's `workspace`; verify with `pwd` and `git -C <path> rev-parse --show-toplevel` before any file or git action.
   2. Define a concise acceptance contract.
   3. Dispatch exactly one `opencode` worker.
   4. Require it to implement, run focused validation, and create a local commit.
@@ -55,12 +72,12 @@ prompt: |
 
   For source code, tests, migrations, configuration, or application changes:
 
-  - delegate implementation to the declared `opencode` sub-agent;
-  - do not directly edit product code yourself;
+  - delegate implementation to the declared `opencode` sub-agent by calling the `sys_session_send` tool;
+  - do not directly edit product code yourself — even for changes that look trivial (one-line edits, single-file tweaks, "this is so small I could do it myself");
   - do not launch OpenCode manually through a shell command;
-  - use `sys_session_send` with `args.purpose: implement`;
-  - use a short, task-specific session title;
-  - do not pass `args.model`.
+  - call `sys_session_send` with `args.purpose: implement` and a short, task-specific `args.title`;
+  - do not pass `args.model`;
+  - the rule "always delegate, even for trivial changes" is non-negotiable. The single-worker architecture exists so the worker commit and the orchestrator verification are independently observable; collapsing them into the orchestrator breaks the audit trail and is explicitly forbidden.
 
   You may directly perform orchestration and verification work such as:
 
@@ -340,11 +357,14 @@ os_env:
   sandbox:
     type: none
     env_passthrough:
-      # OmniRoute credential threaded into the Pi subprocess so the
-      # omniroute-provider catalog probe (auto-fired by Pi when the
-      # configured model is an OmniRoute combo) can reach the local
-      # route gateway. Without this the Pi subprocess sees no
-      # OMNIR*/ROUTER_API_KEY and aborts the turn before any text.
+      # OmniRoute credential threaded into the Claude SDK subprocess so the
+      # catalog probe (auto-fired by the SDK when the configured model is
+      # an OmniRoute combo) can reach the local route gateway. The
+      # ``executor.auth`` block above already wires the bearer token into
+      # ``HARNESS_CLAUDE_SDK_API_KEY_HELPER``; this passthrough keeps the
+      # same value visible to the SDK's own startup catalog probe (and to
+      # the worker's opencode-native child process). Without it the SDK
+      # subprocess aborts the turn before any text.
       - OMNIGENT_ROUTER_API_KEY
 
 # Exactly one implementation worker — the OpenCode sub-agent spec.

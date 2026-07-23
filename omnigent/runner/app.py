@@ -1162,14 +1162,14 @@ async def _auto_create_opencode_terminal(
     # ``auto/``/``custom/`` namespaces (per :func:`_is_omniroute_combo_model_id`)
     # are the only shapes we rewrite — physical provider/model ids and
     # already-qualified forms pass through untouched.
+    from omnigent.opencode_native_provider import OMNIROUTE_PROVIDER_ID, qualify_omniroute_model
+
     if (
         isinstance(model_override, str)
         and model_override
-        and "/" not in model_override
+        and not model_override.startswith(f"{OMNIROUTE_PROVIDER_ID}/")
         and _is_omniroute_combo_model_id(model_override)
     ):
-        from omnigent.opencode_native_provider import qualify_omniroute_model
-
         model_override = qualify_omniroute_model(model_override)
     # Route opencode through the Databricks AI gateway when the spec names a
     # profile. Unlike codex/claude/pi (which consume HARNESS_*_GATEWAY_* env the
@@ -19717,7 +19717,7 @@ def _build_spawn_env_from_spec(
         )
 
         if harness == "claude-sdk":
-            env = _build_claude_sdk_spawn_env(spec, workdir=workdir)
+            env = _build_claude_sdk_spawn_env(spec, cwd=cwd, workdir=workdir)
         elif harness == "codex":
             env = _build_codex_spawn_env(spec, workdir=workdir)
         elif harness == "pi":

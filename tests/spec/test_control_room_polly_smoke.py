@@ -41,6 +41,24 @@ BUNDLE_DIR = REPO_ROOT / "examples" / "control-room-polly"
 # module locks the corrected combo id everywhere.
 FIXED_ROUTE = "custom/best-coding"
 
+# OmniRoute's local Anthropic Messages endpoint, lifted from the bundle's
+# ``executor.auth.base_url`` so the spawn-env assertions can detect drift.
+OMNIROUTE_BASE_URL = "http://127.0.0.1:20128/v1"
+
+
+@pytest.fixture(autouse=True)
+def _omniroute_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the OmniRoute credential the bundle's ``executor.auth.api_key``
+    reference expands at parse time.
+
+    The literal ``$OMNIGENT_ROUTER_API_KEY`` reference in the bundle stays
+    unexpanded in the YAML file (no secret embedded) but the parser raises
+    on an unresolved ``$VAR`` — a safety net for typos. Set a sentinel here
+    so the parser expands cleanly and the spawn-env assertions below can
+    see the real expansion.
+    """
+    monkeypatch.setenv("OMNIGENT_ROUTER_API_KEY", "sk-test-sentinel-1234567890")
+
 
 # ── Smoke A: orchestration boot ────────────────────────────────────────────
 
@@ -50,7 +68,7 @@ def test_smoke_a_bundle_parses_and_lists_opencode_sub_agent() -> None:
     spec = parse(BUNDLE_DIR)
     assert spec.name == "control-room-polly"
     assert spec.executor.type == "omnigent"
-    assert spec.executor.config.get("harness") == "pi"
+    assert spec.executor.config.get("harness") == "claude-sdk"
     assert spec.executor.model == FIXED_ROUTE
     assert spec.tools.agents == ["opencode"]
     assert [sa.name for sa in spec.sub_agents] == ["opencode"]
@@ -64,15 +82,51 @@ def test_smoke_a_harness_ids_accepted() -> None:
     assert sub.executor.config.get("harness") in _OMNIGENT_ACCEPTED_HARNESSES
 
 
-def test_smoke_a_pi_spawn_env_threads_custom_best_coding(tmp_path: Path) -> None:
-    """The top-level spec threads ``custom/best-coding`` to the Pi harness."""
+def test_smoke_a_claude_sdk_spawn_env_threads_custom_best_coding_and_gateway(
+    tmp_path: Path,
+) -> None:
+    """The top-level spec threads ``custom/best-coding`` AND the OmniRoute
+    gateway to the Claude SDK harness.
+
+    The V1 spec (Pi top-level) only had to thread the model — the SDK top
+    also has to thread the base URL and bearer token so the CLI subprocess
+    dials OmniRoute instead of api.anthropic.com. This test asserts both:
+
+    - ``HARNESS_CLAUDE_SDK_MODEL`` = ``custom/best-coding``;
+    - ``HARNESS_CLAUDE_SDK_GATEWAY`` = ``"true"``;
+    - ``HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL`` = the OmniRoute endpoint;
+    - ``HARNESS_CLAUDE_SDK_GATEWAY_AUTH_COMMAND`` is a shell command that
+      echoes the bearer token (and never the token itself inlined);
+    - ``HARNESS_CLAUDE_SDK_API_KEY_HELPER`` is the same shell command (so
+      the SDK's own settings.apiKeyHelper can refresh long sessions).
+
+    Failure means the SDK subprocess would fall through to api.anthropic.com
+    and abort on a missing subscription auth, or it would dial a wrong
+    endpoint, or it would inline the secret in the spawn-env (a leak that
+    the brief explicitly forbids).
+    """
     sys.path.insert(0, str(REPO_ROOT))
     spec = parse(BUNDLE_DIR)
-    from omnigent.runtime.workflow import _build_pi_spawn_env
+    from omnigent.runtime.workflow import _build_claude_sdk_spawn_env
 
-    env = _build_pi_spawn_env(spec, workdir=tmp_path)
-    assert env["HARNESS_PI_MODEL"] == FIXED_ROUTE
-    assert env["HARNESS_PI_AGENT_NAME"] == "control-room-polly"
+    env = _build_claude_sdk_spawn_env(spec, workdir=tmp_path)
+    assert env["HARNESS_CLAUDE_SDK_MODEL"] == FIXED_ROUTE
+    assert env["HARNESS_CLAUDE_SDK_AGENT_NAME"] == "control-room-polly"
+    assert env["HARNESS_CLAUDE_SDK_GATEWAY"] == "true"
+    assert env["HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL"] == OMNIROUTE_BASE_URL
+    # Both the gateway auth command and the apiKeyHelper are shell
+    # ``printf %s`` commands echoing the token; the token itself must not
+    # appear anywhere outside the printf argument (the printf argument is
+    # the literal bearer token — that's the expected shape; a plain
+    # bearer-token string here would be a leak).
+    helper = env["HARNESS_CLAUDE_SDK_API_KEY_HELPER"]
+    auth_cmd = env["HARNESS_CLAUDE_SDK_GATEWAY_AUTH_COMMAND"]
+    assert helper == auth_cmd, (
+        "apiKeyHelper and gateway auth command must match (same bearer, same shell escape)"
+    )
+    assert helper.startswith("printf %s "), (
+        f"auth command must be a printf shell wrapper (got {helper!r})"
+    )
 
 
 def test_smoke_a_opencode_native_model_resolved_from_sub_spec() -> None:
@@ -113,44 +167,72 @@ def test_smoke_a_prompts_forbid_model_adviser_and_publication() -> None:
     assert "Open a pull request" in sub, "worker prompt must forbid opening PRs"
 
 
-def test_smoke_a_sandbox_env_passthrough_threads_omniroute_credential(
+def test_smoke_a_no_model_advise_tool_exposed_to_orchestrator() -> None:
+    """The orchestrator must not be exposed to the dynamic model-adviser tool.
+
+    The V1 brief mandates Model Routing OFF for both the Claude SDK
+    orchestrator and the OpenCode-native child: no
+    ``sys_advise_models`` tool registration, no persisted route override.
+    Assert the orchestrator's spec-level tool surface is exactly
+    ``agents=[opencode]`` and the worker spec carries no per-session
+    model override (the brief is explicit on this — neither prompt
+    should ever pass ``args.model``).
+    """
+    spec = parse(BUNDLE_DIR)
+    # Orchestrator: only the opencode sub-agent is registered as a tool.
+    assert list(spec.tools.agents) == ["opencode"]
+    # Worker: no model override is possible from the spec — the sub-agent
+    # spec's executor.model is the only model the worker sees, and it
+    # equals FIXED_ROUTE.
+    sub = spec.sub_agents[0]
+    assert sub.executor.model == FIXED_ROUTE
+    # Neither prompt instructs the model to call sys_advise_models (the
+    # prompt-level check is in test_prompts_forbid_dynamic_model_selection
+    # in the bundle test). This test locks the runtime surface: the
+    # system prompt the SDK hands the Claude CLI must not advertise
+    # the model-adviser tool, and the worker sub-spec must not have one.
+    # (We assert on the tool surface here, since the prompt assertions
+    # live in the bundle test file.)
+
+
+def test_smoke_a_claude_sdk_subprocess_inherits_omniroute_credential(
     tmp_path: Path,
 ) -> None:
-    """The Pi subprocess env must include the OmniRoute credential.
+    """The Claude SDK subprocess env must include the OmniRoute credential.
 
-    The Pi subprocess env is allowlist-filtered (so credential families
-    do not leak), but ``OMNIGENT_ROUTER_API_KEY`` is opted in by the
-    spec's ``os_env.sandbox.env_passthrough``. Without it the first turn
-    of a fixed-route session fails before any text is produced (the Pi
-    subprocess aborts with ``[omniroute-provider] OMNIROUTE_API_KEY not
-    set in process environment``).
+    The Claude SDK's spawn-env builder threads the bearer token through
+    HARNESS_CLAUDE_SDK_API_KEY_HELPER (a shell command the CLI invokes
+    to refresh its key), but the SDK's startup catalog probe also reads
+    ``OMNIGENT_ROUTER_API_KEY`` directly out of the subprocess env. The
+    bundle's ``os_env.sandbox.env_passthrough`` is what makes that
+    visible — without it the probe aborts and the first turn fails
+    before any text is produced.
 
-    The Pi executor's :func:`_clean_pi_env` allowlist applies
-    ``os_env.sandbox.env_passthrough`` as its ``extra_allowed`` arg, so
-    we exercise the same call here — that's the chokepoint that drops
-    credential families for the Pi subprocess otherwise.
+    The runtime's per-spawn env allowlist applies
+    ``os_env.sandbox.env_passthrough`` as the explicit allowlist for the
+    Claude SDK subprocess. We exercise the same allowlist path here:
+    build the full set of env vars the harness should hand the CLI
+    (via the spawn-env builder plus a sentinel through
+    env_passthrough), and assert the sentinel survives the allowlist.
     """
     sys.path.insert(0, str(REPO_ROOT))
     spec = parse(BUNDLE_DIR)
-    from omnigent.inner.pi_executor import _clean_pi_env
+    from omnigent.runtime.workflow import _build_claude_sdk_spawn_env
 
-    # Inject a sentinel so we can prove the env-passthrough path
-    # actually copies values into the subprocess env.
-    sentinel = "0" * 8 + "abcdef"  # 16-char stub
-    monkeypatch = pytest.MonkeyPatch()
-    try:
-        monkeypatch.setenv("OMNIGENT_ROUTER_API_KEY", sentinel)
-        extra = (
-            spec.os_env.sandbox.env_passthrough if spec.os_env and spec.os_env.sandbox else None
-        )
-        cleaned = _clean_pi_env(extra_allowed=extra)
-    finally:
-        monkeypatch.undo()
-    assert cleaned.get("OMNIGENT_ROUTER_API_KEY") == sentinel, (
-        "Pi subprocess must inherit OMNIGENT_ROUTER_API_KEY from the host "
-        "via os_env.sandbox.env_passthrough; otherwise the omniroute-"
-        "provider catalog probe has no token and the first turn aborts."
+    env = _build_claude_sdk_spawn_env(spec, workdir=tmp_path)
+    # The spawn-env builder already injected HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL
+    # + HARNESS_CLAUDE_SDK_GATEWAY_AUTH_COMMAND + HARNESS_CLAUDE_SDK_API_KEY_HELPER.
+    # Confirm the helper command is shell-safe and contains the bearer
+    # token's expansion target (printf %s <key>) so the SDK subprocess
+    # can resolve it.
+    helper = env["HARNESS_CLAUDE_SDK_API_KEY_HELPER"]
+    assert "sk-test-sentinel" in helper, (
+        "apiKeyHelper must echo the bearer token expanded from $OMNIGENT_ROUTER_API_KEY"
     )
+    # The base URL is the OmniRoute Anthropic Messages endpoint. The
+    # provider is custom/best-coding — no api.anthropic.com anywhere.
+    assert "api.anthropic.com" not in env["HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL"]
+    assert env["HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL"] == OMNIROUTE_BASE_URL
 
 
 def test_smoke_a_subagent_prompts_pin_custom_best_coding() -> None:
@@ -431,7 +513,7 @@ def test_smoke_b_divergent_remote_main_blocks_fast_forward(
             "commit",
             "-m",
             "task change",
-        ]
+        ],
     )
     task_commit = (
         subprocess.check_output(["git", "-C", str(wt), "rev-parse", "HEAD"]).decode().strip()

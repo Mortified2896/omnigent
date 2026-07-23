@@ -2,7 +2,8 @@
 
 The bundle is the V1 single-worker coding orchestrator. It declares:
 
-- top-level executor: omnigent + pi + model ``custom/best-coding``;
+- top-level executor: omnigent + claude-sdk + model ``custom/best-coding``
+  wired through the OmniRoute Anthropic Messages-compatible gateway;
 - exactly one sub-agent named ``opencode``;
 - the sub-agent's executor: omnigent + opencode-native + model
   ``custom/best-coding``;
@@ -12,9 +13,16 @@ The bundle is the V1 single-worker coding orchestrator. It declares:
 - prompts that forbid the worker from pushing, opening a PR, or invoking
   ``sys_advise_models``;
 - the fixed OmniRoute credential is threaded through
-  ``os_env.sandbox.env_passthrough`` so both the Pi subprocess and the
-  opencode-native harness can reach the local route gateway when probing
+  ``os_env.sandbox.env_passthrough`` so both the Claude SDK subprocess and
+  the opencode-native harness can reach the local route gateway when probing
   the configured combo.
+
+The bundle is also the regression that the prior Pi-top-level run hit:
+"the Pi top-level orchestrator failed to continue after completion".
+Replacing the orchestrator harness with ``claude-sdk`` is the correction;
+the bundle must reflect the new harness and the new gateway plumbing, but
+keep the worker (opencode-native + custom/best-coding) and the
+route-approval-disabled V1 safety rules intact.
 
 Materialization through ``omnigent.spec.materialize_bundle`` must produce
 a clean bundle directory the server can seed via
@@ -36,6 +44,28 @@ BUNDLE_DIR = REPO_ROOT / "examples" / "control-room-polly"
 # the bundle silently fall back to ``auto/coding`` or a physical model) is the
 # regression we're guarding against.
 FIXED_ROUTE = "custom/best-coding"
+
+# OmniRoute's local Anthropic Messages endpoint. The bundle references this
+# URL via the ``executor.auth.base_url`` block, and the spawn-env builder
+# lifts it into ``HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL`` so the Claude CLI
+# subprocess dials it instead of api.anthropic.com. The literal hostname /
+# port is duplicated in the bundle's own YAML so this module can detect
+# accidental drift without going through the spawn-env plumbing.
+OMNIROUTE_BASE_URL = "http://127.0.0.1:20128/v1"
+
+
+@pytest.fixture(autouse=True)
+def _omniroute_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the OmniRoute credential the bundle's ``executor.auth.api_key``
+    reference expands at parse time.
+
+    The literal ``$OMNIGENT_ROUTER_API_KEY`` reference in the bundle stays
+    unexpanded in the YAML file (no secret embedded) but the parser raises
+    on an unresolved ``$VAR`` — a safety net for typos. Set a sentinel here
+    so the parser expands cleanly and the spawn-env assertions below can
+    see the real expansion.
+    """
+    monkeypatch.setenv("OMNIGENT_ROUTER_API_KEY", "sk-test-sentinel-1234567890")
 
 
 @pytest.fixture()
@@ -88,12 +118,53 @@ def test_bundle_does_not_silently_fall_back_to_auto_coding() -> None:
         )
 
 
-def test_top_level_executor_is_pi_with_custom_best_coding(bundle_spec: object) -> None:
-    """Top-level: omnigent executor, pi harness, ``custom/best-coding`` model."""
+def test_top_level_executor_is_claude_sdk_with_custom_best_coding(
+    bundle_spec: object,
+) -> None:
+    """Top-level: omnigent executor, claude-sdk harness, ``custom/best-coding`` model.
+
+    The brief mandates a Claude SDK top-level. The Pi top-level hit a wake /
+    resume regression that left the orchestrator silent after the worker
+    committed; the replacement is the Claude SDK harness, which uses the
+    same OmniRoute gateway plumbing (custom/best-coding) the worker already
+    proves.
+    """
     executor = bundle_spec.executor
     assert executor.type == "omnigent"
-    assert executor.config.get("harness") == "pi"
+    assert executor.config.get("harness") == "claude-sdk"
     assert executor.model == FIXED_ROUTE
+
+
+def test_top_level_auth_wires_omniroute_gateway_via_env_ref(
+    bundle_spec: object,
+) -> None:
+    """Top-level ``executor.auth`` references the OmniRoute gateway by env var.
+
+    The bundle's ``auth`` block must:
+
+    - declare ``type: api_key`` so the spawn-env builder treats the
+      credential as a bearer token;
+    - reference ``$OMNIGENT_ROUTER_API_KEY`` (not an inline literal) so the
+      secret stays in the host's environment — no embedded credentials;
+    - carry ``base_url: http://127.0.0.1:20128/v1`` so the workflow layer
+      routes the SDK through OmniRoute's Anthropic Messages-compatible
+      transport instead of api.anthropic.com.
+
+    Failure means either the bundle is going to dial api.anthropic.com
+    (which requires a direct Anthropic subscription, off-limits per the
+    brief) or the bundle has shipped with a literal key in plain text.
+    """
+    auth = bundle_spec.executor.auth
+    assert auth is not None, "top-level executor must declare an auth block"
+    assert auth.type == "api_key"
+    # api_key is expanded at parse time from the env stub fixture; the
+    # actual value isn't asserted (it would leak the sentinel into the
+    # error log) — just that the env-stub expansion succeeded.
+    assert auth.api_key, "api_key must expand to a non-empty string"
+    assert auth.base_url == OMNIROUTE_BASE_URL, (
+        f"base_url must point at the OmniRoute gateway ({OMNIROUTE_BASE_URL!r}); "
+        f"got {auth.base_url!r}"
+    )
 
 
 def test_exactly_one_sub_agent_named_opencode(bundle_spec: object) -> None:
@@ -106,7 +177,13 @@ def test_exactly_one_sub_agent_named_opencode(bundle_spec: object) -> None:
 def test_opencode_worker_uses_opencode_native_with_custom_best_coding(
     bundle_spec: object,
 ) -> None:
-    """Sub-agent: opencode-native harness, same ``custom/best-coding`` model."""
+    """Sub-agent: opencode-native harness, same ``custom/best-coding`` model.
+
+    The worker harness stays opencode-native. The brief's V1 swapped the
+    top-level harness to claude-sdk; the worker is unchanged because
+    opencode-native + custom/best-coding is the proven pair that committed
+    locally in the prior live test.
+    """
     sub = bundle_spec.sub_agents[0]
     assert sub.name == "opencode"
     assert sub.executor.type == "omnigent"
@@ -165,18 +242,20 @@ def test_blast_radius_policy_on_worker(bundle_spec: object) -> None:
 def test_omniroute_credential_threaded_to_orchestrator_sandbox(
     bundle_spec: object,
 ) -> None:
-    """Top-level must opt the Pi subprocess into the OmniRoute credential.
+    """Top-level must opt the Claude SDK subprocess into the OmniRoute credential.
 
-    The Pi executor's env allowlist deliberately omits credential families
-    (it would otherwise leak every host secret into the subprocess). A
-    Pi turn using an OmniRoute combo therefore needs the spec to opt in
-    to ``OMNIGENT_ROUTER_API_KEY`` via ``os_env.sandbox.env_passthrough``
-    so the catalog probe can reach the local route gateway.
+    The Claude SDK executor's env-var path threads the credential through
+    the spawn-env builder (HARNESS_CLAUDE_SDK_API_KEY_HELPER + the
+    gateway transport), but the SDK subprocess also probes the catalog
+    at startup — that probe needs the credential visible in the subprocess
+    env, which means the spec's ``os_env.sandbox.env_passthrough`` must
+    include the canonical name so the runner's per-spawn env allowlist
+    passes it through.
     """
     passthrough = (bundle_spec.os_env.sandbox.env_passthrough or []) if bundle_spec.os_env else []
     assert "OMNIGENT_ROUTER_API_KEY" in passthrough, (
-        "orchestrator must pass OMNIGENT_ROUTER_API_KEY through to the Pi "
-        "subprocess via os_env.sandbox.env_passthrough (otherwise the "
+        "orchestrator must pass OMNIGENT_ROUTER_API_KEY through to the Claude "
+        "SDK subprocess via os_env.sandbox.env_passthrough (otherwise the "
         "fixed-route first turn fails before any text is produced)."
     )
 
@@ -270,6 +349,27 @@ def test_prompts_warn_against_fallback_routes(bundle_spec: object) -> None:
     )
 
 
+def test_prompt_forbids_model_routing_recommender(bundle_spec: object) -> None:
+    """The parent prompt must not enable Model Routing for this bundle.
+
+    The brief mandates ``route_approval_enabled: false`` for Control Room
+    sessions; the parent prompt must explicitly tell the agent not to
+    route itself, not to call the model-adviser, and not to override the
+    fixed route. The wording was tightened in this revision (V2) so the
+    agent has no ambiguity: a generic "use the model configured for this
+    agent" rule, no per-route-id forbidden examples.
+    """
+    parent = bundle_spec.instructions or ""
+    # The brief requires the agent not to even consult the model-adviser,
+    # not to substitute models, and not to override the harness.
+    for required in (
+        "Do not call `sys_advise_models`",
+        "Do not pass an `args.model` override",
+        "Do not substitute another coding harness",
+    ):
+        assert required in parent, f"parent prompt must carry the literal line: {required!r}"
+
+
 def test_worker_prompt_forbids_publication_actions(bundle_spec: object) -> None:
     """The worker's prompt must explicitly forbid push, PR, and merge."""
     sub_prompt = bundle_spec.sub_agents[0].instructions or ""
@@ -350,7 +450,7 @@ def test_materialized_bundle_parses(bundle_spec: object, tmp_path: Path) -> None
     materialized = parse(bundle_dir)
     assert materialized.name == "control-room-polly"
     assert [sa.name for sa in materialized.sub_agents] == ["opencode"]
-    assert materialized.executor.config.get("harness") == "pi"
+    assert materialized.executor.config.get("harness") == "claude-sdk"
     assert materialized.executor.model == FIXED_ROUTE
     assert materialized.sub_agents[0].executor.config.get("harness") == "opencode-native"
     assert materialized.sub_agents[0].executor.model == FIXED_ROUTE

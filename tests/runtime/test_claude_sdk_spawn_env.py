@@ -243,3 +243,149 @@ def test_ucode_state_with_model_is_not_overridden_by_default(
     env = _build_claude_sdk_spawn_env(spec, workdir=None)
 
     assert env["HARNESS_CLAUDE_SDK_MODEL"] == "databricks-claude-sonnet-4-6"
+
+
+# ── Custom-endpoint gateway plumbing (Control Room V2) ─────────────────────
+
+
+def test_api_key_auth_with_base_url_enables_gateway_and_threads_base_url() -> None:
+    """
+    ``executor.auth: {type: api_key, api_key: …, base_url: …}`` enables
+    the Claude SDK gateway transport AND threads the base URL.
+
+    This is the new path the Control Room V2 top-level uses: the
+    orchestrator's ``executor.auth.base_url`` points at OmniRoute's local
+    Anthropic Messages endpoint so the SDK subprocess dials it instead of
+    api.anthropic.com. Failure means the SDK would fall through to
+    api.anthropic.com and abort on a missing subscription auth, or it
+    would dial a wrong endpoint — exactly the regression the
+    ``harness: claude-sdk`` swap was supposed to fix.
+    """
+    spec = _make_spec(
+        model="custom/best-coding",
+        auth=ApiKeyAuth(
+            api_key="sk-omniroute-test",
+            base_url="http://127.0.0.1:20128/v1",
+        ),
+    )
+    env = _build_claude_sdk_spawn_env(spec, workdir=None)
+
+    # Gateway transport is enabled.
+    assert env["HARNESS_CLAUDE_SDK_GATEWAY"] == "true"
+    # Base URL is threaded verbatim.
+    assert env["HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL"] == "http://127.0.0.1:20128/v1"
+    # Auth command is a printf shell wrapper around the bearer token
+    # (NEVER an inline bearer string in the env — that would leak the
+    # secret through the spawn-env dict and into the SDK subprocess).
+    auth_cmd = env["HARNESS_CLAUDE_SDK_GATEWAY_AUTH_COMMAND"]
+    assert auth_cmd.startswith("printf %s "), (
+        f"gateway auth command must be a printf shell wrapper (got {auth_cmd!r})"
+    )
+    assert "sk-omniroute-test" in auth_cmd
+    # apiKeyHelper mirrors the auth command (the SDK uses the helper to
+    # refresh long sessions, so it must point at the same bearer source).
+    assert env["HARNESS_CLAUDE_SDK_API_KEY_HELPER"] == auth_cmd
+    # The model passed in the spec survives into HARNESS_CLAUDE_SDK_MODEL.
+    assert env["HARNESS_CLAUDE_SDK_MODEL"] == "custom/best-coding"
+
+
+def test_api_key_auth_with_base_url_does_not_leak_inline_bearer() -> None:
+    """
+    The custom-endpoint gateway plumbing must never inline the bearer
+    token in any non-shell-wrapper env value.
+
+    The brief is explicit: do not embed secrets. The
+    ``HARNESS_CLAUDE_SDK_*`` env dict is the spawn-env the runner hands
+    the SDK subprocess, so a literal bearer there would be a leak. The
+    printf shell wrapper is the only acceptable form.
+    """
+    bearer = "sk-very-secret-key-1234567890"
+    spec = _make_spec(
+        model="custom/best-coding",
+        auth=ApiKeyAuth(api_key=bearer, base_url="http://127.0.0.1:20128/v1"),
+    )
+    env = _build_claude_sdk_spawn_env(spec, workdir=None)
+    # Bearer must appear ONLY inside the printf shell wrapper — never as
+    # a standalone value in any other env key.
+    for key, value in env.items():
+        if key in (
+            "HARNESS_CLAUDE_SDK_API_KEY_HELPER",
+            "HARNESS_CLAUDE_SDK_GATEWAY_AUTH_COMMAND",
+        ):
+            # These are allowed to contain the bearer because they're
+            # printf shell wrappers that the SDK CLI invokes.
+            assert bearer in value
+            continue
+        assert bearer not in value, (
+            f"bearer token leaked into non-shell-wrapper env {key!r} (value={value!r})"
+        )
+
+
+def test_api_key_auth_without_base_url_does_not_enable_gateway() -> None:
+    """
+    An ``api_key`` auth WITHOUT a ``base_url`` must not enable the
+    gateway transport.
+
+    The gateway is for routing through a custom endpoint. An api_key
+    without a base_url means "use Anthropic's default endpoint with this
+    key" — which is api.anthropic.com territory and out-of-scope for
+    Control Room V2. Failure here means Control Room would enable the
+    gateway flag and re-write the base URL even when no custom URL is
+    declared, dialing an empty endpoint.
+    """
+    spec = _make_spec(
+        model="custom/best-coding",
+        auth=ApiKeyAuth(api_key="sk-test-no-base"),
+    )
+    env = _build_claude_sdk_spawn_env(spec, workdir=None)
+    assert "HARNESS_CLAUDE_SDK_GATEWAY" not in env
+    assert "HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL" not in env
+    assert "HARNESS_CLAUDE_SDK_GATEWAY_AUTH_COMMAND" not in env
+    # apiKeyHelper is still set (it always is for ApiKeyAuth with a key).
+    assert "HARNESS_CLAUDE_SDK_API_KEY_HELPER" in env
+
+
+def test_cwd_param_threads_harness_claude_sdk_cwd(tmp_path: Path) -> None:
+    """
+    The ``cwd`` parameter threads the session workspace to the Claude
+    SDK subprocess as ``HARNESS_CLAUDE_SDK_CWD``.
+
+    The runner resolves the session's stored ``workspace`` to a
+    per-session cwd and passes it through. Without threading it, the
+    Claude SDK CLI would fall back to ``os_env.cwd`` and then to the
+    runner's inherited cwd — which for a Control Room V2 session is the
+    runner's checkout, NOT the disposable git repo the user pointed the
+    session at. The orchestrator's git commands and worker dispatch
+    would target the wrong tree.
+
+    Failure here means the Claude SDK orchestrator silently runs in the
+    wrong directory, looks for the wrong files, and never sees the
+    session workspace the user actually asked for.
+    """
+    spec = _make_spec(model="custom/best-coding")
+    session_workspace = tmp_path / "session-workspace"
+    env = _build_claude_sdk_spawn_env(spec, cwd=session_workspace, workdir=None)
+    assert env["HARNESS_CLAUDE_SDK_CWD"] == str(session_workspace)
+    # CWD is independent of the bundle dir (workdir): setting one does
+    # not also set the other. A session workspace is where the SDK
+    # operates; the bundle dir is where the harness finds bundled
+    # skills. Same value here would just be coincidence.
+    assert "HARNESS_CLAUDE_SDK_BUNDLE_DIR" not in env or env.get(
+        "HARNESS_CLAUDE_SDK_BUNDLE_DIR"
+    ) != str(session_workspace)
+
+
+def test_cwd_omitted_does_not_set_harness_claude_sdk_cwd() -> None:
+    """
+    Omitting ``cwd`` must not set ``HARNESS_CLAUDE_SDK_CWD``.
+
+    The Claude SDK harness wrap falls back to ``os_env.cwd`` and then
+    the inherited subprocess cwd when the env var is absent. Setting it
+    unconditionally (even when the caller passes ``None``) would
+    override a spec's ``os_env.cwd: .`` resolution with the literal
+    string ``"None"`` — a regression of #1423-style silently-broken
+    launches.
+    """
+    spec = _make_spec(model="custom/best-coding")
+    env = _build_claude_sdk_spawn_env(spec, workdir=None)
+    assert "HARNESS_CLAUDE_SDK_CWD" not in env

@@ -1152,6 +1152,7 @@ def _add_claude_sdk_skills_env(
 def _build_claude_sdk_spawn_env(
     spec: AgentSpec,
     *,
+    cwd: Path | None = None,
     workdir: Path | None = None,
 ) -> dict[str, str]:
     """
@@ -1165,6 +1166,13 @@ def _build_claude_sdk_spawn_env(
     ``os.environ``.
 
     :param spec: The agent spec.
+    :param cwd: Runtime working directory for the Claude SDK subprocess —
+        the session workspace (the folder the user launched in), NOT the
+        agent bundle dir. Threaded as ``HARNESS_CLAUDE_SDK_CWD`` so the
+        SDK CLI operates on the user's project rather than the runner's
+        checkout. When unset, the harness wrap falls back to
+        ``os_env.cwd`` and then to the inherited subprocess cwd. Mirrors
+        :func:`_build_kimi_spawn_env`'s ``cwd`` handling.
     :param workdir: The bundle's on-disk path (extracted by the
         agent cache). Threaded through as
         ``HARNESS_CLAUDE_SDK_BUNDLE_DIR`` so the harness wrap can
@@ -1176,6 +1184,19 @@ def _build_claude_sdk_spawn_env(
     model = _resolve_spec_model(spec)
     if model is not None:
         env["HARNESS_CLAUDE_SDK_MODEL"] = model
+    # Runtime CWD — the session workspace the runner passes through
+    # (the folder the user launched in), NOT the agent bundle dir. The
+    # Claude SDK CLI operates on the user's project, so the subprocess
+    # ``cwd=`` is the only lever — thread it as ``HARNESS_CLAUDE_SDK_CWD``
+    # so the harness wrap points the SDK CLI at the session's actual
+    # workspace instead of falling through to the runner's checkout. This
+    # matters for the Control Room V2 orchestrator: without it, the
+    # session's ``workspace`` (the disposable git repo) is ignored and
+    # the SDK CLI runs in the runner's checkout, so the orchestrator's
+    # git commands and worker dispatch target the wrong tree. Mirrors
+    # :func:`_build_kimi_spawn_env`'s ``cwd`` handling.
+    if cwd is not None:
+        env["HARNESS_CLAUDE_SDK_CWD"] = str(cwd)
 
     # ── Auth resolution ────────────────────────────────────────────────
     # Priority (highest first):
