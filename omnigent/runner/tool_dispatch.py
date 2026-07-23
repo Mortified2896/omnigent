@@ -861,6 +861,61 @@ async def _list_child_sessions(
     return [item for item in data if isinstance(item, dict)]
 
 
+async def _fetch_parent_route_approval_flag(
+    server_client: httpx.AsyncClient | None,
+    conversation_id: str | None,
+) -> bool | None:
+    """
+    Read the parent's ``route_approval_enabled`` flag for child propagation.
+
+    ``sys_session_send`` creates the child session on the server via
+    ``POST /v1/sessions``. The server create defaults
+    ``route_approval_enabled`` to the global
+    ``OMNIGENT_ROUTE_APPROVAL_GATE`` env var when the request omits it,
+    so a parent that explicitly toggled the flag (e.g. a fixed-route
+    orchestrator that turned the model-routing recommender off for the
+    V1 smoke test) would otherwise spawn a child that re-enables it.
+    That child then runs the routing recommender against the parent's
+    locked-route spec and pops a route-approval card back to the user.
+
+    This helper returns the parent's setting so the dispatch path can
+    pass it through on the child create body. A failure (transport,
+    unexpected schema) is swallowed and ``None`` is returned — the
+    caller's child-create then falls back to the server default, which
+    is the same as the pre-existing behaviour and is safe for unrelated
+    callers. The "fix" is intentionally non-fatal.
+
+    :param server_client: Omnigent server client, or ``None`` when no
+        runner client is wired (e.g. executor-only paths).
+    :param conversation_id: Parent session id, or ``None`` when no
+        parent context exists.
+    :returns: ``True`` / ``False`` when the parent row answered with
+        an explicit value, ``None`` when the parent didn't set the
+        flag or the lookup failed.
+    """
+    if server_client is None or conversation_id is None:
+        return None
+    try:
+        resp = await server_client.get(
+            f"/v1/sessions/{conversation_id}",
+            timeout=10.0,
+        )
+    except (httpx.HTTPError, RuntimeError, ValueError):
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    flag = body.get("route_approval_enabled")
+    if isinstance(flag, bool):
+        return flag
+    return None
+
+
 async def _find_existing_child_session(
     *,
     server_client: httpx.AsyncClient,
@@ -1636,6 +1691,22 @@ async def _execute_subagent_tool(
             "title": f"{sub_agent_name}:{session_name}",
             "sub_agent_name": sub_agent_name,
         }
+        # Inherit the parent's ``route_approval_enabled`` flag when the
+        # parent has explicitly toggled it. Without this, a parent
+        # created with ``route_approval_enabled=false`` (e.g. a
+        # fixed-route orchestrator that turned the model-routing
+        # recommender off for the V1 smoke test) would spawn a child
+        # that defaults to the server's ``OMNIGENT_ROUTE_APPROVAL_GATE``
+        # (usually True), so the child would run the routing recommender
+        # against the parent's locked-route spec and pop a route-approval
+        # card back to the user. A ``None`` return leaves the server's
+        # default in place — the pre-existing behaviour for unrelated
+        # callers.
+        inherited_route_approval = await _fetch_parent_route_approval_flag(
+            server_client, conversation_id
+        )
+        if inherited_route_approval is not None:
+            create_body["route_approval_enabled"] = inherited_route_approval
         if harness_override_canonical is not None:
             create_body["harness_override"] = harness_override_canonical
         if model is not None:
