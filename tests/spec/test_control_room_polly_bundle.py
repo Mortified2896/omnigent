@@ -2,14 +2,19 @@
 
 The bundle is the V1 single-worker coding orchestrator. It declares:
 
-- top-level executor: omnigent + pi + model ``auto/best-coding``;
+- top-level executor: omnigent + pi + model ``custom/best-coding``;
 - exactly one sub-agent named ``opencode``;
-- the sub-agent's executor: omnigent + opencode-native + model ``auto/best-coding``;
+- the sub-agent's executor: omnigent + opencode-native + model
+  ``custom/best-coding``;
 - blast-radius policies on both with the orchestrator's gate_pushes off and
   the worker's gate_pushes on;
 - no MCP servers, no extra skills, no extra terminals, no model-adviser hint;
 - prompts that forbid the worker from pushing, opening a PR, or invoking
-  ``sys_advise_models``.
+  ``sys_advise_models``;
+- the fixed OmniRoute credential is threaded through
+  ``os_env.sandbox.env_passthrough`` so both the Pi subprocess and the
+  opencode-native harness can reach the local route gateway when probing
+  the configured combo.
 
 Materialization through ``omnigent.spec.materialize_bundle`` must produce
 a clean bundle directory the server can seed via
@@ -26,6 +31,11 @@ from omnigent.spec import materialize_bundle, parse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_DIR = REPO_ROOT / "examples" / "control-room-polly"
+
+# The fixed-route combo both layers are locked to. Replacing it (or letting
+# the bundle silently fall back to ``auto/coding`` or a physical model) is the
+# regression we're guarding against.
+FIXED_ROUTE = "custom/best-coding"
 
 
 @pytest.fixture()
@@ -44,12 +54,46 @@ def test_bundle_directory_and_name_aligned() -> None:
     assert BUNDLE_DIR.name == "control-room-polly"
 
 
-def test_top_level_executor_is_pi_with_best_coding(bundle_spec: object) -> None:
-    """Top-level: omnigent executor, pi harness, ``auto/best-coding`` model."""
+def test_bundle_does_not_declare_auto_best_coding() -> None:
+    """No layer may use the rejected ``auto/best-coding`` combo id.
+
+    ``auto/best-coding`` was the originally-requested combo id but it is not
+    actually a valid OmniRoute catalog entry; the real fixed combo is
+    ``custom/best-coding``. Catching a regression to ``auto/best-coding``
+    here prevents a silent model swap on top of the resource bug.
+    """
+    for path in (BUNDLE_DIR / "config.yaml", BUNDLE_DIR / "agents/opencode/config.yaml"):
+        text = path.read_text()
+        # Strip the prompt's explicit "do not …" examples — those stay as
+        # the documentation of what the fixed route is locked AGAINST.
+        # The model field itself must not equal ``auto/best-coding`` in
+        # the executor block.
+        assert "model: auto/best-coding" not in text, (
+            f"{path.relative_to(REPO_ROOT)} must not declare model auto/best-coding"
+        )
+
+
+def test_bundle_does_not_silently_fall_back_to_auto_coding() -> None:
+    """The bundle must not silently accept ``auto/coding`` as a fallback.
+
+    References to ``auto/coding`` may remain only in the prompt's
+    "do not switch to" wording (which is the rejected-fallback notice).
+    The executor ``model:`` field on both layers must remain the fixed
+    ``custom/best-coding`` combo.
+    """
+    for path in (BUNDLE_DIR / "config.yaml", BUNDLE_DIR / "agents/opencode/config.yaml"):
+        text = path.read_text()
+        assert "model: auto/coding" not in text, (
+            f"{path.relative_to(REPO_ROOT)} must not silently fall back to auto/coding"
+        )
+
+
+def test_top_level_executor_is_pi_with_custom_best_coding(bundle_spec: object) -> None:
+    """Top-level: omnigent executor, pi harness, ``custom/best-coding`` model."""
     executor = bundle_spec.executor
     assert executor.type == "omnigent"
     assert executor.config.get("harness") == "pi"
-    assert executor.model == "auto/best-coding"
+    assert executor.model == FIXED_ROUTE
 
 
 def test_exactly_one_sub_agent_named_opencode(bundle_spec: object) -> None:
@@ -59,15 +103,15 @@ def test_exactly_one_sub_agent_named_opencode(bundle_spec: object) -> None:
     assert bundle_spec.tools.agents == ["opencode"]
 
 
-def test_opencode_worker_uses_opencode_native_with_best_coding(
+def test_opencode_worker_uses_opencode_native_with_custom_best_coding(
     bundle_spec: object,
 ) -> None:
-    """Sub-agent: opencode-native harness, same ``auto/best-coding`` model."""
+    """Sub-agent: opencode-native harness, same ``custom/best-coding`` model."""
     sub = bundle_spec.sub_agents[0]
     assert sub.name == "opencode"
     assert sub.executor.type == "omnigent"
     assert sub.executor.config.get("harness") == "opencode-native"
-    assert sub.executor.model == "auto/best-coding"
+    assert sub.executor.model == FIXED_ROUTE
 
 
 def test_orchestrator_supports_async_and_cancellation(bundle_spec: object) -> None:
@@ -118,6 +162,38 @@ def test_blast_radius_policy_on_worker(bundle_spec: object) -> None:
     assert blast.function.arguments.get("gate_pushes") is True
 
 
+def test_omniroute_credential_threaded_to_orchestrator_sandbox(
+    bundle_spec: object,
+) -> None:
+    """Top-level must opt the Pi subprocess into the OmniRoute credential.
+
+    The Pi executor's env allowlist deliberately omits credential families
+    (it would otherwise leak every host secret into the subprocess). A
+    Pi turn using an OmniRoute combo therefore needs the spec to opt in
+    to ``OMNIGENT_ROUTER_API_KEY`` via ``os_env.sandbox.env_passthrough``
+    so the catalog probe can reach the local route gateway.
+    """
+    passthrough = (bundle_spec.os_env.sandbox.env_passthrough or []) if bundle_spec.os_env else []
+    assert "OMNIGENT_ROUTER_API_KEY" in passthrough, (
+        "orchestrator must pass OMNIGENT_ROUTER_API_KEY through to the Pi "
+        "subprocess via os_env.sandbox.env_passthrough (otherwise the "
+        "fixed-route first turn fails before any text is produced)."
+    )
+
+
+def test_omniroute_credential_threaded_to_worker_sandbox(
+    bundle_spec: object,
+) -> None:
+    """Worker must also opt the opencode-native subprocess into the credential."""
+    sub = bundle_spec.sub_agents[0]
+    passthrough = (sub.os_env.sandbox.env_passthrough or []) if sub.os_env else []
+    assert "OMNIGENT_ROUTER_API_KEY" in passthrough, (
+        "opencode worker must pass OMNIGENT_ROUTER_API_KEY through via "
+        "os_env.sandbox.env_passthrough (the omniroute-provider catalog "
+        "probe otherwise fails with OMNIROUTE_API_KEY not set)."
+    )
+
+
 def test_prompts_forbid_dynamic_model_selection(bundle_spec: object) -> None:
     """Neither prompt may rely on dynamic model-selection tooling."""
     parent = bundle_spec.instructions or ""
@@ -156,6 +232,42 @@ def test_prompts_forbid_dynamic_model_selection(bundle_spec: object) -> None:
     # Neither prompt should let the worker override the lane.
     for label, text in (("parent", parent), ("worker", sub)):
         assert "args.model" in text, f"{label} prompt must explicitly mention args.model handling"
+
+
+def test_prompts_locked_to_custom_best_coding(bundle_spec: object) -> None:
+    """Both prompts must name ``custom/best-coding`` as the fixed route.
+
+    The brief requires the prompt wording to make clear that the agent is
+    fixed to ``custom/best-coding`` and must not silently accept another
+    route. Vague "OmniRoute Coding Best lane" wording (the original V1
+    copy) leaves room for the model to drift, so we enforce the literal
+    combo id appears in both prompts.
+    """
+    parent = bundle_spec.instructions or ""
+    sub = bundle_spec.sub_agents[0].instructions or ""
+    assert "custom/best-coding" in parent, (
+        "parent prompt must explicitly call out custom/best-coding as the fixed route"
+    )
+    assert "custom/best-coding" in sub, (
+        "worker prompt must explicitly call out custom/best-coding as the fixed route"
+    )
+
+
+def test_prompts_warn_against_fallback_routes(bundle_spec: object) -> None:
+    """The parent must explicitly forbid ``auto/coding`` as a fallback.
+
+    The earlier V1 run silently substituted ``auto/coding`` when the
+    route-approval recommender rerouted the spec's ``auto/best-coding``.
+    The corrected prompt must name ``auto/coding`` (and ``auto/best-coding``)
+    as the routes the orchestrator must not accept.
+    """
+    parent = bundle_spec.instructions or ""
+    assert "auto/coding" in parent, (
+        "parent prompt must name auto/coding as a route it must NOT accept"
+    )
+    assert "auto/best-coding" in parent, (
+        "parent prompt must name auto/best-coding as a route it must NOT accept"
+    )
 
 
 def test_worker_prompt_forbids_publication_actions(bundle_spec: object) -> None:
@@ -239,9 +351,9 @@ def test_materialized_bundle_parses(bundle_spec: object, tmp_path: Path) -> None
     assert materialized.name == "control-room-polly"
     assert [sa.name for sa in materialized.sub_agents] == ["opencode"]
     assert materialized.executor.config.get("harness") == "pi"
-    assert materialized.executor.model == "auto/best-coding"
+    assert materialized.executor.model == FIXED_ROUTE
     assert materialized.sub_agents[0].executor.config.get("harness") == "opencode-native"
-    assert materialized.sub_agents[0].executor.model == "auto/best-coding"
+    assert materialized.sub_agents[0].executor.model == FIXED_ROUTE
 
 
 def test_official_polly_bundle_unchanged() -> None:

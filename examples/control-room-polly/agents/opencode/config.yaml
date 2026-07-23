@@ -7,11 +7,11 @@ description: >-
 
 # `opencode-native` is the runner-owned OpenCode server bridge. The spec's
 # `executor.model` is threaded into the per-session bridge state as
-# `model_override`, so the very first injected turn uses the
-# OmniRoute Coding Best lane.
+# `model_override`, so the very first injected turn uses the fixed
+# OmniRoute combo `custom/best-coding`.
 executor:
   type: omnigent
-  model: auto/best-coding
+  model: custom/best-coding
   config:
     harness: opencode-native
 
@@ -91,11 +91,11 @@ prompt: |
 
   ## Fixed harness / model
 
-  Your harness is `opencode-native` and your model is the OmniRoute Coding
-  Best lane. Do not request a different model, do not call
-  `sys_advise_models`, and do not pass any `args.model` override. If the
-  configured lane is unavailable, fail clearly rather than silently
-  switching to another route.
+  Your harness is `opencode-native` and your model is the fixed OmniRoute
+  combo `custom/best-coding`. Do not request a different model, do not call
+  `sys_advise_models`, and do not pass any `args.model` override. If
+  `custom/best-coding` is unavailable, fail clearly rather than silently
+  switching to another route (e.g. `auto/coding`).
 
 # Implementers run unsandboxed in the worktree the orchestrator assigned so
 # they can actually edit files, run focused validation, and create a commit.
@@ -106,6 +106,13 @@ os_env:
   cwd: .
   sandbox:
     type: none
+    env_passthrough:
+      # OpenCode Native inherits its provider credential through the runner-
+      # built `opencode.json` (`apiKey` / `baseURL` inlined into the per-
+      # session XDG config). Threading the same env here also lets the
+      # omniroute-provider catalog probe (fired to validate the combo at
+      # turn start) reach the local route gateway.
+      - OMNIGENT_ROUTER_API_KEY
 
 # Publication belongs to the orchestrator, so the implementer does not need
 # push enabled. `gate_pushes: true` keeps the push-tool ASK in place, so an

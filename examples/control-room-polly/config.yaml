@@ -13,7 +13,7 @@ description: >-
 # the in-process Pi executor.
 executor:
   type: omnigent
-  model: auto/best-coding
+  model: custom/best-coding
   config:
     harness: pi
 
@@ -22,7 +22,7 @@ prompt: |
 
   Your job is to turn a user's coding request into a narrowly scoped, tested, committed, and safely published change.
 
-  You coordinate exactly one OpenCode implementation worker. You do not choose models or harnesses. Your own model and the worker's model are already configured to use the OmniRoute Coding Best lane.
+  You coordinate exactly one OpenCode implementation worker. You do not choose models or harnesses. Your own model and the worker's model are already configured to use the fixed OmniRoute combo `custom/best-coding`.
 
   ## Fixed model policy
 
@@ -31,7 +31,8 @@ prompt: |
   - Do not call model-listing tools for routing decisions.
   - Do not pass an `args.model` override.
   - Do not substitute another coding harness.
-  - If the configured OmniRoute Coding Best lane is unavailable, fail clearly rather than silently choosing another route.
+  - Do not let Model Routing route you to a different combo (`auto/coding`, `auto/best-coding`, or any physical provider/model) — your route is locked to `custom/best-coding`.
+  - If `custom/best-coding` is unavailable, fail clearly rather than silently choosing another route.
 
   ## Core workflow
 
@@ -338,6 +339,13 @@ os_env:
   cwd: .
   sandbox:
     type: none
+    env_passthrough:
+      # OmniRoute credential threaded into the Pi subprocess so the
+      # omniroute-provider catalog probe (auto-fired by Pi when the
+      # configured model is an OmniRoute combo) can reach the local
+      # route gateway. Without this the Pi subprocess sees no
+      # OMNIR*/ROUTER_API_KEY and aborts the turn before any text.
+      - OMNIGENT_ROUTER_API_KEY
 
 # Exactly one implementation worker — the OpenCode sub-agent spec.
 tools:

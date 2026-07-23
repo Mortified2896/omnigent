@@ -3,7 +3,7 @@
 Two smoke scenarios:
 
 - **A (orchestration boot)** — verify the bundle parses, registers the
-  declared sub-agent as a tool, threads ``auto/best-coding`` into both
+  declared sub-agent as a tool, threads ``custom/best-coding`` into both
   harnesses' spawn-env / model-pinning paths, and forbids dynamic model
   selection / worker push / PR actions via the prompt. This runs in-process
   on the feature checkout, no host needed.
@@ -35,6 +35,12 @@ from omnigent.spec.parser import parse
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_DIR = REPO_ROOT / "examples" / "control-room-polly"
 
+# The fixed OmniRoute combo both layers are locked to. The earlier V1
+# pinned ``auto/best-coding`` (which is not a valid catalog entry) and
+# drifted to ``auto/coding`` via the route-approval recommender; this
+# module locks the corrected combo id everywhere.
+FIXED_ROUTE = "custom/best-coding"
+
 
 # ── Smoke A: orchestration boot ────────────────────────────────────────────
 
@@ -45,7 +51,7 @@ def test_smoke_a_bundle_parses_and_lists_opencode_sub_agent() -> None:
     assert spec.name == "control-room-polly"
     assert spec.executor.type == "omnigent"
     assert spec.executor.config.get("harness") == "pi"
-    assert spec.executor.model == "auto/best-coding"
+    assert spec.executor.model == FIXED_ROUTE
     assert spec.tools.agents == ["opencode"]
     assert [sa.name for sa in spec.sub_agents] == ["opencode"]
 
@@ -58,14 +64,14 @@ def test_smoke_a_harness_ids_accepted() -> None:
     assert sub.executor.config.get("harness") in _OMNIGENT_ACCEPTED_HARNESSES
 
 
-def test_smoke_a_pi_spawn_env_threads_best_coding(tmp_path: Path) -> None:
-    """The top-level spec threads ``auto/best-coding`` to the Pi harness."""
+def test_smoke_a_pi_spawn_env_threads_custom_best_coding(tmp_path: Path) -> None:
+    """The top-level spec threads ``custom/best-coding`` to the Pi harness."""
     sys.path.insert(0, str(REPO_ROOT))
     spec = parse(BUNDLE_DIR)
     from omnigent.runtime.workflow import _build_pi_spawn_env
 
     env = _build_pi_spawn_env(spec, workdir=tmp_path)
-    assert env["HARNESS_PI_MODEL"] == "auto/best-coding"
+    assert env["HARNESS_PI_MODEL"] == FIXED_ROUTE
     assert env["HARNESS_PI_AGENT_NAME"] == "control-room-polly"
 
 
@@ -78,7 +84,7 @@ def test_smoke_a_opencode_native_model_resolved_from_sub_spec() -> None:
     # configured default — which is exactly the lane hijack V1 forbids.
     from omnigent.runner.app import _opencode_native_model_from_spec
 
-    assert _opencode_native_model_from_spec(sub) == "auto/best-coding"
+    assert _opencode_native_model_from_spec(sub) == FIXED_ROUTE
 
 
 def test_smoke_a_prompts_forbid_model_adviser_and_publication() -> None:
@@ -105,6 +111,71 @@ def test_smoke_a_prompts_forbid_model_adviser_and_publication() -> None:
     # The worker must explicitly disclaim push and PR publication.
     assert "Push the branch" in sub, "worker prompt must forbid pushing"
     assert "Open a pull request" in sub, "worker prompt must forbid opening PRs"
+
+
+def test_smoke_a_sandbox_env_passthrough_threads_omniroute_credential(
+    tmp_path: Path,
+) -> None:
+    """The Pi subprocess env must include the OmniRoute credential.
+
+    The Pi subprocess env is allowlist-filtered (so credential families
+    do not leak), but ``OMNIGENT_ROUTER_API_KEY`` is opted in by the
+    spec's ``os_env.sandbox.env_passthrough``. Without it the first turn
+    of a fixed-route session fails before any text is produced (the Pi
+    subprocess aborts with ``[omniroute-provider] OMNIROUTE_API_KEY not
+    set in process environment``).
+
+    The Pi executor's :func:`_clean_pi_env` allowlist applies
+    ``os_env.sandbox.env_passthrough`` as its ``extra_allowed`` arg, so
+    we exercise the same call here — that's the chokepoint that drops
+    credential families for the Pi subprocess otherwise.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    spec = parse(BUNDLE_DIR)
+    from omnigent.inner.pi_executor import _clean_pi_env
+
+    # Inject a sentinel so we can prove the env-passthrough path
+    # actually copies values into the subprocess env.
+    sentinel = "0" * 8 + "abcdef"  # 16-char stub
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("OMNIGENT_ROUTER_API_KEY", sentinel)
+        extra = (
+            spec.os_env.sandbox.env_passthrough if spec.os_env and spec.os_env.sandbox else None
+        )
+        cleaned = _clean_pi_env(extra_allowed=extra)
+    finally:
+        monkeypatch.undo()
+    assert cleaned.get("OMNIGENT_ROUTER_API_KEY") == sentinel, (
+        "Pi subprocess must inherit OMNIGENT_ROUTER_API_KEY from the host "
+        "via os_env.sandbox.env_passthrough; otherwise the omniroute-"
+        "provider catalog probe has no token and the first turn aborts."
+    )
+
+
+def test_smoke_a_subagent_prompts_pin_custom_best_coding() -> None:
+    """Both prompts must explicitly reference the fixed combo id.
+
+    The brief's V2 ask was to remove the vague "OmniRoute Coding Best
+    lane" wording from the original V1 copy. ``custom/best-coding`` is
+    the exact combo id, and both prompts must surface it (one as the
+    locked route, the other as the per-turn model with a no-fallback
+    rule).
+    """
+    spec = parse(BUNDLE_DIR)
+    parent = spec.instructions or ""
+    sub = spec.sub_agents[0].instructions or ""
+    assert "custom/best-coding" in parent, (
+        "parent prompt must mention the fixed combo id custom/best-coding"
+    )
+    assert "custom/best-coding" in sub, (
+        "worker prompt must mention the fixed combo id custom/best-coding"
+    )
+    # And the original V1 combo id must be absent from the model line.
+    # (We don't assert full-string absence because the prompt's "do not"
+    # examples still say ``auto/coding`` and ``auto/best-coding``.)
+    for label, text in (("parent", parent), ("worker", sub)):
+        assert FIXED_ROUTE in text, f"{label} prompt missing {FIXED_ROUTE}"
 
 
 # ── Smoke B: disposable commit workflow ────────────────────────────────────
