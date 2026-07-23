@@ -1287,12 +1287,18 @@ async def _auto_create_opencode_terminal(
             )
         except (httpx.HTTPError, ValueError, RuntimeError):
             combos = {}
-        combo_id = launch_config.model_override.split("/", 1)[1]
-        if combo_id in combos:
+        # The catalog keys combos by their full bare id (e.g.
+        # ``"custom/best-coding"``), so pass the spec's bare id verbatim.
+        # The historical ``omniroute_route_expected`` branch above got away
+        # with ``.split("/", 1)[1]`` only because in that path
+        # ``launch_config.model_override`` is qualified with the
+        # ``omniroute/`` provider prefix that we strip off here.
+        approved_route = launch_config.model_override
+        if approved_route in combos:
             config = merge_omniroute_combo_catalog(
                 config,
                 combos=combos,
-                approved_route=combo_id,
+                approved_route=approved_route,
                 provider_base_url=None,
             )
 
