@@ -1149,6 +1149,28 @@ async def _auto_create_opencode_terminal(
     clear_bridge_state(bridge_dir)
 
     model_override = launch_config.model_override or _opencode_native_model_from_spec(agent_spec)
+    # opencode's per-prompt model field is ``{providerID}/{modelID}`` (the
+    # provider-prefixed form). The spec's ``executor.model`` may carry a
+    # bare combo id (e.g. ``custom/best-coding`` for an OmniRoute combo);
+    # without qualification the bare id splits on the first ``/`` and
+    # lands as provider ``custom``, model id ``best-coding`` — opencode
+    # then rejects the dispatch with ``Model not found: best-coding``.
+    # The historical route-approved path qualifies via
+    # ``qualify_omniroute_model``; mirror that here for the
+    # fixed-route-V1 spec-declared model so the same persisted shape is
+    # written to the bridge state. Bare combo ids in the
+    # ``auto/``/``custom/`` namespaces (per :func:`_is_omniroute_combo_model_id`)
+    # are the only shapes we rewrite — physical provider/model ids and
+    # already-qualified forms pass through untouched.
+    if (
+        isinstance(model_override, str)
+        and model_override
+        and "/" not in model_override
+        and _is_omniroute_combo_model_id(model_override)
+    ):
+        from omnigent.opencode_native_provider import qualify_omniroute_model
+
+        model_override = qualify_omniroute_model(model_override)
     # Route opencode through the Databricks AI gateway when the spec names a
     # profile. Unlike codex/claude/pi (which consume HARNESS_*_GATEWAY_* env the
     # CLI translates), opencode reads provider/auth from its own config file, so
@@ -1257,6 +1279,17 @@ async def _auto_create_opencode_terminal(
     config = maybe_merge_user_provider_config(config)
     # Direct provider/model selections use OpenCode's own catalog and auth.
     # Only an explicit OmniRoute route may fetch or validate OmniRoute.
+    # The effective model for the opencode subprocess is resolved later
+    # (line ~1151) as ``launch_config.model_override or
+    # The effective model for the opencode subprocess is resolved later
+    # (line ~1151) as ``launch_config.model_override or
+    # _opencode_native_model_from_spec(agent_spec)``. Use that same
+    # resolution here so the catalog merge sees the model the subprocess
+    # will actually run, not just whatever the persisted snapshot
+    # promoted to ``model_override``.
+    effective_model_id = launch_config.model_override or _opencode_native_model_from_spec(
+        agent_spec
+    )
     if launch_config.omniroute_route_expected:
         combos = await fetch_omniroute_combo_models(api_key=omniroute_api_key_from_config(config))
         config = merge_omniroute_combo_catalog(
@@ -1270,7 +1303,7 @@ async def _auto_create_opencode_terminal(
         # Do not repair a wrong endpoint silently: an explicit route must fail
         # before OpenCode can open a direct provider connection.
         validate_omniroute_provider_config(config, expected_base_url=proxy_provider_base_url)
-    elif _is_omniroute_combo_model_id(launch_config.model_override):
+    elif _is_omniroute_combo_model_id(effective_model_id):
         # Fixed-route V1 case: the spec declares a locked OmniRoute combo id
         # (e.g. ``custom/best-coding``) directly under ``executor.model``.
         # The user has the model-routing recommender off, so no
@@ -1293,7 +1326,7 @@ async def _auto_create_opencode_terminal(
         # with ``.split("/", 1)[1]`` only because in that path
         # ``launch_config.model_override`` is qualified with the
         # ``omniroute/`` provider prefix that we strip off here.
-        approved_route = launch_config.model_override
+        approved_route = effective_model_id
         if approved_route in combos:
             config = merge_omniroute_combo_catalog(
                 config,
