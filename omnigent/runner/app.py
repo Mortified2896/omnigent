@@ -1270,6 +1270,31 @@ async def _auto_create_opencode_terminal(
         # Do not repair a wrong endpoint silently: an explicit route must fail
         # before OpenCode can open a direct provider connection.
         validate_omniroute_provider_config(config, expected_base_url=proxy_provider_base_url)
+    elif _is_omniroute_combo_model_id(launch_config.model_override):
+        # Fixed-route V1 case: the spec declares a locked OmniRoute combo id
+        # (e.g. ``custom/best-coding``) directly under ``executor.model``.
+        # The user has the model-routing recommender off, so no
+        # ``omniroute_route_id`` is persisted, but the worker still needs
+        # the combo registered in the opencode provider's ``models`` dict
+        # or opencode rejects the dispatch with ``Model not found: <id>``.
+        # Probe the live OmniRoute catalog (same call shape as the
+        # approval-pending path) and merge the combo in. A failure or
+        # missing combo leaves ``config`` untouched (opencode then sees
+        # whatever the user's global config exposed).
+        try:
+            combos = await fetch_omniroute_combo_models(
+                api_key=omniroute_api_key_from_config(config)
+            )
+        except (httpx.HTTPError, ValueError, RuntimeError):
+            combos = {}
+        combo_id = launch_config.model_override.split("/", 1)[1]
+        if combo_id in combos:
+            config = merge_omniroute_combo_catalog(
+                config,
+                combos=combos,
+                approved_route=combo_id,
+                provider_base_url=None,
+            )
 
     # Apply the user-facing OpenCode-native permission mode (Default / Auto /
     # Accept edits / Plan / Don't ask / Bypass). The merge happens AFTER every
@@ -1651,6 +1676,63 @@ def _opencode_native_model_from_spec(agent_spec: Any | None) -> str | None:
         return _resolve_spec_model(getattr(agent_spec, "spec", agent_spec))
     except Exception:  # noqa: BLE001 - model resolution is best effort.
         return None
+
+
+def _is_omniroute_combo_model_id(model_id: str | None) -> bool:
+    """
+    Return ``True`` when *model_id* names an OmniRoute combo reference.
+
+    The fixed-route V1 wiring stores the combo id as
+    ``"<provider_id>/<combo_id>"`` (e.g. ``"omniroute/custom/best-coding"``)
+    or as a bare combo id (e.g. ``"custom/best-coding"``) — either form
+    needs to be merged into the opencode provider's ``models`` dict or
+    opencode rejects the dispatch with ``ProviderModelNotFoundError``.
+    Physical provider/model ids carry a known physical-vendor prefix
+    (e.g. ``"anthropic/claude-sonnet-4.6"``); combos live under the
+    ``omniroute`` namespace or one of the synthetic ``/``-rooted
+    namespaces the catalog exposes (``auto/``, ``custom/``).
+
+    This predicate is intentionally a coarse, non-authoritative filter:
+    the caller still validates ``combo_id in combos`` against the live
+    catalog before merging, so a false positive is harmless (the merge
+    is a no-op) and a false negative just routes the lookup through the
+    user's global opencode config path. The narrow case the predicate
+    must catch: a physical ``<vendor>/<model>`` id where ``<vendor>`` is
+    not in the OmniRoute combo namespaces — these must NOT trigger a
+    catalog probe on every dispatch.
+
+    :param model_id: The qualified or bare model id from
+        ``launch_config.model_override`` / the spec's ``executor.model``.
+    :returns: ``True`` when the id is shaped like a combo reference and
+        is not a known physical provider/model id.
+    """
+    if not isinstance(model_id, str) or not model_id:
+        return False
+    from omnigent.opencode_native_provider import OMNIROUTE_PROVIDER_ID
+
+    raw = model_id.strip()
+    if not raw:
+        return False
+    # Already qualified with the omniroute provider id: ``omniroute/<combo>``.
+    if raw == OMNIROUTE_PROVIDER_ID:
+        return True
+    if raw.startswith(f"{OMNIROUTE_PROVIDER_ID}/"):
+        return True
+    # Bare combo path: exactly one ``/`` separating a synthetic namespace
+    # (``auto`` / ``custom`` — the two combo namespaces the live catalog
+    # exposes) from a name. Names can contain dashes / colons / dots
+    # (e.g. ``auto/coding:fast``, ``custom/best-coding``), so we don't
+    # restrict the name half.
+    if raw.count("/") != 1:
+        return False
+    namespace, _ = raw.split("/", 1)
+    return namespace in _OMNIROUTE_COMBO_NAMESPACES
+
+
+# Synthetic namespaces the live OmniRoute catalog exposes for combo ids.
+# Kept narrow so physical provider/model ids (``anthropic/...``,
+# ``openai/...``, etc.) never trigger an unnecessary catalog probe.
+_OMNIROUTE_COMBO_NAMESPACES: frozenset[str] = frozenset({"auto", "custom"})
 
 
 def _resolve_opencode_compact_model(
