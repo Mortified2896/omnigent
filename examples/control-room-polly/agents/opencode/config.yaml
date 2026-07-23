@@ -114,10 +114,9 @@ os_env:
       # turn start) reach the local route gateway.
       - OMNIGENT_ROUTER_API_KEY
 
-# Publication belongs to the orchestrator, so the implementer does not need
-# push enabled. `gate_pushes: true` keeps the push-tool ASK in place, so an
-# accidental `git push` from the worker surfaces as a request instead of
-# silently publishing. The catastrophic set is still denied.
+# Publication belongs to the orchestrator. Deny every worker push attempt
+# outright so a headless approval path can never publish a remote ref.
+# The catastrophic set remains denied as well.
 guardrails:
   policies:
     blast_radius:
@@ -126,4 +125,5 @@ guardrails:
       function:
         path: omnigent.inner.nessie.policies.blast_radius
         arguments:
-          gate_pushes: true
+          gate_pushes: false
+          deny_pushes: true

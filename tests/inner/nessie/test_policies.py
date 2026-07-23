@@ -171,6 +171,13 @@ _DENY_GAP_COMMANDS = [
 
 
 @pytest.mark.parametrize("command", _DENY_GAP_COMMANDS)
+def test_blast_radius_denies_all_pushes_when_configured() -> None:
+    """Worker mode blocks ordinary and destructive publication attempts."""
+    evaluate = blast_radius(gate_pushes=False, deny_pushes=True)
+    for command in ("git push origin task", "git push --force origin main"):
+        assert _result(evaluate(_tool_call("Bash", command=command), {})) == "DENY"
+
+
 def test_blast_radius_denies_destructive_variants(command: str) -> None:
     """
     blast_radius DENIES catastrophic ``rm`` / ``git push`` in every flag,

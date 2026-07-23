@@ -8,7 +8,7 @@ The bundle is the V1 single-worker coding orchestrator. It declares:
 - the sub-agent's executor: omnigent + opencode-native + model
   ``custom/best-coding``;
 - blast-radius policies on both with the orchestrator's gate_pushes off and
-  the worker's gate_pushes on;
+  the worker's deny_pushes on;
 - no MCP servers, no extra skills, no extra terminals, no model-adviser hint;
 - prompts that forbid the worker from pushing, opening a PR, or invoking
   ``sys_advise_models``;
@@ -225,7 +225,7 @@ def test_blast_radius_policy_on_orchestrator(bundle_spec: object) -> None:
 
 
 def test_blast_radius_policy_on_worker(bundle_spec: object) -> None:
-    """Worker blast-radius policy: gate_pushes=True so any stray push ASKs."""
+    """Worker blast-radius policy denies every publication attempt."""
     sub = bundle_spec.sub_agents[0]
     blast = next(
         (
@@ -236,7 +236,8 @@ def test_blast_radius_policy_on_worker(bundle_spec: object) -> None:
         None,
     )
     assert blast is not None, "missing blast_radius policy on opencode worker"
-    assert blast.function.arguments.get("gate_pushes") is True
+    assert blast.function.arguments.get("deny_pushes") is True
+    assert blast.function.arguments.get("gate_pushes") is False
 
 
 def test_omniroute_credential_threaded_to_orchestrator_sandbox(

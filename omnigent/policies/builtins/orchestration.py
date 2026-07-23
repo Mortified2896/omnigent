@@ -345,6 +345,7 @@ def _push_severity(argv: list[str]) -> str | None:
 def blast_radius(
     *,
     gate_pushes: bool = True,
+    deny_pushes: bool = False,
     deny_reason: str = "Blocked by the blast-radius policy.",
 ) -> Callable[[_Json, _Json], _Json]:
     """
@@ -360,6 +361,9 @@ def blast_radius(
     :param gate_pushes: When ``True`` (default), recoverable-but-outward
         commands return ASK. When ``False`` only the catastrophic DENY
         set is enforced — use only for trusted unattended batch runs.
+    :param deny_pushes: When ``True``, deny every ``git push`` rather than
+        relying on an interactive approval boundary. Intended for workers
+        that may commit locally but must never publish.
     :param deny_reason: Reason text surfaced on a DENY decision.
     :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
     """
@@ -392,9 +396,10 @@ def blast_radius(
         # missed split/long rm flags, root children, and force/delete refspecs);
         # the remaining regex patterns cover git-reset / gh / infra tools.
         statements = _shell_statements(command)
-        severities = {
-            sev for stmt in statements for sev in (_rm_severity(stmt), _push_severity(stmt))
-        }
+        push_severities = {_push_severity(stmt) for stmt in statements}
+        severities = push_severities | {_rm_severity(stmt) for stmt in statements}
+        if deny_pushes and any(severity in {"ASK", "DENY"} for severity in push_severities):
+            return _decision("DENY", f"{deny_reason} (worker publication forbidden: {command!r})")
         if "DENY" in severities or any(p.search(command) for p in _DENY_PATTERNS):
             return _decision("DENY", f"{deny_reason} (irreversible: {command!r})")
         if gate_pushes and ("ASK" in severities or any(p.search(command) for p in _ASK_PATTERNS)):
