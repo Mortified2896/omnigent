@@ -18,13 +18,11 @@ a clean bundle directory the server can seed via
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
 from omnigent.spec import materialize_bundle, parse
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_DIR = REPO_ROOT / "examples" / "control-room-polly"
@@ -40,7 +38,7 @@ def test_bundle_directory_and_name_aligned() -> None:
     """The directory name and the spec's ``name:`` field must match exactly."""
     assert BUNDLE_DIR.is_dir(), f"bundle dir missing: {BUNDLE_DIR}"
     config = (BUNDLE_DIR / "config.yaml").read_text()
-    assert f"name: control-room-polly" in config, (
+    assert "name: control-room-polly" in config, (
         "bundle directory and spec name must be aligned (control-room-polly)"
     )
     assert BUNDLE_DIR.name == "control-room-polly"
@@ -109,7 +107,11 @@ def test_blast_radius_policy_on_worker(bundle_spec: object) -> None:
     """Worker blast-radius policy: gate_pushes=True so any stray push ASKs."""
     sub = bundle_spec.sub_agents[0]
     blast = next(
-        (p for p in sub.guardrails.policies if p.function and p.function.path.endswith("blast_radius")),
+        (
+            p
+            for p in sub.guardrails.policies
+            if p.function and p.function.path.endswith("blast_radius")
+        ),
         None,
     )
     assert blast is not None, "missing blast_radius policy on opencode worker"
@@ -153,9 +155,7 @@ def test_prompts_forbid_dynamic_model_selection(bundle_spec: object) -> None:
             )
     # Neither prompt should let the worker override the lane.
     for label, text in (("parent", parent), ("worker", sub)):
-        assert "args.model" in text, (
-            f"{label} prompt must explicitly mention args.model handling"
-        )
+        assert "args.model" in text, f"{label} prompt must explicitly mention args.model handling"
 
 
 def test_worker_prompt_forbids_publication_actions(bundle_spec: object) -> None:
@@ -176,12 +176,9 @@ def test_worker_prompt_forbids_publication_actions(bundle_spec: object) -> None:
     # imperative under the "## You must NOT" section (we check the section
     # header is present and assert each forbidden token falls under it).
     has_must_not_section = any(
-        line.strip().lower().startswith("## you must not")
-        for line in sub_prompt.splitlines()
+        line.strip().lower().startswith("## you must not") for line in sub_prompt.splitlines()
     )
-    assert has_must_not_section, (
-        "worker prompt must have an explicit '## You must NOT' section"
-    )
+    assert has_must_not_section, "worker prompt must have an explicit '## You must NOT' section"
     # Spot-check the forbidden tokens appear in a forbidden context: either
     # under the "## You must NOT" section, or in a "do not" / "never" /
     # "must not" sentence. Because forbidden-actions are framed as a bullet
@@ -190,10 +187,9 @@ def test_worker_prompt_forbids_publication_actions(bundle_spec: object) -> None:
     # neighbours.
     forbidden_imperatives = ("Push the branch", "Open a pull request", "Force-push")
     for imperative in forbidden_imperatives:
-        assert any(
-            imperative in line
-            for line in sub_prompt.splitlines()
-        ), f"worker prompt missing forbidden imperative: {imperative!r}"
+        assert any(imperative in line for line in sub_prompt.splitlines()), (
+            f"worker prompt missing forbidden imperative: {imperative!r}"
+        )
 
 
 def test_parent_prompt_contains_safety_rules(bundle_spec: object) -> None:
