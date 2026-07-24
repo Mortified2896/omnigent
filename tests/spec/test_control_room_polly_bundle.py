@@ -78,8 +78,8 @@ def test_bundle_directory_and_name_aligned() -> None:
     """The directory name and the spec's ``name:`` field must match exactly."""
     assert BUNDLE_DIR.is_dir(), f"bundle dir missing: {BUNDLE_DIR}"
     config = (BUNDLE_DIR / "config.yaml").read_text()
-    assert "name: control-room-polly" in config, (
-        "bundle directory and spec name must be aligned (control-room-polly)"
+    assert "name: verity" in config, (
+        "bundle directory and spec name must be aligned (verity)"
     )
     assert BUNDLE_DIR.name == "control-room-polly"
 
@@ -449,7 +449,7 @@ def test_materialized_bundle_parses(bundle_spec: object, tmp_path: Path) -> None
     """The materialized bundle must also parse to the same shape."""
     bundle_dir = materialize_bundle(BUNDLE_DIR, tmp_path / "bundle")
     materialized = parse(bundle_dir)
-    assert materialized.name == "control-room-polly"
+    assert materialized.name == "verity"
     assert [sa.name for sa in materialized.sub_agents] == ["opencode"]
     assert materialized.executor.config.get("harness") == "claude-sdk"
     assert materialized.executor.model == FIXED_ROUTE

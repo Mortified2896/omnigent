@@ -1,5 +1,5 @@
 spec_version: 1
-name: control-room-polly
+name: verity
 description: >-
   A single-worker coding orchestrator. Control Room plans a scoped change,
   dispatches exactly one OpenCode implementer, verifies the local commit,
