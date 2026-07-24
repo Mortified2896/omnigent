@@ -421,6 +421,16 @@ def test_parent_prompt_contains_safety_rules(bundle_spec: object) -> None:
         )
 
 
+def test_parent_prompt_distinguishes_worker_no_push_from_parent_publication(
+    bundle_spec: object,
+) -> None:
+    """A worker-only no-push instruction must not cancel parent publication."""
+    parent_prompt = " ".join((bundle_spec.instructions or "").split())
+    assert "A worker prohibition such as `Do not push` applies only to the worker" in parent_prompt
+    assert "does not cancel your publication duties" in parent_prompt
+    assert "explicitly tells Control Room/the parent not to publish" in parent_prompt
+
+
 def test_orchestrator_has_no_spawn_flag(bundle_spec: object) -> None:
     """The brief says: no ``spawn: true`` unless sys_session_send is missing.
 
