@@ -664,8 +664,18 @@ class OpenCodeNativeForwarder:
             await self._begin_turn_if_needed()
 
     async def _on_session_idle(self, event: OpenCodeEvent) -> None:
-        """Handle ``session.idle`` — finalize text, post usage, end the turn."""
+        """Handle ``session.idle`` — finalize text, post usage, end the turn.
+
+        OpenCode may fire ``session.idle`` more than once per turn (a final
+        idle after tool completion plus a duplicate on stream cleanup).
+        Reposting ``external_session_status: idle`` would enqueue a duplicate
+        terminal item in the parent inbox and break the single-worker
+        Control Room contract (one dispatch → exactly one parent inbox
+        result). Short-circuit when the turn is already idle.
+        """
         del event
+        if not self.state.turn_active:
+            return
         await self._flush_pending_text()
         await self._post_session_usage()
         await self._end_turn()

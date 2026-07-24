@@ -170,14 +170,73 @@ _DENY_GAP_COMMANDS = [
 ]
 
 
-@pytest.mark.parametrize("command", _DENY_GAP_COMMANDS)
-def test_blast_radius_denies_all_pushes_when_configured() -> None:
-    """Worker mode blocks ordinary and destructive publication attempts."""
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin task",  # ordinary publication
+        "git push --force origin main",  # force-push via long flag
+        "git push --set-upstream origin task",  # set-upstream variant
+        "git push -u origin task",  # set-upstream via short flag
+        "git push origin task:refs/heads/task",  # explicit refspec
+        "git push origin HEAD:main",  # HEAD → remote refspec
+        "(git push origin task)",  # shell-wrapped
+        "echo x && git push origin task",  # shell-wrapped via &&
+        "bash -c 'git push origin task'",  # nested shell
+        "git push",  # bare git push (no remote / branch)
+        "git -C /tmp/repo push origin task",  # git -C before push
+    ],
+)
+def test_blast_radius_denies_all_pushes_when_configured(command: str) -> None:
+    """Worker mode blocks ordinary and destructive publication attempts.
+
+    Regression guard for the Control Room ``deny_pushes: true`` knob:
+    the worker spec ships ``gate_pushes: false, deny_pushes: true`` so
+    every ``git push`` shape (set-upstream, explicit refspecs, shell
+    wrappers, nested shells) MUST DENY outright. A non-DENY here means
+    a worker could publish a remote ref via a path the policy missed.
+    """
     evaluate = blast_radius(gate_pushes=False, deny_pushes=True)
-    for command in ("git push origin task", "git push --force origin main"):
-        assert _result(evaluate(_tool_call("Bash", command=command), {})) == "DENY"
+    assert _result(evaluate(_tool_call("Bash", command=command), {})) == "DENY"
 
 
+def test_blast_radius_allow_push_when_deny_pushes_false() -> None:
+    """Without ``deny_pushes: true`` (i.e. on the orchestrator), ordinary
+    ``git push`` is ASK (gated) or ALLOW (ungated). This locks the
+    asymmetry: parent = ALLOW under ``gate_pushes=False``, child = DENY
+    under ``deny_pushes=True``.
+    """
+    # Parent (gate_pushes=False, deny_pushes=False): ordinary push ALLOWs.
+    parent_eval = blast_radius(gate_pushes=False)
+    assert _result(parent_eval(_tool_call("Bash", command="git push origin task"), {})) == "ALLOW"
+    # Child (gate_pushes=False, deny_pushes=True): same command DENYs.
+    child_eval = blast_radius(gate_pushes=False, deny_pushes=True)
+    assert _result(child_eval(_tool_call("Bash", command="git push origin task"), {})) == "DENY"
+
+
+def test_blast_radius_non_publication_git_still_works() -> None:
+    """Worker non-publication git commands (status, diff, add, commit)
+    must still ALLOW under ``deny_pushes=True``. A regression that
+    blocks ordinary ``git commit`` would prevent the worker from ever
+    producing the artifact the orchestrator promotes.
+    """
+    evaluate = blast_radius(gate_pushes=False, deny_pushes=True)
+    for command in (
+        "git status",
+        "git status --short --branch",
+        "git diff -- app.py test_app.py",
+        "git log --oneline -10",
+        "git add -- app.py test_app.py",
+        "git commit -m 'Change answer to life to 7'",
+        "git rev-parse HEAD",
+        "git branch --show-current",
+        "git remote -v",
+    ):
+        assert _result(evaluate(_tool_call("Bash", command=command), {})) == "ALLOW", (
+            f"non-publication git command must ALLOW: {command!r}"
+        )
+
+
+@pytest.mark.parametrize("command", _DENY_GAP_COMMANDS)
 def test_blast_radius_denies_destructive_variants(command: str) -> None:
     """
     blast_radius DENIES catastrophic ``rm`` / ``git push`` in every flag,

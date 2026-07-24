@@ -236,6 +236,72 @@ async def test_lifecycle_emits_running_then_idle() -> None:
     assert statuses == ["running", "idle"]
 
 
+async def test_session_idle_emits_single_idle_status_on_replay() -> None:
+    """OpenCode may fire ``session.idle`` more than once (a final ``idle`` plus
+    a duplicate after a tool completes late); the forwarder must post
+    ``external_session_status: idle`` exactly once so the parent inbox
+    receives exactly one terminal completion.
+
+    Regression guard for the worker-completion relay: a duplicate idle
+    would enqueue two inbox items, the Claude SDK parent would read both,
+    and the second would either look like a stray wake or duplicate the
+    final report. Either failure breaks the Control Room single-worker
+    contract (one dispatch → one completion).
+    """
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_1", "role": "assistant"}))
+    # A normal turn then a duplicate idle (replay path).
+    await fwd.handle_event(_event("session.idle"))
+    await fwd.handle_event(_event("session.idle"))
+    await fwd.handle_event(_event("session.idle"))
+    statuses = [
+        b["data"]["status"] for _u, b in server.posts if b["type"] == "external_session_status"
+    ]
+    # Exactly one idle — duplicates collapsed.
+    assert statuses.count("idle") == 1, statuses
+
+
+async def test_session_idle_with_final_text_flushes_then_idle_once() -> None:
+    """OpenCode streams text parts; the ``session.idle`` edge finalizes
+    them. The forwarder must flush the pending assistant text BEFORE
+    posting ``external_session_status: idle`` (the parent inbox relies
+    on the final output arriving with the terminal status — a late text
+    after idle would be stranded in the forwarder's queue).
+    """
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_1", "role": "assistant"}))
+    # Simulate streamed text via message.part.updated (the canonical
+    # opencode edge the forwarder consumes).
+    await fwd.handle_event(
+        _event(
+            "message.part.updated",
+            part={"id": "prt_1", "messageID": "msg_1", "type": "text", "text": "final answer"},
+        )
+    )
+    await fwd.handle_event(_event("session.idle"))
+    # Find the post index of the assistant message and the idle status.
+    item_index: int | None = None
+    idle_index: int | None = None
+    for idx, (_u, body) in enumerate(server.posts):
+        if (
+            item_index is None
+            and body["type"] == "external_conversation_item"
+            and body["data"].get("item_type") == "message"
+        ):
+            item_index = idx
+        if idle_index is None and body["type"] == "external_session_status":
+            if body["data"].get("status") == "idle":
+                idle_index = idx
+    assert item_index is not None, "expected the assistant message to be flushed"
+    assert idle_index is not None, "expected an idle status"
+    assert item_index < idle_index, (
+        "final assistant text must post BEFORE the terminal idle status so "
+        "the parent inbox sees the worker's report together with the completion"
+    )
+
+
 async def test_session_error_auth_posts_failed_with_reauth() -> None:
     """A ProviderAuthError surfaces a `failed` edge flagged for re-auth.
 

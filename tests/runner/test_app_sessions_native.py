@@ -7693,6 +7693,125 @@ def test_subagent_terminal_delivery_retry_uses_latest_undelivered_report() -> No
     assert delivered["output"] == "DONE_AFTER_RETRY"
 
 
+@pytest.mark.asyncio
+async def test_duplicate_external_session_status_idle_delivers_parent_inbox_once() -> None:
+    """
+    Control Room relay: ``external_session_status: idle`` arriving twice
+    for the same child delivers ONE inbox payload, not two.
+
+    Regression guard for the worker-completion relay. OpenCode may emit
+    ``session.idle`` more than once per turn (a final idle after tool
+    completion plus a duplicate on stream cleanup); the forwarder now
+    short-circuits the duplicate at the OpenCode-native bridge, but the
+    runner-app inbox layer is the last line of defence — even if a
+    duplicate slips through (legacy forwarder, custom harness, race), it
+    MUST NOT enqueue a second terminal payload for the same child. A
+    duplicate would either (a) confuse the parent Claude SDK turn into
+    acting on a stale report or (b) look like a second completion the
+    parent didn't expect and trigger duplicate wake handling.
+    """
+    from omnigent.runner import app as runner_app
+
+    parent_id = "conv_parent_duplicate_idle"
+    child_id = "conv_child_duplicate_idle"
+    session_inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    runner_app._session_inboxes_ref[parent_id] = session_inbox
+    runner_app.register_subagent_work(
+        parent_session_id=parent_id,
+        child_session_id=child_id,
+        agent="opencode",
+        title="dup-idle",
+    )
+
+    try:
+        first_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="FIRST_REPORT",
+        )
+        # A second idle fires (replay / duplicate / late tool completion).
+        second_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="SECOND_REPORT",
+        )
+    finally:
+        runner_app.unregister_subagent_work(child_id)
+        runner_app._session_inboxes_ref.pop(parent_id, None)
+
+    # First delivery lands in the inbox.
+    assert first_ack.reason == "delivered"
+    assert first_ack.delivered is True
+    assert first_ack.delivered_now is True
+    # Second delivery is acknowledged as already-delivered, NOT re-enqueued.
+    assert second_ack.reason == "already_delivered"
+    assert second_ack.delivered is True
+    assert second_ack.delivered_now is False
+    # Inbox holds EXACTLY one payload (the first), so the parent Claude SDK
+    # turn reads one completion, not two.
+    qsize = session_inbox.qsize()
+    assert qsize == 1, (
+        f"duplicate idle must not enqueue a second inbox payload (got qsize={qsize})"
+    )
+    delivered = session_inbox.get_nowait()
+    assert delivered["output"] == "FIRST_REPORT"
+
+
+@pytest.mark.asyncio
+async def test_replay_idle_after_already_delivered_completion_does_not_disturb_inbox() -> None:
+    """
+    Control Room relay: a late ``idle`` arriving AFTER the parent has
+    already drained the inbox must not insert a stale or empty payload.
+
+    The ``delivered`` flag on the work entry is the durable dedup
+    primitive. A replay idle finds the entry already marked delivered
+    and returns the same ``already_delivered`` ack as a same-turn
+    duplicate — the inbox stays at zero (or whatever the parent drained
+    it to). A non-zero qsize here means a stale idle is bleeding into
+    the parent's next turn and being acted on.
+    """
+    from omnigent.runner import app as runner_app
+
+    parent_id = "conv_parent_replay_idle"
+    child_id = "conv_child_replay_idle"
+    session_inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    runner_app._session_inboxes_ref[parent_id] = session_inbox
+    runner_app.register_subagent_work(
+        parent_session_id=parent_id,
+        child_session_id=child_id,
+        agent="opencode",
+        title="replay-idle",
+    )
+
+    try:
+        first_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="WORKER_REPORT",
+        )
+        # Parent reads + drains the inbox (simulated by get_nowait).
+        delivered = session_inbox.get_nowait()
+        assert delivered["output"] == "WORKER_REPORT"
+        assert session_inbox.qsize() == 0
+        # A late replay idle arrives.
+        second_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="STALE_REPLAY",
+        )
+    finally:
+        runner_app.unregister_subagent_work(child_id)
+        runner_app._session_inboxes_ref.pop(parent_id, None)
+
+    assert first_ack.delivered_now is True
+    assert second_ack.reason == "already_delivered"
+    assert second_ack.delivered_now is False
+    assert session_inbox.qsize() == 0, (
+        "late replay must not insert a stale payload after the parent has "
+        "already drained the inbox"
+    )
+
+
 def test_subagent_terminal_delivery_handles_missing_output() -> None:
     """
     Terminal work with no assistant text still delivers a marker payload.

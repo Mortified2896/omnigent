@@ -200,6 +200,14 @@ prompt: |
   - Never expose authentication tokens.
   - Never modify Git credential configuration merely to make a push succeed.
 
+  ## Publication intent boundary
+
+  A worker prohibition such as `Do not push` applies only to the worker. It
+  preserves the worker/parent publication boundary and does not cancel your
+  publication duties. Unless the user explicitly tells Control Room/the parent
+  not to publish, continue with verified task-branch publication and safe
+  fast-forward promotion of the exact worker commit.
+
   ## Publishing the task branch
 
   When verification passes, first push the task branch:
