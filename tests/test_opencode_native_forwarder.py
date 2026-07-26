@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+import pytest
 
 import omnigent.opencode_native_forwarder as fwd_mod
 from omnigent.opencode_native_client import OpenCodeEvent
@@ -810,3 +813,150 @@ async def test_file_part_dedupes_across_snapshots() -> None:
     await fwd.handle_event(_event("message.part.updated", part=dict(part)))
     items = [b for _u, b in server.posts if b["type"] == "external_conversation_item"]
     assert len(items) == 1
+
+
+# ─── run()-shutdown reconciliation ──────────────────────────────────────────
+#
+# The forwarder must finalize any in-progress turn to ``idle`` when its
+# ``run()`` loop exits (caller cancellation, harness / opencode-process
+# crash, reconnect cap exhausted) without an authoritative
+# ``session.idle`` event. Otherwise the parent's relay-fed status cache
+# stays ``running`` and the chat UI remains stuck on the "Working…"
+# indicator. The fix wraps the consume loop in ``try/finally`` and
+# delegates to ``_finalize_active_turn_on_shutdown``.
+
+
+async def test_run_exits_idle_when_no_turn_was_active() -> None:
+    """No turn in flight → no terminal status post on shutdown."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    # No message.updated, no session.status posted.
+    await fwd.run(max_reconnects=0)
+    status_posts = [b for _u, b in server.posts if b["type"] == "external_session_status"]
+    assert status_posts == []
+
+
+async def test_run_emits_idle_on_cancellation_with_active_turn() -> None:
+    """A turn started before cancellation must be finalized to ``idle``."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+
+    # Simulate an active turn: begin_turn_if_needed posts ``running``.
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_a", "role": "assistant"}))
+    assert any(
+        b["type"] == "external_session_status" and b["data"]["status"] == "running"
+        for _u, b in server.posts
+    )
+
+    # Replace the SSE consumer with one that yields control so the cancel
+    # arrives after the run() loop has actually entered its consume phase.
+    # The fake's ``events()`` doesn't exist, so this also keeps the loop
+    # alive long enough for cancellation to land inside ``run()``.
+    async def hang_forever() -> AsyncIterator[OpenCodeEvent]:
+        while True:
+            await asyncio.sleep(0.01)
+            if False:
+                yield  # pragma: no cover — makes this an async generator.
+
+    fwd._opencode.events = hang_forever  # type: ignore[method-assign]
+
+    task = asyncio.create_task(fwd.run(max_reconnects=0))
+    # Let the task enter the consume loop so the cancel lands inside it.
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    status_posts = [
+        b["data"]["status"] for _u, b in server.posts if b["type"] == "external_session_status"
+    ]
+    assert "running" in status_posts
+    assert status_posts[-1] == "idle"
+
+
+async def test_run_emits_idle_on_consumer_exception_with_active_turn() -> None:
+    """A consumer exception that escapes the SSE loop must still finalize."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_a", "role": "assistant"}))
+
+    # Patch _consume_once to raise so the run() loop's inner except catches
+    # it, then the reconnect cap trips, then the finally block fires.
+    async def boom() -> None:
+        raise RuntimeError("simulated opencode SSE failure")
+
+    fwd._consume_once = boom  # type: ignore[method-assign]
+    await fwd.run(max_reconnects=1)
+
+    status_posts = [
+        b["data"]["status"] for _u, b in server.posts if b["type"] == "external_session_status"
+    ]
+    assert "running" in status_posts
+    # The shutdown cleanup must emit exactly one terminal ``idle`` — the
+    # reconnect loop itself never emits terminal statuses.
+    assert status_posts.count("idle") == 1
+    assert status_posts[-1] == "idle"
+
+
+async def test_run_emits_idle_on_reconnect_cap_with_active_turn() -> None:
+    """Reconnect cap reached mid-turn → ``idle`` on the finally path."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_a", "role": "assistant"}))
+
+    async def keep_failing() -> None:
+        raise RuntimeError("persistent opencode SSE failure")
+
+    fwd._consume_once = keep_failing  # type: ignore[method-assign]
+    await fwd.run(max_reconnects=0)
+
+    status_posts = [
+        b["data"]["status"] for _u, b in server.posts if b["type"] == "external_session_status"
+    ]
+    assert status_posts[-1] == "idle"
+
+
+async def test_run_no_idle_when_turn_already_finalized_by_session_idle() -> None:
+    """Normal session.idle path already finalized → no duplicate ``idle``."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+
+    # Full turn lifecycle: begin → session.idle (finalizes internally).
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_a", "role": "assistant"}))
+    await fwd.handle_event(
+        _event(
+            "message.part.updated",
+            part={"id": "prt_1", "messageID": "msg_a", "type": "text", "text": "done"},
+        )
+    )
+    await fwd.handle_event(_event("session.idle"))
+
+    # Reconnect cap 0 → exits the consume loop without reconnecting.
+    await fwd.run(max_reconnects=0)
+
+    status_posts = [
+        b["data"]["status"] for _u, b in server.posts if b["type"] == "external_session_status"
+    ]
+    # Exactly one ``idle`` — the normal end-of-turn path owns it; the
+    # shutdown reconciliation must NOT double-post.
+    assert status_posts.count("idle") == 1
+
+
+async def test_finalize_swallows_post_failure() -> None:
+    """The finally cleanup must not propagate a transient POST failure."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+
+    await fwd.handle_event(_event("message.updated", info={"id": "msg_a", "role": "assistant"}))
+
+    async def boom(*_args, **_kwargs):
+        raise httpx.HTTPError("simulated POST failure")
+
+    fwd._server.post = boom  # type: ignore[method-assign]
+
+    # The shutdown cleanup runs in the finally branch — even if the POST
+    # raises, run() must exit cleanly and turn_active must be cleared so
+    # the next run() doesn't double-post.
+    await fwd.run(max_reconnects=0)
+    assert fwd.state.turn_active is False
