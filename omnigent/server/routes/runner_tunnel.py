@@ -579,6 +579,11 @@ def create_runner_tunnel_router(
                 getattr(exc, "code", None),
                 getattr(exc, "reason", None),
             )
+            # A receive-side disconnect can escape the helper-task wait
+            # before its inner cleanup finally runs. Always retire the
+            # exact generation here so pending transports are woken.
+            if session is not None:
+                registry.deregister(runner_id, session)
             if on_runner_disconnect is not None:
                 try:
                     await on_runner_disconnect(runner_id)
@@ -587,6 +592,10 @@ def create_runner_tunnel_router(
                         "on_runner_disconnect callback failed for %s",
                         runner_id,
                     )
+        except asyncio.CancelledError:
+            if session is not None:
+                registry.deregister(runner_id, session)
+            raise
         except Exception:
             _logger.exception("Tunnel error for runner %s", runner_id)
             if session is not None:
