@@ -13,7 +13,6 @@ degradation.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,9 +24,11 @@ from omnigent.deploy.preflight import (
     expected_web_ui_dir,
     expected_web_ui_index,
     is_api_only_deployment,
-    main as preflight_main,
     startup_web_ui_check,
     verify_web_ui_bundle,
+)
+from omnigent.deploy.preflight import (
+    main as preflight_main,
 )
 
 
@@ -187,7 +188,9 @@ def test_startup_web_ui_check_silent_when_no_web_ui_dist_supplied(
     assert not errors
 
 
-def test_preflight_main_cli_succeeds(fake_worktree: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_preflight_main_cli_succeeds(
+    fake_worktree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The CLI entry point exits 0 on a valid worktree."""
     rc = preflight_main([str(fake_worktree)])
     out = capsys.readouterr()
