@@ -6,6 +6,7 @@ covering manual-mode preservation, approval-flow execution, and decline.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -812,7 +813,7 @@ async def test_route_approved_selection_allows_one_fresh_proposal_per_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
-    agent = _FakeRoutingAgent(_proposal())
+    agent = _FakeRoutingAgent(_proposal(omniroute_requires_explicit_approval=True))
     monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
     published: list[dict[str, Any]] = []
     _auto_accept_route_proposals(monkeypatch, published)
@@ -854,7 +855,7 @@ async def test_native_route_approval_preserves_forwarder_as_single_user_writer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
-    agent = _FakeRoutingAgent(_proposal())
+    agent = _FakeRoutingAgent(_proposal(omniroute_requires_explicit_approval=True))
     monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
     published: list[dict[str, Any]] = []
     _auto_accept_route_proposals(monkeypatch, published)
@@ -898,3 +899,70 @@ async def test_native_route_approval_preserves_forwarder_as_single_user_writer(
         == 1
     )
     assert store.appended == []
+
+
+@pytest.mark.asyncio
+async def test_route_approval_skipped_when_evaluator_says_no_explicit_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the evaluator verdict is ``requires_explicit_approval=False`` the
+    in-process gate must short-circuit, not block the message POST until a
+    user verdict arrives.
+
+    Regression: the model_routing_agent had `omniroute_requires_explicit_approval=False`
+    for cheap / standard coding routes yet the per-session ``route_approval_enabled``
+    flag still forced a blocking approval Future — the POST stayed open until the
+    user clicked "Approve" on a card the same evaluator had just labelled
+    "No explicit approval required". Resolved by inspecting the proposal between
+    routing and publish so the evaluator's verdict controls the actual gate.
+    """
+    monkeypatch.setattr(routes_sessions, "_route_approval_gate_enabled", lambda: True)
+    proposal = _proposal(omniroute_requires_explicit_approval=False)
+    agent = _FakeRoutingAgent(proposal)
+    monkeypatch.setattr(routes_sessions, "_build_routing_agent_from_runtime", agent)
+    published: list[dict[str, Any]] = []
+
+    def _publish(_session_id: str, event: dict[str, Any]) -> None:
+        published.append(event)
+
+    monkeypatch.setattr(routes_sessions.session_stream, "publish", _publish)
+    monkeypatch.setattr(routes_sessions, "_publish_elicitation_resolved", lambda *_args: None)
+    monkeypatch.setattr(
+        "omnigent.server.task_outcome_recorder.get_recorder",
+        lambda: None,
+    )
+
+    store = _RoutingSelectionStore(_conv(route_approval_enabled=True))
+    body = routes_sessions.SessionEventInput.model_validate(
+        {
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+
+    # Per asyncio.wait_for: the gate MUST yield within 2 seconds when the
+    # proposal requires no explicit approval. Without the fix this coroutine
+    # would block forever waiting on a Future whose only resolver is a manual
+    # /v1/sessions/{id}/elicitations/{eid}/resolve click.
+    out = await asyncio.wait_for(
+        routes_sessions._await_route_approval(
+            "conv_test",
+            store.conv,
+            body,
+            store,  # type: ignore[arg-type]
+        ),
+        timeout=2.0,
+    )
+
+    # The conv was passed straight back — no model_override / routing
+    # selection was applied, because the evaluator already vetted the route.
+    assert out is store.conv
+    assert store.update_calls == []
+    proposals = [
+        event for event in published if event.get("type") == "response.elicitation_request"
+    ]
+    assert proposals == [], (
+        f"unexpected elicitation_request events published: {proposals!r}"
+    )
+    # No Future was registered for the user verdict.
+    assert routes_sessions._harness_elicitation_registry == {}

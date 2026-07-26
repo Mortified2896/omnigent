@@ -8788,6 +8788,30 @@ async def _await_route_approval(
     proposal = await _build_routing_agent_from_runtime().propose(
         user_message=user_text, available_harnesses=["OpenCode Native"]
     )
+    # Honor the evaluator's explicit-approval verdict. The per-session
+    # ``route_approval_enabled`` toggle and the evaluator's
+    # ``omniroute_requires_explicit_approval`` field are orthogonal:
+    # the gate is a session-level opt-in (always confirm the chosen
+    # route regardless of evaluator cost / risk / billing), whereas
+    # ``requires_explicit_approval`` is the evaluator's vetted answer
+    # about whether the chosen combo is premium / hard enough that the
+    # caller should be asked. When the evaluator verdict is False the
+    # surface UX already says "No explicit approval required" — making
+    # the session POST block on a user click anyway creates an apparent
+    # contradiction between the card and the in-process gate, and
+    # stalls the message turn for the full keep-alive window (curl
+    # observed ~20s on cheaper routes where this split-fire was the
+    # root cause). The fix defers to the evaluator for the bypass.
+    if proposal.omniroute_requires_explicit_approval is False:
+        _logger.info(
+            "model_routing_agent evaluator-no-approval session=%s route=%s harness=%s effort=%s perm=%s",
+            session_id,
+            proposal.omniroute_route_id,
+            proposal.recommended_harness,
+            proposal.reasoning_effort,
+            proposal.permission_mode,
+        )
+        return conv
     elicitation_id = f"route_{secrets.token_hex(16)}"
 
     # Persist the immutable recommendation before exposing an approval card.
