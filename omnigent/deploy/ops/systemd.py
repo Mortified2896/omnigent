@@ -101,6 +101,15 @@ def write_release_dropin(sha: str, *, release_dir: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     config = config_path()
     port = service_port()
+    # NOTE: ``WorkingDirectory`` is intentionally set to a neutral
+    # directory (``/tmp``) rather than to the release directory.
+    # Python inserts the cwd into ``sys.path[0]``; if cwd is the
+    # release directory, Python would import ``omnigent`` from the
+    # bare source tree (``<release>/omnigent/``) instead of the
+    # installed wheel under site-packages. The gate and the server
+    # both rely on the explicit ``.venv/bin/python`` interpreter and
+    # the ``OMNIGENT_RELEASE_DIR`` env var; cwd is irrelevant to
+    # their operation.
     body = (
         f"# Pin omnigent-eval-web at release {sha}\n"
         f"# using {release_dir} (release-local .venv, immutable).\n"
@@ -108,18 +117,19 @@ def write_release_dropin(sha: str, *, release_dir: Path) -> Path:
         f"# drop-ins and over pre-existing evaluator/route-approval/router/\n"
         f"# tailscale-origin drop-ins; their Environment*= lines stay in place.\n"
         f"[Service]\n"
-        f"WorkingDirectory={release_dir}\n"
+        f"WorkingDirectory=/tmp\n"
         f"# Supervisor pre-start gate. Runs as the release's own Python so\n"
         f"# ``omnigent`` imports from this release's venv (not from the main\n"
         f"# checkout). Aborts systemd startup on failure.\n"
-        f"ExecStartPre=-{release_dir}/.venv/bin/python -m omnigent.deploy.supervisor.gate\n"
+        f"ExecStartPre={release_dir}/.venv/bin/python -P -m omnigent.deploy.supervisor.gate\n"
         f"ExecStart=\n"
-        f"ExecStart={release_dir}/.venv/bin/python -m omnigent server \\\n"
+        f"ExecStart={release_dir}/.venv/bin/python -P -m omnigent server \\\n"
         f"  --host 127.0.0.1 --port {port} \\\n"
         f"  --no-open \\\n"
         f"  --config {config}\n"
         f"Environment=OMNIGENT_RELEASE_DIR={release_dir}\n"
         f"Environment=OMNIGENT_RELEASE_EXPECTED_SHA={sha}\n"
+        f"Environment=PYTHONSAFEPATH=1\n"
     )
     _atomic_write(target, body)
     return target
