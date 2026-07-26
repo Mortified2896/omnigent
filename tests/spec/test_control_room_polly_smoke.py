@@ -64,9 +64,16 @@ def _omniroute_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_smoke_a_bundle_parses_and_lists_opencode_sub_agent() -> None:
-    """Boot = bundle parses; the opencode sub-agent is exposed as a tool."""
+    """Boot = bundle parses; the opencode sub-agent is exposed as a tool.
+
+    The bundle's deployed name was renamed to ``verity`` (the canonical
+    Verity identity); the directory name stays ``control-room-polly``
+    for backward compatibility with the agent identity contract. The
+    spec's ``name`` field is what the runtime uses to seed the
+    session, so it must reflect the new identity.
+    """
     spec = parse(BUNDLE_DIR)
-    assert spec.name == "control-room-polly"
+    assert spec.name == "verity"
     assert spec.executor.type == "omnigent"
     assert spec.executor.config.get("harness") == "claude-sdk"
     assert spec.executor.model == FIXED_ROUTE
@@ -111,7 +118,7 @@ def test_smoke_a_claude_sdk_spawn_env_threads_custom_best_coding_and_gateway(
 
     env = _build_claude_sdk_spawn_env(spec, workdir=tmp_path)
     assert env["HARNESS_CLAUDE_SDK_MODEL"] == FIXED_ROUTE
-    assert env["HARNESS_CLAUDE_SDK_AGENT_NAME"] == "control-room-polly"
+    assert env["HARNESS_CLAUDE_SDK_AGENT_NAME"] == "verity"
     assert env["HARNESS_CLAUDE_SDK_GATEWAY"] == "true"
     assert env["HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL"] == OMNIROUTE_BASE_URL
     # Both the gateway auth command and the apiKeyHelper are shell

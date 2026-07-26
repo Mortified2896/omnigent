@@ -204,10 +204,23 @@ else
   fi
 
   log "proving import provenance inside the release venv"
-  if ! "$RELEASE_DIR/.venv/bin/python" -m omnigent.deploy.supervisor.provenance "$RELEASE_DIR"; then
+  # Run provenance from a neutral directory with PYTHONPATH unset and
+  # Python's ``-P`` ("don't prepend a potentially unsafe path to
+  # sys.path") so neither the repo checkout nor the release source
+  # root can shadow the installed wheel in the release venv's
+  # site-packages. Running from the repository or the release root
+  # allowed a previous version of this check to false-pass because
+  # Python inserted the cwd into sys.path[0] and the in-tree
+  # ``omnigent/__init__.py`` won over a missing/broken installed wheel.
+  if ! (
+    cd /tmp
+    env -u PYTHONPATH PYTHONSAFEPATH=1 \
+      "$RELEASE_DIR/.venv/bin/python" -P \
+      -m omnigent.deploy.supervisor.provenance "$RELEASE_DIR"
+  ); then
     log "provenance check failed; cleaning $RELEASE_DIR"
     rm -rf "$RELEASE_DIR"
-    fail "import provenance check failed (omnigent did not load from the release venv)"
+    fail "import provenance check failed (omnigent did not load from the release venv site-packages; see stderr above for the diverging path)"
   fi
 
   # 2e. write the manifest.

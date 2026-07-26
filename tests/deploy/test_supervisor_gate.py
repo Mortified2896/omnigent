@@ -25,15 +25,24 @@ from omnigent.deploy.supervisor import manifest as manifest_mod
 
 @pytest.fixture
 def fake_release(tmp_path: Path) -> Path:
-    """Build a release with the structural shape the gate expects."""
+    """Build a release with the structural shape the gate expects.
+
+    The new strict provenance check requires the module files to live
+    inside ``.venv/lib/pythonX.Y/site-packages``, not at the bare
+    ``<release>/omnigent`` source tree. The fixture creates both so
+    that happy-path tests can route the module resolver into
+    site-packages, while bundle / manifest tests still operate on
+    the bare source tree.
+    """
     release = tmp_path / "release"
-    (release / ".venv").mkdir(parents=True)
+    site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
+    site_packages.mkdir(parents=True)
     (release / ".venv" / "pyvenv.cfg").write_text("home = /tmp\n")
-    (release / "omnigent").mkdir(parents=True)
-    (release / "omnigent" / "__init__.py").write_text("")
-    (release / "omnigent" / "server").mkdir(parents=True)
-    (release / "omnigent" / "server" / "__init__.py").write_text("")
-    (release / "omnigent" / "server" / "app.py").write_text("")
+    (site_packages / "omnigent").mkdir()
+    (site_packages / "omnigent" / "__init__.py").write_text("")
+    (site_packages / "omnigent" / "server").mkdir()
+    (site_packages / "omnigent" / "server" / "__init__.py").write_text("")
+    (site_packages / "omnigent" / "server" / "app.py").write_text("")
     bundle = expected_web_ui_dir(release)
     bundle.mkdir(parents=True)
     (bundle / "index.html").write_text("<!doctype html>")
@@ -46,6 +55,8 @@ def fake_release(tmp_path: Path) -> Path:
 def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None:
     """Make the provenance check pass on the fake release."""
 
+    site_packages = fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
+
     def fake_exe() -> Path:
         return fake_release / ".venv" / "bin" / "python"
 
@@ -54,9 +65,9 @@ def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None
 
     def fake_module(name: str, *, attr: str | None = None) -> Path:
         if name == "omnigent":
-            return fake_release / "omnigent" / "__init__.py"
+            return site_packages / "omnigent" / "__init__.py"
         if name == "omnigent.server":
-            return fake_release / "omnigent" / "server" / "app.py"
+            return site_packages / "omnigent" / "server" / "app.py"
         raise AssertionError(name)
 
     import omnigent.deploy.supervisor.provenance as prov
@@ -114,6 +125,7 @@ def test_run_gate_verifies_manifest_sha_when_provided(
     """A release with a manifest whose SHA matches the expected SHA passes."""
     expected_sha = "0123456789abcdef0123456789abcdef01234567"
     monkeypatch.setenv("OMNIGENT_RELEASE_EXPECTED_SHA", expected_sha)
+    site_packages = fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
     manifest = manifest_mod.ReleaseManifest(
         commit_sha=expected_sha,
         built_at="2026-07-26T00:00:00Z",
@@ -121,8 +133,8 @@ def test_run_gate_verifies_manifest_sha_when_provided(
         release_dir=str(fake_release),
         python_executable=str(fake_release / ".venv" / "bin" / "python"),
         python_version="3.12.13",
-        omnigent_module_path=str(fake_release / "omnigent" / "__init__.py"),
-        omnigent_server_app_path=str(fake_release / "omnigent" / "server" / "app.py"),
+        omnigent_module_path=str(site_packages / "omnigent" / "__init__.py"),
+        omnigent_server_app_path=str(site_packages / "omnigent" / "server" / "app.py"),
     )
     path = manifest_mod.write_manifest(fake_release, manifest)
 
@@ -136,6 +148,7 @@ def test_run_gate_rejects_manifest_sha_mismatch(
 ) -> None:
     """A release with a manifest pointing at a different SHA is refused."""
     monkeypatch.setenv("OMNIGENT_RELEASE_EXPECTED_SHA", "0123456789abcdef0123456789abcdef01234567")
+    site_packages = fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
     manifest = manifest_mod.ReleaseManifest(
         commit_sha="ffffffffffffffffffffffffffffffffffffffff",
         built_at="2026-07-26T00:00:00Z",
@@ -143,8 +156,8 @@ def test_run_gate_rejects_manifest_sha_mismatch(
         release_dir=str(fake_release),
         python_executable=str(fake_release / ".venv" / "bin" / "python"),
         python_version="3.12.13",
-        omnigent_module_path=str(fake_release / "omnigent" / "__init__.py"),
-        omnigent_server_app_path=str(fake_release / "omnigent" / "server" / "app.py"),
+        omnigent_module_path=str(site_packages / "omnigent" / "__init__.py"),
+        omnigent_server_app_path=str(site_packages / "omnigent" / "server" / "app.py"),
     )
     manifest_mod.write_manifest(fake_release, manifest)
     with pytest.raises(GateError) as exc:

@@ -92,13 +92,55 @@ def test_promote_script_uses_release_local_venv() -> None:
 
 
 def test_promote_script_validates_via_import_probe() -> None:
-    """The script runs the import-provenance probe after the build,
-    before any systemd reconfiguration."""
+    """The script runs the import-provenance probe from a neutral
+    directory with safe-path behavior.
+
+    The earlier version of this test pinned the exact literal string
+    ``release = pathlib.Path('$RELEASE_DIR').resolve()`` — which the
+    real canonical invocation does not contain, because the canonical
+    invocation is now ``python -m
+    omnigent.deploy.supervisor.provenance`` (the Python module handles
+    resolution internally). That brittle pattern broke every time the
+    probe plumbing refactored, even when the underlying behavior was
+    correct. The replacement is behavioral: assert the script runs the
+    probe using the release's ``.venv/bin/python``, from a neutral
+    directory, with ``PYTHONPATH`` unset and Python's ``-P`` flag.
+    """
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
     body = text[text.find(body_marker):]
-    assert "release = pathlib.Path('$RELEASE_DIR').resolve()" in body
-    assert "omnigent.__file__" in body and "is_relative_to" in body
+    # The probe must run with the release's interpreter, not the
+    # main checkout's interpreter.
+    assert 'env -u PYTHONPATH' in body, (
+        "promote_release.sh must unset inherited PYTHONPATH before invoking "
+        "the provenance probe (PYTHONPATH from the operator's shell otherwise "
+        "shadows the installed wheel)."
+    )
+    assert 'PYTHONSAFEPATH=1' in body, (
+        "promote_release.sh must set PYTHONSAFEPATH=1 before invoking the "
+        "provenance probe (this is the venv-site-packages pre-flight)."
+    )
+    assert '"$RELEASE_DIR/.venv/bin/python" -P' in body, (
+        "promote_release.sh must invoke the release's interpreter with the "
+        "-P (--no-path) flag so cwd/PYTHONPATH cannot shadow site-packages."
+    )
+    assert 'cd /tmp' in body, (
+        "promote_release.sh must change into a neutral directory (e.g. /tmp) "
+        "before invoking the provenance probe (running from the release "
+        "directory inserts the release source root into sys.path and can "
+        "shadow the installed wheel)."
+    )
+    assert '-m omnigent.deploy.supervisor.provenance' in body
+    # The probe must run BEFORE any systemd reconfiguration (drop-in
+    # write / systemctl restart).
+    probe_idx = body.find('-m omnigent.deploy.supervisor.provenance')
+    dropin_idx = body.find('write_release_dropin')
+    restart_idx = body.find('systemctl restart')
+    assert dropin_idx != -1 and restart_idx != -1
+    assert probe_idx < dropin_idx < restart_idx, (
+        "the provenance probe must run before the systemd drop-in rewrite "
+        "and the service restart."
+    )
 
 
 def test_promote_script_atomic_promotion() -> None:

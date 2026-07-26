@@ -36,13 +36,14 @@ def deploy_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def fake_release(tmp_path: Path) -> Path:
     release = tmp_path / "release"
-    (release / ".venv").mkdir(parents=True)
+    site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
+    site_packages.mkdir(parents=True)
     (release / ".venv" / "pyvenv.cfg").write_text("home = /tmp\n")
-    (release / "omnigent").mkdir(parents=True)
-    (release / "omnigent" / "__init__.py").write_text("")
-    (release / "omnigent" / "server").mkdir(parents=True)
-    (release / "omnigent" / "server" / "__init__.py").write_text("")
-    (release / "omnigent" / "server" / "app.py").write_text("")
+    (site_packages / "omnigent").mkdir()
+    (site_packages / "omnigent" / "__init__.py").write_text("")
+    (site_packages / "omnigent" / "server").mkdir()
+    (site_packages / "omnigent" / "server" / "__init__.py").write_text("")
+    (site_packages / "omnigent" / "server" / "app.py").write_text("")
     bundle = expected_web_ui_dir(release)
     bundle.mkdir(parents=True)
     (bundle / "index.html").write_text("<!doctype html>")
@@ -55,6 +56,7 @@ def fake_release(tmp_path: Path) -> Path:
 def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None:
     """Make ``check_runtime_provenance`` succeed on the fake release."""
     import omnigent.deploy.supervisor.provenance as prov
+    site_packages = fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
 
     monkeypatch.setattr(
         prov, "_resolve_executable", lambda: fake_release / ".venv" / "bin" / "python"
@@ -62,9 +64,9 @@ def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None
     monkeypatch.setattr(prov, "_resolve_prefix", lambda: fake_release)
     def fake_module(name: str, *, attr: str | None = None) -> Path:
         if name == "omnigent":
-            return fake_release / "omnigent" / "__init__.py"
+            return site_packages / "omnigent" / "__init__.py"
         if name == "omnigent.server":
-            return fake_release / "omnigent" / "server" / "app.py"
+            return site_packages / "omnigent" / "server" / "app.py"
         raise AssertionError(name)
     monkeypatch.setattr(prov, "_resolve_module", fake_module)
 
@@ -120,8 +122,14 @@ def test_release_with_manifest_matches_expected_sha(
         release_dir=str(fake_release),
         python_executable=str(fake_release / ".venv" / "bin" / "python"),
         python_version="3.12.13",
-        omnigent_module_path=str(fake_release / "omnigent" / "__init__.py"),
-        omnigent_server_app_path=str(fake_release / "omnigent" / "server" / "app.py"),
+        omnigent_module_path=str(
+            fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
+            / "omnigent" / "__init__.py"
+        ),
+        omnigent_server_app_path=str(
+            fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
+            / "omnigent" / "server" / "app.py"
+        ),
         lockfile_hashes={"uv.lock": _sha256(fake_release / "uv.lock")},
     )
     write_manifest(fake_release, manifest)

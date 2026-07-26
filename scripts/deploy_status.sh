@@ -69,13 +69,18 @@ if [[ -f "$DEPLOYED_SHA_FILE" ]]; then
   RECORDED_SHA=$(tr -d '[:space:]' < "$DEPLOYED_SHA_FILE")
 fi
 
-SERVICE_NAME=$(OMNIGENT_DEPLOY_SERVICE_NAME="x" python3 -c "
-import sys; sys.path.insert(0, '$REPO_ROOT')
+# Resolve the *real* service name + port from the ops module's
+# defaults. ``OMNIGENT_DEPLOY_SERVICE_NAME`` / ``OMNIGENT_DEPLOY_SERVICE_PORT``
+# are honored if the operator explicitly set them — but the script
+# never injects a literal placeholder like ``"x"`` that the resolver
+# would otherwise treat as authoritative.
+SERVICE_NAME=$("$REPO_ROOT/.venv/bin/python" -c "
+import sys
 from omnigent.deploy.ops.systemd import service_name
 print(service_name())
 ")
-SERVICE_PORT=$(OMNIGENT_DEPLOY_SERVICE_PORT="x" python3 -c "
-import sys; sys.path.insert(0, '$REPO_ROOT')
+SERVICE_PORT=$("$REPO_ROOT/.venv/bin/python" -c "
+import sys
 from omnigent.deploy.ops.systemd import service_port
 print(service_port())
 ")
@@ -88,43 +93,58 @@ LIVE_CWD=""
 LIVE_EXE=""
 LIVE_MODULE=""
 LIVE_APP=""
+LIVE_SITE_PACKAGES=""
 if [[ -n "$LIVE_PID" ]] && [[ "$LIVE_PID" != "0" ]]; then
   LIVE_CMD=$(tr '\0' ' ' </proc/"$LIVE_PID"/cmdline 2>/dev/null || true)
   LIVE_CWD=$(readlink /proc/"$LIVE_PID"/cwd 2>/dev/null || true)
+  # ``/proc/<pid>/exe`` is informational only. uv venvs symlink the
+  # release's ``bin/python`` to the host's base interpreter under
+  # ``~/.local/share/uv/python/...``, so a resolved ``exe`` that
+  # does *not* live under the release directory is the *normal* case
+  # on a uv host — the canonical proof that the running process is
+  # the release's interpreter comes from the systemd ``ExecStart``
+  # command line (``LIVE_CMD``) and the resolved ``omnigent`` /
+  # ``omnigent.server.app`` module paths, both of which use the
+  # release's own ``.venv/bin/python`` and site-packages tree.
   LIVE_EXE=$(readlink /proc/"$LIVE_PID"/exe 2>/dev/null || true)
-  if [[ -n "$LIVE_EXE" ]]; then
-    # Resolve omnigent's __file__ inside the live process's venv via
-    # /proc/<pid>/root/<venv-python>. This is the same check the
-    # supervisor gate does at ExecStartPre time, so this command can
-    # detect drift after the service started.
-    LIVE_MODULE=$(python3 -c "
-import sys
-sys.path.insert(0, '$REPO_ROOT')
-from omnigent.deploy.supervisor.provenance import check_runtime_provenance
-try:
-    info = check_runtime_provenance(__import__('pathlib').Path('$CURRENT_DIR'))
-    print(info['omnigent_module'])
-except Exception as exc:
-    print(f'(error: {exc})')
-" 2>/dev/null || true)
-    LIVE_APP=$(python3 -c "
-import sys
-sys.path.insert(0, '$REPO_ROOT')
-from omnigent.deploy.supervisor.provenance import check_runtime_provenance
-try:
-    info = check_runtime_provenance(__import__('pathlib').Path('$CURRENT_DIR'))
-    print(info['omnigent_server_app'])
-except Exception as exc:
-    print(f'(error: {exc})')
-" 2>/dev/null || true)
+
+  if [[ -n "$CURRENT_DIR" ]] && [[ -x "$CURRENT_DIR/.venv/bin/python" ]]; then
+    # Run the canonical provenance probe with the *release's* Python,
+    # from a neutral directory, with PYTHONPATH unset and ``-P`` so
+    # neither the repo checkout nor the release source root can
+    # shadow the installed wheel.
+    release_python="$CURRENT_DIR/.venv/bin/python"
+    PROV_OUT=$(
+      cd /tmp
+      env -u PYTHONPATH PYTHONSAFEPATH=1 \
+        "$release_python" -P -m omnigent.deploy.supervisor.provenance \
+        "$CURRENT_DIR" 2>&1
+    ) || true
+    # Parse the key=value output the CLI emits on success.
+    if [[ -n "$PROV_OUT" ]]; then
+      while IFS='=' read -r key value; do
+        case "$key" in
+          omnigent_module) LIVE_MODULE="$value" ;;
+          omnigent_server_app) LIVE_APP="$value" ;;
+          site_packages) LIVE_SITE_PACKAGES="$value" ;;
+        esac
+      done <<< "$PROV_OUT"
+    fi
+    if [[ -z "$LIVE_MODULE" || -z "$LIVE_APP" ]]; then
+      LIVE_MODULE="(error: ${PROV_OUT:-no output})"
+      LIVE_APP="(error: ${PROV_OUT:-no output})"
+    fi
   fi
 fi
 
-# Web UI bundle state (per release).
+# Web UI bundle state (per release). Use the release's own
+# interpreter so the preflight does not import from the main checkout.
 WEB_BUNDLE_STATE="unknown"
-if [[ -n "$CURRENT_DIR" ]] && [[ -d "$CURRENT_DIR" ]]; then
-  if "$CURRENT_DIR/.venv/bin/python" -m omnigent.deploy.preflight "$CURRENT_DIR" \
-       >/dev/null 2>&1; then
+if [[ -n "$CURRENT_DIR" ]] && [[ -d "$CURRENT_DIR" ]] \
+   && [[ -x "$CURRENT_DIR/.venv/bin/python" ]]; then
+  if (cd /tmp && env -u PYTHONPATH PYTHONSAFEPATH=1 \
+        "$CURRENT_DIR/.venv/bin/python" -P -m omnigent.deploy.preflight \
+        "$CURRENT_DIR") >/dev/null 2>&1; then
     WEB_BUNDLE_STATE="present"
   elif [[ "${OMNIGENT_SKIP_WEB_UI:-false}" == "true" ]] \
        || systemctl show "$SERVICE_NAME" -p Environment --value 2>/dev/null \
@@ -157,12 +177,28 @@ if [[ "$UNIT_STATE" != "active" ]]; then
   STATUS="MISMATCH"
   REASONS+=("systemd unit $SERVICE_NAME is $UNIT_STATE")
 fi
-if [[ -n "$LIVE_EXE" ]] && [[ -n "$CURRENT_DIR" ]]; then
-  case "$LIVE_EXE" in
-    "$CURRENT_DIR"/*) ;;  # ok
+# Verify the systemd-launched command line actually uses the
+# current release's interpreter. ``/proc/<pid>/exe`` is uv-resolved
+# (so it is informational only); the launch command is the canonical
+# proof.
+if [[ -n "$LIVE_CMD" ]] && [[ -n "$CURRENT_DIR" ]]; then
+  case "$LIVE_CMD" in
+    *"$CURRENT_DIR/.venv/bin/python"*) ;;
     *)
       STATUS="MISMATCH"
-      REASONS+=("live exe=$LIVE_EXE is not under current release=$CURRENT_DIR")
+      REASONS+=("live command does not launch through $CURRENT_DIR/.venv/bin/python (got: $LIVE_CMD)")
+      ;;
+  esac
+fi
+# Verify the live module paths come from inside the current
+# release's site-packages (the canonical provenance guarantee).
+if [[ -n "$LIVE_SITE_PACKAGES" ]] && [[ -n "$CURRENT_DIR" ]]; then
+  expected_sp="$CURRENT_DIR/.venv/lib"
+  case "$LIVE_SITE_PACKAGES" in
+    "$expected_sp"/*) ;;
+    *)
+      STATUS="MISMATCH"
+      REASONS+=("live site-packages=$LIVE_SITE_PACKAGES is not under $expected_sp")
       ;;
   esac
 fi
@@ -183,9 +219,10 @@ deploy_status
   unit_state:            $UNIT_STATE
   service_port:          $SERVICE_PORT
   live_pid:              ${LIVE_PID:-0}
-  live_exe:              ${LIVE_EXE:-(unknown)}
+  live_exe:              ${LIVE_EXE:-(unknown)}  (uv-resolved; informational)
   live_cwd:              ${LIVE_CWD:-(unknown)}
   live_command:          ${LIVE_CMD:-(unknown)}
+  live_site_packages:    ${LIVE_SITE_PACKAGES:-(unknown)}
   live_omnigent_module:  ${LIVE_MODULE:-(n/a)}
   live_server_app:       ${LIVE_APP:-(n/a)}
   web_ui_bundle:         $WEB_BUNDLE_STATE
