@@ -378,33 +378,52 @@ if [[ "$up_after" -eq 0 ]]; then
 fi
 log "service reached active state after $up_after probe(s)"
 
-# Live loopback + public health probe.
+# Give uvicorn a moment to bind the listening socket after systemd
+# reports ``active``; the unit can reach ``active`` before the HTTP
+# server is actually serving, so a probe fired immediately after
+# restart can race against startup and return empty / error.
+sleep 1
+
+# Live loopback + public health probe. Retry a few times so a single
+# transient blip doesn't roll back a healthy release.
 loopback_ok=1
-if body=$(curl -fsS "http://127.0.0.1:$SERVICE_PORT/health" 2>/dev/null); then
-  if [[ -n "$body" ]]; then
-    log "/health probe: 200"
-  else
-    loopback_ok=0
-  fi
-else
-  loopback_ok=0
-fi
-if [[ "$loopback_ok" -eq 1 ]]; then
-  if body=$(curl -fsS "http://127.0.0.1:$SERVICE_PORT/" 2>/dev/null); then
-    if printf '%s' "$body" | grep -q 'OMNIGENT_SKIP_WEB_UI'; then
+for attempt in 1 2 3 4 5; do
+  loopback_ok=1
+  if body=$(curl -fsS "http://127.0.0.1:$SERVICE_PORT/health" 2>/dev/null); then
+    if [[ -n "$body" ]]; then
+      log "/health probe: 200 (attempt $attempt)"
+    else
       loopback_ok=0
-      log "/ probe returned the API-only landing page; marking deploy as failed"
     fi
   else
     loopback_ok=0
-    log "/ probe failed"
   fi
-fi
+  if [[ "$loopback_ok" -eq 1 ]]; then
+    if body=$(curl -fsS "http://127.0.0.1:$SERVICE_PORT/" 2>/dev/null); then
+      if printf '%s' "$body" | grep -q 'OMNIGENT_SKIP_WEB_UI'; then
+        loopback_ok=0
+        log "/ probe returned the API-only landing page; marking deploy as failed"
+      else
+        log "/ probe: 200 (attempt $attempt)"
+        break
+      fi
+    else
+      loopback_ok=0
+      log "/ probe failed (attempt $attempt)"
+    fi
+  fi
+  sleep 2
+done
 if [[ "$loopback_ok" -ne 1 ]]; then
   log "loopback health check failed; rolling back"
   if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
     sudo systemctl stop "$SERVICE_NAME" || true
-    mv -T "$PREVIOUS_LINK" "$CURRENT_LINK" || true
+    # Swap current symlink back to the previous target without
+    # destroying the previous symlink itself. ``mv -T`` would move
+    # the previous symlink into current, deleting previous in the
+    # process — use ``ln -sfn`` for the swap and leave the previous
+    # symlink intact for future inspection / rollback.
+    ln -sfn "$PREVIOUS_TARGET" "$CURRENT_LINK"
     sudo systemctl start "$SERVICE_NAME" || true
   fi
   mkdir -p "$DEPLOY_ROOT/failed/$sha"
