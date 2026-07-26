@@ -1058,13 +1058,17 @@ def _build_api_only_app(db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     The dev checkout has a built ``static/web-ui`` (so ``create_app`` would
     mount the SPA), so point ``_WEB_UI_DIST`` at an empty path to force the
-    API-only fallback branch under test.
+    API-only fallback branch under test. The fallback is opted into via
+    ``OMNIGENT_SKIP_WEB_UI=true`` so the loud-ERROR preflight in
+    ``omnigent.deploy.startup_web_ui_check`` stays silent — the API-only
+    fallback is intentional here.
     """
     from omnigent.server.app import create_app
     from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
     from omnigent.stores.host_store import HostStore
 
     monkeypatch.setattr(server_app, "_WEB_UI_DIST", tmp_path / "no-web-ui")
+    monkeypatch.setenv("OMNIGENT_SKIP_WEB_UI", "true")
     artifact_store = LocalArtifactStore(str(tmp_path / "artifacts"))
     return create_app(
         agent_store=SqlAlchemyAgentStore(db_uri),
@@ -1122,3 +1126,56 @@ async def test_api_only_root_does_not_shadow_real_routes(
         resp = await c.get("/health", headers={"accept": "text/html"})
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def _build_silent_degraded_app(
+    db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> FastAPI:
+    """Build an app where the SPA bundle is missing AND the deployment is
+    NOT opted into API-only mode. This is the exact silent-degradation
+    scenario the deploy-main-0039e23a regression produced: ``create_app``
+    falls back to the API-only landing page while the live endpoint
+    served a web UI. The soft preflight must log a loud ERROR so the
+    regression is loud in the unit journal rather than silent.
+    """
+    from omnigent.server.app import create_app
+    from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
+    from omnigent.stores.host_store import HostStore
+
+    monkeypatch.setattr(server_app, "_WEB_UI_DIST", tmp_path / "no-web-ui")
+    monkeypatch.delenv("OMNIGENT_SKIP_WEB_UI", raising=False)
+    artifact_store = LocalArtifactStore(str(tmp_path / "artifacts"))
+    return create_app(
+        agent_store=SqlAlchemyAgentStore(db_uri),
+        file_store=SqlAlchemyFileStore(db_uri),
+        conversation_store=SqlAlchemyConversationStore(db_uri),
+        artifact_store=artifact_store,
+        host_store=HostStore(db_uri),
+        agent_cache=AgentCache(artifact_store=artifact_store, cache_dir=tmp_path / "cache"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_bundle_logs_loud_error_on_normal_deployment(
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A normal UI deployment without a bundle logs a loud ERROR.
+
+    This is the durable signal that makes the silent API-only fallback
+    impossible: the server still serves the API-only landing page (the
+    fallback is preserved for intentional API-only installs), but the
+    loud-ERROR is captured by the systemd unit journal so the regression
+    is observable from ``journalctl -u omnigent-eval-web.service``.
+    """
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="omnigent.deploy.preflight"):
+        _build_silent_degraded_app(db_uri, tmp_path, monkeypatch)
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors, "expected at least one ERROR log"
+    assert any("OMNIGENT_SKIP_WEB_UI" in r.getMessage() for r in errors)
+    assert any("npm run build" in r.getMessage() for r in errors)
+    assert any("promote_main_deploy.sh" in r.getMessage() for r in errors)

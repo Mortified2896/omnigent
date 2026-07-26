@@ -2449,6 +2449,29 @@ def create_app(
 
     web_ui_dist = _WEB_UI_DIST
     web_ui_present = web_ui_dist.is_dir() and (web_ui_dist / "index.html").is_file()
+
+    # Loud-ERROR preflight: a normal UI deployment that comes up
+    # without the SPA bundle used to silently degrade to the API-only
+    # landing page, which is the single most common "the web UI doesn't
+    # load" report. ``omnigent.deploy.startup_web_ui_check`` logs a
+    # one-shot ERROR (visible in the systemd unit journal) when the
+    # bundle is missing AND the deployment is not opted into API-only
+    # mode via ``OMNIGENT_SKIP_WEB_UI``. The fallback path below is
+    # preserved for intentional API-only installs.
+    if not web_ui_present:
+        from omnigent.deploy.preflight import startup_web_ui_check
+
+        # Resolve the worktree from the running module location. The
+        # bundle is expected at ``<root>/omnigent/server/static/web-ui``
+        # for both deploy-main-* worktrees and source-tree installs,
+        # so ``running_file.parent.parent.parent`` is unambiguous. For
+        # installed wheels the layout still matches; the runbook in the
+        # log message just names a path that does not exist on disk
+        # and is therefore informational rather than actionable.
+        running_file = Path(__file__).resolve()
+        worktree_root = running_file.parent.parent.parent
+        startup_web_ui_check(web_ui_dist, worktree_root=worktree_root)
+
     if web_ui_present:
         app.mount(
             "/",
