@@ -273,6 +273,7 @@ fi
 # --- 3. Candidate canary (optional) ----------------------------------------
 if [[ "${OMIT_CANARY:-0}" != "1" ]]; then
   log "running canary on candidate release"
+  mkdir -p "$DEPLOY_ROOT/releases/$sha/canary"
   canary_log="$DEPLOY_ROOT/releases/$sha/canary/promote-canary.log"
   if ! "$RELEASE_DIR/.venv/bin/python" -m omnigent.deploy.supervisor.canary \
        "$RELEASE_DIR" 2>"$DEPLOY_ROOT/releases/$sha/canary/promote-canary.err"; then
@@ -335,15 +336,13 @@ if [[ -n "${OMNIGENT_BUILTIN_AGENT_DIRS:-}" ]]; then
 fi
 
 # --- 5. systemd restart and live validation ------------------------------
-SERVICE_NAME=$(OMNIGENT_DEPLOY_SERVICE_NAME="x" \
-  "$RELEASE_DIR/.venv/bin/python" -c "
-import sys; sys.path.insert(0, '$RELEASE_DIR')
+SERVICE_NAME=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
 from omnigent.deploy.ops.systemd import service_name
 print(service_name())
 ")
-SERVICE_PORT=$(OMNIGENT_DEPLOY_SERVICE_PORT="x" \
-  "$RELEASE_DIR/.venv/bin/python" -c "
-import sys; sys.path.insert(0, '$RELEASE_DIR')
+SERVICE_PORT=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
 from omnigent.deploy.ops.systemd import service_port
 print(service_port())
 ")
