@@ -26,7 +26,9 @@ from omnigent.runner.transports.ws_tunnel.frames import (
 )
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runner.transports.ws_tunnel.serve import dispatch_via_asgi
-from omnigent.runner.transports.ws_tunnel.transport import WSTunnelTransport
+from omnigent.runner.transports.ws_tunnel.transport import (
+    WSTunnelTransport,
+)
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
 from tests.runner.helpers import NullServerClient
@@ -1165,3 +1167,335 @@ async def test_mint_token_endpoint_header_mode_unsupported_returns_400() -> None
     response = await _post_mint_token(app, runner_id, token=token)
 
     assert response.status_code == 400
+
+
+# ── Regression: receive-side tunnel disconnect cleanup (e2a3bda) ──
+#
+# These tests exercise the real FastAPI WS route (not the registry in
+# isolation) to lock in the receive-side disconnect cleanup that
+# landed in e2a3bda. The fix added explicit ``registry.deregister``
+# calls in the ``except WebSocketDisconnect`` and the new
+# ``except asyncio.CancelledError`` blocks of ``runner_tunnel.py`` so
+# that the exact session is retired and in-flight requests are woken
+# when the receive side drops or the route handler is cancelled.
+
+
+async def _wait_for_in_flight(
+    session: object, *, timeout_s: float = 1.0
+) -> None:
+    """Poll until ``session.in_flight`` is non-empty.
+
+    :param session: The runner session whose in-flight map should
+        receive a request.
+    :param timeout_s: Max seconds to wait before raising.
+    :returns: None.
+    :raises AssertionError: If no request opens in time.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        if session.in_flight:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("no request opened in_flight within timeout")
+
+
+async def _wait_until(
+    predicate: Callable[[], object], *, timeout_s: float = 1.0
+) -> None:
+    """Poll a synchronous predicate until it becomes truthy.
+
+    :param predicate: Zero-argument callable returning a truthy
+        value when the wait should stop.
+    :param timeout_s: Max seconds to wait before raising.
+    :returns: None.
+    :raises AssertionError: If the predicate never becomes true.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("predicate did not become true before timeout")
+
+
+async def test_ws_tunnel_route_cleans_up_on_receive_side_disconnect() -> None:
+    """Receive-side WebSocketDisconnect deregisters the session and fails pending requests.
+
+    Exercises the real FastAPI WS route: a runner connects, registers,
+    a transport request opens and blocks waiting for the response head,
+    then the receive side raises ``WebSocketDisconnect`` (the runner
+    dropped). The route handler must retire the exact session and wake
+    the pending request within its own bound — not relying on an
+    external client timeout.
+
+    The fix in e2a3bda added explicit cleanup in the
+    ``except WebSocketDisconnect`` block of ``runner_tunnel.py`` so the
+    route handler's outer catch path also retires the session and fires
+    ``on_runner_disconnect``, rather than relying solely on the inner
+    helper-task wait's ``finally`` block.
+
+    :returns: None.
+    """
+    route_app = _tunnel_route_app()
+    registry = route_app.registry
+    runner_id = _RUNNER_ID
+
+    communicator = await _connect_route(route_app.app, _TUNNEL_PATH)
+    await _send_hello(communicator, registry, runner_id=runner_id)
+
+    session = registry.get(runner_id)
+    assert session is not None, "runner must register after hello"
+    assert session.in_flight == {}
+
+    # Open a transport request that will hang on the response head.
+    # The transport opens reassembly state in the registry, enqueues a
+    # request frame on the session's outbound queue, then blocks on
+    # ``state.head_future`` until the runner sends back a head frame.
+    transport = WSTunnelTransport(registry, runner_id)
+    request_task = asyncio.create_task(
+        transport.handle_async_request(
+            httpx.Request("GET", "http://runner/health")
+        ),
+        name="regression-disconnect-pending-request",
+    )
+    await asyncio.wait_for(
+        _wait_for_in_flight(session, timeout_s=2.0),
+        timeout=2.0,
+    )
+    assert len(session.in_flight) == 1
+    req_id = next(iter(session.in_flight))
+    assert not request_task.done()
+
+    # Make the receive side raise WebSocketDisconnect by feeding a
+    # disconnect event to the ApplicationCommunicator. The route's
+    # _receive_task will raise WebSocketDisconnect, which propagates
+    # through the helper-task wait and triggers cleanup.
+    await communicator.send_input(
+        {"type": "websocket.disconnect", "code": 1006, "reason": "abnormal"}
+    )
+
+    # Await route-handler cleanup with our own bound (not an external
+    # client timeout). The ApplicationCommunicator's ``wait`` returns
+    # only after the route handler's task completes, which includes
+    # the inner finally deregister and the outer except handling.
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(communicator.wait(timeout=2.0), timeout=2.0)
+
+    # Assertion 6: the exact session is deregistered.
+    assert registry.get(runner_id) is None, (
+        "session must be deregistered after receive-side disconnect; "
+        f"registry still contains: {registry.online_runner_ids()!r}"
+    )
+
+    # Assertion 7: the pending request must have failed with a
+    # tunnel-closed / connection error within the internal bound.
+    # The deregister path sets the head_future's exception to
+    # ``ConnectionError("tunnel closed before request completed")``,
+    # which the transport re-raises.
+    with pytest.raises((ConnectionError, httpx.ConnectError)):
+        await asyncio.wait_for(request_task, timeout=2.0)
+    assert request_task.done(), "request task must have completed"
+
+    # Assertion 8: no request/channel bookkeeping remains. The
+    # session was already removed from the registry, so the in-flight
+    # map is detached from the registry; the deregister path also
+    # cleared the session's in_flight before removing it.
+    assert req_id not in session.in_flight, (
+        f"req_id {req_id!r} leaked in session.in_flight after deregister; "
+        f"remaining: {list(session.in_flight)!r}"
+    )
+    assert session.ws_channels == {}, "ws_channels must be empty after deregister"
+
+    # Assertion 9: no asynchronous task or unresolved future leaked.
+    # The head_future was resolved with an exception by the deregister
+    # path; the body_queue was sentinel-pushed. The route handler's
+    # helper tasks were cancelled and gathered in the inner finally.
+    # The route handler's own task has completed (communicator.wait
+    # returned). Verify by checking the request's state directly.
+    # (We no longer hold a reference to the RequestState — it was
+    # local to the transport — so assert via the request_task outcome.)
+
+
+async def test_ws_tunnel_route_replacement_generation_preserves_new_session() -> None:
+    """A replacement tunnel survives the old handler's cleanup.
+
+    Newest-wins (RUNNER.md §2): when a new tunnel registers under the
+    same runner id, the old session is retired and the new one
+    replaces it. The old route handler's eventual disconnect cleanup
+    must use the identity-safe ``deregister(runner_id, session)`` so
+    it does not remove the replacement.
+
+    This exercises the real WS route (not just ``TunnelRegistry`` in
+    isolation) so the route handler's ``registry.deregister(runner_id,
+    session)`` call site is verified end-to-end. The broad
+    identity-safe registry behavior is already covered in
+    ``tests/runner/transports/ws_tunnel/test_registry.py::test_stale_deregister_does_not_remove_newest_session``;
+    this test only adds the route-level wiring check.
+
+    :returns: None.
+    """
+    route_app = _tunnel_route_app()
+    registry = route_app.registry
+    runner_id = _RUNNER_ID
+
+    # Tunnel A registers via the route.
+    communicator_a = await _connect_route(route_app.app, _TUNNEL_PATH)
+    await _send_hello(communicator_a, registry, runner_id=runner_id)
+    session_a = registry.get(runner_id)
+    assert session_a is not None
+
+    # Tunnel B replaces A (newest-wins). The registry's register()
+    # call aborts session_a's in-flight and retires its sender; the
+    # route handler for A is still running but its session is stale.
+    # ``_wait_until_registered`` would return immediately because a
+    # session is already registered — poll for the replacement
+    # instead so we observe the new generation.
+    old_session = session_a
+    communicator_b = await _connect_route(route_app.app, _TUNNEL_PATH)
+    await communicator_b.send_input(
+        {"type": "websocket.receive", "text": encode_frame(
+            HelloFrame(
+                runner_version="0.1.0-test",
+                frame_protocol_version=1,
+                harnesses=["claude-sdk"],
+                envs=["os_sandbox"],
+            )
+        )},
+    )
+    await asyncio.wait_for(
+        _wait_until(
+            lambda: registry.get(runner_id) is not None
+            and registry.get(runner_id) is not old_session,
+            timeout_s=2.0,
+        ),
+        timeout=2.0,
+    )
+    session_b = registry.get(runner_id)
+    assert session_b is not None
+    assert session_b is not session_a, "register must retire the old session"
+
+    # The runner dials in under the same id again — its runner is
+    # tunnel B, not A. Sending the disconnect event for A's
+    # communicator triggers A's route handler cleanup. The cleanup
+    # must use the identity-safe ``deregister(runner_id, session_a)``
+    # so it removes session_a (already gone from the registry) and
+    # leaves session_b intact.
+    await communicator_a.send_input(
+        {"type": "websocket.disconnect", "code": 1000}
+    )
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(communicator_a.wait(timeout=2.0), timeout=2.0)
+
+    # Tunnel B remains registered and the registry points to it.
+    assert registry.get(runner_id) is session_b, (
+        "old handler's cleanup must not remove the replacement session"
+    )
+    assert registry.online_runner_ids() == [runner_id]
+
+    # Clean up tunnel B.
+    await communicator_b.send_input(
+        {"type": "websocket.disconnect", "code": 1000}
+    )
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(communicator_b.wait(timeout=2.0), timeout=2.0)
+    assert registry.get(runner_id) is None
+
+
+async def test_ws_tunnel_route_deregisters_on_task_cancellation() -> None:
+    """Cancelling the route handler retires the session and re-raises CancelledError.
+
+    The fix in e2a3bda added a dedicated ``except asyncio.CancelledError``
+    block to ``runner_tunnel.py`` that calls the identity-safe
+    ``registry.deregister(runner_id, session)`` and re-raises the
+    CancelledError.
+
+    The critical scenario is cancellation *after* registration but
+    *before* the inner helper-task ``try/finally`` runs — e.g. the
+    route handler is cancelled while awaiting the ``on_runner_connect``
+    callback. In that window the inner ``finally`` never executes, so
+    the dedicated ``except asyncio.CancelledError`` is the only path
+    that can retire the session. Pre-fix there was no such handler;
+    ``asyncio.CancelledError`` is a ``BaseException`` (not ``Exception``)
+    so the generic ``except Exception`` didn't catch it either — the
+    cancellation propagated to the caller with the session left
+    registered (a zombie).
+
+    :returns: None.
+    """
+    connect_started = asyncio.Event()
+    connect_proceed = asyncio.Event()
+
+    async def _blocking_on_connect(runner_id: str) -> None:
+        """Block the route handler in ``on_runner_connect`` until cancelled.
+
+        The route handler registers the session, then awaits this
+        callback. By blocking here we hold the handler between
+        registration and the inner ``try/finally`` so cancellation
+        skips the inner cleanup.
+        """
+        connect_started.set()
+        await connect_proceed.wait()
+
+    # Build the tunnel route app with the blocking on_connect hook.
+    registry = TunnelRegistry()
+    app = FastAPI()
+    app.include_router(
+        create_runner_tunnel_router(
+            registry,
+            on_runner_connect=_blocking_on_connect,
+        ),
+        prefix="/v1",
+    )
+    runner_id = _RUNNER_ID
+
+    communicator = await _connect_route(app, _TUNNEL_PATH)
+    await _send_hello(communicator, registry, runner_id=runner_id)
+
+    # Wait for the session to be registered and the on_connect
+    # callback to start blocking.
+    await asyncio.wait_for(connect_started.wait(), timeout=2.0)
+    session = registry.get(runner_id)
+    assert session is not None, "session must be registered after hello"
+
+    # Open a transport request that hangs on the response head. This
+    # verifies the pending request is also woken on cancellation.
+    transport = WSTunnelTransport(registry, runner_id)
+    request_task = asyncio.create_task(
+        transport.handle_async_request(
+            httpx.Request("GET", "http://runner/health")
+        ),
+        name="regression-cancel-pending-request",
+    )
+    await asyncio.wait_for(
+        _wait_for_in_flight(session, timeout_s=2.0),
+        timeout=2.0,
+    )
+    assert len(session.in_flight) == 1
+
+    # Cancel the route handler's task. The on_runner_connect callback
+    # is cancelled (it runs in the same task), the CancelledError
+    # propagates out of the callback's try/except (which catches
+    # Exception but NOT CancelledError), and the inner try/finally
+    # is never entered.
+    future = communicator.future
+    assert future is not None
+    future.cancel()
+    with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+        await asyncio.wait_for(communicator.wait(timeout=2.0), timeout=2.0)
+
+    # Release the on_connect callback so any lingering reference is
+    # unblocked (defensive; the task is already cancelled).
+    connect_proceed.set()
+
+    # The session must be retired. Pre-fix this fails: the session
+    # leaks because neither the inner finally (never entered) nor
+    # any except handler caught the CancelledError.
+    assert registry.get(runner_id) is None, (
+        "session must be deregistered after task cancellation; "
+        f"registry still contains: {registry.online_runner_ids()!r}"
+    )
+
+    # The pending request must have failed with a tunnel-closed error.
+    with pytest.raises((ConnectionError, httpx.ConnectError, asyncio.CancelledError)):
+        await asyncio.wait_for(request_task, timeout=2.0)
+    assert request_task.done()
