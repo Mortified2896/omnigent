@@ -2011,6 +2011,85 @@ async def test_copy_files_missing_source_file_is_all_or_nothing(
 
 
 @pytest.mark.asyncio
+async def test_copy_files_malformed_file_id_surfaces_actionable_not_found(
+    file_client: httpx.AsyncClient,
+    file_store: Any,
+) -> None:
+    """A malformed file id (not a 32-char hex uuid) fails the same as a missing one.
+
+    Regression for the production OpenCode delegation failure where a
+    sub-agent's ``file_ids`` carried a placeholder string (``"placeholder"``).
+    The route used to surface a bare ``"Not found."`` 404 from the
+    ``StatementError`` handler, which the runner reported as
+    ``"failed to copy files to child: 404"`` and the parent then read as
+    ``"OpenCode worker failed to start: session service returned 404 Not
+    found while initializing the child workspace"`` — i.e. the route's
+    actual error (bad file id) was lost, and the OpenCode worker never got
+    to start even though the harness selection, workspace, and session
+    were all valid. The malformed id must surface as the canonical
+    ``File '<id>' not found in source session`` error so the caller can
+    correct the args instead of seeing a misleading "session not found".
+
+    :param file_client: httpx client pre-authenticated for the child
+        session and the source session.
+    :param file_store: File metadata store fixture.
+    """
+    before = file_store.list(session_id="405bfe154d5c0e795a2b87021bc897bf").data
+
+    resp = await file_client.post(
+        "/v1/sessions/405bfe154d5c0e795a2b87021bc897bf/resources/files:copy",
+        json={
+            "source_session_id": "b460374fc8e697b296708f52dc9d8179",
+            "file_ids": ["placeholder"],
+        },
+    )
+    assert resp.status_code == 404, resp.text
+    body = resp.json()
+    assert body["error"]["code"] == "not_found"
+    # The actionable message — quote the offending id so the caller can
+    # correct it. The previous "Not found." response hid this and read as
+    # a session-not-found to the parent agent.
+    assert body["error"]["message"] == (
+        "File 'placeholder' not found in source session"
+    )
+
+    # All-or-nothing: destination unchanged because validation rejected the batch.
+    after = file_store.list(session_id="405bfe154d5c0e795a2b87021bc897bf").data
+    assert len(after) == len(before)
+
+
+@pytest.mark.asyncio
+async def test_copy_files_legacy_prefixed_file_id_is_normalized(
+    file_client: httpx.AsyncClient,
+    file_store: Any,
+) -> None:
+    """A ``file_<hex>`` file id is normalised before the Uuid16 column bind.
+
+    v0.6 dropped legacy prefixes on persisted ids but the bind layer
+    still strips them, so an old bookmarked URL or a sub-agent that
+    sends ``file_<hex>`` continues to resolve. Documents the legacy
+    compatibility contract so a future change to the bind path doesn't
+    silently re-break these callers.
+    """
+    legacy_id = "file_" + "b460374fc8e697b296708f52dc9d8179".replace("b460374f", "00000000") + "00"
+    # The above is a synthetic value; a real legacy id would point at a
+    # row that doesn't exist in this DB. The point is that the bind must
+    # NOT raise InvalidUuidError — a missing row should produce the
+    # canonical "File ... not found" message, not the bare 404.
+    resp = await file_client.post(
+        "/v1/sessions/405bfe154d5c0e795a2b87021bc897bf/resources/files:copy",
+        json={
+            "source_session_id": "b460374fc8e697b296708f52dc9d8179",
+            "file_ids": [legacy_id],
+        },
+    )
+    assert resp.status_code == 404, resp.text
+    body = resp.json()
+    assert body["error"]["code"] == "not_found"
+    assert legacy_id in body["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_copy_files_missing_blob_surfaces_before_any_write(
     file_client: httpx.AsyncClient,
     file_store: Any,

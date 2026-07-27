@@ -648,6 +648,61 @@ async def test_send_with_bad_file_id_surfaces_copy_error_and_posts_nothing(
 
 
 @pytest.mark.asyncio
+async def test_send_with_placeholder_file_id_surfaces_actionable_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression for the production OpenCode delegation failure.
+
+    A sub-agent call whose ``file_ids`` carried a placeholder string
+    (``"placeholder"``) used to surface as a bare ``404 Not found.`` from
+    the ``StatementError`` handler. The runner reported it as
+    ``"failed to copy files to child: 404"`` and the parent then read it
+    as ``"OpenCode worker failed to start: 404 Not found while
+    initializing child workspace"`` — the actual error (bad file id) was
+    lost and the OpenCode worker never got to start even though harness
+    selection, workspace, and session were all valid.
+
+    With the server fix the route surfaces ``File 'placeholder' not found
+    in source session`` instead of the bare ``Not found.`` The runner
+    forwards that actionable message verbatim so the parent agent can
+    correct its args, and still tears down the empty child session so a
+    retry with the same ``(agent, title)`` does not collide.
+    """
+    events: list[dict[str, Any]] = []
+    copies: list[dict[str, Any]] = []
+    deletes: list[str] = []
+    handler = _spawn_server_handler(
+        events=events,
+        copies=copies,
+        mapping={},
+        copy_status=404,
+        copy_error={
+            "error": {
+                "code": "not_found",
+                "message": "File 'placeholder' not found in source session",
+            },
+        },
+        deletes=deletes,
+    )
+
+    output = await _run_spawn(
+        monkeypatch,
+        args_payload={"input": "delegate this", "file_ids": ["placeholder"]},
+        handler=handler,
+    )
+
+    # The actionable message is forwarded to the parent agent.
+    assert output.startswith("Error: failed to copy files to child:"), output
+    assert "File 'placeholder' not found in source session" in output, output
+    # No child event is posted when the copy failed — prevents a phantom
+    # message from reaching the runner before teardown completes.
+    assert events == []
+    # The freshly-created server child is torn down.
+    assert deletes == [_CHILD_ID]
+
+
+@pytest.mark.asyncio
 async def test_copy_failure_surfaces_child_delete_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

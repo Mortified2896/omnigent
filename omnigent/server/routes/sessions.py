@@ -55,7 +55,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError, StatementError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from omnigent.codex_native_elicitation import codex_elicitation_id
@@ -63,7 +63,7 @@ from omnigent.cost_plan import (
     COST_CONTROL_LABEL_NAMESPACE,
     reserved_cost_control_keys,
 )
-from omnigent.db.db_models import LABEL_VALUE_MAX_LEN
+from omnigent.db.db_models import LABEL_VALUE_MAX_LEN, InvalidUuidError
 from omnigent.db.utils import generate_agent_id, generate_task_id
 from omnigent.entities import (
     Agent,
@@ -19680,7 +19680,28 @@ def create_sessions_router(
         sources: list[StoredFile] = []
         total_bytes = 0
         for file_id in body.file_ids:
-            stored = file_store.get(file_id, session_id=body.source_session_id)
+            # A malformed file id (e.g. a placeholder string from a sub-agent
+            # call) raises InvalidUuidError on the Uuid16 column bind, wrapped
+            # by SQLAlchemy as StatementError. The generic StatementError
+            # handler maps that to a bare 404 with no context, which fails the
+            # upstream runner's "child workspace initialization" path with a
+            # confusing "Not found." surface. Treat a malformed id the same as
+            # a missing one — both cannot address any row — so the route
+            # surfaces the same actionable 404 it has always used for missing
+            # source files.
+            try:
+                stored = file_store.get(file_id, session_id=body.source_session_id)
+            except InvalidUuidError:
+                # Bare InvalidUuidError (defensive; SQLAlchemy normally wraps).
+                stored = None
+            except StatementError as exc:
+                # The bind path wraps the type-decorator's error in
+                # StatementError before raising it; unwrap here so the route
+                # can answer with the canonical file-not-found message.
+                if isinstance(exc.orig, InvalidUuidError):
+                    stored = None
+                else:
+                    raise
             if stored is None or not artifact_store.exists(stored.id):
                 raise OmnigentError(
                     f"File '{file_id}' not found in source session",
