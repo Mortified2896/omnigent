@@ -22,6 +22,14 @@ import { writeDefaultBaseBranch } from "@/lib/baseBranchPreferences";
 // layers are stubbed so the test isolates that wiring.
 const navigateMock = vi.fn();
 const setPendingInitialPromptMock = vi.fn();
+const harnessModelOptionsOverride = vi.hoisted(() => ({
+  groups: null as Array<{
+    label: string;
+    source: string;
+    error?: string;
+    models: Array<Record<string, unknown>>;
+  }> | null,
+}));
 
 const RECENT_KEY = "omnigent:recent-workspaces";
 // Prompt history is scoped per conversation; the landing composer writes under
@@ -53,6 +61,74 @@ vi.mock("@/hooks/useHosts", () => ({ useHosts: vi.fn() }));
 vi.mock("@/hooks/useAvailableAgents", () => ({
   useAvailableAgents: vi.fn(),
   prefetchAvailableAgentDetails: vi.fn(),
+}));
+vi.mock("@/hooks/useHarnessModelOptions", () => ({
+  useHarnessModelOptions: () => {
+    const generic = {
+      id: "openai/gpt-5-codex",
+      label: "GPT-5 Codex",
+      provider: "OpenAI",
+      source: "authenticated-opencode",
+      reasoning_efforts: ["low", "high"],
+    };
+    const codex = {
+      id: "openai/gpt-5.4",
+      label: "GPT-5.4",
+      provider: "Codex Subscription",
+      source: "direct",
+      provider_id: "openai",
+      access_source: "codex-subscription",
+      availability: "available",
+    };
+    const minimaxGlobal = {
+      id: "minimax-coding-plan/MiniMax-M2.5",
+      label: "MiniMax M2.5",
+      provider: "MiniMax Token Plan",
+      source: "direct",
+      provider_id: "minimax-coding-plan",
+      access_source: "minimax-token-plan",
+      availability: "available",
+      variants: ["adaptive", "toggle"],
+    };
+    const minimaxChina = {
+      ...minimaxGlobal,
+      id: "minimax-cn-coding-plan/MiniMax-M2.5",
+      provider_id: "minimax-cn-coding-plan",
+    };
+    const omniroute = {
+      id: "coding-fast",
+      label: "Coding Fast",
+      provider: "OmniRoute",
+      source: "omniroute",
+      route_id: "coding-fast",
+    };
+    const groups = harnessModelOptionsOverride.groups ?? [
+      {
+        label: "Existing OpenCode models",
+        source: "opencode-authenticated-catalog",
+        models: [generic],
+      },
+      {
+        label: "Codex Subscription",
+        source: "opencode-codex-subscription-catalog",
+        models: [codex],
+      },
+      {
+        label: "MiniMax Token Plan",
+        source: "opencode-minimax-token-plan-catalog",
+        models: [minimaxGlobal, minimaxChina],
+      },
+      { label: "OmniRoute", source: "omniroute", models: [omniroute] },
+    ];
+    return {
+      data: {
+        groups,
+        models: groups.flatMap((group) => group.models),
+      },
+      isLoading: false,
+      error: null,
+    };
+  },
 }));
 // The home listing is only consulted when there's no recent; the recent is
 // always set here, so keep this inert (returns no listing).
@@ -185,6 +261,7 @@ beforeEach(() => {
   navigateMock.mockReset();
   setPendingInitialPromptMock.mockReset();
   vi.mocked(authenticatedFetch).mockReset();
+  harnessModelOptionsOverride.groups = null;
   // Clear the module-level landing draft so a base branch (or other field)
   // left behind by an unmounting test doesn't seed the next one.
   resetLandingDraft();
@@ -692,11 +769,8 @@ describe("NewChatLandingScreen create flow", () => {
   });
 
   it("posts no launch args for opencode-native, even after a codex full-access pick", async () => {
-    // OpenCode declares no mode capability (no permission picker) — `opencode
-    // attach` has no permission/sandbox CLI flag, and emitting Codex's
-    // `--sandbox`/`--ask-for-approval` presets is exactly what crashed the TUI.
-    // So a "Full access" pick on Codex must NOT bleed into OpenCode's launch:
-    // switching to OpenCode posts no terminal_launch_args at all.
+    // OpenCode has a model catalog but no permission/sandbox launch flags.
+    // A "Full access" pick on Codex must not bleed into its launch.
     setAgents([
       agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" }),
       agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
@@ -712,8 +786,7 @@ describe("NewChatLandingScreen create flow", () => {
     openAgentConfig("ag_codex");
     fireEvent.click(screen.getByTestId("new-chat-landing-approval-full-access"));
 
-    // Switch to OpenCode by clicking its row (a plain row — no config submenu,
-    // since it has no mode knobs).
+    // Clicking OpenCode's configurable row commits the agent selection.
     selectAgent("ag_opencode");
 
     typeMessage("go");
@@ -723,6 +796,291 @@ describe("NewChatLandingScreen create flow", () => {
     const body = JSON.parse(init.body as string);
     expect(body.labels?.["omnigent.wrapper"]).toBe("opencode-native-ui");
     expect(body.terminal_launch_args).toBeUndefined();
+  });
+
+  it("groups OpenCode sources in order and collapses the generic catalog initially", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+
+    const headers = ["codex", "minimax", "omniroute", "other"].map((key) =>
+      screen.getByTestId(`new-chat-landing-opencode-group-${key}`),
+    );
+    expect(headers.map((header) => header.textContent)).toEqual([
+      "Codex Subscription1",
+      "MiniMax Token Plan2",
+      "OmniRoute Combos1",
+      "Other OpenCode Models1",
+    ]);
+    expect(headers.map((header) => header.getAttribute("aria-expanded"))).toEqual([
+      "true",
+      "true",
+      "true",
+      "false",
+    ]);
+    expect(screen.queryByText("GPT-5 Codex")).toBeNull();
+    expect(screen.getByText("Global · minimax-coding-plan/MiniMax-M2.5")).toBeInTheDocument();
+    expect(screen.getByText("China · minimax-cn-coding-plan/MiniMax-M2.5")).toBeInTheDocument();
+
+    fireEvent.click(headers[3]);
+    expect(headers[3]).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("GPT-5 Codex")).toBeInTheDocument();
+  });
+
+  it("scopes an OmniRoute outage without hiding direct or generic models", async () => {
+    harnessModelOptionsOverride.groups = [
+      {
+        label: "Existing OpenCode models",
+        source: "opencode-authenticated-catalog",
+        models: [{ id: "google/gemini-3", label: "Gemini 3", provider: "Google" }],
+      },
+      {
+        label: "MiniMax Token Plan",
+        source: "opencode-minimax-token-plan-catalog",
+        models: [
+          {
+            id: "minimax-coding-plan/MiniMax-M3",
+            label: "MiniMax M3",
+            provider: "MiniMax Token Plan",
+            provider_id: "minimax-coding-plan",
+            access_source: "minimax-token-plan",
+            availability: "available",
+          },
+        ],
+      },
+      {
+        label: "OmniRoute",
+        source: "omniroute",
+        error: "OmniRoute is currently unavailable.",
+        models: [],
+      },
+    ];
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+
+    expect(screen.getByTestId("new-chat-landing-opencode-group-omniroute")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getAllByText("Unavailable")).toHaveLength(2);
+    expect(screen.getByText("MiniMax M3")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-group-other"));
+    expect(screen.getByText("Gemini 3")).toBeInTheDocument();
+  });
+
+  it("keeps disclosure state separate from a selected direct OpenCode model", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(
+      screen.getByTestId("new-chat-landing-opencode-model-minimax-coding-plan/MiniMax-M2.5"),
+    );
+    const minimaxHeader = screen.getByTestId("new-chat-landing-opencode-group-minimax");
+    fireEvent.click(minimaxHeader);
+
+    expect(minimaxHeader).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByTestId("new-chat-landing-opencode-model-minimax-coding-plan/MiniMax-M2.5"),
+    ).toBeNull();
+    expect(JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")).toMatchObject(
+      {
+        "opencode-native": {
+          model: "minimax-coding-plan/MiniMax-M2.5",
+          route: "",
+        },
+      },
+    );
+  });
+
+  it("reveals generic OpenCode matches while their group is collapsed", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    expect(screen.getByTestId("new-chat-landing-opencode-group-other")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+
+    const search = screen.getByTestId("new-chat-landing-opencode-search");
+    await waitFor(() => expect(search).toHaveFocus());
+    fireEvent.change(search, {
+      target: { value: "gpt-5 codex" },
+    });
+
+    expect(screen.getByText("GPT-5 Codex")).toBeInTheDocument();
+    expect(screen.getByTestId("new-chat-landing-opencode-group-other")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.queryByTestId("new-chat-landing-opencode-group-codex")).toBeNull();
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(screen.getByTestId("new-chat-landing-opencode-group-other")).toHaveFocus();
+  });
+
+  it("uses accessible keyboard disclosure controls without changing the selection", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    const header = screen.getByTestId("new-chat-landing-opencode-group-other");
+    header.focus();
+    fireEvent.keyDown(header, { key: "Enter" });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(document.activeElement).toBe(header);
+
+    fireEvent.keyDown(header, { key: " " });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(localStorage.getItem("omnigent:last-mode-by-harness")).toBeNull();
+  });
+
+  it("posts a direct OpenCode MiniMax selection without an OmniRoute route", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_model" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(
+      screen.getByTestId("new-chat-landing-opencode-model-minimax-coding-plan/MiniMax-M2.5"),
+    );
+    // MiniMax's variants are provider controls, not OpenAI-style efforts.
+    expect(screen.queryByTestId("new-chat-landing-opencode-effort-low")).toBeNull();
+    closeMenu();
+
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({ model_override: "minimax-coding-plan/MiniMax-M2.5" });
+    expect(body.omniroute_route_id).toBeUndefined();
+  });
+
+  it("persists and posts an exact Codex Subscription model through OpenCode", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_codex" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4"));
+    expect(JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")).toMatchObject(
+      { "opencode-native": { model: "openai/gpt-5.4", route: "" } },
+    );
+    closeMenu();
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.model_override).toBe("openai/gpt-5.4");
+    expect(body.omniroute_route_id).toBeUndefined();
+    expect(body.labels?.["omnigent.wrapper"]).toBe("opencode-native-ui");
+    expect(body.labels?.["omnigent.opencode_native.access_source"]).toBe("codex-subscription");
+  });
+
+  it("finds a Codex model only in the subscription group", async () => {
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.change(screen.getByTestId("new-chat-landing-opencode-search"), {
+      target: { value: "openai/gpt-5.4" },
+    });
+
+    expect(screen.getByTestId("new-chat-landing-opencode-group-codex")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-chat-landing-opencode-group-other")).toBeNull();
+    expect(
+      screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4"),
+    ).toBeInTheDocument();
+  });
+
+  it("restores a selected Codex model with its group expanded", async () => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "openai/gpt-5.4", route: "" } }),
+    );
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+
+    expect(screen.getByTestId("new-chat-landing-opencode-group-codex")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("restores and posts an OmniRoute combo without a direct model override", async () => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "", route: "coding-fast" } }),
+    );
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_route" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    expect(screen.getByTestId("new-chat-landing-opencode-model-coding-fast")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    closeMenu();
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.omniroute_route_id).toBe("coding-fast");
+    expect(body.model_override).toBeUndefined();
+  });
+
+  it("expands the restored generic model group automatically", async () => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { model: "openai/gpt-5-codex", route: "" } }),
+    );
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-opencode-group-other")).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      ),
+    );
+    expect(screen.getByText("GPT-5 Codex")).toBeInTheDocument();
   });
 
   it("omits terminal_launch_args when permission mode is left at default for claude-native", async () => {
@@ -1331,6 +1689,258 @@ describe("NewChatLandingScreen create flow", () => {
     await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
     const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string).agent_id).toBe("ag_hello");
+  });
+
+  // -------------------------------------------------------------------------
+  // OpenCode-native permission mode selector (Default / Auto / Accept edits /
+  // Plan / Don't ask / Bypass permissions). The wire values are distinct
+  // from Claude Code's `permissionMode` (which sends ``--permission-mode X``
+  // via terminal_launch_args); the OpenCode-native mode lands on the
+  // session row as ``permission_mode`` and is translated by the runner into
+  // OpenCode's ``permission`` + ``default_agent`` config surface.
+  // -------------------------------------------------------------------------
+
+  it("defaults the OpenCode permission selector to Default", async () => {
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    expect(
+      screen.getByTestId("new-chat-landing-opencode-permission-default").getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("selects every OpenCode permission mode through the picker", async () => {
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    // All six documented values are reachable in the radio group; pick each
+    // and assert it shows as the checked value. ``onSelect`` is
+    // ``preventDefault``-ed so the menu stays open across picks.
+    for (const mode of [
+      "default",
+      "auto",
+      "accept_edits",
+      "plan",
+      "dont_ask",
+      "bypass",
+    ]) {
+      fireEvent.click(screen.getByTestId(`new-chat-landing-opencode-permission-${mode}`));
+      expect(
+        screen
+          .getByTestId(`new-chat-landing-opencode-permission-${mode}`)
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+    }
+  });
+
+  it("posts the selected OpenCode permission mode on the create body", async () => {
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_mode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-auto"));
+    closeMenu();
+
+    typeMessage("summarise the repo");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.permission_mode).toBe("auto");
+  });
+
+  it("omits permission_mode when Default is selected", async () => {
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_opencode_default" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    // Default is already checked; just submit and confirm the field is absent.
+    closeMenu();
+
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.permission_mode).toBeUndefined();
+  });
+
+  it("renders a warning when Bypass permissions is selected", async () => {
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-bypass"));
+    expect(
+      screen.getByTestId("new-chat-landing-opencode-permission-bypass-warning"),
+    ).toBeInTheDocument();
+    // The warning copy must mention that the outer sandbox / host policy is
+    // NOT relaxed — this is the safety property the label is meant to convey.
+    expect(
+      screen.getByTestId("new-chat-landing-opencode-permission-bypass-warning").textContent,
+    ).toMatch(/sandbox|host policy/i);
+  });
+
+  it("does not emit an OpenCode-only permission mode for other harnesses", async () => {
+    // Switching harnesses must never post an OpenCode-native ``auto`` /
+    // ``accept_edits`` / ``plan`` / ``dont_ask`` mode to Claude Code.
+    // Those values are not valid Claude ``--permission-mode`` args and would
+    // either be rejected or, worse, silently swallowed.
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { mode: "auto" } }),
+    );
+    setAgents([
+      agent({ id: "ag_claude", name: "claude-native-ui", display_name: "Claude Code" }),
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_claude_no_opencode_mode" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // Commit Claude as the selected agent (single-click commits + closes).
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-agent-ag_claude"));
+
+    typeMessage("explain this");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    // No top-level ``permission_mode`` for Claude (Claude sends it as a CLI
+    // flag via ``terminal_launch_args`` instead).
+    expect(body.permission_mode).toBeUndefined();
+    // And the flag pair must not be the OpenCode-only ``auto`` value.
+    const args: string[] | undefined = body.terminal_launch_args;
+    if (args) {
+      expect(args).not.toContain("auto");
+      expect(args).not.toContain("accept_edits");
+      expect(args).not.toContain("plan");
+      expect(args).not.toContain("dont_ask");
+    }
+  });
+
+  it("preserves the OpenCode permission mode across model picks", async () => {
+    // Switching the model must not silently reset the user's permission
+    // choice — model and mode are independent knobs.
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-accept_edits"));
+    // Pick a different model (Codex subscription). The mode must NOT clear.
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5.4"));
+    expect(
+      screen
+        .getByTestId("new-chat-landing-opencode-permission-accept_edits")
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("preserves the OpenCode permission mode across OmniRoute route picks", async () => {
+    // Switching the manually-picked OmniRoute route must not silently reset
+    // the user's permission choice.
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-dont_ask"));
+    // Pick an OmniRoute route; the mode must NOT clear.
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-model-coding-fast"));
+    expect(
+      screen
+        .getByTestId("new-chat-landing-opencode-permission-dont_ask")
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("preserves the OpenCode permission mode across effort picks", async () => {
+    // Effort lives on the active model's reasoning_efforts list, which only
+    // the generic authenticated-catalog models populate. Use the generic
+    // catalog so the effort rows mount.
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    // Open the "Other OpenCode Models" group so the generic catalog row is
+    // visible, then pick it so the effort picker mounts.
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-group-other"));
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-model-openai/gpt-5-codex"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-chat-landing-opencode-effort-low")).not.toBeNull(),
+    );
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-plan"));
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-effort-low"));
+    expect(
+      screen
+        .getByTestId("new-chat-landing-opencode-permission-plan")
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("persists the picked OpenCode permission mode to localStorage", async () => {
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-bypass"));
+    expect(JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")).toMatchObject(
+      { "opencode-native": { mode: "bypass" } },
+    );
+  });
+
+  it("restores the OpenCode permission mode from a previous visit", async () => {
+    // Returning user: a stored ``opencode-native`` ``mode`` lands as the
+    // checked radio on a fresh mount, the same per-harness snapshot the
+    // Claude/Codex mode knobs use.
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "opencode-native": { mode: "dont_ask" } }),
+    );
+    setAgents([
+      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentConfig("ag_opencode");
+    expect(
+      screen
+        .getByTestId("new-chat-landing-opencode-permission-dont_ask")
+        .getAttribute("aria-checked"),
+    ).toBe("true");
   });
 });
 

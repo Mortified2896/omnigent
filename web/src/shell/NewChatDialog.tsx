@@ -51,6 +51,13 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { authenticatedFetch } from "@/lib/identity";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
+import {
+  miniMaxProviderIndicator,
+  openCodeModelMatches,
+  openCodeOptionValue,
+  organizeOpenCodeModelGroups,
+  type OpenCodeGroupKey,
+} from "@/lib/openCodeModelGroups";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { sandboxOptionLabel } from "@/lib/capabilities";
@@ -78,6 +85,10 @@ import { readLastHarness, writeLastHarness } from "@/lib/harnessPreferences";
 import { readHideUnconfiguredHarnesses } from "@/lib/harnessVisibilityPreferences";
 import { readDefaultBaseBranch } from "@/lib/baseBranchPreferences";
 import { readHarnessOptions, writeHarnessOption } from "@/lib/modePreferences";
+import {
+  useHarnessModelOptions,
+  type HarnessModelOptionGroup,
+} from "@/hooks/useHarnessModelOptions";
 import { useBrainHarnessLabels } from "@/lib/agentLabels";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import { sortAgentsForDisplay } from "@/lib/agentGrouping";
@@ -125,6 +136,7 @@ import { OttoEyes } from "@/components/OttoEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import { IntelligentModelControl, type CostControlMode } from "@/components/CostRoutingControl";
+import { RouteApprovalControl } from "@/components/RouteApprovalControl";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentRowTooltip } from "@/components/AgentHoverCard";
 import { CreateAgentDialog } from "./CreateAgentDialog";
@@ -181,6 +193,49 @@ const CLAUDE_NATIVE_PERMISSION_MODES: { value: string; label: string; descriptio
     value: "bypassPermissions",
     label: "Bypass permissions",
     description: "Runs everything; no prompts or safety checks",
+  },
+];
+
+// OpenCode-native permission-mode vocabulary. The user-visible labels are
+// pinned by the UX brief: Default / Auto / Accept edits / Plan / Don't ask
+// / Bypass permissions. The wire-level values match the shared
+// ``KNOWN_PERMISSION_MODES`` enum server-side (omnigent.server.routing_agent);
+// the runner translates them into OpenCode's config surface (permission /
+// default_agent) so a "Default" session never injects an override and the
+// "Bypass permissions" toggle never relaxes the outer sandbox / network
+// guard.
+const OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE = "default";
+const OPENCODE_NATIVE_PERMISSION_MODES: { value: string; label: string; description: string }[] = [
+  {
+    value: "default",
+    label: "Default",
+    description: "Preserves OpenCode's default behaviour (prompts on edits and commands)",
+  },
+  {
+    value: "auto",
+    label: "Auto",
+    description: "Auto-approves non-denied operations; explicit deny rules remain denied",
+  },
+  {
+    value: "accept_edits",
+    label: "Accept edits",
+    description: "Allows file edits without prompting; shell commands still ask",
+  },
+  {
+    value: "plan",
+    label: "Plan",
+    description: "Uses OpenCode's plan agent; cannot edit files",
+  },
+  {
+    value: "dont_ask",
+    label: "Don't ask",
+    description: "Never prompts; ask-level operations are rejected",
+  },
+  {
+    value: "bypass",
+    label: "Bypass permissions",
+    description:
+      "Allows every OpenCode tool permission; outer sandbox and host policy remain active",
   },
 ];
 
@@ -284,6 +339,7 @@ const CODEX_NATIVE_APPROVAL_MODES: {
 // approval-mode presets above: when bypass is on the runner strips any
 // `--sandbox` / `--ask-for-approval` flags those presets would emit.
 const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
+const OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY = "omnigent.opencode_native.access_source";
 // The exact phrase a user must TYPE (not just click) to arm full bypass.
 // A typed confirmation makes the dangerous mode impossible to enable by an
 // accidental click; the toggle stays off until this is entered verbatim.
@@ -962,6 +1018,72 @@ function PermissionModeOptions({
 }
 
 /**
+ * The OpenCode-native permission-mode radio rows + previewed-description
+ * footer, rendered inside the OpenCode submenu in the agent/harness picker.
+ *
+ * The shape mirrors {@link PermissionModeOptions} (Claude Code's variant);
+ * the only difference is the option list and the warning copy that follows
+ * the ``bypass`` row (the OpenCode harness can run unsafe operations, so the
+ * user gets an inline danger treatment).
+ *
+ * @param value Currently selected mode, e.g. ``"default"``.
+ * @param onValueChange Selection callback (receives the mode value).
+ */
+function OpenCodePermissionModeOptions({
+  value,
+  onValueChange,
+}: {
+  value: string;
+  onValueChange: (mode: string) => void;
+}) {
+  const [previewed, setPreviewed] = useState<string | null>(null);
+  const detail = OPENCODE_NATIVE_PERMISSION_MODES.find(
+    (m) => m.value === (previewed ?? value),
+  )?.description;
+  const isBypass = (previewed ?? value) === "bypass";
+  return (
+    <>
+      <DropdownMenuRadioGroup value={value} onValueChange={onValueChange}>
+        {OPENCODE_NATIVE_PERMISSION_MODES.map((mode) => (
+          <DropdownMenuRadioItem
+            key={mode.value}
+            value={mode.value}
+            data-testid={`new-chat-landing-opencode-permission-${mode.value}`}
+            onFocus={() => setPreviewed(mode.value)}
+            onPointerEnter={() => setPreviewed(mode.value)}
+            onSelect={(event) => event.preventDefault()}
+            className="rounded-sm pl-2 py-1 text-xs"
+          >
+            {mode.label}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator />
+      <p
+        data-testid="new-chat-landing-opencode-permission-detail"
+        className="min-h-5 px-2 pt-0.5 pb-1 text-xs leading-relaxed text-muted-foreground"
+      >
+        {detail}
+      </p>
+      {isBypass && (
+        <div
+          role="alert"
+          data-testid="new-chat-landing-opencode-permission-bypass-warning"
+          className="mx-2 mt-1 mb-1.5 flex items-start gap-1.5 rounded-md border border-destructive bg-destructive/10 px-2 py-1.5 text-[11px] font-medium leading-relaxed text-destructive"
+        >
+          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            Bypass permissions lets the session run every OpenCode tool without
+            asking. Omnigent sandboxing, network policy, and host policy still
+            apply — only OpenCode's local permission gate is relaxed.
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * Codex approval-mode radio rows, rendered inside the Advanced settings
  * menu in the composer footer. Mirror of {@link PermissionModeOptions}
  * for the Codex-native agent.
@@ -1209,6 +1331,206 @@ function BrainHarnessOptions({
  * The pick rides along to the create as ``model_override`` (the
  * version-agnostic alias) and ``reasoning_effort``.
  */
+export function OpenCodeModelOptions({
+  groups,
+  loading,
+  error,
+  model,
+  route,
+  effort,
+  onModelChange,
+  onEffortChange,
+}: {
+  groups: HarnessModelOptionGroup[];
+  loading: boolean;
+  error: Error | null;
+  model: string;
+  route: string;
+  effort: string;
+  onModelChange: (model: string, source?: string) => void;
+  onEffortChange: (effort: string) => void;
+}) {
+  const organizedGroups = useMemo(() => organizeOpenCodeModelGroups(groups), [groups]);
+  const selectedId = route || model;
+  const selectedGroup = organizedGroups.find((group) =>
+    group.models.some((item) => openCodeOptionValue(group, item) === selectedId),
+  );
+  const selected = selectedGroup?.models.find(
+    (item) => openCodeOptionValue(selectedGroup, item) === selectedId,
+  );
+  const [query, setQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [expanded, setExpanded] = useState<Set<OpenCodeGroupKey>>(
+    () => new Set(["codex", "minimax", "omniroute"]),
+  );
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedGroup) return;
+    setExpanded((current) => {
+      if (current.has(selectedGroup.key)) return current;
+      const next = new Set(current);
+      next.add(selectedGroup.key);
+      return next;
+    });
+  }, [selectedGroup]);
+
+  // `variants` describes provider-specific controls such as MiniMax adaptive
+  // mode. Only an explicit reasoning_efforts list is an effort picker.
+  const efforts = selected?.reasoning_efforts ?? [];
+  if (loading) {
+    return <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading models…</div>;
+  }
+  if (error) {
+    return <div className="px-2 py-1.5 text-xs text-destructive">Could not load models.</div>;
+  }
+
+  const searching = query.trim().length > 0;
+  const visibleGroups = organizedGroups
+    .map((group) => ({
+      ...group,
+      visibleModels: group.models.filter((item) => openCodeModelMatches(item, query)),
+    }))
+    .filter((group) => !searching || group.visibleModels.length > 0);
+
+  return (
+    <>
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-popover px-2 py-1.5">
+        <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          ref={searchInputRef}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              event.currentTarget
+                .closest('[role="menu"]')
+                ?.querySelector<HTMLElement>('[data-testid^="new-chat-landing-opencode-group-"]')
+                ?.focus();
+              return;
+            }
+            if (event.key === "Escape" && query) {
+              event.preventDefault();
+              event.stopPropagation();
+              setQuery("");
+              return;
+            }
+            if (event.key !== "Escape") event.stopPropagation();
+          }}
+          placeholder="Search OpenCode models"
+          aria-label="Search OpenCode models"
+          data-testid="new-chat-landing-opencode-search"
+          className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      {visibleGroups.map((group, index) => {
+        const isExpanded = searching || expanded.has(group.key);
+        const contentId = `opencode-group-${group.key}`;
+        const providerIndicator = group.key === "minimax";
+        return (
+          <div key={group.key}>
+            {index > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              aria-expanded={isExpanded}
+              aria-controls={contentId}
+              data-testid={`new-chat-landing-opencode-group-${group.key}`}
+              onSelect={(event) => {
+                event.preventDefault();
+                setExpanded((current) => {
+                  const next = new Set(current);
+                  if (next.has(group.key)) next.delete(group.key);
+                  else next.add(group.key);
+                  return next;
+                });
+              }}
+              className="sticky top-8 z-[5] flex items-center gap-2 rounded-sm bg-popover px-2 py-1.5 text-xs font-medium"
+            >
+              {isExpanded ? (
+                <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1 truncate">{group.label}</span>
+              <span className="tabular-nums text-[11px] text-muted-foreground">
+                {group.models.length}
+              </span>
+            </DropdownMenuItem>
+            {isExpanded && (
+              <div id={contentId}>
+                {group.error && group.models.length === 0 ? (
+                  <div className="px-7 py-1 text-xs text-muted-foreground">Unavailable</div>
+                ) : group.visibleModels.length === 0 ? (
+                  <div className="px-7 py-1 text-xs text-muted-foreground">
+                    {group.key === "other" ? "No models available." : "Unavailable"}
+                  </div>
+                ) : (
+                  <DropdownMenuRadioGroup
+                    value={group.key === "omniroute" ? route : model}
+                    onValueChange={(value) =>
+                      onModelChange(value, group.key === "omniroute" ? "omniroute" : group.source)
+                    }
+                  >
+                    {group.visibleModels.map((item) => {
+                      const indicator = providerIndicator
+                        ? miniMaxProviderIndicator(item.provider_id)
+                        : null;
+                      return (
+                        <DropdownMenuRadioItem
+                          key={item.id}
+                          value={openCodeOptionValue(group, item)}
+                          data-testid={`new-chat-landing-opencode-model-${item.id}`}
+                          onSelect={(event) => event.preventDefault()}
+                          className="items-start rounded-sm py-1 pl-2 text-xs"
+                          title={item.id}
+                        >
+                          <span className="flex min-w-0 flex-col">
+                            <span className="truncate">{item.label}</span>
+                            <span className="truncate text-[10px] text-muted-foreground">
+                              {indicator ? `${indicator} · ` : ""}
+                              {item.id}
+                            </span>
+                          </span>
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
+                  </DropdownMenuRadioGroup>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {searching && visibleGroups.length === 0 && (
+        <div className="px-2 py-2 text-xs text-muted-foreground">No matching models.</div>
+      )}
+      {efforts.length > 0 && (
+        <>
+          <DropdownMenuSeparator />
+          <PickerSectionHeader>Effort</PickerSectionHeader>
+          <DropdownMenuRadioGroup value={effort} onValueChange={onEffortChange}>
+            {efforts.map((value) => (
+              <DropdownMenuRadioItem
+                key={value}
+                value={value}
+                data-testid={`new-chat-landing-opencode-effort-${value}`}
+                onSelect={(event) => event.preventDefault()}
+                className="rounded-sm py-1 pl-2 text-xs"
+              >
+                {value.charAt(0).toUpperCase() + value.slice(1)}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </>
+      )}
+    </>
+  );
+}
+
 function ModelEffortOptions({
   model,
   effort,
@@ -1273,8 +1595,9 @@ function PickerSectionHeader({ children }: { children: ReactNode }) {
  * native terminal CLIs — Claude Code, Codex, Cursor, …). **Level 2** is a
  * per-entry submenu of that entry's run-config knobs: model / effort /
  * permission mode for Claude Code, approval mode (+ bypass) for Codex,
- * approval mode for OpenCode, execution mode for Cursor, and the brain-harness
- * override for bundle agents. Entries with no knobs are plain selectable rows.
+ * direct provider model options for OpenCode, execution mode for Cursor, and
+ * the brain-harness override for bundle agents. Entries with no knobs are plain
+ * selectable rows.
  *
  * Holds no state of its own — the selected agent and every knob live in
  * {@link NewChatLandingScreen} and are threaded in. Replaces the old
@@ -1302,19 +1625,26 @@ function AgentHarnessPicker({
   onCreateCustomAgent,
   sandboxSelected,
   permissionMode,
+  opencodePermissionMode,
   approvalMode,
   cursorExecMode,
   bypassSandbox,
   pickedModel,
+  pickedOmniRouteRoute,
   pickedEffort,
   pickedHarness,
   setPermissionMode,
+  setOpencodePermissionMode,
   setApprovalMode,
   setCursorExecMode,
   setBypassSandbox,
   setPickedModel,
+  setPickedOmniRouteRoute,
   setPickedEffort,
   setPickedHarness,
+  opencodeModelGroups,
+  opencodeModelsLoading,
+  opencodeModelsError,
 }: {
   agentEntries: AvailableAgent[];
   harnessEntries: AvailableAgent[];
@@ -1330,19 +1660,26 @@ function AgentHarnessPicker({
   onCreateCustomAgent: () => void;
   sandboxSelected: boolean;
   permissionMode: string;
+  opencodePermissionMode: string;
   approvalMode: string;
   cursorExecMode: string;
   bypassSandbox: boolean;
   pickedModel: string;
+  pickedOmniRouteRoute: string;
   pickedEffort: string;
   pickedHarness: string | null;
   setPermissionMode: (mode: string) => void;
+  setOpencodePermissionMode: (mode: string) => void;
   setApprovalMode: (mode: string) => void;
   setCursorExecMode: (mode: string) => void;
   setBypassSandbox: (enabled: boolean) => void;
   setPickedModel: (model: string) => void;
+  setPickedOmniRouteRoute: (route: string) => void;
   setPickedEffort: (effort: string) => void;
   setPickedHarness: (harness: string | null, agentId?: string) => void;
+  opencodeModelGroups: HarnessModelOptionGroup[];
+  opencodeModelsLoading: boolean;
+  opencodeModelsError: Error | null;
 }) {
   // Controlled so clicking a knobbed row can commit the pick and close the
   // menu (see the sub-trigger onClick below) without diving into the submenu.
@@ -1371,6 +1708,7 @@ function AgentHarnessPicker({
     nativeAgentHasCapability(agent, "permissionMode") ||
     nativeAgentHasCapability(agent, "approvalMode") ||
     nativeAgentHasCapability(agent, "cursorMode") ||
+    nativeAgentHasCapability(agent, "modelOptions") ||
     (agent.harness != null && agent.harness in brainHarnessLabels);
 
   // The agent whose knobs page is open, resolved from the live entry lists so
@@ -1447,6 +1785,66 @@ function AgentHarnessPicker({
         ? stored.effort
         : "";
 
+    if (nativeAgentHasCapability(agent, "modelOptions")) {
+      const models = opencodeModelGroups.flatMap((group) => group.models);
+      const optionModel = isSelected ? pickedModel : (stored.model ?? "");
+      const optionRoute = isSelected ? pickedOmniRouteRoute : (stored.route ?? "");
+      const optionEffort = isSelected ? pickedEffort : (stored.effort ?? "");
+      const selectedOption = models.find(
+        (item) => item.id === (optionRoute || optionModel) || item.route_id === optionRoute,
+      );
+      return (
+        <>
+          <OpenCodeModelOptions
+            groups={opencodeModelGroups}
+            loading={opencodeModelsLoading}
+            error={opencodeModelsError}
+            model={selectedOption && !optionRoute ? optionModel : ""}
+            route={optionRoute}
+            effort={selectedOption?.reasoning_efforts?.includes(optionEffort) ? optionEffort : ""}
+            onModelChange={(value, source) => {
+              onSelectAgent(agent);
+              const isOmniRoute = source === "omniroute";
+              if (entryHarness) {
+                writeHarnessOption(
+                  entryHarness,
+                  isOmniRoute ? { model: "", route: value } : { model: value, route: "" },
+                );
+              }
+              if (isOmniRoute) {
+                setPickedOmniRouteRoute(value);
+                setPickedModel("");
+              } else {
+                setPickedOmniRouteRoute("");
+                setPickedModel(value);
+              }
+              const next = models.find(
+                (item) => item.id === value || item.route_id === value,
+              );
+              if (!next?.reasoning_efforts?.includes(optionEffort)) {
+                if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
+                setPickedEffort("");
+              }
+            }}
+            onEffortChange={(value) => {
+              onSelectAgent(agent);
+              if (entryHarness) writeHarnessOption(entryHarness, { effort: value });
+              setPickedEffort(value);
+            }}
+          />
+          <DropdownMenuSeparator />
+          <PickerSectionHeader>Permission Mode</PickerSectionHeader>
+          <OpenCodePermissionModeOptions
+            value={modeValue(
+              OPENCODE_NATIVE_PERMISSION_MODES,
+              OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE,
+              opencodePermissionMode,
+            )}
+            onValueChange={onModeChange(setOpencodePermissionMode)}
+          />
+        </>
+      );
+    }
     if (nativeAgentHasCapability(agent, "permissionMode")) {
       return (
         <>
@@ -1668,7 +2066,7 @@ function AgentHarnessPicker({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="end"
+        align={isMobile ? "center" : "end"}
         // Desktop keeps the default collision handling (the content never
         // resizes there — knobs live in hover flyouts). On mobile we force the
         // measured side and disable flipping so the in-place page swap holds
@@ -1766,13 +2164,16 @@ type LandingDraft = {
   branchName: string;
   prefilledBranch: string;
   permissionMode: string;
+  opencodePermissionMode: string;
   approvalMode: string;
   bypassSandbox: boolean;
   cursorExecMode: string;
   pickedHarness: string | null;
   pickedModel: string;
+  pickedOmniRouteRoute: string;
   pickedEffort: string;
   costControlMode: CostControlMode;
+  routeApprovalEnabled: boolean;
 };
 
 let landingDraft: LandingDraft | null = null;
@@ -1880,6 +2281,10 @@ export function NewChatLandingScreen() {
   const info = useServerInfo();
   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
+  // Independent gate for the new Model Routing Agent selector — does not
+  // require smart_routing_enabled to be true. The two flows are
+  // separate systems with their own server-side feature flags.
+  const routeApprovalServerEnabled = info !== "loading" && info.route_approval_enabled === true;
   // Provider-named label for the sandbox option (e.g. "Modal Sandbox"),
   // falling back to the generic "New Sandbox" when the server names no
   // provider.
@@ -1971,6 +2376,15 @@ export function NewChatLandingScreen() {
   const [permissionMode, setPermissionMode] = useState<string>(
     () => landingDraft?.permissionMode ?? CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE,
   );
+  // Permission mode for OpenCode-native. Lands on the session as
+  // ``permission_mode`` (``default`` / ``auto`` / ``accept_edits`` / ``plan``
+  // / ``dont_ask`` / ``bypass``) and is translated by the runner into
+  // OpenCode's ``permission`` + ``default_agent`` config surface. Distinct
+  // from Claude's ``permissionMode`` because the wire values differ; an
+  // OpenCode "Auto" session is NOT the same as a Claude "Auto" session.
+  const [opencodePermissionMode, setOpencodePermissionMode] = useState<string>(
+    () => landingDraft?.opencodePermissionMode ?? OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE,
+  );
   // Approval mode for Codex (codex --approval-mode). Only meaningful for
   // the codex-native wrapper; ignored otherwise. Lives in the footer
   // tray's Advanced settings menu.
@@ -1998,12 +2412,15 @@ export function NewChatLandingScreen() {
       landingDraft?.pickedHarness ??
       readLastHarness(landingDraft?.pickedAgentId ?? readLastAgentId()),
   );
-  // Per-session model + reasoning effort for the claude-native model picker.
-  // "" = unselected: nothing is checked and `model_override` / `reasoning_effort`
-  // are omitted from the create, so Claude Code uses its own configured model.
+  // Per-session model + reasoning effort for native model pickers. "" =
+  // unselected: nothing is checked and `model_override` / `reasoning_effort`
+  // are omitted from the create, so the native CLI uses its configured model.
   // An explicit pick rides along and is remembered (seeded back on a later visit
   // via the harness-seed effect below).
   const [pickedModel, _setPickedModel] = useState<string>(() => landingDraft?.pickedModel ?? "");
+  const [pickedOmniRouteRoute, setPickedOmniRouteRoute] = useState<string>(
+    () => landingDraft?.pickedOmniRouteRoute ?? "",
+  );
   const [pickedEffort, setPickedEffort] = useState<string>(() => landingDraft?.pickedEffort ?? "");
   // Per-session cost-control switch ("Cost Optimized" pill). Unset
   // (null) defers to the agent spec's default and is omitted from
@@ -2011,12 +2428,24 @@ export function NewChatLandingScreen() {
   const [costControlMode, _setCostControlMode] = useState<CostControlMode>(
     () => landingDraft?.costControlMode ?? null,
   );
+  // Per-session Model Routing Agent toggle. Independent of the legacy
+  // cost-control switch — gated server-side on
+  // /v1/info.route_approval_enabled so the new flow never overlaps the
+  // smart-routing path. New sessions default to Agent when the server
+  // advertises the route-approval gate; an explicit user toggle to
+  // Manual is preserved in the landing draft and sent to the server.
+  const [routeApprovalEnabled, setRouteApprovalEnabled] = useState<boolean>(
+    () => landingDraft?.routeApprovalEnabled ?? routeApprovalServerEnabled,
+  );
   // Model selection and smart routing are mutually exclusive: enabling
   // routing clears the explicit model pick, and picking a model turns
   // routing off.
   const setPickedModel = useCallback((model: string) => {
     _setPickedModel(model);
-    if (model) _setCostControlMode(null);
+    if (model) {
+      _setCostControlMode(null);
+      setRouteApprovalEnabled(false);
+    }
   }, []);
   const setCostControlMode = useCallback((mode: CostControlMode) => {
     _setCostControlMode(mode);
@@ -2049,13 +2478,16 @@ export function NewChatLandingScreen() {
     branchName,
     prefilledBranch,
     permissionMode,
+    opencodePermissionMode,
     approvalMode,
     bypassSandbox,
     cursorExecMode,
     pickedHarness,
     pickedModel,
+    pickedOmniRouteRoute,
     pickedEffort,
     costControlMode,
+    routeApprovalEnabled,
   };
   useEffect(() => {
     return () => {
@@ -2270,6 +2702,7 @@ export function NewChatLandingScreen() {
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
+  const supportsModelOptions = nativeAgentHasCapability(selectedAgent, "modelOptions");
   // Defense in depth for the DANGEROUS bypass toggle: never let an armed
   // bypass carry across an agent change. Switching the picker to another
   // agent — or away from Codex and back — must require the typed confirmation
@@ -2284,6 +2717,15 @@ export function NewChatLandingScreen() {
   // model / effort), which are harness-specific. null for non-native agents,
   // which have no knobs to remember.
   const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  const {
+    data: opencodeModelOptions,
+    isLoading: opencodeModelsLoading,
+    error: opencodeModelsError,
+  } = useHarnessModelOptions(
+    selectedNativeHarness === "opencode-native" ? "opencode-native" : null,
+  );
+  const opencodeModelGroups = opencodeModelOptions?.groups ?? [];
+  const opencodeModels = opencodeModelOptions?.models ?? [];
   // Seed the harness's knobs from the user's last picks when the selected
   // harness changes (including the first mount), so a returning user starts a
   // new session on the options they used last for that harness instead of the
@@ -2301,7 +2743,19 @@ export function NewChatLandingScreen() {
     // the current list resolves to the default for the same reason.
     const resolve = (modes: readonly { value: string }[], dflt: string) =>
       stored.mode != null && modes.some((m) => m.value === stored.mode) ? stored.mode : dflt;
-    if (supportsPermissionMode) {
+    if (supportsModelOptions) {
+      setPickedModel(stored.model ?? "");
+      setPickedOmniRouteRoute(stored.route ?? "");
+      setPickedEffort(stored.effort ?? "");
+      // OpenCode-native owns its own permission-mode state so the
+      // Claude/Codex cursor strings can't leak into the OpenCode create.
+      // Resolves a stored value if it's still in the opencode vocab, else
+      // drops to "default" — never leaves a stale codex "full-access" in
+      // place when the user later switches back to OpenCode.
+      setOpencodePermissionMode(
+        resolve(OPENCODE_NATIVE_PERMISSION_MODES, OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE),
+      );
+    } else if (supportsPermissionMode) {
       setPermissionMode(
         resolve(CLAUDE_NATIVE_PERMISSION_MODES, CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE),
       );
@@ -2331,6 +2785,17 @@ export function NewChatLandingScreen() {
   // Native-terminal agents interpret slash commands inside their own CLI
   // (the runner injects the text verbatim), so the landing composer must
   // not intercept them — no skills menu, no slash_command routing.
+  // A cached choice can outlive the server's catalog. Never send it unless
+  // the current OpenCode catalog still explicitly exposes that model/effort.
+  const selectedOpenCodeModel = opencodeModels.find((model) => model.id === pickedModel);
+  const selectedOpenCodeRoute = opencodeModelGroups
+    .find((group) => group.source === "omniroute")
+    ?.models.find((model) => model.id === pickedOmniRouteRoute);
+  const selectedOpenCodeEffort = (
+    selectedOpenCodeRoute ?? selectedOpenCodeModel
+  )?.reasoning_efforts?.includes(pickedEffort)
+    ? pickedEffort
+    : "";
   const isNativeTerminalAgent = isNativeCodingAgent(selectedAgent);
   const selectedHost = allHosts.find((h) => h.host_id === selectedHostId);
   // Warn-only readiness signal for the agent picker: only meaningful when
@@ -2819,6 +3284,19 @@ export function NewChatLandingScreen() {
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
       const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
+      const agentSupportsModelOptions = nativeAgentHasCapability(agent, "modelOptions");
+      const resolvedSessionLabels = {
+        ...(nativeLabels ?? {}),
+        ...(agentSupportsModelOptions &&
+        selectedOpenCodeModel?.access_source === "codex-subscription"
+          ? { [OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY]: "codex-subscription" }
+          : {}),
+        ...(agentSupportsApprovalMode && bypassSandbox
+          ? { [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
+          : {}),
+      };
+      const sessionLabels =
+        Object.keys(resolvedSessionLabels).length > 0 ? resolvedSessionLabels : undefined;
 
       let data: { id: string };
 
@@ -2883,10 +3361,7 @@ export function NewChatLandingScreen() {
             // label (only when the toggle is armed for a codex-native agent)
             // so the runner launches with --dangerously-bypass-approvals-and-
             // sandbox and the choice survives reload.
-            labels:
-              agentSupportsApprovalMode && bypassSandbox
-                ? { ...(nativeLabels ?? {}), [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
-                : nativeLabels,
+            labels: sessionLabels,
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
             terminal_launch_args:
@@ -2899,15 +3374,45 @@ export function NewChatLandingScreen() {
                     ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ?? [])
                     : undefined,
             // Model + reasoning effort, persisted on the session row before
-            // the runner launches. Only claude-native surfaces the picker, so
-            // only its agents carry the choice; the runner reads them as
-            // `--model` / `--effort` at terminal launch. An unselected ("")
-            // knob is omitted so Claude Code keeps its own configured model.
-            model_override: agentSupportsPermissionMode && pickedModel ? pickedModel : undefined,
+            // the runner launches. Native model pickers carry the choice; an
+            // unselected ("") knob is omitted so the CLI keeps its configured
+            // model.
+            model_override:
+              agentSupportsPermissionMode && pickedModel
+                ? pickedModel
+                : agentSupportsModelOptions && selectedOpenCodeModel
+                  ? selectedOpenCodeModel.id
+                  : undefined,
+            omniroute_route_id:
+              agentSupportsModelOptions && selectedOpenCodeRoute
+                ? selectedOpenCodeRoute.id
+                : undefined,
             reasoning_effort:
-              agentSupportsPermissionMode && pickedEffort ? pickedEffort : undefined,
+              agentSupportsPermissionMode && pickedEffort
+                ? pickedEffort
+                : agentSupportsModelOptions && selectedOpenCodeEffort
+                  ? selectedOpenCodeEffort
+                  : undefined,
+            // OpenCode-native permission mode (Default / Auto / Accept edits /
+            // Plan / Don't ask / Bypass permissions). Distinct from the
+            // Claude ``permissionMode`` field because the wire values
+            // differ; the runner applies it to OpenCode's ``permission`` /
+            // ``default_agent`` config surface rather than a CLI flag.
+            // Omitted for ``default`` so the server keeps no override and
+            // OpenCode runs with its own built-in behaviour; non-native
+            // agents never see this field even if a stale value is set.
+            permission_mode:
+              agentSupportsModelOptions &&
+              opencodePermissionMode !== OPENCODE_NATIVE_DEFAULT_PERMISSION_MODE
+                ? opencodePermissionMode
+                : undefined,
             // Smart routing toggle — server-side, available for any agent.
             cost_control_mode_override: costControlMode ?? undefined,
+            // Model Routing Agent toggle — independent of smart routing
+            // and gated server-side on /v1/info.route_approval_enabled.
+            // Send both true and false so an explicit Manual choice is
+            // durable; omission is reserved for older clients / defaults.
+            route_approval_enabled: routeApprovalServerEnabled ? routeApprovalEnabled : undefined,
             harness_override: pickedHarness ?? undefined,
           }),
         });
@@ -3292,8 +3797,8 @@ export function NewChatLandingScreen() {
                 {/* Unified agent / harness picker — selects the agent or
                   harness and exposes its run-config knobs in a per-entry
                   submenu (model / effort / permission mode for Claude Code,
-                  approval mode for Codex/OpenCode, exec mode for Cursor,
-                  brain-harness override for bundle agents). */}
+                  approval mode for Codex, direct models for OpenCode, exec
+                  mode for Cursor, brain-harness override for bundle agents). */}
                 <AgentHarnessPicker
                   agentEntries={agentEntries}
                   harnessEntries={harnessEntries}
@@ -3309,19 +3814,31 @@ export function NewChatLandingScreen() {
                   onCreateCustomAgent={() => setCreateAgentOpen(true)}
                   sandboxSelected={sandboxSelected}
                   permissionMode={permissionMode}
+                  opencodePermissionMode={opencodePermissionMode}
                   approvalMode={approvalMode}
                   cursorExecMode={cursorExecMode}
                   bypassSandbox={bypassSandbox}
                   pickedModel={pickedModel}
+                  pickedOmniRouteRoute={pickedOmniRouteRoute}
                   pickedEffort={pickedEffort}
                   pickedHarness={pickedHarness}
                   setPermissionMode={setPermissionMode}
+                  setOpencodePermissionMode={setOpencodePermissionMode}
                   setApprovalMode={setApprovalMode}
                   setCursorExecMode={setCursorExecMode}
                   setBypassSandbox={setBypassSandbox}
                   setPickedModel={setPickedModel}
+                  setPickedOmniRouteRoute={(route) => {
+                    setPickedOmniRouteRoute(route);
+                    if (route) setRouteApprovalEnabled(true);
+                  }}
                   setPickedEffort={setPickedEffort}
                   setPickedHarness={handleSetPickedHarness}
+                  opencodeModelGroups={opencodeModelGroups}
+                  opencodeModelsLoading={opencodeModelsLoading}
+                  opencodeModelsError={
+                    opencodeModelsError instanceof Error ? opencodeModelsError : null
+                  }
                 />
                 {smartRoutingEnabled &&
                   selectedAgent &&
@@ -3331,6 +3848,12 @@ export function NewChatLandingScreen() {
                       onChange={setCostControlMode}
                     />
                   )}
+                {routeApprovalServerEnabled && (
+                  <RouteApprovalControl
+                    enabled={routeApprovalEnabled}
+                    onChange={setRouteApprovalEnabled}
+                  />
+                )}
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>

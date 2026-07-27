@@ -70,6 +70,16 @@ _DEFAULT_IDLE_TIMEOUT_S = 30 * 60
 _DEFAULT_REAPER_INTERVAL_S = 60.0
 _IDLE_TIMEOUT_ENV = "OMNIGENT_NATIVE_PANE_IDLE_TIMEOUT_S"
 
+# Per-harness overrides for the native-pane idle window. ``opencode`` gets a
+# much shorter window (~2 minutes) because its TUI drags in a heavier MCP
+# fleet + ``claude_native_bridge serve-mcp`` than the other harnesses, so
+# leaving its pane warm consumes ~300 MB RSS per idle session. Other harnesses
+# keep the 30-minute default so this knob is a strict narrow for opencode.
+# ``0`` disables reaping for that harness (mirrors the env-var semantics).
+# Override hook: ``OMNIGENT_NATIVE_PANE_OPENCODE_IDLE_TIMEOUT_S``.
+_OPENCODE_PANE_IDLE_TIMEOUT_ENV = "OMNIGENT_NATIVE_PANE_OPENCODE_IDLE_TIMEOUT_S"
+_OPENCODE_PANE_IDLE_TIMEOUT_DEFAULT_S = 120.0
+
 
 class PaneRef(NamedTuple):
     """A live native CLI pane the reaper may reclaim.
@@ -120,6 +130,72 @@ def resolve_native_pane_idle_timeout_s() -> float:
     return value
 
 
+def resolve_native_pane_idle_timeout_for(
+    terminal_name: str,
+    *,
+    fallback: float | None = None,
+) -> float:
+    """Resolve the per-harness idle reaper timeout.
+
+    Honors a per-harness override env var (currently ``opencode``) so a
+    heavier native runtime can be reaped sooner without forcing every
+    harness onto the same short window. ``fallback`` is the value to use
+    when no override matches (defaults to
+    :func:`resolve_native_pane_idle_timeout_s`); a fallback ``<= 0``
+    propagates to the caller as a "disable reaping" sentinel (the
+    :class:`NativePaneReaper` loop already handles non-positive windows).
+
+    :param terminal_name: Harness short-name, e.g. ``"opencode"``.
+    :param fallback: Override for the default fallback value; ``None``
+        resolves the global env-var default.
+    :returns: Idle window in seconds. ``0`` (or negative) disables
+        reaping for that harness.
+    :raises ValueError: When an unparseable or negative override is set
+        for a known harness.
+    """
+    if terminal_name == "opencode":
+        return _resolve_positive_timeout_env(
+            _OPENCODE_PANE_IDLE_TIMEOUT_ENV,
+            default=float(_OPENCODE_PANE_IDLE_TIMEOUT_DEFAULT_S),
+        )
+    if fallback is None:
+        return resolve_native_pane_idle_timeout_s()
+    return float(fallback)
+
+
+def _resolve_positive_timeout_env(env_name: str, *, default: float) -> float:
+    """Resolve a positive numeric env var, falling back to ``default`` on bad input.
+
+    Treats an unparseable value, an empty string, or a negative value as a
+    misconfiguration: logs a warning and uses the default rather than failing
+    the runner at boot. A value of ``0`` is allowed and propagates as a
+    "disable reaping" sentinel (consistent with the global
+    :func:`resolve_native_pane_idle_timeout_s` contract).
+    """
+    raw = os.environ.get(env_name)
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError:
+        _logger.warning(
+            "%s=%r is not a number; using default %ss",
+            env_name,
+            raw,
+            default,
+        )
+        return float(default)
+    if value < 0:
+        _logger.warning(
+            "%s=%r is negative; using default %ss",
+            env_name,
+            raw,
+            default,
+        )
+        return float(default)
+    return value
+
+
 class NativePaneReaper:
     """Background task that reaps idle, unattended native terminal panes.
 
@@ -131,7 +207,12 @@ class NativePaneReaper:
     :param reap: ``async`` pane-scoped teardown — closes only this one native
         terminal, leaving the session resumable.
     :param idle_timeout_s: Idle window before reaping. ``None`` resolves the env
-        knob; ``<= 0`` disables reaping.
+        knob; ``<= 0`` disables reaping. Used for harnesses without a per-name
+        override (see :func:`resolve_native_pane_idle_timeout_for`).
+    :param idle_timeout_for: Optional ``terminal_name -> seconds`` resolver for
+        per-harness overrides. ``None`` falls back to ``idle_timeout_s`` for
+        every pane. Lets one harness (e.g. opencode) use a shorter window
+        without forcing it on every other native harness.
     :param reaper_interval_s: Seconds between scans.
     """
 
@@ -143,6 +224,7 @@ class NativePaneReaper:
         reap: Callable[[PaneRef], Awaitable[None]],
         idle_timeout_s: float | None = None,
         reaper_interval_s: float = _DEFAULT_REAPER_INTERVAL_S,
+        idle_timeout_for: Callable[[str], float] | None = None,
     ) -> None:
         self._list_native_panes = list_native_panes
         self._is_busy = is_busy
@@ -150,11 +232,18 @@ class NativePaneReaper:
         self._idle_timeout_s = (
             idle_timeout_s if idle_timeout_s is not None else resolve_native_pane_idle_timeout_s()
         )
+        self._idle_timeout_for = idle_timeout_for
         self._reaper_interval_s = reaper_interval_s
         # conversation_id -> monotonic time it was last observed busy.
         self._last_busy_at: dict[str, float] = {}
         self._task: asyncio.Task[None] | None = None
         self._started = False
+
+    def _timeout_for(self, pane: PaneRef) -> float:
+        """Resolve the per-pane idle timeout, honoring any harness override."""
+        if self._idle_timeout_for is not None:
+            return float(self._idle_timeout_for(pane.terminal_name))
+        return float(self._idle_timeout_s)
 
     async def start(self) -> None:
         """Spawn the reaper loop (idempotent)."""
@@ -163,7 +252,7 @@ class NativePaneReaper:
         self._started = True
         self._task = asyncio.create_task(self._reap_loop(), name="native-pane-idle-reaper")
         _logger.info(
-            "native pane reaper started (idle_timeout=%ss, interval=%ss%s)",
+            "native pane reaper started (default_idle_timeout=%ss, interval=%ss%s)",
             self._idle_timeout_s,
             self._reaper_interval_s,
             "; DISABLED" if self._idle_timeout_s <= 0 else "",
@@ -183,15 +272,22 @@ class NativePaneReaper:
 
         Given the set of conversation ids observed busy this scan, maintain the
         per-conversation idle clock and return the panes idle for at least
-        ``idle_timeout_s``. A busy pane re-arms its clock; a newly-observed idle
-        pane gets one full window of grace before it is eligible. No I/O, so it is
-        unit-testable with an injected ``now`` and ``busy_convs``.
+        their *per-harness* window. A busy pane re-arms its clock; a
+        newly-observed idle pane gets one full window of grace before it is
+        eligible. Per-pane windows make this method depend on the per-name
+        timeout resolver, so it is unit-testable with an injected ``now``,
+        ``busy_convs``, and ``idle_timeout_for``.
         """
         live: set[str] = set()
         reapable: list[PaneRef] = []
         for pane in panes:
             conv = pane.conversation_id
             live.add(conv)
+            timeout_s = self._timeout_for(pane)
+            # ``<= 0`` disables reaping for this harness (matches the env-var
+            # sentinel). The pane is left alone regardless of idle time.
+            if timeout_s <= 0:
+                continue
             if conv in busy_convs:
                 self._last_busy_at[conv] = now
                 continue
@@ -199,7 +295,7 @@ class NativePaneReaper:
             if last is None:
                 self._last_busy_at[conv] = now
                 continue
-            if now - last >= self._idle_timeout_s:
+            if now - last >= timeout_s:
                 reapable.append(pane)
         # Forget conversations whose pane is gone so the clock map can't grow.
         for gone in self._last_busy_at.keys() - live:
@@ -231,11 +327,12 @@ class NativePaneReaper:
             if await self._is_busy(pane):
                 self._last_busy_at[pane.conversation_id] = time.monotonic()
                 continue
+            timeout_s = self._timeout_for(pane)
             _logger.info(
                 "reaping idle native pane for conversation %s (%s; idle > %.0fs)",
                 pane.conversation_id,
                 pane.terminal_name,
-                self._idle_timeout_s,
+                timeout_s,
             )
             # Drop the clock entry up front: a reap failure then re-arms the grace
             # window next scan instead of permanently skipping the conversation.

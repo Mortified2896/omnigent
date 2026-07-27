@@ -250,23 +250,66 @@ class OpenCodeNativeForwarder:
         await self.seed_dedupe_from_history()
         attempt = 0
         backoff = 0.5
-        while True:
-            try:
-                await self._consume_once()
-                # Clean stream end (server closed): reconnect.
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - reconnect on any transient SSE failure.
-                _logger.warning(
-                    "OpenCode forwarder SSE error for session=%s; reconnecting",
-                    self._session_id,
-                    exc_info=True,
-                )
-            attempt += 1
-            if max_reconnects is not None and attempt > max_reconnects:
-                return
-            await asyncio.sleep(min(backoff, 5.0))
-            backoff = min(backoff * 2, 5.0)
+        try:
+            while True:
+                try:
+                    await self._consume_once()
+                    # Clean stream end (server closed): reconnect.
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - reconnect on any transient SSE failure.
+                    _logger.warning(
+                        "OpenCode forwarder SSE error for session=%s; reconnecting",
+                        self._session_id,
+                        exc_info=True,
+                    )
+                attempt += 1
+                if max_reconnects is not None and attempt > max_reconnects:
+                    return
+                await asyncio.sleep(min(backoff, 5.0))
+                backoff = min(backoff * 2, 5.0)
+        finally:
+            # Finalize any in-progress turn so the parent's session cache /
+            # chat Working indicator cannot remain stuck at "running" when
+            # the forwarder shuts down (caller cancellation, harness /
+            # process death, or an unbounded reconnect cap) without an
+            # authoritative ``session.idle`` event. The status post is
+            # idempotent against the normal ``_end_turn`` path: ``state.turn_active``
+            # is the single source of truth, and it was already cleared by
+            # the normal end-of-turn handler if the model finished cleanly.
+            await self._finalize_active_turn_on_shutdown()
+
+    async def _finalize_active_turn_on_shutdown(self) -> None:
+        """Reconcile any active turn to ``idle`` on forwarder shutdown.
+
+        The forwarder's normal terminal path (``_on_session_idle`` /
+        ``_on_session_error``) calls :meth:`_end_turn` and clears the
+        in-process ``state.turn_active`` flag. This cleanup only does
+        work when that flag is still set — i.e. the opencode SSE stream
+        ended (cancelled, crashed, reconnect cap exhausted) without the
+        harness emitting ``session.idle`` or ``session.error``. Posting
+        ``idle`` then drains the parent's relay-fed status cache and lets
+        the web chat clear "Cooking…" / the working spinner even when the
+        browser missed the terminal event and only learns of the worker's
+        exit via a fresh snapshot on next reconnect.
+
+        Best-effort: a transient POST failure is logged and swallowed —
+        this is a final-reconciliation path, not a turn-boundary post, so
+        dropping it is strictly preferable to leaking an orphan
+        ``turn_active`` flag.
+        """
+        if not self.state.turn_active:
+            return
+        try:
+            await self._end_turn()
+        except Exception:  # noqa: BLE001 - final cleanup must not raise.
+            _logger.warning(
+                "OpenCode forwarder shutdown reconcile failed for session=%s; "
+                "leaving turn_active=%s for the next run() to clean up",
+                self._session_id,
+                self.state.turn_active,
+                exc_info=True,
+            )
 
     async def _consume_once(self) -> None:
         """Consume the SSE stream once, dispatching each event."""
@@ -717,8 +760,18 @@ class OpenCodeNativeForwarder:
             await self._begin_turn_if_needed()
 
     async def _on_session_idle(self, event: OpenCodeEvent) -> None:
-        """Handle ``session.idle`` — finalize text, post usage, end the turn."""
+        """Handle ``session.idle`` — finalize text, post usage, end the turn.
+
+        OpenCode may fire ``session.idle`` more than once per turn (a final
+        idle after tool completion plus a duplicate on stream cleanup).
+        Reposting ``external_session_status: idle`` would enqueue a duplicate
+        terminal item in the parent inbox and break the single-worker
+        Control Room contract (one dispatch → exactly one parent inbox
+        result). Short-circuit when the turn is already idle.
+        """
         del event
+        if not self.state.turn_active:
+            return
         await self._flush_pending_text()
         await self._post_session_usage()
         await self._end_turn()

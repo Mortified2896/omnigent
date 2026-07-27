@@ -125,11 +125,14 @@ class Response:
     :param model: The model identifier that produced the response,
         e.g. ``"claude-sonnet-4-20250514"``.
     :param usage: Token usage information, or ``None`` if unavailable.
+    :param provider_metadata: Sanitized gateway response headers used for
+        provenance validation. Authentication headers are never retained.
     """
 
     output: list[MessageOutput | FunctionCallOutput | NativeToolOutput]
     model: str
     usage: Usage | None = None
+    provider_metadata: dict[str, str] | None = None
 
 
 # ── Streaming event types ─────────────────────────────────

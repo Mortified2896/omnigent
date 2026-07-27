@@ -234,11 +234,59 @@ def test_seed_opencode_auth_copies_user_auth(
     assert (os.stat(dest).st_mode & 0o777) == 0o600
 
 
+def test_seed_opencode_auth_uses_same_harness_oauth_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An OAuth login completed in OpenCode seeds the next native session."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "empty-share"))
+    source = tmp_path / "authenticated/xdg-data/opencode/auth.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"openai": {"type": "oauth", "access": "fake"}}')
+    state = type("OAuthState", (), {"auth_path": source})()
+    monkeypatch.setattr(bridge, "discover_chatgpt_oauth_state", lambda **_kwargs: (state, None))
+
+    bridge_dir = bridge.prepare_bridge_dir("conv_oauth_seed")
+    dest = bridge.seed_opencode_auth(bridge_dir)
+    assert dest is not None
+    assert dest.read_text() == source.read_text()
+    assert (os.stat(dest).st_mode & 0o777) == 0o600
+
+
+def test_seed_opencode_auth_oauth_overrides_same_provider_api_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A global API key cannot replace the same-harness ChatGPT OAuth record."""
+    user_data = tmp_path / "user-share"
+    user_auth = user_data / "opencode/auth.json"
+    user_auth.parent.mkdir(parents=True)
+    user_auth.write_text(
+        '{"openai": {"type": "api", "key": "fake-key"}, "anthropic": {"type": "api"}}'
+    )
+    monkeypatch.setenv("XDG_DATA_HOME", str(user_data))
+    source = tmp_path / "authenticated/xdg-data/opencode/auth.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"openai": {"type": "oauth", "access": "fake-oauth"}}')
+    state = type("OAuthState", (), {"auth_path": source})()
+    monkeypatch.setattr(bridge, "discover_chatgpt_oauth_state", lambda **_kwargs: (state, None))
+
+    bridge_dir = bridge.prepare_bridge_dir("conv_oauth_over_api")
+    dest = bridge.seed_opencode_auth(bridge_dir)
+    assert dest is not None
+    seeded = json.loads(dest.read_text())
+    assert seeded["openai"]["type"] == "oauth"
+    assert seeded["anthropic"]["type"] == "api"
+
+
 def test_seed_opencode_auth_noop_without_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """No user auth.json → no-op (returns None), e.g. on a remote runner."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "empty-share"))
+    monkeypatch.setattr(
+        bridge,
+        "discover_chatgpt_oauth_state",
+        lambda **_kwargs: (None, "OpenCode authentication is not present."),
+    )
     bridge_dir = bridge.prepare_bridge_dir("conv_noseed")
     assert bridge.seed_opencode_auth(bridge_dir) is None
 

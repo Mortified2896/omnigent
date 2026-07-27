@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import omnigent.host.git_worktree as git_worktree_module
 from omnigent.host.git_worktree import (
     CreatedWorktree,
     WorktreeError,
@@ -362,12 +363,100 @@ def test_list_worktrees_reports_detached_head(git_repo: Path) -> None:
     assert detached.detached is True
 
 
-def test_list_worktrees_non_git_path_fails(tmp_path: Path) -> None:
-    """A non-git directory fails loud (the route maps this to 'no worktrees')."""
+def test_list_worktrees_non_git_path_returns_empty_list(tmp_path: Path) -> None:
+    """An existing non-git directory maps to an empty worktree list."""
     plain = (tmp_path / "plain").resolve()
     plain.mkdir()
-    with pytest.raises(WorktreeError):
-        list_worktrees(repo_path=str(plain))
+    assert list_worktrees(repo_path=str(plain)) == []
+
+
+def test_list_worktrees_missing_path_fails(tmp_path: Path) -> None:
+    """A missing path still fails instead of being treated as an empty repo."""
+    missing = (tmp_path / "missing").resolve()
+    with pytest.raises(WorktreeError) as exc:
+        list_worktrees(repo_path=str(missing))
+    assert "path is not a directory" in exc.value.message
+
+
+def test_list_worktrees_file_path_fails(tmp_path: Path) -> None:
+    """A regular file path still fails instead of being treated as an empty repo."""
+    plain_file = (tmp_path / "plain.txt").resolve()
+    plain_file.write_text("hi")
+    with pytest.raises(WorktreeError) as exc:
+        list_worktrees(repo_path=str(plain_file))
+    assert "path is not a directory" in exc.value.message
+
+
+def test_list_worktrees_git_not_installed_surfaces(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing git executable still surfaces as an error."""
+
+    def _raise_missing_git(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise WorktreeError("git is not installed on the host")
+
+    monkeypatch.setattr(git_worktree_module, "_run_git", _raise_missing_git)
+    with pytest.raises(WorktreeError) as exc:
+        list_worktrees(repo_path=str(git_repo))
+    assert exc.value.message == "git is not installed on the host"
+
+
+def test_list_worktrees_git_timeout_surfaces(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A git timeout still surfaces as an error."""
+
+    def _raise_timeout(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise WorktreeError("git command timed out after 120s")
+
+    monkeypatch.setattr(git_worktree_module, "_run_git", _raise_timeout)
+    with pytest.raises(WorktreeError) as exc:
+        list_worktrees(repo_path=str(git_repo))
+    assert exc.value.message == "git command timed out after 120s"
+
+
+def test_list_worktrees_corrupt_git_state_surfaces(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-repository git failure still surfaces instead of returning ``[]``."""
+    calls = 0
+
+    def _fake_run_git(args: list[str], *, cwd: str) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess(
+                ["git", *args],
+                0,
+                stdout=f"worktree {git_repo}\n\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            ["git", *args],
+            128,
+            stdout="",
+            stderr="fatal: bad config line 1 in file .git/config",
+        )
+
+    monkeypatch.setattr(git_worktree_module, "_run_git", _fake_run_git)
+    with pytest.raises(WorktreeError) as exc:
+        list_worktrees(repo_path=str(git_repo))
+    assert "git worktree list failed" in exc.value.message
+    assert "bad config line" in exc.value.message
+
+
+def test_list_worktrees_does_not_swallow_other_worktree_errors(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the specific non-repository case is translated to ``[]``."""
+
+    def _raise_other_error(_repo_path: str) -> str:
+        raise WorktreeError("boom")
+
+    monkeypatch.setattr(git_worktree_module, "_main_work_tree", _raise_other_error)
+    with pytest.raises(WorktreeError) as exc:
+        list_worktrees(repo_path=str(git_repo))
+    assert exc.value.message == "boom"
 
 
 @pytest.mark.parametrize(

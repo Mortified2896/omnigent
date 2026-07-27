@@ -1191,3 +1191,41 @@ describe("ApprovalCard — ExitPlanMode plan review", () => {
     );
   });
 });
+
+describe("ApprovalCard — persisted routing response", () => {
+  it("reconnects the route-specific responded card with original and final values", () => {
+    render(
+      <ApprovalCard
+        elicitationId="route_responded"
+        message="Approve route"
+        phase="route_approval"
+        policyName="model_routing_agent"
+        contentPreview=""
+        requestedSchema={{}}
+        status="responded"
+        response={{
+          action: "accept",
+          content: {
+            route_adjustment: {
+              omniroute_route_id: "auto/easy",
+              reasoning_effort: "low",
+              permission_mode: "read_only",
+            },
+          },
+        }}
+        routeProposal={{
+          omniroute_route_id: "auto/coding",
+          reasoning_effort: "medium",
+          permission_mode: "default",
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("route-approval-card")).toHaveAttribute("data-state", "approved");
+    expect(screen.getByRole("region", { name: "Original recommendation" })).toHaveTextContent(
+      "auto/coding",
+    );
+    expect(screen.getByRole("region", { name: "Final selection" })).toHaveTextContent("auto/easy");
+    expect(screen.queryByTestId("approval-card")).toBeNull();
+  });
+});

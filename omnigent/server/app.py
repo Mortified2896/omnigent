@@ -65,6 +65,7 @@ from omnigent.server.performance_metrics import (
 from omnigent.server.routes.builtin_agents import create_builtin_agents_router
 from omnigent.server.routes.comments import create_comments_router
 from omnigent.server.routes.default_policies import create_default_policies_router
+from omnigent.server.routes.harness_model_options import create_harness_model_options_router
 from omnigent.server.routes.harnesses import create_harnesses_router
 from omnigent.server.routes.imports import create_imports_router
 from omnigent.server.routes.policy_registry import create_policy_registry_router
@@ -1094,6 +1095,7 @@ def create_app(
     sharing_mode: SharingMode | Callable[[], SharingMode] | None = None,
     public_sharing: bool | Callable[[], bool] | None = None,
     server_config: dict[str, Any] | None = None,
+    task_outcome_store: Any | None = None,
 ) -> FastAPI:
     """
     Build and return the FastAPI application with all routes mounted.
@@ -1246,6 +1248,17 @@ def create_app(
     server_metrics = ServerPerformanceMetrics()
     server_metrics_otel = ServerMetricsOtelPublisher()
 
+    from omnigent.server.task_outcome_recorder import (
+        TaskOutcomeRecorder,
+        get_recorder,
+        set_recorder,
+        set_recorder_loop,
+    )
+
+    set_recorder(
+        TaskOutcomeRecorder(store=task_outcome_store) if task_outcome_store is not None else None
+    )
+
     @asynccontextmanager
     async def _lifespan(
         app_inst: FastAPI,
@@ -1270,6 +1283,11 @@ def create_app(
         :param app_inst: The FastAPI app, used to attach
             per-AP state via ``app_inst.state.*``.
         """
+        # Relay terminal callbacks run in ``asyncio.to_thread`` workers.
+        # Capture the server loop once so the recorder can dispatch evaluator
+        # coroutines back here instead of looking for a loop in the worker.
+        set_recorder_loop(asyncio.get_running_loop())
+
         # Bump AnyIO default thread limiter from 40 → 200; every
         # ``asyncio.to_thread`` and FastAPI sync route grabs one.
         from anyio import to_thread as _to_thread
@@ -1373,15 +1391,9 @@ def create_app(
         )
         # Runner ``runner_last_seen`` is refreshed per-tunnel from each
         # runner tunnel's ping loop (``runner_tunnel._ping_loop``), inside
-        # that handler's ``workspace_scope`` — not from a lifespan sweep,
-        # which would run context-free (default workspace) over a
-        # workspace-blind registry and never stamp a multi-tenant row.
+        # that handler's ``workspace_scope``.
 
-        # Recurring-task scheduler: arm a timer per active
-        # scheduled task and fire the injected ``on_fire`` callback on
-        # schedule. The callback (see scheduled.fire) re-reads the row,
-        # creates + owner-grants a session, launches its runner, and records
-        # the run — all fire-and-forget so the timer re-arms immediately.
+        # Recurring-task scheduler: arm active scheduled tasks and fire sessions.
         scheduled_task_scheduler: ScheduledTaskScheduler | None = None
         if scheduled_task_store is not None:
             from omnigent.server.scheduled.fire import FireDeps, build_on_fire
@@ -1406,9 +1418,6 @@ def create_app(
                 on_fire=on_fire,
             )
             app_inst.state.scheduled_task_scheduler = scheduled_task_scheduler
-            # Scheduled tasks are a non-critical subsystem: a failure loading the
-            # schedule (e.g. a DB error listing active tasks) must not take
-            # down server boot. Log and continue with the scheduler unstarted.
             try:
                 await scheduled_task_scheduler.start()
             except Exception as exc:
@@ -1418,9 +1427,22 @@ def create_app(
                     exc,
                 )
 
+        evaluation_retry_task: asyncio.Task[None] | None = None
+        outcome_recorder = get_recorder()
+        if outcome_recorder is not None:
+            from omnigent.server.task_outcome_retry import run_evaluation_retry_worker
+
+            evaluation_retry_task = asyncio.create_task(
+                run_evaluation_retry_worker(outcome_recorder),
+                name="task-outcome-evaluation-retry",
+            )
         try:
             yield
         finally:
+            if evaluation_retry_task is not None:
+                evaluation_retry_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await evaluation_retry_task
             if scheduled_task_scheduler is not None:
                 scheduled_task_scheduler.stop()
             metrics_publish_task.cancel()
@@ -1446,6 +1468,7 @@ def create_app(
             # endpoint. Best-effort — individual close failures are logged
             # inside shutdown_all().
             await _mcp_pool.shutdown_all()
+            set_recorder_loop(None)
 
     app = FastAPI(title="Omnigent Server", lifespan=_lifespan)
     from omnigent.runtime import telemetry
@@ -2071,6 +2094,14 @@ def create_app(
             )
         except ImportError:
             smart_routing_enabled = False
+        # route_approval_enabled: true when the LLM-backed Model Routing Agent
+        # gate is on. Independent of smart_routing_enabled — the two systems
+        # are separate: smart-routing is the older cost-aware control, while
+        # route-approval is the LLM-agent proposal/approval flow for native
+        # OmniRoute routes. Each is gated by its own server-side feature flag.
+        from omnigent.server.routing_agent import route_approval_gate_enabled
+
+        route_approval_enabled = route_approval_gate_enabled()
         return {
             "accounts_enabled": accounts_enabled,
             "single_user": single_user,
@@ -2083,6 +2114,55 @@ def create_app(
             "public_sharing_enabled": public_sharing_enabled,
             "server_version": _server_version(),
             "smart_routing_enabled": smart_routing_enabled,
+            "route_approval_enabled": route_approval_enabled,
+        }
+
+    @app.get("/v1/omniroute/combos")
+    async def omniroute_combos() -> dict[str, Any]:
+        """Return the live OmniRoute combo catalog for the web UI's model picker.
+
+        Drives the new chat / composer "OmniRoute Coding Best/Fast/Reliable"
+        rows. Unauthenticated (matches :http:get:`/v1/info`) so the SPA
+        can populate the picker before any session cookie is held. The
+        catalog is data-only — no credentials, no per-user state.
+
+        Always returns 200 with a non-empty ``combos`` array even when
+        OmniRoute is unreachable: the resolver falls back to the cached
+        listing, then to the curated fallback. ``source`` reports which
+        path served the response so the UI can surface a "live" badge
+        vs. a "catalog degraded" hint when needed.
+
+        :returns: ``{"combos": [...], "source": "live"|"cache"|
+            "fallback_curated", "verified": bool}``.
+
+            ``verified`` is ``True`` when the rows were read from the
+            OmniRoute endpoint (live or cache replay); ``False`` when the
+            server served the curated fallback because the endpoint was
+            unreachable AND no cache was available.
+        """
+        try:
+            from omnigent.server.omniroute_catalog import (
+                fetch_omniroute_combo_catalog,
+            )
+
+            combos, source = await fetch_omniroute_combo_catalog()
+        except Exception as exc:  # noqa: BLE001 - fail-closed to curated fallback.
+            _logger.warning(
+                "omniroute /v1/omniroute/combos resolver raised (%s); serving curated fallback",
+                type(exc).__name__,
+            )
+            from omnigent.server.omniroute_catalog import curated_combo_catalog
+
+            combos = curated_combo_catalog()
+            source = "fallback_curated"
+        # The typed dict is JSON-friendly: ``to_wire()`` already emits
+        # JSON-safe sequences (the tuple in ``reasoning_efforts`` is
+        # converted to a list) so the SPA reads the camelCase / snake_case
+        # fields directly without further translation.
+        return {
+            "combos": [combo.to_wire() for combo in combos],
+            "source": source,
+            "verified": source != "fallback_curated",
         }
 
     @app.get("/v1/me", response_model=None)  # Union return type (dict | JSONResponse)
@@ -2185,6 +2265,11 @@ def create_app(
         tags=["agents"],
     )
     app.include_router(
+        create_harness_model_options_router(auth_provider=auth_provider),
+        prefix="/v1",
+        tags=["harness_model_options"],
+    )
+    app.include_router(
         create_harnesses_router(auth_provider=auth_provider),
         prefix="/v1",
         tags=["harnesses"],
@@ -2221,6 +2306,19 @@ def create_app(
             ),
             prefix="/v1",
             tags=["comments"],
+        )
+    if task_outcome_store is not None:
+        from omnigent.server.routes.task_outcomes import create_task_outcomes_router
+
+        app.include_router(
+            create_task_outcomes_router(
+                task_outcome_store,
+                conversation_store=conversation_store,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
+            prefix="/v1",
+            tags=["task_outcomes"],
         )
     if policy_store is not None:
         app.include_router(
@@ -2663,6 +2761,29 @@ def create_app(
 
     web_ui_dist = _WEB_UI_DIST
     web_ui_present = web_ui_dist.is_dir() and (web_ui_dist / "index.html").is_file()
+
+    # Loud-ERROR preflight: a normal UI deployment that comes up
+    # without the SPA bundle used to silently degrade to the API-only
+    # landing page, which is the single most common "the web UI doesn't
+    # load" report. ``omnigent.deploy.startup_web_ui_check`` logs a
+    # one-shot ERROR (visible in the systemd unit journal) when the
+    # bundle is missing AND the deployment is not opted into API-only
+    # mode via ``OMNIGENT_SKIP_WEB_UI``. The fallback path below is
+    # preserved for intentional API-only installs.
+    if not web_ui_present:
+        from omnigent.deploy.preflight import startup_web_ui_check
+
+        # Resolve the worktree from the running module location. The
+        # bundle is expected at ``<root>/omnigent/server/static/web-ui``
+        # for both deploy-main-* worktrees and source-tree installs,
+        # so ``running_file.parent.parent.parent`` is unambiguous. For
+        # installed wheels the layout still matches; the runbook in the
+        # log message just names a path that does not exist on disk
+        # and is therefore informational rather than actionable.
+        running_file = Path(__file__).resolve()
+        worktree_root = running_file.parent.parent.parent
+        startup_web_ui_check(web_ui_dist, worktree_root=worktree_root)
+
     if web_ui_present:
         app.mount(
             "/",

@@ -17,6 +17,7 @@ import httpx
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.llms.adapters.base import BaseAdapter
+from omnigent.llms.errors import RetryableLLMError
 from omnigent.llms.types import (
     NATIVE_TOOL_OUTPUT_TYPES,
     FunctionCallOutput,
@@ -34,6 +35,7 @@ from omnigent.llms.types import (
     Usage,
 )
 
+# Module-level logger for the openai adapter.
 _logger = logging.getLogger(__name__)
 
 # Timeout for non-streaming requests (seconds)
@@ -41,6 +43,21 @@ _REQUEST_TIMEOUT = 120
 
 # Timeout for streaming connection (seconds)
 _STREAM_TIMEOUT = 300
+
+
+_PROVENANCE_HEADERS = (
+    "x-omniroute-requested-model",
+    "x-omniroute-selected-provider",
+    "x-omniroute-selected-model",
+    "x-omniroute-fallback-used",
+    "x-omniroute-decision-id",
+    "x-omniroute-selection-strategy",
+)
+
+
+def _sanitized_provider_metadata(headers: httpx.Headers) -> dict[str, str]:
+    """Copy only non-secret model provenance headers."""
+    return {name: value for name in _PROVENANCE_HEADERS if (value := headers.get(name))}
 
 
 class OpenAICompatibleAdapter(BaseAdapter):
@@ -105,8 +122,14 @@ class OpenAICompatibleAdapter(BaseAdapter):
         }
         if tools:
             payload["tools"] = tools
+        # Always pin stream explicitly. Some upstream gateways
+        # (notably OmniRoute when a combo routes to minimax/MiniMax-M3)
+        # default to text/event-stream when the field is absent, which
+        # then breaks ``httpx.Response.json()`` because the body is SSE
+        # text rather than a JSON object. Pinning ``stream=False`` here
+        # keeps the contract: ``stream=True`` opt-in via the adapter.
+        payload["stream"] = bool(stream)
         if stream:
-            payload["stream"] = True
             payload.setdefault("stream_options", {"include_usage": True})
         return payload
 
@@ -182,7 +205,8 @@ class OpenAICompatibleAdapter(BaseAdapter):
         :param headers: HTTP headers.
         :param payload: JSON payload.
         :param timeout: Request timeout in seconds, e.g. ``120``.
-        :returns: Parsed JSON response dict.
+        :returns: Parsed JSON response dict, including a private sanitized
+            metadata key with OmniRoute provenance when present.
         :raises httpx.HTTPStatusError: On non-2xx status.
         """
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -192,7 +216,27 @@ class OpenAICompatibleAdapter(BaseAdapter):
                 json=payload,
             )
             resp.raise_for_status()
+            if not resp.text or not resp.text.strip():
+                _logger.error(
+                    "openai_adapter: empty 200 body from %s; content-type=%s, length=%d",
+                    url,
+                    resp.headers.get("content-type"),
+                    len(resp.text or ""),
+                )
+                # A 200 OK with an empty/whitespace body is not a valid OpenAI
+                # response. Treat it as a transient transport failure so the
+                # evaluator defers (or fails after the budget) instead of
+                # fabricating a judgment. Some gateways (e.g. minimax/MiniMax-M3
+                # today) return a 200 event-stream with 0 chunks; calling .json()
+                # on the empty body would otherwise raise JSONDecodeError.
+                raise RetryableLLMError(
+                    "LLM call returned an empty 200 response body",
+                    code="empty_response_body",
+                )
             result: dict[str, Any] = resp.json()
+            metadata = _sanitized_provider_metadata(resp.headers)
+            if metadata:
+                result["_omnigent_provider_metadata"] = metadata
             return result
 
     async def _stream_request(

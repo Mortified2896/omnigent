@@ -54,6 +54,9 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
+import { TaskOutcomeBriefCard } from "@/components/blocks/TaskOutcomeBriefCard";
+import { ownsOutcomeCard, useTaskOutcomeAnchors, useTaskOutcomeRuns } from "@/lib/taskOutcomes";
+import { reconcileRoutingTurnBubbles, useRoutingTurns } from "@/lib/routingTurns";
 import { CompactionMarker, RoutingDecisionCard } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { isSystemUserContent, parseSystemMessage } from "@/lib/systemMessage";
@@ -103,6 +106,7 @@ import {
 } from "@/lib/renderItems";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
+import { getOmniRouteComboDisplayName } from "@/lib/omnirouteCombos";
 import { codexEffortLevelsForModel, findCodexModelOption } from "@/lib/codexNativeModels";
 import {
   composerAttachmentKey,
@@ -160,6 +164,7 @@ import {
   isCostRoutingSession,
   parseCostRoutingVerdict,
 } from "@/components/CostRoutingControl";
+import { RouteApprovalControl } from "@/components/RouteApprovalControl";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { MainTerminalView } from "@/shell/MainTerminalView";
 import { UNTITLED_CONVERSATION_LABEL } from "@/shell/sidebarNav";
@@ -853,6 +858,14 @@ export function ChatPage() {
     serverInfo !== "loading" &&
     serverInfo.smart_routing_enabled &&
     isCostRoutingSession(activeSession);
+  // Model Routing Agent gate (independent of smart_routing_enabled) and
+  // the per-session toggle. The composer's "Model Routing Agent" switch
+  // is shown when the server enables the feature and the active session
+  // is editable. The read-only refinement is computed below, after
+  // `permissionLevel`/`readOnlyReason` are derived.
+  const routeApprovalServerEnabled =
+    serverInfo !== "loading" && serverInfo.route_approval_enabled === true;
+  const routeApprovalEnabled = useChatStore((s) => s.routeApprovalEnabled);
 
   // Non-null only when the active session is a sub-agent (child): the
   // composer then peeks a "Chatting with sub-agent …" tray and the
@@ -1059,6 +1072,11 @@ export function ChatPage() {
     conversationsData !== undefined,
   );
   const readOnlyReason = readOnlyReasonForSessionLabels(activeSession, activeConv);
+  // Show the new Model Routing Agent selector only when the server has
+  // the gate on AND the active session is editable. Kept independent
+  // of the legacy `smart_routing_enabled` flow.
+  const showRouteApprovalControl =
+    routeApprovalServerEnabled && !(readOnlyReason !== null || permissionLevel === 1);
   // Once present, the live session snapshot is authoritative.
   const capabilitySource = {
     labels: activeSession ? (activeSession.labels ?? {}) : (activeConv?.labels ?? {}),
@@ -1122,6 +1140,8 @@ export function ChatPage() {
       codexModelOptions={codexModelOptions}
       showCodexPlanMode={shouldShowCodexPlanModeControl(capabilitySource)}
       showGoalControl={shouldShowGoalControl(capabilitySource)}
+      showRouteApprovalControl={showRouteApprovalControl}
+      routeApprovalEnabled={routeApprovalEnabled}
       costRoutingVerdict={costRoutingVerdict}
       costRoutingEligible={costRoutingEligible}
       subAgentLabel={subAgentLabel}
@@ -1354,6 +1374,15 @@ interface MainAgentSurfaceProps {
   showCodexPlanMode: boolean;
   /** Show the session Goal control. */
   showGoalControl?: boolean;
+  /**
+   * Whether the Model Routing Agent is server-enabled
+   * (``/v1/info.route_approval_enabled``) AND the active session is
+   * editable. Drives the new ``RouteApprovalControl`` selector in the
+   * composer (independent of the legacy smart-routing toggle).
+   */
+  showRouteApprovalControl: boolean;
+  /** Per-session Model Routing Agent toggle value. */
+  routeApprovalEnabled: boolean;
   /** Latest advisor verdict for the cost-routing pill; null when none. */
   costRoutingVerdict: CostRoutingVerdict | null;
   /** Session passes `isCostRoutingSession` (polly orchestrator, not a child). */
@@ -1428,6 +1457,8 @@ function MainAgentSurface({
   codexModelOptions,
   showCodexPlanMode,
   showGoalControl = false,
+  showRouteApprovalControl,
+  routeApprovalEnabled,
   costRoutingVerdict,
   costRoutingEligible,
   subAgentLabel,
@@ -1515,11 +1546,22 @@ function MainAgentSurface({
   // Answered cards stay inline at their natural spot. `streamBubbles` keeps
   // `bubbles`' reference when nothing is pending, so the common case allocates
   // nothing.
-  const pendingElicitations = useMemo(() => collectPendingElicitations(bubbles), [bubbles]);
-  const streamBubbles = useMemo(
-    () => (pendingElicitations.length === 0 ? bubbles : stripPendingElicitations(bubbles)),
-    [bubbles, pendingElicitations.length],
+  const routingTurns = useRoutingTurns(conversationId, status);
+  const durableBubbles = useMemo(
+    () => reconcileRoutingTurnBubbles(bubbles, routingTurns.turns, routingTurns.loaded),
+    [bubbles, routingTurns.loaded, routingTurns.turns],
   );
+  const pendingElicitations = useMemo(
+    () => collectPendingElicitations(durableBubbles),
+    [durableBubbles],
+  );
+  const streamBubbles = useMemo(
+    () =>
+      pendingElicitations.length === 0 ? durableBubbles : stripPendingElicitations(durableBubbles),
+    [durableBubbles, pendingElicitations.length],
+  );
+  const taskOutcomeRuns = useTaskOutcomeRuns(conversationId, status, streamBubbles);
+  const taskOutcomeAnchors = useTaskOutcomeAnchors(streamBubbles, taskOutcomeRuns);
 
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) — guarded so the composer's
   // own unmodified ArrowUp/Down history-recall still works.
@@ -1700,7 +1742,7 @@ function MainAgentSurface({
               hasMoreHistory={hasMoreHistory}
               loadingMoreHistory={loadingMoreHistory}
             />
-            {bubbles.length === 0 && !showWorkingIndicator && !mcpStartupActive ? (
+            {durableBubbles.length === 0 && !showWorkingIndicator && !mcpStartupActive ? (
               // Cold launch: a centered spinner instead of the "ready to
               // type" empty state (the create-then-send path uses the
               // "row" variant). Two launch shapes land here: a
@@ -1727,9 +1769,22 @@ function MainAgentSurface({
               )
             ) : (
               <>
-                {streamBubbles.map((bubble) => (
-                  <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
-                ))}
+                {streamBubbles.map((bubble, bubbleIndex) => {
+                  const taskRunResponseId =
+                    bubble.kind === "assistant" &&
+                    bubble.lifecycle === "completed" &&
+                    ownsOutcomeCard(streamBubbles, bubbleIndex)
+                      ? taskOutcomeAnchors.get(bubble.stableId)
+                      : undefined;
+                  return (
+                    <BubbleView
+                      key={bubbleKey(bubble)}
+                      bubble={bubble}
+                      renderOutcome={taskRunResponseId !== undefined}
+                      taskRunResponseId={taskRunResponseId}
+                    />
+                  );
+                })}
                 {/* Pending elicitation cards, floated to the bottom of the
                     chat so an outstanding question stays in view (stick-to-
                     bottom) no matter how much text the agent streamed after
@@ -1838,6 +1893,9 @@ function MainAgentSurface({
         codexModelOptions={codexModelOptions}
         showCodexPlanMode={showCodexPlanMode}
         showGoalControl={showGoalControl}
+        showRouteApprovalControl={showRouteApprovalControl}
+        routeApprovalEnabled={routeApprovalEnabled}
+        routeApprovalDisabled={readOnlyReason !== null || permissionLevel === 1}
         isTerminalFirst={isTerminalFirst}
         isNativeWrapper={isNativeWrapper}
         reconnectHint={liveness.kind === "runner_asleep" || liveness.kind === "host_asleep"}
@@ -2843,7 +2901,7 @@ function useNativeChatTerminalBar(
     if (!native) return;
     setNativeViewMode({
       mode: view,
-      terminalEnabled: terminalsAvailable,
+      terminalEnabled: terminalsAvailable || terminalStartingUp,
       terminalStartingUp,
       visible,
     });
@@ -2883,10 +2941,13 @@ function ConnectedTerminalFirstPill({
 }) {
   // `terminalStartingUp` is the single loading signal — AppShell folds the
   // launch (liveness `starting`) and PTY-creation (`terminalPending`)
-  // sources into it. The button is disabled whenever no terminal is
-  // reachable: greyed-and-spinning reads as "loading", greyed-and-static as
-  // "no terminal / stopped".
+  // sources into it. Starting remains clickable so the user can enter the
+  // honest empty terminal surface while registration finishes. A stopped
+  // session with no resumable terminal is disabled with an explanation.
   const { view, setView, terminalsAvailable, terminalStartingUp } = ctx;
+  const terminalEnabled = terminalsAvailable || terminalStartingUp;
+  const unavailableReason =
+    "No terminal is available. Send a message to start or resume this session.";
 
   return (
     <div
@@ -2907,7 +2968,7 @@ function ConnectedTerminalFirstPill({
             aria-label="Chat"
             onClick={() => setView("chat")}
             className={cn(
-              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors",
+              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               view === "chat"
                 ? "bg-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -2920,11 +2981,18 @@ function ConnectedTerminalFirstPill({
             type="button"
             aria-pressed={view === "terminal"}
             aria-label="Terminal"
-            disabled={!terminalsAvailable}
-            title={terminalStartingUp ? "Terminal is starting up…" : undefined}
+            disabled={!terminalEnabled}
+            aria-describedby={terminalEnabled ? undefined : "terminal-unavailable-reason"}
+            title={
+              terminalStartingUp
+                ? "Terminal is starting up…"
+                : terminalEnabled
+                  ? undefined
+                  : unavailableReason
+            }
             onClick={() => setView("terminal")}
             className={cn(
-              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              "terminal-first-switcher-option flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
               view === "terminal"
                 ? "bg-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -2937,6 +3005,11 @@ function ConnectedTerminalFirstPill({
             )}
             <span>Terminal</span>
           </button>
+          {!terminalEnabled && (
+            <span id="terminal-unavailable-reason" className="sr-only">
+              {unavailableReason}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -2990,7 +3063,15 @@ function CompactionLoadingIndicator() {
 // markdown/syntax-highlighting subtree. See `bubblesEqual`. Exported for
 // the user-bubble markdown render tests.
 export const BubbleView = memo(
-  function BubbleView({ bubble }: { bubble: Bubble }) {
+  function BubbleView({
+    bubble,
+    renderOutcome = true,
+    taskRunResponseId,
+  }: {
+    bubble: Bubble;
+    renderOutcome?: boolean;
+    taskRunResponseId?: string;
+  }) {
     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
     if (bubble.kind === "compaction_loading") {
       return <CompactionLoadingIndicator />;
@@ -3006,9 +3087,18 @@ export const BubbleView = memo(
         />
       );
     }
-    return <AssistantBubble bubble={bubble} />;
+    return (
+      <AssistantBubble
+        bubble={bubble}
+        renderOutcome={renderOutcome}
+        taskRunResponseId={taskRunResponseId}
+      />
+    );
   },
-  (prev, next) => bubblesEqual(prev.bubble, next.bubble),
+  (prev, next) =>
+    prev.renderOutcome === next.renderOutcome &&
+    prev.taskRunResponseId === next.taskRunResponseId &&
+    bubblesEqual(prev.bubble, next.bubble),
 );
 
 /**
@@ -3224,7 +3314,16 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
   );
 }
 
-function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistant" }> }) {
+function AssistantBubble({
+  bubble,
+  renderOutcome = true,
+  taskRunResponseId,
+}: {
+  bubble: Extract<Bubble, { kind: "assistant" }>;
+  renderOutcome?: boolean;
+  taskRunResponseId?: string;
+}) {
+  const { conversationId: outcomeSessionId } = useParams<{ conversationId: string }>();
   // The walker only emits an assistant bubble when at least one
   // assistant-side block exists, so `items` is non-empty here in the
   // common case. The "Working…" shimmer for the empty-items / streaming
@@ -3245,6 +3344,11 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
   // width to match the composer, not the default w-fit shrink-to-content.
   const hasElicitation = bubble.items.some((it) => it.kind === "elicitation");
   const isWide = hasElicitation || containsMarkdownTable(bubble.items);
+  const showOutcome =
+    renderOutcome &&
+    taskRunResponseId !== undefined &&
+    bubble.lifecycle !== "streaming" &&
+    outcomeSessionId !== undefined;
 
   return (
     <>
@@ -3252,6 +3356,7 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
         from="assistant"
         data-testid="message-bubble"
         data-role="assistant"
+        data-response-id={bubble.responseId}
         className={isWide ? "max-w-full" : "max-w-3xl"}
       >
         <MessageContent className={isWide ? "w-full" : undefined}>
@@ -3287,6 +3392,16 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
           </MessageActions>
         )}
       </Message>
+      {showOutcome && (
+        <div
+          data-testid="assistant-outcome-slot"
+          data-response-id={bubble.responseId}
+          data-task-run-response-id={taskRunResponseId}
+          className="max-w-3xl"
+        >
+          <TaskOutcomeBriefCard sessionId={outcomeSessionId} responseId={taskRunResponseId} />
+        </div>
+      )}
 
       {bubble.lifecycle === "failed" && (
         <p className="text-destructive text-xs">Error: {bubble.error}</p>
@@ -3346,6 +3461,16 @@ interface ComposerProps {
   showCodexPlanMode: boolean;
   /** Show the session Goal control. */
   showGoalControl?: boolean;
+  /**
+   * Show the Model Routing Agent selector. The caller already gates this
+   * on ``/v1/info.route_approval_enabled`` and the session being
+   * editable; the composer just renders the control when told.
+   */
+  showRouteApprovalControl: boolean;
+  /** Per-session Model Routing Agent toggle value. */
+  routeApprovalEnabled: boolean;
+  /** Disable the Model Routing Agent switch (read-only sessions, etc). */
+  routeApprovalDisabled: boolean;
   /**
    * Terminal-first session (Chat/Terminal pill present). Presentation
    * only: tightens the composer's bottom padding to `pb-1.5` so it sits
@@ -3525,7 +3650,15 @@ export function formatStatusModelLabel(
   if (codexOption) return codexOption.displayName ?? codexOption.id;
   const known = CLAUDE_NATIVE_MODELS.find((m) => m.id === lower);
   if (known) return known.label;
-  return raw;
+  // OmniRoute combo id: surface the curated display name when the
+  // picker has one. Falls back to the raw id (preserved verbatim) so
+  // an unknown combo still reads sensibly. The store lookup is the
+  // live catalog (server-fetched); getOmniRouteComboDisplayName
+  // provides the bundled curated fallback.
+  const omnirouteCombos = useChatStore.getState().omnirouteCombos;
+  const omnirouteMatch = omnirouteCombos.find((c) => c.id === raw);
+  if (omnirouteMatch) return omnirouteMatch.display_name || omnirouteMatch.id;
+  return getOmniRouteComboDisplayName(raw);
 }
 
 function formatStatusEffortLabel(effort: string | null, raw = false): string | null {
@@ -3788,6 +3921,9 @@ export function Composer({
   codexModelOptions,
   showCodexPlanMode,
   showGoalControl = false,
+  showRouteApprovalControl = false,
+  routeApprovalEnabled = false,
+  routeApprovalDisabled = false,
   isTerminalFirst = false,
   isNativeWrapper = false,
   reconnectHint = false,
@@ -4904,6 +5040,18 @@ export function Composer({
                 verdict={costRoutingVerdict}
               />
             )}
+            {showRouteApprovalControl && (
+              <RouteApprovalControl
+                enabled={routeApprovalEnabled}
+                disabled={routeApprovalDisabled}
+                onChange={(enabled) =>
+                  void useChatStore
+                    .getState()
+                    .setRouteApprovalEnabled(enabled)
+                    .catch(() => {})
+                }
+              />
+            )}
             {showCodexPlanMode && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -5462,7 +5610,24 @@ function AgentPicker({
     showEffort && selectedEffort
       ? formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex")
       : null;
-  const hasPickerActions = showAgents || modelOptions.length > 0 || showEffort;
+  // Live OmniRoute combo catalog for the picker (sourced from the
+  // session snapshot's ``omniroute_combos`` field). Surfaced as a
+  // dedicated group under the model rows so the curated coding combos
+  // (``auto/best-coding``, ``auto/coding:fast``,
+  // ``auto/coding:reliable``) are always selectable on harnesses that
+  // route through OmniRoute (opencode-native is the primary target).
+  // Empty array hides the section.
+  const omnirouteCombos = useChatStore((s) => s.omnirouteCombos);
+  // Only show the OmniRoute group when the active picker kind actually
+  // routes through OmniRoute — today that's opencode-native. Other
+  // harnesses have no `omniroute/...` provider plumbing so offering the
+  // rows would be misleading.
+  const supportsOmniRoutePicker = modelPickerKind === "opencode" || modelPickerKind === null;
+  const visibleOmniRouteCombos =
+    supportsOmniRoutePicker && omnirouteCombos && omnirouteCombos.length > 0 ? omnirouteCombos : [];
+  const showOmniRouteGroup = visibleOmniRouteCombos.length > 0;
+  const hasPickerActions =
+    showAgents || modelOptions.length > 0 || showOmniRouteGroup || showEffort;
 
   // Before kiro/pi resolve a live model, there is no model to show: kiro until
   // its first session ``.json`` write, pi until its snapshot fills llmModel (or
@@ -5591,11 +5756,49 @@ function AgentPicker({
             })}
           </>
         )}
+        {showOmniRouteGroup && (
+          <>
+            <DropdownMenuSeparator className="my-1" />
+            <PickerSectionHeader>OmniRoute</PickerSectionHeader>
+            {visibleOmniRouteCombos.map((combo) => {
+              const isActive = pickerSelectedModel === combo.id;
+              return (
+                <DropdownMenuItem
+                  key={combo.id}
+                  data-testid="omniroute-combo-picker-item"
+                  data-combo-id={combo.id}
+                  data-active={isActive ? "true" : undefined}
+                  onSelect={() =>
+                    void useChatStore
+                      .getState()
+                      .setModel(combo.id)
+                      .catch(() => {})
+                  }
+                  className={cn(
+                    "items-center gap-2 rounded-sm px-2 py-1.5 text-xs",
+                    "data-[active=true]:bg-accent/60 data-[active=true]:text-foreground",
+                  )}
+                >
+                  <span className="flex flex-1 flex-col gap-0.5">
+                    <span className="truncate" data-testid="omniroute-combo-picker-display-name">
+                      {combo.display_name || combo.id}
+                    </span>
+                    <span className="truncate text-[10px] text-muted-foreground">
+                      <code>{combo.id}</code>
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              );
+            })}
+          </>
+        )}
         {/* Skip the leading rule when Effort is the only section, so the
             dropdown doesn't open with a stray divider at the top. */}
         {showEffort && (
           <>
-            {(showAgents || modelOptions.length > 0) && <DropdownMenuSeparator className="my-1" />}
+            {(showAgents || modelOptions.length > 0 || showOmniRouteGroup) && (
+              <DropdownMenuSeparator className="my-1" />
+            )}
             <PickerSectionHeader>Effort</PickerSectionHeader>
             {effortLevels.map((level) => (
               <DropdownMenuItem

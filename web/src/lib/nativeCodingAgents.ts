@@ -16,7 +16,11 @@ export type NativeCodingAgentIconKind =
   | "antigravity"
   | "kimi"
   | "hermes";
-export type NativeCodingAgentCapability = "permissionMode" | "approvalMode" | "cursorMode";
+export type NativeCodingAgentCapability =
+  | "permissionMode"
+  | "approvalMode"
+  | "cursorMode"
+  | "modelOptions";
 
 export interface NativeCodingAgentSpec {
   key: NativeCodingAgentIconKind;
@@ -58,16 +62,11 @@ export const NATIVE_CODING_AGENTS = [
     displayName: "OpenCode",
     iconKind: "opencode",
     sortRank: 25,
-    // No capabilities → no permission picker. OpenCode has no claude-style
-    // permission-mode surface to mirror: its native modes are the `build`
-    // (allow-by-default) and `plan` primary agents, switched at runtime via Tab
-    // inside the TUI — and `opencode attach` (how the runner launches it) has
-    // no `--agent` flag to preset one anyway. The runner already forces
-    // `permission: "ask"` so tools route through the Omnigent policy engine, so
-    // a launch-time picker would mirror nothing. (Previously declared Codex's
-    // `approvalMode`, whose `--sandbox`/`--ask-for-approval` presets aren't
-    // understood by `opencode attach` and crashed the TUI on any non-default
-    // pick.)
+    // OpenCode exposes both direct model options AND a session-launch
+    // permission-mode surface (Default / Auto / Accept edits / Plan /
+    // Don't ask / Bypass permissions), translated by the runner into
+    // OpenCode's ``permission`` + ``default_agent`` config fields.
+    capabilities: ["modelOptions", "permissionMode"],
   },
   {
     key: "cursor",

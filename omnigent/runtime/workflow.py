@@ -1166,6 +1166,13 @@ def _build_claude_sdk_spawn_env(
     ``os.environ``.
 
     :param spec: The agent spec.
+    :param cwd: Runtime working directory for the Claude SDK subprocess —
+        the session workspace (the folder the user launched in), NOT the
+        agent bundle dir. Threaded as ``HARNESS_CLAUDE_SDK_CWD`` so the
+        SDK CLI operates on the user's project rather than the runner's
+        checkout. When unset, the harness wrap falls back to
+        ``os_env.cwd`` and then to the inherited subprocess cwd. Mirrors
+        :func:`_build_kimi_spawn_env`'s ``cwd`` handling.
     :param workdir: The bundle's on-disk path (extracted by the
         agent cache). Threaded through as
         ``HARNESS_CLAUDE_SDK_BUNDLE_DIR`` so the harness wrap can
@@ -1177,9 +1184,8 @@ def _build_claude_sdk_spawn_env(
     model = _resolve_spec_model(spec)
     if model is not None:
         env["HARNESS_CLAUDE_SDK_MODEL"] = model
-    # Session workspace (the selected working folder), not the bundle workdir.
-    # Without this the SDK subprocess inherits the runner's launch cwd — see
-    # ``HARNESS_CLAUDE_SDK_CWD`` in ``omnigent/inner/claude_sdk_harness.py``.
+    # Session workspace (selected working folder), not the bundle workdir.
+    # Without this, SDK subprocesses inherit the runner's launch cwd.
     if cwd is not None:
         env["HARNESS_CLAUDE_SDK_CWD"] = str(cwd)
 

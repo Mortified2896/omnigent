@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from omnigent.db.utils import get_or_create_engine
 from omnigent.entities import (
@@ -1468,6 +1468,122 @@ async def test_delete_conversation_with_items(
     )
     assert await conversation_store.delete_conversation(conv.id) is True
     assert conversation_store.get_conversation(conv.id) is None
+
+
+async def test_delete_conversation_cascades_fk_referenced_tables(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """Deleting a conversation removes every FK-referenced descendant row.
+
+    Regression test: conversations have FK constraints from
+    ``routing_proposals`` and ``task_runs`` (which themselves have FK
+    children ``routing_decisions``, ``task_evaluations``,
+    ``task_reviews``, and ``langfuse_sync_outbox``). The delete must
+    clean up all of these rows explicitly, otherwise SQLite's
+    ``FOREIGN KEY constraint failed`` aborts the deletion.
+    """
+    from sqlalchemy import text
+
+    from omnigent.db.db_models import (
+        SqlLangfuseSyncOutbox,
+        SqlRoutingDecision,
+        SqlRoutingProposal,
+        SqlTaskEvaluation,
+        SqlTaskReview,
+        SqlTaskRun,
+        current_workspace_id,
+    )
+
+    conv = conversation_store.create_conversation()
+    with conversation_store._session() as session:  # type: ignore[attr-defined]
+        ws = current_workspace_id()
+        # routing_proposals row + child routing_decisions row
+        session.execute(
+            text(
+                "INSERT INTO routing_proposals (workspace_id, id, conversation_id, "
+                "elicitation_id, user_message_sha256, user_message_excerpt, "
+                "user_message_chars, content_types_json, original_route_id, "
+                "requires_explicit_approval, proposal_payload_excerpt, "
+                "proposal_payload_sha256, created_at) "
+                "VALUES (:ws, 'rp_test1', :cid, 'elic_rp1', 'sha1', 'excerpt', "
+                "5, '[]', 'auto/cheap', 0, '{}', 'psha1', 0)"
+            ),
+            {"ws": ws, "cid": conv.id},
+        )
+        session.execute(
+            text(
+                "INSERT INTO routing_decisions (workspace_id, id, proposal_id, action, "
+                "decision_request_sha256, original_route_id, decision_payload_excerpt, "
+                "decision_payload_sha256, created_at) "
+                "VALUES (:ws, 'rd_test1', 'rp_test1', 'declined', 'rsha1', "
+                "'auto/cheap', '{}', 'dpsha1', 0)"
+            ),
+            {"ws": ws},
+        )
+        # task_runs row + 3 child rows in 3 child tables
+        session.execute(
+            text(
+                "INSERT INTO task_runs (workspace_id, id, conversation_id, terminal_status, "
+                "created_at, updated_at) VALUES (:ws, 'tr_test1', :cid, 1, 0, 0)"
+            ),
+            {"ws": ws, "cid": conv.id},
+        )
+        session.execute(
+            text(
+                "INSERT INTO task_evaluations (workspace_id, id, task_run_id, evaluator_type, "
+                "verdict, created_at) VALUES (:ws, 'tev_test1', 'tr_test1', 1, 'success', 0)"
+            ),
+            {"ws": ws},
+        )
+        session.execute(
+            text(
+                "INSERT INTO task_reviews (workspace_id, id, task_run_id, verdict, "
+                "created_at, updated_at) VALUES (:ws, 'trv_test1', 'tr_test1', 'success', 0, 0)"
+            ),
+            {"ws": ws},
+        )
+        session.execute(
+            text(
+                "INSERT INTO langfuse_sync_outbox (workspace_id, id, task_run_id, "
+                "event_type, idempotency_key, payload_json, next_attempt_at, created_at) "
+                "VALUES (:ws, 'lso_test1', 'tr_test1', 'trace', 'idem1', '{}', 0, 0)"
+            ),
+            {"ws": ws},
+        )
+
+        # Verify pre-state
+        for tbl, pk_col, fk_col in [
+            (SqlRoutingProposal, "id", "conversation_id"),
+            (SqlRoutingDecision, "proposal_id", "proposal_id"),
+            (SqlTaskRun, "id", "conversation_id"),
+            (SqlTaskEvaluation, "task_run_id", "task_run_id"),
+            (SqlTaskReview, "task_run_id", "task_run_id"),
+            (SqlLangfuseSyncOutbox, "task_run_id", "task_run_id"),
+        ]:
+            assert session.execute(
+                select(getattr(tbl, fk_col)).where(
+                    getattr(tbl, fk_col).in_([conv.id, "rp_test1", "tr_test1"])
+                )
+            ).fetchall(), f"pre-state missing for {tbl.__name__}"
+
+    # The fix: delete_conversation must succeed without FK errors.
+    assert await conversation_store.delete_conversation(conv.id) is True
+
+    with conversation_store._session() as session:  # type: ignore[attr-defined]
+        for tbl, fk_col in [
+            (SqlRoutingProposal, "conversation_id"),
+            (SqlRoutingDecision, "proposal_id"),
+            (SqlTaskRun, "conversation_id"),
+            (SqlTaskEvaluation, "task_run_id"),
+            (SqlTaskReview, "task_run_id"),
+            (SqlLangfuseSyncOutbox, "task_run_id"),
+        ]:
+            rows = session.execute(
+                select(getattr(tbl, fk_col)).where(
+                    getattr(tbl, fk_col).in_([conv.id, "rp_test1", "tr_test1"])
+                )
+            ).fetchall()
+            assert rows == [], f"{tbl.__name__} rows leaked: {rows}"
 
 
 # ── List conversations pagination ────────────────────
@@ -4967,3 +5083,39 @@ def test_live_state_writes_via_chokepoint_land_in_scoped_workspace(
             assert updated.pending_elicitation_count == 3
     finally:
         session_live_state.configure(None)
+
+
+def test_routing_selection_source_round_trips(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    assert conv.routing_selection_source is None
+
+    updated = conversation_store.update_conversation(
+        conv.id,
+        model_override="openai/gpt-5.4",
+        routing_selection_source="manual",
+    )
+
+    assert updated is not None
+    assert updated.routing_selection_source == "manual"
+    assert conversation_store.get_conversation(conv.id) == updated
+
+    approved = conversation_store.update_conversation(
+        conv.id,
+        omniroute_route_id="auto/coding",
+        routing_selection_source="route_approval",
+    )
+    assert approved is not None
+    assert approved.routing_selection_source == "route_approval"
+
+
+def test_routing_selection_source_rejects_unknown_value(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    with pytest.raises(ValueError, match="routing_selection_source"):
+        conversation_store.update_conversation(
+            conv.id,
+            routing_selection_source="automatic",
+        )

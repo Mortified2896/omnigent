@@ -93,6 +93,7 @@ import type {
   ContentBlock,
   CodexModelOption,
   ModelUsage,
+  OmniRouteCombo,
   PendingInput,
   SandboxStatus,
   Session,
@@ -105,6 +106,7 @@ import { supportsEffortControl } from "@/lib/sessionCapabilities";
 import { isClaudeNativeModel } from "@/lib/claudeNativeModels";
 import { isCodexNativeModel } from "@/lib/codexNativeModels";
 import { codexPlanModeFromSession } from "@/lib/codexPlanMode";
+import { getCachedServerInfo } from "@/lib/capabilities";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { isNativeWrapper } from "@/lib/nativeCodingAgents";
 
@@ -391,6 +393,13 @@ export interface ChatState {
    */
   codexPlanMode: boolean;
   /**
+   * Per-session LLM-backed Model Routing Agent toggle. Hydrated from
+   * ``Session.routeApprovalEnabled`` on bind and updated by the web
+   * "Model Routing Agent" toggle (``setRouteApprovalEnabled``). False
+   * by default — manual harness/model/effort picks are preserved.
+   */
+  routeApprovalEnabled: boolean;
+  /**
    * True when older items exist before the loaded history window. Binds
    * hydrate only the most recent page (see `fetchSessionItemsPage`);
    * scroll-up `loadMoreHistory` pages older until this goes false.
@@ -494,6 +503,20 @@ export interface ChatState {
    * background Codex ``model/list`` fetch lands.
    */
   codexModelOptions: CodexModelOption[];
+  /**
+   * Live OmniRoute combo catalog for the active session's picker. Populated
+   * from the session snapshot's ``omniroute_combos`` field. Surfaced as a
+   * dedicated "OmniRoute" group so the curated coding combos
+   * (``auto/best-coding``, ``auto/coding:fast``, ``auto/coding:reliable``)
+   * are always selectable; an empty array just hides the group.
+   */
+  omnirouteCombos: OmniRouteCombo[];
+  /**
+   * Catalog source the server reported (``"live"`` / ``"cache"`` /
+   * ``"fallback_curated"``). Lets the UI surface a "live" badge or a
+   * "catalog degraded" hint when the catalog isn't freshly read.
+   */
+  omnirouteCombosSource: "live" | "cache" | "fallback_curated" | null;
   /**
    * True while the runner is auto-creating the terminal for a
    * terminal-first session (claude-native / codex-native). Seeded from
@@ -637,6 +660,16 @@ export interface ChatState {
    * default. No-ops when there is no active conversation.
    */
   setCostControlMode: (mode: "on" | "off" | null) => Promise<void>;
+  /**
+   * Toggle the LLM-backed Model Routing Agent for the active
+   * session. When ``true`` the routing agent proposes a harness,
+   * native OmniRoute route, reasoning effort, and permission mode
+   * for every turn and publishes an approval card before execution.
+   * Optimistic local flip then PATCH; the server's canonical value
+   * (or a rollback on failure) settles the state. No-ops when
+   * there is no active conversation.
+   */
+  setRouteApprovalEnabled: (enabled: boolean) => Promise<void>;
   /**
    * Toggle Codex Plan mode for the active session. No-ops when there is no
    * active conversation.
@@ -915,6 +948,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionModelOverride: null,
   costControlModeOverride: null,
   codexPlanMode: false,
+  routeApprovalEnabled: false,
   hasMoreHistory: false,
   loadingMoreHistory: false,
   oldestItemId: null,
@@ -931,6 +965,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   todos: [],
   skills: [],
   codexModelOptions: [],
+  omnirouteCombos: [],
+  omnirouteCombosSource: null,
   terminalPending: false,
   viewers: [],
   sandboxStatus: null,
@@ -1618,6 +1654,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionModelOverride: null,
         costControlModeOverride: null,
         codexPlanMode: false,
+        routeApprovalEnabled: false,
         contextWindow: null,
         tokensUsed: null,
         sessionCostUsd: null,
@@ -1626,6 +1663,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         todos: [],
         skills: [],
         codexModelOptions: [],
+        omnirouteCombos: [],
+        omnirouteCombosSource: null,
         terminalPending: false,
         viewers: [],
         // Drop any queued "Attach to agent" chip that the outgoing session's
@@ -1816,6 +1855,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       if (get().conversationId === conversationId) {
         set({ codexPlanMode: previous });
+      }
+      throw err;
+    }
+  },
+
+  setRouteApprovalEnabled: async (enabled) => {
+    const { conversationId } = get();
+    if (!conversationId) return;
+    const previous = get().routeApprovalEnabled;
+    set({ routeApprovalEnabled: enabled });
+    try {
+      const session = await updateSession(conversationId, { routeApprovalEnabled: enabled });
+      if (get().conversationId !== conversationId) return;
+      set({ routeApprovalEnabled: session.routeApprovalEnabled === true });
+    } catch (err) {
+      if (get().conversationId === conversationId) {
+        set({ routeApprovalEnabled: previous });
       }
       throw err;
     }
@@ -2186,10 +2242,13 @@ function sessionBindingPatch(
   | "subAgentName"
   | "costControlModeOverride"
   | "codexPlanMode"
+  | "routeApprovalEnabled"
   | "contextWindow"
   | "gitBranch"
   | "skills"
   | "codexModelOptions"
+  | "omnirouteCombos"
+  | "omnirouteCombosSource"
   | "terminalPending"
   | "sandboxStatus"
   | "mcpStartup"
@@ -2210,10 +2269,14 @@ function sessionBindingPatch(
     subAgentName: session.subAgentName ?? null,
     costControlModeOverride: session.costControlModeOverride ?? null,
     codexPlanMode: codexPlanModeFromSession(session),
+    routeApprovalEnabled:
+      session.routeApprovalEnabled ?? getCachedServerInfo()?.route_approval_enabled === true,
     contextWindow: session.contextWindow ?? null,
     gitBranch: session.gitBranch ?? null,
     skills: session.skills ?? [],
     codexModelOptions: session.codexModelOptions ?? [],
+    omnirouteCombos: session.omnirouteCombos ?? [],
+    omnirouteCombosSource: session.omnirouteCombosSource ?? null,
     terminalPending: session.terminalPending ?? false,
     sandboxStatus: session.sandboxStatus ?? null,
     mcpStartup: session.mcpStartup ?? null,
@@ -3893,6 +3956,8 @@ async function refetchRunnerBackedSessionState(
       : {
           skills: session.skills ?? [],
           codexModelOptions: session.codexModelOptions ?? [],
+          omnirouteCombos: session.omnirouteCombos ?? [],
+          omnirouteCombosSource: session.omnirouteCombosSource ?? null,
         },
   );
 }

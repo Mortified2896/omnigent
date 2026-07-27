@@ -260,6 +260,7 @@ export interface ElicitationRequest {
    * where the allow rule is meaningful.
    */
   rememberScope?: RememberScope | null;
+  routeProposal?: Record<string, unknown> | null;
 }
 
 /**

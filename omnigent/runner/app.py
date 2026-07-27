@@ -399,6 +399,17 @@ _AUTO_CODEX_APP_SERVERS: dict[str, Any] = {}
 # mid-run (mirrors ``_AUTO_CODEX_APP_SERVERS``).
 _AUTO_OPENCODE_SERVERS: dict[str, Any] = {}
 
+
+async def shutdown_runner_opencode_native_servers() -> None:
+    """Close runner-owned OpenCode servers before the observer stops."""
+    for session_id in list(_AUTO_OPENCODE_SERVERS):
+        await _cancel_auto_forwarder_task(session_id)
+        server = _AUTO_OPENCODE_SERVERS.pop(session_id, None)
+        if server is not None:
+            with contextlib.suppress(Exception):
+                await server.close()
+
+
 # Bound repeated terminal GET miss logs from tight client poll loops.
 _TERMINAL_LOOKUP_MISS_LOG_INTERVAL_S = 10.0
 _terminal_lookup_miss_log_state: dict[tuple[str, str, str], float] = {}
@@ -936,6 +947,13 @@ class _OpenCodeNativeLaunchConfig:
     :param terminal_launch_args: User pass-through OpenCode CLI args.
     :param model_override: Persisted model override, or ``None``.
     :param external_session_id: Existing OpenCode session id to resume.
+    :param codex_subscription_expected: ``True`` only for a picker selection
+        proven to come from the OpenCode ChatGPT OAuth catalog.
+    :param omniroute_route_expected: ``True`` only when the session has an
+        explicit ``omniroute_route_id``. The runner uses this to drive the
+        fail-closed behavior of the OpenCode startup: an explicit route must
+        validate against the local OmniRoute catalog before OpenCode boots,
+        while direct provider/model selections remain independent of it.
     :param fork_carry_history: ``True`` on a forked clone whose prior
         transcript should be seeded as a text preamble
         (``omnigent.fork.carry_history``); opencode has no native session to
@@ -946,7 +964,11 @@ class _OpenCodeNativeLaunchConfig:
     policy_server_url: str
     terminal_launch_args: list[str] | None
     model_override: str | None
+    reasoning_effort: str | None
+    permission_mode: str | None
     external_session_id: str | None
+    codex_subscription_expected: bool = False
+    omniroute_route_expected: bool = False
     fork_carry_history: bool = False
 
 
@@ -994,7 +1016,19 @@ async def _opencode_native_launch_config(
         and all(isinstance(arg, str) for arg in terminal_launch_args)
     ):
         raise RuntimeError(f"Invalid terminal_launch_args for OpenCode session {session_id!r}.")
-    model_override = snapshot.get("model_override")
+    # An OmniRoute catalog is required only for an explicit persisted route.
+    # A manual direct provider/model choice may coexist with the session's
+    # routing preference, but it must never acquire an OmniRoute dependency.
+    route_model_override = snapshot.get("omniroute_route_id")
+    has_explicit_omniroute_route = isinstance(route_model_override, str) and bool(
+        route_model_override
+    )
+    if has_explicit_omniroute_route:
+        from omnigent.opencode_native_provider import qualify_omniroute_model
+
+        model_override = qualify_omniroute_model(route_model_override)
+    else:
+        model_override = snapshot.get("model_override")
     if model_override is not None:
         if not isinstance(model_override, str) or not model_override:
             raise RuntimeError(f"Invalid model_override for OpenCode session {session_id!r}.")
@@ -1004,6 +1038,16 @@ async def _opencode_native_launch_config(
             raise RuntimeError(
                 f"Invalid model_override for OpenCode session {session_id!r}: {exc}"
             ) from exc
+    reasoning_effort = snapshot.get("reasoning_effort")
+    permission_mode = snapshot.get("permission_mode")
+    if permission_mode is not None and (
+        not isinstance(permission_mode, str) or not permission_mode
+    ):
+        raise RuntimeError(f"Invalid permission_mode for OpenCode session {session_id!r}.")
+    if reasoning_effort is not None and (
+        not isinstance(reasoning_effort, str) or not reasoning_effort
+    ):
+        raise RuntimeError(f"Invalid reasoning_effort for OpenCode session {session_id!r}.")
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
@@ -1017,18 +1061,31 @@ async def _opencode_native_launch_config(
     # On a forked clone, the server stamps carry-history (opencode has no native
     # session to clone, so the runner rehydrates the copied transcript as a
     # noReply preamble — same path as a lost-session resume).
+    from omnigent.opencode_native_bridge import (
+        OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY,
+        OPENCODE_NATIVE_CODEX_SUBSCRIPTION_ACCESS_SOURCE,
+    )
     from omnigent.stores.conversation_store import FORK_CARRY_HISTORY_LABEL_KEY
 
     labels = snapshot.get("labels")
     fork_carry_history = (
         isinstance(labels, dict) and labels.get(FORK_CARRY_HISTORY_LABEL_KEY) == "1"
     )
+    codex_subscription_expected = (
+        isinstance(labels, dict)
+        and labels.get(OPENCODE_NATIVE_ACCESS_SOURCE_LABEL_KEY)
+        == OPENCODE_NATIVE_CODEX_SUBSCRIPTION_ACCESS_SOURCE
+    )
     return _OpenCodeNativeLaunchConfig(
         workspace=_codex_session_workspace(session_workspace),
         policy_server_url=_required_runner_env("RUNNER_SERVER_URL"),
         terminal_launch_args=terminal_launch_args,
         model_override=model_override,
+        reasoning_effort=reasoning_effort,
+        permission_mode=permission_mode,
         external_session_id=external_session_id,
+        codex_subscription_expected=codex_subscription_expected,
+        omniroute_route_expected=has_explicit_omniroute_route,
         fork_carry_history=fork_carry_history,
     )
 
@@ -1041,6 +1098,8 @@ async def _auto_create_opencode_terminal(
     agent_spec: Any | None = None,
     server_client: httpx.AsyncClient | None = None,
     ensure_comment_relay: Callable[..., Awaitable[None]] | None = None,
+    provenance_proxy: Any | None = None,
+    runtime_pool: Any | None = None,
 ) -> SessionResourceView:
     """
     Auto-create an OpenCode terminal for an opencode-native session.
@@ -1061,10 +1120,14 @@ async def _auto_create_opencode_terminal(
         relay for this session's bridge dir (the nested
         ``_ensure_comment_relay_started``). ``None`` skips wiring the Omnigent
         MCP relay (tests / no server).
+    :param runtime_pool: Optional opencode runtime pool the conversation
+        should be registered with. ``None`` skips pool bookkeeping
+        (registry-less test doubles / direct module callers).
     :returns: The created terminal resource view.
     """
     from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
     from omnigent.opencode_native_app_server import (
+        OPENCODE_PROVIDER_ENV_DENY_VAR,
         OpenCodeNativeServer,
         build_opencode_attach_args,
         opencode_terminal_env,
@@ -1079,6 +1142,10 @@ async def _auto_create_opencode_terminal(
         write_relay_bridge_config,
     )
     from omnigent.opencode_native_forwarder import OpenCodeNativeForwarder
+    from omnigent.opencode_subscription import (
+        chatgpt_oauth_provider_for_auth_path,
+        chatgpt_provider_env,
+    )
 
     launch_config = await _opencode_native_launch_config(
         session_id=session_id,
@@ -1102,6 +1169,28 @@ async def _auto_create_opencode_terminal(
     clear_bridge_state(bridge_dir)
 
     model_override = launch_config.model_override or _opencode_native_model_from_spec(agent_spec)
+    # opencode's per-prompt model field is ``{providerID}/{modelID}`` (the
+    # provider-prefixed form). The spec's ``executor.model`` may carry a
+    # bare combo id (e.g. ``custom/best-coding`` for an OmniRoute combo);
+    # without qualification the bare id splits on the first ``/`` and
+    # lands as provider ``custom``, model id ``best-coding`` — opencode
+    # then rejects the dispatch with ``Model not found: best-coding``.
+    # The historical route-approved path qualifies via
+    # ``qualify_omniroute_model``; mirror that here for the
+    # fixed-route-V1 spec-declared model so the same persisted shape is
+    # written to the bridge state. Bare combo ids in the
+    # ``auto/``/``custom/`` namespaces (per :func:`_is_omniroute_combo_model_id`)
+    # are the only shapes we rewrite — physical provider/model ids and
+    # already-qualified forms pass through untouched.
+    from omnigent.opencode_native_provider import OMNIROUTE_PROVIDER_ID, qualify_omniroute_model
+
+    if (
+        isinstance(model_override, str)
+        and model_override
+        and not model_override.startswith(f"{OMNIROUTE_PROVIDER_ID}/")
+        and _is_omniroute_combo_model_id(model_override)
+    ):
+        model_override = qualify_omniroute_model(model_override)
     # Route opencode through the Databricks AI gateway when the spec names a
     # profile. Unlike codex/claude/pi (which consume HARNESS_*_GATEWAY_* env the
     # CLI translates), opencode reads provider/auth from its own config file, so
@@ -1110,15 +1199,33 @@ async def _auto_create_opencode_terminal(
     # databricks-sdk absent, auth failure), opencode falls back to whatever
     # provider config the ambient env/global config already gives it.
     from omnigent.opencode_native_bridge import xdg_config_home_for_bridge_dir
+    from omnigent.opencode_native_permission_mode_config import (
+        apply_opencode_permission_mode,
+    )
     from omnigent.opencode_native_provider import (
         build_opencode_mcp_block,
-        build_opencode_model_default_config,
         build_opencode_omnigent_mcp_server,
         build_opencode_provider_config,
+        fetch_omniroute_combo_models,
         maybe_merge_user_provider_config,
+        merge_omniroute_combo_catalog,
+        omniroute_api_key_from_config,
+        remove_provider_config,
         resolve_databricks_gateway,
+        validate_omniroute_provider_config,
         write_opencode_provider_config,
     )
+
+    proxy_provider_base_url: str | None = None
+    if launch_config.omniroute_route_expected:
+        if launch_config.model_override is None:
+            raise RuntimeError("OpenCode OmniRoute execution requires a model override.")
+        if provenance_proxy is not None:
+            proxy_provider_base_url = provenance_proxy.register(
+                session_id=session_id,
+                approved_combo=launch_config.model_override.split("/", 1)[1],
+                reasoning=launch_config.reasoning_effort,
+            ).base_url
 
     # Accumulate the synthesized opencode.json: provider/model (Databricks
     # gateway or a pinned default) + the agent's MCP servers + force-ask.
@@ -1133,12 +1240,12 @@ async def _auto_create_opencode_terminal(
         config = dict(build_opencode_provider_config(gateway))
         config["model"] = model_override
     elif model_override:
-        # No custom provider, but a model is pinned (``omni opencode --model`` or
-        # the ``omni setup`` OpenCode default): write opencode's default model so
-        # the native TUI and the first turn use it instead of ``opencode/big-pickle``.
-        # OpenCode resolves the provider from the model-id prefix against its own
-        # auth.json, so no provider block is needed.
-        config = dict(build_opencode_model_default_config(model_override))
+        # OpenCode resolves direct provider/model selections from its local
+        # catalog. Do not write the qualified id to config["model"]: recent
+        # OpenCode versions treat that string as an unqualified model id and
+        # reject it before the per-prompt {providerID, modelID} pin is applied.
+        # The bridge executor supplies that structured pin on every web turn.
+        pass
 
     # Build opencode's ``mcp`` block: the Omnigent builtin-tool relay (so the
     # model can call sys_*/load_skill/web_fetch — the real "connects to Omnigent
@@ -1165,6 +1272,8 @@ async def _auto_create_opencode_terminal(
     # PostToolUse hooks); coordinates come from the OMNIGENT_* env stamped on
     # the server below. Only wired when there's a server to evaluate against.
     policy_env: dict[str, str] = {}
+    if launch_config.reasoning_effort:
+        policy_env["HARNESS_OPENCODE_NATIVE_REASONING_EFFORT"] = launch_config.reasoning_effort
     runner_server_url = os.environ.get("RUNNER_SERVER_URL")
     if server_client is not None and runner_server_url:
         plugin_path = write_opencode_policy_plugin(bridge_dir)
@@ -1196,15 +1305,102 @@ async def _auto_create_opencode_terminal(
     # hides the user's ~/.config/opencode/opencode.jsonc, so without this
     # merge, custom providers with non-default base URLs are invisible.
     config = maybe_merge_user_provider_config(config)
+    # Direct provider/model selections use OpenCode's own catalog and auth.
+    # Only an explicit OmniRoute route may fetch or validate OmniRoute.
+    # The effective model for the opencode subprocess is resolved later
+    # (line ~1151) as ``launch_config.model_override or
+    # The effective model for the opencode subprocess is resolved later
+    # (line ~1151) as ``launch_config.model_override or
+    # _opencode_native_model_from_spec(agent_spec)``. Use that same
+    # resolution here so the catalog merge sees the model the subprocess
+    # will actually run, not just whatever the persisted snapshot
+    # promoted to ``model_override``.
+    effective_model_id = launch_config.model_override or _opencode_native_model_from_spec(
+        agent_spec
+    )
+    if launch_config.omniroute_route_expected:
+        combos = await fetch_omniroute_combo_models(api_key=omniroute_api_key_from_config(config))
+        config = merge_omniroute_combo_catalog(
+            config,
+            combos=combos,
+            approved_route=launch_config.model_override.split("/", 1)[1]
+            if launch_config.model_override
+            else "",
+            provider_base_url=proxy_provider_base_url,
+        )
+        # Do not repair a wrong endpoint silently: an explicit route must fail
+        # before OpenCode can open a direct provider connection.
+        validate_omniroute_provider_config(config, expected_base_url=proxy_provider_base_url)
+    elif _is_omniroute_combo_model_id(effective_model_id):
+        # Fixed-route V1 case: the spec declares a locked OmniRoute combo id
+        # (e.g. ``custom/best-coding``) directly under ``executor.model``.
+        # The user has the model-routing recommender off, so no
+        # ``omniroute_route_id`` is persisted, but the worker still needs
+        # the combo registered in the opencode provider's ``models`` dict
+        # or opencode rejects the dispatch with ``Model not found: <id>``.
+        # Probe the live OmniRoute catalog (same call shape as the
+        # approval-pending path) and merge the combo in. A failure or
+        # missing combo leaves ``config`` untouched (opencode then sees
+        # whatever the user's global config exposed).
+        try:
+            combos = await fetch_omniroute_combo_models(
+                api_key=omniroute_api_key_from_config(config)
+            )
+        except (httpx.HTTPError, ValueError, RuntimeError):
+            combos = {}
+        # The catalog keys combos by their full bare id (e.g.
+        # ``"custom/best-coding"``), so pass the spec's bare id verbatim.
+        # The historical ``omniroute_route_expected`` branch above got away
+        # with ``.split("/", 1)[1]`` only because in that path
+        # ``launch_config.model_override`` is qualified with the
+        # ``omniroute/`` provider prefix that we strip off here.
+        approved_route = effective_model_id
+        if approved_route in combos:
+            config = merge_omniroute_combo_catalog(
+                config,
+                combos=combos,
+                approved_route=approved_route,
+                provider_base_url=None,
+            )
+
+    # Apply the user-facing OpenCode-native permission mode (Default / Auto /
+    # Accept edits / Plan / Don't ask / Bypass). The merge happens AFTER every
+    # provider / MCP / plugin step so the mode overrides the ``"permission":
+    # "ask"`` default the MCP block sets, but preserves provider blocks,
+    # plugins, explicit deny rules, and the user's merged providers. Outer
+    # sandbox / network / host policy remain in force regardless of mode.
+    config = apply_opencode_permission_mode(config, mode=launch_config.permission_mode)
+
+    # The server runs with a per-session XDG_DATA_HOME, so seed OpenCode's
+    # current credentials before finalizing provider config.
+    seeded_auth = seed_opencode_auth(bridge_dir)
+    selected_provider = model_override.partition("/")[0] if model_override else None
+    subscription_env = (
+        chatgpt_provider_env(selected_provider) if selected_provider is not None else ()
+    )
+    if launch_config.codex_subscription_expected:
+        seeded_provider = (
+            chatgpt_oauth_provider_for_auth_path(seeded_auth)[0]
+            if seeded_auth is not None
+            else None
+        )
+        if (
+            selected_provider is None
+            or not subscription_env
+            or seeded_provider != selected_provider
+            or launch_config.omniroute_route_expected
+        ):
+            raise RuntimeError(
+                "OpenCode ChatGPT OAuth is unavailable for the selected subscription model."
+            )
+        # The OAuth catalog is authoritative for this provider. A global custom
+        # provider block could carry an API key or alternate endpoint, so omit
+        # that block and let OpenCode's authenticated built-in provider run it.
+        config = remove_provider_config(config, provider_id=selected_provider)
+        policy_env[OPENCODE_PROVIDER_ENV_DENY_VAR] = ",".join(subscription_env)
 
     if config:
         write_opencode_provider_config(xdg_config_home_for_bridge_dir(bridge_dir), config)
-
-    # The server runs with a per-session XDG_DATA_HOME, so copy the user's
-    # `opencode auth login` credentials in — otherwise it can't authenticate
-    # their providers and falls back to the no-auth default model. No-op on a
-    # remote runner (no local auth.json) / Databricks-gateway path.
-    seed_opencode_auth(bridge_dir)
 
     # Start the Omnigent builtin-tool relay BEFORE opencode boots, so
     # ``tool_relay.json`` exists when opencode launches the ``serve-mcp`` MCP
@@ -1275,9 +1471,31 @@ async def _auto_create_opencode_terminal(
                 xdg_data_home=str(server.xdg_data_home),
                 xdg_config_home=str(server.xdg_config_home),
                 model_override=model_override,
+                reasoning_effort=(
+                    launch_config.reasoning_effort
+                    if launch_config.reasoning_effort
+                    else ("default" if launch_config.omniroute_route_expected else None)
+                ),
+                permission_mode=launch_config.permission_mode,
+                route_approved=launch_config.omniroute_route_expected,
                 workspace=workspace,
             ),
         )
+        # Register / refresh the opencode runtime pool entry so the
+        # bounded pool (default 2 warm servers) and the idle reaper
+        # (default 300 s) know this conversation owns a live server.
+        # Done AFTER bridge state is written so the entry's
+        # ``external_session_id`` matches the durable OpenCode session id.
+        # The pool is a no-op when not provided (registry-less test
+        # doubles / module-level direct callers).
+        if runtime_pool is not None:
+            await _register_opencode_runtime_after_boot(
+                pool=runtime_pool,
+                session_id=session_id,
+                bridge_dir=bridge_dir,
+                opencode_session_id=opencode_session_id,
+                resource_registry=resource_registry,
+            )
     except Exception:
         await server.close()
         _AUTO_OPENCODE_SERVERS.pop(session_id, None)
@@ -1308,7 +1526,13 @@ async def _auto_create_opencode_terminal(
             ),
         )
         forwarder_task = asyncio.create_task(
-            _supervise_opencode_forwarder(session_id, server, forwarder),
+            _supervise_opencode_forwarder(
+                session_id,
+                server,
+                forwarder,
+                provenance_proxy=provenance_proxy,
+                runtime_pool=runtime_pool,
+            ),
             name=f"opencode-forwarder-{session_id}",
         )
         _register_auto_forwarder_task(session_id, forwarder_task)
@@ -1351,6 +1575,8 @@ async def _auto_create_opencode_terminal(
         await _cancel_auto_forwarder_task(session_id)
         await server.close()
         _AUTO_OPENCODE_SERVERS.pop(session_id, None)
+        if provenance_proxy is not None:
+            provenance_proxy.clear(session_id)
         raise
 
     _logger.info("Auto-created opencode terminal + forwarder for session %s", session_id)
@@ -1361,6 +1587,9 @@ async def _supervise_opencode_forwarder(
     session_id: str,
     server: Any,
     forwarder: Any,
+    *,
+    provenance_proxy: Any | None = None,
+    runtime_pool: Any | None = None,
 ) -> None:
     """
     Run the OpenCode SSE forwarder, closing the server when it ends.
@@ -1373,11 +1602,20 @@ async def _supervise_opencode_forwarder(
     :param session_id: Session/conversation id, e.g. ``"conv_abc123"``.
     :param server: The :class:`OpenCodeNativeServer` to close on exit.
     :param forwarder: The :class:`OpenCodeNativeForwarder` to run.
+    :param provenance_proxy: Optional provenance observer to clear on exit.
+    :param runtime_pool: Optional opencode runtime pool. When the
+        supervisor finishes, the pool's bookkeeping entry for
+        *session_id* is moved to ``STOPPING`` so the bounded pool sees
+        the live ``opencode serve`` slot freed even when the supervisor
+        runs without a prior ``register`` call (e.g. an
+        archive/delete-driven restart loop).
     :returns: None.
     """
     try:
         await forwarder.run()
     finally:
+        if provenance_proxy is not None:
+            provenance_proxy.clear(session_id)
         leftover = _AUTO_OPENCODE_SERVERS.pop(session_id, None)
         if leftover is not None:
             with contextlib.suppress(Exception):
@@ -1385,6 +1623,14 @@ async def _supervise_opencode_forwarder(
         elif server is not None:
             with contextlib.suppress(Exception):
                 await server.close()
+        # Mirror the supervisor teardown into the runtime pool so the
+        # bounded count stays accurate even when the supervisor fires
+        # without a prior ``_register_opencode_runtime_after_boot`` call
+        # (e.g. archive/delete-driven restart loops). ``pop`` keeps the
+        # registry bounded.
+        if runtime_pool is not None and runtime_pool.has_entry(session_id):
+            with contextlib.suppress(Exception):
+                await runtime_pool.terminate(session_id, reason="forwarder_exit")
 
 
 # Permission decisions can park a human approval card server-side
@@ -1497,6 +1743,63 @@ def _opencode_native_model_from_spec(agent_spec: Any | None) -> str | None:
         return _resolve_spec_model(getattr(agent_spec, "spec", agent_spec))
     except Exception:  # noqa: BLE001 - model resolution is best effort.
         return None
+
+
+def _is_omniroute_combo_model_id(model_id: str | None) -> bool:
+    """
+    Return ``True`` when *model_id* names an OmniRoute combo reference.
+
+    The fixed-route V1 wiring stores the combo id as
+    ``"<provider_id>/<combo_id>"`` (e.g. ``"omniroute/custom/best-coding"``)
+    or as a bare combo id (e.g. ``"custom/best-coding"``) — either form
+    needs to be merged into the opencode provider's ``models`` dict or
+    opencode rejects the dispatch with ``ProviderModelNotFoundError``.
+    Physical provider/model ids carry a known physical-vendor prefix
+    (e.g. ``"anthropic/claude-sonnet-4.6"``); combos live under the
+    ``omniroute`` namespace or one of the synthetic ``/``-rooted
+    namespaces the catalog exposes (``auto/``, ``custom/``).
+
+    This predicate is intentionally a coarse, non-authoritative filter:
+    the caller still validates ``combo_id in combos`` against the live
+    catalog before merging, so a false positive is harmless (the merge
+    is a no-op) and a false negative just routes the lookup through the
+    user's global opencode config path. The narrow case the predicate
+    must catch: a physical ``<vendor>/<model>`` id where ``<vendor>`` is
+    not in the OmniRoute combo namespaces — these must NOT trigger a
+    catalog probe on every dispatch.
+
+    :param model_id: The qualified or bare model id from
+        ``launch_config.model_override`` / the spec's ``executor.model``.
+    :returns: ``True`` when the id is shaped like a combo reference and
+        is not a known physical provider/model id.
+    """
+    if not isinstance(model_id, str) or not model_id:
+        return False
+    from omnigent.opencode_native_provider import OMNIROUTE_PROVIDER_ID
+
+    raw = model_id.strip()
+    if not raw:
+        return False
+    # Already qualified with the omniroute provider id: ``omniroute/<combo>``.
+    if raw == OMNIROUTE_PROVIDER_ID:
+        return True
+    if raw.startswith(f"{OMNIROUTE_PROVIDER_ID}/"):
+        return True
+    # Bare combo path: exactly one ``/`` separating a synthetic namespace
+    # (``auto`` / ``custom`` — the two combo namespaces the live catalog
+    # exposes) from a name. Names can contain dashes / colons / dots
+    # (e.g. ``auto/coding:fast``, ``custom/best-coding``), so we don't
+    # restrict the name half.
+    if raw.count("/") != 1:
+        return False
+    namespace, _ = raw.split("/", 1)
+    return namespace in _OMNIROUTE_COMBO_NAMESPACES
+
+
+# Synthetic namespaces the live OmniRoute catalog exposes for combo ids.
+# Kept narrow so physical provider/model ids (``anthropic/...``,
+# ``openai/...``, etc.) never trigger an unnecessary catalog probe.
+_OMNIROUTE_COMBO_NAMESPACES: frozenset[str] = frozenset({"auto", "custom"})
 
 
 def _resolve_opencode_compact_model(
@@ -5291,6 +5594,182 @@ def _native_terminal_start_error_response(exc: BaseException, runtime_name: str)
     )
 
 
+def _opencode_pool_from_app(app: FastAPI) -> Any | None:
+    """Return the opencode runtime pool attached to *app*, or ``None``.
+
+    Used by helpers that want to participate in the pool without taking
+    a direct dependency on the optional ``app.state`` attribute (set by
+    :func:`create_runner_app` and absent in the registry-less lightweight
+    factory and minimal test doubles).
+    """
+    return getattr(app.state, "opencode_runtime_pool", None)
+
+
+async def _register_opencode_runtime_after_boot(
+    *,
+    pool: Any,
+    session_id: str,
+    bridge_dir: Path,
+    opencode_session_id: str | None,
+    resource_registry: Any,
+) -> None:
+    """Register / refresh a runtime entry once ``opencode serve`` is up.
+
+    Captures safe diagnostic metadata (port, PIDs when available) and
+    flips the entry state to ``AWAKE``. Refreshes the entry's idle clock
+    so a freshly-launched runtime gets a full grace window before the
+    reaper picks it up.
+    """
+    from omnigent.runner.opencode_runtime_manager import (
+        LifecycleState,
+        OpenCodeRuntimeEntry,
+    )
+
+    entry = pool.get(session_id)
+    metadata: dict[str, Any] = {}
+    server = _AUTO_OPENCODE_SERVERS.get(session_id)
+    if server is not None:
+        port = getattr(server, "port", None)
+        if isinstance(port, int):
+            metadata["port"] = port
+        process = getattr(server, "process", None)
+        if process is not None:
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, int):
+                metadata["server_pid"] = pid
+    tr = (
+        getattr(resource_registry, "terminal_registry", None)
+        if resource_registry is not None
+        else None
+    )
+    if tr is not None:
+        term = tr.get(session_id, "opencode", "main")
+        if term is not None and getattr(term, "pid", None) is not None:
+            metadata["attach_pid"] = int(term.pid)
+    if entry is None:
+        entry = OpenCodeRuntimeEntry(
+            conversation_id=session_id,
+            external_session_id=opencode_session_id,
+            state=LifecycleState.AWAKE,
+            adapter_metadata=metadata,
+        )
+    else:
+        entry.external_session_id = opencode_session_id
+        entry.adapter_metadata = metadata
+    pool.register(session_id, entry)
+    # Mark the bridge session-id on the entry so resume / orphan
+    # classification can cross-check against the persisted
+    # ``external_session_id`` later.
+    del bridge_dir  # placeholder for future per-bridge metadata if needed
+
+
+async def _maybe_hibernate_opencode_for_capacity(
+    *,
+    pool: Any,
+    requesting_session_id: str,
+) -> None:
+    """Best-effort hibernate an LRU candidate before launching a new runtime.
+
+    Invoked from the opencode cold-boot path before
+    :func:`_auto_create_opencode_terminal`. The actual capacity check
+    lives in :meth:`OpenCodeRuntimePool.ensure_awake`; this helper exists
+    to surface the explicit hook on the cold-boot path so a future
+    watcher can correlate "we almost ran out of capacity here" with
+    operator telemetry. Currently a no-op when the pool is below
+    capacity; the real decision is made inside ``ensure_awake`` once the
+    launch is requested.
+
+    :param pool: The :class:`OpenCodeRuntimePool` (or ``None``).
+    :param requesting_session_id: Conversation id that will wake.
+    """
+    if pool is None:
+        return
+    if not pool.has_entry(requesting_session_id):
+        # No-op here; the real capacity decision is in ``ensure_awake``. Hook
+        # is reserved for a future pre-warm hibernate (e.g. start a
+        # hibernation in the background while the new launch is still
+        # preparing) without blocking the prompt.
+        return
+
+
+async def _ensure_opencode_awake(
+    *,
+    pool: Any,
+    requesting_session_id: str,
+    server_client: httpx.AsyncClient | None,
+    resource_registry: Any,
+    publish_event: Callable[[str, dict[str, Any]], None],
+    ensure_comment_relay: Callable[..., Awaitable[None]] | None,
+    provenance_proxy: Any | None,
+    resolve_spec: Callable[[str], Awaitable[Any]] | None = None,
+) -> bool:
+    """Ensure the opencode runtime for *requesting_session_id* is awake.
+
+    Returns ``True`` when the pool accepted the wake request (no action
+    was needed because the runtime was already awake, or the runtime
+    was freshly woken). Returns ``False`` when the pool rejected the
+    wake because the configured capacity is full and the bounded wait
+    timed out — callers MUST surface that as a documented retryable
+    capacity error (HTTP 429 / 503 per existing API conventions) and
+    MUST NOT raise :class:`runner_failed_to_start`.
+
+    On a hibernated session, this function restarts the opencode server
+    via the same :func:`_auto_create_opencode_terminal` path that handled
+    the cold-boot ensure, so resume transparently uses the durable
+    ``external_session_id`` already persisted on the conversation row.
+    """
+    from omnigent.runner.opencode_runtime_manager import CapacityBusyError
+
+    if pool is None:
+        return True
+    entry = pool.get(requesting_session_id)
+    if entry is not None and entry.state.value not in ("hibernated",):
+        return True
+    # Try to acquire a capacity slot (may evict an LRU idle candidate).
+    try:
+        await pool.ensure_awake(requesting_session_id)
+    except CapacityBusyError as exc:
+        _logger.info(
+            "opencode pool capacity busy: %s (requesting=%s, warm=%d, capacity=%d)",
+            exc,
+            requesting_session_id,
+            pool.warm_count(),
+            pool.max_warm_servers,
+        )
+        return False
+    # The runtime is registered but HIBERNATED — restart the server.
+    # We delegate to the existing auto-create path so resume semantics
+    # are identical to cold boot (provider config, MCP relay, forwarder,
+    # terminal attach, etc.).
+    spec = None
+    if resolve_spec is not None:
+        try:
+            spec = await resolve_spec(requesting_session_id)
+        except Exception:  # noqa: BLE001 - resolve_spec is best-effort.
+            spec = None
+    try:
+        _publish_terminal_pending(publish_event, requesting_session_id, True)
+        await _auto_create_opencode_terminal(
+            requesting_session_id,
+            resource_registry,
+            publish_event,
+            agent_spec=spec,
+            server_client=server_client,
+            ensure_comment_relay=ensure_comment_relay,
+            provenance_proxy=provenance_proxy,
+        )
+    except Exception as exc:
+        _logger.exception(
+            "opencode pool: wake failed for %s: %s",
+            requesting_session_id,
+            exc,
+        )
+        return False
+    finally:
+        _publish_terminal_pending(publish_event, requesting_session_id, False)
+    return True
+
+
 def _codex_ensure_response_with_policy_notice(
     session_id: str, terminal_view: SessionResourceView
 ) -> JSONResponse:
@@ -7898,6 +8377,7 @@ def create_runner_app(
     per_session_workspace: bool = True,
     mcp_manager: Any | None = None,
     auth_token: str | None = None,
+    provenance_proxy: Any | None = None,
 ) -> FastAPI:
     """Build a fresh runner FastAPI app.
 
@@ -7930,6 +8410,8 @@ def create_runner_app(
         request except ``GET /health`` is rejected with 401 if
         the token is missing or wrong.  ``None``
         disables auth (in-process / test path).
+    :param provenance_proxy: Runner-owned observer for approved OpenCode
+        OmniRoute requests. ``None`` makes approved dispatch fail closed.
     """
     import hmac
 
@@ -9508,6 +9990,8 @@ def create_runner_app(
                             agent_spec=_opencode_spec,
                             server_client=server_client,
                             ensure_comment_relay=_ensure_comment_relay_started,
+                            provenance_proxy=provenance_proxy,
+                            runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -9938,6 +10422,17 @@ def create_runner_app(
         # supervisor would poll a dead store and POST to a deleted session
         # forever. Idempotent when no forwarder was registered.
         await _cancel_auto_forwarder_task(session_id)
+
+        # OpenCode runtime pool: terminate the entry so its capacity slot
+        # is freed before the rest of the delete teardown. Hibernation
+        # cleanup (server + attach + bridge URL clear) is owned by the
+        # adapter; bridge directory cleanup is owned by
+        # ``_delete_native_bridge_dirs`` further below. ``pool`` is ``None``
+        # on the registry-less lightweight factory / minimal test doubles.
+        _oc_pool = getattr(app.state, "opencode_runtime_pool", None)
+        if _oc_pool is not None:
+            with contextlib.suppress(Exception):
+                await _oc_pool.terminate(session_id, reason="delete_session")
 
         if process_manager is not None:
             await process_manager.forward_cancel(session_id)
@@ -12259,6 +12754,25 @@ def create_runner_app(
         finally:
             await client.aclose()
 
+    async def _sync_opencode_native_approved_package(conv_id: str) -> None:
+        """Load an approved route into OpenCode before dispatching its prompt."""
+        launch = await _opencode_native_launch_config(
+            session_id=conv_id, server_client=server_client
+        )
+        if not launch.omniroute_route_expected or not launch.model_override:
+            return
+        spec = await _resolve_session_agent_spec(conv_id)
+        await _auto_create_opencode_terminal(
+            conv_id,
+            resource_registry,
+            _publish_event,
+            agent_spec=spec,
+            server_client=server_client,
+            ensure_comment_relay=_ensure_comment_relay_started,
+            provenance_proxy=provenance_proxy,
+            runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
+        )
+
     async def _handle_opencode_native_model_change(conv_id: str, model: str | None) -> Response:
         """
         Apply an Omnigent-initiated model switch to an opencode-native session.
@@ -12325,6 +12839,8 @@ def create_runner_app(
                 agent_spec=spec,
                 server_client=server_client,
                 ensure_comment_relay=_ensure_comment_relay_started,
+                provenance_proxy=provenance_proxy,
+                runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
             )
         except Exception as exc:  # noqa: BLE001 - report relaunch failure to caller.
             return JSONResponse(
@@ -14274,6 +14790,33 @@ def create_runner_app(
                     _oc_tr is not None and _oc_tr.get(conv_id, "opencode", "main") is not None
                 )
                 if not _oc_ready:
+                    # Capacity check before launching a new server. A hibernated
+                    # session surfaces as ``not ready`` here; the bounded wait
+                    # frees an LRU idle runtime within the configured window. A
+                    # genuine all-busy capacity return yields a documented
+                    # retryable 503 (``opencode_capacity_busy``) instead of a
+                    # ``runner_failed_to_start`` failure card.
+                    _oc_pool = getattr(app.state, "opencode_runtime_pool", None)
+                    if _oc_pool is not None:
+                        from omnigent.runner.opencode_runtime_manager import CapacityBusyError
+
+                        try:
+                            await _oc_pool.ensure_awake(conv_id)
+                        except CapacityBusyError as exc:
+                            _logger.info(
+                                "opencode-native capacity busy at cold-boot for %s: %s",
+                                conv_id,
+                                exc,
+                            )
+                            return JSONResponse(
+                                status_code=503,
+                                content={
+                                    "error": "opencode_capacity_busy",
+                                    "detail": _client_safe_error_detail(
+                                        exc, context="opencode capacity"
+                                    ),
+                                },
+                            )
                     _publish_terminal_pending(_publish_event, conv_id, True)
                     try:
                         try:
@@ -14287,6 +14830,8 @@ def create_runner_app(
                             agent_spec=_oc_spec,
                             server_client=server_client,
                             ensure_comment_relay=_ensure_comment_relay_started,
+                            provenance_proxy=provenance_proxy,
+                            runtime_pool=_oc_pool,
                         )
                     except Exception as exc:
                         _logger.exception(
@@ -15137,6 +15682,28 @@ def create_runner_app(
                             "detail": ("Message buffered; active turn will process it."),
                         },
                     )
+
+                # The route approval can occur after the native terminal was
+                # auto-created. Refresh its shared state and catalog before a
+                # harness process can receive this first approved prompt.
+                if _session_harness_name(conversation_id) == "opencode-native":
+                    try:
+                        await _sync_opencode_native_approved_package(conversation_id)
+                    except Exception as exc:
+                        _logger.exception(
+                            "OpenCode approved-package synchronization failed for %s",
+                            conversation_id,
+                        )
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "error": "opencode_route_synchronization_failed",
+                                "detail": _client_safe_error_detail(
+                                    exc, context="approved OpenCode route"
+                                ),
+                                "execution_started": False,
+                            },
+                        )
 
                 # Make the new user message visible to the turn. On the
                 # first touch of a conversation after a runner restart the
@@ -16087,6 +16654,8 @@ def create_runner_app(
                         agent_spec=opencode_agent_spec,
                         server_client=server_client,
                         ensure_comment_relay=_ensure_comment_relay_started,
+                        provenance_proxy=provenance_proxy,
+                        runtime_pool=getattr(app.state, "opencode_runtime_pool", None),
                     )
                 except Exception as exc:
                     _logger.exception(
@@ -18938,6 +19507,13 @@ def create_runner_app(
     # ``_CapturingResourceRegistry`` / ``_TrackingTerminalRegistry`` doubles
     # don't break app construction — they just get no reaper).
     _pane_reaper_registry = getattr(resource_registry, "terminal_registry", None)
+    # ``_list_tmux_clients`` is used by BOTH the pane reaper (when its
+    # branch runs) and the opencode runtime pool's adapter (always).
+    # Import it once at the function scope so the adapter sees a defined
+    # symbol even on the lightweight / test paths where the pane reaper
+    # branch is skipped.
+    from omnigent.native_cost_popup import _list_tmux_clients
+
     if (
         resource_registry is not None
         and _pane_reaper_registry is not None
@@ -18949,9 +19525,12 @@ def create_runner_app(
         # would rebind it as a create_runner_app local for the WHOLE function,
         # leaving those earlier uses unbound on any path where this branch does
         # not run (registry-less app factory / test doubles) → NameError.
-        from omnigent.native_cost_popup import _list_tmux_clients
         from omnigent.runner.tool_dispatch import _publish_terminal_deleted_event
-        from omnigent.terminals.pane_reaper import NativePaneReaper, PaneRef
+        from omnigent.terminals.pane_reaper import (
+            NativePaneReaper,
+            PaneRef,
+            resolve_native_pane_idle_timeout_for,
+        )
 
         def _native_panes_for_reaper() -> list[PaneRef]:
             panes: list[PaneRef] = []
@@ -18997,15 +19576,259 @@ def create_runner_app(
                     publish_event=_publish_event,
                 )
 
+        def _idle_timeout_for(terminal_name: str) -> float:
+            """Per-harness native-pane idle window (opencode ≈ 2 min, others default).
+
+            The opencode pane drags in a heavier MCP fleet (~300 MB RSS per idle
+            session) than the other native harnesses; we reap its pane after ~2
+            minutes of idle so idle opencode sessions don't accumulate. Other
+            harnesses keep their existing 30-minute default so this knob is a
+            strict narrow for opencode. ``resolve_native_pane_idle_timeout_for``
+            honors ``OMNIGENT_NATIVE_PANE_OPENCODE_IDLE_TIMEOUT_S`` (0 disables
+            opencode reaping) and falls back to the global default for
+            unrecognized names.
+            """
+            return resolve_native_pane_idle_timeout_for(terminal_name)
+
         app.state.native_pane_reaper = NativePaneReaper(
             list_native_panes=_native_panes_for_reaper,
             is_busy=_native_pane_is_busy,
             reap=_reap_native_pane,
+            idle_timeout_for=_idle_timeout_for,
         )
     else:
         app.state.native_pane_reaper = None
 
+    # OpenCode runtime pool (memory-safety). Bounded persistent pool of
+    # runner-owned ``opencode serve`` instances with idle hibernation
+    # (default 300 s) and a hard warm-server cap (default 2). Hibernates an
+    # idle opencode server + its SSE forwarder + the embedded attach TUI
+    # without losing the durable opencode session id, so the next prompt
+    # resumes transparently. Started/stopped by the runner lifespan
+    # (``omnigent.runner._entry``). ``app.state.opencode_runtime_pool`` is
+    # ``None`` for the registry-less lightweight app factory and minimal
+    # test doubles (mirrors the pane reaper's ``None`` fallback) so those
+    # surfaces stay constructible.
+    from omnigent.runner.opencode_runtime_manager import OpenCodeRuntimePool
+
+    # Build the opencode runtime pool. ``_OpenCodeAdapter`` is a thin
+    # closure over the runner's existing state (``_AUTO_OPENCODE_SERVERS``,
+    # ``resource_registry``, ``_active_turns``, ``_native_pane_status``,
+    # ``process_manager``, ``_publish_event``) so hibernation reuses the
+    # proven teardown path instead of inventing a parallel
+    # process-management code path.
+    app.state.opencode_runtime_pool = OpenCodeRuntimePool(
+        adapter=_OpenCodeAdapter(
+            resource_registry=resource_registry,
+            process_manager=process_manager,
+            publish_event=_publish_event,
+            cancel_forwarder=_cancel_auto_forwarder_task,
+            auto_servers=_AUTO_OPENCODE_SERVERS,
+            active_turns=_active_turns,
+            native_pane_status=_native_pane_status,
+            list_tmux_clients=_list_tmux_clients,
+        )
+    )
+    _logger.info(
+        "opencode runtime pool attached (idle_timeout=%ss, max_warm=%d, "
+        "attach_timeout=%ss, capacity_wait=%ss)",
+        app.state.opencode_runtime_pool.idle_timeout_s,
+        app.state.opencode_runtime_pool.max_warm_servers,
+        app.state.opencode_runtime_pool.attach_idle_timeout_s,
+        app.state.opencode_runtime_pool.capacity_wait_timeout_s,
+    )
+
     return app
+
+
+class _OpenCodeAdapter:
+    """Adapter the opencode pool delegates side-effects to.
+
+    Pure dependency-injected adapter: every closure variable the adapter
+    needs (``resource_registry``, ``_AUTO_OPENCODE_SERVERS``, etc.) is
+    passed explicitly so the adapter can be unit-tested with fakes and
+    so the production wiring in :func:`create_runner_app` is a
+    constructor call rather than a nested class. The adapter delegates
+    to the runner's existing teardown helpers (``close_terminal``,
+    ``_cancel_auto_forwarder_task``, ``_publish_terminal_deleted_event``)
+    so the opencode hibernation path reuses the proven teardown rather
+    than inventing a parallel process-management code path.
+    """
+
+    def __init__(
+        self,
+        *,
+        resource_registry: Any,
+        process_manager: Any | None,
+        publish_event: Callable[[str, dict[str, Any]], None],
+        cancel_forwarder: Callable[[str], Awaitable[bool]],
+        auto_servers: dict[str, Any],
+        active_turns: dict[str, Any],
+        native_pane_status: dict[str, str],
+        list_tmux_clients: Callable[..., Any],
+    ) -> None:
+        self._resource_registry = resource_registry
+        self._process_manager = process_manager
+        self._publish_event = publish_event
+        self._cancel_forwarder = cancel_forwarder
+        self._auto_servers = auto_servers
+        self._active_turns = active_turns
+        self._native_pane_status = native_pane_status
+        self._list_tmux_clients = list_tmux_clients
+
+    async def is_busy(self, conversation_id: str) -> bool:
+        if conversation_id in self._active_turns:
+            return True
+        if self._process_manager is not None and self._process_manager.has_active_turn(
+            conversation_id
+        ):
+            return True
+        if self._native_pane_status.get(conversation_id) == "running":
+            return True
+        return False
+
+    async def has_attached_tmux_client(self, conversation_id: str) -> bool:
+        tr = (
+            getattr(self._resource_registry, "terminal_registry", None)
+            if self._resource_registry is not None
+            else None
+        )
+        if tr is None:
+            return False
+        entry = tr.get(conversation_id, "opencode", "main")
+        if entry is None or not entry.running:
+            return False
+        try:
+            clients = await asyncio.to_thread(
+                self._list_tmux_clients, str(entry.socket_path), "main"
+            )
+        except Exception:  # noqa: BLE001 - tmux probe errors mean "not attached".
+            return False
+        return bool(clients)
+
+    def warm_count(self) -> int:
+        return len(self._auto_servers)
+
+    def attach_pid(self, conversation_id: str) -> int | None:
+        tr = (
+            getattr(self._resource_registry, "terminal_registry", None)
+            if self._resource_registry is not None
+            else None
+        )
+        if tr is None:
+            return None
+        entry = tr.get(conversation_id, "opencode", "main")
+        if entry is None or not entry.running:
+            return None
+        return getattr(entry, "pid", None)
+
+    async def hibernate(self, conversation_id: str, *, reason: str = "") -> bool:
+        """Stop the opencode runtime for *conversation_id*.
+
+        Mirrors the existing ``shutdown_runner_opencode_native_servers``
+        path for ONE conversation. Order matches
+        ``_supervise_opencode_forwarder``'s ``finally``: cancel forwarder
+        → close attach → close server. ``reason`` is reserved by the
+        pool's adapter protocol for log correlation (and surfaced through
+        the teardown paths below).
+        """
+        del reason  # surfaced by the pool itself; not consumed here.
+        any_closed = False
+        forwarder_cancelled = await self._cancel_forwarder(conversation_id)
+        any_closed = any_closed or forwarder_cancelled
+        tr = (
+            getattr(self._resource_registry, "terminal_registry", None)
+            if self._resource_registry is not None
+            else None
+        )
+        if tr is not None:
+            terminal_id = terminal_resource_id("opencode", "main")
+            try:
+                instance = tr.get(conversation_id, "opencode", "main")
+            except Exception:  # noqa: BLE001 - registry errors mean "no terminal".
+                instance = None
+            if instance is not None and instance.running:
+                try:
+                    await self._resource_registry.close_terminal(conversation_id, terminal_id)
+                except Exception:
+                    _logger.exception(
+                        "opencode pool: close_terminal failed (conversation_id=%s)",
+                        conversation_id,
+                    )
+                finally:
+                    from omnigent.runner.tool_dispatch import (
+                        _publish_terminal_deleted_event,
+                    )
+
+                    _publish_terminal_deleted_event(
+                        conversation_id=conversation_id,
+                        terminal_name="opencode",
+                        session_key="main",
+                        publish_event=self._publish_event,
+                    )
+                any_closed = True
+        server = self._auto_servers.pop(conversation_id, None)
+        if server is not None:
+            with contextlib.suppress(Exception):
+                await server.close()
+            any_closed = True
+        # Clear the live bridge coords so a stale URL doesn't look like a
+        # live server. ``external_session_id`` and the durable selection
+        # (``model_override`` / ``reasoning_effort`` / ``permission_mode``
+        # / ``route_approved``) survive — the resume path reads them back.
+        try:
+            from omnigent.opencode_native_bridge import (
+                bridge_dir_for_bridge_id,
+                read_bridge_state,
+                write_bridge_state,
+            )
+        except ImportError:
+            read_bridge_state = None  # type: ignore[assignment]
+        if read_bridge_state is not None:
+            with contextlib.suppress(Exception):
+                bd = bridge_dir_for_bridge_id(conversation_id)
+                state = read_bridge_state(bd)
+                if state is not None:
+                    import dataclasses as _dc
+
+                    # ``server_base_url`` is the load-bearing live-coord
+                    # field — the harness subprocess routes prompts through
+                    # it. ``read_bridge_state`` requires a non-empty string
+                    # here, so we use ``about:blank`` as a sentinel for a
+                    # hibernated runtime (the executor treats it as "server
+                    # gone; resume will restart and refresh"). ``auth_secret``
+                    # is cleared so the hibernated bridge state never carries
+                    # a usable credential.
+                    write_bridge_state(
+                        bd,
+                        _dc.replace(
+                            state,
+                            server_base_url="about:blank",
+                            auth_secret=None,
+                            active_message_id=None,
+                            status="idle",
+                            last_event_id=None,
+                        ),
+                    )
+        return any_closed
+
+    async def terminate(self, conversation_id: str, *, reason: str = "") -> bool:
+        """Permanently stop the runtime.
+
+        Hibernation-equivalent teardown; bridge dir cleanup is owned by
+        ``_delete_native_bridge_dirs`` (delete_session path) and NOT run
+        here so an archive that is later restored still has its
+        resumable session. ``reason`` is forwarded for log correlation.
+        """
+        return await self.hibernate(conversation_id, reason=reason)
+
+    async def shutdown(self) -> None:
+        for conv_id in list(self._auto_servers):
+            await self._cancel_forwarder(conv_id)
+            server = self._auto_servers.pop(conv_id, None)
+            if server is not None:
+                with contextlib.suppress(Exception):
+                    await server.close()
 
 
 def create_runner_app_from_env() -> FastAPI:
@@ -19023,6 +19846,14 @@ def create_runner_app_from_env() -> FastAPI:
     so transport smoke tests start quickly without spawning harness pools
     or sweeping orphan directories.
 
+    The host-tunnel runner also stands up an in-process
+    :class:`OpenCodeProvenanceProxyService` so route-approved OpenCode
+    terminals can attach their provider base URL to the observer. Without
+    it the runner rejects route-approved launches with
+    ``"OpenCode provenance observer is unavailable"``. Set
+    ``OMNIGENT_PROVENANCE_OBSERVER=0`` to disable it (e.g. for transports
+    that route OpenCode traffic through a different runner).
+
     :returns: A :class:`FastAPI` runner app backed by an httpx client
         pointed at ``RUNNER_SERVER_URL``.
     :raises RuntimeError: If ``RUNNER_SERVER_URL`` is not set in the
@@ -19032,6 +19863,13 @@ def create_runner_app_from_env() -> FastAPI:
 
     import httpx
 
+    from omnigent.opencode_native_provider import omniroute_base_url
+    from omnigent.opencode_provenance_proxy import StructuredRuntimeProvenance
+    from omnigent.runner.opencode_provenance import (
+        ActiveExecution,
+        OpenCodeProvenanceProxyService,
+    )
+
     server_url = os.environ.get("RUNNER_SERVER_URL", "").strip()
     if not server_url:
         raise RuntimeError("RUNNER_SERVER_URL is required for the runner subprocess factory")
@@ -19039,6 +19877,52 @@ def create_runner_app_from_env() -> FastAPI:
         base_url=server_url,
         timeout=httpx.Timeout(5.0, read=None),
     )
+
+    provenance_proxy: OpenCodeProvenanceProxyService | None = None
+    if os.environ.get("OMNIGENT_PROVENANCE_OBSERVER", "1") != "0":
+
+        async def _record_runtime(
+            active: ActiveExecution, provenance: StructuredRuntimeProvenance
+        ) -> None:
+            payload = {
+                "type": "external_execution_provenance",
+                "data": {
+                    "actual_provider": provenance.actual_provider,
+                    "actual_provider_model": provenance.actual_provider_model,
+                    "actual_provenance_verified": provenance.verified,
+                    "fallback_used": provenance.fallback_used,
+                    "omniroute_request_id": provenance.omniroute_request_id,
+                    "omniroute_decision_id": provenance.omniroute_decision_id,
+                    "selection_strategy": provenance.selection_strategy,
+                    "billing_class": provenance.billing_class,
+                },
+            }
+            try:
+                response = await server_client.post(
+                    f"/v1/sessions/{active.conversation_id}/events",
+                    json=payload,
+                    timeout=10.0,
+                )
+                if response.status_code >= 400:
+                    return
+            except httpx.HTTPError:
+                return
+
+        provenance_proxy = OpenCodeProvenanceProxyService(
+            omniroute_base_url(), record_runtime=_record_runtime
+        )
+
+        app = create_runner_app(server_client=server_client, provenance_proxy=provenance_proxy)
+
+        async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+            await provenance_proxy.start()
+            try:
+                yield
+            finally:
+                await provenance_proxy.stop()
+
+        app.router.lifespan_context = _lifespan
+        return app
     return create_runner_app(server_client=server_client)
 
 

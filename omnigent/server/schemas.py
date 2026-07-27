@@ -17,6 +17,55 @@ from typing import Annotated, Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, Strict, field_validator, model_validator
 
 from omnigent.entities import ConversationItem
+from omnigent.server.omniroute_routes import (
+    CUSTOM_BEST_CODING_DISPLAY_NAME,
+    RESERVED_NON_EXECUTABLE_ROUTE_IDS,
+    executable_route_ids,
+    is_executable_route_id,
+    normalize_route_id,
+)
+from omnigent.server.routing_agent import KNOWN_PERMISSION_MODES
+
+
+def _validate_omniroute_route_id(value: str | None) -> str | None:
+    """Validate + canonicalize the ``omniroute_route_id`` schema field.
+
+    * Strips the ``omniroute/`` transport prefix when a caller
+      serialized it that way, persisting the canonical bare id.
+    * Rejects ``None`` and empty values are passed through unchanged.
+    * Rejects the display label (e.g. ``"OmniRoute Coding Best"``).
+    * Rejects reserved background-only ids (e.g. ``custom/outcome-scoring``).
+    * Rejects unknown route ids.
+
+    The error message lists the allowed execution ids and explicitly
+    names reserved background ids so the failure is actionable.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(_omniroute_route_error(value))
+    canonical = normalize_route_id(value)
+    if canonical is None:
+        # Pure whitespace, or transport-prefix-only input.
+        return None
+    if not is_executable_route_id(canonical):
+        raise ValueError(_omniroute_route_error(value))
+    return canonical
+
+
+def _omniroute_route_error(received: object) -> str:
+    """Build the actionable error message for a rejected route id."""
+    allowed = ", ".join(executable_route_ids())
+    reserved = ", ".join(sorted(RESERVED_NON_EXECUTABLE_ROUTE_IDS))
+    return (
+        "unknown native OmniRoute route id "
+        f"(received {received!r}; expected canonical wire id like "
+        f"'custom/best-coding'. Display labels such as "
+        f"'{CUSTOM_BEST_CODING_DISPLAY_NAME!r}' are not route ids. "
+        f"Reserved background routes ({reserved}) cannot be selected for execution. "
+        f"Allowed execution routes: {allowed}.)"
+    )
+
 
 # ── Shared ──────────────────────────────────────────────────────
 
@@ -1320,6 +1369,22 @@ class SessionCreateRequest(BaseModel):
     reasoning_effort: str | None = None
     cost_control_mode_override: str | None = None
     harness_override: str | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
+
+    @field_validator("omniroute_route_id")
+    @classmethod
+    def _known_create_omniroute_route(cls, value: str | None) -> str | None:
+        return _validate_omniroute_route_id(value)
+
+    @field_validator("permission_mode")
+    @classmethod
+    def _known_create_permission_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in KNOWN_PERMISSION_MODES:
+            raise ValueError("unknown permission mode")
+        return value
 
     @model_validator(mode="after")
     def _check_git_requires_host(self) -> SessionCreateRequest:
@@ -1828,6 +1893,20 @@ class SessionResponse(BaseModel):
     todos: list[dict[str, Any]] = Field(default_factory=list)
     skills: list[SkillSummary] = Field(default_factory=list)
     model_options: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    Live OmniRoute combo catalog for the web UI's model picker.
+
+    Each entry is the JSON-shaped dict produced by
+    :meth:`omnigent.server.omniroute_catalog.OmniRouteComboEntry.to_wire`:
+    ``id`` (verbatim native id, including colons / slashes / brackets),
+    ``display_name`` (curated, e.g. ``"OmniRoute Coding Fast"``),
+    ``provider`` (always ``"omniroute"``), ``kind`` (always
+    ``"combo"``), ``reasoning_efforts`` (allowed efforts as a list of
+    strings), ``max_reasoning_effort``, ``default_reasoning_effort``,
+    ``requires_explicit_approval``. Empty list when no combos are
+    resolvable (mirrors :attr:`model_options`).
+    """
+    omniroute_combos: list[dict[str, Any]] = Field(default_factory=list)
     terminal_pending: bool = False
     sandbox_status: SandboxStatus | None = None
     # Per-MCP-server startup state for native harness sessions
@@ -1837,6 +1916,10 @@ class SessionResponse(BaseModel):
     # opening the session mid-startup sees the startup band.
     mcp_startup: dict[str, McpServerStartup] | None = None
     active_response_id: str | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -1917,8 +2000,24 @@ class UpdateSessionRequest(BaseModel):
     cost_control_mode_override: str | None = None
     external_session_id: str | None = None
     terminal_launch_args: list[str] | None = None
+    route_approval_enabled: bool | None = None
+    omniroute_route_id: str | None = None
+    permission_mode: str | None = None
+    omniroute_requires_explicit_approval: bool | None = None
     archived: bool | None = None
     silent: bool = False
+
+    @field_validator("omniroute_route_id")
+    @classmethod
+    def _known_omniroute_route(cls, value: str | None) -> str | None:
+        return _validate_omniroute_route_id(value)
+
+    @field_validator("permission_mode")
+    @classmethod
+    def _known_permission_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in KNOWN_PERMISSION_MODES:
+            raise ValueError("unknown permission mode")
+        return value
 
     model_config = ConfigDict(extra="forbid")
 

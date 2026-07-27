@@ -62,6 +62,9 @@ def build_prompt_payload(prompt: NativePrompt) -> dict[str, Any]:
     payload: dict[str, Any] = {"parts": parts}
     if prompt.system_prompt:
         payload["system"] = prompt.system_prompt
+    if prompt.variant:
+        payload["variant"] = prompt.variant
+        payload["reasoning_effort"] = prompt.variant
     model = _split_model(prompt.model)
     if model is not None:
         payload["model"] = model

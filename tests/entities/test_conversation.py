@@ -5,10 +5,23 @@ from __future__ import annotations
 import pytest
 
 from omnigent.entities.conversation import (
+    Conversation,
     ConversationItem,
     MessageData,
     synthesize_conversation_title,
 )
+
+
+def test_conversation_routing_selection_source_is_nullable() -> None:
+    conv = Conversation(
+        id="conv_1",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_1",
+    )
+    assert conv.routing_selection_source is None
+    conv.routing_selection_source = "route_approval"
+    assert conv.routing_selection_source == "route_approval"
 
 
 def _message_item(created_by: str | None) -> ConversationItem:

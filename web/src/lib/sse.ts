@@ -866,6 +866,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
     // `host` is the WebFetch request domain when present (drives the
     // button label and the rule scope).
     const rememberScopeRaw = p.remember_scope;
+    const routeProposalRaw = p.route_proposal;
     const rememberScope: RememberScope | null =
       rememberScopeRaw &&
       typeof rememberScopeRaw === "object" &&
@@ -919,6 +920,10 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
           : null,
       allowAllEdits,
       rememberScope,
+      routeProposal:
+        routeProposalRaw && typeof routeProposalRaw === "object" && !Array.isArray(routeProposalRaw)
+          ? (routeProposalRaw as Record<string, unknown>)
+          : null,
     } satisfies ElicitationRequest;
   }
 

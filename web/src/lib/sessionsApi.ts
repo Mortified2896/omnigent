@@ -20,6 +20,7 @@ import type {
   CodexModelOption,
   ModelUsage,
   NestedSessionItem,
+  OmniRouteCombo,
   SandboxStatus,
   Session,
   SessionEventInput,
@@ -148,6 +149,8 @@ interface SessionResponseWire {
   model_override?: string | null;
   /** Per-session cost-control switch; `null`/absent = spec default. */
   cost_control_mode_override?: "on" | "off" | null;
+  /** Per-session Model Routing Agent toggle. `null`/absent = off. */
+  route_approval_enabled?: boolean | null;
   context_window?: number | null;
   last_total_tokens?: number | null;
   total_cost_usd?: number | null;
@@ -210,6 +213,8 @@ interface SessionResponseWire {
    */
   skills?: SkillSummary[];
   model_options?: CodexModelOption[];
+  omniroute_combos?: OmniRouteCombo[];
+  omniroute_combos_source?: "live" | "cache" | "fallback_curated" | null;
   /**
    * True while the runner is auto-creating a terminal-first session's
    * terminal. Drives the Terminal-pill spinner; absent on older
@@ -296,6 +301,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
     harness: wire.harness ?? null,
     modelOverride: wire.model_override,
     costControlModeOverride: wire.cost_control_mode_override,
+    routeApprovalEnabled: wire.route_approval_enabled ?? null,
     contextWindow: wire.context_window,
     lastTotalTokens: wire.last_total_tokens,
     totalCostUsd: wire.total_cost_usd,
@@ -313,6 +319,8 @@ function sessionFromWire(wire: SessionResponseWire): Session {
     todos: wire.todos ?? [],
     skills: wire.skills ?? [],
     codexModelOptions: wire.model_options ?? [],
+    omnirouteCombos: wire.omniroute_combos ?? [],
+    omnirouteCombosSource: wire.omniroute_combos_source ?? null,
     terminalPending: wire.terminal_pending ?? false,
     sandboxStatus: wire.sandbox_status ?? null,
     mcpStartup: wire.mcp_startup ?? null,
@@ -647,6 +655,7 @@ export async function updateSession(
     modelOverride?: string | null;
     codexPlanMode?: boolean;
     costControlModeOverride?: "on" | "off" | null;
+    routeApprovalEnabled?: boolean | null;
     runnerId?: string;
     silent?: boolean;
   },
@@ -663,6 +672,9 @@ export async function updateSession(
   }
   if ("costControlModeOverride" in updates) {
     body.cost_control_mode_override = updates.costControlModeOverride ?? null;
+  }
+  if ("routeApprovalEnabled" in updates) {
+    body.route_approval_enabled = updates.routeApprovalEnabled ?? null;
   }
   if (updates.runnerId !== undefined) {
     body.runner_id = updates.runnerId;

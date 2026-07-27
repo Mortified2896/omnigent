@@ -11,10 +11,33 @@ from omnigent.llms.adapters.openai import (
     OpenAIAdapter,
     OpenAICompatibleAdapter,
     _parse_sse_line,
+    _sanitized_provider_metadata,
 )
 from omnigent.llms.types import ResponseTextDeltaEvent
 
 # ── Payload building ─────────────────────────────────────
+
+
+def test_provider_metadata_headers_are_sanitized() -> None:
+    headers = httpx.Headers(
+        {
+            "x-omniroute-requested-model": "minimax/MiniMax-M3",
+            "x-omniroute-selected-provider": "minimax",
+            "x-omniroute-selected-model": "minimax/MiniMax-M3",
+            "x-omniroute-fallback-used": "false",
+            "x-omniroute-decision-id": "dec-1",
+            "authorization": "Bearer <redacted>",
+        }
+    )
+    sanitized = _sanitized_provider_metadata(headers)
+    assert sanitized == {
+        "x-omniroute-requested-model": "minimax/MiniMax-M3",
+        "x-omniroute-selected-provider": "minimax",
+        "x-omniroute-selected-model": "minimax/MiniMax-M3",
+        "x-omniroute-fallback-used": "false",
+        "x-omniroute-decision-id": "dec-1",
+    }
+    assert "authorization" not in sanitized
 
 
 def test_basic_payload_structure() -> None:
@@ -32,7 +55,11 @@ def test_basic_payload_structure() -> None:
     assert payload["model"] == "gpt-5.4"
     assert payload["messages"] == [{"role": "user", "content": "Hi"}]
     assert "tools" not in payload
-    assert "stream" not in payload
+    # ``stream`` is always pinned (False here). Some upstream gateways
+    # default to text/event-stream when the field is absent, breaking
+    # ``Response.json()`` on the evaluator path.
+    assert payload["stream"] is False
+    assert "stream_options" not in payload
 
 
 def test_tools_included_when_provided() -> None:

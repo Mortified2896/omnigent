@@ -7956,6 +7956,125 @@ def test_subagent_terminal_delivery_retry_uses_latest_undelivered_report() -> No
     assert delivered["output"] == "DONE_AFTER_RETRY"
 
 
+@pytest.mark.asyncio
+async def test_duplicate_external_session_status_idle_delivers_parent_inbox_once() -> None:
+    """
+    Control Room relay: ``external_session_status: idle`` arriving twice
+    for the same child delivers ONE inbox payload, not two.
+
+    Regression guard for the worker-completion relay. OpenCode may emit
+    ``session.idle`` more than once per turn (a final idle after tool
+    completion plus a duplicate on stream cleanup); the forwarder now
+    short-circuits the duplicate at the OpenCode-native bridge, but the
+    runner-app inbox layer is the last line of defence — even if a
+    duplicate slips through (legacy forwarder, custom harness, race), it
+    MUST NOT enqueue a second terminal payload for the same child. A
+    duplicate would either (a) confuse the parent Claude SDK turn into
+    acting on a stale report or (b) look like a second completion the
+    parent didn't expect and trigger duplicate wake handling.
+    """
+    from omnigent.runner import app as runner_app
+
+    parent_id = "conv_parent_duplicate_idle"
+    child_id = "conv_child_duplicate_idle"
+    session_inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    runner_app._session_inboxes_ref[parent_id] = session_inbox
+    runner_app.register_subagent_work(
+        parent_session_id=parent_id,
+        child_session_id=child_id,
+        agent="opencode",
+        title="dup-idle",
+    )
+
+    try:
+        first_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="FIRST_REPORT",
+        )
+        # A second idle fires (replay / duplicate / late tool completion).
+        second_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="SECOND_REPORT",
+        )
+    finally:
+        runner_app.unregister_subagent_work(child_id)
+        runner_app._session_inboxes_ref.pop(parent_id, None)
+
+    # First delivery lands in the inbox.
+    assert first_ack.reason == "delivered"
+    assert first_ack.delivered is True
+    assert first_ack.delivered_now is True
+    # Second delivery is acknowledged as already-delivered, NOT re-enqueued.
+    assert second_ack.reason == "already_delivered"
+    assert second_ack.delivered is True
+    assert second_ack.delivered_now is False
+    # Inbox holds EXACTLY one payload (the first), so the parent Claude SDK
+    # turn reads one completion, not two.
+    qsize = session_inbox.qsize()
+    assert qsize == 1, (
+        f"duplicate idle must not enqueue a second inbox payload (got qsize={qsize})"
+    )
+    delivered = session_inbox.get_nowait()
+    assert delivered["output"] == "FIRST_REPORT"
+
+
+@pytest.mark.asyncio
+async def test_replay_idle_after_already_delivered_completion_does_not_disturb_inbox() -> None:
+    """
+    Control Room relay: a late ``idle`` arriving AFTER the parent has
+    already drained the inbox must not insert a stale or empty payload.
+
+    The ``delivered`` flag on the work entry is the durable dedup
+    primitive. A replay idle finds the entry already marked delivered
+    and returns the same ``already_delivered`` ack as a same-turn
+    duplicate — the inbox stays at zero (or whatever the parent drained
+    it to). A non-zero qsize here means a stale idle is bleeding into
+    the parent's next turn and being acted on.
+    """
+    from omnigent.runner import app as runner_app
+
+    parent_id = "conv_parent_replay_idle"
+    child_id = "conv_child_replay_idle"
+    session_inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    runner_app._session_inboxes_ref[parent_id] = session_inbox
+    runner_app.register_subagent_work(
+        parent_session_id=parent_id,
+        child_session_id=child_id,
+        agent="opencode",
+        title="replay-idle",
+    )
+
+    try:
+        first_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="WORKER_REPORT",
+        )
+        # Parent reads + drains the inbox (simulated by get_nowait).
+        delivered = session_inbox.get_nowait()
+        assert delivered["output"] == "WORKER_REPORT"
+        assert session_inbox.qsize() == 0
+        # A late replay idle arrives.
+        second_ack = runner_app.mark_subagent_work_terminal(
+            child_id,
+            status="completed",
+            output="STALE_REPLAY",
+        )
+    finally:
+        runner_app.unregister_subagent_work(child_id)
+        runner_app._session_inboxes_ref.pop(parent_id, None)
+
+    assert first_ack.delivered_now is True
+    assert second_ack.reason == "already_delivered"
+    assert second_ack.delivered_now is False
+    assert session_inbox.qsize() == 0, (
+        "late replay must not insert a stale payload after the parent has "
+        "already drained the inbox"
+    )
+
+
 def test_subagent_terminal_delivery_handles_missing_output() -> None:
     """
     Terminal work with no assistant text still delivers a marker payload.
@@ -9033,6 +9152,100 @@ async def test_events_interrupt_on_native_session_injects_escape_without_marker(
         f"(the PTY watcher emits it on quiesce); got {status_idle!r} on the "
         f"queue: {queued_events!r}."
     )
+
+
+@pytest.mark.asyncio
+async def test_opencode_native_message_syncs_approved_package_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from omnigent import opencode_native_bridge, opencode_native_provider
+    from omnigent.runner import app as runner_app
+    from omnigent.runner.app import _OpenCodeNativeLaunchConfig
+
+    session_id = "conv_opencode_approved"
+    spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "opencode-native"}),
+    )
+    launch = _OpenCodeNativeLaunchConfig(
+        workspace=tmp_path,
+        policy_server_url="http://server",
+        terminal_launch_args=None,
+        model_override="auto/coding",
+        reasoning_effort="high",
+        permission_mode="ask_before_edits",
+        external_session_id="ses_1",
+        omniroute_route_expected=True,
+    )
+    launch_fetches: list[str] = []
+    relaunches: list[str] = []
+    package_updates: list[dict[str, Any]] = []
+
+    async def _launch_config(*, session_id: str, server_client: Any):
+        del server_client
+        launch_fetches.append(session_id)
+        return launch
+
+    async def _skip_auto_create(session_id: str, *_args: Any, **_kwargs: Any) -> None:
+        relaunches.append(session_id)
+
+    async def _fetch_combos(**_kwargs: Any) -> list[Any]:
+        return []
+
+    def _update_package(_bridge_dir: Path, **package: Any) -> object:
+        package_updates.append(package)
+        return object()
+
+    monkeypatch.setattr(runner_app, "_opencode_native_launch_config", _launch_config)
+    monkeypatch.setattr(runner_app, "_auto_create_opencode_terminal", _skip_auto_create)
+    monkeypatch.setattr(
+        opencode_native_bridge, "bridge_dir_for_bridge_id", lambda _session_id: tmp_path
+    )
+    monkeypatch.setattr(opencode_native_bridge, "read_bridge_state", lambda _path: object())
+    monkeypatch.setattr(
+        opencode_native_bridge,
+        "xdg_config_home_for_bridge_dir",
+        lambda _path: tmp_path / "config",
+    )
+    monkeypatch.setattr(opencode_native_bridge, "update_execution_package", _update_package)
+    monkeypatch.setattr(opencode_native_provider, "fetch_omniroute_combo_models", _fetch_combos)
+    monkeypatch.setattr(
+        opencode_native_provider,
+        "merge_omniroute_combo_catalog",
+        lambda existing, **_kwargs: existing,
+    )
+    monkeypatch.setattr(opencode_native_provider, "omniroute_api_key_from_config", lambda _c: "k")
+    monkeypatch.setattr(
+        opencode_native_provider, "write_opencode_provider_config", lambda *_a: None
+    )
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=await _spec_resolver_returning(spec),
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    async with _runner_client(app) as client:
+        created = await client.post(
+            "/v1/sessions",
+            json={"session_id": session_id, "agent_id": "ag_1"},
+        )
+        assert created.status_code == 201, created.text
+        response = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "implement it"}],
+                "agent_id": "ag_1",
+            },
+        )
+
+    assert response.status_code in (200, 202), response.text
+    assert launch_fetches == [session_id]
+    assert relaunches == [session_id, session_id]
+    assert package_updates == []
 
 
 @pytest.mark.parametrize(

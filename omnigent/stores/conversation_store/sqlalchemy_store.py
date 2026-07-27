@@ -33,8 +33,14 @@ from omnigent.db.db_models import (
     SqlConversationItem,
     SqlConversationLabel,
     SqlConversationMetadata,
+    SqlLangfuseSyncOutbox,
     SqlPolicy,
+    SqlRoutingDecision,
+    SqlRoutingProposal,
     SqlSessionPermission,
+    SqlTaskEvaluation,
+    SqlTaskReview,
+    SqlTaskRun,
     SqlUserDailyCost,
     conversation_title_hash,
     current_workspace_id,
@@ -190,6 +196,11 @@ def _to_conversation(
         model_override=overrides["model_override"],
         cost_control_mode_override=overrides["cost_control_mode_override"],
         harness_override=overrides["harness_override"],
+        route_approval_enabled=row.route_approval_enabled,
+        routing_selection_source=row.routing_selection_source,
+        omniroute_route_id=row.omniroute_route_id,
+        permission_mode=row.permission_mode,
+        omniroute_requires_explicit_approval=row.omniroute_requires_explicit_approval,
         sub_agent_name=meta.sub_agent_name if meta else None,
         external_session_id=meta.external_session_id if meta else None,
         # NULL → None; a stored JSON array (e.g. ``"[]"`` or
@@ -2382,6 +2393,12 @@ class SqlAlchemyConversationStore(ConversationStore):
         cost_control_mode_override: str | None = None,
         _unset_cost_control_mode_override: bool = False,
         harness_override: str | None = None,
+        route_approval_enabled: bool | None = None,
+        routing_selection_source: str | None = None,
+        omniroute_route_id: str | None = None,
+        _unset_omniroute_route_id: bool = False,
+        permission_mode: str | None = None,
+        omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
     ) -> Conversation | None:
@@ -2458,10 +2475,33 @@ class SqlAlchemyConversationStore(ConversationStore):
             if overrides_changed:
                 row.session_overrides = _encode_session_overrides(overrides)
                 ap_changed = True
+            if route_approval_enabled is not None:
+                row.route_approval_enabled = route_approval_enabled
+                ap_changed = True
+            if routing_selection_source is not None:
+                if routing_selection_source not in ("manual", "route_approval"):
+                    raise ValueError(
+                        "routing_selection_source must be 'manual' or 'route_approval'"
+                    )
+                row.routing_selection_source = routing_selection_source
+                ap_changed = True
+            if _unset_omniroute_route_id:
+                row.omniroute_route_id = None
+                ap_changed = True
+            elif omniroute_route_id is not None:
+                row.omniroute_route_id = omniroute_route_id
+                ap_changed = True
+            if permission_mode is not None:
+                row.permission_mode = permission_mode
+                ap_changed = True
+            if omniroute_requires_explicit_approval is not None:
+                row.omniroute_requires_explicit_approval = omniroute_requires_explicit_approval
+                ap_changed = True
             if archived is not None:
                 # archived lives on the AP conversations row; a visible state change.
                 row.archived = archived
                 ap_changed = True
+            parent_conversation_id = row.parent_conversation_id
             if ap_changed:
                 row.updated_at = now
         if terminal_launch_args is not None:
@@ -2470,18 +2510,13 @@ class SqlAlchemyConversationStore(ConversationStore):
                     SqlConversationMetadata, (current_workspace_id(), conversation_id)
                 )
                 if meta is None:
-                    # Orphaned conversation (a crash between the AP and
-                    # metadata transactions during creation left no metadata
-                    # row). Recreate it rather than silently dropping the
-                    # update; kind derives from the parent pointer, same as
-                    # at creation.
                     _logger.warning(
                         "conversation %s has no metadata row; recreating it",
                         conversation_id,
                     )
                     meta = _new_session_metadata_row(
                         conversation_id,
-                        parent_conversation_id=row.parent_conversation_id,
+                        parent_conversation_id=parent_conversation_id,
                     )
                     meta_sess.add(meta)
                 meta.terminal_launch_args = json.dumps(terminal_launch_args)
@@ -3470,18 +3505,15 @@ class SqlAlchemyConversationStore(ConversationStore):
 
         Collects the full subtree of conversation IDs (the target plus
         all direct/indirect children), then deletes their items, labels,
-        comments, policies, and session-permission rows before deleting
-        the conversation rows themselves (children before parent).
+        comments, policies, routing proposals, task runs, and session-
+        permission rows before deleting the conversation rows themselves
+        (children before parent).
 
         :param conversation_id: Unique conversation identifier,
             e.g. ``"conv_abc123"``.
         :returns: ``True`` if the conversation existed,
             ``False`` otherwise.
         """
-        # AP rows are deleted first so the conversation is immediately unreachable;
-        # Omnigent-side rows (metadata/comments/policies/permissions) are cleaned up
-        # second. A failure of the second transaction leaves orphaned Omnigent rows
-        # for a conversation that no longer exists — an acceptable best-effort tradeoff.
         with self._conv_session() as ap_sess:
             row = ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id))
             if not row:
@@ -3501,13 +3533,6 @@ class SqlAlchemyConversationStore(ConversationStore):
                 )
             )
             subtree_ids = [r[0] for r in ap_sess.execute(select(cte.c.id)).fetchall()]
-            # Collect the subtree's agent bindings before their rows go, so
-            # the Omnigent transaction below can delete the session-scoped
-            # agent rows that backed these conversations. Only include agents
-            # with NO surviving reference outside the deleted subtree: a
-            # session-scoped agent may be referenced by multiple conversations
-            # (e.g. when POST /v1/sessions reuses an existing agent_id), and
-            # should only be removed when ALL its referrers are deleted.
             candidate_agent_ids = set(
                 ap_sess.execute(
                     select(SqlConversation.agent_id).where(
@@ -3519,8 +3544,6 @@ class SqlAlchemyConversationStore(ConversationStore):
                 .scalars()
                 .all()
             )
-            # Keep only agents that have no remaining reference outside the
-            # subtree being deleted.
             surviving_refs = set(
                 ap_sess.execute(
                     select(SqlConversation.agent_id).where(
@@ -3533,30 +3556,68 @@ class SqlAlchemyConversationStore(ConversationStore):
                 .all()
             )
             bound_agent_ids = candidate_agent_ids - surviving_refs
-            for conv_id in subtree_ids:
-                delete_fts_by_conversation(ap_sess, conv_id)
-            ap_sess.execute(
-                delete(SqlConversationItem).where(
-                    SqlConversationItem.workspace_id == current_workspace_id(),
-                    SqlConversationItem.conversation_id.in_(subtree_ids),
-                )
-            )
-            ap_sess.execute(
-                delete(SqlConversationLabel).where(
-                    SqlConversationLabel.workspace_id == current_workspace_id(),
-                    SqlConversationLabel.conversation_id.in_(subtree_ids),
-                )
-            )
-            ap_sess.execute(
-                delete(SqlConversation).where(
-                    SqlConversation.workspace_id == current_workspace_id(),
-                    SqlConversation.id.in_(subtree_ids),
-                    SqlConversation.id != conversation_id,
-                )
-            )
-            ap_sess.delete(row)
 
+        # Clean Control Room and Omnigent-side rows before the AP conversation
+        # rows, so same-database installs with custom FKs delete dependents first.
         with self._session() as session:
+            subtree_proposal_ids = list(
+                session.execute(
+                    select(SqlRoutingProposal.id).where(
+                        SqlRoutingProposal.workspace_id == current_workspace_id(),
+                        SqlRoutingProposal.conversation_id.in_(subtree_ids),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            subtree_task_run_ids = list(
+                session.execute(
+                    select(SqlTaskRun.id).where(
+                        SqlTaskRun.workspace_id == current_workspace_id(),
+                        SqlTaskRun.conversation_id.in_(subtree_ids),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if subtree_proposal_ids:
+                session.execute(
+                    delete(SqlRoutingDecision).where(
+                        SqlRoutingDecision.workspace_id == current_workspace_id(),
+                        SqlRoutingDecision.proposal_id.in_(subtree_proposal_ids),
+                    )
+                )
+            session.execute(
+                delete(SqlRoutingProposal).where(
+                    SqlRoutingProposal.workspace_id == current_workspace_id(),
+                    SqlRoutingProposal.conversation_id.in_(subtree_ids),
+                )
+            )
+            if subtree_task_run_ids:
+                session.execute(
+                    delete(SqlTaskEvaluation).where(
+                        SqlTaskEvaluation.workspace_id == current_workspace_id(),
+                        SqlTaskEvaluation.task_run_id.in_(subtree_task_run_ids),
+                    )
+                )
+                session.execute(
+                    delete(SqlTaskReview).where(
+                        SqlTaskReview.workspace_id == current_workspace_id(),
+                        SqlTaskReview.task_run_id.in_(subtree_task_run_ids),
+                    )
+                )
+                session.execute(
+                    delete(SqlLangfuseSyncOutbox).where(
+                        SqlLangfuseSyncOutbox.workspace_id == current_workspace_id(),
+                        SqlLangfuseSyncOutbox.task_run_id.in_(subtree_task_run_ids),
+                    )
+                )
+            session.execute(
+                delete(SqlTaskRun).where(
+                    SqlTaskRun.workspace_id == current_workspace_id(),
+                    SqlTaskRun.conversation_id.in_(subtree_ids),
+                )
+            )
             session.execute(
                 delete(SqlComment).where(
                     SqlComment.workspace_id == current_workspace_id(),
@@ -3582,10 +3643,6 @@ class SqlAlchemyConversationStore(ConversationStore):
                 )
             )
             if bound_agent_ids:
-                # Session-scoped agents are 1:1 with their conversation
-                # (forks always clone a fresh agent), so every binding
-                # collected from the deleted subtree is dead. Template
-                # agents are shared and survive via the kind guard.
                 session.execute(
                     delete(SqlAgent).where(
                         SqlAgent.workspace_id == current_workspace_id(),
@@ -3593,5 +3650,31 @@ class SqlAlchemyConversationStore(ConversationStore):
                         SqlAgent.kind == encode_agent_kind("session"),
                     )
                 )
+
+        with self._conv_session() as ap_sess:
+            for conv_id in subtree_ids:
+                delete_fts_by_conversation(ap_sess, conv_id)
+            ap_sess.execute(
+                delete(SqlConversationItem).where(
+                    SqlConversationItem.workspace_id == current_workspace_id(),
+                    SqlConversationItem.conversation_id.in_(subtree_ids),
+                )
+            )
+            ap_sess.execute(
+                delete(SqlConversationLabel).where(
+                    SqlConversationLabel.workspace_id == current_workspace_id(),
+                    SqlConversationLabel.conversation_id.in_(subtree_ids),
+                )
+            )
+            ap_sess.execute(
+                delete(SqlConversation).where(
+                    SqlConversation.workspace_id == current_workspace_id(),
+                    SqlConversation.id.in_(subtree_ids),
+                    SqlConversation.id != conversation_id,
+                )
+            )
+            row = ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id))
+            if row is not None:
+                ap_sess.delete(row)
 
         return True

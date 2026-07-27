@@ -89,6 +89,7 @@ const _bootProbe: Promise<ServerInfo> = Promise.race([
           public_sharing_enabled: true,
           server_version: null,
           smart_routing_enabled: false,
+          route_approval_enabled: false,
         }),
       1500,
     ),

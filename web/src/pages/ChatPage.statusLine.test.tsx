@@ -81,6 +81,9 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) 
     modelPickerKind: null,
     codexModelOptions: [],
     showCodexPlanMode: false,
+    showRouteApprovalControl: false,
+    routeApprovalEnabled: false,
+    routeApprovalDisabled: false,
     ...overrides,
   };
 }

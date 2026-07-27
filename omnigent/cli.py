@@ -3308,6 +3308,13 @@ def server(
     permission_store = SqlAlchemyPermissionStore(db_uri)
     scheduled_task_store = SqlAlchemyScheduledTaskStore(db_uri)
     artifact_store = _create_artifact_store(art_loc)
+    task_outcome_store = None
+    if os.environ.get("OMNIGENT_TASK_OUTCOMES_ENABLED", "1") != "0":
+        from omnigent.stores.task_outcome_store.sqlalchemy_store import (
+            SqlAlchemyTaskOutcomeStore,
+        )
+
+        task_outcome_store = SqlAlchemyTaskOutcomeStore(db_uri)
 
     # Initialize the runtime with store references so workflow code
     # can access them via getter functions (get_agent_cache(), etc.).
@@ -3469,6 +3476,7 @@ def server(
         allowed_domains=config_str_list(cfg.get("allowed_domains")),
         sandbox_config=sandbox_config,
         server_config=cfg,
+        task_outcome_store=task_outcome_store,
     )
 
     click.echo(f"Starting omnigent server on {host}:{port}")

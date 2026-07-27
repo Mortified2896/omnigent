@@ -93,15 +93,12 @@ describe("ConnectionIndicator", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("disables the Terminal pill and shows a spinner while the terminal is coming up", () => {
-    // Coming up: no terminal yet AND the consolidated startingUp flag is
-    // set (AppShell folds launch + PTY-creation into it). The greyed button
-    // reads as "loading".
+  it("enables the Terminal pill and shows a spinner while the terminal is coming up", () => {
+    // Starting is a navigable empty view. MainTerminalView attaches in place
+    // once the registered terminal arrives, without interrupting the turn.
     renderWithContext(ONLINE, makeCtx({ terminalsAvailable: false, terminalStartingUp: true }));
     const terminalButton = screen.getByRole("button", { name: /^terminal$/i });
-    expect(terminalButton).toBeDisabled();
-    // The starting-up state swaps the static terminal glyph for an
-    // animated spinner so the greyed-out button reads as "loading".
+    expect(terminalButton).toBeEnabled();
     expect(terminalButton.querySelector(".animate-spin")).not.toBeNull();
     expect(terminalButton).toHaveAttribute("title", expect.stringMatching(/starting up/i));
   });
@@ -113,7 +110,9 @@ describe("ConnectionIndicator", () => {
     const terminalButton = screen.getByRole("button", { name: /^terminal$/i });
     expect(terminalButton).toBeDisabled();
     expect(terminalButton.querySelector(".animate-spin")).toBeNull();
-    expect(terminalButton).not.toHaveAttribute("title");
+    expect(terminalButton).toHaveAttribute("aria-describedby", "terminal-unavailable-reason");
+    expect(terminalButton).toHaveAccessibleDescription(/no terminal is available/i);
+    expect(terminalButton).toHaveAttribute("title", expect.stringMatching(/send a message/i));
   });
 
   it("shows the terminal icon (no spinner) once a terminal is available", () => {
@@ -124,6 +123,16 @@ describe("ConnectionIndicator", () => {
     expect(terminalButton).toBeEnabled();
     expect(terminalButton.querySelector(".animate-spin")).toBeNull();
     expect(terminalButton).not.toHaveAttribute("title");
+  });
+
+  it("invokes setView while the terminal is starting", () => {
+    const setView = vi.fn();
+    renderWithContext(
+      ONLINE,
+      makeCtx({ setView, terminalsAvailable: false, terminalStartingUp: true }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^terminal$/i }));
+    expect(setView).toHaveBeenCalledWith("terminal");
   });
 
   it("invokes setView when pill buttons are clicked", () => {
@@ -207,6 +216,7 @@ describe("ConnectionIndicator", () => {
     expect(
       screen.getByRole("button", { name: /^terminal$/i }).querySelector(".animate-spin"),
     ).not.toBeNull();
+    expect(screen.getByRole("button", { name: /^terminal$/i })).toBeEnabled();
   });
 
   it("shows the Chat/Terminal pill for a terminal-first unknown (pre-poll) session", () => {

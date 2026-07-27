@@ -65,6 +65,19 @@ _DENY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bgit\b.*\breset\s+--hard\s+\w+/"),  # hard-reset to a remote ref
 )
 
+# Any ``git push`` invocation — the regex is intentionally shell-wrapper
+# agnostic so it fires regardless of ``(git push ...)`` / ``bash -c 'git
+# push ...'`` / ``&& git push ...`` / ``$ git push ...`` shape. ``_push_severity``
+# already covers the canonical ``git push`` tokenization, but ``_shell_statements``
+# is a best-effort splitter that does NOT model subshells / nested shells
+# / command substitution. A worker attempting publication via a wrapper
+# would otherwise bypass the policy on the AST-level check and only get
+# caught by the regex pass — the regex matches first so the AST gap never
+# matters for the deny_pushes boundary. The trailing ``(\s|$)`` keeps the
+# match from firing on git subcommands that merely start with ``push``
+# (``git push-notes``, ``git push-remote``).
+_PUSH_RE: re.Pattern[str] = re.compile(r"(^|[^A-Za-z0-9_./-])git(\s+[^|;&]*)?\s+push(\s|$)")
+
 # Outward / destructive but recoverable — ASK the human first.
 _ASK_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bgh\s+(pr\s+merge|release|repo\s+delete)\b"),
@@ -346,6 +359,7 @@ def _push_severity(argv: list[str]) -> str | None:
 def blast_radius(
     *,
     gate_pushes: bool = True,
+    deny_pushes: bool = False,
     deny_reason: str = "Blocked by the blast-radius policy.",
 ) -> Callable[[_Json, _Json], _Json]:
     """
@@ -361,6 +375,9 @@ def blast_radius(
     :param gate_pushes: When ``True`` (default), recoverable-but-outward
         commands return ASK. When ``False`` only the catastrophic DENY
         set is enforced — use only for trusted unattended batch runs.
+    :param deny_pushes: When ``True``, deny every ``git push`` rather than
+        relying on an interactive approval boundary. Intended for workers
+        that may commit locally but must never publish.
     :param deny_reason: Reason text surfaced on a DENY decision.
     :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
     """
@@ -393,9 +410,25 @@ def blast_radius(
         # missed split/long rm flags, root children, and force/delete refspecs);
         # the remaining regex patterns cover git-reset / gh / infra tools.
         statements = _shell_statements(command)
-        severities = {
-            sev for stmt in statements for sev in (_rm_severity(stmt), _push_severity(stmt))
-        }
+        push_severities = {_push_severity(stmt) for stmt in statements}
+        severities = push_severities | {_rm_severity(stmt) for stmt in statements}
+        if deny_pushes and any(severity in {"ASK", "DENY"} for severity in push_severities):
+            return _decision("DENY", f"{deny_reason} (worker publication forbidden: {command!r})")
+        # When ``deny_pushes`` is set, the AST-level classification may miss
+        # wrapped forms (``(git push ...)``, ``bash -c 'git push ...'``,
+        # ``&& git push ...``); the regex pre-check catches those so the
+        # worker can never publish via a non-canonical shape. The regex
+        # is intentionally permissive — it matches ``git push`` anywhere
+        # in the command line, even inside a string literal. The OpenCode
+        # bash tool would have to interpolate that literal into a shell
+        # that then runs ``git push`` for it to count, which the prompt
+        # forbids; the false positive (e.g. ``echo "git push"``) is the
+        # safe direction (deny beats allow for worker publication).
+        if deny_pushes and _PUSH_RE.search(command):
+            return _decision(
+                "DENY",
+                f"{deny_reason} (worker publication forbidden: {command!r})",
+            )
         if "DENY" in severities or any(p.search(command) for p in _DENY_PATTERNS):
             return _decision("DENY", f"{deny_reason} (irreversible: {command!r})")
         if gate_pushes and ("ASK" in severities or any(p.search(command) for p in _ASK_PATTERNS)):

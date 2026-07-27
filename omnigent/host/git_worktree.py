@@ -45,6 +45,10 @@ class WorktreeError(Exception):
         self.message = message
 
 
+class NotGitRepositoryError(WorktreeError):
+    """Raised when an existing directory is confirmed not to be in a git repo."""
+
+
 def validate_branch_name(name: str) -> None:
     """Validate a git branch name against ``git check-ref-format`` rules.
 
@@ -137,6 +141,11 @@ def _git_error(label: str, result: subprocess.CompletedProcess[str]) -> Worktree
     return WorktreeError(f"{label} (exit {result.returncode}){suffix}")
 
 
+def _is_not_git_repository_result(result: subprocess.CompletedProcess[str]) -> bool:
+    """Return whether a failed git subprocess reports a non-repository path."""
+    return "not a git repository" in result.stderr.lower()
+
+
 def _main_work_tree(repo_path: str) -> str:
     """Resolve the MAIN work tree for any path inside a git repo.
 
@@ -155,14 +164,18 @@ def _main_work_tree(repo_path: str) -> str:
         ``"/Users/alice/myrepo-worktrees/feature"``.
     :returns: Absolute path of the main work tree, e.g.
         ``"/Users/alice/myrepo"``.
-    :raises WorktreeError: If ``repo_path`` is not a directory or not
-        inside a git work tree.
+    :raises WorktreeError: If ``repo_path`` is not a directory or git
+        fails while resolving the main work tree.
+    :raises NotGitRepositoryError: If ``repo_path`` is an existing
+        directory but is not inside a git work tree.
     """
     if not Path(repo_path).is_dir():
         raise WorktreeError(f"path is not a directory: {repo_path}")
     result = _run_git(["worktree", "list", "--porcelain"], cwd=repo_path)
     if result.returncode != 0:
-        raise WorktreeError(f"not a git repository: {repo_path}")
+        if _is_not_git_repository_result(result):
+            raise NotGitRepositoryError(f"not a git repository: {repo_path}")
+        raise _git_error("git worktree list failed while resolving the main work tree", result)
     for line in result.stdout.splitlines():
         # Porcelain format: the first record's ``worktree <path>`` line is
         # the main work tree; linked worktrees follow.
@@ -203,11 +216,16 @@ def list_worktrees(*, repo_path: str) -> list[WorktreeInfo]:
 
     :param repo_path: Absolute path inside a git repository — the
         directory the user picked, e.g. ``"/Users/alice/myrepo"``.
-    :returns: One :class:`WorktreeInfo` per worktree, main first.
-    :raises WorktreeError: If ``repo_path`` is not a directory or not
-        inside a git work tree, or if ``git worktree list`` fails.
+    :returns: One :class:`WorktreeInfo` per worktree, main first. An
+        existing non-git directory returns ``[]``.
+    :raises WorktreeError: If ``repo_path`` is not a directory, git is
+        unavailable/times out, or ``git worktree list`` fails for any
+        reason other than "not a git repository".
     """
-    repo_root = _main_work_tree(repo_path)
+    try:
+        repo_root = _main_work_tree(repo_path)
+    except NotGitRepositoryError:
+        return []
     result = _run_git(["worktree", "list", "--porcelain"], cwd=repo_root)
     if result.returncode != 0:
         raise _git_error("git worktree list failed", result)
