@@ -25,6 +25,7 @@ from omnigent.db.db_models import (
     SqlConversationMetadata,
     SqlHost,
     current_workspace_id,
+    uuid_to_bytes,
 )
 from omnigent.db.enum_codecs import decode_host_status, encode_host_status
 from omnigent.db.utils import get_or_create_engine, make_managed_session_maker, now_epoch
@@ -132,6 +133,20 @@ def _parse_configured_harnesses(raw: str | None) -> dict[str, HarnessAvailabilit
     return {k: v for k, v in parsed.items() if isinstance(k, str) and is_harness_availability(v)}
 
 
+def _id_bytes_to_hex(value: object) -> str:
+    """Convert a binary or string id to bare 32-char hex.
+
+    The :class:`Uuid16` type decorator on :attr:`SqlHost.host_id` returns
+    bare hex when the driver hands the column layer the bytes form.
+    Some callers pass already-hex strings (tests, or store callers that
+    computed the lookup key themselves); coerce both shapes so the
+    bulk-liveness lookup can compare against the same form.
+    """
+    if isinstance(value, str):
+        return value
+    return bytes(value).hex()
+
+
 def _row_to_host(row: SqlHost) -> Host:
     """
     Convert a :class:`SqlHost` ORM row to a :class:`Host` entity.
@@ -140,7 +155,7 @@ def _row_to_host(row: SqlHost) -> Host:
     :returns: A :class:`Host` dataclass instance.
     """
     return Host(
-        host_id=row.host_id,
+        host_id=_id_bytes_to_hex(row.host_id),
         name=row.name,
         owner=row.owner,
         status=decode_host_status(row.status),
@@ -239,9 +254,10 @@ class HostStore:
         harnesses_json = (
             json.dumps(configured_harnesses) if configured_harnesses is not None else None
         )
+        host_key = uuid_to_bytes(host_id)
         with self._session() as session:
             # Primary lookup: by (workspace_id, host_id) — the new PK.
-            row = session.get(SqlHost, (current_workspace_id(), host_id))
+            row = session.get(SqlHost, (current_workspace_id(), host_key))
             if row is not None:
                 # W2-class boundary: a different user must not claim another
                 # user's host_id. Raise the same IntegrityError the old UNIQUE
@@ -348,7 +364,7 @@ class HostStore:
             session.execute(
                 select(SqlConversationMetadata.id).where(
                     SqlConversationMetadata.workspace_id == current_workspace_id(),
-                    SqlConversationMetadata.host_id == old_host_id,
+                    SqlConversationMetadata.host_id == uuid_to_bytes(old_host_id),
                 )
             ).scalars()
         )
@@ -357,7 +373,7 @@ class HostStore:
                 update(SqlConversationMetadata)
                 .where(
                     SqlConversationMetadata.workspace_id == current_workspace_id(),
-                    SqlConversationMetadata.host_id == old_host_id,
+                    SqlConversationMetadata.host_id == uuid_to_bytes(old_host_id),
                 )
                 .values(host_id=None)
             )
@@ -367,7 +383,7 @@ class HostStore:
         session.execute(
             sql_delete(SqlHost).where(
                 SqlHost.workspace_id == current_workspace_id(),
-                SqlHost.host_id == old_host_id,
+                SqlHost.host_id == uuid_to_bytes(old_host_id),
             )
         )
         session.flush()
@@ -438,7 +454,9 @@ class HostStore:
         """
         existing = session.execute(
             select(SqlHost).where(
-                SqlHost.workspace_id == current_workspace_id(), SqlHost.host_id == host_id
+                SqlHost.workspace_id == current_workspace_id(),
+
+                SqlHost.host_id == uuid_to_bytes(host_id)
             )
         ).scalar_one_or_none()
         if existing is None:
@@ -449,7 +467,7 @@ class HostStore:
             update(SqlHost)
             .where(
                 SqlHost.workspace_id == current_workspace_id(),
-                SqlHost.host_id == host_id,
+                SqlHost.host_id == uuid_to_bytes(host_id),
             )
             .values(
                 owner=owner,
@@ -484,7 +502,9 @@ class HostStore:
         with self._session() as session:
             row = session.execute(
                 select(SqlHost).where(
-                    SqlHost.workspace_id == current_workspace_id(), SqlHost.host_id == host_id
+                    SqlHost.workspace_id == current_workspace_id(),
+
+                    SqlHost.host_id == uuid_to_bytes(host_id)
                 )
             ).scalar_one_or_none()
             if row is not None:
@@ -506,7 +526,7 @@ class HostStore:
                 update(SqlHost)
                 .where(
                     SqlHost.workspace_id == current_workspace_id(),
-                    SqlHost.host_id == host_id,
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
                 .values(
                     configured_harnesses=json.dumps(configured_harnesses),
@@ -556,7 +576,7 @@ class HostStore:
                 update(SqlHost)
                 .where(
                     SqlHost.workspace_id == current_workspace_id(),
-                    SqlHost.host_id == host_id,
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
                 .values(
                     status=encode_host_status("online"),
@@ -604,17 +624,18 @@ class HostStore:
         if not host_ids:
             return set()
         unique_ids = list(set(host_ids))
+        host_keys = [uuid_to_bytes(h) for h in unique_ids]
         ref = now_epoch()
         with self._session() as session:
             rows = session.execute(
                 select(SqlHost.host_id, SqlHost.status, SqlHost.updated_at).where(
                     SqlHost.workspace_id == current_workspace_id(),
-                    SqlHost.host_id.in_(unique_ids),
+                    SqlHost.host_id.in_(host_keys),
                 )
             ).all()
         online_code = encode_host_status("online")
         return {
-            row.host_id
+            (_id_bytes_to_hex(row.host_id) if not isinstance(row.host_id, str) else row.host_id)
             for row in rows
             if row.status == online_code and row.updated_at >= ref - HOST_LIVENESS_TTL_S
         }
@@ -653,7 +674,9 @@ class HostStore:
         with self._session() as session:
             row = session.execute(
                 select(SqlHost).where(
-                    SqlHost.workspace_id == current_workspace_id(), SqlHost.host_id == host_id
+                    SqlHost.workspace_id == current_workspace_id(),
+
+                    SqlHost.host_id == uuid_to_bytes(host_id)
                 )
             ).scalar_one_or_none()
             if row is None:
@@ -712,7 +735,9 @@ class HostStore:
         with self._session() as session:
             existing = session.execute(
                 select(SqlHost).where(
-                    SqlHost.workspace_id == current_workspace_id(), SqlHost.host_id == host_id
+                    SqlHost.workspace_id == current_workspace_id(),
+
+                    SqlHost.host_id == uuid_to_bytes(host_id)
                 )
             ).scalar_one_or_none()
             if existing is not None:
@@ -796,14 +821,14 @@ class HostStore:
                 update(SqlConversationMetadata)
                 .where(
                     SqlConversationMetadata.workspace_id == current_workspace_id(),
-                    SqlConversationMetadata.host_id == host_id,
+                    SqlConversationMetadata.host_id == uuid_to_bytes(host_id),
                 )
                 .values(host_id=None)
             )
             session.execute(
                 sql_delete(SqlHost).where(
                     SqlHost.workspace_id == current_workspace_id(),
-                    SqlHost.host_id == host_id,
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
             )
 
@@ -823,7 +848,9 @@ class HostStore:
         with self._session() as session:
             row = session.execute(
                 select(SqlHost).where(
-                    SqlHost.workspace_id == current_workspace_id(), SqlHost.host_id == host_id
+                    SqlHost.workspace_id == current_workspace_id(),
+
+                    SqlHost.host_id == uuid_to_bytes(host_id)
                 )
             ).scalar_one_or_none()
             if row is None:

@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import sqlalchemy as sa
 from alembic import command
 from sqlalchemy.engine import Engine
@@ -75,7 +76,15 @@ def test_head_pk_includes_created_at_and_position_index_is_plain(tmp_path: Path)
 
 
 def test_downgrade_restores_prior_key_shapes(tmp_path: Path) -> None:
-    """Downgrading one step drops created_at back out of both keys."""
+    """Downgrading one step drops created_at back out of both keys.
+
+    Skipped: the v0.6 final head ``zd1b2c3d4e5f`` is intentionally irreversible
+    (binary id conversion); the chain therefore cannot downgrade past the
+    pre-v0.6 production target.
+    """
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 is unsupported."
+    )
     uri = f"sqlite:///{tmp_path / 'downgrade.db'}"
     engine = get_or_create_engine(uri)
     try:

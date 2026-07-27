@@ -27,6 +27,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import (
+    InvalidUuidError,
     SqlLangfuseSyncOutbox,
     SqlRoutingDecision,
     SqlRoutingProposal,
@@ -34,6 +35,7 @@ from omnigent.db.db_models import (
     SqlTaskReview,
     SqlTaskRun,
     current_workspace_id,
+    uuid_to_bytes,
 )
 from omnigent.db.enum_codecs import (
     decode_langfuse_outbox_status,
@@ -108,6 +110,31 @@ def _generate_run_id() -> str:
     return f"tr_{uuid.uuid4().hex}"
 
 
+def _id_with_prefix(hex_id: object, prefix: str | None) -> str | None:
+    """Re-apply a legacy prefix to a hex id read back from a ``Uuid16`` column.
+
+    The ORM layer returns bare 32-char hex; callers (and on-the-wire APIs)
+    still expect the legacy-prefixed form these ids carried before the v0.6
+    binary conversion. ``None`` passes through so nullable columns are
+    preserved verbatim. A ``None`` prefix returns the bare hex (used for
+    conversation-item ids, which have no per-item prefix at this layer).
+
+    :param hex_id: Bare hex id returned by the column, or ``None``.
+    :param prefix: The legacy prefix to re-apply (``"tr"``, ``"tev"``, …),
+        or ``None`` to return the bare hex verbatim.
+    :returns: The prefixed id, or ``None`` if the input was ``None``.
+    """
+    if hex_id is None:
+        return None
+    if isinstance(hex_id, (bytes, bytearray, memoryview)):
+        hex_text = bytes(hex_id).hex()
+    else:
+        hex_text = str(hex_id)
+    if prefix is None:
+        return hex_text
+    return f"{prefix}_{hex_text}"
+
+
 def _generate_evaluation_id() -> str:
     """Mint a fresh ``task_evaluations.id`` UUID with the ``tev_`` prefix."""
     return f"tev_{uuid.uuid4().hex}"
@@ -125,8 +152,8 @@ def _generate_outbox_id() -> str:
 
 def _proposal_row_to_entity(row: SqlRoutingProposal) -> RoutingProposal:
     return RoutingProposal(
-        id=row.id,
-        conversation_id=row.conversation_id,
+        id=_id_with_prefix(row.id, "rp"),
+        conversation_id=_id_with_prefix(row.conversation_id, "conv"),
         elicitation_id=row.elicitation_id,
         user_message_sha256=row.user_message_sha256,
         user_message_excerpt=row.user_message_excerpt,
@@ -154,8 +181,8 @@ def _proposal_row_to_entity(row: SqlRoutingProposal) -> RoutingProposal:
 
 def _decision_row_to_entity(row: SqlRoutingDecision) -> RoutingDecision:
     return RoutingDecision(
-        id=row.id,
-        proposal_id=row.proposal_id,
+        id=_id_with_prefix(row.id, "rdc"),
+        proposal_id=_id_with_prefix(row.proposal_id, "rp"),
         action=row.action,
         decision_request_sha256=row.decision_request_sha256,
         original_harness=row.original_harness,
@@ -180,8 +207,8 @@ def _decision_row_to_entity(row: SqlRoutingDecision) -> RoutingDecision:
 def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
     """Convert a :class:`SqlTaskRun` ORM row to a :class:`TaskRun`."""
     return TaskRun(
-        id=row.id,
-        conversation_id=row.conversation_id,
+        id=_id_with_prefix(row.id, "tr"),
+        conversation_id=_id_with_prefix(row.conversation_id, "conv"),
         terminal_status=decode_task_run_status(row.terminal_status),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -205,7 +232,7 @@ def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
         actual_provider_model=row.actual_provider_model,
         actual_provenance_verified=row.actual_provenance_verified,
         response_id=row.response_id,
-        triggering_message_id=row.triggering_message_id,
+        triggering_message_id=_id_with_prefix(row.triggering_message_id, None),
         project_path=row.project_path,
         task_description=row.task_description,
         proposed_task_family=row.proposed_task_family,
@@ -217,8 +244,8 @@ def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
         reasoning_effort=row.reasoning_effort,
         permission_mode=row.permission_mode,
         omniroute_decision_id=row.omniroute_decision_id,
-        routing_proposal_id=row.routing_proposal_id,
-        routing_decision_id=row.routing_decision_id,
+        routing_proposal_id=_id_with_prefix(row.routing_proposal_id, "rp"),
+        routing_decision_id=_id_with_prefix(row.routing_decision_id, "rdc"),
         selection_strategy=row.selection_strategy,
         billing_class=row.billing_class,
         fallback_used=row.fallback_used,
@@ -241,8 +268,8 @@ def _run_row_to_entity(row: SqlTaskRun) -> TaskRun:
 def _evaluation_row_to_entity(row: SqlTaskEvaluation) -> TaskEvaluation:
     """Convert a :class:`SqlTaskEvaluation` ORM row to a :class:`TaskEvaluation`."""
     return TaskEvaluation(
-        id=row.id,
-        task_run_id=row.task_run_id,
+        id=_id_with_prefix(row.id, "tev"),
+        task_run_id=_id_with_prefix(row.task_run_id, "tr"),
         evaluator_type=decode_task_evaluation_type(row.evaluator_type),
         verdict=row.verdict,
         created_at=row.created_at,
@@ -263,8 +290,8 @@ def _evaluation_row_to_entity(row: SqlTaskEvaluation) -> TaskEvaluation:
 def _review_row_to_entity(row: SqlTaskReview) -> TaskReview:
     """Convert a :class:`SqlTaskReview` ORM row to a :class:`TaskReview`."""
     return TaskReview(
-        id=row.id,
-        task_run_id=row.task_run_id,
+        id=_id_with_prefix(row.id, "trv"),
+        task_run_id=_id_with_prefix(row.task_run_id, "tr"),
         verdict=row.verdict,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -279,7 +306,7 @@ def _review_row_to_entity(row: SqlTaskReview) -> TaskReview:
         failure_attribution=row.failure_attribution,
         preferred_route_id=row.preferred_route_id,
         preferred_reasoning_effort=row.preferred_reasoning_effort,
-        source_evaluation_id=row.source_evaluation_id,
+        source_evaluation_id=_id_with_prefix(row.source_evaluation_id, "tev"),
         review_schema_version=row.review_schema_version,
     )
 
@@ -295,8 +322,8 @@ def _outbox_row_to_entity(row: SqlLangfuseSyncOutbox) -> LangfuseOutboxRow:
         # opaque marker the worker can recognise.
         payload = {"_corrupt": True, "_raw_bytes": len(row.payload_json)}
     return LangfuseOutboxRow(
-        id=row.id,
-        task_run_id=row.task_run_id,
+        id=_id_with_prefix(row.id, "lfs"),
+        task_run_id=_id_with_prefix(row.task_run_id, "tr"),
         event_type=row.event_type,
         idempotency_key=row.idempotency_key,
         payload=payload,
@@ -304,7 +331,7 @@ def _outbox_row_to_entity(row: SqlLangfuseSyncOutbox) -> LangfuseOutboxRow:
         attempt_count=row.attempt_count,
         next_attempt_at=row.next_attempt_at,
         created_at=row.created_at,
-        task_evaluation_id=row.task_evaluation_id,
+        task_evaluation_id=_id_with_prefix(row.task_evaluation_id, "tev"),
         last_error=row.last_error,
         delivered_at=row.delivered_at,
     )
@@ -335,8 +362,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         proposal_excerpt, proposal_hash = _canonical_payload(data.proposal_payload)
         message_hash = hashlib.sha256(data.user_message.encode("utf-8")).hexdigest()
         row = SqlRoutingProposal(
-            id=_generate_proposal_id(),
-            conversation_id=data.conversation_id,
+            id=uuid_to_bytes(_generate_proposal_id()),
+            conversation_id=uuid_to_bytes(data.conversation_id),
             elicitation_id=data.elicitation_id,
             user_message_sha256=message_hash,
             user_message_excerpt=data.user_message[:_AUDIT_EXCERPT_CHARS],
@@ -380,15 +407,20 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 return _proposal_row_to_entity(existing)
 
     def get_routing_proposal(self, proposal_id: str) -> RoutingProposal | None:
+        try:
+            key = uuid_to_bytes(proposal_id)
+        except InvalidUuidError:
+            return None
         with self._session() as session:
-            row = session.get(SqlRoutingProposal, (current_workspace_id(), proposal_id))
+            row = session.get(SqlRoutingProposal, (current_workspace_id(), key))
             return _proposal_row_to_entity(row) if row is not None else None
 
     def create_routing_decision(self, data: CreateRoutingDecisionInput) -> RoutingDecision:
         if data.action not in {"approved", "changed", "declined"}:
             raise ValueError("invalid routing decision action")
         with self._session() as session:
-            proposal = session.get(SqlRoutingProposal, (current_workspace_id(), data.proposal_id))
+            proposal_key = uuid_to_bytes(data.proposal_id)
+            proposal = session.get(SqlRoutingProposal, (current_workspace_id(), proposal_key))
             if proposal is None:
                 raise ValueError(f"unknown routing proposal: {data.proposal_id}")
             payload_excerpt, payload_hash = _canonical_payload(data.decision_payload)
@@ -422,8 +454,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                     )
                 return _decision_row_to_entity(existing)
             row = SqlRoutingDecision(
-                id=_generate_decision_id(),
-                proposal_id=data.proposal_id,
+                id=uuid_to_bytes(_generate_decision_id()),
+                proposal_id=proposal_key,
                 action=data.action,
                 decision_request_sha256=request_hash,
                 original_harness=proposal.original_harness,
@@ -448,11 +480,15 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             return _decision_row_to_entity(row)
 
     def get_routing_decision_for_proposal(self, proposal_id: str) -> RoutingDecision | None:
+        try:
+            key = uuid_to_bytes(proposal_id)
+        except InvalidUuidError:
+            return None
         with self._session() as session:
             row = session.execute(
                 select(SqlRoutingDecision).where(
                     SqlRoutingDecision.workspace_id == current_workspace_id(),
-                    SqlRoutingDecision.proposal_id == proposal_id,
+                    SqlRoutingDecision.proposal_id == key,
                 )
             ).scalar_one_or_none()
             return _decision_row_to_entity(row) if row is not None else None
@@ -460,6 +496,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
     def list_routing_turns_for_conversation(
         self, conversation_id: str, limit: int = 200
     ) -> list[RoutingTurnAudit]:
+        conv_key = uuid_to_bytes(conversation_id)
         stmt = (
             select(SqlRoutingProposal, SqlRoutingDecision, SqlTaskRun)
             .outerjoin(
@@ -474,7 +511,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             )
             .where(
                 SqlRoutingProposal.workspace_id == current_workspace_id(),
-                SqlRoutingProposal.conversation_id == conversation_id,
+                SqlRoutingProposal.conversation_id == conv_key,
             )
             .order_by(SqlRoutingProposal.created_at, SqlRoutingProposal.id, SqlTaskRun.created_at)
             .limit(limit)
@@ -506,10 +543,14 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         now = now_epoch()
         run_id = _generate_run_id()
         row = SqlTaskRun(
-            id=run_id,
-            conversation_id=data.conversation_id,
+            id=uuid_to_bytes(run_id),
+            conversation_id=uuid_to_bytes(data.conversation_id),
             response_id=data.response_id,
-            triggering_message_id=data.triggering_message_id,
+            triggering_message_id=(
+                uuid_to_bytes(data.triggering_message_id)
+                if data.triggering_message_id is not None
+                else None
+            ),
             project_path=data.project_path,
             task_description=data.task_description,
             harness_id=data.harness_id,
@@ -519,8 +560,16 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             reasoning_effort=data.reasoning_effort,
             permission_mode=data.permission_mode,
             omniroute_decision_id=data.omniroute_decision_id,
-            routing_proposal_id=data.routing_proposal_id,
-            routing_decision_id=data.routing_decision_id,
+            routing_proposal_id=(
+                uuid_to_bytes(data.routing_proposal_id)
+                if data.routing_proposal_id is not None
+                else None
+            ),
+            routing_decision_id=(
+                uuid_to_bytes(data.routing_decision_id)
+                if data.routing_decision_id is not None
+                else None
+            ),
             selection_strategy=data.selection_strategy,
             billing_class=data.billing_class,
             fallback_used=data.fallback_used,
@@ -547,17 +596,22 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
 
     def get_run(self, task_run_id: str) -> TaskRun | None:
         """Return a single ``task_runs`` row by id. See base class."""
+        try:
+            run_key = uuid_to_bytes(task_run_id)
+        except InvalidUuidError:
+            return None
         with self._session() as session:
-            row = session.get(SqlTaskRun, (current_workspace_id(), task_run_id))
+            row = session.get(SqlTaskRun, (current_workspace_id(), uuid_to_bytes(run_key)))
             return _run_row_to_entity(row) if row is not None else None
 
     def get_run_for_response(self, response_id: str, conversation_id: str) -> TaskRun | None:
+        conv_key = uuid_to_bytes(conversation_id)
         stmt = (
             select(SqlTaskRun)
             .where(
                 SqlTaskRun.workspace_id == current_workspace_id(),
                 SqlTaskRun.response_id == response_id,
-                SqlTaskRun.conversation_id == conversation_id,
+                SqlTaskRun.conversation_id == conv_key,
             )
             .order_by(SqlTaskRun.updated_at.desc())
             .limit(1)
@@ -568,17 +622,30 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
 
     def get_run_for_conversation(self, task_run_id: str, conversation_id: str) -> TaskRun | None:
         """Return a row only when its conversation matches. See base class."""
+        try:
+            run_key = uuid_to_bytes(task_run_id)
+            # ``SqlTaskRun.conversation_id`` is loaded by the ``Uuid16`` type
+            # decorator, which returns bare 32-char hex to Python. Compare
+            # against the same form so the equal-check matches what the ORM
+            # reads back.
+            conv_key = uuid_to_bytes(conversation_id).hex()
+        except InvalidUuidError:
+            return None
         with self._session() as session:
-            row = session.get(SqlTaskRun, (current_workspace_id(), task_run_id))
-            if row is None or row.conversation_id != conversation_id:
+            row = session.get(SqlTaskRun, (current_workspace_id(), run_key))
+            if row is None or row.conversation_id != conv_key:
                 return None
             return _run_row_to_entity(row)
 
     def update_run_provenance(self, data: UpdateTaskRunProvenanceInput) -> TaskRun | None:
         """Attach structured execution provenance without terminalizing the run."""
         now = now_epoch()
+        try:
+            run_key = uuid_to_bytes(data.task_run_id)
+        except InvalidUuidError:
+            return None
         with self._session() as session:
-            row = session.get(SqlTaskRun, (current_workspace_id(), data.task_run_id))
+            row = session.get(SqlTaskRun, (current_workspace_id(), uuid_to_bytes(run_key)))
             if row is None:
                 return None
             # Null or unverified observations never erase a verified identity.
@@ -616,8 +683,12 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
     def update_run_terminal(self, data: UpdateTaskRunTerminalInput) -> TaskRun | None:
         """Mark a ``task_runs`` row terminal. See base class."""
         now = now_epoch()
+        try:
+            run_key = uuid_to_bytes(data.task_run_id)
+        except InvalidUuidError:
+            return None
         with self._session() as session:
-            row = session.get(SqlTaskRun, (current_workspace_id(), data.task_run_id))
+            row = session.get(SqlTaskRun, (current_workspace_id(), uuid_to_bytes(run_key)))
             if row is None:
                 return None
             # Compare-and-set: late terminal callbacks cannot resurrect a
@@ -675,11 +746,12 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         limit: int = 50,
     ) -> list[TaskRun]:
         """Return runs for *conversation_id* newest-first. See base class."""
+        conv_key = uuid_to_bytes(conversation_id)
         stmt = (
             select(SqlTaskRun)
             .where(
                 SqlTaskRun.workspace_id == current_workspace_id(),
-                SqlTaskRun.conversation_id == conversation_id,
+                SqlTaskRun.conversation_id == conv_key,
             )
             .order_by(SqlTaskRun.started_at.desc(), SqlTaskRun.id)
             .limit(limit)
@@ -722,7 +794,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             .limit(limit)
         )
         if conversation_id is not None:
-            stmt = stmt.where(SqlTaskRun.conversation_id == conversation_id)
+            stmt = stmt.where(SqlTaskRun.conversation_id == uuid_to_bytes(conversation_id))
         with self._session() as session:
             return [_run_row_to_entity(r) for r in session.execute(stmt).scalars().all()]
 
@@ -734,7 +806,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
     ) -> None:
         """Stamp Langfuse trace + observation ids. See base class."""
         with self._session() as session:
-            row = session.get(SqlTaskRun, (current_workspace_id(), task_run_id))
+            row = session.get(SqlTaskRun, (current_workspace_id(), uuid_to_bytes(task_run_id)))
             if row is None:
                 return
             row.langfuse_trace_id = trace_id
@@ -753,7 +825,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         workspace_id = current_workspace_id()
         active_statuses = {"completed", "failed", "cancelled", "timed_out"}
         with self._session() as session:
-            row = session.get(SqlTaskRun, (workspace_id, task_run_id))
+            row = session.get(SqlTaskRun, (workspace_id, uuid_to_bytes(task_run_id)))
             if row is None:
                 raise LookupError(f"task run not found: {task_run_id}")
             if row.execution_status not in active_statuses:
@@ -784,7 +856,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             )
             session.flush()
             session.expire_all()
-            row = session.get(SqlTaskRun, (workspace_id, task_run_id))
+            row = session.get(SqlTaskRun, (workspace_id, uuid_to_bytes(task_run_id)))
             assert row is not None
             status = "queued" if result.rowcount == 1 else "already_pending"
             if row.evaluation_status == "completed":
@@ -861,7 +933,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             if result.rowcount != 1:
                 return None
             session.flush()
-            row = session.get(SqlTaskRun, (workspace_id, task_run_id))
+            row = session.get(SqlTaskRun, (workspace_id, uuid_to_bytes(task_run_id)))
             return _run_row_to_entity(row) if row is not None else None
 
     def recover_stale_pending_evaluations(self, *, now: int, stale_before: int) -> int:
@@ -938,15 +1010,20 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             return [
                 _run_row_to_entity(row)
                 for run_id in claimed_ids
-                if (row := session.get(SqlTaskRun, (workspace_id, run_id))) is not None
+                if (
+                    row := session.get(
+                        SqlTaskRun, (workspace_id, uuid_to_bytes(run_id))
+                    )
+                )
+                is not None
             ]
 
     def create_evaluation(self, data: CreateTaskEvaluationInput) -> TaskEvaluation:
         """INSERT a ``task_evaluations`` row. See base class."""
         now = now_epoch()
         row = SqlTaskEvaluation(
-            id=_generate_evaluation_id(),
-            task_run_id=data.task_run_id,
+            id=uuid_to_bytes(_generate_evaluation_id()),
+            task_run_id=uuid_to_bytes(data.task_run_id),
             evaluator_type=encode_task_evaluation_type(data.evaluator_type),
             evaluator_provider=data.evaluator_provider,
             evaluator_model=data.evaluator_model,
@@ -963,15 +1040,16 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             created_at=now,
         )
         workspace_id = current_workspace_id()
+        run_key = uuid_to_bytes(data.task_run_id)
         with self._session() as session:
-            run = session.get(SqlTaskRun, (workspace_id, data.task_run_id))
+            run = session.get(SqlTaskRun, (workspace_id, uuid_to_bytes(run_key)))
             if run is None:
                 raise ValueError(f"unknown task run: {data.task_run_id}")
             existing = (
                 session.execute(
                     select(SqlTaskEvaluation).where(
                         SqlTaskEvaluation.workspace_id == workspace_id,
-                        SqlTaskEvaluation.task_run_id == data.task_run_id,
+                        SqlTaskEvaluation.task_run_id == uuid_to_bytes(data.task_run_id),
                     )
                 )
                 .scalars()
@@ -1009,7 +1087,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                     session.execute(
                         select(SqlTaskEvaluation).where(
                             SqlTaskEvaluation.workspace_id == workspace_id,
-                            SqlTaskEvaluation.task_run_id == data.task_run_id,
+                            SqlTaskEvaluation.task_run_id == uuid_to_bytes(data.task_run_id),
                         )
                     )
                     .scalars()
@@ -1034,7 +1112,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             select(SqlTaskEvaluation)
             .where(
                 SqlTaskEvaluation.workspace_id == current_workspace_id(),
-                SqlTaskEvaluation.task_run_id == task_run_id,
+                SqlTaskEvaluation.task_run_id == uuid_to_bytes(task_run_id),
             )
             .order_by(SqlTaskEvaluation.created_at.desc(), SqlTaskEvaluation.id)
             .limit(1)
@@ -1053,7 +1131,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 session.execute(
                     select(SqlTaskReview).where(
                         SqlTaskReview.workspace_id == current_workspace_id(),
-                        SqlTaskReview.task_run_id == data.task_run_id,
+                        SqlTaskReview.task_run_id == uuid_to_bytes(data.task_run_id),
                         SqlTaskReview.created_by == data.created_by,
                     )
                 )
@@ -1078,8 +1156,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 session.flush()
                 return _review_row_to_entity(existing)
             row = SqlTaskReview(
-                id=_generate_review_id(),
-                task_run_id=data.task_run_id,
+                id=uuid_to_bytes(_generate_review_id()),
+                task_run_id=uuid_to_bytes(data.task_run_id),
                 verdict=data.verdict,
                 quality_score=data.quality_score,
                 final_task_family=data.final_task_family,
@@ -1092,7 +1170,11 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
                 failure_attribution=data.failure_attribution,
                 preferred_route_id=data.preferred_route_id,
                 preferred_reasoning_effort=data.preferred_reasoning_effort,
-                source_evaluation_id=data.source_evaluation_id,
+                source_evaluation_id=(
+                    uuid_to_bytes(data.source_evaluation_id)
+                    if data.source_evaluation_id is not None
+                    else None
+                ),
                 review_schema_version=data.review_schema_version,
                 created_at=now,
                 updated_at=now,
@@ -1109,7 +1191,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         """Return the reviewer's review row. See base class."""
         stmt = select(SqlTaskReview).where(
             SqlTaskReview.workspace_id == current_workspace_id(),
-            SqlTaskReview.task_run_id == task_run_id,
+            SqlTaskReview.task_run_id == uuid_to_bytes(task_run_id),
             SqlTaskReview.created_by == created_by,
         )
         with self._session() as session:
@@ -1143,7 +1225,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             select(SqlTaskReview)
             .where(
                 SqlTaskReview.workspace_id == current_workspace_id(),
-                SqlTaskReview.task_run_id == task_run_id,
+                SqlTaskReview.task_run_id == uuid_to_bytes(task_run_id),
             )
             .order_by(SqlTaskReview.updated_at.desc(), SqlTaskReview.id)
             .limit(1)
@@ -1160,9 +1242,13 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         next_attempt = data.next_attempt_at if data.next_attempt_at is not None else now
         payload_bytes = json.dumps(data.payload, ensure_ascii=True).encode("utf-8")
         row = SqlLangfuseSyncOutbox(
-            id=_generate_outbox_id(),
-            task_run_id=data.task_run_id,
-            task_evaluation_id=data.task_evaluation_id,
+            id=uuid_to_bytes(_generate_outbox_id()),
+            task_run_id=uuid_to_bytes(data.task_run_id),
+            task_evaluation_id=(
+                uuid_to_bytes(data.task_evaluation_id)
+                if data.task_evaluation_id is not None
+                else None
+            ),
             event_type=data.event_type,
             idempotency_key=data.idempotency_key,
             payload_json=payload_bytes,
@@ -1188,8 +1274,8 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         # ``event_type='llm_verdict'``.
         now = now_epoch()
         row = SqlLangfuseSyncOutbox(
-            id=_generate_outbox_id(),
-            task_run_id=task_run_id,
+            id=uuid_to_bytes(_generate_outbox_id()),
+            task_run_id=uuid_to_bytes(task_run_id),
             task_evaluation_id=None,
             event_type="task_root",
             idempotency_key=f"task:{task_run_id}:root:skipped:v1",
@@ -1265,7 +1351,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
         pending_code = encode_langfuse_outbox_status("pending")
         stmt = select(func.count(SqlLangfuseSyncOutbox.id)).where(
             SqlLangfuseSyncOutbox.workspace_id == current_workspace_id(),
-            SqlLangfuseSyncOutbox.task_run_id == task_run_id,
+            SqlLangfuseSyncOutbox.task_run_id == uuid_to_bytes(task_run_id),
             SqlLangfuseSyncOutbox.status == pending_code,
         )
         with self._session() as session:

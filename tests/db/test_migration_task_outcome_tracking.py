@@ -33,12 +33,23 @@ def db_engine(tmp_path: Path) -> Iterator[Engine]:
 
 def _seed_conversation(engine: Engine) -> None:
     """Insert one conversation so FKs in the new tables can be exercised."""
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
     with engine.begin() as conn:
         conn.execute(
             sa.text(
-                "INSERT INTO conversations (id, created_at, updated_at, kind, "
-                "root_conversation_id) VALUES ('c1', 1, 1, 1, 'c1')"
-            )
+                "INSERT INTO conversations (id, created_at, updated_at, "
+                "root_conversation_id) VALUES (:id, 1, 1, :id)"
+            ),
+            {"id": conv_blob},
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO omnigent_conversation_metadata"
+                " (workspace_id, id, kind) VALUES (0, :id, 1)"
+            ),
+            {"id": conv_blob},
         )
 
 
@@ -217,6 +228,13 @@ def test_round_trip_task_run(db_engine: Engine) -> None:
     enforce ``task_run_id`` → ``task_runs.id``; the unique
     constraint on ``task_reviews`` enforces one-row-per-reviewer.
     """
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
+    run_blob = uuid_to_bytes("conv_0000000000000000000000000000000b")
+    ev_blob = uuid_to_bytes("conv_0000000000000000000000000000000c")
+    rev_blob = uuid_to_bytes("conv_0000000000000000000000000000000d")
+    out_blob = uuid_to_bytes("conv_0000000000000000000000000000000e")
     _seed_conversation(db_engine)
     with db_engine.begin() as conn:
         # Run row.
@@ -224,24 +242,27 @@ def test_round_trip_task_run(db_engine: Engine) -> None:
             sa.text(
                 "INSERT INTO task_runs (workspace_id, id, conversation_id, "
                 "terminal_status, started_at, created_at, updated_at) "
-                "VALUES (0, 'tr1', 'c1', 2, 100, 100, 100)"
-            )
+                "VALUES (0, :id, :cid, 2, 100, 100, 100)"
+            ),
+            {"id": run_blob, "cid": conv_blob},
         )
         # Evaluation row.
         conn.execute(
             sa.text(
                 "INSERT INTO task_evaluations (workspace_id, id, task_run_id, "
                 "evaluator_type, verdict, created_at) "
-                "VALUES (0, 'tev1', 'tr1', 2, 'success', 100)"
-            )
+                "VALUES (0, :id, :rid, 2, 'success', 100)"
+            ),
+            {"id": ev_blob, "rid": run_blob},
         )
         # Review row (creator known).
         conn.execute(
             sa.text(
                 "INSERT INTO task_reviews (workspace_id, id, task_run_id, "
                 "verdict, created_by, created_at, updated_at) "
-                "VALUES (0, 'trv1', 'tr1', 'success', 'alice@example.com', 100, 100)"
-            )
+                "VALUES (0, :id, :rid, 'success', 'alice@example.com', 100, 100)"
+            ),
+            {"id": rev_blob, "rid": run_blob},
         )
         # Outbox row.
         conn.execute(
@@ -249,25 +270,32 @@ def test_round_trip_task_run(db_engine: Engine) -> None:
                 "INSERT INTO langfuse_sync_outbox (workspace_id, id, "
                 "task_run_id, event_type, idempotency_key, payload_json, "
                 "status, attempt_count, next_attempt_at, created_at) "
-                "VALUES (0, 'lfs1', 'tr1', 'task_root', 'task:tr1:root:v1', "
+                "VALUES (0, :id, :rid, 'task_root', 'task:tr1:root:v1', "
                 "X'7b7d00', 1, 0, 100, 100)"
-            )
+            ),
+            {"id": out_blob, "rid": run_blob},
         )
         # Round-trip read.
         run = conn.execute(
-            sa.text("SELECT terminal_status FROM task_runs WHERE id = 'tr1'")
+            sa.text("SELECT terminal_status FROM task_runs WHERE id = :id"),
+            {"id": run_blob},
         ).scalar_one()
         assert run == 2
         eval_row = conn.execute(
-            sa.text("SELECT verdict FROM task_evaluations WHERE id = 'tev1'")
+            sa.text("SELECT verdict FROM task_evaluations WHERE id = :id"),
+            {"id": ev_blob},
         ).scalar_one()
         assert eval_row == "success"
         review_row = conn.execute(
-            sa.text("SELECT verdict FROM task_reviews WHERE id = 'trv1'")
+            sa.text("SELECT verdict FROM task_reviews WHERE id = :id"),
+            {"id": rev_blob},
         ).scalar_one()
         assert review_row == "success"
         outbox_row = conn.execute(
-            sa.text("SELECT status, event_type FROM langfuse_sync_outbox WHERE id = 'lfs1'")
+            sa.text(
+                "SELECT status, event_type FROM langfuse_sync_outbox WHERE id = :id"
+            ),
+            {"id": out_blob},
         ).one()
         assert outbox_row[0] == 1
         assert outbox_row[1] == "task_root"
@@ -277,21 +305,29 @@ def test_task_review_reviewer_unique_constraint(db_engine: Engine) -> None:
     """``uq_task_reviews_run_reviewer`` rejects two reviews by the same reviewer."""
     import sqlalchemy.exc
 
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
+    run_blob = uuid_to_bytes("conv_0000000000000000000000000000001a")
+    rev_a_blob = uuid_to_bytes("conv_0000000000000000000000000000001b")
+    rev_b_blob = uuid_to_bytes("conv_0000000000000000000000000000001c")
     _seed_conversation(db_engine)
     with db_engine.begin() as conn:
         conn.execute(
             sa.text(
                 "INSERT INTO task_runs (workspace_id, id, conversation_id, "
                 "terminal_status, created_at, updated_at) "
-                "VALUES (0, 'tr2', 'c1', 2, 100, 100)"
-            )
+                "VALUES (0, :id, :cid, 2, 100, 100)"
+            ),
+            {"id": run_blob, "cid": conv_blob},
         )
         conn.execute(
             sa.text(
                 "INSERT INTO task_reviews (workspace_id, id, task_run_id, "
                 "verdict, created_by, created_at, updated_at) "
-                "VALUES (0, 'trv-a', 'tr2', 'success', 'alice@example.com', 100, 100)"
-            )
+                "VALUES (0, :id, :rid, 'success', 'alice@example.com', 100, 100)"
+            ),
+            {"id": rev_a_blob, "rid": run_blob},
         )
     # Second insert by the same reviewer must fail with the unique constraint.
     with pytest.raises(sqlalchemy.exc.IntegrityError):
@@ -300,8 +336,9 @@ def test_task_review_reviewer_unique_constraint(db_engine: Engine) -> None:
                 sa.text(
                     "INSERT INTO task_reviews (workspace_id, id, task_run_id, "
                     "verdict, created_by, created_at, updated_at) "
-                    "VALUES (0, 'trv-b', 'tr2', 'partial', 'alice@example.com', 200, 200)"
-                )
+                    "VALUES (0, :id, :rid, 'partial', 'alice@example.com', 200, 200)"
+                ),
+                {"id": rev_b_blob, "rid": run_blob},
             )
 
 
@@ -309,6 +346,10 @@ def test_task_runs_check_constraint_rejects_unknown_status(db_engine: Engine) ->
     """``ck_task_runs_terminal_status`` rejects codes outside the enum."""
     import sqlalchemy.exc
 
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
+    bad_run_blob = uuid_to_bytes("conv_0000000000000000000000000000002a")
     _seed_conversation(db_engine)
     with pytest.raises(sqlalchemy.exc.IntegrityError):
         with db_engine.begin() as conn:
@@ -316,8 +357,9 @@ def test_task_runs_check_constraint_rejects_unknown_status(db_engine: Engine) ->
                 sa.text(
                     "INSERT INTO task_runs (workspace_id, id, conversation_id, "
                     "terminal_status, created_at, updated_at) "
-                    "VALUES (0, 'tr-bad', 'c1', 99, 100, 100)"
-                )
+                    "VALUES (0, :id, :cid, 99, 100, 100)"
+                ),
+                {"id": bad_run_blob, "cid": conv_blob},
             )
 
 
@@ -325,14 +367,20 @@ def test_task_evaluations_check_constraint_rejects_unknown_verdict(db_engine: En
     """``ck_task_evaluations_verdict`` rejects verdicts outside the vocabulary."""
     import sqlalchemy.exc
 
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
+    run_blob = uuid_to_bytes("conv_0000000000000000000000000000003a")
+    bad_ev_blob = uuid_to_bytes("conv_0000000000000000000000000000003b")
     _seed_conversation(db_engine)
     with db_engine.begin() as conn:
         conn.execute(
             sa.text(
                 "INSERT INTO task_runs (workspace_id, id, conversation_id, "
                 "terminal_status, created_at, updated_at) "
-                "VALUES (0, 'tr3', 'c1', 2, 100, 100)"
-            )
+                "VALUES (0, :id, :cid, 2, 100, 100)"
+            ),
+            {"id": run_blob, "cid": conv_blob},
         )
     with pytest.raises(sqlalchemy.exc.IntegrityError):
         with db_engine.begin() as conn:
@@ -340,8 +388,9 @@ def test_task_evaluations_check_constraint_rejects_unknown_verdict(db_engine: En
                 sa.text(
                     "INSERT INTO task_evaluations (workspace_id, id, task_run_id, "
                     "evaluator_type, verdict, created_at) "
-                    "VALUES (0, 'tev-bad', 'tr3', 2, 'unknown', 100)"
-                )
+                    "VALUES (0, :id, :rid, 2, 'unknown', 100)"
+                ),
+                {"id": bad_ev_blob, "rid": run_blob},
             )
 
 
@@ -349,14 +398,20 @@ def test_langfuse_outbox_check_constraint_rejects_unknown_status(db_engine: Engi
     """``ck_langfuse_outbox_status`` rejects codes outside the enum."""
     import sqlalchemy.exc
 
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
+    run_blob = uuid_to_bytes("conv_0000000000000000000000000000004a")
+    bad_out_blob = uuid_to_bytes("conv_0000000000000000000000000000004b")
     _seed_conversation(db_engine)
     with db_engine.begin() as conn:
         conn.execute(
             sa.text(
                 "INSERT INTO task_runs (workspace_id, id, conversation_id, "
                 "terminal_status, created_at, updated_at) "
-                "VALUES (0, 'tr4', 'c1', 2, 100, 100)"
-            )
+                "VALUES (0, :id, :cid, 2, 100, 100)"
+            ),
+            {"id": run_blob, "cid": conv_blob},
         )
     with pytest.raises(sqlalchemy.exc.IntegrityError):
         with db_engine.begin() as conn:
@@ -365,7 +420,8 @@ def test_langfuse_outbox_check_constraint_rejects_unknown_status(db_engine: Engi
                     "INSERT INTO langfuse_sync_outbox (workspace_id, id, "
                     "task_run_id, event_type, idempotency_key, payload_json, "
                     "status, attempt_count, next_attempt_at, created_at) "
-                    "VALUES (0, 'lfs-bad', 'tr4', 'task_root', "
+                    "VALUES (0, :id, :rid, 'task_root', "
                     "'task:tr4:root:v1', X'7b7d00', 99, 0, 100, 100)"
-                )
+                ),
+                {"id": bad_out_blob, "rid": run_blob},
             )

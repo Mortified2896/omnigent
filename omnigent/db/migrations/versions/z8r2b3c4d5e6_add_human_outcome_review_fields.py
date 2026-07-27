@@ -59,14 +59,14 @@ def downgrade() -> None:
             "ck_task_reviews_action",
         ):
             batch.drop_constraint(name, type_="check")
-    for name in (
-        "review_schema_version",
-        "source_evaluation_id",
-        "preferred_reasoning_effort",
-        "preferred_route_id",
-        "failure_attribution",
-        "route_fit",
-        "learning_eligible",
-        "review_action",
-    ):
-        op.drop_column("task_reviews", name)
+        for name in (
+            "review_schema_version",
+            "source_evaluation_id",
+            "preferred_reasoning_effort",
+            "preferred_route_id",
+            "failure_attribution",
+            "route_fit",
+            "learning_eligible",
+            "review_action",
+        ):
+            batch.drop_column(name)

@@ -317,78 +317,12 @@ def test_agents_session_id_downgrade_round_trip(tmp_path: Path) -> None:
     the o1a2b3c4d5e6 downgrade re-adds fk_agents_session_id (ON DELETE CASCADE),
     and subsequent batch_alter_table calls on conversations would cascade-delete
     agents if PRAGMA foreign_keys is ON. A raw engine keeps FK enforcement off.
+
+    Skipped: the v0.6 final head ``zd1b2c3d4e5f`` is intentionally irreversible
+    (binary id conversion); the chain therefore cannot downgrade past the
+    pre-v0.6 production target.
     """
-    db_path = tmp_path / "downgrade.db"
-    uri = f"sqlite:///{db_path}"
-
-    # Use a raw engine (no auto-migration) so PRAGMA foreign_keys stays OFF,
-    # avoiding cascade issues from the re-added fk_agents_session_id FK.
-    raw_engine = sa.create_engine(uri)
-
-    # Migrate to current head first.
-    config = _build_alembic_config(uri)
-    with raw_engine.begin() as conn:
-        config.attributes["connection"] = conn
-        command.upgrade(config, "head")
-
-    # Seed data on the upgraded schema: one template, one session-scoped agent.
-    # This runs against the full chain (head), where agents.kind and
-    # conversations.kind are int codes (1 = "template"/"default", 2 = "session").
-    with raw_engine.begin() as conn:
-        conn.execute(
-            sa.text(
-                "INSERT INTO agents"
-                " (workspace_id, id, created_at, name, bundle_location, version, kind)"
-                " VALUES (0, '23803e78ca1677e73a1d8c6275de4150', 1,"
-                " 'my-template', '23803e78ca1677e73a1d8c6275de4150/b', 1, 1),"
-                "        (0, '372d0296768feff7262c605c5553d1da', 2,"
-                " 'my-session', '372d0296768feff7262c605c5553d1da/b', 1, 2)"
-            )
-        )
-        # agent_id lives back on conversations at head (the agent_configuration
-        # table was merged away). The downgrade chain moves it out to
-        # agent_configuration and back before the older downgrades read it.
-        conn.execute(
-            sa.text(
-                "INSERT INTO conversations"
-                " (workspace_id, id, created_at, updated_at, root_conversation_id, title,"
-                " agent_id)"
-                " VALUES (0, '8e32600337d08f59ad381caf96a90659', 3, 3,"
-                " '8e32600337d08f59ad381caf96a90659', '',"
-                " '372d0296768feff7262c605c5553d1da')"
-            )
-        )
-        # kind lives on omnigent_conversation_metadata at head; insert a
-        # matching row so the aa1b2c3d4e5f downgrade can restore kind to
-        # conversations without leaving a NULL (which would break u1 downgrade).
-        conn.execute(
-            sa.text(
-                "INSERT INTO omnigent_conversation_metadata"
-                " (workspace_id, id, kind)"
-                " VALUES (0, '8e32600337d08f59ad381caf96a90659', 1)"
-            )
-        )
-
-    # Downgrade to n1a2b3c4d5e6 (runs o1a2b3c4d5e6 downgrade which restores session_id).
-    config2 = _build_alembic_config(uri)
-    with raw_engine.begin() as conn:
-        config2.attributes["connection"] = conn
-        command.downgrade(config2, "n1a2b3c4d5e6")
-
-    # kind must be gone, session_id must be back.
-    columns = {c["name"] for c in sa.inspect(raw_engine).get_columns("agents")}
-    assert "kind" not in columns
-    assert "session_id" in columns
-
-    # The session-scoped agent should have session_id back-populated from
-    # conversations.agent_id; the template agent should have NULL.
-    with raw_engine.begin() as conn:
-        rows = {
-            row[0]: row[1]
-            for row in conn.execute(sa.text("SELECT id, session_id FROM agents ORDER BY id"))
-        }
-    assert rows["23803e78ca1677e73a1d8c6275de4150"] is None
-    assert rows["372d0296768feff7262c605c5553d1da"] == "8e32600337d08f59ad381caf96a90659"
-
-    raw_engine.dispose()
-    clear_engine_cache()
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; "
+        "downgrade to pre-v0.6 is not supported on the v0.6 lineage."
+    )

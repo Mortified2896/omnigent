@@ -64,41 +64,51 @@ def test_upgrade_from_z9_preserves_historical_outcome_rows(tmp_path: Path) -> No
     engine = sa.create_engine(uri)
     try:
         with engine.begin() as conn:
+            from omnigent.db.db_models import uuid_to_bytes
+            conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
+            run_blob = uuid_to_bytes("conv_0000000000000000000000000000000b")
+            ev_blob = uuid_to_bytes("conv_0000000000000000000000000000000c")
+            rev_blob = uuid_to_bytes("conv_0000000000000000000000000000000d")
             conn.execute(
                 sa.text(
                     "INSERT INTO conversations (workspace_id, id, created_at, updated_at, "
-                    "root_conversation_id) VALUES (0, 'c_hist', 1, 1, 'c_hist')"
-                )
+                    "root_conversation_id) VALUES (0, :id, 1, 1, :id)"
+                ),
+                {"id": conv_blob},
             )
             conn.execute(
                 sa.text(
                     "INSERT INTO omnigent_conversation_metadata"
-                    " (workspace_id, id, kind) VALUES (0, 'c_hist', 1)"
-                )
+                    " (workspace_id, id, kind) VALUES (0, :id, 1)"
+                ),
+                {"id": conv_blob},
             )
             conn.execute(
                 sa.text(
                     "INSERT INTO task_runs (workspace_id, id, conversation_id, response_id, "
                     "terminal_status, execution_status, evaluation_status, started_at, "
                     "created_at, updated_at) VALUES "
-                    "(0, 'tr_hist', 'c_hist', 'resp_hist', 2, 'completed', "
+                    "(0, :id, :cid, 'resp_hist', 2, 'completed', "
                     "'completed', 10, 10, 20)"
-                )
+                ),
+                {"id": run_blob, "cid": conv_blob},
             )
             conn.execute(
                 sa.text(
                     "INSERT INTO task_evaluations (workspace_id, id, task_run_id, "
                     "evaluator_type, verdict, reasoning, created_at) VALUES "
-                    "(0, 'tev_hist', 'tr_hist', 2, 'success', 'historical evaluation', 21)"
-                )
+                    "(0, :id, :run_id, 2, 'success', 'historical evaluation', 21)"
+                ),
+                {"id": ev_blob, "run_id": run_blob},
             )
             conn.execute(
                 sa.text(
                     "INSERT INTO task_reviews (workspace_id, id, task_run_id, verdict, "
                     "comments, created_by, review_action, learning_eligible, created_at, "
-                    "updated_at) VALUES (0, 'trv_hist', 'tr_hist', 'success', "
+                    "updated_at) VALUES (0, :id, :run_id, 'success', "
                     "'historical review', 'alice@example.com', 'accepted', 1, 22, 22)"
-                )
+                ),
+                {"id": rev_blob, "run_id": run_blob},
             )
 
         command.upgrade(config, "head")
@@ -107,17 +117,25 @@ def test_upgrade_from_z9_preserves_historical_outcome_rows(tmp_path: Path) -> No
             run = conn.execute(
                 sa.text(
                     "SELECT response_id, routing_proposal_id, routing_decision_id "
-                    "FROM task_runs WHERE id = 'tr_hist'"
-                )
+                    "FROM task_runs WHERE id = :id"
+                ),
+                {"id": run_blob},
             ).one()
             selection_source = conn.execute(
-                sa.text("SELECT routing_selection_source FROM conversations WHERE id = 'c_hist'")
+                sa.text("SELECT routing_selection_source FROM conversations WHERE id = :id"),
+                {"id": conv_blob},
             ).scalar_one()
             evaluation = conn.execute(
-                sa.text("SELECT verdict, reasoning FROM task_evaluations WHERE id = 'tev_hist'")
+                sa.text(
+                    "SELECT verdict, reasoning FROM task_evaluations WHERE id = :id"
+                ),
+                {"id": ev_blob},
             ).one()
             review = conn.execute(
-                sa.text("SELECT verdict, comments FROM task_reviews WHERE id = 'trv_hist'")
+                sa.text(
+                    "SELECT verdict, comments FROM task_reviews WHERE id = :id"
+                ),
+                {"id": rev_blob},
             ).one()
         assert run == ("resp_hist", None, None)
         assert selection_source is None

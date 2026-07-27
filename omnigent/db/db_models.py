@@ -69,6 +69,19 @@ _LEGACY_ID_PREFIXES = frozenset(
         "sc",
         "tc",
         "rd",
+        # Control Room task-outcome and routing audit prefixes; these are
+        # legacy-shaped identifiers minted before the v0.6 binary conversion
+        # (the upstream task-outcome store still emits them via _generate_*).
+        "tr",
+        "tev",
+        "trv",
+        "rp",
+        "rdc",
+        "rdt",
+        "lfs",
+        "lso",
+        "st",
+        "str",
         # runner-internal conversation binding
         "agy_conv",
     }
@@ -85,24 +98,35 @@ class InvalidUuidError(ValueError):
     """
 
 
-def uuid_to_bytes(value: str | uuid.UUID) -> bytes:
+def uuid_to_bytes(value: str | uuid.UUID | bytes | bytearray | memoryview) -> bytes:
     """Normalise an id to the 16 raw bytes stored in a ``Uuid16`` column.
 
     Accepts, reducing them all to the same 16 bytes: a :class:`uuid.UUID`
     object; the bare 32-char hex form (what generators emit); the dashed
-    canonical uuid (``str(uuid4())``); and a legacy id carrying one of the
+    canonical uuid (``str(uuid4())``); a legacy id carrying one of the
     known :data:`_LEGACY_ID_PREFIXES` (``conv_<hex>``, ``ag_<hex>``, …) — so
-    old bookmarked URLs, pasted ids, and pre-migration clients keep resolving.
-    Anything else — a truncated id, non-hex text, an unknown prefix — fails
-    loud rather than silently storing the wrong bytes.
+    old bookmarked URLs, pasted ids, and pre-migration clients keep resolving;
+    or already-binary 16 bytes (a round-trip through the column layer). Other
+    lengths of binary input are treated as a malformed id (fail loud rather
+    than silently storing the wrong bytes).
 
-    :param value: A ``uuid.UUID``, or a 32-char hex uuid optionally dashed or
-        legacy-prefixed.
+    :param value: A ``uuid.UUID``, a 32-char hex uuid optionally dashed or
+        legacy-prefixed, or already-binary bytes.
     :returns: The 16-byte big-endian value.
     :raises InvalidUuidError: If *value* is not a 32-char hex uuid.
     """
     if isinstance(value, uuid.UUID):
         return value.bytes
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        if len(raw) == _UUID_HEX_LEN // 2:
+            return raw
+        # Otherwise it is a legacy-prefixed hex literal in its ascii bytes
+        # form (an upstream caller passed the bytes-equivalent of a str id).
+        try:
+            value = raw.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise InvalidUuidError(f"non-ascii id bytes: {value!r}") from exc
     normalized = value.replace("-", "")
     if "_" in normalized:
         prefix, _, tail = normalized.rpartition("_")
@@ -1743,7 +1767,7 @@ class SqlTaskRun(OmnigentBase):
     id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(Uuid16(), nullable=False)
     response_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    triggering_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    triggering_message_id: Mapped[str | None] = mapped_column(Uuid16(), nullable=True)
     project_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     task_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     proposed_task_family: Mapped[str | None] = mapped_column(String(64), nullable=True)

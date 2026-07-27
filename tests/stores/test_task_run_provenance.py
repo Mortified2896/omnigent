@@ -23,13 +23,23 @@ def store(tmp_path_factory) -> SqlAlchemyTaskOutcomeStore:
     db_path = tmp_path_factory.mktemp("provenance") / "provenance.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)
+    from omnigent.db.db_models import uuid_to_bytes
+
+    conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
     with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO conversations (id, created_at, updated_at, "
-                "kind, root_conversation_id) VALUES "
-                "('conv_1', 1, 1, 1, 'conv_1')"
-            )
+                "root_conversation_id) VALUES (:id, 1, 1, :id)"
+            ),
+            {"id": conv_blob},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO omnigent_conversation_metadata"
+                " (workspace_id, id, kind) VALUES (0, :id, 1)"
+            ),
+            {"id": conv_blob},
         )
     return SqlAlchemyTaskOutcomeStore(uri)
 
@@ -38,7 +48,7 @@ def _create_run(store: SqlAlchemyTaskOutcomeStore) -> str:
 
     proposal = store.create_routing_proposal(
         CreateRoutingProposalInput(
-            conversation_id="conv_1",
+            conversation_id="conv_0000000000000000000000000000000a",
             elicitation_id="elic_1",
             user_message="hello",
             content_types=["input_text"],
@@ -60,9 +70,9 @@ def _create_run(store: SqlAlchemyTaskOutcomeStore) -> str:
     )
     run = store.create_run(
         CreateTaskRunInput(
-            conversation_id="conv_1",
+            conversation_id="conv_0000000000000000000000000000000a",
             response_id="resp_1",
-            triggering_message_id="msg_1",
+            triggering_message_id="conv_000000000000000000000000000000aa",
             routing_proposal_id=proposal.id,
             routing_decision_id=decision.id,
         )

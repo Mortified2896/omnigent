@@ -1,9 +1,11 @@
 """Tests for SqlAlchemyConversationStore."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, select, text
 
 from omnigent.db.utils import get_or_create_engine
 from omnigent.entities import (
@@ -1495,6 +1497,15 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
     )
 
     conv = conversation_store.create_conversation()
+    from omnigent.db.db_models import Uuid16
+
+    cid_bind = bindparam("cid", type_=Uuid16())
+    pid_bind = bindparam("pid", type_=Uuid16())
+    rid_bind = bindparam("rid", type_=Uuid16())
+    tid_bind = bindparam("tid", type_=Uuid16())
+    tev_bind = bindparam("tev", type_=Uuid16())
+    trv_bind = bindparam("trv", type_=Uuid16())
+    lid_bind = bindparam("lid", type_=Uuid16())
     with conversation_store._session() as session:  # type: ignore[attr-defined]
         ws = current_workspace_id()
         # routing_proposals row + child routing_decisions row
@@ -1505,50 +1516,50 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
                 "user_message_chars, content_types_json, original_route_id, "
                 "requires_explicit_approval, proposal_payload_excerpt, "
                 "proposal_payload_sha256, created_at) "
-                "VALUES (:ws, 'rp_test1', :cid, 'elic_rp1', 'sha1', 'excerpt', "
+                "VALUES (:ws, :rid, :cid, 'elic_rp1', 'sha1', 'excerpt', "
                 "5, '[]', 'auto/cheap', 0, '{}', 'psha1', 0)"
-            ),
-            {"ws": ws, "cid": conv.id},
+            ).bindparams(rid_bind, cid_bind),
+            {"ws": ws, "rid": "rp_7da40d19bee8437bac9efac53da5a39a", "cid": conv.id},
         )
         session.execute(
             text(
                 "INSERT INTO routing_decisions (workspace_id, id, proposal_id, action, "
                 "decision_request_sha256, original_route_id, decision_payload_excerpt, "
                 "decision_payload_sha256, created_at) "
-                "VALUES (:ws, 'rd_test1', 'rp_test1', 'declined', 'rsha1', "
+                "VALUES (:ws, :rid, :pid, 'declined', 'rsha1', "
                 "'auto/cheap', '{}', 'dpsha1', 0)"
-            ),
-            {"ws": ws},
+            ).bindparams(rid_bind, pid_bind),
+            {"ws": ws, "rid": "rdt_077348c3fc424f679b2dd9eee050610a", "pid": "rp_7da40d19bee8437bac9efac53da5a39a"},
         )
         # task_runs row + 3 child rows in 3 child tables
         session.execute(
             text(
                 "INSERT INTO task_runs (workspace_id, id, conversation_id, terminal_status, "
-                "created_at, updated_at) VALUES (:ws, 'tr_test1', :cid, 1, 0, 0)"
-            ),
-            {"ws": ws, "cid": conv.id},
+                "created_at, updated_at) VALUES (:ws, :tid, :cid, 1, 0, 0)"
+            ).bindparams(tid_bind, cid_bind),
+            {"ws": ws, "tid": "tr_b52842a577fb484f90e31a8f497e9846", "cid": conv.id},
         )
         session.execute(
             text(
                 "INSERT INTO task_evaluations (workspace_id, id, task_run_id, evaluator_type, "
-                "verdict, created_at) VALUES (:ws, 'tev_test1', 'tr_test1', 1, 'success', 0)"
-            ),
-            {"ws": ws},
+                "verdict, created_at) VALUES (:ws, :tev, :tid, 1, 'success', 0)"
+            ).bindparams(tev_bind, tid_bind),
+            {"ws": ws, "tev": "tev_430f248674164782a348194e96df9cd5", "tid": "tr_b52842a577fb484f90e31a8f497e9846"},
         )
         session.execute(
             text(
                 "INSERT INTO task_reviews (workspace_id, id, task_run_id, verdict, "
-                "created_at, updated_at) VALUES (:ws, 'trv_test1', 'tr_test1', 'success', 0, 0)"
-            ),
-            {"ws": ws},
+                "created_at, updated_at) VALUES (:ws, :trv, :tid, 'success', 0, 0)"
+            ).bindparams(trv_bind, tid_bind),
+            {"ws": ws, "trv": "trv_be9581f127e14180856ed40f1345b010", "tid": "tr_b52842a577fb484f90e31a8f497e9846"},
         )
         session.execute(
             text(
                 "INSERT INTO langfuse_sync_outbox (workspace_id, id, task_run_id, "
                 "event_type, idempotency_key, payload_json, next_attempt_at, created_at) "
-                "VALUES (:ws, 'lso_test1', 'tr_test1', 'trace', 'idem1', '{}', 0, 0)"
-            ),
-            {"ws": ws},
+                "VALUES (:ws, :lid, :tid, 'trace', 'idem1', '{}', 0, 0)"
+            ).bindparams(lid_bind, tid_bind),
+            {"ws": ws, "lid": "lso_0000000000000000000000000000000a", "tid": "tr_b52842a577fb484f90e31a8f497e9846"},
         )
 
         # Verify pre-state
@@ -1562,7 +1573,10 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
         ]:
             assert session.execute(
                 select(getattr(tbl, fk_col)).where(
-                    getattr(tbl, fk_col).in_([conv.id, "rp_test1", "tr_test1"])
+                    getattr(tbl, fk_col).in_(
+                        [conv.id, "rp_7da40d19bee8437bac9efac53da5a39a",
+                         "tr_b52842a577fb484f90e31a8f497e9846"]
+                    )
                 )
             ).fetchall(), f"pre-state missing for {tbl.__name__}"
 
@@ -1580,7 +1594,10 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
         ]:
             rows = session.execute(
                 select(getattr(tbl, fk_col)).where(
-                    getattr(tbl, fk_col).in_([conv.id, "rp_test1", "tr_test1"])
+                    getattr(tbl, fk_col).in_(
+                        [conv.id, "rp_7da40d19bee8437bac9efac53da5a39a",
+                         "tr_b52842a577fb484f90e31a8f497e9846"]
+                    )
                 )
             ).fetchall()
             assert rows == [], f"{tbl.__name__} rows leaked: {rows}"

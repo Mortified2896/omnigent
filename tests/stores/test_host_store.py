@@ -38,8 +38,13 @@ def _set_updated_at(db_uri: str, host_id: str, value: int) -> None:
     :param value: Unix epoch seconds to write into ``updated_at``.
     """
     engine = get_or_create_engine(db_uri)
+    from omnigent.db.db_models import uuid_to_bytes
     with Session(engine) as session:
-        session.execute(update(SqlHost).where(SqlHost.host_id == host_id).values(updated_at=value))
+        session.execute(
+            update(SqlHost)
+            .where(SqlHost.host_id == uuid_to_bytes(host_id))
+            .values(updated_at=value)
+        )
         session.commit()
 
 
@@ -467,25 +472,25 @@ def test_heartbeat_revives_offline_row_to_online(
     alive right now; co-writing ``status`` is what flips the picker
     to ``ONLINE``.
     """
-    host_store.upsert_on_connect("host_rev", "laptop", "alice@example.com")
-    host_store.set_offline("host_rev")
+    host_store.upsert_on_connect("0000000000000000000000000000000a", "laptop", "alice@example.com")
+    host_store.set_offline("0000000000000000000000000000000a")
     # Sanity: the row is offline before the heartbeat, otherwise this
     # test would never exercise the fix path.
-    assert host_store.get_host("host_rev").status == "offline"
+    assert host_store.get_host("0000000000000000000000000000000a").status == "offline"
 
     # Fresh update_at stands in for the heartbeats that already fired
     # during the disconnect/connect churn (the freshness half of
     # host_is_live is already satisfied; only ``status`` is stale).
-    _set_updated_at(db_uri, "host_rev", now_epoch() - 5)
+    _set_updated_at(db_uri, "0000000000000000000000000000000a", now_epoch() - 5)
 
-    host_store.heartbeat("host_rev")
+    host_store.heartbeat("0000000000000000000000000000000a")
 
-    fetched = host_store.get_host("host_rev")
+    fetched = host_store.get_host("0000000000000000000000000000000a")
     assert fetched is not None
     # The fix: heartbeat now revives the row to online.
     assert fetched.status == "online"
     # Picker classification now agrees with the freshness check.
-    assert host_store.is_online("host_rev") is True
+    assert host_store.is_online("0000000000000000000000000000000a") is True
 
 
 def test_heartbeat_noop_for_unknown_host(host_store: HostStore) -> None:

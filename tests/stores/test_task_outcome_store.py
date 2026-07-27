@@ -10,6 +10,8 @@ Mirrors the structure of
 follow the same pattern.
 """
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import pytest
@@ -38,18 +40,30 @@ def store(tmp_path_factory) -> TaskOutcomeStore:
     db_path = tmp_path_factory.mktemp("store") / "test.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)
+    from omnigent.db.db_models import uuid_to_bytes
+
+    c1 = uuid_to_bytes("conv_0000000000000000000000000000000a")
+    c2 = uuid_to_bytes("conv_0000000000000000000000000000000b")
     with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO conversations (id, created_at, updated_at, "
-                "kind, root_conversation_id) VALUES "
-                "('c1', 1, 1, 1, 'c1'), ('c2', 2, 2, 1, 'c2')"
-            )
+                "root_conversation_id) VALUES (:c1, 1, 1, :c1),"
+                " (:c2, 2, 2, :c2)"
+            ),
+            {"c1": c1, "c2": c2},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO omnigent_conversation_metadata"
+                " (workspace_id, id, kind) VALUES (0, :c1, 1), (0, :c2, 1)"
+            ),
+            {"c1": c1, "c2": c2},
         )
     return SqlAlchemyTaskOutcomeStore(uri)
 
 
-def _create_run(store: TaskOutcomeStore, *, conv: str = "c1", **kwargs) -> str:
+def _create_run(store: TaskOutcomeStore, *, conv: str = "conv_0000000000000000000000000000000a", **kwargs) -> str:
     """Helper: create a task_run with sensible defaults + return its id."""
     defaults = {
         "conversation_id": conv,
@@ -84,7 +98,7 @@ def _terminal_and_request(store: TaskOutcomeStore, run_id: str) -> None:
 def _create_proposal(store: TaskOutcomeStore):
     return store.create_routing_proposal(
         CreateRoutingProposalInput(
-            conversation_id="c1",
+            conversation_id="conv_0000000000000000000000000000000a",
             elicitation_id="route_1",
             user_message="x" * 5000,
             content_types=["input_text"],
@@ -165,19 +179,19 @@ def test_list_routing_turns_includes_decision_and_linked_run(store: TaskOutcomeS
     )
     run_id = _create_run(
         store,
-        triggering_message_id="msg_user",
+        triggering_message_id="conv_000000000000000000000000000000aa",
         routing_proposal_id=proposal.id,
         routing_decision_id=decision.id,
     )
 
-    turns = store.list_routing_turns_for_conversation("c1")
+    turns = store.list_routing_turns_for_conversation("conv_0000000000000000000000000000000a")
 
     assert len(turns) == 1
     assert turns[0].proposal.id == proposal.id
     assert turns[0].decision == decision
     assert turns[0].task_run is not None
     assert turns[0].task_run.id == run_id
-    assert store.list_routing_turns_for_conversation("c2") == []
+    assert store.list_routing_turns_for_conversation("conv_0000000000000000000000000000000b") == []
 
 
 def test_create_run_returns_row(store: TaskOutcomeStore) -> None:
@@ -185,7 +199,7 @@ def test_create_run_returns_row(store: TaskOutcomeStore) -> None:
     run_id = _create_run(store)
     run = store.get_run(run_id)
     assert run is not None
-    assert run.conversation_id == "c1"
+    assert run.conversation_id == "conv_0000000000000000000000000000000a"
     assert run.terminal_status == "running"
     assert run.response_id == "r1"
     assert run.task_description == "Fix the login bug"
@@ -208,9 +222,9 @@ def test_get_run_returns_none_when_missing(store: TaskOutcomeStore) -> None:
 
 def test_get_run_for_conversation_scopes_by_owner(store: TaskOutcomeStore) -> None:
     """``get_run_for_conversation`` returns ``None`` for cross-session lookups."""
-    run_id = _create_run(store, conv="c1")
-    assert store.get_run_for_conversation(run_id, "c1") is not None
-    assert store.get_run_for_conversation(run_id, "c2") is None
+    run_id = _create_run(store, conv="conv_0000000000000000000000000000000a")
+    assert store.get_run_for_conversation(run_id, "conv_0000000000000000000000000000000a") is not None
+    assert store.get_run_for_conversation(run_id, "conv_0000000000000000000000000000000b") is None
 
 
 def test_update_run_terminal_computes_duration(store: TaskOutcomeStore) -> None:
@@ -481,7 +495,7 @@ def test_list_runs_for_conversation_returns_both(
     stable-by-id when started_at ties (same second)."""
     r1 = _create_run(store)
     r2 = _create_run(store, response_id="r2")
-    runs = store.list_runs_for_conversation("c1")
+    runs = store.list_runs_for_conversation("conv_0000000000000000000000000000000a")
     ids = {r.id for r in runs}
     assert r1 in ids and r2 in ids
     assert len(runs) == 2
@@ -509,7 +523,7 @@ def test_list_unreviewed_runs_excludes_reviewed(
     store.upsert_review(
         UpsertTaskReviewInput(task_run_id=r3, verdict="skipped", created_by="alice")
     )
-    unreviewed = store.list_unreviewed_runs(conversation_id="c1")
+    unreviewed = store.list_unreviewed_runs(conversation_id="conv_0000000000000000000000000000000a")
     assert {r.id for r in unreviewed} == {r1}
 
 
