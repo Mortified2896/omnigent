@@ -79,17 +79,36 @@ class ReleaseManifest:
         omnigent_module_path: str,
         omnigent_server_app_path: str,
         frontend_build_version: str = "",
+        canonical_release_dir: Path | str | None = None,
     ) -> ReleaseManifest:
         """Build a manifest from the immutable archive and explicit SHA.
 
         ``commit_sha`` is resolved before archive extraction and is never
         inferred from the release directory.
+
+        ``release_dir`` is the directory whose files are inspected and
+        hashed (typically a staging directory that will be atomically
+        renamed into the canonical release directory before this
+        function returns). ``canonical_release_dir`` is the post-rename
+        path the manifest records — i.e. the directory the release will
+        live at once the promotion script's ``mv -T`` finalizes it.
+
+        When ``canonical_release_dir`` is omitted, the manifest falls
+        back to ``release_dir`` (the historical behavior); the staging
+        flow always passes an explicit canonical path so the manifest
+        survives the atomic rename intact.
         """
+        if canonical_release_dir is None:
+            canonical_path = Path(release_dir)
+        elif isinstance(canonical_release_dir, str):
+            canonical_path = Path(canonical_release_dir)
+        else:
+            canonical_path = canonical_release_dir
         return cls(
             commit_sha=commit_sha,
             built_at=_utcnow_iso(),
             repository=repository,
-            release_dir=str(release_dir.resolve()),
+            release_dir=str(canonical_path.resolve()),
             python_executable=python_executable,
             python_version=python_version,
             omnigent_module_path=omnigent_module_path,
@@ -185,6 +204,36 @@ def verify_manifest_commit(manifest: ReleaseManifest, expected_sha: str) -> None
     if manifest.commit_sha != expected_sha:
         raise ManifestError(
             f"manifest commit_sha={manifest.commit_sha} does not match expected_sha={expected_sha}"
+        )
+
+
+def verify_canonical_release_dir(
+    manifest: ReleaseManifest,
+    canonical_release_dir: Path | str,
+) -> None:
+    """Refuse to accept a manifest whose ``release_dir`` does not point at
+    the canonical post-rename path.
+
+    The promotion script builds in a staging directory
+    (``releases/.staging-<sha>-...``) and atomically renames it into
+    ``releases/<sha>``. If the manifest was written before the rename
+    with the staging path baked in, ``manifest.release_dir`` would never
+    match the canonical path that subsequent ``--build-only`` runs
+    observe. This check pins that invariant so the staging-then-rename
+    flow cannot regress to the "manifest records the staging path"
+    defect.
+
+    The comparison is against the *resolved* canonical path so a
+    caller that passes either a symlink or a relative path converges
+    with the resolved path the manifest itself stores.
+    """
+    canonical = Path(canonical_release_dir).resolve()
+    recorded = Path(manifest.release_dir).resolve() if manifest.release_dir else None
+    if recorded is None or recorded != canonical:
+        raise ManifestError(
+            f"manifest release_dir={recorded!s} does not match canonical "
+            f"release_dir={canonical!s}; the manifest was likely written "
+            "before the staging-to-canonical rename"
         )
 
 

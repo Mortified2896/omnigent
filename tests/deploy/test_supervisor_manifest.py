@@ -14,6 +14,7 @@ from omnigent.deploy.supervisor.manifest import (
     ReleaseManifest,
     load_manifest,
     manifest_path_for,
+    verify_canonical_release_dir,
     verify_manifest_commit,
     write_manifest,
 )
@@ -256,3 +257,146 @@ def test_from_directory_records_lockfile_hashes(tmp_path: Path) -> None:
         manifest.lockfile_hashes["web/package-lock.json"]
         == hashlib.sha256(lockfile.read_bytes()).hexdigest()
     )
+
+
+# --- Issue #28 follow-up: canonical vs physical release directory ----------
+
+
+def test_from_directory_records_canonical_release_dir(tmp_path: Path) -> None:
+    """``canonical_release_dir`` overrides the recorded ``release_dir``.
+
+    The promotion flow builds in a staging directory and atomically
+    renames it into ``releases/<sha>``. ``from_directory`` must record
+    the *post-rename* canonical path so the manifest survives the
+    rename and the next ``--build-only`` reuses the candidate instead
+    of quarantining it.
+    """
+    staging = tmp_path / ".staging-aaaa-1111-2222"
+    canonical = tmp_path / "releases" / "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    staging.mkdir(parents=True)
+    canonical.parent.mkdir(parents=True)
+
+    manifest = ReleaseManifest.from_directory(
+        staging,
+        commit_sha="abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+        canonical_release_dir=canonical,
+    )
+    assert manifest.release_dir == str(canonical.resolve())
+
+
+def test_from_directory_inspects_files_from_input_directory(tmp_path: Path) -> None:
+    """Files are inspected/hashed from the input directory, not the canonical one.
+
+    The canonical-release-dir parameter is metadata only; lockfiles and
+    other inputs are still hashed from the directory the caller hands
+    in (the staging directory during a build).
+    """
+    staging = tmp_path / ".staging-bbbb-3333-4444"
+    canonical = tmp_path / "canonical" / "b"
+    staging.mkdir(parents=True)
+    canonical.mkdir(parents=True)
+
+    # Write a lockfile inside staging only.
+    (staging / "uv.lock").write_text("# uv lock\n")
+    (staging / "web").mkdir()
+    (staging / "web" / "package-lock.json").write_text('{"name":"web-staging"}')
+
+    manifest = ReleaseManifest.from_directory(
+        staging,
+        commit_sha="b" * 40,
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+        canonical_release_dir=canonical,
+    )
+    assert manifest.release_dir == str(canonical.resolve())
+    assert (
+        manifest.lockfile_hashes["web/package-lock.json"]
+        == hashlib.sha256(b'{"name":"web-staging"}').hexdigest()
+    )
+
+
+def test_from_directory_canonical_defaults_to_input(tmp_path: Path) -> None:
+    """When ``canonical_release_dir`` is omitted, ``release_dir`` is the input.
+
+    Preserves the historical API for callers that aren't using the
+    staging flow (tests, fixtures, hand-assembled releases).
+    """
+    manifest = ReleaseManifest.from_directory(
+        tmp_path,
+        commit_sha="c" * 40,
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+    )
+    assert manifest.release_dir == str(tmp_path.resolve())
+
+
+def test_verify_canonical_release_dir_accepts_matching_path() -> None:
+    """A manifest whose ``release_dir`` matches the canonical path passes."""
+    manifest = ReleaseManifest(
+        commit_sha="d" * 40,
+        built_at="2026-07-26T00:00:00Z",
+        repository="Mortified2896/omnigent",
+        release_dir="/srv/releases/dddddddddddddddddddddddddddddddddddddddd",
+        python_executable="/srv/releases/.../.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/srv/releases/.../omnigent/__init__.py",
+        omnigent_server_app_path="/srv/releases/.../omnigent/server/app.py",
+    )
+    verify_canonical_release_dir(
+        manifest, "/srv/releases/dddddddddddddddddddddddddddddddddddddddd"
+    )
+
+
+def test_verify_canonical_release_dir_rejects_staging_path() -> None:
+    """A manifest pointing at the staging path is rejected."""
+    manifest = ReleaseManifest(
+        commit_sha="e" * 40,
+        built_at="2026-07-26T00:00:00Z",
+        repository="Mortified2896/omnigent",
+        release_dir="/srv/releases/.staging-eeeeeeee...-...-...-....-....-...",
+        python_executable="/srv/releases/.../.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/srv/releases/.../omnigent/__init__.py",
+        omnigent_server_app_path="/srv/releases/.../omnigent/server/app.py",
+    )
+    with pytest.raises(ManifestError) as exc:
+        verify_canonical_release_dir(
+            manifest, "/srv/releases/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        )
+    assert "staging" in str(exc.value).lower()
+
+
+def test_verify_canonical_release_dir_resolves_symlinks(tmp_path: Path) -> None:
+    """Symlink/relative forms of the canonical path still match.
+
+    The verifier resolves both sides before comparing, so a caller that
+    passes either a symlink or a relative path converges with the
+    resolved path the manifest itself stores.
+    """
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    manifest = ReleaseManifest(
+        commit_sha="f" * 40,
+        built_at="2026-07-26T00:00:00Z",
+        repository="Mortified2896/omnigent",
+        release_dir=str(real.resolve()),
+        python_executable=str(real / ".venv/bin/python"),
+        python_version="3.12.13",
+        omnigent_module_path=str(real / "omnigent/__init__.py"),
+        omnigent_server_app_path=str(real / "omnigent/server/app.py"),
+    )
+    # Pass the symlink — must still resolve and match the recorded path.
+    verify_canonical_release_dir(manifest, link)
