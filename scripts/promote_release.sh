@@ -217,6 +217,13 @@ if [[ ! -d "$RELEASE_DIR" ]]; then
   fi
   popd >/dev/null
 
+  # Static build complete. The web bundle is now under
+  # ``omnigent/server/static/web-ui/`` and ``web/node_modules/`` is no
+  # longer needed at runtime. Removing it shrinks the release and
+  # prevents a stale ``node_modules`` from being served or copied.
+  log "removing web/node_modules after static build"
+  rm -rf "$RELEASE_DIR/web/node_modules"
+
   # 2d. preflight + provenance check on the new release.
   log "running deploy preflight"
   if ! "$RELEASE_DIR/.venv/bin/python" -m omnigent.deploy.preflight "$RELEASE_DIR"; then
