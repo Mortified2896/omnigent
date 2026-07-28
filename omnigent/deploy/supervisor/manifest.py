@@ -34,12 +34,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-
 
 _MANIFEST_FILENAME = "manifest.json"
 
@@ -74,42 +72,21 @@ class ReleaseManifest:
         cls,
         release_dir: Path,
         *,
+        commit_sha: str,
         repository: str,
         python_executable: str,
         python_version: str,
         omnigent_module_path: str,
         omnigent_server_app_path: str,
         frontend_build_version: str = "",
-    ) -> "ReleaseManifest":
-        """Build a manifest by reading the release directory.
+    ) -> ReleaseManifest:
+        """Build a manifest from the immutable archive and explicit SHA.
 
-        :param release_dir: Release directory (must contain ``.git/``
-            — the SHA is taken from ``git -C release_dir rev-parse HEAD``).
-        :param repository: The repository URL the SHA was resolved
-            against (informational).
-        :param python_executable: Absolute path of the release-local
-            Python interpreter, already resolved.
-        :param python_version: ``sys.version`` from the same interpreter.
-        :param omnigent_module_path: Resolved path of ``omnigent``'s
-            ``__file__`` from the same interpreter.
-        :param omnigent_server_app_path: Resolved path of
-            ``omnigent.server.app``'s ``__file__``.
-        :param frontend_build_version: Optional build-version string
-            parsed from ``web-ui/version.json``.
+        ``commit_sha`` is resolved before archive extraction and is never
+        inferred from the release directory.
         """
-        try:
-            commit = subprocess.run(
-                ["git", "-C", str(release_dir), "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-        except (OSError, subprocess.CalledProcessError) as exc:
-            raise ManifestError(
-                f"could not resolve commit SHA in {release_dir}: {exc}"
-            ) from exc
         return cls(
-            commit_sha=commit,
+            commit_sha=commit_sha,
             built_at=_utcnow_iso(),
             repository=repository,
             release_dir=str(release_dir.resolve()),
@@ -207,8 +184,7 @@ def verify_manifest_commit(manifest: ReleaseManifest, expected_sha: str) -> None
         raise ManifestError("expected_sha is empty")
     if manifest.commit_sha != expected_sha:
         raise ManifestError(
-            f"manifest commit_sha={manifest.commit_sha} does not match "
-            f"expected_sha={expected_sha}"
+            f"manifest commit_sha={manifest.commit_sha} does not match expected_sha={expected_sha}"
         )
 
 

@@ -114,27 +114,46 @@ PREVIOUS_LINK="$DEPLOY_ROOT/previous"
 mkdir -p "$DEPLOY_ROOT/releases" "$DEPLOY_ROOT/manifests" "$DEPLOY_ROOT/failed"
 
 # --- 2. Reuse or build the release -----------------------------------------
-if [[ -f "$MANIFEST_PATH" ]] && [[ -d "$RELEASE_DIR/.venv" ]]; then
-  log "release $short already built at $RELEASE_DIR; reusing"
-  if [[ "$BUILD_ONLY" -eq 1 && "$NO_PROMOTE" -eq 0 ]]; then
-    log "--build-only set on an existing release; nothing to build"
+STAGING_DIR="$DEPLOY_ROOT/releases/.staging-$sha-$$-$(date +%s%N)"
+quarantine_invalid() {
+  local reason="$1"
+  if [[ -e "$RELEASE_DIR" ]]; then
+    mv -T "$RELEASE_DIR" "$DEPLOY_ROOT/failed/${sha}-invalid-$(date +%s%N)" || rm -rf "$RELEASE_DIR"
+    log "quarantined invalid cached release ($reason)"
   fi
-else
-  log "building release $short at $RELEASE_DIR"
-  mkdir -p "$RELEASE_DIR"
-
-  # 2a. git archive - extract the exact commit, no working tree.
+}
+verify_candidate() {
+  [[ -f "$RELEASE_DIR/manifest.json" && -f "$RELEASE_DIR/pyproject.toml" ]] || return 1
+  [[ -f "$RELEASE_DIR/web/package-lock.json" ]] || return 1
+  [[ -d "$RELEASE_DIR/omnigent/server/static/web-ui" ]] || return 1
+  [[ ! -e "$RELEASE_DIR/.git" ]] || return 1
+  local candidate_sha lockfile expected_lockfile source_sha expected_source
+  candidate_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit_sha"])' "$RELEASE_DIR/manifest.json") || return 1
+  [[ "$candidate_sha" == "$sha" ]] || return 1
+  [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("release_dir", ""))' "$RELEASE_DIR/manifest.json")" == "$(readlink -f "$RELEASE_DIR")" ]] || return 1
+  lockfile=$(sha256sum "$RELEASE_DIR/web/package-lock.json" | cut -d' ' -f1)
+  expected_lockfile=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("lockfile_hashes",{}).get("web/package-lock.json", ""))' "$RELEASE_DIR/manifest.json")
+  [[ "$lockfile" == "$expected_lockfile" ]] || return 1
+  "$RELEASE_DIR/.venv/bin/python" -m omnigent.deploy.preflight "$RELEASE_DIR" >/dev/null || return 1
+  return 0
+}
+if [[ -d "$RELEASE_DIR" ]]; then
+  if verify_candidate; then
+    log "release $short already built at $RELEASE_DIR; reusing"
+  else
+    quarantine_invalid "integrity verification failed"
+  fi
+fi
+if [[ ! -d "$RELEASE_DIR" ]]; then
+  log "building release $short in staging"
+  rm -rf "$STAGING_DIR"
+  mkdir -p "$STAGING_DIR"
+  cleanup_staging() { rm -rf "$STAGING_DIR"; }
+  trap cleanup_staging EXIT
   log "extracting git archive for $sha"
-  if ! (cd "$REPO_ROOT" && git archive --format=tar "$sha") \
-       | tar -x -C "$RELEASE_DIR"; then
-    log "git archive failed; cleaning $RELEASE_DIR"
-    rm -rf "$RELEASE_DIR"
-    fail "git archive for $sha failed (commit not in local repo?)"
-  fi
-  # The archive contains ``.gitattributes`` but no ``.git`` directory;
-  # create a gitlink that points back to the local .git so the
-  # ``release_id`` / manifest modules can resolve ``git rev-parse HEAD``.
-  ln -s "$REPO_ROOT/.git" "$RELEASE_DIR/.git"
+  (cd "$REPO_ROOT" && git archive --format=tar "$sha") | tar -x -C "$STAGING_DIR" || fail "git archive for $sha failed"
+  RELEASE_DIR="$STAGING_DIR"
+  MANIFEST_PATH="$RELEASE_DIR/manifest.json"
 
   # 2b. release-local frozen venv.
   log "creating release-local venv"
@@ -179,6 +198,7 @@ else
     fail "release archive is missing web/package-lock.json (this means the lockfile is gitignored; the repo policy requires it tracked)"
   fi
   log "running npm ci in $RELEASE_DIR/web"
+  lockfile_before=$(sha256sum "$RELEASE_DIR/web/package-lock.json" | cut -d' ' -f1)
   pushd "$RELEASE_DIR/web" >/dev/null
   if ! PATH="/home/hermes/.hermes/node/bin:$PATH" npm ci --no-audit --no-fund; then
     popd >/dev/null
@@ -186,6 +206,8 @@ else
     rm -rf "$RELEASE_DIR"
     fail "npm ci failed (lockfile drifted from package.json; regenerate with the npm cooldown policy applied)"
   fi
+  lockfile_after=$(sha256sum "$RELEASE_DIR/web/package-lock.json" | cut -d' ' -f1)
+  [[ "$lockfile_before" == "$lockfile_after" ]] || fail "npm ci mutated web/package-lock.json"
   log "running npm run build"
   if ! PATH="/home/hermes/.hermes/node/bin:$PATH" npm run build; then
     popd >/dev/null
@@ -194,6 +216,13 @@ else
     fail "npm run build failed"
   fi
   popd >/dev/null
+
+  # Static build complete. The web bundle is now under
+  # ``omnigent/server/static/web-ui/`` and ``web/node_modules/`` is no
+  # longer needed at runtime. Removing it shrinks the release and
+  # prevents a stale ``node_modules`` from being served or copied.
+  log "removing web/node_modules after static build"
+  rm -rf "$RELEASE_DIR/web/node_modules"
 
   # 2d. preflight + provenance check on the new release.
   log "running deploy preflight"
@@ -244,6 +273,7 @@ if version_json.is_file():
         pass
 manifest = ReleaseManifest.from_directory(
     pathlib.Path('$RELEASE_DIR'),
+    commit_sha='$sha',
     repository='Mortified2896/omnigent',
     python_executable=str(pathlib.Path(sys.executable).resolve()),
     python_version='%d.%d.%d' % sys.version_info[:3],
@@ -258,7 +288,19 @@ write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
     fail "manifest write failed"
   fi
 
-  log "release $short built at $RELEASE_DIR"
+  verify_candidate_staging() {
+    [[ -f "$RELEASE_DIR/manifest.json" ]] || return 1
+    [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit_sha"])' "$RELEASE_DIR/manifest.json")" == "$sha" ]] || return 1
+    [[ "$(sha256sum "$RELEASE_DIR/web/package-lock.json" | cut -d' ' -f1)" == "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["lockfile_hashes"]["web/package-lock.json"])' "$RELEASE_DIR/manifest.json")" ]] || return 1
+    "$RELEASE_DIR/.venv/bin/python" -m omnigent.deploy.preflight "$RELEASE_DIR" >/dev/null
+  }
+  verify_candidate_staging || fail "staged release integrity verification failed"
+  FINAL_RELEASE_DIR="$DEPLOY_ROOT/releases/$sha"
+  [[ ! -e "$FINAL_RELEASE_DIR" ]] || rm -rf "$FINAL_RELEASE_DIR"
+  mv -T "$STAGING_DIR" "$FINAL_RELEASE_DIR"
+  trap - EXIT
+  RELEASE_DIR="$FINAL_RELEASE_DIR"
+  MANIFEST_PATH="$RELEASE_DIR/manifest.json"
 fi
 
 # Copy the manifest into the archived manifests/ tree for ease of

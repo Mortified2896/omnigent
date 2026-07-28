@@ -61,6 +61,8 @@ if [[ ! -d "$RELEASES_DIR" ]]; then
 fi
 
 # Build set of inviolable release SHAs.
+# Keep both symlink targets and metadata files so a failed promotion cannot
+# cause the previous production release to be collected.
 RETENTION=()
 [[ -L "$CURRENT_LINK" ]] && RETENTION+=("$(basename "$(readlink -f "$CURRENT_LINK")")")
 [[ -L "$PREVIOUS_LINK" ]] && RETENTION+=("$(basename "$(readlink -f "$PREVIOUS_LINK")")")
