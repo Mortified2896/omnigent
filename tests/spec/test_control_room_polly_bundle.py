@@ -78,9 +78,7 @@ def test_bundle_directory_and_name_aligned() -> None:
     """The directory name and the spec's ``name:`` field must match exactly."""
     assert BUNDLE_DIR.is_dir(), f"bundle dir missing: {BUNDLE_DIR}"
     config = (BUNDLE_DIR / "config.yaml").read_text()
-    assert "name: verity" in config, (
-        "bundle directory and spec name must be aligned (verity)"
-    )
+    assert "name: verity" in config, "bundle directory and spec name must be aligned (verity)"
     assert BUNDLE_DIR.name == "control-room-polly"
 
 

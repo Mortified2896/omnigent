@@ -119,5 +119,7 @@ def test_normalize_ref_empty_defaults_to_fork_main(tmp_path: Path) -> None:
     with pytest.raises(release_id.ReleaseIdError):
         release_id.normalize_ref(repo, "")
     # Now create a fork/main branch-like ref by fetching into fork/main.
-    subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/fork/main", full], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "update-ref", "refs/remotes/fork/main", full], check=True
+    )
     assert release_id.normalize_ref(repo, "") == full

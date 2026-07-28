@@ -40,12 +40,12 @@ __all__ = [
     "ManifestError",
     "ProvenanceError",
     "ReleaseManifest",
+    "load_manifest",
     "manifest_path_for",
     "run_canary",
     "run_gate",
     "verify_manifest_commit",
     "write_manifest",
-    "load_manifest",
 ]
 
 

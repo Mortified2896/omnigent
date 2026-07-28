@@ -961,8 +961,6 @@ async def test_route_approval_skipped_when_evaluator_says_no_explicit_approval(
     proposals = [
         event for event in published if event.get("type") == "response.elicitation_request"
     ]
-    assert proposals == [], (
-        f"unexpected elicitation_request events published: {proposals!r}"
-    )
+    assert proposals == [], f"unexpected elicitation_request events published: {proposals!r}"
     # No Future was registered for the user verdict.
     assert routes_sessions._harness_elicitation_registry == {}

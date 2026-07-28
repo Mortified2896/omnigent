@@ -30,7 +30,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 _DEFAULT_DEPLOY_ROOT = Path("/home/hermes/workspace/deployments/omnigent")
 _ENV_DEPLOY_ROOT = "OMNIGENT_DEPLOY_ROOT"
 

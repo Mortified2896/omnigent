@@ -130,9 +130,7 @@ def run_gate(release: Path, *, skip_web_ui: bool | None = None) -> dict[str, str
         try:
             verify_web_ui_bundle(release)
         except Exception as exc:  # WebUIBundleMissingError or other
-            raise GateError(
-                f"web UI bundle check failed: {exc}"
-            ) from exc
+            raise GateError(f"web UI bundle check failed: {exc}") from exc
 
     return {
         **provenance,

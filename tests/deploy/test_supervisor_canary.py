@@ -60,26 +60,26 @@ def test_http_get_handles_connection_refused(tmp_path: Path) -> None:
 
 def test_http_get_returns_404_body(tmp_path: Path) -> None:
     """A 404 response is surfaced as a (404, '') tuple without raising."""
-    import threading
     import http.server
     import socketserver
+    import threading
 
     port = _pick_free_port()
 
     class _Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self.send_response(404)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"")
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - silent
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     with socketserver.TCPServer(("127.0.0.1", port), _Handler) as httpd:
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
-            status, body = _http_get(f"http://127.0.0.1:{port}/missing")
+            status, _body = _http_get(f"http://127.0.0.1:{port}/missing")
             assert status == 404
         finally:
             httpd.shutdown()
@@ -113,7 +113,5 @@ def test_extract_index_assets_handles_empty() -> None:
 
 def test_extract_index_assets_caps_at_twenty() -> None:
     """At most 20 assets are returned so a buggy probe can't run forever."""
-    refs = "".join(
-        f'<script src="/assets/{i}.js"></script>' for i in range(50)
-    )
+    refs = "".join(f'<script src="/assets/{i}.js"></script>' for i in range(50))
     assert len(_extract_index_assets(refs)) == 20

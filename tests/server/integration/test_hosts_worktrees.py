@@ -224,8 +224,7 @@ async def test_list_worktrees_git_failure_still_400(
     replies["/tmp/bad-repo"] = {
         "status": "failed",
         "error": (
-            "git worktree list failed (exit 128): "
-            "fatal: bad config line 1 in file .git/config"
+            "git worktree list failed (exit 128): fatal: bad config line 1 in file .git/config"
         ),
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
