@@ -115,12 +115,30 @@ mkdir -p "$DEPLOY_ROOT/releases" "$DEPLOY_ROOT/manifests" "$DEPLOY_ROOT/failed"
 
 # --- 2. Reuse or build the release -----------------------------------------
 STAGING_DIR="$DEPLOY_ROOT/releases/.staging-$sha-$$-$(date +%s%N)"
+# The canonical release directory is known up front (it is the
+# resolved form of ``$DEPLOY_ROOT/releases/$sha``). Declaring it
+# before the build lets the manifest record the *canonical* path
+# even though files are inspected from the staging directory.
+FINAL_RELEASE_DIR="$RELEASE_DIR"
 quarantine_invalid() {
   local reason="$1"
   if [[ -e "$RELEASE_DIR" ]]; then
     mv -T "$RELEASE_DIR" "$DEPLOY_ROOT/failed/${sha}-invalid-$(date +%s%N)" || rm -rf "$RELEASE_DIR"
     log "quarantined invalid cached release ($reason)"
   fi
+}
+# Strict canonical-path verifier. Used immediately after ``mv -T``
+# to assert that the manifest's recorded ``release_dir`` matches
+# the post-rename canonical path (not the staging path that no
+# longer exists). On failure the canonical candidate is quarantined
+# by the caller and the build is rejected before any reuse path
+# can observe the broken manifest.
+verify_candidate_canonical() {
+  [[ -f "$RELEASE_DIR/manifest.json" ]] || return 1
+  local recorded
+  recorded=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("release_dir", ""))' "$RELEASE_DIR/manifest.json") || return 1
+  [[ "$recorded" == "$(readlink -f "$FINAL_RELEASE_DIR")" ]] || return 1
+  return 0
 }
 verify_candidate() {
   [[ -f "$RELEASE_DIR/manifest.json" && -f "$RELEASE_DIR/pyproject.toml" ]] || return 1
@@ -280,6 +298,7 @@ manifest = ReleaseManifest.from_directory(
     omnigent_module_path=str(pathlib.Path(omnigent.__file__).resolve()),
     omnigent_server_app_path=str(pathlib.Path(omnigent.server.app.__file__).resolve()),
     frontend_build_version=frontend_version,
+    canonical_release_dir=pathlib.Path('$FINAL_RELEASE_DIR'),
 )
 write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
 "; then
@@ -295,12 +314,22 @@ write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
     "$RELEASE_DIR/.venv/bin/python" -m omnigent.deploy.preflight "$RELEASE_DIR" >/dev/null
   }
   verify_candidate_staging || fail "staged release integrity verification failed"
-  FINAL_RELEASE_DIR="$DEPLOY_ROOT/releases/$sha"
   [[ ! -e "$FINAL_RELEASE_DIR" ]] || rm -rf "$FINAL_RELEASE_DIR"
   mv -T "$STAGING_DIR" "$FINAL_RELEASE_DIR"
   trap - EXIT
   RELEASE_DIR="$FINAL_RELEASE_DIR"
   MANIFEST_PATH="$RELEASE_DIR/manifest.json"
+
+  # 2f. strict canonical-path verification immediately after the atomic
+  # rename. The manifest records ``$FINAL_RELEASE_DIR`` because the
+  # shell script passed it explicitly to ``from_directory``; this
+  # check pins that contract end-to-end. On failure we must NOT leave
+  # the canonical candidate lying around — it is not current and not
+  # previous, so quarantining it is safe.
+  if ! verify_candidate_canonical; then
+    quarantine_invalid "post-rename canonical-path verification failed"
+    fail "post-rename canonical-path verification failed (manifest.release_dir != $FINAL_RELEASE_DIR)"
+  fi
 fi
 
 # Copy the manifest into the archived manifests/ tree for ease of

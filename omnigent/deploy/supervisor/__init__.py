@@ -40,12 +40,13 @@ __all__ = [
     "ManifestError",
     "ProvenanceError",
     "ReleaseManifest",
+    "load_manifest",
     "manifest_path_for",
     "run_canary",
     "run_gate",
+    "verify_canonical_release_dir",
     "verify_manifest_commit",
     "write_manifest",
-    "load_manifest",
 ]
 
 
@@ -57,6 +58,7 @@ if TYPE_CHECKING:  # pragma: no cover - re-export shim
         ReleaseManifest,
         load_manifest,
         manifest_path_for,
+        verify_canonical_release_dir,
         verify_manifest_commit,
         write_manifest,
     )
@@ -72,6 +74,7 @@ _LAZY_MAP = {
     "ReleaseManifest": "omnigent.deploy.supervisor.manifest",
     "load_manifest": "omnigent.deploy.supervisor.manifest",
     "manifest_path_for": "omnigent.deploy.supervisor.manifest",
+    "verify_canonical_release_dir": "omnigent.deploy.supervisor.manifest",
     "verify_manifest_commit": "omnigent.deploy.supervisor.manifest",
     "write_manifest": "omnigent.deploy.supervisor.manifest",
     "ProvenanceError": "omnigent.deploy.supervisor.provenance",
