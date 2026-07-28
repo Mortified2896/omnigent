@@ -61,7 +61,7 @@ LEGAL_TRANSITIONS: dict[OversightAutopilotState, frozenset[OversightAutopilotSta
     OversightAutopilotState.REVIEWING: frozenset(
         {
             OversightAutopilotState.FIXING,
-            OversightAutopilotState.PR_READY,
+            OversightAutopilotState.PUBLISHING,
             OversightAutopilotState.BLOCKED,
             OversightAutopilotState.FAILED,
         }

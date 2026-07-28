@@ -62,7 +62,7 @@ outbound set, and a hint to consult this document.
 | `PLANNING`     | `IMPLEMENTING`, `BLOCKED`, `FAILED`              |
 | `IMPLEMENTING` | `TESTING`, `BLOCKED`, `FAILED`                   |
 | `TESTING`      | `REVIEWING`, `FIXING`, `BLOCKED`, `FAILED`       |
-| `REVIEWING`    | `FIXING`, `PR_READY`, `BLOCKED`, `FAILED`        |
+| `REVIEWING`    | `FIXING`, `PUBLISHING`, `BLOCKED`, `FAILED`      |
 | `FIXING`       | `IMPLEMENTING`, `BLOCKED`, `FAILED`              |
 | `PUBLISHING`   | `PR_READY`, `BLOCKED`, `FAILED`                  |
 | `PR_READY`     | `DONE`, `FAILED`                                 |
@@ -75,7 +75,9 @@ Notes on the graph:
 - `TESTING -> FIXING` is the canonical path for a test failure; `TESTING
   -> FAILED` is reserved for unrecoverable test infrastructure problems.
 - `REVIEWING -> FIXING` covers review feedback that requires code
-  changes; `REVIEWING -> PR_READY` is the green path.
+  changes; `REVIEWING -> PUBLISHING` is the publication-prep handoff;
+  `PUBLISHING -> PR_READY` is the post-publish state. `REVIEWING` no
+  longer transitions directly to `PR_READY`.
 - `FIXING -> IMPLEMENTING` lets the controller re-enter the
   implement/test loop while staying under the bounded retry counters.
 - `BLOCKED` resumes to either `CLAIMED` (resume the same claim) or

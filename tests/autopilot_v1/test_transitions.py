@@ -32,7 +32,7 @@ LEGAL_PAIRS: list[tuple[OversightAutopilotState, OversightAutopilotState]] = [
     (OversightAutopilotState.TESTING, OversightAutopilotState.BLOCKED),
     (OversightAutopilotState.TESTING, OversightAutopilotState.FAILED),
     (OversightAutopilotState.REVIEWING, OversightAutopilotState.FIXING),
-    (OversightAutopilotState.REVIEWING, OversightAutopilotState.PR_READY),
+    (OversightAutopilotState.REVIEWING, OversightAutopilotState.PUBLISHING),
     (OversightAutopilotState.REVIEWING, OversightAutopilotState.BLOCKED),
     (OversightAutopilotState.REVIEWING, OversightAutopilotState.FAILED),
     (OversightAutopilotState.FIXING, OversightAutopilotState.IMPLEMENTING),
@@ -112,6 +112,26 @@ def test_illegal_transition_blocked_to_implementing_rejected() -> None:
     # IMPLEMENTING — that requires going through CLAIMED -> PLANNING.
     assert (
         is_legal_transition(OversightAutopilotState.BLOCKED, OversightAutopilotState.IMPLEMENTING)
+        is False
+    )
+
+
+def test_legal_transition_reviewing_to_publishing_accepted() -> None:
+    # REVIEWING -> PUBLISHING is the publication-prep handoff: the worker
+    # has finished review and hands the branch off to the controller for
+    # the publication step.
+    assert (
+        is_legal_transition(OversightAutopilotState.REVIEWING, OversightAutopilotState.PUBLISHING)
+        is True
+    )
+
+
+def test_illegal_transition_reviewing_to_pr_ready_rejected() -> None:
+    # REVIEWING -> PR_READY is no longer a direct transition: the contract
+    # requires the run to traverse PUBLISHING first so the controller can
+    # perform the publication step before claiming the PR is ready.
+    assert (
+        is_legal_transition(OversightAutopilotState.REVIEWING, OversightAutopilotState.PR_READY)
         is False
     )
 
