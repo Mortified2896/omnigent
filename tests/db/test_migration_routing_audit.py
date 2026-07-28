@@ -98,20 +98,34 @@ def test_upgrade_from_z9_preserves_historical_outcome_rows(tmp_path: Path) -> No
         command.upgrade(config, "head")
 
         with engine.connect() as conn:
+            # The ``zd1b2c3d4e5f`` merge rewrites the audit / outcome
+            # table ids to 16 raw bytes, so look up the rows via
+            # columns that aren't part of the binary conversion
+            # (``response_id`` stays TEXT, ``verdict`` / ``comments``
+            # are application columns, not identifiers).
             run = conn.execute(
                 sa.text(
                     "SELECT response_id, routing_proposal_id, routing_decision_id "
-                    "FROM task_runs WHERE id = 'tr_hist'"
+                    "FROM task_runs WHERE response_id = 'resp_hist'"
                 )
             ).one()
             selection_source = conn.execute(
-                sa.text("SELECT routing_selection_source FROM conversations WHERE id = 'c_hist'")
+                sa.text(
+                    "SELECT routing_selection_source FROM conversations "
+                    "WHERE root_conversation_id = 'c_hist'"
+                )
             ).scalar_one()
             evaluation = conn.execute(
-                sa.text("SELECT verdict, reasoning FROM task_evaluations WHERE id = 'tev_hist'")
+                sa.text(
+                    "SELECT verdict, reasoning FROM task_evaluations "
+                    "WHERE reasoning = 'historical evaluation'"
+                )
             ).one()
             review = conn.execute(
-                sa.text("SELECT verdict, comments FROM task_reviews WHERE id = 'trv_hist'")
+                sa.text(
+                    "SELECT verdict, comments FROM task_reviews "
+                    "WHERE comments = 'historical review'"
+                )
             ).one()
         assert run == ("resp_hist", None, None)
         assert selection_source is None

@@ -118,7 +118,16 @@ def test_agent_round_trip_via_store(db_engine: Engine) -> None:
 
 
 def test_downgrade_removes_workspace_id_and_restores_pk(tmp_path: Path) -> None:
-    """Downgrade drops workspace_id and restores each original primary key."""
+    """Downgrade drops workspace_id and restores each original primary key.
+
+    Skipped: the v0.6 final head ``zd1b2c3d4e5f`` is intentionally irreversible
+    (binary id conversion); downgrade past pre-v0.6 is unsupported on the
+    v0.6 lineage.
+    """
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 "
+        "is unsupported on the v0.6 lineage."
+    )
     db_path = tmp_path / "downgrade.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)
