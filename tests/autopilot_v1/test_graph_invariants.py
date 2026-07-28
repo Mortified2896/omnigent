@@ -9,7 +9,7 @@ pairwise checks in ``test_transitions.py``.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from itertools import pairwise
 
 import pytest
@@ -90,25 +90,19 @@ def test_publishing_reachable_from_queued() -> None:
 
 
 def test_pr_ready_only_reachable_via_publishing() -> None:
-    """Every shortest legal path from QUEUED to PR_READY must include PUBLISHING.
+    """PR_READY has only PUBLISHING as an inbound source and requires it."""
+    pr_ready = OversightAutopilotState.PR_READY
+    inbound = {state for state, targets in LEGAL_TRANSITIONS.items() if pr_ready in targets}
+    assert inbound == {OversightAutopilotState.PUBLISHING}
 
-    Under the corrected graph, REVIEWING no longer transitions directly to
-    PR_READY, so any path into PR_READY from QUEUED must traverse the
-    PUBLISHING publication-prep step.
-    """
-    paths = _shortest_paths(OversightAutopilotState.QUEUED, LEGAL_TRANSITIONS)
-    assert OversightAutopilotState.PR_READY in paths, "PR_READY must be reachable from QUEUED"
-    pr_ready_paths: Iterable[list[OversightAutopilotState]] = [
-        paths[OversightAutopilotState.PR_READY]
-    ]
-    # BFS yields exactly one shortest path per target (the first one found),
-    # so a single path check is sufficient; iterate defensively in case the
-    # implementation is ever extended to enumerate all shortest paths.
-    for path in pr_ready_paths:
-        assert OversightAutopilotState.PUBLISHING in path, (
-            f"Expected every shortest QUEUED -> PR_READY path to traverse "
-            f"PUBLISHING, but got: {[s.value for s in path]}"
-        )
+    graph_without_publishing = {
+        state: targets - {OversightAutopilotState.PUBLISHING}
+        for state, targets in LEGAL_TRANSITIONS.items()
+    }
+    reachable_without_publishing = _reachable_from(
+        OversightAutopilotState.QUEUED, graph_without_publishing
+    )
+    assert pr_ready not in reachable_without_publishing
 
 
 # ── Terminal states ──────────────────────────────────────────────────────
