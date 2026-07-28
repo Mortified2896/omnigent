@@ -175,13 +175,15 @@ def test_zd1b2c3d4e5f_converts_routing_id_columns_to_binary() -> None:
                 )
                 conn.execute(
                     sa.text(
-                        "INSERT INTO routing_proposals (workspace_id, id, conversation_id, "
+                        "INSERT INTO routing_proposals "
+                        "(workspace_id, id, conversation_id, "
                         "elicitation_id, user_message_sha256, user_message_excerpt, "
                         "user_message_chars, content_types_json, original_route_id, "
                         "requires_explicit_approval, proposal_payload_excerpt, "
                         "proposal_payload_sha256, created_at) VALUES "
                         "(0, 'rp_prop00000000000000000000000000bb', "
-                        "'c_conv00000000000000000000000000aa', 'el_000000000000000000000000000000cc', "
+                        "'c_conv00000000000000000000000000aa', "
+                        "'el_000000000000000000000000000000cc', "
                         "'sha00000000000000000000000000000000000000000000000000000000000000dd', "
                         "'excerpt', 7, '{}', 'auto/coding', 1, 'p', "
                         "'sha00000000000000000000000000000000000000000000000000000000000000ee', 1)"
