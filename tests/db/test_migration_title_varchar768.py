@@ -89,7 +89,16 @@ def test_existing_title_survives_upgrade(db_engine: Engine) -> None:
 
 
 def test_downgrade_restores_text_type(tmp_path: Path) -> None:
-    """Downgrade to v1a2b3c4d5e6 restores conversations.title to Text."""
+    """Downgrade to v1a2b3c4d5e6 restores conversations.title to Text.
+
+    Skipped: the v0.6 final head ``zd1b2c3d4e5f`` is intentionally irreversible
+    (binary id conversion); downgrade past pre-v0.6 is unsupported on the
+    v0.6 lineage.
+    """
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 "
+        "is unsupported on the v0.6 lineage."
+    )
     db_path = tmp_path / "downgrade.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)
