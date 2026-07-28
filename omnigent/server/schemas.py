@@ -3232,6 +3232,60 @@ class HeartbeatEvent(_SSEEventBase):
     last_event_seq: int | None = None
 
 
+class SubprocessLivenessEvent(_SSEEventBase):
+    """
+    Liveness event emitted while a supervised subprocess is alive.
+
+    Distinct from :class:`HeartbeatEvent` (``response.heartbeat``)
+    which is a pure keep-alive. The liveness event resets the
+    scaffold's idle watchdog, carrying enough diagnostics for the
+    watchdog to distinguish ``slow but alive`` from a real timeout:
+
+    - ``command`` — argv the subprocess was launched with
+      (truncated for log size).
+    - ``pid`` — the supervised process id; ``None`` if the process
+      has exited by the time of emission.
+    - ``elapsed_s`` — wall-clock seconds since the subprocess was
+      registered.
+    - ``last_stdout_at`` / ``last_stderr_at`` — ISO-8601 wall
+      timestamps of the most recent stdout / stderr bytes read by
+      the harness, or ``None`` if none have been observed yet.
+    - ``stdout_bytes`` / ``stderr_bytes`` — cumulative byte counts
+      read from the supervised process.
+    - ``state`` — one of ``alive``, ``interactive_wait``,
+      ``zombie``, or ``exited``. ``interactive_wait`` is set when
+      the process is alive but the harness has detected an
+      outstanding password / sudo / pager / confirmation prompt
+      (heuristics in
+      :mod:`omnigent.runtime.harnesses.watchdog`).
+    - ``cpu_percent`` / ``rss_bytes`` — process resource snapshot
+      when ``psutil`` is available; ``None`` on unsupported
+      platforms or when the process is gone.
+    - ``interactive_hint`` — short string the watchdog extracted
+      when ``state == "interactive_wait"`` (e.g. ``"[sudo] password
+      for user: "``). ``None`` otherwise.
+
+    Consumers SHOULD treat the event as proof of life and let the
+    turn continue; the watchdog will only fire when liveness events
+    stop arriving within the configured idle window.
+
+    :param type: Always ``"response.subprocess_live"``.
+    """
+
+    type: Literal["response.subprocess_live"]
+    command: str = ""
+    pid: int | None = None
+    elapsed_s: float = 0.0
+    last_stdout_at: str | None = None
+    last_stderr_at: str | None = None
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
+    state: str = "alive"
+    cpu_percent: float | None = None
+    rss_bytes: int | None = None
+    interactive_hint: str | None = None
+
+
 class SessionHeartbeatEvent(_SSEEventBase):
     """
     Idle-stream keepalive on ``GET /v1/sessions/{id}/stream``.
@@ -3970,6 +4024,7 @@ ServerStreamEvent = Annotated[
     # ── Transient (SSE-only) — file annotations / keepalive ────
     | OutputFileDoneEvent
     | HeartbeatEvent
+    | SubprocessLivenessEvent
     | SessionHeartbeatEvent
     # ── Transient (SSE-only) — synchronous decision request ────
     | ElicitationRequestEvent

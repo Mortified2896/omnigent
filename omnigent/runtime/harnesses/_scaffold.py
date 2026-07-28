@@ -53,6 +53,20 @@ from pydantic import BaseModel, ConfigDict, Field
 from omnigent import _native_forwarder_health as native_forwarder_health
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.policies.types import FAIL_CLOSED_PHASES
+from omnigent.runtime.harnesses.watchdog import (
+    TimeoutReason,
+    build_liveness_event,
+    classify_timeout,
+    resolve_watchdog_budgets,
+    terminate_subprocess_tree,
+    tracked_subprocesses,
+)
+from omnigent.runtime.harnesses.watchdog import (
+    register_supervised_subprocess as _register_supervised_subprocess,
+)
+from omnigent.runtime.harnesses.watchdog import (
+    unregister_supervised_subprocess as _unregister_supervised_subprocess,
+)
 from omnigent.runtime.tool_output import cap_tool_output
 from omnigent.server.schemas import (
     CompletedEvent,
@@ -69,6 +83,7 @@ from omnigent.server.schemas import (
     PolicyEvaluationRequestEvent,
     ResponseObject,
     ServerStreamEvent,
+    SubprocessLivenessEvent,
     Usage,
 )
 
@@ -81,6 +96,16 @@ _logger = logging.getLogger(__name__)
 # dead-detection threshold for AP, long enough that the
 # per-process emit overhead is negligible.
 _HEARTBEAT_INTERVAL_S = 15.0
+
+# Cadence for ``response.subprocess_live`` events. Same range as
+# the legacy heartbeat (15-30s) but configurable so a noisy CI
+# harness that spawns long-running build / test subprocesses can
+# lower the cadence without touching the SSE heartbeat contract.
+# The liveness event carries per-subprocess diagnostics
+# (``pid``, ``elapsed_s``, ``stdout_bytes``, ``state``,
+# optional CPU / memory) so the scaffold can distinguish
+# ``slow but alive`` from a real timeout.
+_LIVENESS_INTERVAL_S = float(os.environ.get("HARNESS_LIVENESS_INTERVAL_S", "20"))
 
 # Grace period between SIGTERM / SIGINT arrival and the FastAPI
 # app exiting. Long enough to let a well-behaved harness flush
@@ -102,17 +127,23 @@ _POLICY_EVAL_TIMEOUT_S = 86400.0
 
 # Per-turn IDLE watchdog: max gap WITHOUT progress before a wedged
 # ``run_turn`` becomes ``response.failed`` (vs heartbeating forever).
-# Every non-heartbeat ``ctx.emit`` resets the deadline (see
-# ``_guarded_run_turn``), so a long-but-active turn is never killed.
-# Env var name kept for the ops knob; ``<= 0`` disables.
-_TURN_IDLE_TIMEOUT_S = float(os.environ.get("HARNESS_TURN_TIMEOUT_S", "240"))
+# The scaffold resolves its budgets lazily inside ``_guarded_run_turn``
+# so each subprocess (the runner is its own process via
+# :class:`HarnessProcessManager`) reads the live env vars. Issue #30
+# promoted the single 240s window into four typed budgets so a harness
+# with a quiet but live subprocess is no longer killed.
+#
+# Module-level constants kept for downstream importers that still
+# expect the legacy attribute names; they are refreshed at the top
+# of each guarded run by :func:`_resolve_runtime_budgets` and only
+# used as a synchronous fallback for the rare codepath that reads
+# them outside a guarded turn.
+_WATCHDOG_BUDGETS = resolve_watchdog_budgets()
 
-# Absolute per-turn ceiling: a hard cap on TOTAL turn duration, backstop
-# to the idle watchdog above. The idle watchdog never trips a turn that
-# keeps emitting, so a runaway-but-active loop (e.g. an infinite tool
-# loop emitting steadily) needs this. Generous so it never clips a real
-# long turn. ``<= 0`` disables. Whichever of (idle, absolute) trips first.
-_TURN_ABSOLUTE_TIMEOUT_S = float(os.environ.get("HARNESS_TURN_ABSOLUTE_TIMEOUT_S", "3600"))
+# Backwards-compat aliases used elsewhere in this module (and by
+# downstream code that still references the constants directly).
+_TURN_IDLE_TIMEOUT_S = _WATCHDOG_BUDGETS.model_stream_idle_s
+_TURN_ABSOLUTE_TIMEOUT_S = _WATCHDOG_BUDGETS.max_turn_runtime_s
 
 
 @dataclass(frozen=True)
@@ -438,13 +469,61 @@ class TurnContext:
             delta="hi")``.
         """
         # Treat any non-heartbeat event as progress and push the idle
-        # watchdog deadline forward. Heartbeats are keep-alive, NOT
-        # progress — letting them reset the deadline would defeat the
-        # watchdog (a wedged turn's 15s heartbeats would keep it alive
-        # forever).
-        if self._reset_idle_watchdog is not None and not isinstance(event, HeartbeatEvent):
+        # watchdog deadline forward. ``HeartbeatEvent`` is keep-alive,
+        # NOT progress — letting it reset the deadline would defeat
+        # the watchdog (a wedged turn's 15s heartbeats would keep it
+        # alive forever). ``SubprocessLivenessEvent`` DOES count as
+        # progress: the harness is alive, the supervised subprocess
+        # is alive, and the operator should be able to see why the
+        # turn is taking this long.
+        if self._reset_idle_watchdog is not None and isinstance(
+            event, (HeartbeatEvent, SubprocessLivenessEvent)
+        ) is False:
             self._reset_idle_watchdog()
         self._event_queue.put_nowait(event)
+
+    def register_supervised_subprocess(
+        self,
+        *,
+        name: str,
+        pid: int,
+        command: list[str] | tuple[str, ...] | str,
+    ) -> None:
+        """Mark *pid* as a supervised child the liveness loop tracks.
+
+        Issue #30: a long-running supervised subprocess that emits
+        nothing on the harness's own progress path used to be killed
+        by the 240s idle watchdog even when it was making real
+        progress. Registering the child lets the scaffold emit a
+        :class:`SubprocessLivenessEvent` every
+        ``_LIVENESS_INTERVAL_S``; that event resets the idle
+        watchdog and carries the diagnostics the scaffold uses to
+        distinguish ``slow but alive`` from a real timeout.
+
+        :param name: Human-readable label the harness picks, e.g.
+            ``"pytest"`` or ``"claude-cli"``.
+        :param pid: The supervised process id.
+        :param command: Argv or single command string the harness
+            launched with. Stored for the timeout diagnostics; the
+            scaffold truncates to 256 chars when emitting the event.
+        """
+        _register_supervised_subprocess(
+            name=name,
+            pid=pid,
+            command=command,
+        )
+
+    def unregister_supervised_subprocess(self, pid: int) -> None:
+        """Stop tracking *pid* in the liveness loop.
+
+        Idempotent. Called by the harness when the supervised child
+        exits normally; the scaffold also calls it from its
+        post-timeout cleanup so future turns don't see stale state.
+
+        :param pid: Process id previously passed to
+            :meth:`register_supervised_subprocess`.
+        """
+        _unregister_supervised_subprocess(pid)
 
     async def dispatch_tool(self, call_id: str, name: str, arguments: str, agent: str) -> str:
         """
@@ -1302,6 +1381,16 @@ class HarnessApp:
             self._heartbeat_loop(ctx),
             name=f"harness-heartbeat:{ctx.response_id}",
         )
+        # Liveness loop runs alongside the heartbeat. While the
+        # harness has registered at least one supervised subprocess,
+        # the loop emits ``response.subprocess_live`` events that
+        # both prove life to the operator and reset the idle
+        # watchdog (the plain ``response.heartbeat`` does NOT reset
+        # it on its own). Cancellation mirrors the heartbeat task.
+        liveness_task = asyncio.create_task(
+            self._liveness_loop(ctx),
+            name=f"harness-liveness:{ctx.response_id}",
+        )
         # Track the sequence_number of the last non-heartbeat
         # event emitted on this stream so we can stamp the
         # heartbeat's ``last_event_seq`` field at yield time.
@@ -1345,7 +1434,7 @@ class HarnessApp:
                     self._active_turn_ctx = None
             yield _format_sse_event(terminal)
         finally:
-            await self._teardown_turn(ctx, run_task, heartbeat_task)
+            await self._teardown_turn(ctx, run_task, heartbeat_task, liveness_task)
 
     def _initial_envelope_events(
         self, ctx: TurnContext, model: str, start_seq: int
@@ -1396,6 +1485,7 @@ class HarnessApp:
         ctx: TurnContext,
         run_task: asyncio.Task[None],
         heartbeat_task: asyncio.Task[None],
+        liveness_task: asyncio.Task[None] | None = None,
     ) -> None:
         """
         Cancel the heartbeat + (defensively) the run task, then
@@ -1412,7 +1502,14 @@ class HarnessApp:
         :param heartbeat_task: The heartbeat emitter task; always
             still running at this point (it loops forever) and
             needs explicit cancellation.
+        :param liveness_task: The subprocess-liveness emitter task
+            (``None`` when the liveness loop hasn't started, e.g.
+            an older ``_stream_turn`` caller).
         """
+        if liveness_task is not None:
+            liveness_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await liveness_task
         heartbeat_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
@@ -1441,28 +1538,40 @@ class HarnessApp:
         would leave the streaming loop blocked on
         ``event_queue.get()`` forever.
 
-        Enforces two per-turn watchdogs, whichever trips first:
+        Enforces four per-turn watchdogs (issue #30), whichever
+        trips first:
 
-        - IDLE (:data:`_TURN_IDLE_TIMEOUT_S`): each non-heartbeat
-          ``ctx.emit`` reschedules its deadline via the
-          ``_reset_idle_watchdog`` hook, so a turn that keeps making
-          progress (an orchestrator running tests + build + many tool
-          calls) is never killed — only one that emits nothing for the
-          whole window. This replaces the prior fixed *cumulative* cap,
-          which guillotined long-but-healthy turns mid-stream.
-        - ABSOLUTE (:data:`_TURN_ABSOLUTE_TIMEOUT_S`): a hard ceiling on
-          total duration, never rescheduled. Backstops the idle watchdog
-          against a runaway-but-active loop the idle one never sees as
-          stuck.
+        - MODEL-STREAM IDLE (``:attr:`WatchdogBudgets.model_stream_idle_s``):
+          max seconds the harness may go without an emit while no
+          tool is in flight before the idle watchdog fires. Each
+          non-heartbeat, non-liveness ``ctx.emit`` reschedules its
+          deadline via the ``_reset_idle_watchdog`` hook. A long
+          but active turn is never killed by this gate.
+        - TOOL-OUTPUT IDLE (``:attr:`WatchdogBudgets.tool_output_idle_s``):
+          max seconds a supervised tool may go without I/O before
+          its liveness event stops arriving; the watchdog then
+          classifies the trip as ``slow_but_alive`` /
+          ``dead_process`` / ``interactive_wait`` etc.
+        - MAX TOOL RUNTIME (``:attr:`WatchdogBudgets.max_tool_runtime_s``):
+          per-tool absolute cap, never rescheduled.
+        - MAX TURN RUNTIME (``:attr:`WatchdogBudgets.max_turn_runtime_s``):
+          total-turn cap, never rescheduled.
 
-        Either expiry surfaces a wedged/runaway ``run_turn`` as
-        ``response.failed``.
+        Either expiry surfaces a wedged / runaway ``run_turn`` as
+        ``response.failed`` with a classified reason.
 
         :param request: Forwarded to ``run_turn``.
         :param ctx: Forwarded to ``run_turn``.
         """
-        idle_timeout = _TURN_IDLE_TIMEOUT_S
-        absolute_timeout = _TURN_ABSOLUTE_TIMEOUT_S
+        budgets = resolve_watchdog_budgets()
+        # Refresh module-level aliases so any code path that reads
+        # them after this point (e.g. ``_TURN_IDLE_TIMEOUT_S`` is
+        # used elsewhere) sees the per-turn value.
+        global _TURN_IDLE_TIMEOUT_S, _TURN_ABSOLUTE_TIMEOUT_S
+        _TURN_IDLE_TIMEOUT_S = budgets.model_stream_idle_s
+        _TURN_ABSOLUTE_TIMEOUT_S = budgets.max_turn_runtime_s
+        idle_timeout = budgets.model_stream_idle_s
+        absolute_timeout = budgets.max_turn_runtime_s
         # ``asyncio.timeout(None)`` is a no-op, so ``<= 0`` disables each.
         idle_wd = asyncio.timeout(idle_timeout if idle_timeout > 0 else None)
         absolute_wd = asyncio.timeout(absolute_timeout if absolute_timeout > 0 else None)
@@ -1483,48 +1592,56 @@ class HarnessApp:
             async with absolute_wd, idle_wd:
                 await self.run_turn(request, ctx)
         except TimeoutError as exc:
-            if idle_wd.expired():
+            tracked = tracked_subprocesses()
+            last_entry = tracked[-1] if tracked else None
+            if last_entry is not None:
+                last_state: str | None = (
+                    "interactive_wait" if last_entry.interactive_hint else "alive"
+                )
+            else:
+                last_state = None
+            last_pid = last_entry.pid if last_entry else None
+            last_alive = (
+                bool(tracked)
+                and last_state in {"alive", "interactive_wait"}
+            )
+            forwarder_failure = native_forwarder_health.recent_post_failure(idle_timeout * 2)
+            trip_kind = "absolute" if absolute_wd.expired() else "idle"
+            classified = classify_timeout(
+                trip_kind=trip_kind,
+                has_tracked_subprocess=bool(tracked),
+                last_subprocess_state=last_state,
+                last_subprocess_pid=last_pid,
+                last_subprocess_alive=last_alive,
+                forwarder_failure=forwarder_failure,
+            )
+            if trip_kind == "idle":
                 _logger.warning(
-                    "run_turn for %s made no progress for %.0fs (idle turn watchdog); "
-                    "marking the turn failed",
+                    "run_turn for %s made no progress for %.0fs (idle turn watchdog; "
+                    "classified=%s); marking the turn failed",
                     ctx.response_id,
                     idle_timeout,
+                    classified.value,
                 )
-                # A native forwarder that can't reach the server (e.g.
-                # ``No route to host``) starves the turn of progress events, so
-                # the idle watchdog — not the connectivity error — is what fails
-                # the turn. If such a POST failure was recorded recently, attach
-                # it so the user sees the real cause rather than a generic
-                # "wedged LLM" reason. The window is twice the
-                # idle timeout: the failure that began the stall is already
-                # ~idle_timeout old when the watchdog fires, so a window equal
-                # to the stall would race past it; 2x captures it while still
-                # ignoring a long-resolved earlier blip.
-                forwarder_failure = native_forwarder_health.recent_post_failure(idle_timeout * 2)
-                cause = (
-                    f"likely a wedged LLM or tool call; "
-                    f"recent forwarder POST failure ({forwarder_failure})"
-                    if forwarder_failure is not None
-                    else "likely a wedged LLM or tool call"
-                )
-                raise RuntimeError(
-                    f"turn exceeded the {idle_timeout:.0f}s harness idle watchdog "
-                    f"(run_turn emitted no events for {idle_timeout:.0f}s; {cause})"
+                raise self._build_watchdog_error(
+                    trip_kind="idle",
+                    classified=classified,
+                    idle_timeout=idle_timeout,
+                    absolute_timeout=absolute_timeout,
+                    forwarder_failure=forwarder_failure,
+                    tracked=tracked,
+                    exc=exc,
                 ) from exc
-            if absolute_wd.expired():
-                _logger.warning(
-                    "run_turn for %s exceeded the %.0fs absolute turn ceiling; "
-                    "marking the turn failed",
-                    ctx.response_id,
-                    absolute_timeout,
-                )
-                raise RuntimeError(
-                    f"turn exceeded the {absolute_timeout:.0f}s harness absolute watchdog "
-                    f"(total turn duration cap; the turn kept emitting but never finished)"
-                ) from exc
-            # Neither ceiling tripped — an inner ``run_turn`` TimeoutError;
-            # pass it through unchanged.
-            raise
+            _logger.warning(
+                "run_turn for %s exceeded the %.0fs absolute turn ceiling; "
+                "marking the turn failed",
+                ctx.response_id,
+                absolute_timeout,
+            )
+            raise RuntimeError(
+                f"turn exceeded the {absolute_timeout:.0f}s harness absolute watchdog "
+                f"(total turn duration cap; the turn kept emitting but never finished)"
+            ) from exc
         except asyncio.CancelledError:
             # Re-raised so the streaming-side ``run_task.exception()``
             # check sees it; the terminal event handling
@@ -1535,9 +1652,86 @@ class HarnessApp:
             # Detach the reset hook before the timeout context unwinds so
             # a stray late ``emit`` can't reschedule a finished timeout.
             ctx._reset_idle_watchdog = None
+            # Always tear down any supervised subprocesses the harness
+            # registered for this turn. A real timeout means the turn
+            # is being surfaced as ``response.failed``; an unhalted
+            # subprocess would leak across sessions.
+            self._terminate_supervised_subprocesses()
             # Sentinel that tells ``_stream_turn`` to stop reading
             # the queue and emit the terminal event.
             ctx._event_queue.put_nowait(None)
+
+    def _terminate_supervised_subprocesses(self) -> None:
+        """Tear down every supervised subprocess on turn exit.
+
+        Called from ``_guarded_run_turn``'s finally block. Walks the
+        tracker, terminates each PID and its children, and
+        unregisters so the next turn starts with a clean slate.
+
+        Never raises — cleanup runs after the turn is already over.
+        """
+        for entry in tracked_subprocesses():
+            pid = entry.pid
+            if pid is None:
+                continue
+            try:
+                terminate_subprocess_tree(pid)
+            except Exception as cleanup_exc:  # pragma: no cover - best-effort
+                _logger.warning(
+                    "failed to clean up supervised subprocess %s (pid=%s): %s",
+                    entry.name,
+                    pid,
+                    cleanup_exc,
+                )
+            finally:
+                _unregister_supervised_subprocess(pid)
+
+    def _build_watchdog_error(
+        self,
+        *,
+        trip_kind: str,
+        classified: TimeoutReason,
+        idle_timeout: float,
+        absolute_timeout: float,
+        forwarder_failure: object | None,
+        tracked: list,
+        exc: BaseException,
+    ) -> RuntimeError:
+        """Build the structured ``RuntimeError`` raised on a watchdog trip.
+
+        Includes the operator-facing classification the liveness
+        tracker produced plus the per-subprocess diagnostics so a
+        240s-exceeded failure tells the operator *why* the harness
+        hit the deadline instead of forcing them to grep the
+        journal for a wedged-subprocess signature.
+
+        :returns: The exception the caller should raise.
+        """
+        subproc_summary = ", ".join(
+            f"{entry.name} (pid={entry.pid}, hint={entry.interactive_hint!r})"
+            for entry in tracked
+        )
+        if classified is TimeoutReason.FORWARDER_DISCONNECT:
+            cause = f"native forwarder POST failure ({forwarder_failure})"
+        elif classified is TimeoutReason.DEAD_PROCESS:
+            cause = "supervised subprocess is no longer running"
+        elif classified is TimeoutReason.INTERACTIVE_WAIT:
+            hint = tracked[0].interactive_hint if tracked else "unknown"
+            cause = (
+                f"supervised subprocess is alive but blocked on an "
+                f"interactive prompt ({hint})"
+            )
+        elif classified is TimeoutReason.SLOW_BUT_ALIVE:
+            cause = "supervised subprocess is alive but made no progress within the idle window"
+        else:
+            cause = "likely a wedged LLM or tool call"
+        subproc_clause = f" supervised_subprocesses=[{subproc_summary}]" if tracked else ""
+        message = (
+            f"turn exceeded the {idle_timeout:.0f}s harness idle watchdog "
+            f"(run_turn emitted no events for {idle_timeout:.0f}s; classified={classified.value}; "
+            f"{cause};{subproc_clause})"
+        )
+        return RuntimeError(message)
 
     async def _heartbeat_loop(self, ctx: TurnContext) -> None:
         """
@@ -1553,6 +1747,54 @@ class HarnessApp:
         while True:
             await asyncio.sleep(_HEARTBEAT_INTERVAL_S)
             ctx.emit(HeartbeatEvent(type="response.heartbeat"))
+
+    async def _liveness_loop(self, ctx: TurnContext) -> None:
+        """
+        Emit ``response.subprocess_live`` for every supervised
+        subprocess at :data:`_LIVENESS_INTERVAL_S` cadence.
+
+        Issue #30 fix: a harness whose inner ``run_turn`` is
+        parked on a supervised subprocess used to be killed by
+        the idle watchdog even when the subprocess was actively
+        making progress. This loop emits a per-subprocess
+        liveness event that both proves life to the operator
+        and resets the idle watchdog (``SubprocessLivenessEvent``
+        is treated as progress by :meth:`TurnContext.emit`).
+
+        The loop reads from the module-level tracker populated by
+        :meth:`TurnContext.register_supervised_subprocess`. The
+        tracker is process-wide so multiple concurrent turns
+        keep their state across scheduler hops; the event still
+        carries the per-turn ``response_id`` via the surrounding
+        SSE envelope.
+
+        Cancellation is the normal exit path.
+
+        :param ctx: The per-turn context whose queue receives
+            the liveness events.
+        """
+        interval = _LIVENESS_INTERVAL_S if _LIVENESS_INTERVAL_S > 0 else _HEARTBEAT_INTERVAL_S
+        while True:
+            await asyncio.sleep(interval)
+            entries = tracked_subprocesses()
+            if not entries:
+                # Skip the emit when no supervised subprocesses
+                # are registered; the watchdog reset would be
+                # unearned and would mask genuine stalls.
+                continue
+            for entry in entries:
+                payload = build_liveness_event(entry)
+                try:
+                    event = SubprocessLivenessEvent(**payload)
+                except Exception as build_exc:  # pragma: no cover - defensive
+                    _logger.warning(
+                        "failed to build liveness event for %s (pid=%s): %s",
+                        entry.name,
+                        entry.pid,
+                        build_exc,
+                    )
+                    continue
+                ctx.emit(event)
 
     async def _build_terminal_event(
         self,
