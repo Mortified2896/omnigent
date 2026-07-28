@@ -25,6 +25,15 @@ from omnigent.entities.conversation import (
 )
 from omnigent.entities.device_grant import DeviceGrant
 from omnigent.entities.file import StoredFile
+from omnigent.entities.issue_run import (
+    DEFAULT_ISSUE_RUN_LEASE_S,
+    ISSUE_RUN_EVENT_KINDS,
+    ISSUE_RUN_STATE_EDGES,
+    IssueRun,
+    IssueRunEvent,
+    IssueRunState,
+    is_legal_state_edge,
+)
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import ResolvedAccess, SessionPermission
 from omnigent.entities.policy import Policy
@@ -59,8 +68,11 @@ from omnigent.entities.task_outcome import (
 
 __all__ = [
     "DEFAULT_ENVIRONMENT_ID",
+    "DEFAULT_ISSUE_RUN_LEASE_S",
     "EVALUATOR_ACCURACY_VALUES",
     "FAILURE_ATTRIBUTION_VALUES",
+    "ISSUE_RUN_EVENT_KINDS",
+    "ISSUE_RUN_STATE_EDGES",
     "NON_CONTENT_ITEM_TYPES",
     "OUTBOX_STATUSES",
     "REASONING_EFFORT_VALUES",
@@ -82,6 +94,9 @@ __all__ = [
     "ErrorData",
     "FunctionCallData",
     "FunctionCallOutputData",
+    "IssueRun",
+    "IssueRunEvent",
+    "IssueRunState",
     "ItemData",
     "LangfuseOutboxRow",
     "LoadedAgent",
@@ -110,6 +125,7 @@ __all__ = [
     "encode_json_list",
     "filter_resources_by_type",
     "get_resource_by_id",
+    "is_legal_state_edge",
     "parse_item_data",
     "resolve_terminal_entry_by_resource_id",
     "synthesize_conversation_title",

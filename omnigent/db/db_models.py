@@ -2172,3 +2172,168 @@ class SqlLangfuseSyncOutbox(OmnigentBase):
             "id",
         ),
     )
+
+
+# ── Oversight Autopilot v1: issue-run persistence (issue #18) ───
+
+
+class SqlIssueRun(OmnigentBase):
+    """
+    SQLAlchemy model for the ``issue_runs`` table.
+
+    One row per Autopilot run on a (repository, issue_number) pair.
+    The row is the durable record of who is working on what, with a
+    lease the store uses as the atomic claim lock (issue #18). The
+    Autopilot scheduler / recovery sweep reads ``list_active`` and
+    reaps expired leases; the runner transitions the row along the
+    state ladder declared in ``omnigent.entities.issue_run``.
+
+    :param id: Bare 32-char hex UUID primary key (see :class:`Uuid16`).
+    :param repository: ``owner/repo`` slug, e.g.
+        ``"Mortified2896/omnigent"``.
+    :param issue_number: The GitHub issue number this run targets.
+    :param state: Lifecycle state — ``queued``/``claiming``/``claimed``/
+        ``in_progress``/``pr_ready``/``done``/``failed``/``abandoned``.
+        Stored as a stable int code (see ``omnigent.db.enum_codecs``)
+        so adding new states doesn't require a schema migration.
+    :param lease_owner: Bare 32-char hex UUID of the runner holding
+        the lease. ``None`` when the row is unclaimed (e.g. terminal
+        or expired).
+    :param lease_acquired_at: Unix epoch seconds the lease was taken.
+    :param lease_expires_at: Unix epoch seconds the lease lapses;
+        the recovery sweep considers ``lease_expires_at < now`` as
+        available for re-claim.
+    :param parent_session_id: The parent harness session id that
+        spawned the worker (bare 32-char hex UUID). Optional.
+    :param worker_session_id: The worker session id (bare 32-char hex
+        UUID). Optional until the worker has started.
+    :param branch: The branch the worker is using, e.g.
+        ``"feat/issue-18-durable-run-persistence"``.
+    :param worktree: Absolute path of the worker's worktree.
+    :param head_sha: Last commit sha the worker pushed.
+    :param pr_number: PR number this run opened.
+    :param review_iteration: Current review / iteration counter.
+    :param retry_count: Terminal retry counter (commits / pushes /
+        migrations always retry-disabled).
+    :param last_error: Most recent error message (truncated).
+    :param last_error_code: Short classification, e.g.
+        ``"timeout"``, ``"rate_limited"``.
+    :param created_at: Unix epoch seconds the row was first written.
+    :param updated_at: Unix epoch seconds the row was last touched.
+    """
+
+    __tablename__ = "issue_runs"
+
+    # Tenant partition key: Databricks workspace id owning this row (0 = default).
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Lifecycle state as a stable int code — see
+    # ``omnigent.db.enum_codecs.ISSUE_RUN_STATE`` for the mapping.
+    state: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    lease_acquired_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lease_expires_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    parent_session_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    worker_session_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    worktree: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_iteration: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        # ``(repository, issue_number)`` is the natural key — only one
+        # non-terminal row may exist for the pair at a time. The
+        # uniqueness is enforced application-side (``try_claim``
+        # refuses to insert a second non-terminal row); a DB
+        # UNIQUE constraint would break terminal -> follow-up flows.
+        Index("ix_issue_runs_repo_issue", "workspace_id", "repository", "issue_number"),
+        # ``(state, lease_expires_at)`` — the recovery sweep's primary
+        # scan: WHERE state IN (non-terminal) AND lease_expires_at IS NOT NULL
+        # AND lease_expires_at < now ORDER BY lease_expires_at, id.
+        Index("ix_issue_runs_state_lease", "state", "lease_expires_at", "id"),
+        # ``(repository, state, updated_at)`` — the scheduler's "show
+        # me active runs across the repo" listing.
+        Index(
+            "ix_issue_runs_repo_state_updated",
+            "workspace_id",
+            "repository",
+            "state",
+            "updated_at",
+        ),
+        CheckConstraint("issue_number > 0", name="ck_issue_runs_issue_number_positive"),
+    )
+
+
+class SqlIssueRunEvent(OmnigentBase):
+    """
+    SQLAlchemy model for the ``issue_run_events`` table.
+
+    One row per state transition or external event recorded against
+    an :class:`SqlIssueRun`. The event log is the source of truth for
+    restart-safe checkpoint recovery: replaying the events in
+    ``sequence`` order reconstructs the run's last-known state without
+    relying on the snapshot row alone.
+
+    :param id: Bare 32-char hex UUID primary key (see :class:`Uuid16`).
+    :param run_id: Owning :class:`SqlIssueRun.id`.
+    :param sequence: Monotonic per-run sequence number (1, 2, 3,
+        ...). Assigned by the store; callers should leave ``None``
+        on insert so the store can assign the next gap-free number.
+    :param kind: Event kind literal (see
+        :data:`omnigent.entities.issue_run.ISSUE_RUN_EVENT_KINDS`).
+        Stored as a stable string so the API can decode without an
+        enum lookup.
+    :param from_state: Prior state (the ``state`` column was this
+        when the event was emitted). ``None`` for creation events.
+    :param to_state: New state after the event. ``None`` for pure
+        observation events (e.g. ``ci_failed``).
+    :param payload: Free-form JSON payload, e.g. CI url, comment
+        id, log excerpt. Stored as compressed text.
+    :param created_at: Unix epoch seconds the event row was written.
+    """
+
+    __tablename__ = "issue_run_events"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    run_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    # Sequence is part of the PK so two events for the same run can
+    # never share a number; the ``(workspace_id, run_id, sequence)``
+    # triple is globally unique within a workspace.
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        # Replay path: per-run events in sequence order.
+        Index("ix_issue_run_events_run_sequence", "workspace_id", "run_id", "sequence"),
+        # "Show me every ci_failed event" query.
+        Index("ix_issue_run_events_kind_created", "workspace_id", "kind", "created_at"),
+    )
