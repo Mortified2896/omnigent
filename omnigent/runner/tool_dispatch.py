@@ -42,6 +42,7 @@ from omnigent._wrapper_labels import (
     CLAUDE_NATIVE_WRAPPER_VALUE,
     CODEX_NATIVE_WRAPPER_VALUE,
 )
+from omnigent.db.db_models import InvalidUuidError, uuid_to_bytes
 from omnigent.harness_aliases import canonicalize_harness
 from omnigent.model_override import (
     harness_supports_model_override,
@@ -1089,6 +1090,11 @@ def _subagent_file_ids_from_args(args: dict[str, Any]) -> list[str]:
         raise ValueError("'file_ids' must contain at least one file id when provided")
     if len(set(raw_ids)) != len(raw_ids):
         raise ValueError("'file_ids' must not contain duplicate file ids")
+    for file_id in raw_ids:
+        try:
+            uuid_to_bytes(file_id)
+        except InvalidUuidError as exc:
+            raise ValueError(f"'file_ids' contains invalid file id {file_id!r}: {exc}") from exc
     return list(raw_ids)
 
 

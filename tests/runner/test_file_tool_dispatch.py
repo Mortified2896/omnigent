@@ -368,20 +368,25 @@ async def test_send_with_file_ids_copies_then_attaches_input_file(
     handler = _spawn_server_handler(
         events=events,
         copies=copies,
-        mapping={"file_parent": _copied("file_child", "notes.txt", "text/plain")},
+        mapping={
+            "247a8c2023856d2eabf41f938df8f032": _copied("file_child", "notes.txt", "text/plain")
+        },
         meta_gets=meta_gets,
     )
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "use this", "file_ids": ["file_parent"]},
+        args_payload={"input": "use this", "file_ids": ["247a8c2023856d2eabf41f938df8f032"]},
         handler=handler,
     )
 
     assert json.loads(output)["status"] == "launching"
     # Exactly one copy, addressed parent→child with the requested ids.
     assert len(copies) == 1
-    assert copies[0] == {"source_session_id": _PARENT_ID, "file_ids": ["file_parent"]}
+    assert copies[0] == {
+        "source_session_id": _PARENT_ID,
+        "file_ids": ["247a8c2023856d2eabf41f938df8f032"],
+    }
     # The child message: input_text first, then the file block on the
     # mapped id (NOT the original parent id).
     content = events[0]["data"]["content"]
@@ -402,12 +407,14 @@ async def test_send_with_image_file_id_attaches_input_image(
     handler = _spawn_server_handler(
         events=events,
         copies=copies,
-        mapping={"file_pic": _copied("file_child_pic", "chart.png", "image/png")},
+        mapping={
+            "65f7ae83b2200f8c848848e9afc4b8af": _copied("file_child_pic", "chart.png", "image/png")
+        },
     )
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "look", "file_ids": ["file_pic"]},
+        args_payload={"input": "look", "file_ids": ["65f7ae83b2200f8c848848e9afc4b8af"]},
         handler=handler,
     )
 
@@ -426,12 +433,12 @@ async def test_send_image_file_falls_back_to_filename_when_no_content_type(
     handler = _spawn_server_handler(
         events=events,
         copies=copies,
-        mapping={"file_pic": _copied("file_child_pic", "chart.png", None)},
+        mapping={"65f7ae83b2200f8c848848e9afc4b8af": _copied("file_child_pic", "chart.png", None)},
     )
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "look", "file_ids": ["file_pic"]},
+        args_payload={"input": "look", "file_ids": ["65f7ae83b2200f8c848848e9afc4b8af"]},
         handler=handler,
     )
 
@@ -452,15 +459,22 @@ async def test_send_multiple_file_ids_preserve_order(
         events=events,
         copies=copies,
         mapping={
-            "f_a": _copied("c_a", "a.pdf", "application/pdf"),
-            "f_b": _copied("c_b", "b.png", "image/png"),
-            "f_c": _copied("c_c", "c.csv", "text/csv"),
+            "0000000000000000000000000000000a": _copied("c_a", "a.pdf", "application/pdf"),
+            "0000000000000000000000000000000b": _copied("c_b", "b.png", "image/png"),
+            "0000000000000000000000000000000c": _copied("c_c", "c.csv", "text/csv"),
         },
     )
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "three", "file_ids": ["f_a", "f_b", "f_c"]},
+        args_payload={
+            "input": "three",
+            "file_ids": [
+                "0000000000000000000000000000000a",
+                "0000000000000000000000000000000b",
+                "0000000000000000000000000000000c",
+            ],
+        },
         handler=handler,
     )
 
@@ -520,7 +534,10 @@ async def test_send_by_session_id_rejects_file_ids_before_server_call() -> None:
                 arguments=json.dumps(
                     {
                         "session_id": _CHILD_ID,
-                        "args": {"input": "continue", "file_ids": ["file_parent"]},
+                        "args": {
+                            "input": "continue",
+                            "file_ids": ["247a8c2023856d2eabf41f938df8f032"],
+                        },
                     }
                 ),
                 server_client=server_client,
@@ -539,7 +556,8 @@ async def test_send_by_session_id_rejects_file_ids_before_server_call() -> None:
     "file_ids",
     [
         [],
-        ["file_parent", "file_parent"],
+        ["247a8c2023856d2eabf41f938df8f032", "247a8c2023856d2eabf41f938df8f032"],
+        ["placeholder"],
     ],
 )
 @pytest.mark.asyncio
@@ -579,6 +597,34 @@ async def test_send_rejects_invalid_file_ids_before_server_call(
 
 
 @pytest.mark.asyncio
+async def test_send_accepts_legacy_prefixed_file_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valid legacy ids pass through to the server's UUID boundary."""
+    legacy_id = "file_247a8c2023856d2eabf41f938df8f032"
+    events: list[dict[str, Any]] = []
+    copies: list[dict[str, Any]] = []
+    handler = _spawn_server_handler(
+        events=events,
+        copies=copies,
+        mapping={legacy_id: _copied("file_child", "notes.txt", "text/plain")},
+    )
+
+    output = await _run_spawn(
+        monkeypatch,
+        args_payload={"input": "use this", "file_ids": [legacy_id]},
+        handler=handler,
+    )
+
+    assert json.loads(output)["status"] == "launching"
+    assert copies == [{"source_session_id": _PARENT_ID, "file_ids": [legacy_id]}]
+    assert events[0]["data"]["content"][-1] == {
+        "type": "input_file",
+        "file_id": "file_child",
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_named_continuation_rejects_file_ids_before_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -588,7 +634,9 @@ async def test_send_named_continuation_rejects_file_ids_before_copy(
     handler = _spawn_server_handler(
         events=events,
         copies=copies,
-        mapping={"file_parent": _copied("file_child", "notes.txt", "text/plain")},
+        mapping={
+            "247a8c2023856d2eabf41f938df8f032": _copied("file_child", "notes.txt", "text/plain")
+        },
         existing_child={
             "id": _CHILD_ID,
             "title": "worker:task-1",
@@ -601,7 +649,7 @@ async def test_send_named_continuation_rejects_file_ids_before_copy(
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "continue", "file_ids": ["file_parent"]},
+        args_payload={"input": "continue", "file_ids": ["247a8c2023856d2eabf41f938df8f032"]},
         handler=handler,
     )
 
@@ -633,7 +681,7 @@ async def test_send_with_bad_file_id_surfaces_copy_error_and_posts_nothing(
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "use this", "file_ids": ["file_bogus"]},
+        args_payload={"input": "use this", "file_ids": ["f1ed2ab9409388bb399e33d8b1a40000"]},
         handler=handler,
     )
 
@@ -648,27 +696,10 @@ async def test_send_with_bad_file_id_surfaces_copy_error_and_posts_nothing(
 
 
 @pytest.mark.asyncio
-async def test_send_with_placeholder_file_id_surfaces_actionable_404(
+async def test_send_with_placeholder_file_id_fails_before_child_creation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    Regression for the production OpenCode delegation failure.
-
-    A sub-agent call whose ``file_ids`` carried a placeholder string
-    (``"placeholder"``) used to surface as a bare ``404 Not found.`` from
-    the ``StatementError`` handler. The runner reported it as
-    ``"failed to copy files to child: 404"`` and the parent then read it
-    as ``"OpenCode worker failed to start: 404 Not found while
-    initializing child workspace"`` — the actual error (bad file id) was
-    lost and the OpenCode worker never got to start even though harness
-    selection, workspace, and session were all valid.
-
-    With the server fix the route surfaces ``File 'placeholder' not found
-    in source session`` instead of the bare ``Not found.`` The runner
-    forwards that actionable message verbatim so the parent agent can
-    correct its args, and still tears down the empty child session so a
-    retry with the same ``(agent, title)`` does not collide.
-    """
+    """The old production payload fails before create or files:copy."""
     events: list[dict[str, Any]] = []
     copies: list[dict[str, Any]] = []
     deletes: list[str] = []
@@ -677,12 +708,7 @@ async def test_send_with_placeholder_file_id_surfaces_actionable_404(
         copies=copies,
         mapping={},
         copy_status=404,
-        copy_error={
-            "error": {
-                "code": "not_found",
-                "message": "File 'placeholder' not found in source session",
-            },
-        },
+        copy_error={"error": {"code": "not_found", "message": "Not found."}},
         deletes=deletes,
     )
 
@@ -692,14 +718,11 @@ async def test_send_with_placeholder_file_id_surfaces_actionable_404(
         handler=handler,
     )
 
-    # The actionable message is forwarded to the parent agent.
-    assert output.startswith("Error: failed to copy files to child:"), output
-    assert "File 'placeholder' not found in source session" in output, output
-    # No child event is posted when the copy failed — prevents a phantom
-    # message from reaching the runner before teardown completes.
+    assert output.startswith("Error: sys_session_send invalid 'file_ids':"), output
+    assert "'placeholder'" in output
     assert events == []
-    # The freshly-created server child is torn down.
-    assert deletes == [_CHILD_ID]
+    assert copies == []
+    assert deletes == []
 
 
 @pytest.mark.asyncio
@@ -722,7 +745,7 @@ async def test_copy_failure_surfaces_child_delete_failure(
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "use this", "file_ids": ["file_bogus"]},
+        args_payload={"input": "use this", "file_ids": ["f1ed2ab9409388bb399e33d8b1a40000"]},
         handler=handler,
     )
 
@@ -749,14 +772,16 @@ async def test_send_message_failure_after_copy_tears_down_child(
     handler = _spawn_server_handler(
         events=events,
         copies=copies,
-        mapping={"file_parent": _copied("file_child", "notes.txt", "text/plain")},
+        mapping={
+            "247a8c2023856d2eabf41f938df8f032": _copied("file_child", "notes.txt", "text/plain")
+        },
         deletes=deletes,
         events_status=500,
     )
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "use this", "file_ids": ["file_parent"]},
+        args_payload={"input": "use this", "file_ids": ["247a8c2023856d2eabf41f938df8f032"]},
         handler=handler,
     )
 
@@ -780,7 +805,9 @@ async def test_send_message_failure_surfaces_child_delete_http_error(
     handler = _spawn_server_handler(
         events=events,
         copies=copies,
-        mapping={"file_parent": _copied("file_child", "notes.txt", "text/plain")},
+        mapping={
+            "247a8c2023856d2eabf41f938df8f032": _copied("file_child", "notes.txt", "text/plain")
+        },
         deletes=deletes,
         delete_exc=httpx.ConnectError("delete failed"),
         events_status=500,
@@ -788,7 +815,7 @@ async def test_send_message_failure_surfaces_child_delete_http_error(
 
     output = await _run_spawn(
         monkeypatch,
-        args_payload={"input": "use this", "file_ids": ["file_parent"]},
+        args_payload={"input": "use this", "file_ids": ["247a8c2023856d2eabf41f938df8f032"]},
         handler=handler,
     )
 
