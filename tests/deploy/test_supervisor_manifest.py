@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -58,7 +59,9 @@ def test_write_manifest_round_trip(tmp_path: Path, sample_manifest: ReleaseManif
     assert loaded.lockfile_hashes == sample_manifest.lockfile_hashes
 
 
-def test_write_manifest_refuses_overwrite(tmp_path: Path, sample_manifest: ReleaseManifest) -> None:
+def test_write_manifest_refuses_overwrite(
+    tmp_path: Path, sample_manifest: ReleaseManifest
+) -> None:
     """Refuse to overwrite an existing manifest without explicit opt-in."""
     write_manifest(tmp_path, sample_manifest)
     with pytest.raises(ManifestError) as exc:
@@ -66,7 +69,9 @@ def test_write_manifest_refuses_overwrite(tmp_path: Path, sample_manifest: Relea
     assert "refusing to overwrite" in str(exc.value).lower()
 
 
-def test_write_manifest_overwrite_with_opt_in(tmp_path: Path, sample_manifest: ReleaseManifest) -> None:
+def test_write_manifest_overwrite_with_opt_in(
+    tmp_path: Path, sample_manifest: ReleaseManifest
+) -> None:
     """``OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE=1`` permits re-write."""
     write_manifest(tmp_path, sample_manifest)
     os.environ["OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE"] = "1"
@@ -150,3 +155,104 @@ def test_verify_manifest_commit_rejects_empty_expected() -> None:
     with pytest.raises(ManifestError) as exc:
         verify_manifest_commit(manifest, "")
     assert "empty" in str(exc.value)
+
+
+# --- Issue #28: manifest identity comes from the caller, not the checkout --
+
+
+def _basic_release_dir(tmp_path: Path) -> Path:
+    """Populate ``tmp_path`` with the files ``from_directory`` inspects."""
+    (tmp_path / "uv.lock").write_text("# uv lock\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='omnigent'\n")
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "package-lock.json").write_text("{}\n")
+    return tmp_path
+
+
+def test_from_directory_uses_supplied_commit_sha(tmp_path: Path) -> None:
+    """``from_directory`` records the explicit SHA the caller passed in.
+
+    The release identity must come from the already-resolved canonical
+    SHA, not from any property of the archive directory itself.
+    """
+    sha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    manifest = ReleaseManifest.from_directory(
+        tmp_path,
+        commit_sha=sha,
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+        frontend_build_version="build-1",
+    )
+    assert manifest.commit_sha == sha
+
+
+def test_from_directory_does_not_require_dot_git(tmp_path: Path) -> None:
+    """``from_directory`` works on a release directory with no ``.git``.
+
+    The release archive is built from ``git archive`` and intentionally
+    does not contain a git checkout. The manifest must build without
+    requiring one.
+    """
+    _basic_release_dir(tmp_path)
+    assert not (tmp_path / ".git").exists()
+    ReleaseManifest.from_directory(
+        tmp_path,
+        commit_sha="abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+    )
+
+
+def test_from_directory_ignores_unrelated_checkout(tmp_path: Path, monkeypatch) -> None:
+    """The archive's git state cannot influence the manifest SHA.
+
+    If a ``.git`` symlink happens to be present and points at a
+    different commit, the manifest must still record the SHA the
+    caller supplied. We simulate this by stubbing ``subprocess.run`` to
+    raise: ``from_directory`` must never call it.
+    """
+    _basic_release_dir(tmp_path)
+
+    def _explode(*args, **kwargs):
+        raise AssertionError(
+            "from_directory must not invoke subprocess; identity is supplied by the caller."
+        )
+
+    monkeypatch.setattr("subprocess.run", _explode)
+    ReleaseManifest.from_directory(
+        tmp_path,
+        commit_sha="abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+    )
+
+
+def test_from_directory_records_lockfile_hashes(tmp_path: Path) -> None:
+    """Lockfile hashes are collected from the archive."""
+    _basic_release_dir(tmp_path)
+    lockfile = tmp_path / "web" / "package-lock.json"
+    lockfile.write_text('{"name":"web"}\n')
+    manifest = ReleaseManifest.from_directory(
+        tmp_path,
+        commit_sha="abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        repository="Mortified2896/omnigent",
+        python_executable="/tmp/.venv/bin/python",
+        python_version="3.12.13",
+        omnigent_module_path="/tmp/omnigent/__init__.py",
+        omnigent_server_app_path="/tmp/omnigent/server/app.py",
+    )
+    assert "web/package-lock.json" in manifest.lockfile_hashes
+    assert (
+        manifest.lockfile_hashes["web/package-lock.json"]
+        == hashlib.sha256(lockfile.read_bytes()).hexdigest()
+    )
