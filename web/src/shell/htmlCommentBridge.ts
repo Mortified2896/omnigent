@@ -83,7 +83,10 @@ export interface BridgeReady {
 
 /** Any message the iframe can send to the parent (post-handshake). */
 export type InboundBridgeMessage =
-  BridgeReady | BridgeSelection | BridgeCommentClick | BridgeSelectionCleared;
+  | BridgeReady
+  | BridgeSelection
+  | BridgeCommentClick
+  | BridgeSelectionCleared;
 
 // ---------------------------------------------------------------------------
 // Inbound message validation
