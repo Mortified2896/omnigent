@@ -156,24 +156,43 @@ def test_indexes_present(fresh_migrated_db: Path) -> None:
     try:
         inspector = sa.inspect(engine)
         run_indexes = {idx["name"] for idx in inspector.get_indexes("issue_runs")}
-        event_indexes = {
-            idx["name"] for idx in inspector.get_indexes("issue_run_events")
-        }
+        event_indexes = {idx["name"] for idx in inspector.get_indexes("issue_run_events")}
         for expected in (
             "ix_issue_runs_repo_issue",
             "ix_issue_runs_state_lease",
             "ix_issue_runs_repo_state_updated",
         ):
-            assert expected in run_indexes, (
-                f"index {expected} missing from issue_runs"
-            )
+            assert expected in run_indexes, f"index {expected} missing from issue_runs"
         for expected in (
             "ix_issue_run_events_run_sequence",
             "ix_issue_run_events_kind_created",
         ):
-            assert expected in event_indexes, (
-                f"index {expected} missing from issue_run_events"
-            )
+            assert expected in event_indexes, f"index {expected} missing from issue_run_events"
+    finally:
+        engine.dispose()
+
+
+def test_partial_unique_index_active_runs_present(
+    fresh_migrated_db: Path,
+) -> None:
+    """The partial unique index that enforces "at most one active row" exists.
+
+    Without this index, two concurrent ``try_claim`` / ``create_follow_up``
+    calls on PostgreSQL / MySQL can both INSERT a non-terminal row for
+    the same (workspace_id, repository, issue_number). The
+    SELECT-then-INSERT shape is safe on SQLite via ``BEGIN IMMEDIATE``
+    but needs the partial unique index to be safe on the other
+    dialects the store supports.
+    """
+    engine = sa.create_engine(f"sqlite:///{fresh_migrated_db}")
+    try:
+        inspector = sa.inspect(engine)
+        indexes = {idx["name"] for idx in inspector.get_indexes("issue_runs")}
+        assert "uq_issue_runs_active_repo_issue" in indexes, (
+            "partial unique index uq_issue_runs_active_repo_issue is "
+            "missing from issue_runs; concurrent try_claim can no longer "
+            "be considered safe on PostgreSQL / MySQL."
+        )
     finally:
         engine.dispose()
 
@@ -236,5 +255,13 @@ def test_live_production_database_revision_unchanged() -> None:
 
 
 # Touch unused imports so ruff doesn't flag them.
-_ = (SqlIssueRun, SqlIssueRunEvent, IssueRun, IssueRunEvent, encode_issue_run_state,
-     decode_issue_run_state, IssueRunConflictError, DEFAULT_WORKSPACE_ID)
+_ = (
+    SqlIssueRun,
+    SqlIssueRunEvent,
+    IssueRun,
+    IssueRunEvent,
+    encode_issue_run_state,
+    decode_issue_run_state,
+    IssueRunConflictError,
+    DEFAULT_WORKSPACE_ID,
+)

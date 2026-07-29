@@ -179,30 +179,40 @@ ISSUE_RUN_EVENT_KINDS: tuple[str, ...] = (
 # Legal state edges. Forward-only; same-state (no-op) edges are
 # rejected by the store to keep event-log semantics strict.
 ISSUE_RUN_STATE_EDGES: dict[str, frozenset[str]] = {
-    IssueRunState.QUEUED.value: frozenset({
-        IssueRunState.CLAIMING.value,
-        IssueRunState.ABANDONED.value,
-    }),
-    IssueRunState.CLAIMING.value: frozenset({
-        IssueRunState.CLAIMED.value,
-        IssueRunState.FAILED.value,
-        IssueRunState.ABANDONED.value,
-    }),
-    IssueRunState.CLAIMED.value: frozenset({
-        IssueRunState.IN_PROGRESS.value,
-        IssueRunState.FAILED.value,
-        IssueRunState.ABANDONED.value,
-    }),
-    IssueRunState.IN_PROGRESS.value: frozenset({
-        IssueRunState.PR_READY.value,
-        IssueRunState.FAILED.value,
-        IssueRunState.ABANDONED.value,
-    }),
-    IssueRunState.PR_READY.value: frozenset({
-        IssueRunState.DONE.value,
-        IssueRunState.FAILED.value,
-        IssueRunState.ABANDONED.value,
-    }),
+    IssueRunState.QUEUED.value: frozenset(
+        {
+            IssueRunState.CLAIMING.value,
+            IssueRunState.ABANDONED.value,
+        }
+    ),
+    IssueRunState.CLAIMING.value: frozenset(
+        {
+            IssueRunState.CLAIMED.value,
+            IssueRunState.FAILED.value,
+            IssueRunState.ABANDONED.value,
+        }
+    ),
+    IssueRunState.CLAIMED.value: frozenset(
+        {
+            IssueRunState.IN_PROGRESS.value,
+            IssueRunState.FAILED.value,
+            IssueRunState.ABANDONED.value,
+        }
+    ),
+    IssueRunState.IN_PROGRESS.value: frozenset(
+        {
+            IssueRunState.PR_READY.value,
+            IssueRunState.FAILED.value,
+            IssueRunState.ABANDONED.value,
+        }
+    ),
+    IssueRunState.PR_READY.value: frozenset(
+        {
+            IssueRunState.DONE.value,
+            IssueRunState.FAILED.value,
+            IssueRunState.ABANDONED.value,
+        }
+    ),
     IssueRunState.DONE.value: frozenset(),
     IssueRunState.FAILED.value: frozenset(),
     IssueRunState.ABANDONED.value: frozenset(),

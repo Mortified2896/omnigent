@@ -61,12 +61,8 @@ def upgrade() -> None:
         sa.Column("worktree", sa.String(length=2048), nullable=True),
         sa.Column("head_sha", sa.String(length=64), nullable=True),
         sa.Column("pr_number", sa.Integer(), nullable=True),
-        sa.Column(
-            "review_iteration", sa.Integer(), nullable=False, server_default="0"
-        ),
-        sa.Column(
-            "retry_count", sa.Integer(), nullable=False, server_default="0"
-        ),
+        sa.Column("review_iteration", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("retry_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("last_error_code", sa.String(length=64), nullable=True),
         sa.Column("created_at", sa.BigInteger(), nullable=False),
@@ -97,6 +93,60 @@ def upgrade() -> None:
         "issue_runs",
         ["workspace_id", "repository", "state", "updated_at"],
     )
+
+    # DB-level enforcement of "at most one non-terminal row per
+    # (workspace_id, repository, issue_number)". Without this index,
+    # ``SELECT ... FOR UPDATE`` followed by an INSERT has a check-then-
+    # act race on PostgreSQL / MySQL: ``FOR UPDATE`` only locks rows
+    # that already match, so two concurrent transactions can both see
+    # ``existing IS NULL`` and both succeed in INSERTing. SQLite is
+    # safe via ``BEGIN IMMEDIATE`` (per-DB write lock), but Postgres
+    # needs an explicit unique constraint to make the invariant real.
+    # The index is *partial* — terminal states (DONE/FAILED/ABANDONED)
+    # are excluded so the ``create_follow_up`` retry path can insert
+    # a fresh non-terminal row over a terminal predecessor.
+    #
+    # Partial-index syntax differs per dialect; SQLite and PostgreSQL
+    # both accept ``CREATE UNIQUE INDEX ... WHERE ...`` so the same
+    # statement works on the deployed SQLite and on a future Postgres
+    # rollout. MySQL has no partial-index support — the application-
+    # level guards in :meth:`SqlIssueRunStore.try_claim` and
+    # :meth:`SqlIssueRunStore.create_follow_up` provide the same
+    # safety on MySQL via the SELECT-then-INSERT transaction shape.
+    bind = op.get_bind()
+    if bind.dialect.name in ("sqlite", "postgresql"):
+        # Terminal state codes are stable (see ``omnigent.db.enum_codecs.ISSUE_RUN_STATE``):
+        #   done=6, failed=7, abandoned=8.
+        op.execute(
+            "CREATE UNIQUE INDEX uq_issue_runs_active_repo_issue "
+            "ON issue_runs (workspace_id, repository, issue_number) "
+            "WHERE state NOT IN (6, 7, 8)"
+        )
+    elif bind.dialect.name == "mysql":
+        # MySQL has no partial indexes; use a generated column that's
+        # NULL for terminal rows (NULLs are excluded from unique
+        # indexes by default) and the natural-key triple otherwise.
+        op.execute(
+            "ALTER TABLE issue_runs "
+            "ADD COLUMN _active_marker VARCHAR(255) "
+            "GENERATED ALWAYS AS ("
+            "  CASE WHEN state IN (6, 7, 8) THEN NULL "
+            "  ELSE CONCAT(workspace_id, ':', repository, ':', issue_number) "
+            "END"
+            ") STORED"
+        )
+        op.create_index(
+            "uq_issue_runs_active_repo_issue",
+            "issue_runs",
+            ["_active_marker"],
+            unique=True,
+        )
+    else:
+        # Unknown dialect — log but don't fail; the store's
+        # SELECT-then-INSERT transaction is still correct under
+        # SERIALIZABLE isolation. SQLite / PostgreSQL / MySQL cover
+        # every supported deployment target.
+        pass
 
     op.create_table(
         "issue_run_events",
@@ -137,6 +187,4 @@ def downgrade() -> None:
     downgrade would silently drop the issue_run_events rows a
     re-deployed schema expects.
     """
-    raise RuntimeError(
-        "ze1b2c3d4e5f is not safely reversible; restore the pre-cutover backup"
-    )
+    raise RuntimeError("ze1b2c3d4e5f is not safely reversible; restore the pre-cutover backup")

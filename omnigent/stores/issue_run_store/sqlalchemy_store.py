@@ -40,6 +40,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import (
     DEFAULT_WORKSPACE_ID,
@@ -67,6 +68,16 @@ from omnigent.stores.issue_run_store import (
     _validate_patch_keys,
     _validate_state_edge,
 )
+
+
+def _raise_claim_conflict(repository: str, issue_number: int, message: str) -> None:
+    """Raise :class:`IssueRunConflictError` for an atomic-claim loss.
+
+    Centralised so the IntegrityError handler and the synchronous
+    SELECT-based pre-check report the same exception type / shape.
+    """
+    raise IssueRunConflictError(repository=repository, issue_number=issue_number, message=message)
+
 
 # State codes considered "non-terminal" by the recovery sweep +
 # claim path. Matches :data:`omnigent.entities.issue_run.IssueRunState`'s
@@ -226,9 +237,9 @@ class SqlIssueRunStore(IssueRunStore):
         now = _now_epoch()
         with self._session_factory() as session:
             workspace_id = current_workspace_id()
-                # session is already inside a transaction (managed_session with immediate=True).
-                # Lock the natural-key tuple. ``FOR UPDATE`` is a no-op
-                # on SQLite but the per-transaction write lock keeps
+            # session is already inside a transaction (managed_session with immediate=True).
+            # Lock the natural-key tuple. ``FOR UPDATE`` is a no-op
+            # on SQLite but the per-transaction write lock keeps
             # the logic identical; on Postgres / MySQL it
             # serialises concurrent claim attempts.
             stmt = (
@@ -280,7 +291,29 @@ class SqlIssueRunStore(IssueRunStore):
                         created_at=now,
                     )
                 )
-                session.flush()
+                # ``SELECT ... FOR UPDATE`` only locks rows that
+                # already match, so on PostgreSQL / MySQL two
+                # concurrent transactions can both observe
+                # ``existing IS NULL`` and both attempt to INSERT.
+                # The partial unique index
+                # ``uq_issue_runs_active_repo_issue`` (added by the
+                # same migration as this table) is the
+                # database-level safety net: a duplicate INSERT
+                # raises IntegrityError, which we translate to
+                # ``IssueRunConflictError`` so the caller sees the
+                # same exception type whether the conflict was
+                # detected synchronously or via the index.
+                try:
+                    session.flush()
+                except IntegrityError:
+                    _raise_claim_conflict(
+                        repository=repository,
+                        issue_number=issue_number,
+                        message=(
+                            "concurrent try_claim lost the atomic-claim race; "
+                            "another runner inserted a non-terminal row first"
+                        ),
+                    )
                 row = session.execute(
                     select(SqlIssueRun).where(SqlIssueRun.id == run_id)
                 ).scalar_one()
@@ -296,10 +329,7 @@ class SqlIssueRunStore(IssueRunStore):
                     ),
                 )
             # Non-terminal — is the lease still live?
-            lease_live = (
-                existing.lease_expires_at is not None
-                and existing.lease_expires_at > now
-            )
+            lease_live = existing.lease_expires_at is not None and existing.lease_expires_at > now
             if lease_live and existing.lease_owner != owner:
                 raise IssueRunConflictError(
                     repository=repository,
@@ -366,18 +396,15 @@ class SqlIssueRunStore(IssueRunStore):
         now = _now_epoch()
         with self._session_factory() as session:
             workspace_id = current_workspace_id()
-                # session is already inside a transaction (managed_session with immediate=True).
-            row = (
-                session.execute(
-                    select(SqlIssueRun)
-                    .where(
-                        SqlIssueRun.workspace_id == workspace_id,
-                        SqlIssueRun.id == run_id,
-                    )
-                    .with_for_update()
+            # session is already inside a transaction (managed_session with immediate=True).
+            row = session.execute(
+                select(SqlIssueRun)
+                .where(
+                    SqlIssueRun.workspace_id == workspace_id,
+                    SqlIssueRun.id == run_id,
                 )
-                .scalar_one_or_none()
-            )
+                .with_for_update()
+            ).scalar_one_or_none()
             if row is None:
                 raise IssueRunConflictError(
                     repository="<unknown>",
@@ -423,18 +450,15 @@ class SqlIssueRunStore(IssueRunStore):
         now = _now_epoch()
         with self._session_factory() as session:
             workspace_id = current_workspace_id()
-                # session is already inside a transaction (managed_session with immediate=True).
-            row = (
-                session.execute(
-                    select(SqlIssueRun)
-                    .where(
-                        SqlIssueRun.workspace_id == workspace_id,
-                        SqlIssueRun.id == run_id,
-                    )
-                    .with_for_update()
+            # session is already inside a transaction (managed_session with immediate=True).
+            row = session.execute(
+                select(SqlIssueRun)
+                .where(
+                    SqlIssueRun.workspace_id == workspace_id,
+                    SqlIssueRun.id == run_id,
                 )
-                .scalar_one_or_none()
-            )
+                .with_for_update()
+            ).scalar_one_or_none()
             if row is None:
                 raise IssueRunConflictError(
                     repository="<unknown>",
@@ -492,18 +516,15 @@ class SqlIssueRunStore(IssueRunStore):
         now = _now_epoch()
         with self._session_factory() as session:
             workspace_id = current_workspace_id()
-                # session is already inside a transaction (managed_session with immediate=True).
-            row = (
-                session.execute(
-                    select(SqlIssueRun)
-                    .where(
-                        SqlIssueRun.workspace_id == workspace_id,
-                        SqlIssueRun.id == run_id,
-                    )
-                    .with_for_update()
+            # session is already inside a transaction (managed_session with immediate=True).
+            row = session.execute(
+                select(SqlIssueRun)
+                .where(
+                    SqlIssueRun.workspace_id == workspace_id,
+                    SqlIssueRun.id == run_id,
                 )
-                .scalar_one_or_none()
-            )
+                .with_for_update()
+            ).scalar_one_or_none()
             if row is None:
                 raise IssueRunConflictError(
                     repository="<unknown>",
@@ -549,7 +570,7 @@ class SqlIssueRunStore(IssueRunStore):
         reaped: list[IssueRun] = []
         with self._session_factory() as session:
             workspace_id = current_workspace_id()
-                # session is already inside a transaction (managed_session with immediate=True).
+            # session is already inside a transaction (managed_session with immediate=True).
             stmt = (
                 select(SqlIssueRun)
                 .where(
@@ -611,7 +632,7 @@ class SqlIssueRunStore(IssueRunStore):
         owner = _new_run_id()
         with self._session_factory() as session:
             workspace_id = current_workspace_id()
-                # session is already inside a transaction (managed_session with immediate=True).
+            # session is already inside a transaction (managed_session with immediate=True).
             session.add(
                 SqlIssueRun(
                     workspace_id=workspace_id,
@@ -647,10 +668,24 @@ class SqlIssueRunStore(IssueRunStore):
                     created_at=now,
                 )
             )
-            session.flush()
-            row = session.execute(
-                select(SqlIssueRun).where(SqlIssueRun.id == new_id)
-            ).scalar_one()
+            # Same DB-level invariant guard as ``try_claim``: the
+            # partial unique index refuses a second non-terminal row
+            # for the same (workspace, repository, issue), which a
+            # concurrent ``create_follow_up`` could otherwise insert
+            # when the predecessor lookup is racy.
+            try:
+                session.flush()
+            except IntegrityError:
+                _raise_claim_conflict(
+                    repository=repository,
+                    issue_number=issue_number,
+                    message=(
+                        "create_follow_up lost the atomic-claim race; "
+                        "another runner already has an active run for this "
+                        "(repository, issue_number)"
+                    ),
+                )
+            row = session.execute(select(SqlIssueRun).where(SqlIssueRun.id == new_id)).scalar_one()
             return _to_entity(row)
 
 

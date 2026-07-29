@@ -99,19 +99,13 @@ def test_try_claim_second_call_conflicts_when_lease_live(
     """A second concurrent claim with a different owner raises ``IssueRunConflictError``."""
     fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A)
     with pytest.raises(IssueRunConflictError):
-        fresh_db.try_claim(
-            _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_B
-        )
+        fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_B)
 
 
 def test_try_claim_idempotent_for_same_owner(fresh_db: SqlIssueRunStore) -> None:
     """The same caller can re-claim its own lease; the row id is stable."""
-    first = fresh_db.try_claim(
-        _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A
-    )
-    second = fresh_db.try_claim(
-        _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A
-    )
+    first = fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A)
+    second = fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A)
     assert first.id == second.id
     assert first.lease_owner == _LEASE_OWNER_A
 
@@ -151,6 +145,83 @@ def test_concurrent_try_claim_produces_one_winner(fresh_db: SqlIssueRunStore) ->
     assert len(rows) == 1, f"expected 1 row, got {len(rows)}: {rows}"
     # The single row is owned by ``_LEASE_OWNER_A``.
     assert rows[0].lease_owner == _LEASE_OWNER_A
+
+
+def test_try_claim_loses_to_partial_unique_index(
+    fresh_db: SqlIssueRunStore,
+) -> None:
+    """A direct SQL INSERT of a second non-terminal row is refused by the DB.
+
+    Exercises the partial unique index
+    ``uq_issue_runs_active_repo_issue`` that backs the
+    ``IssueRunConflictError`` translation in :meth:`try_claim`.
+    Without the index, two concurrent transactions on PostgreSQL /
+    MySQL could each pass the ``SELECT ... FOR UPDATE`` (which only
+    locks existing rows) and both INSERT, producing two non-terminal
+    rows for the same (workspace, repository, issue) triple.
+    """
+    import uuid as _uuid
+
+    import sqlalchemy as sa
+
+    from omnigent.db.db_models import SqlIssueRun
+    from omnigent.db.enum_codecs import encode_issue_run_state
+    from omnigent.db.utils import get_or_create_engine, make_managed_session_maker
+
+    fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A)
+    engine = get_or_create_engine(fresh_db.storage_location)
+    factory = make_managed_session_maker(engine, immediate=True)
+    second_run_id = _uuid.uuid4().hex
+    with factory() as session:
+        session.add(
+            SqlIssueRun(
+                workspace_id=0,
+                id=second_run_id,
+                repository=_TEST_REPOSITORY,
+                issue_number=_TEST_ISSUE_NUMBER,
+                state=encode_issue_run_state(IssueRunState.QUEUED.value),
+                lease_owner=_LEASE_OWNER_B,
+                lease_acquired_at=0,
+                lease_expires_at=10**9,
+                created_at=0,
+                updated_at=0,
+            )
+        )
+        with pytest.raises(sa.exc.IntegrityError):
+            session.flush()
+        session.rollback()
+
+
+def test_create_follow_up_loses_to_partial_unique_index(
+    fresh_db: SqlIssueRunStore,
+) -> None:
+    """Two concurrent ``create_follow_up`` calls on the same issue produce one row.
+
+    Mirrors the ``try_claim`` race: a direct concurrent INSERT
+    (simulated here by ordering the operations) hits the partial
+    unique index and the second one raises
+    :class:`IssueRunConflictError`.
+    """
+    predecessor = fresh_db.try_claim(
+        _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A
+    )
+    fresh_db.release_lease(predecessor.id, lease_owner=_LEASE_OWNER_A)
+    fresh_db.transition(predecessor.id, to_state=IssueRunState.ABANDONED.value)
+    follow_up = fresh_db.create_follow_up(
+        predecessor_id=predecessor.id,
+        repository=_TEST_REPOSITORY,
+        issue_number=_TEST_ISSUE_NUMBER,
+    )
+    # A second concurrent follow-up for the same issue loses.
+    with pytest.raises(IssueRunConflictError):
+        fresh_db.create_follow_up(
+            predecessor_id=predecessor.id,
+            repository=_TEST_REPOSITORY,
+            issue_number=_TEST_ISSUE_NUMBER,
+        )
+    assert follow_up.state == IssueRunState.QUEUED.value
+    # Exactly one active row remains.
+    assert len(fresh_db.list_active()) == 1
 
 
 def test_transition_writes_event_row(fresh_db: SqlIssueRunStore) -> None:
@@ -283,13 +354,9 @@ def test_expired_lease_can_be_reclaimed_by_new_owner(fresh_db: SqlIssueRunStore)
     """An expired lease is reclaimable; the new owner sees the same row id."""
     import time
 
-    first = fresh_db.try_claim(
-        _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A
-    )
+    first = fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A)
     time.sleep(2.2)
-    second = fresh_db.try_claim(
-        _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_B
-    )
+    second = fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_B)
     assert second.id == first.id
     assert second.lease_owner == _LEASE_OWNER_B
     events = fresh_db.list_events(second.id)
@@ -327,9 +394,7 @@ def test_terminal_state_blocks_re_claim(fresh_db: SqlIssueRunStore) -> None:
         lease_owner=_LEASE_OWNER_A,
     )
     with pytest.raises(IssueRunConflictError):
-        fresh_db.try_claim(
-            _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_B
-        )
+        fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_B)
 
 
 def test_create_follow_up_inserts_fresh_run(fresh_db: SqlIssueRunStore) -> None:
@@ -440,9 +505,7 @@ def test_restarted_process_loads_exact_checkpoint(fresh_db: SqlIssueRunStore) ->
 
 def test_list_active_excludes_terminal_rows(fresh_db: SqlIssueRunStore) -> None:
     """``list_active`` filters out terminal-state rows so the V1 invariant is checkable."""
-    a = fresh_db.try_claim(
-        _TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A
-    )
+    a = fresh_db.try_claim(_TEST_REPOSITORY, _TEST_ISSUE_NUMBER, lease_owner=_LEASE_OWNER_A)
     # Terminalise ``a``.
     fresh_db.transition(a.id, to_state=IssueRunState.ABANDONED.value, lease_owner=_LEASE_OWNER_A)
     active = fresh_db.list_active()
@@ -555,8 +618,7 @@ def test_state_edge_graph_matches_documented_contract() -> None:
     }
     for state, expected in expected_edges.items():
         assert ISSUE_RUN_STATE_EDGES[state] == frozenset(expected), (
-            f"state {state!r} edges {set(ISSUE_RUN_STATE_EDGES[state])} "
-            f"!= expected {expected}"
+            f"state {state!r} edges {set(ISSUE_RUN_STATE_EDGES[state])} != expected {expected}"
         )
 
 
