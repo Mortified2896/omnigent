@@ -10,19 +10,15 @@ of-work level by composing them against fake releases.
 
 from __future__ import annotations
 
-import importlib
-import os
 from pathlib import Path
 
 import pytest
 
-from omnigent.deploy.ops import layout, release_id, systemd
+from omnigent.deploy.ops import systemd
 from omnigent.deploy.preflight import expected_web_ui_dir
-from omnigent.deploy.supervisor.gate import GateError, run_gate
+from omnigent.deploy.supervisor.gate import run_gate
 from omnigent.deploy.supervisor.manifest import (
-    ManifestError,
     ReleaseManifest,
-    verify_manifest_commit,
     write_manifest,
 )
 
@@ -56,18 +52,21 @@ def fake_release(tmp_path: Path) -> Path:
 def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None:
     """Make ``check_runtime_provenance`` succeed on the fake release."""
     import omnigent.deploy.supervisor.provenance as prov
+
     site_packages = fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
 
     monkeypatch.setattr(
         prov, "_resolve_executable", lambda: fake_release / ".venv" / "bin" / "python"
     )
     monkeypatch.setattr(prov, "_resolve_prefix", lambda: fake_release)
+
     def fake_module(name: str, *, attr: str | None = None) -> Path:
         if name == "omnigent":
             return site_packages / "omnigent" / "__init__.py"
         if name == "omnigent.server":
             return site_packages / "omnigent" / "server" / "app.py"
         raise AssertionError(name)
+
     monkeypatch.setattr(prov, "_resolve_module", fake_module)
 
 
@@ -77,6 +76,7 @@ def test_layout_releases_manifests_failed_layout(deploy_root: Path) -> None:
     # root and ``releases()`` / ``manifests()`` / ``failed()`` each
     # ensure their subdir exists on access.
     from omnigent.deploy.ops import layout as layout_mod
+
     layout_mod.deploy_root()
     layout_mod.releases_dir()
     layout_mod.manifests_dir()
@@ -123,12 +123,23 @@ def test_release_with_manifest_matches_expected_sha(
         python_executable=str(fake_release / ".venv" / "bin" / "python"),
         python_version="3.12.13",
         omnigent_module_path=str(
-            fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
-            / "omnigent" / "__init__.py"
+            fake_release
+            / ".venv"
+            / "lib"
+            / "python3.12"
+            / "site-packages"
+            / "omnigent"
+            / "__init__.py"
         ),
         omnigent_server_app_path=str(
-            fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
-            / "omnigent" / "server" / "app.py"
+            fake_release
+            / ".venv"
+            / "lib"
+            / "python3.12"
+            / "site-packages"
+            / "omnigent"
+            / "server"
+            / "app.py"
         ),
         lockfile_hashes={"uv.lock": _sha256(fake_release / "uv.lock")},
     )

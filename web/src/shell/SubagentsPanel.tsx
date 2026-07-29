@@ -155,14 +155,7 @@ export function SubagentsPanel({ conversationId, rootSessionId }: SubagentsPanel
 // NOT genuinely fail, so it renders a quiet, non-destructive grey dot rather
 // than the red "Failed" one.
 type AgentActivity =
-  | "launching"
-  | "working"
-  | "awaiting"
-  | "done"
-  | "failed"
-  | "disconnected"
-  | "idle"
-  | "other";
+  "launching" | "working" | "awaiting" | "done" | "failed" | "disconnected" | "idle" | "other";
 
 // Error codes that mean "the runner went away", not "the task failed".
 // ``runner_disconnected`` is published when the SSE relay's tunnel drops

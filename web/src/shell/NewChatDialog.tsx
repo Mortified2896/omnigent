@@ -1036,9 +1036,9 @@ function OpenCodePermissionModeOptions({
         >
           <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            Bypass permissions lets the session run every OpenCode tool without
-            asking. Omnigent sandboxing, network policy, and host policy still
-            apply — only OpenCode's local permission gate is relaxed.
+            Bypass permissions lets the session run every OpenCode tool without asking. Omnigent
+            sandboxing, network policy, and host policy still apply — only OpenCode's local
+            permission gate is relaxed.
           </span>
         </div>
       )}
@@ -1770,9 +1770,7 @@ function AgentHarnessPicker({
                 setPickedOmniRouteRoute("");
                 setPickedModel(value);
               }
-              const next = models.find(
-                (item) => item.id === value || item.route_id === value,
-              );
+              const next = models.find((item) => item.id === value || item.route_id === value);
               if (!next?.reasoning_efforts?.includes(optionEffort)) {
                 if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
                 setPickedEffort("");
@@ -2881,17 +2879,15 @@ export function NewChatLandingScreen() {
     if (mentionFsQuery.isPlaceholderData) return [];
     const rows = (mentionFsQuery.data?.entries ?? [])
       .filter((e) => e.type === "directory" || e.type === "file")
-      .map(
-        (e): WorkspaceFile => ({
-          path: e.path.startsWith(workspaceRoot)
-            ? e.path.slice(workspaceRoot.length).replace(/^\/+/, "")
-            : e.name,
-          name: e.name,
-          type: e.type === "directory" ? "directory" : "file",
-          bytes: e.bytes,
-          modified_at: e.modified_at,
-        }),
-      );
+      .map((e): WorkspaceFile => ({
+        path: e.path.startsWith(workspaceRoot)
+          ? e.path.slice(workspaceRoot.length).replace(/^\/+/, "")
+          : e.name,
+        name: e.name,
+        type: e.type === "directory" ? "directory" : "file",
+        bytes: e.bytes,
+        modified_at: e.modified_at,
+      }));
     return rankMentionEntries(rows, mentionFilter);
   }, [
     mentionEnabled,

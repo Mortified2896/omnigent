@@ -400,11 +400,7 @@ export interface TaskRunRoutingContext {
 
 export interface TaskRunSelectionContext {
   source:
-    | "routing_agent"
-    | "user_selected_model"
-    | "user_selected_route"
-    | "session_default"
-    | "unknown";
+    "routing_agent" | "user_selected_model" | "user_selected_route" | "session_default" | "unknown";
   requested: {
     harness: string | null;
     provider: string | null;
