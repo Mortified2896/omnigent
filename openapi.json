@@ -193,6 +193,25 @@
         "title": "Body_upload_session_file_v1_sessions__session_id__resources_files_post",
         "type": "object"
       },
+      "CancelRequest": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/updater/request-cancel`.",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "title": "CancelRequest",
+        "type": "object"
+      },
       "CancelledEvent": {
         "description": "Terminal event for a turn cancelled before completion.",
         "properties": {
@@ -1133,6 +1152,99 @@
           "response"
         ],
         "title": "CreatedEvent",
+        "type": "object"
+      },
+      "DeliverRequest": {
+        "additionalProperties": false,
+        "description": "The structured result payload the updater delivers.\n\nMirrors `omnigent.updater.protocol.ResultRecord`'s\nfields so the web service can persist the result as a comment\nwithout re-deriving anything. All fields are required because\nthe updater must always send a complete record.",
+        "properties": {
+          "deployed_sha": {
+            "default": "0000000000000000000000000000000000000000",
+            "maxLength": 40,
+            "minLength": 40,
+            "title": "Deployed Sha",
+            "type": "string"
+          },
+          "failure_phase": {
+            "default": "",
+            "title": "Failure Phase",
+            "type": "string"
+          },
+          "failure_reason": {
+            "default": "",
+            "title": "Failure Reason",
+            "type": "string"
+          },
+          "final_status": {
+            "title": "Final Status",
+            "type": "string"
+          },
+          "previous_sha": {
+            "default": "0000000000000000000000000000000000000000",
+            "maxLength": 40,
+            "minLength": 40,
+            "title": "Previous Sha",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 26,
+            "minLength": 26,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "rollback_performed": {
+            "default": false,
+            "title": "Rollback Performed",
+            "type": "boolean"
+          },
+          "rollback_result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Result"
+          },
+          "target_sha": {
+            "maxLength": 40,
+            "minLength": 40,
+            "title": "Target Sha",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "final_status",
+          "target_sha"
+        ],
+        "title": "DeliverRequest",
+        "type": "object"
+      },
+      "DeliverResponse": {
+        "description": "Response body for `POST /api/updater/result-deliver`.",
+        "properties": {
+          "comment_id": {
+            "title": "Comment Id",
+            "type": "string"
+          },
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivered",
+          "comment_id",
+          "message"
+        ],
+        "title": "DeliverResponse",
         "type": "object"
       },
       "ElicitationRequestEvent": {
@@ -6238,6 +6350,157 @@
   },
   "openapi": "3.2.0",
   "paths": {
+    "/api/updater/drain-status": {
+      "get": {
+        "operationId": "drain_status_api_updater_drain_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Drain Status Api Updater Drain Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Drain Status",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
+    "/api/updater/request-cancel": {
+      "post": {
+        "operationId": "request_cancel_api_updater_request_cancel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Request Cancel Api Updater Request Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Cancel",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
+    "/api/updater/requests/{request_id}": {
+      "get": {
+        "operationId": "get_request_status_api_updater_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Request Status Api Updater Requests  Request Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Request Status",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
+    "/api/updater/result-deliver": {
+      "post": {
+        "operationId": "deliver_result_api_updater_result_deliver_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliverResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deliver Result",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
     "/api/version": {
       "get": {
         "description": "Return the installed omnigent package version.\n\nUsed by the web UI to include version info in bug reports.\n\n**Returns:** `{\"version\": \"<semver string>\"}`, e.g. `{\"version\": \"0.1.0\"}`.",
