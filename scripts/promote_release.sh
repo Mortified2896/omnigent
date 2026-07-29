@@ -320,6 +320,23 @@ write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
   RELEASE_DIR="$FINAL_RELEASE_DIR"
   MANIFEST_PATH="$RELEASE_DIR/manifest.json"
 
+  # Rewrite the ``.venv/bin/{omni,omnigent}`` entry-point shims so
+  # their shebang points at the canonical release dir rather than
+  # the (now-deleted) staging dir. ``uv pip install`` embedded the
+  # staging path at install time and the rename does not touch the
+  # shim. The host launch path also avoids the shim directly via
+  # ``python -P -m omnigent host`` (see ``write_host_dropin``), so
+  # this is a defense-in-depth normalization.
+  "$RELEASE_DIR/.venv/bin/python" -P -c "
+import sys
+sys.path.insert(0, '$RELEASE_DIR')
+from pathlib import Path
+from omnigent.deploy.ops.systemd import normalize_entry_point_shims
+rewritten = normalize_entry_point_shims(Path('$RELEASE_DIR'))
+if rewritten:
+    print('normalized entry-point shims:', [str(p) for p in rewritten])
+" || fail "could not normalize .venv/bin/{omni,omnigent} shims"
+
   # 2f. strict canonical-path verification immediately after the atomic
   # rename. The manifest records ``$FINAL_RELEASE_DIR`` because the
   # shell script passed it explicitly to ``from_directory``; this
@@ -422,6 +439,31 @@ log "running daemon-reload + systemctl restart $SERVICE_NAME"
 sudo systemctl daemon-reload || fail "systemctl daemon-reload failed"
 sudo systemctl restart "$SERVICE_NAME" || fail "systemctl restart $SERVICE_NAME failed"
 
+# Write the host drop-in alongside the web drop-in so the host
+# service cannot stay pinned at a previous release while the web
+# has moved on. The drop-in precedence (``10-release-*``) wins
+# over the older ``10-deploy-main-*`` entries; ``disable_other_``
+# cleans both web and host directories.
+HOST_SERVICE=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
+from omnigent.deploy.ops.systemd import host_service_name
+print(host_service_name())
+") || HOST_SERVICE="omnigent-eval-host.service"
+if [[ -n "$HOST_SERVICE" ]] && [[ "$HOST_SERVICE" != "$SERVICE_NAME" ]]; then
+  HOST_DROPIN_PATH=$(sudo "$RELEASE_DIR/.venv/bin/python" -c "
+import os, sys
+sys.path.insert(0, '$RELEASE_DIR')
+from omnigent.deploy.ops.systemd import write_host_dropin
+p = write_host_dropin('$sha', release_dir=__import__('pathlib').Path('$RELEASE_DIR'))
+print(p)
+" 2>&1) || log "(continuing) could not write host drop-in for $HOST_SERVICE"
+  if [[ -n "${HOST_DROPIN_PATH:-}" ]]; then
+    log "wrote host drop-in: $HOST_DROPIN_PATH"
+  fi
+  log "restarting $HOST_SERVICE onto release $short"
+  sudo systemctl restart "$HOST_SERVICE" || fail "systemctl restart $HOST_SERVICE failed"
+fi
+
 # Wait for the service to come back up.
 up_after=0
 for i in $(seq 1 30); do
@@ -514,7 +556,32 @@ if [[ "${OMIT_HEALTH:-0}" != "1" ]]; then
   fi
 fi
 
-# --- 6. Update deployment metadata ----------------------------------------
+# --- 6. Verify loaded release across web + host -------------------------
+# Refuse to declare the deployment live if either service is still
+# running from a different release directory than the one this
+# promotion claims to have deployed. This is the deployment-
+# completeness check that issue #30's regression lacked: the host
+# stayed at the previous SHA because the promotion script only
+# restarted the web.
+log "verifying both web and host loaded release $short"
+"$RELEASE_DIR/.venv/bin/python" -c "
+import sys
+sys.path.insert(0, '$RELEASE_DIR')
+from omnigent.deploy.ops.systemd import (
+    verify_loaded_release,
+    service_name,
+    host_service_name,
+)
+for svc in (service_name(), host_service_name()):
+    try:
+        path = verify_loaded_release(service=svc, expected_sha='$sha')
+    except Exception as exc:
+        print(f'verify FAILED for {svc}: {exc}', file=sys.stderr)
+        sys.exit(1)
+    print(f'verify OK    {svc} -> {path}')
+" || fail "post-restart loaded-release verification failed (web + host must load $sha)"
+
+# --- 7. Update deployment metadata ----------------------------------------
 mkdir -p "$(dirname ~/.omnigent/deployed-sha 2>/dev/null)"
 log "updating ~/.omnigent/deployed-sha and previous-deployed-sha"
 printf '%s\n' "$sha" > ~/.omnigent/deployed-sha.tmp

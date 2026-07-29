@@ -1743,7 +1743,6 @@ async def test_idle_watchdog_attaches_recent_forwarder_post_failure(
     once the watchdog reads ``_native_forwarder_health``.
     """
     from omnigent import _native_forwarder_health as health
-    from omnigent.runtime.harnesses import _scaffold
 
     class _WedgedApp(HarnessApp):
         async def run_turn(self, request: Any, ctx: TurnContext) -> None:
@@ -1755,8 +1754,8 @@ async def test_idle_watchdog_attaches_recent_forwarder_post_failure(
     # idle ceiling (not the absolute one) is what fails the turn. The reader's
     # recency window is 2x the idle timeout, comfortably covering the record
     # made just before run_turn started plus scheduling overhead.
-    monkeypatch.setattr(_scaffold, "_TURN_IDLE_TIMEOUT_S", 0.2)
-    monkeypatch.setattr(_scaffold, "_TURN_ABSOLUTE_TIMEOUT_S", 3600.0)
+    monkeypatch.setenv("HARNESS_MODEL_STREAM_IDLE_S", "0.2")
+    monkeypatch.setenv("HARNESS_MAX_TURN_RUNTIME_S", "3600")
 
     health.clear()
     health.record_post_failure("external_session_status", httpx.ConnectError("No route to host"))

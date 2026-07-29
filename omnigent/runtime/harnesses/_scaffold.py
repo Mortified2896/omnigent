@@ -469,18 +469,33 @@ class TurnContext:
             delta="hi")``.
         """
         # Treat any non-heartbeat event as progress and push the idle
-        # watchdog deadline forward. ``HeartbeatEvent`` is keep-alive,
-        # NOT progress — letting it reset the deadline would defeat
-        # the watchdog (a wedged turn's 15s heartbeats would keep it
-        # alive forever). ``SubprocessLivenessEvent`` DOES count as
-        # progress: the harness is alive, the supervised subprocess
-        # is alive, and the operator should be able to see why the
-        # turn is taking this long.
-        if (
-            self._reset_idle_watchdog is not None
-            and isinstance(event, (HeartbeatEvent, SubprocessLivenessEvent)) is False
-        ):
-            self._reset_idle_watchdog()
+        # watchdog deadline forward — but only when an idle
+        # watchdog has actually been enabled. ``HeartbeatEvent`` is
+        # keep-alive, NOT progress: letting it reset the deadline
+        # would defeat the watchdog (a wedged turn's 15s heartbeats
+        # would keep it alive forever). ``SubprocessLivenessEvent``
+        # DOES count as progress: the harness is alive, the
+        # supervised subprocess is alive, and the operator should be
+        # able to see why the turn is taking this long.
+        #
+        # Note: when ``HARNESS_MODEL_STREAM_IDLE_S`` is ``0`` (the
+        # Control Room default), ``_reset_idle_watchdog`` is never
+        # installed (``_guarded_run_turn`` skips the assignment for
+        # ``idle_timeout <= 0``) so this branch is a no-op anyway.
+        # The check below is therefore the canonical safety net for
+        # installations that explicitly opt into an idle timeout.
+        if self._reset_idle_watchdog is None:
+            self._event_queue.put_nowait(event)
+            return
+        if isinstance(event, (HeartbeatEvent,)):
+            # Pure keep-alive; do not let it mask an idle stall.
+            self._event_queue.put_nowait(event)
+            return
+        # All other events — ``SubprocessLivenessEvent``,
+        # ``OutputItemDoneEvent``, ``CompletedEvent``, model deltas,
+        # tool calls, tool results, status transitions, etc. —
+        # reset the enabled idle deadline.
+        self._reset_idle_watchdog()
         self._event_queue.put_nowait(event)
 
     def register_supervised_subprocess(
