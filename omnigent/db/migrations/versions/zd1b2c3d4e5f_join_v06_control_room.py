@@ -52,7 +52,16 @@ depends_on: str | Sequence[str] | None = None
 # (table, columns) — for each control-room audit / outcome table whose
 # identifiers must be 16 raw bytes on disk. Tables that don't exist on
 # the target DB (e.g. legacy pre-routing forks) are silently skipped.
+# (table, columns) — for each control-room audit / outcome table whose
+# identifiers must be 16 raw bytes on disk. Tables that don't exist on
+# the target DB (e.g. legacy pre-routing forks) are silently skipped.
+#
+# Order matters: the helper iterates this dict and applies the
+# ``batch_alter_table`` rebuild per table; a child table's FK to a
+# parent must resolve against the new column type, so the parent is
+# converted first.
 _CUSTOM_ID_COLUMNS: dict[str, tuple[str, ...]] = {
+    "conversations": ("id",),
     "routing_proposals": ("id", "conversation_id"),
     "routing_decisions": ("id", "proposal_id"),
     "task_runs": (
