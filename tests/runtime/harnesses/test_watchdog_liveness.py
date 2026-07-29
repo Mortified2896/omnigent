@@ -173,9 +173,7 @@ def test_update_subprocess_io_records_byte_counters_and_prompt_hints() -> None:
     """Harness-side byte / hint updates flow through to the tracker."""
     proc = _idle_proc(10.0)
     try:
-        register_supervised_subprocess(
-            name="pytest", pid=proc.pid, command="pytest"
-        )
+        register_supervised_subprocess(name="pytest", pid=proc.pid, command="pytest")
         update_subprocess_io(
             proc.pid,
             stdout_bytes=128,
@@ -369,9 +367,7 @@ def test_terminate_subprocess_tree_kills_alive_subprocess() -> None:
     assert proc.pid is not None
     try:
         register_supervised_subprocess(name="sleeper", pid=proc.pid, command="sleep 60")
-        terminate_subprocess_tree(
-            proc.pid, grace_s=1.0, escalate_to_sigkill=True
-        )
+        terminate_subprocess_tree(proc.pid, grace_s=1.0, escalate_to_sigkill=True)
         # The process should be gone (or reaped) within a few seconds.
         deadline = time.time() + 4.0
         while time.time() < deadline:
@@ -466,9 +462,7 @@ def test_watchdog_does_not_kill_live_silent_subprocess(fresh_tracker: None) -> N
     """
     proc = _idle_proc(10.0)
     try:
-        register_supervised_subprocess(
-            name="silent-build", pid=proc.pid, command="build --silent"
-        )
+        register_supervised_subprocess(name="silent-build", pid=proc.pid, command="build --silent")
         # Simulate the watchdog firing after the configured idle window
         # by classifying with the live state.
         classified = classify_timeout(
@@ -504,8 +498,7 @@ def test_no_unbounded_background_process_after_tests(fresh_tracker: None) -> Non
     """
     for entry in tracked_subprocesses():
         assert entry.pid is None or not _pid_alive(entry.pid), (
-            f"Subprocess {entry.name} (pid={entry.pid}) outlived its test; "
-            f"tracker leak."
+            f"Subprocess {entry.name} (pid={entry.pid}) outlived its test; tracker leak."
         )
 
 

@@ -31,10 +31,8 @@ and the project supports Python 3.12+, so the method is used directly.
 
 from __future__ import annotations
 
-import importlib
 import os
 import re
-import site
 import sys
 import sysconfig
 from pathlib import Path
@@ -335,7 +333,9 @@ def _check_module_inside_site_packages(
     # The release *source root* is intentionally also a forbidden
     # location: even though it satisfies ``is_relative_to(release)``,
     # a healthy immutable release only imports from site-packages.
-    if resolved.is_relative_to(release / "omnigent") and not resolved.is_relative_to(site_packages):
+    if resolved.is_relative_to(release / "omnigent") and not resolved.is_relative_to(
+        site_packages
+    ):
         raise ProvenanceError(
             f"{module_name}{('.' + attr) if attr else ''} resolves to "
             f"{resolved}, which lives at the release source root "
@@ -403,12 +403,18 @@ def check_runtime_provenance(release_root: Path) -> dict[str, str]:
 
     omnigent_path = _resolve_module("omnigent")
     _check_module_inside_site_packages(
-        module_name="omnigent", attr=None, resolved=omnigent_path, release=release,
+        module_name="omnigent",
+        attr=None,
+        resolved=omnigent_path,
+        release=release,
     )
 
     app_path = _resolve_module("omnigent.server", attr="app")
     _check_module_inside_site_packages(
-        module_name="omnigent.server", attr="app", resolved=app_path, release=release,
+        module_name="omnigent.server",
+        attr="app",
+        resolved=app_path,
+        release=release,
     )
 
     site_packages = _release_site_packages(release)
@@ -482,7 +488,10 @@ def main() -> int:
     # directory they want to probe).
     release_dir = (args[0] if args else os.environ.get("OMNIGENT_RELEASE_DIR", "")).strip()
     if not release_dir:
-        print("release directory not provided (set OMNIGENT_RELEASE_DIR or pass it as the first argument)", file=sys.stderr)
+        print(
+            "release directory not provided (set OMNIGENT_RELEASE_DIR or pass it as the first argument)",
+            file=sys.stderr,
+        )
         return 2
     if "PYTHONPATH" in os.environ:
         print(

@@ -1180,9 +1180,7 @@ async def test_mint_token_endpoint_header_mode_unsupported_returns_400() -> None
 # when the receive side drops or the route handler is cancelled.
 
 
-async def _wait_for_in_flight(
-    session: object, *, timeout_s: float = 1.0
-) -> None:
+async def _wait_for_in_flight(session: object, *, timeout_s: float = 1.0) -> None:
     """Poll until ``session.in_flight`` is non-empty.
 
     :param session: The runner session whose in-flight map should
@@ -1199,9 +1197,7 @@ async def _wait_for_in_flight(
     raise AssertionError("no request opened in_flight within timeout")
 
 
-async def _wait_until(
-    predicate: Callable[[], object], *, timeout_s: float = 1.0
-) -> None:
+async def _wait_until(predicate: Callable[[], object], *, timeout_s: float = 1.0) -> None:
     """Poll a synchronous predicate until it becomes truthy.
 
     :param predicate: Zero-argument callable returning a truthy
@@ -1253,9 +1249,7 @@ async def test_ws_tunnel_route_cleans_up_on_receive_side_disconnect() -> None:
     # ``state.head_future`` until the runner sends back a head frame.
     transport = WSTunnelTransport(registry, runner_id)
     request_task = asyncio.create_task(
-        transport.handle_async_request(
-            httpx.Request("GET", "http://runner/health")
-        ),
+        transport.handle_async_request(httpx.Request("GET", "http://runner/health")),
         name="regression-disconnect-pending-request",
     )
     await asyncio.wait_for(
@@ -1353,19 +1347,23 @@ async def test_ws_tunnel_route_replacement_generation_preserves_new_session() ->
     old_session = session_a
     communicator_b = await _connect_route(route_app.app, _TUNNEL_PATH)
     await communicator_b.send_input(
-        {"type": "websocket.receive", "text": encode_frame(
-            HelloFrame(
-                runner_version="0.1.0-test",
-                frame_protocol_version=1,
-                harnesses=["claude-sdk"],
-                envs=["os_sandbox"],
-            )
-        )},
+        {
+            "type": "websocket.receive",
+            "text": encode_frame(
+                HelloFrame(
+                    runner_version="0.1.0-test",
+                    frame_protocol_version=1,
+                    harnesses=["claude-sdk"],
+                    envs=["os_sandbox"],
+                )
+            ),
+        },
     )
     await asyncio.wait_for(
         _wait_until(
-            lambda: registry.get(runner_id) is not None
-            and registry.get(runner_id) is not old_session,
+            lambda: (
+                registry.get(runner_id) is not None and registry.get(runner_id) is not old_session
+            ),
             timeout_s=2.0,
         ),
         timeout=2.0,
@@ -1380,9 +1378,7 @@ async def test_ws_tunnel_route_replacement_generation_preserves_new_session() ->
     # must use the identity-safe ``deregister(runner_id, session_a)``
     # so it removes session_a (already gone from the registry) and
     # leaves session_b intact.
-    await communicator_a.send_input(
-        {"type": "websocket.disconnect", "code": 1000}
-    )
+    await communicator_a.send_input({"type": "websocket.disconnect", "code": 1000})
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(communicator_a.wait(timeout=2.0), timeout=2.0)
 
@@ -1393,9 +1389,7 @@ async def test_ws_tunnel_route_replacement_generation_preserves_new_session() ->
     assert registry.online_runner_ids() == [runner_id]
 
     # Clean up tunnel B.
-    await communicator_b.send_input(
-        {"type": "websocket.disconnect", "code": 1000}
-    )
+    await communicator_b.send_input({"type": "websocket.disconnect", "code": 1000})
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(communicator_b.wait(timeout=2.0), timeout=2.0)
     assert registry.get(runner_id) is None
@@ -1461,9 +1455,7 @@ async def test_ws_tunnel_route_deregisters_on_task_cancellation() -> None:
     # verifies the pending request is also woken on cancellation.
     transport = WSTunnelTransport(registry, runner_id)
     request_task = asyncio.create_task(
-        transport.handle_async_request(
-            httpx.Request("GET", "http://runner/health")
-        ),
+        transport.handle_async_request(httpx.Request("GET", "http://runner/health")),
         name="regression-cancel-pending-request",
     )
     await asyncio.wait_for(

@@ -1214,7 +1214,9 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
 
     conv = conversation_store.create_conversation()
     with conversation_store._session() as session:  # type: ignore[attr-defined]
-        ws = session.execute(text("SELECT workspace_id FROM conversations WHERE id = :id"), {"id": conv.id}).scalar_one()
+        ws = session.execute(
+            text("SELECT workspace_id FROM conversations WHERE id = :id"), {"id": conv.id}
+        ).scalar_one()
         # routing_proposals row + child routing_decisions row
         session.execute(
             text(

@@ -2938,6 +2938,7 @@
             "response.reasoning_summary_text.delta": "#/components/schemas/ReasoningSummaryTextDeltaEvent",
             "response.reasoning_text.delta": "#/components/schemas/ReasoningTextDeltaEvent",
             "response.retry": "#/components/schemas/RetryEvent",
+            "response.subprocess_live": "#/components/schemas/SubprocessLivenessEvent",
             "session.agent_changed": "#/components/schemas/SessionAgentChangedEvent",
             "session.changed_files.invalidated": "#/components/schemas/SessionChangedFilesInvalidatedEvent",
             "session.child_session.updated": "#/components/schemas/SessionChildSessionUpdatedEvent",
@@ -3051,6 +3052,9 @@
           },
           {
             "$ref": "#/components/schemas/HeartbeatEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SubprocessLivenessEvent"
           },
           {
             "$ref": "#/components/schemas/SessionHeartbeatEvent"
@@ -5365,6 +5369,131 @@
         "title": "SlashCommandData",
         "type": "object"
       },
+      "SubprocessLivenessEvent": {
+        "description": "Liveness event emitted while a supervised subprocess is alive.\n\nDistinct from `HeartbeatEvent` (`response.heartbeat`)\nwhich is a pure keep-alive. The liveness event resets the\nscaffold's idle watchdog, carrying enough diagnostics for the\nwatchdog to distinguish `slow but alive` from a real timeout:\n\n- `command` \u2014 argv the subprocess was launched with\n  (truncated for log size).\n- `pid` \u2014 the supervised process id; `None` if the process\n  has exited by the time of emission.\n- `elapsed_s` \u2014 wall-clock seconds since the subprocess was\n  registered.\n- `last_stdout_at` / `last_stderr_at` \u2014 ISO-8601 wall\n  timestamps of the most recent stdout / stderr bytes read by\n  the harness, or `None` if none have been observed yet.\n- `stdout_bytes` / `stderr_bytes` \u2014 cumulative byte counts\n  read from the supervised process.\n- `state` \u2014 one of `alive`, `interactive_wait`,\n  `zombie`, or `exited`. `interactive_wait` is set when\n  the process is alive but the harness has detected an\n  outstanding password / sudo / pager / confirmation prompt\n  (heuristics in\n  `omnigent.runtime.harnesses.watchdog`).\n- `cpu_percent` / `rss_bytes` \u2014 process resource snapshot\n  when `psutil` is available; `None` on unsupported\n  platforms or when the process is gone.\n- `interactive_hint` \u2014 short string the watchdog extracted\n  when `state == \"interactive_wait\"` (e.g. `\"[sudo] password for user: \"`). `None` otherwise.\n\nConsumers SHOULD treat the event as proof of life and let the\nturn continue; the watchdog will only fire when liveness events\nstop arriving within the configured idle window.",
+        "properties": {
+          "command": {
+            "default": "",
+            "title": "Command",
+            "type": "string"
+          },
+          "cpu_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cpu Percent"
+          },
+          "elapsed_s": {
+            "default": 0.0,
+            "title": "Elapsed S",
+            "type": "number"
+          },
+          "interactive_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Interactive Hint"
+          },
+          "last_stderr_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Stderr At"
+          },
+          "last_stdout_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Stdout At"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pid"
+          },
+          "rss_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rss Bytes"
+          },
+          "sequence_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sequence Number"
+          },
+          "state": {
+            "default": "alive",
+            "title": "State",
+            "type": "string"
+          },
+          "stderr_bytes": {
+            "default": 0,
+            "title": "Stderr Bytes",
+            "type": "integer"
+          },
+          "stdout_bytes": {
+            "default": 0,
+            "title": "Stdout Bytes",
+            "type": "integer"
+          },
+          "type": {
+            "const": "response.subprocess_live",
+            "description": "Always `\"response.subprocess_live\"`.",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "SubprocessLivenessEvent",
+        "type": "object"
+      },
       "TerminalCommandData": {
         "description": "Data payload for a runner-side terminal command (`!cmd`) observed\nin a harness transcript (today: Claude Code's embedded TUI).\n\nListed in `NON_CONTENT_ITEM_TYPES` so the agent loop never\ninjects this as phantom content into the LLM's message history.\n\nClaude Code writes two sibling transcript records per `!cmd`\ninvocation: one `<bash-input>` record and one combined\n`<bash-stdout>`/`<bash-stderr>` record. Each maps to one\n`terminal_command` item with `kind=\"input\"` or\n`kind=\"output\"` respectively.",
         "properties": {
@@ -6295,6 +6424,52 @@
         "summary": "List Builtin Agents",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/v1/harness-model-options": {
+      "get": {
+        "operationId": "get_harness_model_options_v1_harness_model_options_get",
+        "parameters": [
+          {
+            "description": "Canonical harness id, e.g. opencode-native",
+            "in": "query",
+            "name": "harness",
+            "required": true,
+            "schema": {
+              "description": "Canonical harness id, e.g. opencode-native",
+              "title": "Harness",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Harness Model Options V1 Harness Model Options Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Harness Model Options",
+        "tags": [
+          "harness_model_options"
         ]
       }
     },

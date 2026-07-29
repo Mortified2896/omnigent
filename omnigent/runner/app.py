@@ -19575,6 +19575,7 @@ def create_runner_app_from_env() -> FastAPI:
 
         app = create_runner_app(server_client=server_client, provenance_proxy=provenance_proxy)
 
+        @contextlib.asynccontextmanager
         async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await provenance_proxy.start()
             try:

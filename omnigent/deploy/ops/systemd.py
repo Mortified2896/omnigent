@@ -24,7 +24,6 @@ import shutil
 import tempfile
 from pathlib import Path
 
-
 _DEFAULT_SERVICE = "omnigent-eval-web.service"
 _DEFAULT_DROPIN_DIR = Path("/etc/systemd/system/omnigent-eval-web.service.d")
 _DEFAULT_PORT = 4097

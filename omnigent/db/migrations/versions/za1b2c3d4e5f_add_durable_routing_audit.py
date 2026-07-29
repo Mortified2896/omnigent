@@ -137,8 +137,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if op.get_bind().dialect.name == "sqlite":
-        op.drop_column("task_runs", "routing_decision_id")
-        op.drop_column("task_runs", "routing_proposal_id")
+        with op.batch_alter_table("task_runs") as batch:
+            batch.drop_column("routing_decision_id")
+            batch.drop_column("routing_proposal_id")
     else:
         with op.batch_alter_table("task_runs") as batch:
             batch.drop_constraint("fk_task_runs_routing_decision", type_="foreignkey")
@@ -149,4 +150,5 @@ def downgrade() -> None:
     op.drop_table("routing_decisions")
     op.drop_index("ix_routing_proposals_conversation_created", table_name="routing_proposals")
     op.drop_table("routing_proposals")
-    op.drop_column("conversations", "routing_selection_source")
+    with op.batch_alter_table("conversations") as batch:
+        batch.drop_column("routing_selection_source")

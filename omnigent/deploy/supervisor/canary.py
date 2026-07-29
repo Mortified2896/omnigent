@@ -85,7 +85,9 @@ def _http_get(url: str, *, timeout: float = 5.0) -> tuple[int, str]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:  # 4xx/5xx that *answered*
-        return exc.code, exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+        return exc.code, exc.read().decode("utf-8", errors="replace") if hasattr(
+            exc, "read"
+        ) else ""
     except urllib.error.URLError as exc:
         raise CanaryError(f"GET {url} failed: {exc}") from exc
 
@@ -228,8 +230,7 @@ def run_canary(
     try:
         if not _wait_for_bind(port, bind_timeout_s):
             raise CanaryError(
-                f"canary process exited before binding 127.0.0.1:{port}; "
-                f"see {log_path}"
+                f"canary process exited before binding 127.0.0.1:{port}; see {log_path}"
             )
         # `/health` is the universal liveness probe (also used by the
         # public health check script).
@@ -257,9 +258,7 @@ def run_canary(
                 asset_url = f"http://127.0.0.1:{port}/{asset_rel.lstrip('/')}"
                 asset_status, _ = _http_get(asset_url)
                 if asset_status != 200:
-                    raise CanaryError(
-                        f"referenced asset {asset_rel!r} returned {asset_status}"
-                    )
+                    raise CanaryError(f"referenced asset {asset_rel!r} returned {asset_status}")
         return {
             "port": str(port),
             "pid": str(proc.pid),

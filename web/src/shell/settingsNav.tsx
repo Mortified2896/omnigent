@@ -28,14 +28,7 @@ import { isElectronShell } from "@/lib/nativeBridge";
 import { cn } from "@/lib/utils";
 
 export type SettingsSectionId =
-  | "appearance"
-  | "git"
-  | "shortcuts"
-  | "account"
-  | "members"
-  | "policies"
-  | "archived"
-  | "cli";
+  "appearance" | "git" | "shortcuts" | "account" | "members" | "policies" | "archived" | "cli";
 
 const SECTION_IDS: readonly SettingsSectionId[] = [
   "appearance",

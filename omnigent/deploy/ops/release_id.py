@@ -23,7 +23,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHORT_SHA = re.compile(r"^[0-9a-f]{7,39}$")
 _REF_NAME = re.compile(r"^[0-9A-Za-z._/-]+$")
@@ -119,7 +118,9 @@ def fetch(repo: Path, *, remote: str | None = None) -> None:
     soft error: ``normalize_ref`` will still succeed against the
     locally available refs.
     """
-    remote_name = (remote or os.environ.get("OMNIGENT_PROMOTE_FROM_REMOTE", "fork")).strip() or "fork"
+    remote_name = (
+        remote or os.environ.get("OMNIGENT_PROMOTE_FROM_REMOTE", "fork")
+    ).strip() or "fork"
     try:
         subprocess.run(
             ["git", "-C", str(repo), "fetch", remote_name],

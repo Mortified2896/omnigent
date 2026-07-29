@@ -125,9 +125,7 @@ def _convert_custom_ids() -> None:
             # changes, otherwise referential updates will compare
             # differently-encoded bytes after the type swap.
             selected = ", ".join(f'"{c}"' for c in text_columns)
-            rows = bind.execute(
-                sa.text(f'SELECT rowid, {selected} FROM "{table}"')
-            ).fetchall()
+            rows = bind.execute(sa.text(f'SELECT rowid, {selected} FROM "{table}"')).fetchall()
             for row in rows:
                 values = {
                     col: _id_to_bytes(row[index])
@@ -138,9 +136,7 @@ def _convert_custom_ids() -> None:
                     continue
                 assignments = ", ".join(f'"{c}" = :{c}' for c in values)
                 bind.execute(
-                    sa.text(
-                        f'UPDATE "{table}" SET {assignments} WHERE rowid = :__rowid'
-                    ),
+                    sa.text(f'UPDATE "{table}" SET {assignments} WHERE rowid = :__rowid'),
                     {**values, "__rowid": row[0]},
                 )
             # SQLite requires a table recreate for type changes; batch
@@ -169,6 +165,4 @@ def downgrade() -> None:
     # hex/binary conversion deterministically; the production deploy
     # path keeps a pre-cutover backup and restores from it instead.
     # Marking this unsupported keeps operators on the safe path.
-    raise RuntimeError(
-        "zd1b2c3d4e5f is not safely reversible; restore the pre-cutover backup"
-    )
+    raise RuntimeError("zd1b2c3d4e5f is not safely reversible; restore the pre-cutover backup")

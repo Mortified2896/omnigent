@@ -132,8 +132,10 @@ def test_dropin_records_original_target(rollback_root: Path) -> None:
     )
 
     # Use the system venv python so ``omnigent.deploy.ops.systemd`` is
-    # importable from the repo root via ``PYTHONPATH``.
-    venv_python = "/home/hermes/workspace/repos/omnigent-eval/.venv/bin/python"
+    # importable from the repo root via ``PYTHONPATH``. ``sys.executable``
+    # is the test runner's Python, which lives inside ``_REPO_ROOT/.venv``
+    # in dev checkouts and at the uv-managed path on CI.
+    venv_python = f"{_REPO_ROOT}/.venv/bin/python"
     proc = subprocess.run(
         [venv_python, "-c", capture_then_race],
         capture_output=True,

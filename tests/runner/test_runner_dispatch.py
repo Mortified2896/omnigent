@@ -1605,16 +1605,19 @@ async def test_runner_failed_status_carries_setup_error_message(
             executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
         )
 
-    def _raising_build(spec: object, *, workdir: object = None) -> dict[str, str]:
+    def _raising_build(
+        spec: object, *, cwd: object = None, workdir: object = None
+    ) -> dict[str, str]:
         """
         Fail the spawn-env build the way the no-model provider path does.
 
         :param spec: The agent spec (unused).
+        :param cwd: Bundle cwd (unused).
         :param workdir: Bundle workdir (unused).
         :returns: Never returns.
         :raises OmnigentError: Always.
         """
-        del spec, workdir
+        del spec, cwd, workdir
         raise OmnigentError(raised_message, code=ErrorCode.INVALID_INPUT)
 
     monkeypatch.setattr(

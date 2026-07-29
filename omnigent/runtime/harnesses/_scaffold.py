@@ -476,9 +476,10 @@ class TurnContext:
         # progress: the harness is alive, the supervised subprocess
         # is alive, and the operator should be able to see why the
         # turn is taking this long.
-        if self._reset_idle_watchdog is not None and isinstance(
-            event, (HeartbeatEvent, SubprocessLivenessEvent)
-        ) is False:
+        if (
+            self._reset_idle_watchdog is not None
+            and isinstance(event, (HeartbeatEvent, SubprocessLivenessEvent)) is False
+        ):
             self._reset_idle_watchdog()
         self._event_queue.put_nowait(event)
 
@@ -1601,10 +1602,7 @@ class HarnessApp:
             else:
                 last_state = None
             last_pid = last_entry.pid if last_entry else None
-            last_alive = (
-                bool(tracked)
-                and last_state in {"alive", "interactive_wait"}
-            )
+            last_alive = bool(tracked) and last_state in {"alive", "interactive_wait"}
             forwarder_failure = native_forwarder_health.recent_post_failure(idle_timeout * 2)
             trip_kind = "absolute" if absolute_wd.expired() else "idle"
             classified = classify_timeout(
@@ -1708,8 +1706,7 @@ class HarnessApp:
         :returns: The exception the caller should raise.
         """
         subproc_summary = ", ".join(
-            f"{entry.name} (pid={entry.pid}, hint={entry.interactive_hint!r})"
-            for entry in tracked
+            f"{entry.name} (pid={entry.pid}, hint={entry.interactive_hint!r})" for entry in tracked
         )
         if classified is TimeoutReason.FORWARDER_DISCONNECT:
             cause = f"native forwarder POST failure ({forwarder_failure})"
@@ -1717,10 +1714,7 @@ class HarnessApp:
             cause = "supervised subprocess is no longer running"
         elif classified is TimeoutReason.INTERACTIVE_WAIT:
             hint = tracked[0].interactive_hint if tracked else "unknown"
-            cause = (
-                f"supervised subprocess is alive but blocked on an "
-                f"interactive prompt ({hint})"
-            )
+            cause = f"supervised subprocess is alive but blocked on an interactive prompt ({hint})"
         elif classified is TimeoutReason.SLOW_BUT_ALIVE:
             cause = "supervised subprocess is alive but made no progress within the idle window"
         else:
