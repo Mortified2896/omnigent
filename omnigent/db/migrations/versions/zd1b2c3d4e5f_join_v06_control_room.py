@@ -110,6 +110,16 @@ def _convert_custom_ids() -> None:
     # MySQL treats ``"name"`` as a string literal rather than an identifier;
     # use backticks there, and the standard double quotes everywhere else.
     quote = "`" if dialect == "mysql" else '"'
+    # SQLite exposes ``rowid`` as a hidden column on every table; Postgres
+    # has no equivalent, so we look up the primary-key columns instead.
+    if dialect == "sqlite":
+        rowid_expr = "rowid"
+    else:
+        rowid_expr = (
+            ", ".join(f"{quote}{pk}{quote}" for pk in reflected_pk_columns)
+            if reflected_pk_columns
+            else "1"
+        )
     try:
         for table, columns in _CUSTOM_ID_COLUMNS.items():
             if not inspector.has_table(table):
@@ -128,8 +138,16 @@ def _convert_custom_ids() -> None:
             # changes, otherwise referential updates will compare
             # differently-encoded bytes after the type swap.
             selected = ", ".join(f"{quote}{c}{quote}" for c in text_columns)
+            # SQLite exposes a hidden ``rowid`` column on every table;
+            # Postgres / MySQL have no equivalent, so we fall back to the
+            # primary-key columns of the table itself for the row address.
+            if dialect == "sqlite":
+                rowid_select = "rowid"
+            else:
+                pk_cols = list(inspector.get_pk_constraint(table)["constrained_columns"])
+                rowid_select = ", ".join(f"{quote}{pk}{quote}" for pk in pk_cols)
             rows = bind.execute(
-                sa.text(f"SELECT rowid, {selected} FROM {quote}{table}{quote}")
+                sa.text(f"SELECT {rowid_select}, {selected} FROM {quote}{table}{quote}")
             ).fetchall()
             for row in rows:
                 values = {
@@ -140,11 +158,23 @@ def _convert_custom_ids() -> None:
                 if not values:
                     continue
                 assignments = ", ".join(f"{quote}{c}{quote} = :{c}" for c in values)
+                if dialect == "sqlite":
+                    where_clause = "rowid = :__rowid"
+                    update_params: dict[str, object] = {**values, "__rowid": row[0]}
+                else:
+                    pk_cols = list(inspector.get_pk_constraint(table)["constrained_columns"])
+                    where_clause = " AND ".join(
+                        f"{quote}{pk}{quote} = :_pk_{pk}" for pk in pk_cols
+                    )
+                    update_params = {
+                        **values,
+                        **{f"_pk_{pk}": row[index] for index, pk in enumerate(pk_cols, start=1)},
+                    }
                 bind.execute(
                     sa.text(
-                        f"UPDATE {quote}{table}{quote} SET {assignments} WHERE rowid = :__rowid"
+                        f"UPDATE {quote}{table}{quote} SET {assignments} WHERE {where_clause}"
                     ),
-                    {**values, "__rowid": row[0]},
+                    update_params,
                 )
             # SQLite requires a table recreate for type changes; batch
             # alter with recreate="always" is the canonical workaround.
