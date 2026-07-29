@@ -169,11 +169,19 @@ def _convert_custom_ids() -> None:
             # SQLite requires a table recreate for type changes; batch
             # alter with recreate="always" is the canonical workaround.
             # Other dialects accept ALTER COLUMN in place.
+            # MySQL needs ``VARBINARY(16)`` for indexed columns; ``LargeBinary``
+            # renders as ``BLOB`` on MySQL and is rejected for PRIMARY KEYs
+            # with error 1170. SQLite / Postgres accept either form.
+            binary_type: sa.TypeEngine[bytes]
+            if dialect == "mysql":
+                binary_type = sa.dialects.mysql.VARBINARY(16)
+            else:
+                binary_type = sa.LargeBinary(16)
             with op.batch_alter_table(table, recreate="always") as batch:
                 for column in text_columns:
                     batch.alter_column(
                         column,
-                        type_=sa.LargeBinary(16),
+                        type_=binary_type,
                         existing_type=reflected[column]["type"],
                         existing_nullable=reflected[column]["nullable"],
                     )
