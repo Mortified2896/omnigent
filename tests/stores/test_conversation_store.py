@@ -1229,7 +1229,7 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
                 "created_at) "
                 "VALUES ("
                 ":ws, 'rp_test1', :cid, 'elic_rp1', 'sha1', "
-                "'excerpt', 5, '[]', 'auto/cheap', 0, '{}', 'psha1', 0)"
+                "'excerpt', 5, '[]', 'auto/cheap', false, '{}', 'psha1', 0)"
             ),
             {"ws": ws, "cid": conv.id},
         )
