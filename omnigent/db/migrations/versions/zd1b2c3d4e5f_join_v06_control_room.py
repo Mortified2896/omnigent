@@ -175,9 +175,6 @@ def _convert_custom_ids() -> None:
                     ),
                     update_params,
                 )
-            # SQLite requires a table recreate for type changes; batch
-            # alter with recreate="always" is the canonical workaround.
-            # Other dialects accept ALTER COLUMN in place.
             # MySQL needs ``VARBINARY(16)`` for indexed columns; ``LargeBinary``
             # renders as ``BLOB`` on MySQL and is rejected for PRIMARY KEYs
             # with error 1170. SQLite / Postgres accept either form.
@@ -186,7 +183,14 @@ def _convert_custom_ids() -> None:
                 binary_type = sa.dialects.mysql.VARBINARY(16)
             else:
                 binary_type = sa.LargeBinary(16)
-            with op.batch_alter_table(table, recreate="always") as batch:
+            # SQLite requires a table recreate for type changes; batch
+            # alter with recreate="always" is the canonical workaround.
+            # Other dialects accept ALTER COLUMN in place. Using
+            # recreate="auto" on non-SQLite avoids a duplicate-check-
+            # constraint error when the rebuilt table is compared
+            # against the model's reflected CheckConstraint declarations.
+            recreate_mode = "always" if dialect == "sqlite" else "auto"
+            with op.batch_alter_table(table, recreate=recreate_mode) as batch:
                 for column in text_columns:
                     batch.alter_column(
                         column,
