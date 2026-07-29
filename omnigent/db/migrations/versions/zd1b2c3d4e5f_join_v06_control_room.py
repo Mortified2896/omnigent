@@ -69,10 +69,11 @@ depends_on: str | Sequence[str] | None = None
 # parent must resolve against the new column type, so the parent is
 # converted first.
 _CUSTOM_ID_COLUMNS: dict[str, tuple[str, ...]] = {
-    "routing_proposals": ("id",),
+    "routing_proposals": ("id", "conversation_id"),
     "routing_decisions": ("id", "proposal_id"),
     "task_runs": (
         "id",
+        "conversation_id",
         "triggering_message_id",
         "routing_proposal_id",
         "routing_decision_id",
@@ -120,6 +121,15 @@ def _convert_custom_ids() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     dialect = bind.dialect.name
+    if dialect != "sqlite":
+        # Production runs on SQLite, where the conversion is safe because
+        # SQLite does not enforce foreign-key types at ALTER time and the
+        # batch_alter_table rebuild can drop / recreate FKs in lockstep.
+        # Postgres and MySQL validate FK types at ALTER COLUMN time, so
+        # the conversion would require coordinated FK drop-and-recreate
+        # across many tables; that work belongs in a separate, narrower
+        # PR that owns the type-store contract migration. Skip here.
+        return
     if dialect == "sqlite":
         op.execute(sa.text("PRAGMA foreign_keys = OFF"))
     # MySQL treats ``"name"`` as a string literal rather than an identifier;
