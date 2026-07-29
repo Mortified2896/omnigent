@@ -420,11 +420,26 @@ def db_uri(tmp_path: Path, _worker_db_uri: str) -> Generator[str, None, None]:
     dialect = engine.dialect.name
     tables = [t for t in _sa.inspect(engine).get_table_names() if t != "alembic_version"]
     # No FK constraints exist (dropped in p1a2b3c4d5e6) so no need to toggle
-    # FOREIGN_KEY_CHECKS — one less round-trip per test on MySQL.
+    # FOREIGN_KEY_CHECKS — one less round-trip per test on MySQL. Postgres
+    # and MySQL both reject plain TRUNCATE on tables referenced by FKs (and
+    # there are now several: task_runs.conversation_id, routing_proposals.
+    # conversation_id, routing_decisions.proposal_id, etc.); use TRUNCATE ...
+    # CASCADE on both, as a single statement so the entire graph is wiped
+    # atomically.
     with engine.begin() as conn:
-        for table in tables:
-            q = f"`{table}`" if dialect == "mysql" else f'"{table}"'
-            conn.execute(_sa.text(f"TRUNCATE TABLE {q}"))
+        # Both MySQL and Postgres reject plain TRUNCATE on a table
+        # referenced by any FK; use CASCADE on both. SQLite is permissive
+        # and accepts either form.
+        if dialect in ("postgresql", "mysql"):
+            quoted = (
+                ", ".join(f'"{t}"' for t in tables)
+                if dialect == "postgresql"
+                else ", ".join(f"`{t}`" for t in tables)
+            )
+            conn.execute(_sa.text(f"TRUNCATE TABLE {quoted} CASCADE"))
+        else:
+            for table in tables:
+                conn.execute(_sa.text(f'TRUNCATE TABLE "{table}"'))
     yield _worker_db_uri
 
 
