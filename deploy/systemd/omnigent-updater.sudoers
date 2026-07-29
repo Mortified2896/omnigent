@@ -1,0 +1,33 @@
+# Tightly scoped sudoers rule for the Omnigent external updater
+# (issue #38). Installed by
+# ``scripts/install_omnigent_updater.sh --sudoers-rule`` after the
+# operator reviews the rule.
+#
+# What this rule grants:
+#   * systemctl daemon-reload — needed after drop-in writes.
+#   * systemctl restart omnigent-eval-web.service — the only
+#     service the updater may restart.
+#   * systemctl restart omnigent-eval-host.service — the only
+#     other service the updater may restart.
+#   * systemctl is-active <above services> — used by health probes.
+#
+# What this rule explicitly DOES NOT grant:
+#   * unrestricted root shell (no NOPASSWD: ALL).
+#   * other systemctl verbs (stop / disable / mask).
+#   * other systemctl targets (anything not named above).
+#   * arbitrary command execution through sudo.
+#
+# Operators MUST review this file before installing it.
+
+Cmnd_Alias OMNIGENT_UPDATER_CMDS = \
+    /usr/bin/systemctl daemon-reload, \
+    /usr/bin/systemctl restart omnigent-eval-web.service, \
+    /usr/bin/systemctl restart omnigent-eval-host.service, \
+    /usr/bin/systemctl is-active omnigent-eval-web.service, \
+    /usr/bin/systemctl is-active omnigent-eval-host.service
+
+omnigent-updater ALL=(root) NOPASSWD: OMNIGENT_UPDATER_CMDS
+
+# Pin the install root so the binary the unit invokes is the one
+# the operator audited.
+Defaults!OMNIGENT_UPDATER_CMDS env_keep+= "OMNIGENT_UPDATER_HOME"
