@@ -674,7 +674,14 @@ class OpenCodeRuntimePool:
         Recheck busy state immediately before teardown to close the
         select→reap race. Bounded to one candidate per scan so the loop
         doesn't compete with new wake requests for capacity.
+
+        When ``idle_timeout_s <= 0`` hibernation is disabled entirely.
+        Both the reaper loop *and* ``_scan_once`` short-circuit so
+        direct callers (tests, manual diagnostics) get the same
+        no-op semantics.
         """
+        if self._idle_timeout_s <= 0:
+            return
         now = self._clock()
         async with self._capacity_lock:
             # Find the oldest idle AWAKE entry.
