@@ -22,16 +22,13 @@ the installed wheel. These tests pin the new strict contract:
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from omnigent.deploy.supervisor import provenance as prov
-
 
 # ----------------------------------------------------------------------------
 # Helpers
@@ -51,7 +48,9 @@ def _build_minimal_site_packages(site_packages: Path) -> None:
 
 
 def _build_fake_release(
-    tmp_path: Path, *, with_editable_finder: bool = False,
+    tmp_path: Path,
+    *,
+    with_editable_finder: bool = False,
     extra_pth_lines: tuple[str, ...] = (),
     module_in_site_packages: bool = True,
     module_in_release_source: bool = False,
@@ -130,7 +129,9 @@ def _patch_release_paths(
     """Patch the provenance helpers to return the test's controlled paths."""
     monkeypatch.setattr(prov, "_resolve_executable", lambda: executable)
     monkeypatch.setattr(prov, "_resolve_prefix", lambda: prefix)
-    monkeypatch.setattr(prov, "_resolve_module",
+    monkeypatch.setattr(
+        prov,
+        "_resolve_module",
         lambda name, *, attr=None: omnigent_path if name == "omnigent" else app_path,
     )
     monkeypatch.setattr(prov, "_release_site_packages", lambda _: site_packages)
@@ -148,7 +149,8 @@ def test_proper_non_editable_release_passes(
     release = _build_fake_release(tmp_path)
     site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
     _patch_release_paths(
-        monkeypatch, release,
+        monkeypatch,
+        release,
         site_packages=site_packages,
         omnigent_path=site_packages / "omnigent" / "__init__.py",
         app_path=site_packages / "omnigent" / "server" / "app.py",
@@ -176,7 +178,8 @@ def test_module_resolving_from_checkout_fails(
     checkout.write_text("")
     site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
     _patch_release_paths(
-        monkeypatch, release,
+        monkeypatch,
+        release,
         site_packages=site_packages,
         omnigent_path=checkout,
         app_path=site_packages / "omnigent" / "server" / "app.py",
@@ -197,12 +200,14 @@ def test_running_from_release_source_root_cannot_hide_missing_wheel(
     installed wheel, simulating a broken build; the check must fail
     closed rather than pass because of the bare ``<release>/omnigent``.
     """
-    release = _build_fake_release(tmp_path, module_in_site_packages=False,
-                                  module_in_release_source=True)
+    release = _build_fake_release(
+        tmp_path, module_in_site_packages=False, module_in_release_source=True
+    )
     site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
     release_source_omnigent = release / "omnigent" / "__init__.py"
     _patch_release_paths(
-        monkeypatch, release,
+        monkeypatch,
+        release,
         site_packages=site_packages,
         omnigent_path=release_source_omnigent,
         app_path=release / "omnigent" / "server" / "app.py",
@@ -233,6 +238,7 @@ def test_editable_finder_pointing_at_checkout_fails(
     # The synthetic finder module lives under the release's
     # site-packages; import it so the finder registers in sys.meta_path.
     import importlib.util as _ilu
+
     finder_name = "__editable___omnigent_test_finder"
     spec = _ilu.spec_from_file_location(finder_name, finder_py)
     assert spec and spec.loader
@@ -245,7 +251,8 @@ def test_editable_finder_pointing_at_checkout_fails(
     spec.loader.exec_module(mod)
     try:
         _patch_release_paths(
-            monkeypatch, release,
+            monkeypatch,
+            release,
             site_packages=site_packages,
             omnigent_path=site_packages / "omnigent" / "__init__.py",
             app_path=site_packages / "omnigent" / "server" / "app.py",
@@ -261,9 +268,7 @@ def test_editable_finder_pointing_at_checkout_fails(
         sys.modules.pop(finder_name, None)
 
 
-def test_foreign_pth_entry_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_foreign_pth_entry_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``.pth`` file under site-packages that points outside the
     release fails — the venv is supposed to be immutable.
     """
@@ -275,7 +280,8 @@ def test_foreign_pth_entry_fails(
     )
     site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
     _patch_release_paths(
-        monkeypatch, release,
+        monkeypatch,
+        release,
         site_packages=site_packages,
         omnigent_path=site_packages / "omnigent" / "__init__.py",
         app_path=site_packages / "omnigent" / "server" / "app.py",
@@ -297,7 +303,8 @@ def test_omnigent_server_app_resolving_outside_site_packages_fails(
     foreign_app.parent.mkdir(parents=True)
     foreign_app.write_text("")
     _patch_release_paths(
-        monkeypatch, release,
+        monkeypatch,
+        release,
         site_packages=site_packages,
         omnigent_path=site_packages / "omnigent" / "__init__.py",
         app_path=foreign_app,
@@ -341,25 +348,26 @@ def test_missing_runtime_dependency_fails_honestly(
     release = _build_fake_release(tmp_path, module_in_site_packages=False)
     site_packages = release / ".venv" / "lib" / "python3.12" / "site-packages"
     _patch_release_paths(
-        monkeypatch, release,
+        monkeypatch,
+        release,
         site_packages=site_packages,
         omnigent_path=site_packages / "omnigent" / "__init__.py",  # doesn't exist
         app_path=site_packages / "omnigent" / "server" / "app.py",
         executable=release / ".venv" / "bin" / "python",
         prefix=release,
     )
+
     # _resolve_module should raise ImportError when the wheel isn't there;
     # in this test we simulate the "wheel missing" state by raising.
     def broken_resolve(name: str, *, attr: str | None = None) -> Path:
         raise ImportError(f"No module named {name!r}")
+
     monkeypatch.setattr(prov, "_resolve_module", broken_resolve)
     with pytest.raises(ImportError):
         prov.check_runtime_provenance(release)
 
 
-def test_cli_refuses_with_pythonpath(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_refuses_with_pythonpath(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The CLI refuses to run when ``PYTHONPATH`` is set in the env.
 
     Invoke ``main()`` directly so the argv length check does not

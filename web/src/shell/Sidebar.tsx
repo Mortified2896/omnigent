@@ -3694,10 +3694,7 @@ function BulkActionBar({
         // from the selection along with the ids the user selected but
         // weren't deletable (shared / not-loaded) — leaving the bar
         // empty keeps the UX coherent.
-        onRemoveFromSelection([
-          ...result.succeeded,
-          ...result.alreadyDeleted,
-        ]);
+        onRemoveFromSelection([...result.succeeded, ...result.alreadyDeleted]);
         if (activeId && result.succeeded.includes(activeId)) navigate("/", { replace: true });
         setLastDeleteError(null);
       },
@@ -3941,8 +3938,7 @@ function BulkDeleteFailurePanel({
   busy: boolean;
 }) {
   const succeededCount = result.succeeded.length + result.alreadyDeleted.length;
-  const failedTotal =
-    result.failed.length + result.forbidden.length + result.activeSession.length;
+  const failedTotal = result.failed.length + result.forbidden.length + result.activeSession.length;
   const retryableIds = result.failed.filter((f) => f.retryable).length;
   return (
     <div

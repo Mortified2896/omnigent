@@ -7,6 +7,7 @@ schemas, while this revision upgrades an existing production snapshot through
 the stock post-z5 schema changes before normalising the Control Room audit
 references to the same binary UUID representation as the core tables.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -68,21 +69,21 @@ def _column_exists(bind: sa.Connection, table: str, column: str) -> bool:
 
 def _stock_schema_is_present(bind: sa.Connection) -> bool:
     """Return true when the production copy already has the post-z5 core."""
-    return _table_exists(bind, "scheduled_tasks") and _column_exists(
-        bind, "conversations", "session_overrides"
-    ) and any(
-        str(c["type"]).upper().startswith("BLOB")
-        for c in sa.inspect(bind).get_columns("conversations")
-        if c["name"] == "id"
+    return (
+        _table_exists(bind, "scheduled_tasks")
+        and _column_exists(bind, "conversations", "session_overrides")
+        and any(
+            str(c["type"]).upper().startswith("BLOB")
+            for c in sa.inspect(bind).get_columns("conversations")
+            if c["name"] == "id"
+        )
     )
 
 
 def _apply_stock_post_z5() -> None:
     """Replay stock migrations against the legacy production schema."""
     for module_name in _STOCK_POST_Z5:
-        module = importlib.import_module(
-            f"omnigent.db.migrations.versions.{module_name}"
-        )
+        module = importlib.import_module(f"omnigent.db.migrations.versions.{module_name}")
         module.upgrade()
 
 
@@ -124,9 +125,7 @@ def _convert_custom_ids() -> None:
             if not text_columns:
                 continue
             selected = ", ".join(f'"{c}"' for c in text_columns)
-            rows = bind.execute(
-                sa.text(f'SELECT rowid, {selected} FROM "{table}"')
-            ).fetchall()
+            rows = bind.execute(sa.text(f'SELECT rowid, {selected} FROM "{table}"')).fetchall()
             for row in rows:
                 values = {
                     col: _id_to_bytes(row[index])
@@ -137,9 +136,7 @@ def _convert_custom_ids() -> None:
                     continue
                 assignments = ", ".join(f'"{c}" = :{c}' for c in values)
                 bind.execute(
-                    sa.text(
-                        f'UPDATE "{table}" SET {assignments} WHERE rowid = :__rowid'
-                    ),
+                    sa.text(f'UPDATE "{table}" SET {assignments} WHERE rowid = :__rowid'),
                     {**values, "__rowid": row[0]},
                 )
             with op.batch_alter_table(table, recreate="always") as batch:

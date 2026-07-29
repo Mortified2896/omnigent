@@ -10,8 +10,6 @@ Mirrors the structure of
 follow the same pattern.
 """
 
-# ruff: noqa: E501
-
 from __future__ import annotations
 
 import pytest
@@ -63,7 +61,9 @@ def store(tmp_path_factory) -> TaskOutcomeStore:
     return SqlAlchemyTaskOutcomeStore(uri)
 
 
-def _create_run(store: TaskOutcomeStore, *, conv: str = "conv_0000000000000000000000000000000a", **kwargs) -> str:
+def _create_run(
+    store: TaskOutcomeStore, *, conv: str = "conv_0000000000000000000000000000000a", **kwargs
+) -> str:
     """Helper: create a task_run with sensible defaults + return its id."""
     defaults = {
         "conversation_id": conv,
@@ -223,7 +223,9 @@ def test_get_run_returns_none_when_missing(store: TaskOutcomeStore) -> None:
 def test_get_run_for_conversation_scopes_by_owner(store: TaskOutcomeStore) -> None:
     """``get_run_for_conversation`` returns ``None`` for cross-session lookups."""
     run_id = _create_run(store, conv="conv_0000000000000000000000000000000a")
-    assert store.get_run_for_conversation(run_id, "conv_0000000000000000000000000000000a") is not None
+    assert (
+        store.get_run_for_conversation(run_id, "conv_0000000000000000000000000000000a") is not None
+    )
     assert store.get_run_for_conversation(run_id, "conv_0000000000000000000000000000000b") is None
 
 
@@ -523,7 +525,9 @@ def test_list_unreviewed_runs_excludes_reviewed(
     store.upsert_review(
         UpsertTaskReviewInput(task_run_id=r3, verdict="skipped", created_by="alice")
     )
-    unreviewed = store.list_unreviewed_runs(conversation_id="conv_0000000000000000000000000000000a")
+    unreviewed = store.list_unreviewed_runs(
+        conversation_id="conv_0000000000000000000000000000000a"
+    )
     assert {r.id for r in unreviewed} == {r1}
 
 

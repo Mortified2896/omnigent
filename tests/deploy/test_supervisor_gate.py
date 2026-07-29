@@ -18,9 +18,8 @@ from pathlib import Path
 import pytest
 
 from omnigent.deploy.preflight import expected_web_ui_dir
-from omnigent.deploy.supervisor import gate
-from omnigent.deploy.supervisor.gate import GateError, run_gate
 from omnigent.deploy.supervisor import manifest as manifest_mod
+from omnigent.deploy.supervisor.gate import GateError, run_gate
 
 
 @pytest.fixture
@@ -71,6 +70,7 @@ def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None
         raise AssertionError(name)
 
     import omnigent.deploy.supervisor.provenance as prov
+
     monkeypatch.setattr(prov, "_resolve_executable", fake_exe)
     monkeypatch.setattr(prov, "_resolve_prefix", fake_prefix)
     monkeypatch.setattr(prov, "_resolve_module", fake_module)
@@ -136,7 +136,7 @@ def test_run_gate_verifies_manifest_sha_when_provided(
         omnigent_module_path=str(site_packages / "omnigent" / "__init__.py"),
         omnigent_server_app_path=str(site_packages / "omnigent" / "server" / "app.py"),
     )
-    path = manifest_mod.write_manifest(fake_release, manifest)
+    manifest_mod.write_manifest(fake_release, manifest)
 
     info = run_gate(fake_release)
     assert info["manifest_sha"] == expected_sha

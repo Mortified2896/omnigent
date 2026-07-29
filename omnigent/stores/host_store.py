@@ -455,8 +455,7 @@ class HostStore:
         existing = session.execute(
             select(SqlHost).where(
                 SqlHost.workspace_id == current_workspace_id(),
-
-                SqlHost.host_id == uuid_to_bytes(host_id)
+                SqlHost.host_id == uuid_to_bytes(host_id),
             )
         ).scalar_one_or_none()
         if existing is None:
@@ -503,8 +502,7 @@ class HostStore:
             row = session.execute(
                 select(SqlHost).where(
                     SqlHost.workspace_id == current_workspace_id(),
-
-                    SqlHost.host_id == uuid_to_bytes(host_id)
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
             ).scalar_one_or_none()
             if row is not None:
@@ -675,8 +673,7 @@ class HostStore:
             row = session.execute(
                 select(SqlHost).where(
                     SqlHost.workspace_id == current_workspace_id(),
-
-                    SqlHost.host_id == uuid_to_bytes(host_id)
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
             ).scalar_one_or_none()
             if row is None:
@@ -736,8 +733,7 @@ class HostStore:
             existing = session.execute(
                 select(SqlHost).where(
                     SqlHost.workspace_id == current_workspace_id(),
-
-                    SqlHost.host_id == uuid_to_bytes(host_id)
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
             ).scalar_one_or_none()
             if existing is not None:
@@ -849,8 +845,7 @@ class HostStore:
             row = session.execute(
                 select(SqlHost).where(
                     SqlHost.workspace_id == current_workspace_id(),
-
-                    SqlHost.host_id == uuid_to_bytes(host_id)
+                    SqlHost.host_id == uuid_to_bytes(host_id),
                 )
             ).scalar_one_or_none()
             if row is None:

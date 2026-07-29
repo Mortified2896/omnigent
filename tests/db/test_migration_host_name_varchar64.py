@@ -49,7 +49,10 @@ def test_hosts_name_column_is_varchar64(db_engine: Engine) -> None:
 
 def test_downgrade_restores_varchar256(tmp_path: Path) -> None:
     """Downgrade to s1a2b3c4d5e6 widens hosts.name back to VARCHAR(256)."""
-    pytest.skip("zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 production target is not supported.")
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; "
+        "downgrade past pre-v0.6 production target is not supported."
+    )
     db_path = tmp_path / "downgrade.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)

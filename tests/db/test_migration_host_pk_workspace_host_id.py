@@ -100,7 +100,10 @@ def test_data_survives_upgrade(tmp_path: Path) -> None:
 
 def test_downgrade_restores_old_pk(tmp_path: Path) -> None:
     """Downgrade to u1a2b3c4d5e6 must restore PK (workspace_id, owner, name)."""
-    pytest.skip("zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 production target is not supported.")
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; "
+        "downgrade past pre-v0.6 production target is not supported."
+    )
     db_path = tmp_path / "downgrade.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)

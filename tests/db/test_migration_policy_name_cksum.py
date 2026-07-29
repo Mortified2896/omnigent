@@ -1,7 +1,5 @@
 """Tests for the policies.name_cksum migration (x1a2b3c4d5e6)."""
 
-# ruff: noqa: E501
-
 from __future__ import annotations
 
 import hashlib
@@ -117,7 +115,10 @@ def test_backfill_computes_sha256_of_name(tmp_path: Path) -> None:
 
 def test_downgrade_restores_name_index_and_drops_checksum(tmp_path: Path) -> None:
     """Downgrade drops name_cksum and restores the raw-name index/constraint."""
-    pytest.skip("zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 production target is not supported.")
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; "
+        "downgrade past pre-v0.6 production target is not supported."
+    )
     db_path = tmp_path / "downgrade.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)

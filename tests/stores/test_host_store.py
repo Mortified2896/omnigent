@@ -39,6 +39,7 @@ def _set_updated_at(db_uri: str, host_id: str, value: int) -> None:
     """
     engine = get_or_create_engine(db_uri)
     from omnigent.db.db_models import uuid_to_bytes
+
     with Session(engine) as session:
         session.execute(
             update(SqlHost)

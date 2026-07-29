@@ -2049,9 +2049,7 @@ async def test_copy_files_malformed_file_id_surfaces_actionable_not_found(
     # The actionable message — quote the offending id so the caller can
     # correct it. The previous "Not found." response hid this and read as
     # a session-not-found to the parent agent.
-    assert body["error"]["message"] == (
-        "File 'placeholder' not found in source session"
-    )
+    assert body["error"]["message"] == ("File 'placeholder' not found in source session")
 
     # All-or-nothing: destination unchanged because validation rejected the batch.
     after = file_store.list(session_id="405bfe154d5c0e795a2b87021bc897bf").data

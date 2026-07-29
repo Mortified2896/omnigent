@@ -65,6 +65,7 @@ def test_upgrade_from_z9_preserves_historical_outcome_rows(tmp_path: Path) -> No
     try:
         with engine.begin() as conn:
             from omnigent.db.db_models import uuid_to_bytes
+
             conv_blob = uuid_to_bytes("conv_0000000000000000000000000000000a")
             run_blob = uuid_to_bytes("conv_0000000000000000000000000000000b")
             ev_blob = uuid_to_bytes("conv_0000000000000000000000000000000c")
@@ -126,15 +127,11 @@ def test_upgrade_from_z9_preserves_historical_outcome_rows(tmp_path: Path) -> No
                 {"id": conv_blob},
             ).scalar_one()
             evaluation = conn.execute(
-                sa.text(
-                    "SELECT verdict, reasoning FROM task_evaluations WHERE id = :id"
-                ),
+                sa.text("SELECT verdict, reasoning FROM task_evaluations WHERE id = :id"),
                 {"id": ev_blob},
             ).one()
             review = conn.execute(
-                sa.text(
-                    "SELECT verdict, comments FROM task_reviews WHERE id = :id"
-                ),
+                sa.text("SELECT verdict, comments FROM task_reviews WHERE id = :id"),
                 {"id": rev_blob},
             ).one()
         assert run == ("resp_hist", None, None)
