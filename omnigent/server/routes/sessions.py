@@ -8804,7 +8804,8 @@ async def _await_route_approval(
     # root cause). The fix defers to the evaluator for the bypass.
     if proposal.omniroute_requires_explicit_approval is False:
         _logger.info(
-            "model_routing_agent evaluator-no-approval session=%s route=%s harness=%s effort=%s perm=%s",
+            "model_routing_agent evaluator-no-approval "
+            "session=%s route=%s harness=%s effort=%s perm=%s",
             session_id,
             proposal.omniroute_route_id,
             proposal.recommended_harness,

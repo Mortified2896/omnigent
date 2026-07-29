@@ -207,7 +207,7 @@ def _check_pth_no_foreign_paths(prefix: Path, release: Path) -> None:
             continue
         for raw_line in text.splitlines():
             line = raw_line.strip()
-            if not line or line.startswith("#") or line.startswith("import "):
+            if not line or line.startswith(("#", "import ")):
                 continue
             # ``.pth`` files use ``/absolute/path`` or ``/abs/path`` to
             # inject a directory into ``sys.path``. Relative paths
@@ -325,7 +325,7 @@ def _check_module_inside_site_packages(
     # reason so the operator can identify the leak immediately.
     forbidden_prefixes.append(("release_source_root", release))
 
-    for label, prefix in forbidden_prefixes:
+    for _label, prefix in forbidden_prefixes:
         if resolved.is_relative_to(prefix) and not resolved.is_relative_to(site_packages):
             # Already caught above; keep for symmetry with old behaviour.
             continue
@@ -489,7 +489,8 @@ def main() -> int:
     release_dir = (args[0] if args else os.environ.get("OMNIGENT_RELEASE_DIR", "")).strip()
     if not release_dir:
         print(
-            "release directory not provided (set OMNIGENT_RELEASE_DIR or pass it as the first argument)",
+            "release directory not provided "
+            "(set OMNIGENT_RELEASE_DIR or pass it as the first argument)",
             file=sys.stderr,
         )
         return 2

@@ -79,7 +79,7 @@ def test_http_get_returns_404_body(tmp_path: Path) -> None:
     with socketserver.TCPServer(("127.0.0.1", port), _Handler) as httpd:
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
-            status, body = _http_get(f"http://127.0.0.1:{port}/missing")
+            status, _body = _http_get(f"http://127.0.0.1:{port}/missing")
             assert status == 404
         finally:
             httpd.shutdown()

@@ -18,6 +18,7 @@ that drive ``scripts/promote_release.sh``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -121,15 +122,13 @@ def fetch(repo: Path, *, remote: str | None = None) -> None:
     remote_name = (
         remote or os.environ.get("OMNIGENT_PROMOTE_FROM_REMOTE", "fork")
     ).strip() or "fork"
-    try:
+    with contextlib.suppress(FileNotFoundError):
         subprocess.run(
             ["git", "-C", str(repo), "fetch", remote_name],
             capture_output=True,
             text=True,
             check=False,
         )
-    except FileNotFoundError:
-        pass
 
 
 def main() -> int:

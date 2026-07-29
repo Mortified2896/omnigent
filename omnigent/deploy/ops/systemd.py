@@ -19,6 +19,7 @@ this prevents systemd from picking up a half-written file during a
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -179,8 +180,6 @@ def _atomic_write(target: Path, body: str) -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, target)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise

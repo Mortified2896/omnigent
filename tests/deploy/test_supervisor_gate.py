@@ -144,7 +144,7 @@ def test_run_gate_verifies_manifest_sha_when_provided(
         omnigent_module_path=str(site_packages / "omnigent" / "__init__.py"),
         omnigent_server_app_path=str(site_packages / "omnigent" / "server" / "app.py"),
     )
-    path = manifest_mod.write_manifest(fake_release, manifest)
+    manifest_mod.write_manifest(fake_release, manifest)
 
     info = run_gate(fake_release)
     assert info["manifest_sha"] == expected_sha

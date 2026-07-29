@@ -96,7 +96,7 @@ def _build_command(
     release: Path,
     port: int,
     *,
-    skip_web_ui: bool,
+    _skip_web_ui: bool,
     config: Path | None,
 ) -> list[str]:
     """Build the ExecStart-equivalent command for the canary.
@@ -180,7 +180,7 @@ def _terminate(proc: subprocess.Popen[str], grace_s: float = 5.0) -> None:
         try:
             proc.kill()
             proc.wait(timeout=grace_s)
-        except Exception:
+        except Exception:  # noqa: BLE001 - shutdown best-effort: kill may race with process exit
             pass
 
 
