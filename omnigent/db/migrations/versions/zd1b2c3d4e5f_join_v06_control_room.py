@@ -56,17 +56,23 @@ depends_on: str | Sequence[str] | None = None
 # identifiers must be 16 raw bytes on disk. Tables that don't exist on
 # the target DB (e.g. legacy pre-routing forks) are silently skipped.
 #
+# Only PRIMARY-KEY id columns are converted here. FK-target columns
+# (``conversation_id`` pointing at ``conversations.id``, etc.) are
+# intentionally left as TEXT/VARCHAR because converting them would
+# require coordinated conversion of the FK target, which the rest of
+# the schema (FKs from many places pointing at conversations.id) is
+# not ready for. The primary-key ids are what ``Uuid16`` stores bind
+# to in production; FK-target columns are bound as strings.
+#
 # Order matters: the helper iterates this dict and applies the
 # ``batch_alter_table`` rebuild per table; a child table's FK to a
 # parent must resolve against the new column type, so the parent is
 # converted first.
 _CUSTOM_ID_COLUMNS: dict[str, tuple[str, ...]] = {
-    "conversations": ("id",),
-    "routing_proposals": ("id", "conversation_id"),
+    "routing_proposals": ("id",),
     "routing_decisions": ("id", "proposal_id"),
     "task_runs": (
         "id",
-        "conversation_id",
         "triggering_message_id",
         "routing_proposal_id",
         "routing_decision_id",
