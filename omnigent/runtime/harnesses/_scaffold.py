@@ -469,17 +469,33 @@ class TurnContext:
             delta="hi")``.
         """
         # Treat any non-heartbeat event as progress and push the idle
-        # watchdog deadline forward. ``HeartbeatEvent`` is keep-alive,
-        # NOT progress — letting it reset the deadline would defeat
-        # the watchdog (a wedged turn's 15s heartbeats would keep it
-        # alive forever). ``SubprocessLivenessEvent`` DOES count as
-        # progress: the harness is alive, the supervised subprocess
-        # is alive, and the operator should be able to see why the
-        # turn is taking this long.
-        if self._reset_idle_watchdog is not None and isinstance(
-            event, (HeartbeatEvent, SubprocessLivenessEvent)
-        ) is False:
-            self._reset_idle_watchdog()
+        # watchdog deadline forward — but only when an idle
+        # watchdog has actually been enabled. ``HeartbeatEvent`` is
+        # keep-alive, NOT progress: letting it reset the deadline
+        # would defeat the watchdog (a wedged turn's 15s heartbeats
+        # would keep it alive forever). ``SubprocessLivenessEvent``
+        # DOES count as progress: the harness is alive, the
+        # supervised subprocess is alive, and the operator should be
+        # able to see why the turn is taking this long.
+        #
+        # Note: when ``HARNESS_MODEL_STREAM_IDLE_S`` is ``0`` (the
+        # Control Room default), ``_reset_idle_watchdog`` is never
+        # installed (``_guarded_run_turn`` skips the assignment for
+        # ``idle_timeout <= 0``) so this branch is a no-op anyway.
+        # The check below is therefore the canonical safety net for
+        # installations that explicitly opt into an idle timeout.
+        if self._reset_idle_watchdog is None:
+            self._event_queue.put_nowait(event)
+            return
+        if isinstance(event, (HeartbeatEvent,)):
+            # Pure keep-alive; do not let it mask an idle stall.
+            self._event_queue.put_nowait(event)
+            return
+        # All other events — ``SubprocessLivenessEvent``,
+        # ``OutputItemDoneEvent``, ``CompletedEvent``, model deltas,
+        # tool calls, tool results, status transitions, etc. —
+        # reset the enabled idle deadline.
+        self._reset_idle_watchdog()
         self._event_queue.put_nowait(event)
 
     def register_supervised_subprocess(
@@ -1601,10 +1617,7 @@ class HarnessApp:
             else:
                 last_state = None
             last_pid = last_entry.pid if last_entry else None
-            last_alive = (
-                bool(tracked)
-                and last_state in {"alive", "interactive_wait"}
-            )
+            last_alive = bool(tracked) and last_state in {"alive", "interactive_wait"}
             forwarder_failure = native_forwarder_health.recent_post_failure(idle_timeout * 2)
             trip_kind = "absolute" if absolute_wd.expired() else "idle"
             classified = classify_timeout(
@@ -1708,8 +1721,7 @@ class HarnessApp:
         :returns: The exception the caller should raise.
         """
         subproc_summary = ", ".join(
-            f"{entry.name} (pid={entry.pid}, hint={entry.interactive_hint!r})"
-            for entry in tracked
+            f"{entry.name} (pid={entry.pid}, hint={entry.interactive_hint!r})" for entry in tracked
         )
         if classified is TimeoutReason.FORWARDER_DISCONNECT:
             cause = f"native forwarder POST failure ({forwarder_failure})"
@@ -1717,10 +1729,7 @@ class HarnessApp:
             cause = "supervised subprocess is no longer running"
         elif classified is TimeoutReason.INTERACTIVE_WAIT:
             hint = tracked[0].interactive_hint if tracked else "unknown"
-            cause = (
-                f"supervised subprocess is alive but blocked on an "
-                f"interactive prompt ({hint})"
-            )
+            cause = f"supervised subprocess is alive but blocked on an interactive prompt ({hint})"
         elif classified is TimeoutReason.SLOW_BUT_ALIVE:
             cause = "supervised subprocess is alive but made no progress within the idle window"
         else:
