@@ -110,16 +110,6 @@ def _convert_custom_ids() -> None:
     # MySQL treats ``"name"`` as a string literal rather than an identifier;
     # use backticks there, and the standard double quotes everywhere else.
     quote = "`" if dialect == "mysql" else '"'
-    # SQLite exposes ``rowid`` as a hidden column on every table; Postgres
-    # has no equivalent, so we look up the primary-key columns instead.
-    if dialect == "sqlite":
-        rowid_expr = "rowid"
-    else:
-        rowid_expr = (
-            ", ".join(f"{quote}{pk}{quote}" for pk in reflected_pk_columns)
-            if reflected_pk_columns
-            else "1"
-        )
     try:
         for table, columns in _CUSTOM_ID_COLUMNS.items():
             if not inspector.has_table(table):
