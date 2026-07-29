@@ -81,7 +81,9 @@ export function createCommentDecorationExtension(
             },
             apply(tr, decorations, _, newState) {
               const meta = tr.getMeta(commentDecorationKey) as
-                "rebuild" | { pendingRange: { from: number; to: number } | null } | undefined;
+                | "rebuild"
+                | { pendingRange: { from: number; to: number } | null }
+                | undefined;
               if (meta) {
                 if (!stateRef.current) return DecorationSet.empty;
                 // Explicit pendingRange in meta is written to stateRef here so

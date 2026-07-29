@@ -54,7 +54,9 @@ export type LivenessRow = Pick<Conversation, "host_id" | "permission_level" | "c
  */
 export function livenessRowFromSession(
   session:
-    Pick<Session, "hostId" | "permissionLevel" | "createdAt" | "hostResumable"> | null | undefined,
+    | Pick<Session, "hostId" | "permissionLevel" | "createdAt" | "hostResumable">
+    | null
+    | undefined,
 ): LivenessRow | null {
   if (!session) return null;
   return {

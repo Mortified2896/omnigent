@@ -26,12 +26,14 @@ function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
 
 function data(...pages: Conversation[][]): ConversationsInfiniteData {
   return {
-    pages: pages.map((rows): ConversationsPage => ({
-      data: rows,
-      first_id: rows[0]?.id ?? null,
-      last_id: rows[rows.length - 1]?.id ?? null,
-      has_more: false,
-    })),
+    pages: pages.map(
+      (rows): ConversationsPage => ({
+        data: rows,
+        first_id: rows[0]?.id ?? null,
+        last_id: rows[rows.length - 1]?.id ?? null,
+        has_more: false,
+      }),
+    ),
     pageParams: pages.map(() => undefined),
   };
 }

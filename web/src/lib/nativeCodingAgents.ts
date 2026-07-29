@@ -17,7 +17,10 @@ export type NativeCodingAgentIconKind =
   | "kimi"
   | "hermes";
 export type NativeCodingAgentCapability =
-  "permissionMode" | "approvalMode" | "cursorMode" | "modelOptions";
+  | "permissionMode"
+  | "approvalMode"
+  | "cursorMode"
+  | "modelOptions";
 
 export interface NativeCodingAgentSpec {
   key: NativeCodingAgentIconKind;
