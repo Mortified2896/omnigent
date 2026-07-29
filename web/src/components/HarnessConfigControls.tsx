@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SMART_ROUTING_LABEL } from "@/lib/agentLabels";
+import { cn } from "@/lib/utils";
 
 // Sentinel Select values for the Model row. Radix requires a non-empty value,
 // so the two "no explicit model" choices ride on reserved tokens rather than
@@ -122,10 +123,12 @@ export function ConfigRow({
   label,
   description,
   children,
+  controlClassName,
 }: {
   label: string;
   description?: string;
   children: ReactNode;
+  controlClassName?: string;
 }) {
   return (
     // Stacked on mobile (label above a full-width control) so the label never
@@ -136,7 +139,7 @@ export function ConfigRow({
         <div className="text-ui font-medium">{label}</div>
         {description && <div className="text-sm text-muted-foreground">{description}</div>}
       </div>
-      <div className="w-full sm:w-52 sm:shrink-0">{children}</div>
+      <div className={cn("w-full sm:w-52 sm:shrink-0", controlClassName)}>{children}</div>
     </div>
   );
 }
