@@ -46,15 +46,18 @@ USAGE
   esac
 done
 
-# Determine target release dir.
+# Capture the previous-release identity up front so later symlink
+# mutations cannot redirect the drop-in / ``current`` switch / logs.
 if [[ -n "$EXPLICIT_TARGET" ]]; then
   TARGET="$DEPLOY_ROOT/releases/$EXPLICIT_TARGET"
   [[ -d "$TARGET" ]] || fail "release directory does not exist: $TARGET"
-else
-  [[ -L "$PREVIOUS_LINK" ]] || fail "no previous symlink at $PREVIOUS_LINK; cannot roll back"
+  TARGET_SHA="$EXPLICIT_TARGET"
+elif [[ -L "$PREVIOUS_LINK" ]]; then
   TARGET=$(readlink -f "$PREVIOUS_LINK")
+  TARGET_SHA=$(basename "$TARGET")
+else
+  fail "no previous symlink at $PREVIOUS_LINK; cannot roll back"
 fi
-TARGET_SHA=$(basename "$TARGET")
 SHORT_SHA="${TARGET_SHA:0:12}"
 log "rolling back to $TARGET_SHA (target dir: $TARGET)"
 
@@ -69,7 +72,8 @@ mkdir -p "$FAILED_DIR"
   echo "target_sha: $TARGET_SHA"
 } > "$FAILED_DIR/info.txt"
 
-# Drop-in rewrite — atomic, via a tmp+rename on the drop-in file.
+# Drop-in rewrite uses TARGET/TARGET_SHA captured above so a later
+# ``previous`` overwrite cannot redirect the systemd unit.
 write_dropin() {
   sudo "$TARGET/.venv/bin/python" - <<PY
 import os, sys
@@ -89,12 +93,15 @@ log "current -> $TARGET"
 
 # daemon-reload + restart (the live service has no idea the symlink
 # changed; the drop-in update is the actual configuration change).
-SERVICE_NAME=$(OMNIGENT_DEPLOY_SERVICE_NAME="x" python3 -c "
+# Unset the override env vars so the helpers fall back to their
+# built-in defaults instead of inheriting a caller-set literal.
+unset OMNIGENT_DEPLOY_SERVICE_NAME OMNIGENT_DEPLOY_SERVICE_PORT
+SERVICE_NAME=$(python3 -c "
 import sys; sys.path.insert(0, '$REPO_ROOT')
 from omnigent.deploy.ops.systemd import service_name
 print(service_name())
 ")
-SERVICE_PORT=$(OMNIGENT_DEPLOY_SERVICE_PORT="x" python3 -c "
+SERVICE_PORT=$(python3 -c "
 import sys; sys.path.insert(0, '$REPO_ROOT')
 from omnigent.deploy.ops.systemd import service_port
 print(service_port())
