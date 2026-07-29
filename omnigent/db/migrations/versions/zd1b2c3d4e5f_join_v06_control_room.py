@@ -107,6 +107,9 @@ def _convert_custom_ids() -> None:
     dialect = bind.dialect.name
     if dialect == "sqlite":
         op.execute(sa.text("PRAGMA foreign_keys = OFF"))
+    # MySQL treats ``"name"`` as a string literal rather than an identifier;
+    # use backticks there, and the standard double quotes everywhere else.
+    quote = "`" if dialect == "mysql" else '"'
     try:
         for table, columns in _CUSTOM_ID_COLUMNS.items():
             if not inspector.has_table(table):
@@ -124,8 +127,10 @@ def _convert_custom_ids() -> None:
             # Translate values into 16 raw bytes before the column type
             # changes, otherwise referential updates will compare
             # differently-encoded bytes after the type swap.
-            selected = ", ".join(f'"{c}"' for c in text_columns)
-            rows = bind.execute(sa.text(f'SELECT rowid, {selected} FROM "{table}"')).fetchall()
+            selected = ", ".join(f"{quote}{c}{quote}" for c in text_columns)
+            rows = bind.execute(
+                sa.text(f"SELECT rowid, {selected} FROM {quote}{table}{quote}")
+            ).fetchall()
             for row in rows:
                 values = {
                     col: _id_to_bytes(row[index])
@@ -134,9 +139,11 @@ def _convert_custom_ids() -> None:
                 }
                 if not values:
                     continue
-                assignments = ", ".join(f'"{c}" = :{c}' for c in values)
+                assignments = ", ".join(f"{quote}{c}{quote} = :{c}" for c in values)
                 bind.execute(
-                    sa.text(f'UPDATE "{table}" SET {assignments} WHERE rowid = :__rowid'),
+                    sa.text(
+                        f"UPDATE {quote}{table}{quote} SET {assignments} WHERE rowid = :__rowid"
+                    ),
                     {**values, "__rowid": row[0]},
                 )
             # SQLite requires a table recreate for type changes; batch
