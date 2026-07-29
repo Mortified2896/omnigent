@@ -192,12 +192,25 @@ def _convert_custom_ids() -> None:
             recreate_mode = "always" if dialect == "sqlite" else "auto"
             with op.batch_alter_table(table, recreate=recreate_mode) as batch:
                 for column in text_columns:
-                    batch.alter_column(
-                        column,
-                        type_=binary_type,
-                        existing_type=reflected[column]["type"],
-                        existing_nullable=reflected[column]["nullable"],
-                    )
+                    # Postgres can't auto-cast VARCHAR/TEXT to BYTEA; tell
+                    # it explicitly that the column already holds the right
+                    # bytes and just needs the type tag flipped. The data
+                    # is already 16 raw bytes from the per-row UPDATE above.
+                    if dialect == "postgresql":
+                        batch.alter_column(
+                            column,
+                            type_=binary_type,
+                            existing_type=reflected[column]["type"],
+                            existing_nullable=reflected[column]["nullable"],
+                            postgresql_using=f"{quote}{column}{quote}::bytea",
+                        )
+                    else:
+                        batch.alter_column(
+                            column,
+                            type_=binary_type,
+                            existing_type=reflected[column]["type"],
+                            existing_nullable=reflected[column]["nullable"],
+                        )
             inspector = sa.inspect(bind)
     finally:
         if dialect == "sqlite":
