@@ -41,9 +41,7 @@ def upgrade() -> None:
         sa.Column("original_route_id", sa.String(64), nullable=False),
         sa.Column("original_reasoning_effort", sa.String(32), nullable=True),
         sa.Column("original_permission_mode", sa.String(64), nullable=True),
-        sa.Column(
-            "requires_explicit_approval", sa.Boolean(), nullable=False, server_default="false"
-        ),
+        sa.Column("requires_explicit_approval", sa.Boolean(), nullable=False),
         sa.Column("evaluator_route_id", sa.String(64), nullable=True),
         sa.Column("evaluator_provider", sa.String(128), nullable=True),
         sa.Column("evaluator_model", sa.String(128), nullable=True),
