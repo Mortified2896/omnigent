@@ -397,9 +397,7 @@ function TaskReviewCardBody({
   evaluation: TaskEvaluation | null;
 }) {
   const requested = selection?.requested;
-  const requestedPackage = requested
-    ? formatPackage({ ...requested, route_id: null })
-    : "—";
+  const requestedPackage = requested ? formatPackage({ ...requested, route_id: null }) : "—";
   return (
     <div className="grid gap-3 pb-3">
       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">

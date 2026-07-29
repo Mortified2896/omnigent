@@ -1701,35 +1701,26 @@ describe("NewChatLandingScreen create flow", () => {
   // -------------------------------------------------------------------------
 
   it("defaults the OpenCode permission selector to Default", async () => {
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
     expect(
-      screen.getByTestId("new-chat-landing-opencode-permission-default").getAttribute("aria-checked"),
+      screen
+        .getByTestId("new-chat-landing-opencode-permission-default")
+        .getAttribute("aria-checked"),
     ).toBe("true");
   });
 
   it("selects every OpenCode permission mode through the picker", async () => {
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
     // All six documented values are reachable in the radio group; pick each
     // and assert it shows as the checked value. ``onSelect`` is
     // ``preventDefault``-ed so the menu stays open across picks.
-    for (const mode of [
-      "default",
-      "auto",
-      "accept_edits",
-      "plan",
-      "dont_ask",
-      "bypass",
-    ]) {
+    for (const mode of ["default", "auto", "accept_edits", "plan", "dont_ask", "bypass"]) {
       fireEvent.click(screen.getByTestId(`new-chat-landing-opencode-permission-${mode}`));
       expect(
         screen
@@ -1740,9 +1731,7 @@ describe("NewChatLandingScreen create flow", () => {
   });
 
   it("posts the selected OpenCode permission mode on the create body", async () => {
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     vi.mocked(authenticatedFetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: "conv_opencode_mode" }),
@@ -1763,9 +1752,7 @@ describe("NewChatLandingScreen create flow", () => {
   });
 
   it("omits permission_mode when Default is selected", async () => {
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     vi.mocked(authenticatedFetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: "conv_opencode_default" }),
@@ -1786,9 +1773,7 @@ describe("NewChatLandingScreen create flow", () => {
   });
 
   it("renders a warning when Bypass permissions is selected", async () => {
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
@@ -1848,9 +1833,7 @@ describe("NewChatLandingScreen create flow", () => {
   it("preserves the OpenCode permission mode across model picks", async () => {
     // Switching the model must not silently reset the user's permission
     // choice — model and mode are independent knobs.
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
@@ -1867,9 +1850,7 @@ describe("NewChatLandingScreen create flow", () => {
   it("preserves the OpenCode permission mode across OmniRoute route picks", async () => {
     // Switching the manually-picked OmniRoute route must not silently reset
     // the user's permission choice.
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
@@ -1887,9 +1868,7 @@ describe("NewChatLandingScreen create flow", () => {
     // Effort lives on the active model's reasoning_efforts list, which only
     // the generic authenticated-catalog models populate. Use the generic
     // catalog so the effort rows mount.
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
@@ -1903,16 +1882,12 @@ describe("NewChatLandingScreen create flow", () => {
     fireEvent.click(screen.getByTestId("new-chat-landing-opencode-permission-plan"));
     fireEvent.click(screen.getByTestId("new-chat-landing-opencode-effort-low"));
     expect(
-      screen
-        .getByTestId("new-chat-landing-opencode-permission-plan")
-        .getAttribute("aria-checked"),
+      screen.getByTestId("new-chat-landing-opencode-permission-plan").getAttribute("aria-checked"),
     ).toBe("true");
   });
 
   it("persists the picked OpenCode permission mode to localStorage", async () => {
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");
@@ -1930,9 +1905,7 @@ describe("NewChatLandingScreen create flow", () => {
       "omnigent:last-mode-by-harness",
       JSON.stringify({ "opencode-native": { mode: "dont_ask" } }),
     );
-    setAgents([
-      agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" }),
-    ]);
+    setAgents([agent({ id: "ag_opencode", name: "opencode-native-ui", display_name: "OpenCode" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     openAgentConfig("ag_opencode");

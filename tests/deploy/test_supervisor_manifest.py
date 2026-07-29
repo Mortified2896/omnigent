@@ -58,7 +58,9 @@ def test_write_manifest_round_trip(tmp_path: Path, sample_manifest: ReleaseManif
     assert loaded.lockfile_hashes == sample_manifest.lockfile_hashes
 
 
-def test_write_manifest_refuses_overwrite(tmp_path: Path, sample_manifest: ReleaseManifest) -> None:
+def test_write_manifest_refuses_overwrite(
+    tmp_path: Path, sample_manifest: ReleaseManifest
+) -> None:
     """Refuse to overwrite an existing manifest without explicit opt-in."""
     write_manifest(tmp_path, sample_manifest)
     with pytest.raises(ManifestError) as exc:
@@ -66,7 +68,9 @@ def test_write_manifest_refuses_overwrite(tmp_path: Path, sample_manifest: Relea
     assert "refusing to overwrite" in str(exc.value).lower()
 
 
-def test_write_manifest_overwrite_with_opt_in(tmp_path: Path, sample_manifest: ReleaseManifest) -> None:
+def test_write_manifest_overwrite_with_opt_in(
+    tmp_path: Path, sample_manifest: ReleaseManifest
+) -> None:
     """``OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE=1`` permits re-write."""
     write_manifest(tmp_path, sample_manifest)
     os.environ["OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE"] = "1"

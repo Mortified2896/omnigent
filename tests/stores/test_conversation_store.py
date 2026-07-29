@@ -1,7 +1,5 @@
 """Tests for SqlAlchemyConversationStore."""
 
-# ruff: noqa: E501
-
 from __future__ import annotations
 
 import pytest
@@ -1529,7 +1527,11 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
                 "VALUES (:ws, :rid, :pid, 'declined', 'rsha1', "
                 "'auto/cheap', '{}', 'dpsha1', 0)"
             ).bindparams(rid_bind, pid_bind),
-            {"ws": ws, "rid": "rdt_077348c3fc424f679b2dd9eee050610a", "pid": "rp_7da40d19bee8437bac9efac53da5a39a"},
+            {
+                "ws": ws,
+                "rid": "rdt_077348c3fc424f679b2dd9eee050610a",
+                "pid": "rp_7da40d19bee8437bac9efac53da5a39a",
+            },
         )
         # task_runs row + 3 child rows in 3 child tables
         session.execute(
@@ -1544,14 +1546,22 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
                 "INSERT INTO task_evaluations (workspace_id, id, task_run_id, evaluator_type, "
                 "verdict, created_at) VALUES (:ws, :tev, :tid, 1, 'success', 0)"
             ).bindparams(tev_bind, tid_bind),
-            {"ws": ws, "tev": "tev_430f248674164782a348194e96df9cd5", "tid": "tr_b52842a577fb484f90e31a8f497e9846"},
+            {
+                "ws": ws,
+                "tev": "tev_430f248674164782a348194e96df9cd5",
+                "tid": "tr_b52842a577fb484f90e31a8f497e9846",
+            },
         )
         session.execute(
             text(
                 "INSERT INTO task_reviews (workspace_id, id, task_run_id, verdict, "
                 "created_at, updated_at) VALUES (:ws, :trv, :tid, 'success', 0, 0)"
             ).bindparams(trv_bind, tid_bind),
-            {"ws": ws, "trv": "trv_be9581f127e14180856ed40f1345b010", "tid": "tr_b52842a577fb484f90e31a8f497e9846"},
+            {
+                "ws": ws,
+                "trv": "trv_be9581f127e14180856ed40f1345b010",
+                "tid": "tr_b52842a577fb484f90e31a8f497e9846",
+            },
         )
         session.execute(
             text(
@@ -1559,7 +1569,11 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
                 "event_type, idempotency_key, payload_json, next_attempt_at, created_at) "
                 "VALUES (:ws, :lid, :tid, 'trace', 'idem1', '{}', 0, 0)"
             ).bindparams(lid_bind, tid_bind),
-            {"ws": ws, "lid": "lso_0000000000000000000000000000000a", "tid": "tr_b52842a577fb484f90e31a8f497e9846"},
+            {
+                "ws": ws,
+                "lid": "lso_0000000000000000000000000000000a",
+                "tid": "tr_b52842a577fb484f90e31a8f497e9846",
+            },
         )
 
         # Verify pre-state
@@ -1574,8 +1588,11 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
             assert session.execute(
                 select(getattr(tbl, fk_col)).where(
                     getattr(tbl, fk_col).in_(
-                        [conv.id, "rp_7da40d19bee8437bac9efac53da5a39a",
-                         "tr_b52842a577fb484f90e31a8f497e9846"]
+                        [
+                            conv.id,
+                            "rp_7da40d19bee8437bac9efac53da5a39a",
+                            "tr_b52842a577fb484f90e31a8f497e9846",
+                        ]
                     )
                 )
             ).fetchall(), f"pre-state missing for {tbl.__name__}"
@@ -1595,8 +1612,11 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
             rows = session.execute(
                 select(getattr(tbl, fk_col)).where(
                     getattr(tbl, fk_col).in_(
-                        [conv.id, "rp_7da40d19bee8437bac9efac53da5a39a",
-                         "tr_b52842a577fb484f90e31a8f497e9846"]
+                        [
+                            conv.id,
+                            "rp_7da40d19bee8437bac9efac53da5a39a",
+                            "tr_b52842a577fb484f90e31a8f497e9846",
+                        ]
                     )
                 )
             ).fetchall()

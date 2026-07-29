@@ -9,24 +9,19 @@ from pathlib import Path
 
 import pytest
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _STATUS_SCRIPT = _REPO_ROOT / "scripts" / "deploy_status.sh"
 _ROLLBACK_SCRIPT = _REPO_ROOT / "scripts" / "rollback_release.sh"
 _CLEANUP_SCRIPT = _REPO_ROOT / "scripts" / "cleanup_releases.sh"
 
 
-@pytest.mark.parametrize(
-    "script", [_STATUS_SCRIPT, _ROLLBACK_SCRIPT, _CLEANUP_SCRIPT]
-)
+@pytest.mark.parametrize("script", [_STATUS_SCRIPT, _ROLLBACK_SCRIPT, _CLEANUP_SCRIPT])
 def test_script_exists_and_executable(script: Path) -> None:
     assert script.is_file()
     assert os.access(script, os.X_OK)
 
 
-@pytest.mark.parametrize(
-    "script", [_STATUS_SCRIPT, _ROLLBACK_SCRIPT, _CLEANUP_SCRIPT]
-)
+@pytest.mark.parametrize("script", [_STATUS_SCRIPT, _ROLLBACK_SCRIPT, _CLEANUP_SCRIPT])
 def test_script_parses_with_bash(script: Path) -> None:
     bash = shutil.which("bash")
     if bash is None:

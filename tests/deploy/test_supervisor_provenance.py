@@ -9,9 +9,6 @@ future refactor cannot silently weaken it.
 
 from __future__ import annotations
 
-import importlib
-import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -87,7 +84,9 @@ def test_check_runtime_provenance_releases_outside_prefix(
     def fake_prefix() -> Path:
         return other_prefix
 
-    monkeypatch.setattr(prov, "_resolve_executable", lambda: fake_release / ".venv" / "bin" / "python")
+    monkeypatch.setattr(
+        prov, "_resolve_executable", lambda: fake_release / ".venv" / "bin" / "python"
+    )
     monkeypatch.setattr(prov, "_resolve_prefix", fake_prefix)
     monkeypatch.setattr(prov, "_resolve_module", lambda *a, **k: fake_release / "x")
 
@@ -123,7 +122,9 @@ def test_check_runtime_provenance_rejects_editable_install(
             return site_packages / "omnigent" / "server" / "app.py"
         raise AssertionError(f"unexpected module probe: {name}")
 
-    monkeypatch.setattr(prov, "_resolve_executable", lambda: fake_release / ".venv" / "bin" / "python")
+    monkeypatch.setattr(
+        prov, "_resolve_executable", lambda: fake_release / ".venv" / "bin" / "python"
+    )
     monkeypatch.setattr(prov, "_resolve_prefix", fake_prefix)
     monkeypatch.setattr(prov, "_resolve_module", fake_module)
 
@@ -169,7 +170,6 @@ def test_check_runtime_provenance_uses_real_paths_for_smoke() -> None:
     out); this version pins the corrected behavior so a future
     refactor that re-loosens the check breaks the test here.
     """
-    import sys
 
     release = Path(__file__).resolve().parents[2]
     with pytest.raises(prov.ProvenanceError) as exc:

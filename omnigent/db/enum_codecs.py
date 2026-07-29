@@ -370,6 +370,7 @@ def decode_scheduled_task_run_status(code: int) -> str:
     """Decode a ``scheduled_task_runs.status`` int code to its name."""
     return _decode(SCHEDULED_TASK_RUN_STATUS, code, field="scheduled_task_runs.status")
 
+
 def encode_task_run_status(name: str) -> int:
     """Encode a ``task_runs.terminal_status`` name to its int code."""
     return _encode(TASK_RUN_STATUS, name, field="task_runs.terminal_status")

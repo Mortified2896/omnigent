@@ -9,7 +9,6 @@ at a hard-coded path again.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -52,9 +51,7 @@ def test_write_release_dropin_atomic(dropin_dir: Path, release_dir: Path) -> Non
         assert not entry.name.startswith(f".{path.name}")
 
 
-def test_write_release_dropin_overwrites_safely(
-    dropin_dir: Path, release_dir: Path
-) -> None:
+def test_write_release_dropin_overwrites_safely(dropin_dir: Path, release_dir: Path) -> None:
     """Re-writing the same drop-in id does not leave partial files."""
     sha = "0123456789abcdef0123456789abcdef01234567"
     path1 = systemd.write_release_dropin(sha, release_dir=release_dir)
@@ -63,16 +60,12 @@ def test_write_release_dropin_overwrites_safely(
     assert path1.read_text() == path2.read_text()
 
 
-def test_disable_other_release_dropins_keeps_active(
-    dropin_dir: Path, release_dir: Path
-) -> None:
+def test_disable_other_release_dropins_keeps_active(dropin_dir: Path, release_dir: Path) -> None:
     """Other 10-release-* drop-ins get renamed ``.disabled``; the active stays put."""
     active_sha = "0123456789abcdef0123456789abcdef01234567"
     other_sha = "ffffffffffffffffffffffffffffffffffffffff"
     systemd.write_release_dropin(active_sha, release_dir=release_dir)
-    other_path = systemd.write_release_dropin(
-        other_sha, release_dir=release_dir / "other"
-    )
+    other_path = systemd.write_release_dropin(other_sha, release_dir=release_dir / "other")
     disabled = systemd.disable_other_release_dropins(active_sha)
     assert other_path.with_suffix(other_path.suffix + ".disabled") in disabled
     # Active drop-in survives untouched.

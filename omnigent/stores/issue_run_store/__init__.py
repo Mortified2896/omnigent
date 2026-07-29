@@ -404,5 +404,3 @@ __all__ = [
 ]
 
 from omnigent.stores.issue_run_store.sqlalchemy_store import SqlIssueRunStore  # noqa: E402
-
-

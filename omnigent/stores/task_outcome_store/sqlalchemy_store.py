@@ -1010,11 +1010,7 @@ class SqlAlchemyTaskOutcomeStore(TaskOutcomeStore):
             return [
                 _run_row_to_entity(row)
                 for run_id in claimed_ids
-                if (
-                    row := session.get(
-                        SqlTaskRun, (workspace_id, uuid_to_bytes(run_id))
-                    )
-                )
+                if (row := session.get(SqlTaskRun, (workspace_id, uuid_to_bytes(run_id))))
                 is not None
             ]
 

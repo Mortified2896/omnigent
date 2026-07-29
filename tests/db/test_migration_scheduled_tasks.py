@@ -293,7 +293,10 @@ def test_scheduled_task_runs_status_stored_as_smallint(db_engine: Engine) -> Non
 
 def test_downgrade_drops_both_tables(tmp_path: Path) -> None:
     """Downgrading one step removes both tables; re-upgrade restores them."""
-    pytest.skip("zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 production target is not supported.")
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; "
+        "downgrade past pre-v0.6 production target is not supported."
+    )
     db_path = tmp_path / "downgrade.db"
     uri = f"sqlite:///{db_path}"
     engine = get_or_create_engine(uri)

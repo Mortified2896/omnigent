@@ -17,11 +17,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
-
-import pytest
-
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _STATUS_SCRIPT = _REPO_ROOT / "scripts" / "deploy_status.sh"
@@ -54,8 +50,8 @@ def test_status_script_invokes_provenance_via_release_python() -> None:
         "deploy_status.sh must invoke provenance using the release's own "
         ".venv/bin/python (not the main checkout's)"
     )
-    assert ' -P ' in text
-    assert 'env -u PYTHONPATH' in text
+    assert " -P " in text
+    assert "env -u PYTHONPATH" in text
 
 
 def test_status_script_does_not_use_repo_path_as_omnigent_source() -> None:
@@ -88,7 +84,11 @@ def test_status_script_treats_live_exe_as_informational() -> None:
     # The earlier version had: case "$LIVE_EXE" in "$CURRENT_DIR"/*) ;;
     # *) MISMATCH. The new version must NOT have that pattern as a
     # MISMATCH trigger.
-    assert 'live exe=' not in text.split('live_exe:')[0].split('MISMATCH')[0] if 'MISMATCH' in text else True
+    assert (
+        "live exe=" not in text.split("live_exe:")[0].split("MISMATCH")[0]
+        if "MISMATCH" in text
+        else True
+    )
     # Stronger assertion: the LIVE_EXE-driven mismatch trigger is gone.
     # Look for the specific old pattern.
     bad_pattern = '"$CURRENT_DIR"/*) ;;'
@@ -121,7 +121,7 @@ def test_status_script_verifies_launch_command() -> None:
     ``.venv/bin/python`` substring.
     """
     text = _STATUS_SCRIPT.read_text()
-    assert 'live command does not launch through' in text or 'live_command' in text
+    assert "live command does not launch through" in text or "live_command" in text
     assert '"$CURRENT_DIR/.venv/bin/python"' in text
 
 
@@ -149,6 +149,7 @@ def test_status_script_prints_status_ok() -> None:
     stub are all wired up so the script reaches the OK path.
     """
     import tempfile
+
     with tempfile.TemporaryDirectory() as raw:
         deploy_root = Path(raw) / "deploy"
         deploy_root.mkdir()

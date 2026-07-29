@@ -2247,12 +2247,8 @@ class SqlIssueRun(OmnigentBase):
     worktree: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    review_iteration: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0"
-    )
-    retry_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0"
-    )
+    review_iteration: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

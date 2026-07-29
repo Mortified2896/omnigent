@@ -292,9 +292,7 @@ def test_round_trip_task_run(db_engine: Engine) -> None:
         ).scalar_one()
         assert review_row == "success"
         outbox_row = conn.execute(
-            sa.text(
-                "SELECT status, event_type FROM langfuse_sync_outbox WHERE id = :id"
-            ),
+            sa.text("SELECT status, event_type FROM langfuse_sync_outbox WHERE id = :id"),
             {"id": out_blob},
         ).one()
         assert outbox_row[0] == 1

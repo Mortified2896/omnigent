@@ -604,7 +604,11 @@ export function useBulkDeleteConversations() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (ids: string[]): Promise<BulkDeleteResult> => {
-      const results = await runWithConcurrency(ids, (id) => stopAndDeleteOne(id), BULK_OP_CONCURRENCY);
+      const results = await runWithConcurrency(
+        ids,
+        (id) => stopAndDeleteOne(id),
+        BULK_OP_CONCURRENCY,
+      );
       const out: BulkDeleteResult = {
         attempted: [...ids],
         succeeded: [],
@@ -646,25 +650,17 @@ export function useBulkDeleteConversations() {
         }
       }
       const hasPartial =
-        out.forbidden.length > 0 ||
-        out.activeSession.length > 0 ||
-        out.failed.length > 0;
+        out.forbidden.length > 0 || out.activeSession.length > 0 || out.failed.length > 0;
       if (hasPartial) throw out;
       return out;
     },
     onSuccess: (result) => {
-      applyDeletedToCache(queryClient, [
-        ...result.succeeded,
-        ...result.alreadyDeleted,
-      ]);
+      applyDeletedToCache(queryClient, [...result.succeeded, ...result.alreadyDeleted]);
     },
     onError: (err) => {
       if (err && typeof err === "object" && "succeeded" in err) {
         const result = err as unknown as BulkDeleteResult;
-        applyDeletedToCache(queryClient, [
-          ...result.succeeded,
-          ...result.alreadyDeleted,
-        ]);
+        applyDeletedToCache(queryClient, [...result.succeeded, ...result.alreadyDeleted]);
       }
     },
   });
@@ -677,10 +673,7 @@ export function useBulkDeleteConversations() {
  * invalidation round-trip (the server's search index reindexes async
  * — invalidating would race it and resurrect the just-deleted row).
  */
-function applyDeletedToCache(
-  queryClient: ReturnType<typeof useQueryClient>,
-  deletedIds: string[],
-) {
+function applyDeletedToCache(queryClient: ReturnType<typeof useQueryClient>, deletedIds: string[]) {
   if (deletedIds.length === 0) return;
   const idSet = new Set(deletedIds);
   for (const queryKey of [["conversations"], ["project-sessions"]]) {
@@ -754,11 +747,7 @@ export function useBulkStopSessions() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (ids: string[]) => {
-      const results = await runWithConcurrency(
-        ids,
-        (id) => stopSession(id),
-        BULK_OP_CONCURRENCY,
-      );
+      const results = await runWithConcurrency(ids, (id) => stopSession(id), BULK_OP_CONCURRENCY);
       const succeeded: string[] = [];
       const failed: string[] = [];
       for (const r of results) {

@@ -1073,9 +1073,9 @@ function OpenCodePermissionModeOptions({
         >
           <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            Bypass permissions lets the session run every OpenCode tool without
-            asking. Omnigent sandboxing, network policy, and host policy still
-            apply — only OpenCode's local permission gate is relaxed.
+            Bypass permissions lets the session run every OpenCode tool without asking. Omnigent
+            sandboxing, network policy, and host policy still apply — only OpenCode's local
+            permission gate is relaxed.
           </span>
         </div>
       )}
@@ -1818,9 +1818,7 @@ function AgentHarnessPicker({
                 setPickedOmniRouteRoute("");
                 setPickedModel(value);
               }
-              const next = models.find(
-                (item) => item.id === value || item.route_id === value,
-              );
+              const next = models.find((item) => item.id === value || item.route_id === value);
               if (!next?.reasoning_efforts?.includes(optionEffort)) {
                 if (entryHarness) writeHarnessOption(entryHarness, { effort: "" });
                 setPickedEffort("");

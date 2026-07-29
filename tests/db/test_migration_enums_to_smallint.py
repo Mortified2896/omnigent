@@ -178,7 +178,10 @@ def test_check_rejects_out_of_range_code(seeded_engine: Engine) -> None:
 
 def test_downgrade_restores_strings(seeded_engine: Engine) -> None:
     """The reversible downgrade maps int codes back to the original strings."""
-    pytest.skip("zd1b2c3d4e5f is intentionally irreversible; downgrade past pre-v0.6 production target is not supported.")
+    pytest.skip(
+        "zd1b2c3d4e5f is intentionally irreversible; "
+        "downgrade past pre-v0.6 production target is not supported."
+    )
     _upgrade(seeded_engine, _THIS)
     _downgrade(seeded_engine, _PRIOR)
     with seeded_engine.connect() as conn:

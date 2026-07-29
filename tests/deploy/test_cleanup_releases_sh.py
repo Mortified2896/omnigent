@@ -7,12 +7,7 @@ pin them to the script's documented invariants.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
-
-import pytest
-
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "cleanup_releases.sh"
