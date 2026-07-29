@@ -627,11 +627,27 @@ def tracked_pids() -> Iterator[int]:
 # here so issue #30's scope (separate model-stream / tool-output /
 # max-tool / max-turn windows) is in one place. The scaffold reads
 # these via :func:`resolve_watchdog_budgets`.
+#
+# Default policy: automatic model-stream idle termination is
+# **disabled** (``model_stream_idle_s`` and ``tool_output_idle_s``
+# both default to ``0``). The Control Room installation chose this
+# trade-off because preserving legitimate delegated work (parent
+# waiting on a child session, harness waiting on a long-running
+# subprocess the harness hasn't yet surfaced as activity) is more
+# valuable than aggressively killing an occasionally-quiet turn.
+# Manual cancellation remains available; the absolute caps stay on
+# as the backstop for abandoned or runaway work.
+#
+# A deployment that wants the older four-minute idle behaviour can
+# opt back in explicitly by setting ``HARNESS_MODEL_STREAM_IDLE_S``
+# and ``HARNESS_TOOL_OUTPUT_IDLE_S`` in the service environment.
+# ``0`` (or a negative value) means disabled; the scaffold already
+# treats ``<= 0`` as a no-op via ``asyncio.timeout(None)``.
 
-_DEFAULT_MODEL_STREAM_IDLE_S = 240.0
-_DEFAULT_TOOL_OUTPUT_IDLE_S = 240.0
-_DEFAULT_MAX_TOOL_RUNTIME_S = 3600.0
-_DEFAULT_MAX_TURN_RUNTIME_S = 7200.0
+_DEFAULT_MODEL_STREAM_IDLE_S = 0.0
+_DEFAULT_TOOL_OUTPUT_IDLE_S = 0.0
+_DEFAULT_MAX_TOOL_RUNTIME_S = 14400.0
+_DEFAULT_MAX_TURN_RUNTIME_S = 28800.0
 
 
 @dataclass(frozen=True)
@@ -640,12 +656,17 @@ class WatchdogBudgets:
 
     :param model_stream_idle_s: Max seconds the harness may go
         without an emit while no tool is in flight before the
-        idle watchdog fires.
+        idle watchdog fires. ``<= 0`` **disables** the idle
+        watchdog — the scaffold turns ``asyncio.timeout`` into a
+        no-op in that case, so a quiet turn is never killed by
+        this gate. Default is ``0`` (disabled).
     :param tool_output_idle_s: Max seconds a supervised tool may
-        go without I/O before the idle watchdog fires.
+        go without I/O before the idle watchdog fires. Same
+        ``<= 0`` disables semantics. Default is ``0`` (disabled).
     :param max_tool_runtime_s: Per-tool absolute cap. ``<= 0``
-        disables.
+        disables. Default is ``14400`` (4 h).
     :param max_turn_runtime_s: Total-turn cap. ``<= 0`` disables.
+        Default is ``28800`` (8 h).
     """
 
     model_stream_idle_s: float

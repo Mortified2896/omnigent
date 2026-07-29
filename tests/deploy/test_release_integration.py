@@ -159,7 +159,12 @@ def test_drop_in_reflects_release_choice(deploy_root: Path, tmp_path: Path) -> N
     monkeypatch = pytest.MonkeyPatch()
     try:
         monkeypatch.setenv("OMNIGENT_DEPLOY_DROPIN_DIR", str(deploy_root / "dropins"))
+        # Point the host drop-in env at the same tmp dir so the
+        # ``disable_other`` cleanup that now also touches the host
+        # directory doesn't reach into the real /etc/systemd.
+        monkeypatch.setenv("OMNIGENT_DEPLOY_HOST_DROPIN_DIR", str(deploy_root / "host_dropins"))
         (deploy_root / "dropins").mkdir()
+        (deploy_root / "host_dropins").mkdir()
         sha_active = "0123456789abcdef0123456789abcdef01234567"
         sha_old = "ffffffffffffffffffffffffffffffffffffffff"
         rel_active = tmp_path / "active"
