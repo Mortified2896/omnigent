@@ -821,13 +821,25 @@ def _read_live_deployed_sha_for_health() -> str | None:
     Returns ``None`` (and the field is omitted) when the production
     deployed-sha file is missing or unreadable; the bare ``/health``
     probe is the only contract callers depend on for liveness.
+
+    The canonical live-SHA marker is the shared path the external
+    updater reads and writes. The legacy ``~/.omnigent/deployed-sha``
+    fallback is only honored when the shared marker is absent, so
+    deploys that pre-date the external updater still surface a
+    ``version_sha`` after a one-time migration.
     """
+    import os
     from pathlib import Path
 
-    candidates = (
-        Path("/var/lib/omnigent/shared/deployed-sha"),
-        Path.home() / ".omnigent" / "deployed-sha",
-    )
+    env_override = os.environ.get("OMNIGENT_UPDATER_LIVE_SHA_FILE", "").strip()
+    candidates: tuple[Path, ...]
+    if env_override:
+        candidates = (Path(env_override),)
+    else:
+        candidates = (
+            Path("/var/lib/omnigent/shared/deployed-sha"),
+            Path.home() / ".omnigent" / "deployed-sha",
+        )
     for path in candidates:
         try:
             raw = path.read_text().strip()

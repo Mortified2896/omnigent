@@ -91,7 +91,9 @@ def test_probe_runs_before_systemd_reconfiguration() -> None:
     text = _SCRIPT_PATH.read_text()
     body = text[text.find("set -euo pipefail") :]
     probe_idx = body.find("proving import provenance")
-    dropin_idx = body.find("write_release_dropin")
+    # The drop-in write is now routed through the sudo-allowed
+    # wrapper. The wrapper invocation is the equivalent gate.
+    dropin_idx = body.find("write-dropin.sh")
     restart_idx = body.find("systemctl restart")
     assert probe_idx != -1
     assert dropin_idx != -1

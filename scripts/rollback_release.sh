@@ -75,14 +75,10 @@ mkdir -p "$FAILED_DIR"
 # Drop-in rewrite uses TARGET/TARGET_SHA captured above so a later
 # ``previous`` overwrite cannot redirect the systemd unit.
 write_dropin() {
-  sudo "$TARGET/.venv/bin/python" - <<PY
-import os, sys
-sys.path.insert(0, '$TARGET')
-from omnigent.deploy.ops.systemd import write_release_dropin, disable_other_release_dropins
-p = write_release_dropin('$TARGET_SHA', release_dir=__import__('pathlib').Path('$TARGET'))
-disable_other_release_dropins('$TARGET_SHA')
-print(p)
-PY
+  # The wrapper handles both write and disable; the wrapper
+  # validates SHA + release-dir path before invoking the
+  # release's python.
+  sudo /opt/omnigent/updater/bin/write-dropin.sh write "$TARGET_SHA" "$TARGET"
 }
 DROPIN_PATH=$(write_dropin) || fail "could not write drop-in (sudo required)"
 
@@ -153,9 +149,15 @@ if body=$(curl -fsS -m 8 "https://hermes-agent.taile0361b.ts.net:9461/" 2>/dev/n
 fi
 
 # Update deployment-sha on success.
-printf '%s\n' "$TARGET_SHA" > /home/hermes/.omnigent/deployed-sha.tmp
-mv -T /home/hermes/.omnigent/deployed-sha.tmp /home/hermes/.omnigent/deployed-sha
-log "rolled back to $TARGET_SHA; deployed-sha updated"
+# Source the shared live-SHA helper so the rollback writes the
+# canonical marker the external updater reads. The helper honors
+# OMNIGENT_DEPLOYED_SHA_FILE / OMNIGENT_DEPLOYED_SHA_DIR and falls
+# back to /var/lib/omnigent/shared/ when writable.
+SCRIPT_DIR_DEPLOYED_SHA_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_deployed_sha.sh
+source "$SCRIPT_DIR_DEPLOYED_SHA_HELPER/_deployed_sha.sh"
+_deployed_sha_write_current "$TARGET_SHA"
+log "rolled back to $TARGET_SHA; deployed-sha=$DEPLOYED_SHA_FILE updated"
 
 rm -rf "$FAILED_DIR"
 exit 0

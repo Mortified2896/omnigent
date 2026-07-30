@@ -118,6 +118,15 @@ log "installed $PREFIX/bin/omnigent-updater"
 install -m 0755 "$SCRIPT_DIR/omnigent_updater.sh" "$PREFIX/bin/omnigent_updater.sh"
 log "installed $PREFIX/bin/omnigent_updater.sh"
 
+# Drop-in writer wrapper. The promote/rollback scripts use sudo to
+# invoke this wrapper instead of the release's python directly so
+# the sudoers rule can be narrowly scoped to a single binary. The
+# wrapper validates SHA + release-dir before invoking the release
+# python.
+install -m 0750 "$SCRIPT_DIR/write-dropin.sh" "$PREFIX/bin/write-dropin.sh"
+chown root:omnigent-updater "$PREFIX/bin/write-dropin.sh" 2>/dev/null || true
+log "installed $PREFIX/bin/write-dropin.sh"
+
 # Optional artifacts: systemd unit template + sudoers rule.
 install -m 0644 "$REPO_ROOT/deploy/systemd/omnigent-updater.service.template" \
     "$PREFIX/etc/omnigent-updater.service.template"

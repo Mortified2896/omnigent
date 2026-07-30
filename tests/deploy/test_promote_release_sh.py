@@ -133,7 +133,9 @@ def test_promote_script_validates_via_import_probe() -> None:
     # The probe must run BEFORE any systemd reconfiguration (drop-in
     # write / systemctl restart).
     probe_idx = body.find("-m omnigent.deploy.supervisor.provenance")
-    dropin_idx = body.find("write_release_dropin")
+    # The drop-in write is now routed through the sudo-allowed
+    # wrapper at /opt/omnigent/updater/bin/write-dropin.sh.
+    dropin_idx = body.find("write-dropin.sh")
     restart_idx = body.find("systemctl restart")
     assert dropin_idx != -1 and restart_idx != -1
     assert probe_idx < dropin_idx < restart_idx, (
@@ -147,16 +149,24 @@ def test_promote_script_atomic_promotion() -> None:
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
     body = text[text.find(body_marker) :]
-    dropin_idx = body.find("write_release_dropin")
-    deploy_idx = body.find(".omnigent/deployed-sha")
+    # The drop-in write is now routed through the sudo-allowed
+    # wrapper at /opt/omnigent/updater/bin/write-dropin.sh so the
+    # literal ``write_release_dropin`` no longer appears inline.
+    wrapper_idx = body.find("write-dropin.sh")
+    # The deployed-sha write is routed through the shared helper
+    # ``_deployed_sha.sh`` so the literal path string no longer
+    # appears inline.
+    helper_idx = body.find("_deployed_sha.sh")
+    helper_write_idx = body.find("_deployed_sha_write_current")
     loopback_idx = body.find("/health")
-    assert dropin_idx != -1
+    assert wrapper_idx != -1, "promote_release.sh must call write-dropin.sh"
     assert loopback_idx != -1
-    assert deploy_idx != -1
-    # deployed-sha update must happen after the drop-in write AND after
-    # the loopback probe passes — otherwise a flaky live restart would
-    # still record the SHA as "deployed".
-    assert dropin_idx < loopback_idx < deploy_idx
+    assert helper_idx != -1, "promote_release.sh must source scripts/_deployed_sha.sh"
+    assert helper_write_idx != -1, "promote_release.sh must call _deployed_sha_write_current"
+    # deployed-sha update must happen after the drop-in write AND
+    # after the loopback probe passes — otherwise a flaky live
+    # restart would still record the SHA as "deployed".
+    assert wrapper_idx < loopback_idx < helper_write_idx
 
 
 def test_promote_script_does_not_use_main_checkout_runtime() -> None:
