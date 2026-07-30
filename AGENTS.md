@@ -1,43 +1,81 @@
 # Agent guidance
 
-Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
-repository. See `CONTRIBUTING.md` for the full contributor workflow.
+Guidance for AI coding agents working in this repository. See `CONTRIBUTING.md`
+for the full contributor workflow.
 
 ## Committing
 
-Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or
-let it run on staged files via `git commit`). Fix any issues it reports so the
-commit lands clean — CI runs the same checks.
+During iteration, run pre-commit on changed or staged files. Before opening or
+updating a pull request, run the repository-required full pre-commit command and
+fix every reported issue. CI runs the same checks.
 
 ## Pull requests
 
-When you open a pull request, fill in the repo's PR template at
-`.github/pull_request_template.md` (case-sensitive on Linux — note the lowercase
-filename). Keep every section and checkbox row so reviewers can skim them.
-
-- **Summary** — what changed and why.
-- **Test Plan** — how you verified it.
-- **Demo** — a **video or images** showing the change. Expected on contributor
-  PRs for UI / frontend changes (check the "UI / frontend change" box under
-  *Type of change*) so reviewers can see the new behaviour without checking out
-  the branch. Use `N/A` for non-visual changes.
-- **Type of change** / **Test coverage** — check all that apply (at least one
-  each).
-- **Coverage notes** — required if you checked "Manual verification completed"
-  or "Not applicable".
-
-Generate the description from the actual diff and this session's context — lead
-with the motivation, then the change. Don't pass a `--body` that skips these
-sections.
+Use `.github/pull_request_template.md` and complete every applicable section
+based on the actual diff and verification performed. Keep the template
+structure intact, regardless of whether the pull request is opened through the
+CLI, API, or web UI.
 
 ## Code comments
 
-Keep comments short and focused on the code, not on the change history.
+Explain non-obvious intent, invariants, and safety constraints. Prefer concise
+comments, but do not remove necessary operational context merely to meet an
+arbitrary line limit. Describe the current scenario rather than change history,
+pull requests, or ticket numbers.
 
-- **Keep them brief** — prefer one or two lines. Avoid comments longer than
-  three lines; if you need more, the code likely needs refactoring or a doc
-  string, not a wall of inline commentary.
-- **Describe the scenario, not the PR** — explain *what* the code handles or
-  *why* it exists, in terms a future reader needs. Don't reference PR numbers,
-  issue numbers, or ticket IDs (e.g. `#1646`, `fixes JIRA-123`); the scenario
-  should be clear without chasing external links.
+## Long-running commands and tests
+
+Long-running work must remain observable. Never leave an agent waiting for many
+minutes without live output or an explicit progress check.
+
+- Do not pipe a long-running command directly into `tail`, `head`, command
+  substitution, or another consumer that may wait for EOF before displaying
+  output. In particular, avoid:
+
+  ```bash
+  some-long-command 2>&1 | tail -20
+  ```
+
+  `tail -20` cannot know the final 20 lines until the producer exits, so the
+  command may appear completely silent while it is still running.
+
+- Stream output live and keep a complete log. Preserve the original command's
+  exit status:
+
+  ```bash
+  set -o pipefail
+  log_file=$(mktemp)
+  stdbuf -oL -eL some-long-command 2>&1 | tee "$log_file"
+  status=${PIPESTATUS[0]}
+  tail -n 20 "$log_file"
+  exit "$status"
+  ```
+
+- Before starting work expected to take more than two minutes, state what is
+  being run, the expected phases, and a rough expected duration.
+
+- For commands expected to run longer than five minutes, use a durable log and
+  inspect progress at least every one to two minutes. Useful signals include:
+  log-file modification time and size, the process tree and elapsed time, CPU
+  and memory use, active child processes, and durable deployment or updater
+  state files.
+
+- If a command produces no new output for several minutes, inspect whether it
+  is still doing useful work, blocked on a lock or network request, waiting for
+  input, finished while another process still holds the output pipe open, or
+  merely buffering output.
+
+- Use line buffering where supported, such as `stdbuf -oL -eL`, unbuffered
+  Python, verbose test output, or application-specific progress flags.
+
+- Use explicit, reasonable timeouts for ordinary tests and network operations.
+  Do not blindly terminate deployment, migration, promotion, or rollback work
+  at a timeout; first determine whether it is inside a critical cutover or
+  recovery phase.
+
+- When only the final lines are needed for a report, capture the complete live
+  output with `tee` and run `tail` on the completed log afterward.
+
+- Do not rerun a possibly active deployment or updater request merely because
+  its original shell appears silent. First check its process, durable request
+  and result state, current release, and service health.
