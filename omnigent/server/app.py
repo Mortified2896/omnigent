@@ -815,6 +815,29 @@ def _ensure_default_hermes_agent(
     )
 
 
+def _read_live_deployed_sha_for_health() -> str | None:
+    """Read the live deployed commit SHA for the ``/health`` response.
+
+    Returns ``None`` (and the field is omitted) when the production
+    deployed-sha file is missing or unreadable; the bare ``/health``
+    probe is the only contract callers depend on for liveness.
+    """
+    from pathlib import Path
+
+    candidates = (
+        Path("/var/lib/omnigent/shared/deployed-sha"),
+        Path.home() / ".omnigent" / "deployed-sha",
+    )
+    for path in candidates:
+        try:
+            raw = path.read_text().strip()
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+        if len(raw) == 40 and all(c in "0123456789abcdef" for c in raw):
+            return raw
+    return None
+
+
 def _ensure_default_antigravity_agent(
     agent_store: AgentStore,
     artifact_store: ArtifactStore,
@@ -1742,6 +1765,16 @@ def create_app(
             host binding / the version isn't resolvable on this replica.
         """
         result: dict[str, Any] = {"status": "ok"}
+        # Canary: surface the live deployed commit SHA so the
+        # external updater's post-cutover health check (and the
+        # operator) can confirm the running release matches the
+        # requested target without scraping the deployment
+        # metadata file directly. The SHA is read lazily and is
+        # absent when the production deploy root has not yet been
+        # bootstrapped.
+        _live_sha = _read_live_deployed_sha_for_health()
+        if _live_sha:
+            result["version_sha"] = _live_sha
         batch_ids = [s.strip() for s in session_ids.split(",") if s.strip()] if session_ids else []
         # Resolve every requested id (single + batch) in ONE lookup. The
         # online-dot lookups hit the database (conversations + hosts

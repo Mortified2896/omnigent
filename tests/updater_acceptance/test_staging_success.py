@@ -105,6 +105,16 @@ def test_staging_successful_update_end_to_end(
         ["git", "-C", str(staging_repo), "commit", "-m", "candidate", "-q"],
         check=True,
     )
+    # Push to the fork mirror so the explicit fork/main ancestry
+    # check accepts the new commit.
+    subprocess.run(
+        ["git", "-C", str(staging_repo), "push", "fork", "main", "-q"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(staging_repo), "fetch", "fork", "-q"],
+        check=True,
+    )
     target = subprocess.run(
         ["git", "-C", str(staging_repo), "rev-parse", "HEAD"],
         capture_output=True,

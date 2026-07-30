@@ -47,6 +47,17 @@ def test_staging_stale_expected_current_is_rejected(
     (staging_repo / "README").write_text("v\n")
     subprocess.run(["git", "-C", str(staging_repo), "add", "README"], check=True)
     subprocess.run(["git", "-C", str(staging_repo), "commit", "-m", "v", "-q"], check=True)
+    try:
+        subprocess.run(
+            ["git", "-C", str(staging_repo), "push", "fork", "main", "-q"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(staging_repo), "fetch", "fork", "-q"],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        pass
     target = subprocess.run(
         ["git", "-C", str(staging_repo), "rev-parse", "HEAD"],
         capture_output=True,

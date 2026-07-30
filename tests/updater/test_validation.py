@@ -7,6 +7,7 @@ live metadata, and the failure-mode error mapping.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -223,3 +224,281 @@ def test_validate_request_rejects_stale(
     live = "0123456789abcdef0123456789abcdef01234567"
     with pytest.raises(StaleExpectedCurrentError):
         validate_request(record, repo=repo_root, live_sha=live)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 hardening — explicit fork/main ancestry + remote URL + symbol/version
+# rejection (issue #38 §3).
+# ---------------------------------------------------------------------------
+
+
+def test_validate_sha_format_rejects_symbolic_ref() -> None:
+    """A symbolic ref like ``fork/main`` is not a 40-char SHA."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(target_sha="fork/main", expected_current_sha="0" * 40)
+
+
+def test_validate_sha_format_rejects_branch_name() -> None:
+    """An arbitrary branch name is not a 40-char SHA."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(
+            target_sha="feat/issue-38-external-self-update-controller",
+            expected_current_sha="0" * 40,
+        )
+
+
+def test_validate_sha_format_rejects_version_string() -> None:
+    """A SemVer string like ``v0.7.0`` is rejected at format validation."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(target_sha="v0.7.0", expected_current_sha="0" * 40)
+
+
+def test_validate_sha_format_rejects_latest() -> None:
+    """The literal string ``latest`` is rejected at format validation."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(target_sha="latest", expected_current_sha="0" * 40)
+
+
+def test_validate_sha_format_rejects_empty_sha() -> None:
+    """An empty string is rejected at format validation."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(target_sha="", expected_current_sha="0" * 40)
+
+
+def test_validate_sha_format_rejects_partial_sha() -> None:
+    """A 7-character short SHA is rejected at format validation.
+
+    Git allows abbreviated SHAs but the updater never accepts
+    them — the request must contain the exact merged SHA so the
+    audit trail is unambiguous.
+    """
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(target_sha="0123456", expected_current_sha="0" * 40)
+
+
+def test_validate_sha_format_rejects_uppercase_hex() -> None:
+    """Uppercase hex characters are rejected (spec requires lowercase)."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(
+            target_sha="0123456789ABCDEF0123456789ABCDEF01234567",
+            expected_current_sha="0" * 40,
+        )
+
+
+def test_validate_sha_format_rejects_non_hex() -> None:
+    """A 40-character string with non-hex characters is rejected."""
+    with pytest.raises(MalformedShaError):
+        validate_sha_format(
+            target_sha="z" * 40,
+            expected_current_sha="0" * 40,
+        )
+
+
+def test_fork_remote_url_rejects_unapproved_remote(
+    repo_root: Path, lineage_anchor: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``fork`` remote pointing at the wrong repo is rejected loudly.
+
+    The conftest registers the local mirror as an approved URL so
+    other tests pass; we strip that override here so only the
+    production allow-list applies.
+    """
+    from omnigent.updater.validation import (
+        ForkRemoteUrlError,
+        verify_fork_remote_url,
+    )
+
+    monkeypatch.delenv("OMNIGENT_UPDATER_APPROVED_FORK_URLS", raising=False)
+    # Re-point the `fork` remote at an unrelated repository.
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "remote",
+            "set-url",
+            "fork",
+            "https://github.com/attacker/evil-fork.git",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(ForkRemoteUrlError):
+        verify_fork_remote_url(repo_root)
+
+
+def test_fork_remote_url_accepts_approved_https(
+    repo_root: Path, lineage_anchor: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The approved HTTPS URL is accepted when no test override is active."""
+    from omnigent.updater.validation import verify_fork_remote_url
+
+    monkeypatch.delenv("OMNIGENT_UPDATER_APPROVED_FORK_URLS", raising=False)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "remote",
+            "set-url",
+            "fork",
+            "https://github.com/Mortified2896/omnigent.git",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    verify_fork_remote_url(repo_root)
+
+
+def test_fork_remote_url_accepts_approved_ssh(
+    repo_root: Path, lineage_anchor: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SSH form ``git@github.com:Mortified2896/omnigent.git`` is accepted."""
+    from omnigent.updater.validation import verify_fork_remote_url
+
+    monkeypatch.delenv("OMNIGENT_UPDATER_APPROVED_FORK_URLS", raising=False)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "remote",
+            "set-url",
+            "fork",
+            "git@github.com:Mortified2896/omnigent.git",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    verify_fork_remote_url(repo_root)
+
+
+def test_fork_main_ref_resolved_requires_fetched_ref(repo_root: Path, lineage_anchor: str) -> None:
+    """``refs/remotes/fork/main`` is present after the conftest fetches it."""
+    from omnigent.updater.validation import fork_main_ref_resolved
+
+    assert fork_main_ref_resolved(repo_root) is True
+
+
+def test_target_is_commit_on_fork_rejects_tag(repo_root: Path, make_commit) -> None:
+    """An annotated tag's tag-object SHA is rejected.
+
+    A lightweight tag's SHA is the commit SHA, so we use an
+    annotated tag (``git tag -a``) to exercise the tag-object
+    rejection path.
+    """
+    from omnigent.updater.validation import target_is_commit_on_fork
+
+    commit_sha = make_commit("tagged")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "tag",
+            "-a",
+            "-m",
+            "annotated test tag",
+            "v9.9.9-test",
+            commit_sha,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    # `git rev-parse <tag>` returns the tag-object SHA (not the
+    # commit it points at) for annotated tags.
+    tag_obj_sha = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "v9.9.9-test^{tag}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert target_is_commit_on_fork(repo_root, commit_sha) is True
+    assert target_is_commit_on_fork(repo_root, tag_obj_sha) is False
+
+
+def test_validate_target_rejects_unmerged_feature_branch_commit(
+    repo_root: Path, lineage_anchor: str
+) -> None:
+    """A commit on a feature branch not merged into ``refs/remotes/fork/main``
+    is rejected with ``LineageRejectedError`` even though it resolves to
+    a valid commit object on the local repo."""
+    # Create a separate orphan repo and copy a single commit from it
+    # as a remote, the way the upstream-only test does.
+    other = repo_root.parent / "feature_branch_test"
+    other.mkdir()
+    subprocess.run(
+        ["git", "-C", str(other), "init", "--initial-branch=main", "-q"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other), "config", "user.name", "Test"],
+        check=True,
+    )
+    (other / "F").write_text("f")
+    subprocess.run(["git", "-C", str(other), "add", "F"], check=True)
+    subprocess.run(
+        ["git", "-C", str(other), "commit", "-m", "feature branch tip", "-q"], check=True
+    )
+    branch_sha = subprocess.run(
+        ["git", "-C", str(other), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    # Attach as a remote under a name that is not `fork`.
+    subprocess.run(
+        ["git", "-C", str(repo_root), "remote", "add", "feature_branch_test", str(other)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_root), "fetch", "feature_branch_test", "-q"],
+        check=True,
+    )
+    with pytest.raises(LineageRejectedError):
+        validate_target(repo_root, branch_sha)
+
+
+def test_validate_request_rejects_unmerged_branch_target(
+    repo_root: Path, lineage_anchor: str, live_sha_file: Path
+) -> None:
+    """``validate_request`` rejects a target SHA that is on a feature branch
+    but not an ancestor of ``refs/remotes/fork/main``."""
+    other = repo_root.parent / "feature_branch_request_test"
+    other.mkdir()
+    subprocess.run(
+        ["git", "-C", str(other), "init", "--initial-branch=main", "-q"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other), "config", "user.name", "Test"],
+        check=True,
+    )
+    (other / "F").write_text("f")
+    subprocess.run(["git", "-C", str(other), "add", "F"], check=True)
+    subprocess.run(["git", "-C", str(other), "commit", "-m", "tip", "-q"], check=True)
+    branch_sha = subprocess.run(
+        ["git", "-C", str(other), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(repo_root), "remote", "add", "feature_branch_req", str(other)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_root), "fetch", "feature_branch_req", "-q"],
+        check=True,
+    )
+    record = _record(target=branch_sha, expected="0" * 40)
+    with pytest.raises(LineageRejectedError):
+        validate_request(record, repo=repo_root, live_sha="0" * 40)

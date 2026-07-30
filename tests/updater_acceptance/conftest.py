@@ -66,6 +66,12 @@ def staging_repo(staging_root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     Tests add the lineage anchor and candidate commits on top of
     this. ``OMNIGENT_UPDATER_REPO_ROOT`` is wired through so the
     controller uses this repo, not the live checkout.
+
+    A local bare mirror at ``staging_root/fork.git`` plays the role
+    of the approved ``fork`` remote so the explicit fork/main
+    ancestry check accepts staging commits. The mirror's path is
+    registered via ``OMNIGENT_UPDATER_APPROVED_FORK_URLS`` (test
+    override of the production allow-list).
     """
     repo = staging_root / "repo"
     repo.mkdir()
@@ -75,7 +81,16 @@ def staging_repo(staging_root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (repo / "README").write_text("seed\n")
     _git(repo, "add", "README")
     _git(repo, "commit", "-m", "seed", "-q")
+    # Build a local bare mirror and wire it as `fork`.
+    fork_mirror = staging_root / "fork.git"
+    fork_mirror.mkdir()
+    _git(fork_mirror, "init", "--bare", "--initial-branch=main", "-q")
+    _git(fork_mirror, "symbolic-ref", "HEAD", "refs/heads/main")
+    _git(repo, "remote", "add", "fork", str(fork_mirror))
+    _git(repo, "push", "fork", "main", "-q")
+    _git(repo, "fetch", "fork", "-q")
     monkeypatch.setenv("OMNIGENT_UPDATER_REPO_ROOT", str(repo))
+    monkeypatch.setenv("OMNIGENT_UPDATER_APPROVED_FORK_URLS", str(fork_mirror))
     return repo
 
 
@@ -122,4 +137,14 @@ def _git_make_commit(repo: Path, message: str) -> str:
     (repo / "README").write_text(f"{message}\n")
     _git(repo, "add", "README")
     _git(repo, "commit", "-m", message, "-q")
+    # Push to the fork mirror so the explicit fork/main ancestry
+    # check accepts the new commit. Tests that create additional
+    # commits inline should call _git_push_and_fetch_fork themselves.
+    try:
+        _git(repo, "push", "fork", "main", "-q")
+        _git(repo, "fetch", "fork", "-q")
+    except RuntimeError:
+        # No fork remote configured (e.g. a test deliberately
+        # stripping it). The test is responsible for its own setup.
+        pass
     return _git(repo, "rev-parse", "HEAD")
