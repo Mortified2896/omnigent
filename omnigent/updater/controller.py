@@ -606,7 +606,7 @@ class UpdaterController:
         # Run the rollback.
         repo = self._config.resolved_repo_root()
         try:
-            proc = self._invoke_rollback(repo)
+            proc = self._invoke_rollback(repo, previous_sha=previous_sha)
             if proc.returncode != 0:
                 raise RollbackFailedError(
                     f"rollback_release.sh exited {proc.returncode}: "
@@ -979,7 +979,9 @@ class UpdaterController:
             check=False,
         )
 
-    def _invoke_rollback(self, repo: Path) -> subprocess.CompletedProcess:
+    def _invoke_rollback(
+        self, repo: Path, *, previous_sha: str = ""
+    ) -> subprocess.CompletedProcess:
         # User-provided hooks are honored even in dry_run so tests
         # can simulate failures; ``dry_run`` only short-circuits
         # the real subprocess invocation.
@@ -989,8 +991,17 @@ class UpdaterController:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="dry-run")
         script = self._rollback_script(repo)
         env = self._subprocess_env()
+        cmd: list[str] = ["bash", str(script)]
+        # Pass the explicit previous-SHA captured at the start of the
+        # update. ``rollback_release.sh --to <sha>`` is preferred over
+        # the ``previous`` symlink because the symlink can be stale
+        # (e.g. a broken .venv or an unrelated intermediate deploy),
+        # while ``previous_sha`` is the same value the controller
+        # recorded as the live release before the failing cutover.
+        if previous_sha:
+            cmd.extend(["--to", previous_sha])
         return subprocess.run(
-            ["bash", str(script)],
+            cmd,
             cwd=str(repo),
             env=env,
             capture_output=True,
