@@ -18,11 +18,11 @@ that drive ``scripts/promote_release.sh``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
 from pathlib import Path
-
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHORT_SHA = re.compile(r"^[0-9a-f]{7,39}$")
@@ -119,16 +119,16 @@ def fetch(repo: Path, *, remote: str | None = None) -> None:
     soft error: ``normalize_ref`` will still succeed against the
     locally available refs.
     """
-    remote_name = (remote or os.environ.get("OMNIGENT_PROMOTE_FROM_REMOTE", "fork")).strip() or "fork"
-    try:
+    remote_name = (
+        remote or os.environ.get("OMNIGENT_PROMOTE_FROM_REMOTE", "fork")
+    ).strip() or "fork"
+    with contextlib.suppress(FileNotFoundError):
         subprocess.run(
             ["git", "-C", str(repo), "fetch", remote_name],
             capture_output=True,
             text=True,
             check=False,
         )
-    except FileNotFoundError:
-        pass
 
 
 def main() -> int:

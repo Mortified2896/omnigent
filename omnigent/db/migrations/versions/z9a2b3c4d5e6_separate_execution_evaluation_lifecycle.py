@@ -44,6 +44,10 @@ def upgrade() -> None:
     # Single-statement backfill kept verbatim from the original authoring;
     # any rewrite must produce an equivalent UPDATE against an existing
     # SQLite row shape. Ruff's E501 is suppressed here on purpose.
+    # SQLite stores Boolean as INTEGER and accepts the literal ``0`` for false;
+    # PostgreSQL rejects an unannotated ``0`` against a boolean column, so use
+    # the explicit ``false`` literal there.
+    verified_default = "false" if op.get_bind().dialect.name != "sqlite" else "0"
     op.execute(
         "UPDATE task_runs SET "
         "execution_status = CASE terminal_status "
@@ -55,7 +59,7 @@ def upgrade() -> None:
         "execution_duration_ms = duration_ms, "
         "actual_provider = selected_provider, "
         "actual_provider_model = selected_model, "
-        "actual_provenance_verified = 0"
+        f"actual_provenance_verified = {verified_default}"
     )
 
 

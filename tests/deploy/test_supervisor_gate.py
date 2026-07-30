@@ -18,9 +18,8 @@ from pathlib import Path
 import pytest
 
 from omnigent.deploy.preflight import expected_web_ui_dir
-from omnigent.deploy.supervisor import gate
-from omnigent.deploy.supervisor.gate import GateError, run_gate
 from omnigent.deploy.supervisor import manifest as manifest_mod
+from omnigent.deploy.supervisor.gate import GateError, run_gate
 
 
 @pytest.fixture
@@ -71,6 +70,7 @@ def stub_provenance(monkeypatch: pytest.MonkeyPatch, fake_release: Path) -> None
         raise AssertionError(name)
 
     import omnigent.deploy.supervisor.provenance as prov
+
     monkeypatch.setattr(prov, "_resolve_executable", fake_exe)
     monkeypatch.setattr(prov, "_resolve_prefix", fake_prefix)
     monkeypatch.setattr(prov, "_resolve_module", fake_module)
@@ -82,6 +82,10 @@ def test_run_gate_passes_when_all_checks_pass(
     """A clean release passes the gate."""
     # No manifest SHA env var → manifest check is skipped.
     monkeypatch.delenv("OMNIGENT_RELEASE_EXPECTED_SHA", raising=False)
+    # The CI workflow sets OMNIGENT_SKIP_WEB_UI=true so the bundle check is
+    # not required during the pytest run; the gate would otherwise force
+    # skip_web_ui="1" and the strict assertion below would see it.
+    monkeypatch.delenv("OMNIGENT_SKIP_WEB_UI", raising=False)
     info = run_gate(fake_release)
     assert info["skip_web_ui"] == "0"
     assert info["release"].endswith("release")
@@ -125,6 +129,10 @@ def test_run_gate_verifies_manifest_sha_when_provided(
     """A release with a manifest whose SHA matches the expected SHA passes."""
     expected_sha = "0123456789abcdef0123456789abcdef01234567"
     monkeypatch.setenv("OMNIGENT_RELEASE_EXPECTED_SHA", expected_sha)
+    # See test_run_gate_passes_when_all_checks_pass for why this delenv is
+    # required even though the manifest case does not exercise the bundle
+    # check directly.
+    monkeypatch.delenv("OMNIGENT_SKIP_WEB_UI", raising=False)
     site_packages = fake_release / ".venv" / "lib" / "python3.12" / "site-packages"
     manifest = manifest_mod.ReleaseManifest(
         commit_sha=expected_sha,
@@ -136,7 +144,7 @@ def test_run_gate_verifies_manifest_sha_when_provided(
         omnigent_module_path=str(site_packages / "omnigent" / "__init__.py"),
         omnigent_server_app_path=str(site_packages / "omnigent" / "server" / "app.py"),
     )
-    path = manifest_mod.write_manifest(fake_release, manifest)
+    manifest_mod.write_manifest(fake_release, manifest)
 
     info = run_gate(fake_release)
     assert info["manifest_sha"] == expected_sha

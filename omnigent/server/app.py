@@ -2065,6 +2065,36 @@ def create_app(
             prefix="/v1",
             tags=["comments"],
         )
+    # External self-update controller (issue #38). Mounted under
+    # ``/api/updater`` so it does not collide with the ``/v1``
+    # session API. The updater routes require either session
+    # auth or the ``X-Omnigent-Updater-Token`` header so the
+    # updater daemon (which runs as a system service and has no
+    # user identity) can call them.
+    if comment_store is not None:
+        from omnigent.server.routes.updater import (
+            create_updater_router,
+            reconcile_startup,
+        )
+
+        app.include_router(
+            create_updater_router(
+                auth_provider=auth_provider,
+                conversation_store=conversation_store,
+                comment_store=comment_store,
+            )
+        )
+        # Reconcile the maintenance marker on every startup so a
+        # crashed updater does not leave the maintenance flag
+        # stuck. Best-effort — never raises.
+        try:
+            reconcile_startup()
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "updater marker reconcile failed at startup", exc_info=True
+            )
     if task_outcome_store is not None:
         from omnigent.server.routes.task_outcomes import create_task_outcomes_router
 

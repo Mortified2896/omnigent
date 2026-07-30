@@ -675,6 +675,13 @@ class OpenCodeRuntimePool:
         select→reap race. Bounded to one candidate per scan so the loop
         doesn't compete with new wake requests for capacity.
         """
+        # ``<= 0`` disables hibernation entirely (mirrors the SDK reaper
+        # guard and the loop's idle_timeout short-circuit above). Both
+        # paths must agree or a test that drives _scan_once directly
+        # would see an entry hibernate even though the production loop
+        # would have skipped the scan.
+        if self._idle_timeout_s <= 0:
+            return
         now = self._clock()
         async with self._capacity_lock:
             # Find the oldest idle AWAKE entry.

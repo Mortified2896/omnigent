@@ -201,12 +201,9 @@ def test_zd1b2c3d4e5f_converts_routing_id_columns_to_binary() -> None:
                     for c in sa.inspect(engine).get_columns("routing_proposals")
                 }
                 assert "BLOB" in cols["id"], (
-                    f"routing_proposals.id should be BLOB after zd... upgrade; "
-                    f"got {cols['id']!r}"
+                    f"routing_proposals.id should be BLOB after zd... upgrade; got {cols['id']!r}"
                 )
-                row = conn.execute(
-                    sa.text("SELECT id FROM routing_proposals LIMIT 1")
-                ).one()
+                row = conn.execute(sa.text("SELECT id FROM routing_proposals LIMIT 1")).one()
                 assert isinstance(row[0], (bytes, memoryview)), (
                     f"routing_proposals.id value should be raw bytes after "
                     f"zd... upgrade; got {type(row[0]).__name__}"

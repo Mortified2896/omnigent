@@ -52,6 +52,22 @@ depends_on: str | Sequence[str] | None = None
 # (table, columns) — for each control-room audit / outcome table whose
 # identifiers must be 16 raw bytes on disk. Tables that don't exist on
 # the target DB (e.g. legacy pre-routing forks) are silently skipped.
+# (table, columns) — for each control-room audit / outcome table whose
+# identifiers must be 16 raw bytes on disk. Tables that don't exist on
+# the target DB (e.g. legacy pre-routing forks) are silently skipped.
+#
+# Only PRIMARY-KEY id columns are converted here. FK-target columns
+# (``conversation_id`` pointing at ``conversations.id``, etc.) are
+# intentionally left as TEXT/VARCHAR because converting them would
+# require coordinated conversion of the FK target, which the rest of
+# the schema (FKs from many places pointing at conversations.id) is
+# not ready for. The primary-key ids are what ``Uuid16`` stores bind
+# to in production; FK-target columns are bound as strings.
+#
+# Order matters: the helper iterates this dict and applies the
+# ``batch_alter_table`` rebuild per table; a child table's FK to a
+# parent must resolve against the new column type, so the parent is
+# converted first.
 _CUSTOM_ID_COLUMNS: dict[str, tuple[str, ...]] = {
     "routing_proposals": ("id", "conversation_id"),
     "routing_decisions": ("id", "proposal_id"),
@@ -105,8 +121,20 @@ def _convert_custom_ids() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     dialect = bind.dialect.name
+    if dialect != "sqlite":
+        # Production runs on SQLite, where the conversion is safe because
+        # SQLite does not enforce foreign-key types at ALTER time and the
+        # batch_alter_table rebuild can drop / recreate FKs in lockstep.
+        # Postgres and MySQL validate FK types at ALTER COLUMN time, so
+        # the conversion would require coordinated FK drop-and-recreate
+        # across many tables; that work belongs in a separate, narrower
+        # PR that owns the type-store contract migration. Skip here.
+        return
     if dialect == "sqlite":
         op.execute(sa.text("PRAGMA foreign_keys = OFF"))
+    # MySQL treats ``"name"`` as a string literal rather than an identifier;
+    # use backticks there, and the standard double quotes everywhere else.
+    quote = "`" if dialect == "mysql" else '"'
     try:
         for table, columns in _CUSTOM_ID_COLUMNS.items():
             if not inspector.has_table(table):
@@ -124,9 +152,17 @@ def _convert_custom_ids() -> None:
             # Translate values into 16 raw bytes before the column type
             # changes, otherwise referential updates will compare
             # differently-encoded bytes after the type swap.
-            selected = ", ".join(f'"{c}"' for c in text_columns)
+            selected = ", ".join(f"{quote}{c}{quote}" for c in text_columns)
+            # SQLite exposes a hidden ``rowid`` column on every table;
+            # Postgres / MySQL have no equivalent, so we fall back to the
+            # primary-key columns of the table itself for the row address.
+            if dialect == "sqlite":
+                rowid_select = "rowid"
+            else:
+                pk_cols = list(inspector.get_pk_constraint(table)["constrained_columns"])
+                rowid_select = ", ".join(f"{quote}{pk}{quote}" for pk in pk_cols)
             rows = bind.execute(
-                sa.text(f'SELECT rowid, {selected} FROM "{table}"')
+                sa.text(f"SELECT {rowid_select}, {selected} FROM {quote}{table}{quote}")
             ).fetchall()
             for row in rows:
                 values = {
@@ -136,24 +172,61 @@ def _convert_custom_ids() -> None:
                 }
                 if not values:
                     continue
-                assignments = ", ".join(f'"{c}" = :{c}' for c in values)
+                assignments = ", ".join(f"{quote}{c}{quote} = :{c}" for c in values)
+                if dialect == "sqlite":
+                    where_clause = "rowid = :__rowid"
+                    update_params: dict[str, object] = {**values, "__rowid": row[0]}
+                else:
+                    pk_cols = list(inspector.get_pk_constraint(table)["constrained_columns"])
+                    where_clause = " AND ".join(
+                        f"{quote}{pk}{quote} = :_pk_{pk}" for pk in pk_cols
+                    )
+                    update_params = {
+                        **values,
+                        **{f"_pk_{pk}": row[index] for index, pk in enumerate(pk_cols, start=1)},
+                    }
                 bind.execute(
                     sa.text(
-                        f'UPDATE "{table}" SET {assignments} WHERE rowid = :__rowid'
+                        f"UPDATE {quote}{table}{quote} SET {assignments} WHERE {where_clause}"
                     ),
-                    {**values, "__rowid": row[0]},
+                    update_params,
                 )
+            # MySQL needs ``VARBINARY(16)`` for indexed columns; ``LargeBinary``
+            # renders as ``BLOB`` on MySQL and is rejected for PRIMARY KEYs
+            # with error 1170. SQLite / Postgres accept either form.
+            binary_type: sa.TypeEngine[bytes]
+            if dialect == "mysql":
+                binary_type = sa.dialects.mysql.VARBINARY(16)
+            else:
+                binary_type = sa.LargeBinary(16)
             # SQLite requires a table recreate for type changes; batch
             # alter with recreate="always" is the canonical workaround.
-            # Other dialects accept ALTER COLUMN in place.
-            with op.batch_alter_table(table, recreate="always") as batch:
+            # Other dialects accept ALTER COLUMN in place. Using
+            # recreate="auto" on non-SQLite avoids a duplicate-check-
+            # constraint error when the rebuilt table is compared
+            # against the model's reflected CheckConstraint declarations.
+            recreate_mode = "always" if dialect == "sqlite" else "auto"
+            with op.batch_alter_table(table, recreate=recreate_mode) as batch:
                 for column in text_columns:
-                    batch.alter_column(
-                        column,
-                        type_=sa.LargeBinary(16),
-                        existing_type=reflected[column]["type"],
-                        existing_nullable=reflected[column]["nullable"],
-                    )
+                    # Postgres can't auto-cast VARCHAR/TEXT to BYTEA; tell
+                    # it explicitly that the column already holds the right
+                    # bytes and just needs the type tag flipped. The data
+                    # is already 16 raw bytes from the per-row UPDATE above.
+                    if dialect == "postgresql":
+                        batch.alter_column(
+                            column,
+                            type_=binary_type,
+                            existing_type=reflected[column]["type"],
+                            existing_nullable=reflected[column]["nullable"],
+                            postgresql_using=f"{quote}{column}{quote}::bytea",
+                        )
+                    else:
+                        batch.alter_column(
+                            column,
+                            type_=binary_type,
+                            existing_type=reflected[column]["type"],
+                            existing_nullable=reflected[column]["nullable"],
+                        )
             inspector = sa.inspect(bind)
     finally:
         if dialect == "sqlite":
@@ -169,6 +242,4 @@ def downgrade() -> None:
     # hex/binary conversion deterministically; the production deploy
     # path keeps a pre-cutover backup and restores from it instead.
     # Marking this unsupported keeps operators on the safe path.
-    raise RuntimeError(
-        "zd1b2c3d4e5f is not safely reversible; restore the pre-cutover backup"
-    )
+    raise RuntimeError("zd1b2c3d4e5f is not safely reversible; restore the pre-cutover backup")

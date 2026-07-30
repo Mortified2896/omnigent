@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "promote_release.sh"
 
@@ -82,11 +81,11 @@ def test_promote_script_uses_release_local_venv() -> None:
     not a shared or symlinked venv."""
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
-    body = text[text.find(body_marker):]
+    body = text[text.find(body_marker) :]
     assert "uv venv --python 3.12 .venv" in body, (
         "promote_release.sh must create a release-local .venv via `uv venv`"
     )
-    assert "uv pip install --python \"$RELEASE_DIR/.venv/bin/python\"" in body, (
+    assert 'uv pip install --python "$RELEASE_DIR/.venv/bin/python"' in body, (
         "promote_release.sh must use the release-local python for `uv pip install`"
     )
 
@@ -108,15 +107,15 @@ def test_promote_script_validates_via_import_probe() -> None:
     """
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
-    body = text[text.find(body_marker):]
+    body = text[text.find(body_marker) :]
     # The probe must run with the release's interpreter, not the
     # main checkout's interpreter.
-    assert 'env -u PYTHONPATH' in body, (
+    assert "env -u PYTHONPATH" in body, (
         "promote_release.sh must unset inherited PYTHONPATH before invoking "
         "the provenance probe (PYTHONPATH from the operator's shell otherwise "
         "shadows the installed wheel)."
     )
-    assert 'PYTHONSAFEPATH=1' in body, (
+    assert "PYTHONSAFEPATH=1" in body, (
         "promote_release.sh must set PYTHONSAFEPATH=1 before invoking the "
         "provenance probe (this is the venv-site-packages pre-flight)."
     )
@@ -124,22 +123,21 @@ def test_promote_script_validates_via_import_probe() -> None:
         "promote_release.sh must invoke the release's interpreter with the "
         "-P (--no-path) flag so cwd/PYTHONPATH cannot shadow site-packages."
     )
-    assert 'cd /tmp' in body, (
+    assert "cd /tmp" in body, (
         "promote_release.sh must change into a neutral directory (e.g. /tmp) "
         "before invoking the provenance probe (running from the release "
         "directory inserts the release source root into sys.path and can "
         "shadow the installed wheel)."
     )
-    assert '-m omnigent.deploy.supervisor.provenance' in body
+    assert "-m omnigent.deploy.supervisor.provenance" in body
     # The probe must run BEFORE any systemd reconfiguration (drop-in
     # write / systemctl restart).
-    probe_idx = body.find('-m omnigent.deploy.supervisor.provenance')
-    dropin_idx = body.find('write_release_dropin')
-    restart_idx = body.find('systemctl restart')
+    probe_idx = body.find("-m omnigent.deploy.supervisor.provenance")
+    dropin_idx = body.find("write_release_dropin")
+    restart_idx = body.find("systemctl restart")
     assert dropin_idx != -1 and restart_idx != -1
     assert probe_idx < dropin_idx < restart_idx, (
-        "the provenance probe must run before the systemd drop-in rewrite "
-        "and the service restart."
+        "the provenance probe must run before the systemd drop-in rewrite and the service restart."
     )
 
 
@@ -148,7 +146,7 @@ def test_promote_script_atomic_promotion() -> None:
     live loopback probe passes."""
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
-    body = text[text.find(body_marker):]
+    body = text[text.find(body_marker) :]
     dropin_idx = body.find("write_release_dropin")
     deploy_idx = body.find(".omnigent/deployed-sha")
     loopback_idx = body.find("/health")
@@ -166,7 +164,7 @@ def test_promote_script_does_not_use_main_checkout_runtime() -> None:
     ``.venv/bin/python`` — only the release's venv is acceptable."""
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
-    body = text[text.find(body_marker):]
+    body = text[text.find(body_marker) :]
     # exec starts must use the release python; we grep for the literal
     # ``$RELEASE_DIR/.venv`` so we don't pick up docstrings.
     assert "$RELEASE_DIR/.venv/bin/python" in body, (

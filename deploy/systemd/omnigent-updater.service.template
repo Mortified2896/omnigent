@@ -1,0 +1,43 @@
+[Unit]
+Description=Omnigent external self-update controller (issue #38)
+Documentation=https://github.com/Mortified2896/omnigent/blob/main/docs/deployments/omnigent-updater.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The unit runs ``omnigent-updater recover`` once and exits so a
+# crashed update is reconciled on every boot. Operators invoke
+# ``run`` manually for new updates — the unit deliberately does
+# NOT auto-start promotion.
+ExecStart=@PREFIX@/bin/omnigent-updater.sh recover
+Environment=OMNIGENT_UPDATER_HOME=@PREFIX@
+Environment=OMNIGENT_UPDATER_STATE_ROOT=/var/lib/omnigent/updates
+Environment=PYTHONSAFEPATH=1
+User=omnigent-updater
+Group=omnigent-updater
+WorkingDirectory=/tmp
+
+# Hardening: read-only filesystem, dedicated state dir, no
+# ambient capabilities, no new privileges.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/omnigent/updates
+PrivateTmp=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Allow only the specific sudo commands the controller needs.
+# The matching rule is installed at
+# ``/etc/sudoers.d/omnigent-updater`` by
+# ``scripts/install_omnigent_updater.sh --sudoers-rule``.
+SecureBits=keep-caps
+
+[Install]
+WantedBy=multi-user.target

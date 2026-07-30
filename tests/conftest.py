@@ -419,12 +419,27 @@ def db_uri(tmp_path: Path, _worker_db_uri: str) -> Generator[str, None, None]:
     engine = get_or_create_engine(_worker_db_uri)
     dialect = engine.dialect.name
     tables = [t for t in _sa.inspect(engine).get_table_names() if t != "alembic_version"]
-    # No FK constraints exist (dropped in p1a2b3c4d5e6) so no need to toggle
-    # FOREIGN_KEY_CHECKS — one less round-trip per test on MySQL.
+    # Multiple migrations now reintroduce FK constraints that the early
+    # test-era assumptions (no FK constraints on MySQL) relied on; this
+    # means TRUNCATE TABLE on MySQL needs FOREIGN_KEY_CHECKS toggled off
+    # to avoid the per-table constraint check, and Postgres needs
+    # CASCADE. SQLite is permissive on both. Issue the dialect-specific
+    # cleanup as a single transaction so failures don't leave half-wiped
+    # test state.
     with engine.begin() as conn:
-        for table in tables:
-            q = f"`{table}`" if dialect == "mysql" else f'"{table}"'
-            conn.execute(_sa.text(f"TRUNCATE TABLE {q}"))
+        if dialect == "mysql":
+            conn.execute(_sa.text("SET FOREIGN_KEY_CHECKS = 0"))
+            try:
+                for table in tables:
+                    conn.execute(_sa.text(f"TRUNCATE TABLE `{table}`"))
+            finally:
+                conn.execute(_sa.text("SET FOREIGN_KEY_CHECKS = 1"))
+        elif dialect == "postgresql":
+            quoted = ", ".join(f'"{t}"' for t in tables)
+            conn.execute(_sa.text(f"TRUNCATE TABLE {quoted} CASCADE"))
+        else:
+            for table in tables:
+                conn.execute(_sa.text(f'TRUNCATE TABLE "{table}"'))
     yield _worker_db_uri
 
 

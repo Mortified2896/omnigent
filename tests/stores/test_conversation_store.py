@@ -1214,24 +1214,35 @@ async def test_delete_conversation_cascades_fk_referenced_tables(
 
     conv = conversation_store.create_conversation()
     with conversation_store._session() as session:  # type: ignore[attr-defined]
-        ws = session.execute(text("SELECT workspace_id FROM conversations WHERE id = :id"), {"id": conv.id}).scalar_one()
+        ws = session.execute(
+            text("SELECT workspace_id FROM conversations WHERE id = :id"), {"id": conv.id}
+        ).scalar_one()
         # routing_proposals row + child routing_decisions row
         session.execute(
             text(
-                "INSERT INTO routing_proposals (workspace_id, id, conversation_id, elicitation_id, "
-                "user_message_sha256, user_message_excerpt, user_message_chars, content_types_json, "
-                "original_route_id, requires_explicit_approval, proposal_payload_excerpt, "
-                "proposal_payload_sha256, created_at) "
-                "VALUES (:ws, 'rp_test1', :cid, 'elic_rp1', 'sha1', 'excerpt', 5, '[]', 'auto/cheap', 0, '{}', 'psha1', 0)"
+                "INSERT INTO routing_proposals ("
+                "workspace_id, id, conversation_id, elicitation_id, "
+                "user_message_sha256, user_message_excerpt, "
+                "user_message_chars, content_types_json, "
+                "original_route_id, requires_explicit_approval, "
+                "proposal_payload_excerpt, proposal_payload_sha256, "
+                "created_at) "
+                "VALUES ("
+                ":ws, 'rp_test1', :cid, 'elic_rp1', 'sha1', "
+                "'excerpt', 5, '[]', 'auto/cheap', false, '{}', 'psha1', 0)"
             ),
             {"ws": ws, "cid": conv.id},
         )
         session.execute(
             text(
-                "INSERT INTO routing_decisions (workspace_id, id, proposal_id, action, "
-                "decision_request_sha256, original_route_id, decision_payload_excerpt, "
-                "decision_payload_sha256, created_at) "
-                "VALUES (:ws, 'rd_test1', 'rp_test1', 'declined', 'rsha1', 'auto/cheap', '{}', 'dpsha1', 0)"
+                "INSERT INTO routing_decisions ("
+                "workspace_id, id, proposal_id, action, "
+                "decision_request_sha256, original_route_id, "
+                "decision_payload_excerpt, decision_payload_sha256, "
+                "created_at) "
+                "VALUES ("
+                ":ws, 'rd_test1', 'rp_test1', 'declined', "
+                "'rsha1', 'auto/cheap', '{}', 'dpsha1', 0)"
             ),
             {"ws": ws},
         )

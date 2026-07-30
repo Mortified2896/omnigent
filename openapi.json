@@ -193,6 +193,25 @@
         "title": "Body_upload_session_file_v1_sessions__session_id__resources_files_post",
         "type": "object"
       },
+      "CancelRequest": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/updater/request-cancel`.",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "title": "CancelRequest",
+        "type": "object"
+      },
       "CancelledEvent": {
         "description": "Terminal event for a turn cancelled before completion.",
         "properties": {
@@ -1133,6 +1152,99 @@
           "response"
         ],
         "title": "CreatedEvent",
+        "type": "object"
+      },
+      "DeliverRequest": {
+        "additionalProperties": false,
+        "description": "The structured result payload the updater delivers.\n\nMirrors `omnigent.updater.protocol.ResultRecord`'s\nfields so the web service can persist the result as a comment\nwithout re-deriving anything. All fields are required because\nthe updater must always send a complete record.",
+        "properties": {
+          "deployed_sha": {
+            "default": "0000000000000000000000000000000000000000",
+            "maxLength": 40,
+            "minLength": 40,
+            "title": "Deployed Sha",
+            "type": "string"
+          },
+          "failure_phase": {
+            "default": "",
+            "title": "Failure Phase",
+            "type": "string"
+          },
+          "failure_reason": {
+            "default": "",
+            "title": "Failure Reason",
+            "type": "string"
+          },
+          "final_status": {
+            "title": "Final Status",
+            "type": "string"
+          },
+          "previous_sha": {
+            "default": "0000000000000000000000000000000000000000",
+            "maxLength": 40,
+            "minLength": 40,
+            "title": "Previous Sha",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 26,
+            "minLength": 26,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "rollback_performed": {
+            "default": false,
+            "title": "Rollback Performed",
+            "type": "boolean"
+          },
+          "rollback_result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Result"
+          },
+          "target_sha": {
+            "maxLength": 40,
+            "minLength": 40,
+            "title": "Target Sha",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "final_status",
+          "target_sha"
+        ],
+        "title": "DeliverRequest",
+        "type": "object"
+      },
+      "DeliverResponse": {
+        "description": "Response body for `POST /api/updater/result-deliver`.",
+        "properties": {
+          "comment_id": {
+            "title": "Comment Id",
+            "type": "string"
+          },
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivered",
+          "comment_id",
+          "message"
+        ],
+        "title": "DeliverResponse",
         "type": "object"
       },
       "ElicitationRequestEvent": {
@@ -2938,6 +3050,7 @@
             "response.reasoning_summary_text.delta": "#/components/schemas/ReasoningSummaryTextDeltaEvent",
             "response.reasoning_text.delta": "#/components/schemas/ReasoningTextDeltaEvent",
             "response.retry": "#/components/schemas/RetryEvent",
+            "response.subprocess_live": "#/components/schemas/SubprocessLivenessEvent",
             "session.agent_changed": "#/components/schemas/SessionAgentChangedEvent",
             "session.changed_files.invalidated": "#/components/schemas/SessionChangedFilesInvalidatedEvent",
             "session.child_session.updated": "#/components/schemas/SessionChildSessionUpdatedEvent",
@@ -3051,6 +3164,9 @@
           },
           {
             "$ref": "#/components/schemas/HeartbeatEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SubprocessLivenessEvent"
           },
           {
             "$ref": "#/components/schemas/SessionHeartbeatEvent"
@@ -5365,6 +5481,131 @@
         "title": "SlashCommandData",
         "type": "object"
       },
+      "SubprocessLivenessEvent": {
+        "description": "Liveness event emitted while a supervised subprocess is alive.\n\nDistinct from `HeartbeatEvent` (`response.heartbeat`)\nwhich is a pure keep-alive. The liveness event resets the\nscaffold's idle watchdog, carrying enough diagnostics for the\nwatchdog to distinguish `slow but alive` from a real timeout:\n\n- `command` \u2014 argv the subprocess was launched with\n  (truncated for log size).\n- `pid` \u2014 the supervised process id; `None` if the process\n  has exited by the time of emission.\n- `elapsed_s` \u2014 wall-clock seconds since the subprocess was\n  registered.\n- `last_stdout_at` / `last_stderr_at` \u2014 ISO-8601 wall\n  timestamps of the most recent stdout / stderr bytes read by\n  the harness, or `None` if none have been observed yet.\n- `stdout_bytes` / `stderr_bytes` \u2014 cumulative byte counts\n  read from the supervised process.\n- `state` \u2014 one of `alive`, `interactive_wait`,\n  `zombie`, or `exited`. `interactive_wait` is set when\n  the process is alive but the harness has detected an\n  outstanding password / sudo / pager / confirmation prompt\n  (heuristics in\n  `omnigent.runtime.harnesses.watchdog`).\n- `cpu_percent` / `rss_bytes` \u2014 process resource snapshot\n  when `psutil` is available; `None` on unsupported\n  platforms or when the process is gone.\n- `interactive_hint` \u2014 short string the watchdog extracted\n  when `state == \"interactive_wait\"` (e.g. `\"[sudo] password for user: \"`). `None` otherwise.\n\nConsumers SHOULD treat the event as proof of life and let the\nturn continue; the watchdog will only fire when liveness events\nstop arriving within the configured idle window.",
+        "properties": {
+          "command": {
+            "default": "",
+            "title": "Command",
+            "type": "string"
+          },
+          "cpu_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cpu Percent"
+          },
+          "elapsed_s": {
+            "default": 0.0,
+            "title": "Elapsed S",
+            "type": "number"
+          },
+          "interactive_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Interactive Hint"
+          },
+          "last_stderr_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Stderr At"
+          },
+          "last_stdout_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Stdout At"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pid"
+          },
+          "rss_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rss Bytes"
+          },
+          "sequence_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sequence Number"
+          },
+          "state": {
+            "default": "alive",
+            "title": "State",
+            "type": "string"
+          },
+          "stderr_bytes": {
+            "default": 0,
+            "title": "Stderr Bytes",
+            "type": "integer"
+          },
+          "stdout_bytes": {
+            "default": 0,
+            "title": "Stdout Bytes",
+            "type": "integer"
+          },
+          "type": {
+            "const": "response.subprocess_live",
+            "description": "Always `\"response.subprocess_live\"`.",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "SubprocessLivenessEvent",
+        "type": "object"
+      },
       "TerminalCommandData": {
         "description": "Data payload for a runner-side terminal command (`!cmd`) observed\nin a harness transcript (today: Claude Code's embedded TUI).\n\nListed in `NON_CONTENT_ITEM_TYPES` so the agent loop never\ninjects this as phantom content into the LLM's message history.\n\nClaude Code writes two sibling transcript records per `!cmd`\ninvocation: one `<bash-input>` record and one combined\n`<bash-stdout>`/`<bash-stderr>` record. Each maps to one\n`terminal_command` item with `kind=\"input\"` or\n`kind=\"output\"` respectively.",
         "properties": {
@@ -6109,6 +6350,157 @@
   },
   "openapi": "3.2.0",
   "paths": {
+    "/api/updater/drain-status": {
+      "get": {
+        "operationId": "drain_status_api_updater_drain_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Drain Status Api Updater Drain Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Drain Status",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
+    "/api/updater/request-cancel": {
+      "post": {
+        "operationId": "request_cancel_api_updater_request_cancel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Request Cancel Api Updater Request Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Cancel",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
+    "/api/updater/requests/{request_id}": {
+      "get": {
+        "operationId": "get_request_status_api_updater_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Request Status Api Updater Requests  Request Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Request Status",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
+    "/api/updater/result-deliver": {
+      "post": {
+        "operationId": "deliver_result_api_updater_result_deliver_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliverResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deliver Result",
+        "tags": [
+          "updater"
+        ]
+      }
+    },
     "/api/version": {
       "get": {
         "description": "Return the installed omnigent package version.\n\nUsed by the web UI to include version info in bug reports.\n\n**Returns:** `{\"version\": \"<semver string>\"}`, e.g. `{\"version\": \"0.1.0\"}`.",
@@ -6295,6 +6687,52 @@
         "summary": "List Builtin Agents",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/v1/harness-model-options": {
+      "get": {
+        "operationId": "get_harness_model_options_v1_harness_model_options_get",
+        "parameters": [
+          {
+            "description": "Canonical harness id, e.g. opencode-native",
+            "in": "query",
+            "name": "harness",
+            "required": true,
+            "schema": {
+              "description": "Canonical harness id, e.g. opencode-native",
+              "title": "Harness",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Harness Model Options V1 Harness Model Options Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Harness Model Options",
+        "tags": [
+          "harness_model_options"
         ]
       }
     },
