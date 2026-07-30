@@ -449,19 +449,56 @@ async def test_info_route_approval_follows_gate_env(
 
 
 @pytest.mark.asyncio
-async def test_health_bare_returns_status_ok(db_uri: str, tmp_path: Path) -> None:
+async def test_health_bare_returns_status_ok(
+    db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """
     ``GET /health`` with no session params still returns the bare
     ``{"status": "ok"}`` — the liveness rearchitecture must not break the
     plain health-check integrations that parse this exact shape.
     """
+    # Issue #38 canary: ensure no deployed-sha file is consulted
+    # so the response shape is exactly ``{"status": "ok"}``.
+    monkeypatch.setattr(
+        "omnigent.server.app._read_live_deployed_sha_for_health",
+        lambda: None,
+    )
     app = _build_liveness_app(db_uri, tmp_path).app
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await c.get("/health")
     assert resp.status_code == 200
-    # Exact shape — no session/sessions keys leak in when none were asked for.
+    # Exact shape — no session/sessions/version_sha keys leak in
+    # when none were asked for and no deployed-sha file is
+    # readable.
     assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_health_surfaces_version_sha_when_deployed_sha_present(
+    db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the deployed-sha file is readable, /health surfaces ``version_sha``.
+
+    The canary for issue #38 — the external updater's post-cutover
+    health check uses this field to confirm the running release
+    matches the requested target.
+    """
+
+    marker = tmp_path / "canary-deployed-sha"
+    marker.write_text("0123456789abcdef0123456789abcdef01234567\n")
+    monkeypatch.setattr(
+        "omnigent.server.app._read_live_deployed_sha_for_health",
+        lambda: "0123456789abcdef0123456789abcdef01234567",
+    )
+    app = _build_liveness_app(db_uri, tmp_path).app
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["version_sha"] == "0123456789abcdef0123456789abcdef01234567"
 
 
 @pytest.mark.asyncio
