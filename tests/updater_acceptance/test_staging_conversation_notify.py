@@ -38,6 +38,11 @@ def _make_candidate(repo: Path) -> str:
     (repo / "README").write_text("candidate\n")
     subprocess.run(["git", "-C", str(repo), "add", "README"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "candidate", "-q"], check=True)
+    try:
+        subprocess.run(["git", "-C", str(repo), "push", "fork", "main", "-q"], check=True)
+        subprocess.run(["git", "-C", str(repo), "fetch", "fork", "-q"], check=True)
+    except subprocess.CalledProcessError:
+        pass
     return subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True,

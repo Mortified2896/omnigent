@@ -46,6 +46,13 @@ def repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ``OMNIGENT_UPDATER_REPO_ROOT`` so ``omnigent.updater.layout``
     returns it.
 
+    A local bare mirror at ``tmp_path/fork.git`` plays the role of
+    the approved ``fork`` remote. The mirror's path is registered
+    via ``OMNIGENT_UPDATER_APPROVED_FORK_URLS`` so the explicit
+    URL allow-list accepts it, and ``refs/remotes/fork/main`` is
+    fetched after every ``make_commit`` so the ancestry check
+    reflects the current state of the test repo.
+
     The fixture's teardown removes the repo so subsequent tests
     start clean.
     """
@@ -57,9 +64,22 @@ def repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (repo / "README").write_text("seed\n")
     _git(repo, "add", "README")
     _git(repo, "commit", "-m", "seed", "-q")
+    # Build a local bare mirror and seed it with the initial commit.
+    fork_mirror = tmp_path / "fork.git"
+    fork_mirror.mkdir()
+    _git(fork_mirror, "init", "--bare", "--initial-branch=main", "-q")
+    _git(fork_mirror, "symbolic-ref", "HEAD", "refs/heads/main")
+    _git(repo, "remote", "add", "fork", str(fork_mirror))
+    _git(repo, "push", "fork", "main", "-q")
+    _git(repo, "fetch", "fork", "-q")
     monkeypatch.setenv("OMNIGENT_UPDATER_REPO_ROOT", str(repo))
+    # The mirror's local path is added to the approved URL suffix
+    # list so the validation layer accepts it in place of the
+    # production GitHub URL.
+    monkeypatch.setenv("OMNIGENT_UPDATER_APPROVED_FORK_URLS", str(fork_mirror))
     yield repo
     shutil.rmtree(repo, ignore_errors=True)
+    shutil.rmtree(fork_mirror, ignore_errors=True)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -76,12 +96,19 @@ def _git(repo: Path, *args: str) -> str:
 
 @pytest.fixture
 def make_commit(repo_root: Path):
-    """Return a callable that creates a new commit and returns its SHA."""
+    """Return a callable that creates a new commit and returns its SHA.
+
+    Each commit is also pushed to the local ``fork`` bare mirror so
+    ``refs/remotes/fork/main`` stays current and the explicit
+    fork/main ancestry check accepts the new commit.
+    """
 
     def _make(message: str = "wip") -> str:
         (repo_root / "README").write_text(f"{message}\n")
         _git(repo_root, "add", "README")
         _git(repo_root, "commit", "-m", message, "-q")
+        _git(repo_root, "push", "fork", "main", "-q")
+        _git(repo_root, "fetch", "fork", "-q")
         return _git(repo_root, "rev-parse", "HEAD")
 
     return _make

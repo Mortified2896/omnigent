@@ -84,6 +84,15 @@ def _make_candidate(repo: Path) -> str:
     (repo / "README").write_text("candidate\n")
     subprocess.run(["git", "-C", str(repo), "add", "README"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "candidate", "-q"], check=True)
+    # Push to the fork mirror so the explicit fork/main ancestry
+    # check accepts the new commit.
+    try:
+        subprocess.run(["git", "-C", str(repo), "push", "fork", "main", "-q"], check=True)
+        subprocess.run(["git", "-C", str(repo), "fetch", "fork", "-q"], check=True)
+    except subprocess.CalledProcessError:
+        # Tests that deliberately strip the fork remote rely on
+        # this candidate being rejected at validation time.
+        pass
     return subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True,

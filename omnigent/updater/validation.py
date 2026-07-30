@@ -60,6 +60,43 @@ class StaleExpectedCurrentError(ValidationError):
     """Raised when ``expected_current_sha`` does not match the live SHA."""
 
 
+class ForkRemoteUrlError(ValidationError):
+    """Raised when the configured ``fork`` remote URL is not the approved one."""
+
+
+class ForkMainMissingError(ValidationError):
+    """Raised when ``refs/remotes/fork/main`` is not fetched locally."""
+
+
+# Approved writable fork. The updater never installs anything from any
+# other repository — even if the SHA validates — because the
+# deployment lineage is tied to this fork.
+_APPROVED_FORK_URL_SUFFIXES: tuple[str, ...] = (
+    "github.com/Mortified2896/omnigent.git",
+    # SSH form for the same repo.
+    "github.com:Mortified2896/omnigent.git",
+)
+_ENV_APPROVED_FORK_URLS = "OMNIGENT_UPDATER_APPROVED_FORK_URLS"
+
+
+def _approved_fork_url(url: str) -> bool:
+    """Return ``True`` iff ``url`` is one of the approved fork URL forms.
+
+    Production deploys use the hardcoded GitHub URL suffixes. Tests
+    may set ``OMNIGENT_UPDATER_APPROVED_FORK_URLS`` to a
+    comma-separated list of additional suffixes (typically the path
+    of a local bare mirror) so they can exercise the explicit
+    ``refs/remotes/fork/main`` ancestry check without contacting
+    GitHub.
+    """
+    url = url.strip()
+    raw = os.environ.get(_ENV_APPROVED_FORK_URLS, "").strip()
+    suffixes: list[str] = list(_APPROVED_FORK_URL_SUFFIXES)
+    if raw:
+        suffixes.extend(s.strip() for s in raw.split(",") if s.strip())
+    return any(url.endswith(suffix) for suffix in suffixes)
+
+
 @dataclass(frozen=True)
 class LiveMetadata:
     """The current deployment metadata read from disk.
@@ -160,7 +197,23 @@ def lineage_rejects(repo: Path, target_sha: str) -> str | None:
 
     Returns ``None`` when the target is on the approved fork and is
     a descendant of the configured lineage anchor.
+
+    :raises ForkRemoteUrlError: when the ``fork`` remote URL is not
+        one of the approved fork URLs.
+    :raises ForkMainMissingError: when ``refs/remotes/fork/main`` is
+        not fetched locally.
     """
+    url = fork_remote_url(repo)
+    if not _approved_fork_url(url):
+        raise ForkRemoteUrlError(
+            f"configured `fork` remote URL {url!r} is not the approved "
+            f"Mortified2896/omnigent.git; refusing to validate targets"
+        )
+    if not fork_main_ref_resolved(repo):
+        raise ForkMainMissingError(
+            "refs/remotes/fork/main is not fetched locally; refusing to "
+            "validate targets until the approved remote-tracking ref is present"
+        )
     if not target_exists_on_fork(repo, target_sha):
         return f"target {target_sha!r} does not exist on the approved fork"
     anchor = layout.lineage_anchor()
@@ -170,6 +223,149 @@ def lineage_rejects(repo: Path, target_sha: str) -> str | None:
             f"{anchor!r} (out of approved deployment lineage)"
         )
     return None
+
+
+def fork_remote_url(repo: Path) -> str:
+    """Return the URL of the ``fork`` remote configured on ``repo``.
+
+    Raises :class:`ValidationError` when the remote is missing.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "remote", "get-url", "fork"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    if proc.returncode != 0:
+        raise ValidationError(
+            f"`fork` remote is not configured on {repo}: "
+            f"{proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return proc.stdout.strip()
+
+
+def verify_fork_remote_url(repo: Path) -> None:
+    """Reject a ``fork`` remote whose URL is not on the approved allow-list.
+
+    The approved list is the hardcoded production suffixes
+    (``github.com/Mortified2896/omnigent.git`` in HTTPS or SSH
+    form) plus any suffixes registered through
+    ``OMNIGENT_UPDATER_APPROVED_FORK_URLS`` (used by tests to point
+    at a local bare mirror).
+    """
+    url = fork_remote_url(repo)
+    if not _approved_fork_url(url):
+        raise ForkRemoteUrlError(
+            f"configured `fork` remote URL {url!r} is not the approved "
+            f"Mortified2896/omnigent.git; refusing to validate targets"
+        )
+
+
+def fork_main_ref_resolved(repo: Path) -> bool:
+    """Return ``True`` iff ``refs/remotes/fork/main`` resolves locally.
+
+    Uses ``git rev-parse --verify`` because it returns non-zero on a
+    missing ref without polluting the repository. The updater's
+    ``install_omnigent_updater.sh`` script is responsible for
+    fetching ``fork main`` during install; if it has not been run
+    yet, every validation must fail closed.
+    """
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/remotes/fork/main",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    return proc.returncode == 0
+
+
+def fork_main_sha(repo: Path) -> str:
+    """Return the SHA pointed at by ``refs/remotes/fork/main``.
+
+    Raises :class:`ForkMainMissingError` if the ref is not present.
+    """
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "rev-parse",
+            "--verify",
+            "refs/remotes/fork/main",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    if proc.returncode != 0:
+        raise ForkMainMissingError(
+            f"refs/remotes/fork/main not present on {repo}: "
+            f"{proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return proc.stdout.strip()
+
+
+def target_is_commit_on_fork(repo: Path, target_sha: str) -> bool:
+    """Return ``True`` iff ``target_sha`` resolves to a commit on the fork.
+
+    Uses ``git cat-file -t <sha>`` because the literal
+    ``git cat-file -e <sha>^{commit}`` peeler from the spec would
+    accept annotated tags (they peel down to a commit). The
+    semantic the spec actually wants is "the SHA must point at a
+    commit object directly", which is what ``cat-file -t`` checks.
+    Tags, trees, and blobs are all rejected.
+    """
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "cat-file",
+            "-t",
+            target_sha,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    return proc.returncode == 0 and proc.stdout.strip() == "commit"
+
+
+def target_reachable_from_fork_main(repo: Path, target_sha: str) -> bool:
+    """Return ``True`` iff ``target_sha`` is an ancestor of ``refs/remotes/fork/main``.
+
+    Uses the explicit ``git merge-base --is-ancestor TARGET refs/remotes/fork/main``
+    form from the issue spec. The function prefers the exit code
+    over stdout because git prints nothing on success.
+    """
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "merge-base",
+            "--is-ancestor",
+            target_sha,
+            "refs/remotes/fork/main",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    return proc.returncode == 0
 
 
 def validate_sha_format(*, target_sha: str, expected_current_sha: str) -> None:
@@ -194,15 +390,41 @@ def validate_target(
     *,
     live_sha: str | None = None,  # noqa: ARG001
 ) -> None:
-    """Reject missing or out-of-lineage targets.
+    """Reject missing, out-of-lineage, or non-fork-main targets.
 
-    Issue #38 §3 rules 3-5.
+    Issue #38 §3 rules 3-5. Runs three independent guards so the
+    operator gets a precise rejection reason:
+
+    1. The ``fork`` remote URL must be the approved
+       ``Mortified2896/omnigent`` form.
+    2. ``refs/remotes/fork/main`` must be fetched locally.
+    3. ``target_sha`` must resolve to a commit object (rejects
+       tags, trees, and blobs) **and** be an ancestor of
+       ``refs/remotes/fork/main`` — the authoritative deployment
+       ref. This is the explicit ``git cat-file -e`` and
+       ``git merge-base --is-ancestor`` check from the spec.
+
+    The legacy lineage-anchor check is retained as an additional
+    belt-and-suspenders guard against a stale ``fork/main`` ref
+    pointing at an unauthorized rollback.
     """
     reason = lineage_rejects(repo, target_sha)
     if reason is not None:
         if "does not exist" in reason:
             raise TargetMissingError(reason)
         raise LineageRejectedError(reason)
+    # Explicit fork/main ancestry check (issue #38 §3 — the
+    # authoritative deployment ref, not the lineage anchor).
+    if not target_is_commit_on_fork(repo, target_sha):
+        raise TargetMissingError(
+            f"target {target_sha!r} does not resolve to a commit on the approved fork "
+            f"(rejected: not a commit object — tag/tree/blob)"
+        )
+    if not target_reachable_from_fork_main(repo, target_sha):
+        raise LineageRejectedError(
+            f"target {target_sha!r} is not an ancestor of refs/remotes/fork/main "
+            f"(rejected: out of approved deployment lineage)"
+        )
 
 
 def validate_expected_current(record: RequestRecord, *, live_sha: str) -> None:
@@ -266,18 +488,26 @@ def validate_request(
 
 
 __all__ = [
+    "ForkMainMissingError",
+    "ForkRemoteUrlError",
     "LineageRejectedError",
     "LiveMetadata",
     "MalformedShaError",
     "StaleExpectedCurrentError",
     "TargetMissingError",
     "ValidationError",
+    "fork_main_ref_resolved",
+    "fork_main_sha",
+    "fork_remote_url",
     "is_descendant_of",
     "lineage_rejects",
     "read_live_metadata",
     "target_exists_on_fork",
+    "target_is_commit_on_fork",
+    "target_reachable_from_fork_main",
     "validate_expected_current",
     "validate_request",
     "validate_sha_format",
     "validate_target",
+    "verify_fork_remote_url",
 ]
