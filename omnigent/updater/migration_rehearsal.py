@@ -248,7 +248,40 @@ def rehearse(
     matches the candidate head. When the candidate head equals the
     live revision (or either is missing), the rehearsal is recorded
     as "inspected-not-required".
+
+    Issue: the rehearsal must consult the ``omnigent`` Python module
+    from inside the candidate release directory, NOT whatever is
+    importable from the process cwd. Without this guard, a
+    controller running from a stale source-tree cwd silently picks
+    up an older revision set and reports a wrong (stale) candidate
+    head, blocking valid promotions. The fix: chdir into the
+    release directory before any Python work, then restore cwd on
+    exit. ``contextlib.chdir`` is unavailable pre-3.12, so a try /
+    finally is the simplest portable form.
     """
+    import contextlib
+    import os
+
+    from omnigent.db.utils import _run_migrations, get_or_create_engine
+
+    previous_cwd = os.getcwd()
+    try:
+        os.chdir(str(candidate_repo))
+        return _rehearse_inner(
+            request_id=request_id,
+            candidate_repo=candidate_repo,
+            db_url=db_url,
+        )
+    finally:
+        os.chdir(previous_cwd)
+
+
+def _rehearse_inner(
+    *,
+    request_id: str,
+    candidate_repo: Path,
+    db_url: str,
+) -> RehearsalRecord:
     from omnigent.db.utils import _run_migrations, get_or_create_engine
 
     scratch = layout.rehearsal_dir() / request_id
