@@ -120,6 +120,19 @@ def write_marker(state: MaintenanceState, *, path: Path | None = None) -> Path:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
+    # The maintenance marker is read by the web service (running as
+    # ``User=hermes``), not just by the updater (which writes it as
+    # ``User=omnigent-updater``). ``tempfile.mkstemp`` defaults to
+    # ``0o600``; without an explicit chmod the web service's
+    # ``read_marker`` call gets ``PermissionError`` and silently
+    # reports ``draining=False``, which makes the controller think
+    # sessions or runners are still active and abort the cutover.
+    # Also chmod the parent directory so the web service user can
+    # ``os.listdir`` / ``stat`` the marker file even when the
+    # updater-owned dir has restrictive perms.
+    os.chmod(target, 0o644)
+    with contextlib.suppress(OSError):
+        os.chmod(target.parent, 0o755)
     return target
 
 
