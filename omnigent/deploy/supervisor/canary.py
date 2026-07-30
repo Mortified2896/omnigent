@@ -142,12 +142,20 @@ def _spawn_canary(
     release_canary_dir = release / "canary"
     release_canary_dir.mkdir(parents=True, exist_ok=True)
     db_path = release_canary_dir / "canary.db"
+    artifact_path = release_canary_dir / "artifacts"
+    artifact_path.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = log_path.open("w", encoding="utf-8")
     cmd = _build_command(release, port, skip_web_ui=skip_web_ui, config=config)
     env = {
         **os.environ,
+        # Point the canary at release-local SQLite + artifact dir so it
+        # never touches the live ``~/.omnigent/`` state. Without this
+        # the subprocess falls through to the on-disk default and the
+        # canary refuses to start (the release's migration chain won't
+        # bind to the production chat.db's revision; see issue #38).
         "OMNIGENT_DATABASE_URI": f"sqlite:///{db_path}",
+        "OMNIGENT_ARTIFACT_LOCATION": str(artifact_path),
         "OMNIGENT_SKIP_WEB_UI": "1" if skip_web_ui else "",
         "PYTHONUNBUFFERED": "1",
         "HOME": str(Path.home()),
