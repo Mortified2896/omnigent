@@ -2996,10 +2996,25 @@ def server(
 
     cfg = _load_config(config_path)
 
-    # CLI args take precedence over config file, which takes precedence
-    # over defaults.
-    db_uri = database_uri or cfg.get("database_uri", _default_db_uri())
-    art_loc = artifact_location or cfg.get("artifact_location", _default_artifact_location())
+    # Precedence: CLI args > ``OMNIGENT_DATABASE_URI`` / ``OMNIGENT_ARTIFACT_LOCATION``
+    # env > config file > defaults. The env-var tier is required so the
+    # candidate canary subprocess can point the server at a release-local
+    # SQLite without rewriting the on-disk config; it was previously
+    # missing, which made the canary fall through to the machine-global
+    # default ``chat.db`` and refuse to start with a schema-version
+    # mismatch (see issue #38).
+    db_uri = (
+        database_uri
+        or os.environ.get("OMNIGENT_DATABASE_URI")
+        or cfg.get("database_uri")
+        or _default_db_uri()
+    )
+    art_loc = (
+        artifact_location
+        or os.environ.get("OMNIGENT_ARTIFACT_LOCATION")
+        or cfg.get("artifact_location")
+        or _default_artifact_location()
+    )
 
     # Resolve relative artifact location against config file's directory
     # (only when the value came from the config file, not CLI).
