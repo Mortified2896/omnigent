@@ -92,11 +92,64 @@ def test_request_record_to_dict_round_trips() -> None:
         requested_by="operator:tester",
         created_at="2026-01-01T00:00:00Z",
         authorization=_authorization(),
+        repository="Mortified2896/omnigent",
+        approved_branch="main",
+        github_issue_number=38,
+        github_pr_number=44,
         notes="audit",
     )
     payload = record.to_dict()
     restored = RequestRecord.from_dict(payload)
     assert restored == record
+
+
+def test_request_record_provenance_defaults() -> None:
+    """Provenance fields default to the approved fork / branch so every
+    request carries an audit trail even when callers omit them."""
+    record = RequestRecord(
+        request_id=new_request_id(),
+        target_sha="0" * 40,
+        expected_current_sha="0" * 40,
+        origin_session_id=None,
+        origin_conversation_id=None,
+        requested_by="operator:tester",
+        created_at="2026-01-01T00:00:00Z",
+        authorization=_authorization(),
+    )
+    assert record.repository == "Mortified2896/omnigent"
+    assert record.approved_branch == "main"
+    assert record.github_issue_number is None
+    assert record.github_pr_number is None
+
+
+def test_request_record_rejects_non_positive_issue_number() -> None:
+    with pytest.raises(ValueError):
+        RequestRecord(
+            request_id=new_request_id(),
+            target_sha="0" * 40,
+            expected_current_sha="0" * 40,
+            origin_session_id=None,
+            origin_conversation_id=None,
+            requested_by="operator:tester",
+            created_at="2026-01-01T00:00:00Z",
+            authorization=_authorization(),
+            github_issue_number=0,
+        )
+
+
+def test_request_record_rejects_malformed_repository() -> None:
+    with pytest.raises(ValueError):
+        RequestRecord(
+            request_id=new_request_id(),
+            target_sha="0" * 40,
+            expected_current_sha="0" * 40,
+            origin_session_id=None,
+            origin_conversation_id=None,
+            requested_by="operator:tester",
+            created_at="2026-01-01T00:00:00Z",
+            authorization=_authorization(),
+            repository="evil",
+        )
 
 
 def test_request_record_from_dict_rejects_unknown_fields() -> None:

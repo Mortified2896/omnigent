@@ -138,6 +138,16 @@ class RequestRecord:
         ``"verity"``, ``"system:<agent>"``).
     :param created_at: RFC3339 timestamp.
     :param authorization: Authorization metadata (see :class:`Authorization`).
+    :param repository: ``owner/repo`` of the approved writable fork the
+        target SHA was drawn from. Defaults to the configured fork
+        (``Mortified2896/omnigent``).
+    :param approved_branch: Branch the target SHA was merged into on
+        the approved fork. Defaults to ``"main"``.
+    :param github_issue_number: Issue number that produced the merged
+        SHA, when applicable. ``None`` if the deployment is not tied
+        to an issue.
+    :param github_pr_number: PR number that merged the implementation
+        into the approved branch. ``None`` if not tied to a PR.
     :param notes: Free-form notes — never interpreted.
     """
 
@@ -149,6 +159,10 @@ class RequestRecord:
     requested_by: str
     created_at: str
     authorization: Authorization
+    repository: str = "Mortified2896/omnigent"
+    approved_branch: str = "main"
+    github_issue_number: int | None = None
+    github_pr_number: int | None = None
     notes: str | None = None
 
     def __post_init__(self) -> None:
@@ -165,6 +179,18 @@ class RequestRecord:
                 f"expected_current_sha must be 40 lowercase hex characters; "
                 f"got {self.expected_current_sha!r}"
             )
+        if "/" not in self.repository:
+            raise ValueError(f"repository must be 'owner/repo'; got {self.repository!r}")
+        if not self.approved_branch:
+            raise ValueError("approved_branch must be a non-empty string")
+        if self.github_issue_number is not None and self.github_issue_number < 1:
+            raise ValueError(
+                f"github_issue_number must be a positive integer; got {self.github_issue_number!r}"
+            )
+        if self.github_pr_number is not None and self.github_pr_number < 1:
+            raise ValueError(
+                f"github_pr_number must be a positive integer; got {self.github_pr_number!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -176,7 +202,13 @@ class RequestRecord:
             "requested_by": self.requested_by,
             "created_at": self.created_at,
             "authorization": self.authorization.to_dict(),
+            "repository": self.repository,
+            "approved_branch": self.approved_branch,
         }
+        if self.github_issue_number is not None:
+            out["github_issue_number"] = self.github_issue_number
+        if self.github_pr_number is not None:
+            out["github_pr_number"] = self.github_pr_number
         if self.notes:
             out["notes"] = self.notes
         return out
@@ -199,21 +231,34 @@ class RequestRecord:
             "created_at",
             "authorization",
             "notes",
+            "repository",
+            "approved_branch",
+            "github_issue_number",
+            "github_pr_number",
         }
         unknown = set(data) - expected
         if unknown:
             raise ValueError(f"request has unknown fields: {sorted(unknown)}")
-        return cls(
-            request_id=str(data["request_id"]),
-            target_sha=str(data["target_sha"]),
-            expected_current_sha=str(data["expected_current_sha"]),
-            origin_session_id=data.get("origin_session_id"),
-            origin_conversation_id=data.get("origin_conversation_id"),
-            requested_by=str(data["requested_by"]),
-            created_at=str(data["created_at"]),
-            authorization=Authorization.from_dict(data["authorization"]),
-            notes=data.get("notes"),
-        )
+        kwargs: dict[str, Any] = {
+            "request_id": str(data["request_id"]),
+            "target_sha": str(data["target_sha"]),
+            "expected_current_sha": str(data["expected_current_sha"]),
+            "origin_session_id": data.get("origin_session_id"),
+            "origin_conversation_id": data.get("origin_conversation_id"),
+            "requested_by": str(data["requested_by"]),
+            "created_at": str(data["created_at"]),
+            "authorization": Authorization.from_dict(data["authorization"]),
+            "notes": data.get("notes"),
+        }
+        if "repository" in data:
+            kwargs["repository"] = str(data["repository"])
+        if "approved_branch" in data:
+            kwargs["approved_branch"] = str(data["approved_branch"])
+        if data.get("github_issue_number") is not None:
+            kwargs["github_issue_number"] = int(data["github_issue_number"])
+        if data.get("github_pr_number") is not None:
+            kwargs["github_pr_number"] = int(data["github_pr_number"])
+        return cls(**kwargs)
 
 
 @dataclass
