@@ -122,23 +122,38 @@ if [[ "$up_after" -eq 0 ]]; then
   fail "service $SERVICE_NAME did not become active after restart"
 fi
 
-# Loopback probe.
-if body=$(curl -fsS -m 5 "http://127.0.0.1:$SERVICE_PORT/health" 2>/dev/null); then
-  if [[ -z "$body" ]]; then
-    echo "loopback health returned empty body" >> "$FAILED_DIR/info.txt"
-    fail "loopback health probe returned empty"
-  fi
-else
-  echo "loopback health probe failed" >> "$FAILED_DIR/info.txt"
+# Loopback probe. systemd reports ``active`` before uvicorn binds the
+# loopback socket, so a single curl right after ``systemctl restart``
+# can race the app startup and return ``Connection refused`` even
+# though the rolled-back release is healthy. Retry the probe in a
+# short loop (matches the prometheus-style convention the live
+# service already uses for its readiness signal).
+loopback_probe() {
+  local url="$1"
+  local attempts="${2:-30}"
+  local sleep_s="${3:-1}"
+  for ((i = 0; i < attempts; i++)); do
+    if body=$(curl -fsS -m 5 "$url" 2>/dev/null) && [[ -n "$body" ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    sleep "$sleep_s"
+  done
+  return 1
+}
+
+if ! body=$(loopback_probe "http://127.0.0.1:$SERVICE_PORT/health"); then
+  echo "loopback /health probe failed after retries" >> "$FAILED_DIR/info.txt"
   fail "loopback /health probe failed"
 fi
 
-if body=$(curl -fsS -m 5 "http://127.0.0.1:$SERVICE_PORT/" 2>/dev/null); then
-  if printf '%s' "$body" | grep -q 'OMNIGENT_SKIP_WEB_UI'; then
-    fail "rolled-back release serves the API-only landing page; bailing"
-  fi
-else
+if ! body=$(loopback_probe "http://127.0.0.1:$SERVICE_PORT/"); then
+  echo "loopback / probe failed after retries" >> "$FAILED_DIR/info.txt"
   fail "loopback / probe failed"
+fi
+
+if printf '%s' "$body" | grep -q 'OMNIGENT_SKIP_WEB_UI'; then
+  fail "rolled-back release serves the API-only landing page; bailing"
 fi
 
 # Public probe (best-effort).

@@ -986,7 +986,7 @@ class UpdaterController:
         # can simulate failures; ``dry_run`` only short-circuits
         # the real subprocess invocation.
         if self._config.hooks.rollback is not None:
-            return self._config.hooks.rollback(repo)
+            return self._config.hooks.rollback(repo, previous_sha=previous_sha)
         if self._config.dry_run:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="dry-run")
         script = self._rollback_script(repo)
