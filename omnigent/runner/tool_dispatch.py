@@ -2070,6 +2070,8 @@ def _build_session_create_body(
     conversation_id: str,
     title: Any,
     message: Any,
+    *,
+    agent_selector: str | None = None,
 ) -> dict[str, Any]:
     """
     Build the JSON ``POST /v1/sessions`` body for ``sys_session_create``.
@@ -2080,12 +2082,22 @@ def _build_session_create_body(
     are included when provided; the message becomes the child's first
     queued user turn via ``initial_items``.
 
+    When *agent_selector* is set (e.g. ``"opencode"``), it is forwarded
+    so the server routes through
+    :func:`omnigent.agent_selector.resolve_delegate_agent` instead of
+    trusting the caller's ``agent_id``. The ``agent_id`` is still
+    sent (the server's resolver uses it as the canonical-name lookup
+    key only; the resolver rejects a non-matching ``agent_id`` rather
+    than substituting). See issue #56.
+
     :param agent_id: The existing agent to launch, e.g. ``"ag_abc123"``.
     :param conversation_id: The caller's session id — the forced parent.
     :param title: Optional session label; included only when a non-empty
         string.
     :param message: Optional first user message; included only when a
         non-empty string.
+    :param agent_selector: Optional semantic delegation selector;
+        ``None`` keeps the legacy ``agent_id`` lookup.
     :returns: The JSON request body.
     """
     body: dict[str, Any] = {
@@ -2101,6 +2113,8 @@ def _build_session_create_body(
                 "data": {"role": "user", "content": [{"type": "input_text", "text": message}]},
             }
         ]
+    if isinstance(agent_selector, str) and agent_selector:
+        body["agent_selector"] = agent_selector
     return body
 
 
@@ -2239,7 +2253,11 @@ async def _execute_session_create(
             runner_workspace=runner_workspace,
         )
     body = _build_session_create_body(
-        str(agent_id), conversation_id, args.get("title"), args.get("message")
+        str(agent_id),
+        conversation_id,
+        args.get("title"),
+        args.get("message"),
+        agent_selector=args.get("agent_selector"),
     )
     try:
         resp = await server_client.post("/v1/sessions", json=body, timeout=30.0)

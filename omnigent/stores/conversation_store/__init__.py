@@ -232,6 +232,7 @@ class ConversationStore(ABC):
         workspace: str | None = None,
         git_branch: str | None = None,
         terminal_launch_args: list[str] | None = None,
+        delegation_provenance: dict[str, Any] | None = None,
     ) -> Conversation:
         """
         Create a new conversation. Generates a unique
@@ -634,6 +635,8 @@ class ConversationStore(ABC):
         omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
+        delegation_provenance: dict[str, Any] | None = None,
+        _unset_delegation_provenance: bool = False,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.

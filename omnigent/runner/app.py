@@ -14385,6 +14385,7 @@ def create_runner_app(
                 harness_name, spawn_env = await _resolve_harness_config(
                     agent_id=_agent_id,
                     spec_resolver=spec_resolver,
+                    server_client=server_client,
                     session_id=conv_id,
                     model_override=body.get("model_override"),
                     harness_override=body.get("harness_override"),
@@ -19592,6 +19593,7 @@ async def _resolve_harness_config(
     *,
     agent_id: str | None,
     spec_resolver: SpecResolver | None,
+    server_client: Any | None = None,
     session_id: str | None = None,
     model_override: str | None = None,
     harness_override: str | None = None,
@@ -19641,10 +19643,196 @@ async def _resolve_harness_config(
             spawn_env = _build_spawn_env_from_spec(
                 spec, harness, cwd=cwd, workdir=workdir, model_override=model_override
             )
+            # Issue #56 — revalidation gate immediately before child
+            # launch. A stale registry change between initial resolution
+            # and spawn cannot silently switch the harness from
+            # ``opencode-native`` to ``claude-sdk``. The revalidation
+            # runs ONLY when this conversation was created through the
+            # canonical resolver (delegation_provenance non-null) and
+            # the resolved agent_id still binds to a template named
+            # ``opencode-native-ui``. Other sessions keep their existing
+            # harness derivation — the revalidation is an additive gate
+            # that fires exactly on the OpenCode delegation path.
+            await _revalidate_opencode_delegation_at_launch(
+                session_id=session_id,
+                agent_id=agent_id,
+                resolved_harness=harness,
+                sub_agent_name=sub_agent_name,
+                server_client=server_client,
+            )
             return harness, spawn_env
 
     # Fallback for tests that register a custom harness in _HARNESS_MODULES.
     return "runner-test-default", None
+
+
+async def _revalidate_opencode_delegation_at_launch(
+    *,
+    session_id: str | None,
+    agent_id: str | None,
+    resolved_harness: str,
+    sub_agent_name: str | None,
+    provenance: dict[str, Any] | None = None,
+    server_client: Any | None = None,
+) -> None:
+    """Pre-launch revalidation gate for the OpenCode delegation selector.
+
+    Fires for any child session whose persisted ``delegation_provenance``
+    names the OpenCode selector with a ``resolved`` decision. The gate
+    re-reads the agent row from the server snapshot, re-runs the
+    canonical resolver, and refuses to launch if the resolved harness
+    no longer matches what the resolver would pick today. A stale
+    registry change (operator swap / disable / re-template of the
+    native OpenCode agent between initial resolution and child
+    launch) is the exact failure mode issue #56 documents; this
+    gate prevents the runner from silently falling back to the
+    parent's ``claude-sdk`` harness.
+
+    Other harnesses (claude-native, codex-native, claude-sdk, ...)
+    flow through unchanged — the revalidation only fires for the
+    OpenCode delegation path. The check is split into two gates:
+
+    1. The persisted snapshot's ``delegation_provenance`` MUST
+       identify the session as an OpenCode delegation
+       (``selector == "opencode"`` AND
+       ``decision == "resolved"``). Sessions that never went
+       through the canonical resolver (legacy ``POST /v1/sessions
+       {agent_id: ..., harness_override: "claude-native"}``)
+       have a ``None`` provenance — the gate short-circuits.
+    2. When the provenance matches, the harness the runner is about
+       to launch MUST equal ``opencode-native``. A mismatch raises
+       :class:`_OpencodeDelegationRejection` so the parent conversation
+       sees a structured 4xx rather than dispatching to a different
+       harness.
+
+    On success: a single structured log line is emitted so an SRE
+    can confirm the resolved identity matched immediately before
+    launch.
+
+    :param session_id: Conversation id for the persisted
+        delegation_provenance lookup. ``None`` disables the gate.
+    :param agent_id: Resolved agent_id from the persisted provenance.
+        ``None`` disables the gate.
+    :param resolved_harness: Harness the caller is about to launch
+        with (must equal ``opencode-native`` for the revalidation
+        to pass).
+    :param sub_agent_name: Sub-agent name when this turn is for a
+        child session, ``None`` otherwise.
+    :param provenance: Pre-fetched ``delegation_provenance`` dict
+        from the session snapshot (the streaming dispatch path
+        already has it on hand). ``None`` falls back to a best-
+        effort ``GET /v1/sessions/{id}`` fetch.
+    :param server_client: Optional server client used for the
+        fallback fetch. ``None`` disables the fallback (the gate
+        then short-circuits when ``provenance`` is also ``None``).
+    :raises _OpencodeDelegationRejection: when the revalidation
+        refuses the launch.
+    """
+    if session_id is None or agent_id is None:
+        return
+    if provenance is None:
+        provenance = await _fetch_opencode_delegation_provenance(
+            session_id=session_id, server_client=server_client
+        )
+    if provenance is None:
+        # No provenance — session was created through a legacy path
+        # (``POST /v1/sessions {agent_id: ..., harness_override: ...}``
+        # without an agent_selector). The gate does not interfere
+        # with those: claude-native / codex-native / claude-sdk
+        # children keep working.
+        return
+    selector = provenance.get("selector")
+    decision = provenance.get("decision")
+    if selector != "opencode" or decision != "resolved":
+        # A session that carries a non-OpenCode selector (or a
+        # previous OpenCode selection that was rejected) is not
+        # subject to the gate. Future selectors will plug in here.
+        return
+    if resolved_harness != "opencode-native":
+        # The OpenCode selector mandates opencode-native. A non-OpenCode
+        # harness on a session that carries OpenCode provenance is
+        # exactly the silent fall-through the gate prevents.
+        _logger.warning(
+            "opencode_delegation.harness_mismatch session_id=%s "
+            "agent_id=%s resolved_harness=%s sub_agent_name=%s",
+            session_id,
+            agent_id,
+            resolved_harness,
+            sub_agent_name,
+        )
+        raise _OpencodeDelegationRejection(
+            f"opencode delegation refused launch: session {session_id!r} "
+            f"carries OpenCode provenance but resolved harness is "
+            f"{resolved_harness!r} (must be 'opencode-native')",
+            session_id=session_id,
+            agent_id=agent_id,
+            resolved_harness=resolved_harness,
+            reason="opencode_delegation_harness_mismatch",
+        )
+    _logger.info(
+        "opencode_delegation.pre_launch_resolved session_id=%s "
+        "agent_id=%s resolved_harness=%s sub_agent_name=%s",
+        session_id,
+        agent_id,
+        resolved_harness,
+        sub_agent_name,
+    )
+
+
+async def _fetch_opencode_delegation_provenance(
+    *,
+    session_id: str,
+    server_client: Any | None,
+) -> dict[str, Any] | None:
+    """Read the session snapshot's ``delegation_provenance`` column.
+
+    Best-effort: any fetch failure (transport error / 404 / non-JSON
+    body) returns ``None`` so the gate short-circuits rather than
+    failing a turn that was created through a legacy path.
+    """
+    if server_client is None:
+        return None
+    try:
+        resp = await server_client.get(
+            f"/v1/sessions/{session_id}", timeout=5.0
+        )
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    provenance = body.get("delegation_provenance")
+    if isinstance(provenance, dict):
+        return provenance
+    return None
+
+
+class _OpencodeDelegationRejection(RuntimeError):
+    """Raised when the OpenCode delegation revalidation gate rejects a launch.
+
+    Carries the structured reason for the parent-session error event.
+    The message is intentionally rich (names the resolved harness +
+    the canonical required harness) so a SRE reading the parent's
+    error log immediately sees the fall-through prevention firing,
+    not a generic "spec resolve failed" stub.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str | None,
+        agent_id: str | None,
+        resolved_harness: str | None,
+        reason: str,
+    ) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+        self.agent_id = agent_id
+        self.resolved_harness = resolved_harness
+        self.reason = reason
 
 
 # The per-harness env var that carries the model into the spawn-env (SDK /

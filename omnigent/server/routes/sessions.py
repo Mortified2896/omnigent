@@ -2544,6 +2544,12 @@ def _build_session_response(
         omniroute_route_id=conv.omniroute_route_id,
         permission_mode=conv.permission_mode,
         omniroute_requires_explicit_approval=conv.omniroute_requires_explicit_approval,
+        delegation_provenance=conv.delegation_provenance,
+        agent_selector_decision=(
+            conv.delegation_provenance.get("decision")
+            if conv.delegation_provenance is not None
+            else None
+        ),
         context_window=context_window,
         last_total_tokens=last_total_tokens,
         # Seed the client's cost indicator on resume. Uses the SUBTREE
@@ -12783,9 +12789,76 @@ async def _create_session_from_existing_agent(
     :returns: The newly created session snapshot.
     :raises OmnigentError: 404 if no agent matches ``body.agent_id``;
         403/404 if ``parent_session_id`` or session-scoped ``agent_id``
-        fails authorization.
+        fails authorization; 422 if ``body.agent_selector`` rejects the
+        resolved identity.
     """
     _reject_reserved_cost_control_label_seed(body.labels)
+
+    # Issue #56: semantic delegation selector. When the caller supplies
+    # ``body.agent_selector`` (e.g. ``"opencode"``), the resolver is
+    # the single source of truth for the resolved agent identity.
+    # The legacy ``body.agent_id`` lookup is still honoured for
+    # callers that already know the durable id (Web UI hidden behind
+    # ``?o=``, registry-bypass tests) — the resolver is additive.
+    delegation_selection: Any | None = None
+    if body.agent_selector:
+        from omnigent.agent_selector import (
+            AgentSelectionError,
+            log_delegation_decision,
+            resolve_delegate_agent,
+        )
+
+        try:
+            delegation_selection = await asyncio.to_thread(
+                resolve_delegate_agent,
+                selector=body.agent_selector,
+                agent_store=agent_store,
+                agent_cache=agent_cache,
+            )
+        except AgentSelectionError as exc:
+            raise OmnigentError(
+                f"agent selector {body.agent_selector!r} rejected: "
+                f"{exc.reason} ({exc})",
+                code=ErrorCode.INVALID_INPUT,
+            ) from exc
+
+        log_delegation_decision(delegation_selection)
+        if not delegation_selection.ok or delegation_selection.resolved_agent_id is None:
+            reason = (
+                delegation_selection.error.reason
+                if delegation_selection.error is not None
+                else "rejected"
+            )
+            raise OmnigentError(
+                f"agent selector {body.agent_selector!r} rejected: {reason} "
+                f"(see delegation_provenance on the response for diagnostic candidates)",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        # Rewrite ``body.agent_id`` in-place so the rest of the
+        # create path uses the canonical, resolver-verified identity.
+        # The original caller's ``agent_id`` is intentionally NOT
+        # consulted — fuzzy name / description matching was the root
+        # cause of the silent Verity/claude-sdk fall-through.
+        body.agent_id = delegation_selection.resolved_agent_id
+        # The selector dictates the canonical harness; an explicit
+        # ``harness_override`` that disagrees is rejected so a caller
+        # cannot smuggle a non-OpenCode harness through the
+        # OpenCode selector.
+        if (
+            body.harness_override is not None
+            and body.harness_override != delegation_selection.resolved_harness
+        ):
+            raise OmnigentError(
+                f"agent selector {body.agent_selector!r} requires harness "
+                f"{delegation_selection.resolved_harness!r}; "
+                f"harness_override={body.harness_override!r} disagrees",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        # Pin the harness so the create path doesn't consult the
+        # spec's declared harness (which would still be opencode-native
+        # today, but the pin makes the contract explicit and survives a
+        # bundle swap that changes the spec's declared harness).
+        body.harness_override = delegation_selection.resolved_harness
 
     agent = await asyncio.to_thread(agent_store.get, body.agent_id)
     if agent is None:
@@ -12993,6 +13066,11 @@ async def _create_session_from_existing_agent(
             workspace=canonical_workspace,
             git_branch=git_branch,
             terminal_launch_args=validated_launch_args,
+            delegation_provenance=(
+                delegation_selection.to_provenance_dict()
+                if delegation_selection is not None and delegation_selection.ok
+                else None
+            ),
         )
     except Exception:
         # Broad catch is intentional: ANY create_conversation failure

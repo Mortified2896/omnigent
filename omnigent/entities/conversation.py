@@ -209,6 +209,7 @@ class Conversation:
     terminal_launch_args: list[str] | None = None
     workspace: str | None = None
     git_branch: str | None = None
+    delegation_provenance: dict[str, Any] | None = None
     archived: bool = False
 
 

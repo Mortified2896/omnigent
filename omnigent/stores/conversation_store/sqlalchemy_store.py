@@ -144,6 +144,11 @@ def _to_conversation(
         ),
         workspace=row.workspace,
         git_branch=row.git_branch,
+        delegation_provenance=(
+            json.loads(row.delegation_provenance)
+            if row.delegation_provenance is not None
+            else None
+        ),
         archived=row.archived,
     )
 
@@ -598,6 +603,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         workspace: str | None = None,
         git_branch: str | None = None,
         terminal_launch_args: list[str] | None = None,
+        delegation_provenance: dict[str, Any] | None = None,
     ) -> Conversation:
         """
         Create a new conversation in the database.
@@ -703,6 +709,15 @@ class SqlAlchemyConversationStore(ConversationStore):
                     terminal_launch_args=(
                         json.dumps(terminal_launch_args)
                         if terminal_launch_args is not None
+                        else None
+                    ),
+                    # Issue #56: durable delegation provenance. Always
+                    # serialized when present; NULL means the resolver
+                    # was not invoked for this create (legacy path or
+                    # the resolver rejected before recording).
+                    delegation_provenance=(
+                        json.dumps(delegation_provenance)
+                        if delegation_provenance is not None
                         else None
                     ),
                 )
@@ -2001,6 +2016,8 @@ class SqlAlchemyConversationStore(ConversationStore):
         omniroute_requires_explicit_approval: bool | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
+        delegation_provenance: dict[str, Any] | None = None,
+        _unset_delegation_provenance: bool = False,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
@@ -2090,6 +2107,12 @@ class SqlAlchemyConversationStore(ConversationStore):
                 changed = True
             if terminal_launch_args is not None:
                 row.terminal_launch_args = json.dumps(terminal_launch_args)
+                changed = True
+            if _unset_delegation_provenance:
+                row.delegation_provenance = None
+                changed = True
+            elif delegation_provenance is not None:
+                row.delegation_provenance = json.dumps(delegation_provenance)
                 changed = True
             if changed:
                 row.updated_at = now_epoch()
