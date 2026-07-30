@@ -96,7 +96,7 @@ def _build_command(
     release: Path,
     port: int,
     *,
-    _skip_web_ui: bool,
+    skip_web_ui: bool,
     config: Path | None,
 ) -> list[str]:
     """Build the ExecStart-equivalent command for the canary.
