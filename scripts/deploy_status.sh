@@ -40,7 +40,12 @@ fi
 
 CURRENT_LINK="$DEPLOY_ROOT/current"
 PREVIOUS_LINK="$DEPLOY_ROOT/previous"
-DEPLOYED_SHA_FILE="${DEPLOYED_SHA_FILE:-/home/hermes/.omnigent/deployed-sha}"
+# Canonical live-SHA marker — sourced from the shared helper so the
+# status script reads the same file the updater writes.
+SCRIPT_DIR_DEPLOYED_SHA_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_deployed_sha.sh
+source "$SCRIPT_DIR_DEPLOYED_SHA_HELPER/_deployed_sha.sh"
+DEPLOYED_SHA_FILE="$DEPLOYED_SHA_FILE"
 
 if [[ ! -L "$CURRENT_LINK" ]]; then
   log "WARNING: $CURRENT_LINK is not a symlink"

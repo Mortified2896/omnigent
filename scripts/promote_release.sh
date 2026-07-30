@@ -377,21 +377,10 @@ fi
 
 # Write the active drop-in (systemd-side view of the same release).
 log "writing systemd drop-in"
-DROPIN_PATH=$(sudo "$RELEASE_DIR/.venv/bin/python" -c "
-import os, sys
-sys.path.insert(0, '$RELEASE_DIR')
-from omnigent.deploy.ops.systemd import write_release_dropin
-p = write_release_dropin('$sha', release_dir=__import__('pathlib').Path('$RELEASE_DIR'))
-print(p)
-" 2>&1) || fail "could not write systemd drop-in (sudo required)"
+DROPIN_PATH=$(sudo /opt/omnigent/updater/bin/write-dropin.sh write "$sha" "$RELEASE_DIR" 2>&1) || fail "could not write systemd drop-in (sudo required)"
 
 # Disable any leftover 10-deploy-main-*.conf and 10-release-<other-sha>.conf.
-sudo "$RELEASE_DIR/.venv/bin/python" -c "
-import os, sys
-sys.path.insert(0, '$RELEASE_DIR')
-from omnigent.deploy.ops.systemd import disable_other_release_dropins
-disable_other_release_dropins('$sha')
-" || log "(continuing) other drop-in cleanup failed"
+sudo /opt/omnigent/updater/bin/write-dropin.sh disable "$sha" "$RELEASE_DIR" || log "(continuing) other drop-in cleanup failed"
 
 # If a ``BUILTIN_AGENT_DIRS`` env override is requested, also update the
 # control-room-polly drop-in to point at the new release's example dir.
@@ -515,14 +504,18 @@ if [[ "${OMIT_HEALTH:-0}" != "1" ]]; then
 fi
 
 # --- 6. Update deployment metadata ----------------------------------------
-mkdir -p "$(dirname ~/.omnigent/deployed-sha 2>/dev/null)"
-log "updating ~/.omnigent/deployed-sha and previous-deployed-sha"
-printf '%s\n' "$sha" > ~/.omnigent/deployed-sha.tmp
-mv -T ~/.omnigent/deployed-sha.tmp ~/.omnigent/deployed-sha
+# Source the shared live-SHA helper so the marker is written to the
+# canonical path the external updater reads. The helper honors
+# OMNIGENT_DEPLOYED_SHA_FILE / OMNIGENT_DEPLOYED_SHA_DIR and falls
+# back to /var/lib/omnigent/shared/ when writable.
+SCRIPT_DIR_DEPLOYED_SHA_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_deployed_sha.sh
+source "$SCRIPT_DIR_DEPLOYED_SHA_HELPER/_deployed_sha.sh"
+log "updating $DEPLOYED_SHA_FILE and $PREV_DEPLOYED_SHA_FILE"
+_deployed_sha_write_current "$sha"
 if [[ -n "$PREVIOUS_TARGET" ]]; then
   prev_sha=$(basename "$PREVIOUS_TARGET")
-  printf '%s\n' "$prev_sha" > ~/.omnigent/previous-deployed-sha.tmp
-  mv -T ~/.omnigent/previous-deployed-sha.tmp ~/.omnigent/previous-deployed-sha
+  _deployed_sha_write_previous "$prev_sha"
 fi
 
 log "promote-release $short complete (deployed-sha=$sha)"

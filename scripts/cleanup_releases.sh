@@ -51,8 +51,14 @@ export OMNIGENT_DEPLOY_ROOT="$DEPLOY_ROOT"
 
 CURRENT_LINK="$DEPLOY_ROOT/current"
 PREVIOUS_LINK="$DEPLOY_ROOT/previous"
-DEPLOYED_SHA_FILE="${DEPLOYED_SHA_FILE:-/home/hermes/.omnigent/deployed-sha}"
-PREV_DEPLOYED_SHA_FILE="${PREV_DEPLOYED_SHA_FILE:-/home/hermes/.omnigent/previous-deployed-sha}"
+# Canonical live-SHA marker — sourced from the shared helper so the
+# cleanup script reads the same file the updater and the /health
+# endpoint write.
+SCRIPT_DIR_DEPLOYED_SHA_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_deployed_sha.sh
+source "$SCRIPT_DIR_DEPLOYED_SHA_HELPER/_deployed_sha.sh"
+DEPLOYED_SHA_FILE="$DEPLOYED_SHA_FILE"
+PREV_DEPLOYED_SHA_FILE="$PREV_DEPLOYED_SHA_FILE"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
 
 if [[ ! -d "$RELEASES_DIR" ]]; then
