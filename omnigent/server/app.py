@@ -2135,8 +2135,15 @@ def create_app(
         try:
             reconcile_startup()
         except Exception:  # pragma: no cover - defensive  # noqa: BLE001
-            import logging
-
+            # NB: do NOT ``import logging`` here. ``create_app``'s
+            # earlier nested ``_lifespan`` references ``logging``
+            # via the function's cellvars. Adding ``import logging``
+            # at any later point inside this function rebinds the
+            # cell to a local module, breaking the nested function
+            # with ``NameError: free variable 'logging' ... not
+            # associated with a value in enclosing scope`` at app
+            # startup. ``logging`` is already imported at module
+            # scope; refer to it directly.
             logging.getLogger(__name__).warning(
                 "updater marker reconcile failed at startup", exc_info=True
             )
