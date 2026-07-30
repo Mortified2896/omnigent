@@ -31,6 +31,9 @@ def test_lifecycle_schema_and_historical_treatment(tmp_path) -> None:
         for constraint in uniques
     )
     with engine.connect() as connection:
+        # Issue #18 advanced the head from ``zd1b2c3d4e5f`` to
+        # ``ze1b2c3d4e5f`` to add the ``issue_runs`` + ``issue_run_events``
+        # tables for durable Oversight Autopilot persistence.
         assert connection.execute(text("select version_num from alembic_version")).scalar() == (
-            "zd1b2c3d4e5f"
+            "ze1b2c3d4e5f"
         )
