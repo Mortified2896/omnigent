@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import uuid
 from collections.abc import Iterator
 from contextvars import ContextVar
 from typing import Any
@@ -19,6 +20,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    TypeDecorator,
     UniqueConstraint,
     false,
     text,
@@ -33,6 +35,162 @@ from omnigent.db.compression import CompressedText
 # but MySQL cannot index a BLOB without a key-prefix length, so use fixed-length
 # BINARY(32) there — an exact fit for the digest and fully indexable.
 _CKSUM32 = LargeBinary(32).with_variant(MySQLBinary(32), "mysql")
+
+
+# Hex length of a bare uuid4 id, the canonical Python-side form.
+_UUID_HEX_LEN = 32
+
+# Prefixes ids carried before they became bare 32-char hex. ``uuid_to_bytes``
+# strips exactly these (so old URLs/clients keep resolving) and nothing else —
+# an unknown prefix fails loud rather than silently storing a wrong-typed id's
+# hex tail (e.g. a ``resp_``/``runner_token_`` value mis-passed to a uuid column).
+_LEGACY_ID_PREFIXES = frozenset(
+    {
+        "ag",
+        "conv",
+        "host",
+        "pol",
+        "file",
+        "cmt",
+        # conversation-item per-type prefixes
+        "msg",
+        "fc",
+        "fco",
+        "err",
+        "rs",
+        "cmp",
+        "nt",
+        "rse",
+        "sc",
+        "tc",
+        "rd",
+        # Control Room task-outcome and routing audit prefixes; these are
+        # legacy-shaped identifiers minted before the v0.6 binary conversion
+        # (the upstream task-outcome store still emits them via _generate_*).
+        "tr",
+        "tev",
+        "trv",
+        "rp",
+        "rdc",
+        "rdt",
+        "lfs",
+        "lso",
+        "st",
+        "str",
+        # runner-internal conversation binding
+        "agy_conv",
+    }
+)
+
+
+class InvalidUuidError(ValueError):
+    """An id string could not be normalised to a 32-char hex uuid.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` sites keep
+    working. Surfaced (wrapped in ``sqlalchemy.exc.StatementError``) when a
+    malformed id reaches a ``Uuid16`` column bind; the server maps it to a 404
+    so a bad id in a URL is not-found rather than a 500.
+    """
+
+
+def uuid_to_bytes(value: str | uuid.UUID | bytes | bytearray | memoryview) -> bytes:
+    """Normalise an id to the 16 raw bytes stored in a ``Uuid16`` column.
+
+    Accepts, reducing them all to the same 16 bytes: a :class:`uuid.UUID`
+    object; the bare 32-char hex form (what generators emit); the dashed
+    canonical uuid (``str(uuid4())``); a legacy id carrying one of the
+    known :data:`_LEGACY_ID_PREFIXES` (``conv_<hex>``, ``ag_<hex>``, …) — so
+    old bookmarked URLs, pasted ids, and pre-migration clients keep resolving;
+    or already-binary 16 bytes (a round-trip through the column layer). Other
+    lengths of binary input are treated as a malformed id (fail loud rather
+    than silently storing the wrong bytes).
+
+    :param value: A ``uuid.UUID``, a 32-char hex uuid optionally dashed or
+        legacy-prefixed, or already-binary bytes.
+    :returns: The 16-byte big-endian value.
+    :raises InvalidUuidError: If *value* is not a 32-char hex uuid.
+    """
+    if isinstance(value, uuid.UUID):
+        return value.bytes
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        if len(raw) == _UUID_HEX_LEN // 2:
+            return raw
+        # Otherwise it is a legacy-prefixed hex literal in its ascii bytes
+        # form (an upstream caller passed the bytes-equivalent of a str id).
+        try:
+            value = raw.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise InvalidUuidError(f"non-ascii id bytes: {value!r}") from exc
+    normalized = value.replace("-", "")
+    if "_" in normalized:
+        prefix, _, tail = normalized.rpartition("_")
+        if prefix in _LEGACY_ID_PREFIXES and len(tail) == _UUID_HEX_LEN:
+            normalized = tail
+    if len(normalized) != _UUID_HEX_LEN:
+        raise InvalidUuidError(f"expected a 32-char hex uuid, got {value!r}")
+    try:
+        return bytes.fromhex(normalized)
+    except ValueError as exc:
+        raise InvalidUuidError(f"invalid hex uuid: {value!r}") from exc
+
+
+def normalize_uuid(value: str | None) -> str | None:
+    """Return the bare 32-char hex form of *value*, or *value* unchanged.
+
+    The forgiving companion to :func:`uuid_to_bytes` for **Python-side** id
+    comparisons (e.g. a store's scope check against an ORM attribute, which
+    always reads back bare hex). A legacy-prefixed or dashed input normalises
+    to bare hex; a malformed input is returned as-is so the comparison simply
+    mismatches — preserving the pre-migration "unknown id = not found"
+    behaviour instead of raising. ``None`` passes through.
+
+    :param value: Any caller-supplied id string, or ``None``.
+    :returns: The bare 32-char hex form, or *value* verbatim if not a uuid.
+    """
+    if value is None:
+        return None
+    try:
+        return uuid_to_bytes(value).hex()
+    except InvalidUuidError:
+        return value
+
+
+class Uuid16(TypeDecorator[str]):
+    """A uuid stored as 16 raw bytes, presented to Python as bare 32-char hex.
+
+    Our ids are opaque 128-bit uuid4s stored as raw bytes — ``BYTEA``
+    (PostgreSQL), ``BLOB`` (SQLite / D1), fixed-length ``BINARY(16)`` (MySQL,
+    where a BLOB is not indexable without a key-prefix length). The rest of
+    the system keeps the readable bare 32-char hex form (entities, JSON
+    blobs, URLs, the FTS mirror), so this type converts at the column
+    boundary and nothing else has to change. Binds accept bare, dashed, or
+    legacy-prefixed uuids; results always come back as bare lowercase hex.
+    Result values guard the same driver variance ``CompressedText`` does:
+    ``bytes``, ``memoryview`` (some drivers), or ``str`` (already hex).
+    """
+
+    impl = LargeBinary(16)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Any) -> Any:
+        if dialect.name == "mysql":
+            return dialect.type_descriptor(MySQLBinary(16))
+        return dialect.type_descriptor(LargeBinary(16))
+
+    def process_bind_param(self, value: str | uuid.UUID | None, _dialect: object) -> bytes | None:
+        if value is None:
+            return None
+        return uuid_to_bytes(value)
+
+    def process_result_value(
+        self, value: bytes | memoryview | str | None, _dialect: object
+    ) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return bytes(value).hex()
 
 
 class Base(DeclarativeBase):
@@ -1700,4 +1858,165 @@ class SqlLangfuseSyncOutbox(Base):
             "task_run_id",
             "id",
         ),
+    )
+
+
+# ── Oversight Autopilot v1: issue-run persistence (issue #18) ───
+
+
+class SqlIssueRun(Base):
+    """
+    SQLAlchemy model for the ``issue_runs`` table.
+
+    One row per Autopilot run on a (repository, issue_number) pair.
+    The row is the durable record of who is working on what, with a
+    lease the store uses as the atomic claim lock (issue #18). The
+    Autopilot scheduler / recovery sweep reads ``list_active`` and
+    reaps expired leases; the runner transitions the row along the
+    state ladder declared in ``omnigent.entities.issue_run``.
+
+    :param id: Bare 32-char hex UUID primary key (see :class:`Uuid16`).
+    :param repository: ``owner/repo`` slug, e.g.
+        ``"Mortified2896/omnigent"``.
+    :param issue_number: The GitHub issue number this run targets.
+    :param state: Lifecycle state — ``queued``/``claiming``/``claimed``/
+        ``in_progress``/``pr_ready``/``done``/``failed``/``abandoned``.
+        Stored as a stable int code (see ``omnigent.db.enum_codecs``)
+        so adding new states doesn't require a schema migration.
+    :param lease_owner: Bare 32-char hex UUID of the runner holding
+        the lease. ``None`` when the row is unclaimed (e.g. terminal
+        or expired).
+    :param lease_acquired_at: Unix epoch seconds the lease was taken.
+    :param lease_expires_at: Unix epoch seconds the lease lapses;
+        the recovery sweep considers ``lease_expires_at < now`` as
+        available for re-claim.
+    :param parent_session_id: The parent harness session id that
+        spawned the worker (bare 32-char hex UUID). Optional.
+    :param worker_session_id: The worker session id (bare 32-char hex
+        UUID). Optional until the worker has started.
+    :param branch: The branch the worker is using, e.g.
+        ``"feat/issue-18-durable-run-persistence"``.
+    :param worktree: Absolute path of the worker's worktree.
+    :param head_sha: Last commit sha the worker pushed.
+    :param pr_number: PR number this run opened.
+    :param review_iteration: Current review / iteration counter.
+    :param retry_count: Terminal retry counter (commits / pushes /
+        migrations always retry-disabled).
+    :param last_error: Most recent error message (truncated).
+    :param last_error_code: Short classification, e.g.
+        ``"timeout"``, ``"rate_limited"``.
+    :param created_at: Unix epoch seconds the row was first written.
+    :param updated_at: Unix epoch seconds the row was last touched.
+    """
+
+    __tablename__ = "issue_runs"
+
+    # Tenant partition key: Databricks workspace id owning this row (0 = default).
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
+    repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Lifecycle state as a stable int code — see
+    # ``omnigent.db.enum_codecs.ISSUE_RUN_STATE`` for the mapping.
+    state: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(Uuid16(), nullable=True)
+    lease_acquired_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lease_expires_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    parent_session_id: Mapped[str | None] = mapped_column(Uuid16(), nullable=True)
+    worker_session_id: Mapped[str | None] = mapped_column(Uuid16(), nullable=True)
+    branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    worktree: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_iteration: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        # ``(repository, issue_number)`` is the natural key — only one
+        # non-terminal row may exist for the pair at a time. The
+        # uniqueness is enforced application-side (``try_claim``
+        # refuses to insert a second non-terminal row); a DB
+        # UNIQUE constraint would break terminal -> follow-up flows.
+        Index("ix_issue_runs_repo_issue", "workspace_id", "repository", "issue_number"),
+        # ``(state, lease_expires_at)`` — the recovery sweep's primary
+        # scan: WHERE state IN (non-terminal) AND lease_expires_at IS NOT NULL
+        # AND lease_expires_at < now ORDER BY lease_expires_at, id.
+        Index("ix_issue_runs_state_lease", "state", "lease_expires_at", "id"),
+        # ``(repository, state, updated_at)`` — the scheduler's "show
+        # me active runs across the repo" listing.
+        Index(
+            "ix_issue_runs_repo_state_updated",
+            "workspace_id",
+            "repository",
+            "state",
+            "updated_at",
+        ),
+        CheckConstraint("issue_number > 0", name="ck_issue_runs_issue_number_positive"),
+    )
+
+
+class SqlIssueRunEvent(Base):
+    """
+    SQLAlchemy model for the ``issue_run_events`` table.
+
+    One row per state transition or external event recorded against
+    an :class:`SqlIssueRun`. The event log is the source of truth for
+    restart-safe checkpoint recovery: replaying the events in
+    ``sequence`` order reconstructs the run's last-known state without
+    relying on the snapshot row alone.
+
+    :param id: Bare 32-char hex UUID primary key (see :class:`Uuid16`).
+    :param run_id: Owning :class:`SqlIssueRun.id`.
+    :param sequence: Monotonic per-run sequence number (1, 2, 3,
+        ...). Assigned by the store; callers should leave ``None``
+        on insert so the store can assign the next gap-free number.
+    :param kind: Event kind literal (see
+        :data:`omnigent.entities.issue_run.ISSUE_RUN_EVENT_KINDS`).
+        Stored as a stable string so the API can decode without an
+        enum lookup.
+    :param from_state: Prior state (the ``state`` column was this
+        when the event was emitted). ``None`` for creation events.
+    :param to_state: New state after the event. ``None`` for pure
+        observation events (e.g. ``ci_failed``).
+    :param payload: Free-form JSON payload, e.g. CI url, comment
+        id, log excerpt. Stored as compressed text.
+    :param created_at: Unix epoch seconds the event row was written.
+    """
+
+    __tablename__ = "issue_run_events"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
+    run_id: Mapped[str] = mapped_column(Uuid16(), nullable=False)
+    # Sequence is part of the PK so two events for the same run can
+    # never share a number; the ``(workspace_id, run_id, sequence)``
+    # triple is globally unique within a workspace.
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        # Replay path: per-run events in sequence order.
+        Index("ix_issue_run_events_run_sequence", "workspace_id", "run_id", "sequence"),
+        # "Show me every ci_failed event" query.
+        Index("ix_issue_run_events_kind_created", "workspace_id", "kind", "created_at"),
     )

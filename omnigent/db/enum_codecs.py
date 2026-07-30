@@ -308,3 +308,27 @@ def encode_langfuse_outbox_status(name: str) -> int:
 def decode_langfuse_outbox_status(code: int) -> str:
     """Decode a ``langfuse_sync_outbox.status`` int code to its name."""
     return _decode(LANGFUSE_OUTBOX_STATUS, code, field="langfuse_sync_outbox.status")
+
+
+# Stable int codes for ``issue_runs.state``. New states must be
+# appended (never reordered) so on-disk rows keep decoding.
+ISSUE_RUN_STATE: dict[str, int] = {
+    "queued": 1,
+    "claiming": 2,
+    "claimed": 3,
+    "in_progress": 4,
+    "pr_ready": 5,
+    "done": 6,
+    "failed": 7,
+    "abandoned": 8,
+}
+
+
+def encode_issue_run_state(name: str) -> int:
+    """Encode an ``issue_runs.state`` name to its int code."""
+    return _encode(ISSUE_RUN_STATE, name, field="issue_runs.state")
+
+
+def decode_issue_run_state(code: int) -> str:
+    """Decode an ``issue_runs.state`` int code to its name."""
+    return _decode(ISSUE_RUN_STATE, code, field="issue_runs.state")
