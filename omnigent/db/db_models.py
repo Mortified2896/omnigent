@@ -692,6 +692,17 @@ class SqlConversation(Base):
     # server-created git worktree; None otherwise. Gates worktree
     # cleanup on delete. See designs/SESSION_GIT_WORKTREE.md.
     git_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Structured delegation provenance JSON (issue #56). Captures
+    # requested_agent_selector, resolved_agent_id/name/harness, requested
+    # OmniRoute route/combo, resolved provider/model, reasoning effort,
+    # fallback_used, workspace_or_worktree, parent/child conversation ids,
+    # and the resolution decision or rejection reason. Single source of
+    # truth for "did this session ever reach native OpenCode" forensics —
+    # a silent fall-through to Verity/claude-sdk leaves this column
+    # populated with the rejection reason. NULL for sessions created
+    # through non-canonical paths (e.g. legacy ``POST /v1/sessions``
+    # without ``agent_selector``); the column is additive and nullable.
+    delegation_provenance: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Whether the session is archived (hidden from the default
     # /v1/sessions listing and the sidebar). False for normal
     # sessions; server_default false backfills existing rows on the

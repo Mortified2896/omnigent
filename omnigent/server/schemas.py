@@ -1352,6 +1352,24 @@ class SessionCreateRequest(BaseModel):
         the spec's declared harness. Create-time only — there is no
         PATCH path, since the harness process spawns on the first
         turn.
+    :param agent_selector: Semantic delegation selector, e.g.
+        ``"opencode"``. When set, the server routes the request
+        through
+        :func:`omnigent.agent_selector.resolve_delegate_agent`,
+        the single source of truth that maps the selector to the
+        canonical native OpenCode agent identity
+        (``opencode-native-ui``, harness ``opencode-native``).
+        Resolution prefers stable identifiers and explicit
+        capabilities over fuzzy name / description matching; a
+        Verity/claude-sdk agent whose description mentions "opencode"
+        is rejected with the structured reason
+        (``rejected_name_mismatch`` / ``rejected_harness_mismatch`` /
+        ``rejected_missing_agent``) instead of silently being picked.
+        On success the resolved identity is durably recorded in
+        :attr:`SessionResponse.delegation_provenance` and the
+        session is created with the canonical harness pinned.
+        ``None`` skips the resolver and uses the legacy ``agent_id``
+        lookup (legacy callers that already know the durable id).
     """
 
     agent_id: str
@@ -1373,6 +1391,7 @@ class SessionCreateRequest(BaseModel):
     omniroute_route_id: str | None = None
     permission_mode: str | None = None
     omniroute_requires_explicit_approval: bool | None = None
+    agent_selector: str | None = None
 
     @field_validator("omniroute_route_id")
     @classmethod
@@ -1384,6 +1403,20 @@ class SessionCreateRequest(BaseModel):
     def _known_create_permission_mode(cls, value: str | None) -> str | None:
         if value is not None and value not in KNOWN_PERMISSION_MODES:
             raise ValueError("unknown permission mode")
+        return value
+
+    @field_validator("agent_selector")
+    @classmethod
+    def _known_agent_selector(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        from omnigent.agent_selector import SEMANTIC_OPENCODE_SELECTOR
+
+        if value != SEMANTIC_OPENCODE_SELECTOR:
+            raise ValueError(
+                f"unknown delegation selector {value!r}; expected "
+                f"{SEMANTIC_OPENCODE_SELECTOR!r}"
+            )
         return value
 
     @model_validator(mode="after")
@@ -1914,6 +1947,43 @@ class SessionResponse(BaseModel):
     omniroute_route_id: str | None = None
     permission_mode: str | None = None
     omniroute_requires_explicit_approval: bool | None = None
+    delegation_provenance: dict[str, Any] | None = None
+    """
+    Structured delegation provenance for issue #56.
+
+    Populated for any session whose create ran through the canonical
+    :func:`omnigent.agent_selector.resolve_delegate_agent` resolver
+    (the OpenCode semantic selector today). Contains at minimum:
+    ``selector`` (the requested semantic, e.g. ``"opencode"``),
+    ``resolved_agent_id`` / ``resolved_agent_name`` /
+    ``resolved_harness`` / ``resolved_display_name``, ``native``,
+    ``decision`` (e.g. ``"resolved"`` /
+    ``"rejected_harness_mismatch"``), ``candidates`` (diagnostic
+    snapshot of agents the resolver considered), and ``error`` (the
+    structured rejection reason + message when ``decision`` is not
+    ``"resolved"``). Also stamps
+    :attr:`omniroute_route_id` / :attr:`model_options` /
+    :attr:`harness` so a UI consumer can render the resolved route
+    and harness without an extra round-trip.
+
+    ``None`` for sessions created through the legacy
+    ``agent_id`` path (no ``agent_selector``). The field is the
+    single source of truth for post-incident forensics: a silent
+    fall-through to Verity/claude-sdk leaves a populated record
+    naming the rejection reason, so a SRE can grep durable history
+    instead of guessing what the user's request resolved to.
+    """
+
+    agent_selector_decision: str | None = None
+    """
+    Short decision string for the delegation resolver, e.g.
+    ``"resolved"``, ``"rejected_harness_mismatch"``,
+    ``"rejected_missing_agent"``. Mirrors
+    :attr:`delegation_provenance` ``decision`` so the Web UI can
+    render the user-visible badge without parsing the full
+    provenance dict. ``None`` for legacy (non-canonical)
+    resolutions.
+    """
 
 
 class UpdateSessionRequest(BaseModel):
