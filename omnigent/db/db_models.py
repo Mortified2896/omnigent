@@ -282,7 +282,7 @@ class SqlAgent(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     created_at: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(256))
     bundle_location: Mapped[str] = mapped_column(String(512))
@@ -334,12 +334,12 @@ class SqlFile(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     created_at: Mapped[int] = mapped_column(Integer)
     filename: Mapped[str] = mapped_column(String(512))
     bytes: Mapped[int] = mapped_column(Integer)
     content_type: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(Uuid16(), nullable=True)
 
     __table_args__ = (
         Index("ix_files_created_at", "workspace_id", "created_at", "id"),
@@ -492,7 +492,7 @@ class SqlSessionPermission(Base):
         primary_key=True,
     )
     conversation_id: Mapped[str] = mapped_column(
-        String(64),
+        Uuid16(),
         primary_key=True,
     )
     level: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -596,7 +596,7 @@ class SqlConversation(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(768), nullable=False, server_default="")
@@ -605,15 +605,15 @@ class SqlConversation(Base):
     # the string name at the row↔entity boundary.
     kind: Mapped[int] = mapped_column(SmallInteger, default=1)
     parent_conversation_id: Mapped[str | None] = mapped_column(
-        String(64),
+        Uuid16(),
         nullable=True,
     )
     root_conversation_id: Mapped[str] = mapped_column(
-        String(64),
+        Uuid16(),
         nullable=False,
     )
     agent_id: Mapped[str | None] = mapped_column(
-        String(64),
+        Uuid16(),
         nullable=True,
     )
     runner_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -799,7 +799,7 @@ class SqlConversationItem(Base):
         String(64),
         primary_key=True,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     response_id: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[int] = mapped_column(Integer)
     # Enum stored as a stable int code (see omnigent.db.enum_codecs
@@ -941,8 +941,8 @@ class SqlComment(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    conversation_id: Mapped[str] = mapped_column(String(64))
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(Uuid16())
     path: Mapped[str] = mapped_column(String(4096))
     start_index: Mapped[int] = mapped_column(Integer)
     end_index: Mapped[int] = mapped_column(Integer)
@@ -1046,7 +1046,7 @@ class SqlPolicy(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     name: Mapped[str] = mapped_column(String(256))
     # sha256(name) — the value the name-uniqueness indexes key on instead of
     # the wide name column. Stamped from `name` on INSERT via the column
@@ -1161,7 +1161,7 @@ class SqlHost(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    host_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    host_id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     owner: Mapped[str] = mapped_column(String(256), nullable=False)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     # Enum stored as a stable int code (see omnigent.db.enum_codecs
@@ -1256,7 +1256,7 @@ class SqlRoutingProposal(Base):
         server_default="0",
         default=current_workspace_id,
     )
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(String(64), nullable=False)
     elicitation_id: Mapped[str] = mapped_column(String(64), nullable=False)
     user_message_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
