@@ -289,8 +289,7 @@ def write_release_dropin(
         # do not propagate the exit code to systemd.
         server_url = f"http://127.0.0.1:{port}"
         body_parts.append(
-            f"ExecStopPost={release_dir}/.venv/bin/omni host stop "
-            f"--server {server_url}"
+            f"ExecStopPost={release_dir}/.venv/bin/omni host stop --server {server_url}"
         )
     body_parts.extend(
         [
@@ -339,10 +338,7 @@ def _exec_start_lines(spec: ServiceSpec, *, release_dir: Path, port: int) -> lis
         server_url = f"http://127.0.0.1:{port}"
         return [
             "ExecStart=",
-            (
-                f"ExecStart={release_dir}/.venv/bin/omni host "
-                f"--server {server_url}"
-            ),
+            (f"ExecStart={release_dir}/.venv/bin/omni host --server {server_url}"),
         ]
     # ``host_stop`` is reserved for ExecStopPost — see
     # :func:`write_release_dropin` for the call site. Returning an
