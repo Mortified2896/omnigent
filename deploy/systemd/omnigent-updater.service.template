@@ -13,6 +13,14 @@ Type=oneshot
 ExecStart=@PREFIX@/bin/omnigent-updater.sh recover
 Environment=OMNIGENT_UPDATER_HOME=@PREFIX@
 Environment=OMNIGENT_UPDATER_STATE_ROOT=/var/lib/omnigent/updates
+# Durable lineage anchor override. The validator (issue #38 §3)
+# treats every target SHA whose ``refs/remotes/fork/main``
+# ancestry fails as out of approved lineage, but a hard-coded
+# anchor here is the belt-and-suspenders guard against a stale
+# fork/main ref pointing at an unauthorized rollback. Rolling
+# the anchor forward requires editing this file and re-running
+# ``scripts/install_omnigent_updater.sh``.
+Environment=OMNIGENT_UPDATER_LINEAGE_ANCHOR=3b42ccbebbcca8cc7215ea3e4ac0da63c0be2654
 Environment=PYTHONSAFEPATH=1
 User=omnigent-updater
 Group=omnigent-updater

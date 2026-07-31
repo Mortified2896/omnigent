@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from omnigent.updater import layout, maintenance
@@ -81,6 +82,38 @@ def test_reconcile_marker_no_owner_leaves_state_alone(state_root: Path) -> None:
     maintenance.engage_maintenance(request_id="GGGGGGGGGGGGGGGGGGGGGGGGGG")
     state = maintenance.reconcile_marker(owner_pid=None)
     assert state.active is True
+
+
+def test_reconcile_marker_clears_when_request_has_terminal_result(
+    state_root: Path,
+) -> None:
+    """When the owning controller is unknown but the named request
+    already reached a terminal state, the marker is released.
+
+    This is the recovery path for the ``rollback_failed`` crash
+    case: the web service never learns the controller's pid (it
+    runs as the user, the updater as a system service), but the
+    terminal result file is durable and signals the update is
+    finished. Without this fallback the maintenance flag would be
+    stuck forever.
+    """
+    request_id = "58EGHTN0929TAT506P2PC7GC14"
+    maintenance.engage_maintenance(request_id=request_id)
+    # Write a terminal result file so the reconcile sees the
+    # request as finished.
+    result_file = layout.result_path(request_id)
+    result_file.write_text(
+        json.dumps(
+            {
+                "final_status": "rollback_failed",
+                "target_sha": "a" * 40,
+                "previous_sha": "b" * 40,
+            }
+        )
+    )
+    state = maintenance.reconcile_marker(owner_pid=None)
+    assert state.active is False
+    assert not layout.maintenance_marker_path().is_file()
 
 
 def test_drain_status_parses_response() -> None:
