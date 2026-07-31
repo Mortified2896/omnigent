@@ -495,3 +495,183 @@ def test_recover_non_terminal_classifies_record_rollback(
     )
     decisions = controller.recover_non_terminal()
     assert decisions[0].action == "record_rollback"
+
+
+# ---------------------------------------------------------------------------
+# Host-service pinning probes (issue: omnigent-eval-host must run from the
+# same release as omnigent-eval-web).
+# ---------------------------------------------------------------------------
+
+
+def test_check_host_pinned_passes_when_host_runs_release_venv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The host pinning check accepts a host executable that lives
+    inside the release's ``.venv``.
+
+    Reproduces the happy path: ``systemctl is-active`` returns 0,
+    ``MainPID`` resolves to a process whose ``/proc/<pid>/exe`` is
+    inside ``<deploy>/releases/<sha>/.venv``. The probe must not
+    raise.
+    """
+    deploy = tmp_path / "deploy"
+    release = deploy / "releases" / "0123456789abcdef0123456789abcdef01234567"
+    venv_bin = release / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    expected_exe = venv_bin / "omni"
+    expected_exe.touch()
+
+    # Patch Path.resolve so the /proc/<pid>/exe symlink resolves to
+    # the fake venv binary. The kernel does not let tests poke a
+    # real /proc/<pid>/exe link, but the probe uses ``Path.resolve``
+    # which we can intercept here.
+    original_resolve = Path.resolve
+
+    def fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+        resolved = original_resolve(self, *args, **kwargs)
+        if str(self).startswith("/proc/") and str(self).endswith("/exe"):
+            return expected_exe.resolve()
+        return resolved
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    monkeypatch.setattr("shutil.which", lambda _name: "/bin/systemctl")
+
+    def fake_run(
+        args: list[str] | tuple[str, ...],
+        *rest: object,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        a = tuple(args)
+        # Compare by basename: the production code resolves
+        # ``systemctl`` to its absolute path (e.g.
+        # ``/usr/bin/systemctl``) and passes that to ``subprocess.run``;
+        # tests need to match regardless of the resolved path.
+        base = tuple(x.rsplit("/", 1)[-1] for x in a[:3])
+        if base == ("systemctl", "is-active", "--quiet"):
+            return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
+        if base == ("systemctl", "show", "-p"):
+            return subprocess.CompletedProcess(args=a, returncode=0, stdout="12345\n", stderr="")
+        return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    cfg = ControllerConfig(
+        deploy_root=deploy,
+        host_service_name="omnigent-eval-host.service",
+        dry_run=False,
+    )
+    controller = UpdaterController(cfg)
+    # Should not raise.
+    controller._check_host_pinned("0123456789abcdef0123456789abcdef01234567")
+
+
+def test_check_host_pinned_fails_when_host_runs_mutable_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The host pinning check raises when the host executable does
+    NOT live under the target release's ``.venv``.
+
+    Reproduces the production bug this issue fixes: the host daemon
+    is active but its binary is the mutable repository's
+    ``.venv/bin/omni`` (or any path outside the target release).
+    The probe must raise ``HealthCheckFailedError`` so the
+    controller transitions to a rollback.
+    """
+    deploy = tmp_path / "deploy"
+    release = deploy / "releases" / "0123456789abcdef0123456789abcdef01234567"
+    release.mkdir(parents=True)
+
+    # Mock the host's executable to live in the mutable checkout,
+    # NOT in the target release's venv.
+    mutable_root = tmp_path / "home" / "hermes" / "workspace" / "repos" / "omnigent-eval"
+    mutable_exe = mutable_root / ".venv" / "bin" / "omni"
+    mutable_exe.parent.mkdir(parents=True)
+    mutable_exe.touch()
+
+    original_resolve = Path.resolve
+
+    def fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+        resolved = original_resolve(self, *args, **kwargs)
+        if str(self).startswith("/proc/") and str(self).endswith("/exe"):
+            return mutable_exe.resolve()
+        return resolved
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    monkeypatch.setattr("shutil.which", lambda _name: "/bin/systemctl")
+
+    def fake_run(
+        args: list[str] | tuple[str, ...],
+        *rest: object,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        a = tuple(args)
+        base = tuple(x.rsplit("/", 1)[-1] for x in a[:3])
+        if base == ("systemctl", "is-active", "--quiet"):
+            return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
+        if base == ("systemctl", "show", "-p"):
+            return subprocess.CompletedProcess(args=a, returncode=0, stdout="12345\n", stderr="")
+        return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    cfg = ControllerConfig(
+        deploy_root=deploy,
+        host_service_name="omnigent-eval-host.service",
+        dry_run=False,
+    )
+    controller = UpdaterController(cfg)
+    with pytest.raises(HealthCheckFailedError, match="not pinned to the target release"):
+        controller._check_host_pinned("0123456789abcdef0123456789abcdef01234567")
+
+
+def test_check_host_pinned_fails_when_unit_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The host pinning check raises when ``systemctl is-active`` reports
+    the unit is not active.
+    """
+    cfg = ControllerConfig(
+        deploy_root=tmp_path,
+        host_service_name="omnigent-eval-host.service",
+        dry_run=False,
+    )
+    controller = UpdaterController(cfg)
+    monkeypatch.setattr("shutil.which", lambda _name: "/bin/systemctl")
+
+    def fake_run(
+        args: list[str] | tuple[str, ...],
+        *rest: object,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        a = tuple(args)
+        base = tuple(x.rsplit("/", 1)[-1] for x in a[:3])
+        if base == ("systemctl", "is-active", "--quiet"):
+            return subprocess.CompletedProcess(
+                args=a, returncode=3, stdout="", stderr="inactive\n"
+            )
+        return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    with pytest.raises(HealthCheckFailedError, match="not active"):
+        controller._check_host_pinned("0123456789abcdef0123456789abcdef01234567")
+
+
+def test_check_host_pinned_skipped_in_dry_run(tmp_path: Path) -> None:
+    """The host pinning check is a no-op when ``dry_run`` is set.
+
+    Tests cannot rely on a real ``systemctl`` so the controller
+    silently skips the probe rather than shelling out from a unit
+    test.
+    """
+    cfg = ControllerConfig(
+        deploy_root=tmp_path,
+        host_service_name="omnigent-eval-host.service",
+        dry_run=True,
+    )
+    controller = UpdaterController(cfg)
+    # No subprocess.run patch needed: the dry-run path returns
+    # immediately.
+    controller._check_host_pinned("0123456789abcdef0123456789abcdef01234567")

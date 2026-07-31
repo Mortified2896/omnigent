@@ -139,6 +139,12 @@ class ControllerConfig:
     db_url: str = "sqlite:////home/hermes/.omnigent/chat.db"
     service_name: str = "omnigent-eval-web.service"
     service_port: int = 4097
+    # The host daemon runs alongside the web service on the same
+    # release. The controller pins both units to ``target_sha``;
+    # ``host_service_name`` is used by the post-cutover health
+    # probe to confirm the host daemon is active and running
+    # from the release venv (not the mutable repository checkout).
+    host_service_name: str = "omnigent-eval-host.service"
     build_poll_seconds: float = 2.0
     drain_timeout_seconds: float = 1800.0
     dry_run: bool = False
@@ -868,10 +874,13 @@ class UpdaterController:
         Verifies:
 
         * the recorded ``deployed-sha`` matches ``expected_sha``;
-        * the live systemd unit is active;
+        * the live web systemd unit is active;
         * the loopback ``/health`` and ``/`` endpoints respond;
         * the public (Tailscale) probe responds when the host has
-          one configured (best-effort, never fatal).
+          one configured (best-effort, never fatal);
+        * the live host daemon unit is active;
+        * the host daemon's running executable lives inside the
+          release's ``.venv`` (not the mutable repository checkout).
 
         Raises :class:`HealthCheckFailedError` on any failure.
         """
@@ -884,7 +893,7 @@ class UpdaterController:
             raise HealthCheckFailedError(
                 f"live SHA {meta.live_sha!r} does not match expected {expected_sha!r}"
             )
-        # Loopback probes.
+        # Web service: loopback probes.
         import urllib.error
         import urllib.request
 
@@ -905,6 +914,15 @@ class UpdaterController:
                     )
         except (urllib.error.URLError, ConnectionError, OSError) as exc:
             raise HealthCheckFailedError(f"loopback / failed: {exc}") from exc
+        # Host daemon: the unit must be active AND pinned to the
+        # release venv. ``active`` alone is insufficient — the unit
+        # could be active but still running from a previous binary
+        # if the drop-in was overwritten while systemd held an
+        # open connection. We check the running executable lives
+        # under ``<release>/.venv``; if not, the host is on the
+        # wrong release (mutable checkout or another release) and
+        # must be rolled back.
+        self._check_host_pinned(expected_sha)
         # Public probe is best-effort.
         try:
             with urllib.request.urlopen(
@@ -913,6 +931,86 @@ class UpdaterController:
                 resp.read()
         except (urllib.error.URLError, ConnectionError, OSError):
             pass
+
+    def _check_host_pinned(self, expected_sha: str) -> None:
+        """Confirm ``omnigent-eval-host.service`` is active and the
+        running executable is inside the target release's ``.venv``.
+
+        Skipped when :attr:`dry_run` is set (the controller cannot
+        safely shell out to ``systemctl`` in a unit-test
+        environment). The check is also tolerant of missing
+        ``systemctl`` (a non-systemd test host); a missing binary is
+        not a host-pinning failure — the test environment is
+        configured separately.
+
+        :param expected_sha: SHA the live release should be at.
+        :raises HealthCheckFailedError: When the unit is not
+            active, or the running executable does not live under
+            ``<deploy_root>/releases/<expected_sha>/.venv``.
+        """
+        if self._config.dry_run:
+            return
+        import shutil as _shutil
+        import subprocess as _subprocess
+
+        systemctl = _shutil.which("systemctl")
+        if systemctl is None:
+            return
+        host_service = self._config.host_service_name
+        proc = _subprocess.run(
+            [systemctl, "is-active", "--quiet", host_service],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise HealthCheckFailedError(
+                f"{host_service} is not active after cutover "
+                f"(systemctl is-active returned {proc.returncode})"
+            )
+        main_pid_proc = _subprocess.run(
+            [systemctl, "show", "-p", "MainPID", "--value", host_service],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        main_pid = (main_pid_proc.stdout or "").strip()
+        if not main_pid or main_pid == "0":
+            raise HealthCheckFailedError(
+                f"{host_service} has no MainPID; cannot verify host pinning"
+            )
+        try:
+            pid_int = int(main_pid)
+        except ValueError:
+            raise HealthCheckFailedError(
+                f"{host_service} MainPID is not numeric: {main_pid!r}"
+            ) from None
+        exe_link = Path(f"/proc/{pid_int}/exe")
+        try:
+            host_exe = exe_link.resolve()
+        except OSError as exc:
+            raise HealthCheckFailedError(
+                f"could not resolve {host_service} executable: {exc}"
+            ) from exc
+        # The deploy root carries releases under
+        # ``releases/<sha>/.venv/...``; confirm the host binary
+        # is somewhere under the expected release's ``.venv``.
+        deploy_root = self._config.resolved_deploy_root()
+        expected_release = (deploy_root / "releases" / expected_sha).resolve()
+        expected_exe_root = (expected_release / ".venv").resolve()
+        try:
+            host_exe.is_relative_to(expected_exe_root)
+        except OSError:
+            pinned = False
+        else:
+            pinned = host_exe.is_relative_to(expected_exe_root)
+        if not pinned:
+            raise HealthCheckFailedError(
+                f"{host_service} is running from {host_exe}; "
+                f"expected it to live under {expected_exe_root}. "
+                f"The host daemon is not pinned to the target release "
+                f"{expected_sha}; rolling back."
+            )
 
     # ------------------------------------------------------------------
     # Result delivery

@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
-# Roll back the omnigent-eval-web service to the previous known-good release.
+# Roll back the omnigent-eval-web and omnigent-eval-host services to
+# the previous known-good release.
 #
 # Reads the ``previous`` symlink in the deploy root, atomically swaps
-# ``current`` to it, rewrites the systemd drop-in to point at the
-# previous release, asks systemd to restart, and verifies the live
-# service is healthy before exiting. The recorded ``deployed-sha`` is
-# rewritten to the rolled-back SHA *only after* the live health probe
-# passes, so an operator can detect a broken rollback.
+# ``current`` to it, rewrites the systemd drop-ins for **both** the
+# web and host services to point at the previous release, asks systemd
+# to restart the web service first, then restarts the host daemon and
+# verifies both services are healthy. The recorded ``deployed-sha`` is
+# rewritten to the rolled-back SHA *only after* the live health probes
+# pass, so an operator can detect a broken rollback.
+#
+# The host daemon is pinned to the same release as the web service;
+# this script is the single point of truth for the coordinated
+# web+host rollback. An LLM agent or operator that calls into the
+# sudoers-gated ``write-dropin.sh`` directly cannot change one service
+# without going through this script's coordinated flow.
 #
 # Usage:
 #   scripts/rollback_release.sh [--to <sha>]
@@ -73,14 +81,21 @@ mkdir -p "$FAILED_DIR"
 } > "$FAILED_DIR/info.txt"
 
 # Drop-in rewrite uses TARGET/TARGET_SHA captured above so a later
-# ``previous`` overwrite cannot redirect the systemd unit.
+# ``previous`` overwrite cannot redirect the systemd unit. Both
+# services (web + host) are pinned to the same release, so we write
+# drop-ins for both before restarting anything.
 write_dropin() {
   # The wrapper handles both write and disable; the wrapper
   # validates SHA + release-dir path before invoking the
   # release's python.
-  sudo /opt/omnigent/updater/bin/write-dropin.sh write "$TARGET_SHA" "$TARGET"
+  local kind="$1"
+  sudo /opt/omnigent/updater/bin/write-dropin.sh write "$kind" "$TARGET_SHA" "$TARGET"
 }
-DROPIN_PATH=$(write_dropin) || fail "could not write drop-in (sudo required)"
+WEB_DROPIN_PATH=$(write_dropin web) || fail "could not write omnigent-eval-web.service drop-in (sudo required)"
+log "  web drop-in: $WEB_DROPIN_PATH"
+HOST_DROPIN_PATH=$(write_dropin host) || fail "could not write omnigent-eval-host.service drop-in (sudo required)"
+log "  host drop-in: $HOST_DROPIN_PATH"
+DROPIN_PATH="$WEB_DROPIN_PATH"
 
 # Atomic current-symlink swap (mv -T atomically replaces).
 ln -s "$TARGET" "$DEPLOY_ROOT/.current.new.$SHORT_SHA"
@@ -102,6 +117,11 @@ import sys; sys.path.insert(0, '$REPO_ROOT')
 from omnigent.deploy.ops.systemd import service_port
 print(service_port())
 ")
+HOST_SERVICE_NAME=$(python3 -c "
+import sys; sys.path.insert(0, '$REPO_ROOT')
+from omnigent.deploy.ops.systemd import host_service_spec
+print(host_service_spec().service_name)
+")
 
 sudo systemctl daemon-reload || fail "systemctl daemon-reload failed"
 sudo systemctl restart "$SERVICE_NAME" || fail "systemctl restart $SERVICE_NAME failed"
@@ -121,6 +141,37 @@ if [[ "$up_after" -eq 0 ]]; then
   journalctl -n 200 --no-pager -u "$SERVICE_NAME" > "$FAILED_DIR/journal.txt" 2>&1 || true
   fail "service $SERVICE_NAME did not become active after restart"
 fi
+
+# Restart the host daemon AFTER the web side settles. The host
+# daemon has no HTTP surface, so its health check is process-level:
+# verify the running executable is inside the rolled-back release's
+# ``.venv`` (not the mutable repository checkout).
+log "restarting $HOST_SERVICE_NAME (host)"
+sudo systemctl restart "$HOST_SERVICE_NAME" || fail "systemctl restart $HOST_SERVICE_NAME failed"
+
+host_up_after=0
+for i in $(seq 1 30); do
+  if systemctl is-active --quiet "$HOST_SERVICE_NAME"; then
+    host_up_after=$i
+    break
+  fi
+  sleep 2
+done
+if [[ "$host_up_after" -eq 0 ]]; then
+  echo "host service did not become active" >> "$FAILED_DIR/info.txt"
+  systemctl status --no-pager "$HOST_SERVICE_NAME" > "$FAILED_DIR/host-systemctl-status.txt" 2>&1 || true
+  journalctl -n 200 --no-pager -u "$HOST_SERVICE_NAME" > "$FAILED_DIR/host-journal.txt" 2>&1 || true
+  fail "host service $HOST_SERVICE_NAME did not become active after restart"
+fi
+
+HOST_EXE=$(readlink "/proc/$(systemctl show -p MainPID --value "$HOST_SERVICE_NAME")/exe" 2>/dev/null || echo "")
+case "$HOST_EXE" in
+  "$TARGET"/.venv/*) log "host daemon running from $HOST_EXE (release-pinned to $TARGET_SHA)" ;;
+  *) echo "host daemon executable $HOST_EXE is NOT inside $TARGET/.venv" >> "$FAILED_DIR/info.txt"
+     systemctl status --no-pager "$HOST_SERVICE_NAME" > "$FAILED_DIR/host-systemctl-status.txt" 2>&1 || true
+     journalctl -n 200 --no-pager -u "$HOST_SERVICE_NAME" > "$FAILED_DIR/host-journal.txt" 2>&1 || true
+     fail "host daemon is running from $HOST_EXE, not $TARGET/.venv/..." ;;
+esac
 
 # Loopback probe. systemd reports ``active`` before uvicorn binds the
 # loopback socket, so a single curl right after ``systemctl restart``
