@@ -288,7 +288,9 @@ if [[ ! -d "$RELEASE_DIR" ]]; then
   # the staging-to-canonical rename.
   CANONICAL_OMNIGENT_INIT="$FINAL_RELEASE_DIR/omnigent/__init__.py"
   CANONICAL_OMNIGENT_SERVER_APP="$FINAL_RELEASE_DIR/omnigent/server/app.py"
-  if ! OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE=1 \
+  if ! CANONICAL_OMNIGENT_INIT="$CANONICAL_OMNIGENT_INIT" \
+       CANONICAL_OMNIGENT_SERVER_APP="$CANONICAL_OMNIGENT_SERVER_APP" \
+       OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE=1 \
        "$RELEASE_DIR/.venv/bin/python" \
        -c "
 import os, sys, json
@@ -314,8 +316,7 @@ manifest = ReleaseManifest.from_directory(
     canonical_release_dir=pathlib.Path('$FINAL_RELEASE_DIR'),
 )
 write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
-" CANONICAL_OMNIGENT_INIT="$CANONICAL_OMNIGENT_INIT" \
-       CANONICAL_OMNIGENT_SERVER_APP="$CANONICAL_OMNIGENT_SERVER_APP"; then
+"; then
     log "manifest write failed; cleaning $RELEASE_DIR"
     rm -rf "$RELEASE_DIR"
     fail "manifest write failed"
@@ -350,6 +351,12 @@ write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
   # release's own copy of those files — the underlying venv at
   # ``$RELEASE_DIR/.venv`` is otherwise left untouched.
   log "rewriting venv shim paths from staging to canonical release"
+  # Substitute just the ``/releases/.staging-<sha>-<pid>-<ns>/``
+  # segment with ``/releases/<canonical-sha>/``. Anchoring on
+  # ``/releases/`` (rather than ``/``) keeps the upstream prefix
+  # untouched and avoids double-prefix bugs.
+  SHIM_STAGING_PATTERN="/releases/\\.staging-$sha-[0-9]+-[0-9]+/"
+  SHIM_CANONICAL_REPLACE="/releases/$sha/"
   shopt -s nullglob
   rewrite_count=0
   for f in "$RELEASE_DIR"/.venv/bin/*; do
@@ -360,7 +367,7 @@ write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
       # staging-path prefix for this build. Doing a quick
       # ``grep -q`` keeps the no-op case cheap.
       if grep -qF "/.staging-$sha-" "$f" 2>/dev/null; then
-          sed -i "s|/\\.staging-$sha-[0-9]*-[0-9]*|$FINAL_RELEASE_DIR|g" "$f"
+          sed -E -i "s#$SHIM_STAGING_PATTERN#$SHIM_CANONICAL_REPLACE#g" "$f"
           rewrite_count=$((rewrite_count + 1))
       fi
   done
@@ -622,11 +629,18 @@ log "$HOST_SERVICE_NAME reached active state after $host_up_after probe(s)"
 # release (it is not enough for the unit to be active; an active
 # unit could still be running from a previous binary if the
 # drop-in was overwritten but systemd's cache was stale). The
-# check confirms the live process's executable lives under the
-# release's .venv, not under the mutable repository checkout.
-HOST_EXE=$(readlink "/proc/$(systemctl show -p MainPID --value "$HOST_SERVICE_NAME")/exe" 2>/dev/null || echo "")
-if [[ -z "$HOST_EXE" ]]; then
-  log "could not read host daemon's executable; rolling back BOTH services"
+# check reads ``/proc/<PID>/cmdline`` (not ``exe``) because
+# ``cmdline`` records the literal argv[0] systemd launched —
+# i.e. the release's ``.venv/bin/python`` symlink path — while
+# ``exe`` reports the resolved interpreter outside the venv
+# (the venv's ``python`` is a symlink to a uv-managed
+# interpreter living under ``~/.local/share/uv/``). Asserting
+# on ``cmdline`` pins the daemon to the right release *and* the
+# right venv, and rejects any future regression where the
+# drop-in's ExecStart is repointed to a developer checkout.
+HOST_CMDLINE=$(tr '\0' ' ' < "/proc/$(systemctl show -p MainPID --value "$HOST_SERVICE_NAME")/cmdline" 2>/dev/null || echo "")
+if [[ -z "$HOST_CMDLINE" ]]; then
+  log "could not read host daemon's cmdline; rolling back BOTH services"
   if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
     PREV_SHA=$(basename "$PREVIOUS_TARGET")
     sudo /opt/omnigent/updater/bin/write-dropin.sh write web "$PREV_SHA" "$PREVIOUS_TARGET" || true
@@ -634,10 +648,10 @@ if [[ -z "$HOST_EXE" ]]; then
     sudo systemctl restart "$SERVICE_NAME" || true
     sudo systemctl restart "$HOST_SERVICE_NAME" || true
   fi
-  fail "host daemon process has no executable; pinning failed"
+  fail "host daemon process has no cmdline; pinning failed"
 fi
-case "$HOST_EXE" in
-  "$RELEASE_DIR"/.venv/*) log "host daemon running from $HOST_EXE (release-pinned)" ;;
+case "$HOST_CMDLINE" in
+  "$RELEASE_DIR"/.venv/bin/python*) log "host daemon launched from $HOST_CMDLINE (release-pinned)" ;;
   *)
     log "host daemon executable $HOST_EXE is NOT inside $RELEASE_DIR/.venv; rolling back BOTH services"
     if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
@@ -651,7 +665,7 @@ case "$HOST_EXE" in
     cp "$MANIFEST_PATH" "$DEPLOY_ROOT/failed/$sha/manifest.json" 2>/dev/null || true
     systemctl status --no-pager "$HOST_SERVICE_NAME" >"$DEPLOY_ROOT/failed/$sha/host-systemctl-status.txt" 2>&1 || true
     journalctl -n 200 --no-pager -u "$HOST_SERVICE_NAME" >"$DEPLOY_ROOT/failed/$sha/host-journal.txt" 2>&1 || true
-    fail "host daemon is running from $HOST_EXE, not $RELEASE_DIR/.venv/..." ;;
+    fail "host daemon is launched from $HOST_CMDLINE, not $RELEASE_DIR/.venv/bin/python ..." ;;
 esac
 
 # Public Tailscale probe (skip if explicitly disabled).
