@@ -136,9 +136,43 @@ def test_register_replaces_stale_connection() -> None:
     assert new_conn is not old_conn
 
     # Old connection's outbound queue was poisoned with None.
-    # The None sentinel tells the sender loop to exit.
     poison = old_conn.outbound_queue.get_nowait()
     assert poison is None
+
+
+def test_stale_deregister_does_not_remove_replacement() -> None:
+    """An old tunnel cleanup cannot take down a replacement tunnel."""
+    registry = HostRegistry()
+    old = registry.register(
+        "host_1234567890abcdef1234567890abcdef",
+        FakeWebSocket(),
+        _make_hello(),
+        owner=None,
+    )
+    new = registry.register(
+        "1234567890abcdef1234567890abcdef",
+        FakeWebSocket(),
+        _make_hello(),
+        owner=None,
+    )
+
+    assert registry.deregister(old) is False
+    assert registry.get("host_1234567890abcdef1234567890abcdef") is new
+    assert registry.deregister(new) is True
+    assert registry.get("1234567890abcdef1234567890abcdef") is None
+
+
+def test_prefixed_and_unprefixed_ids_share_registry_key() -> None:
+    """Accepted legacy and canonical IDs resolve to one live connection."""
+    registry = HostRegistry()
+    conn = registry.register(
+        "1234567890abcdef1234567890abcdef",
+        FakeWebSocket(),
+        _make_hello(),
+        owner=None,
+    )
+    assert registry.get("host_1234567890abcdef1234567890abcdef") is conn
+    assert conn.host_id == "1234567890abcdef1234567890abcdef"
 
 
 def test_send_text_enqueues_frame() -> None:
