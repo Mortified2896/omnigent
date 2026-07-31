@@ -107,7 +107,11 @@ class ControllerHooks:
 
     build_only: Callable[[Path, str], subprocess.CompletedProcess] | None = None
     promote: Callable[[Path, str], subprocess.CompletedProcess] | None = None
-    rollback: Callable[[Path], subprocess.CompletedProcess] | None = None
+    # The rollback hook receives both the repo root and the explicit
+    # previous-SHA captured at the start of the update so a hook
+    # implementation can ``rollback_release.sh --to <sha>`` against the
+    # same release the controller recorded before the failing cutover.
+    rollback: Callable[..., subprocess.CompletedProcess] | None = None
     health_probes: Callable[[str], None] | None = None
     preflight: Callable[[Path], None] | None = None
     drain: Callable[[str], None] | None = None
@@ -1082,7 +1086,10 @@ class UpdaterController:
     ) -> subprocess.CompletedProcess:
         # User-provided hooks are honored even in dry_run so tests
         # can simulate failures; ``dry_run`` only short-circuits
-        # the real subprocess invocation.
+        # the real subprocess invocation. The hook receives the
+        # ``previous_sha`` kwarg so a test helper that ignores it
+        # (signature ``def _rollback(_repo)``) does not crash; see
+        # ``ControllerHooks.rollback``'s ``Callable[..., ...]`` type.
         if self._config.hooks.rollback is not None:
             return self._config.hooks.rollback(repo, previous_sha=previous_sha)
         if self._config.dry_run:

@@ -23,7 +23,7 @@ from pathlib import Path
 _DEFAULT_STATE_ROOT = Path("/var/lib/omnigent/updates")
 _DEFAULT_DEPLOY_ROOT = Path("/home/hermes/workspace/deployments/omnigent")
 _DEFAULT_REPO_ROOT = Path("/home/hermes/workspace/repos/omnigent-eval")
-_DEFAULT_LINEAGE_ANCHOR = "c1f23749c4dd0b24ce62a17d926b9660bf99db5c"
+_DEFAULT_LINEAGE_ANCHOR = "3b42ccbebbcca8cc7215ea3e4ac0da63c0be2654"
 _DEFAULT_LIVE_DEPLOYED_SHA = Path("/var/lib/omnigent/shared/deployed-sha")
 _DEFAULT_NOTIFY_PORT = 4097
 _ENV_STATE_ROOT = "OMNIGENT_UPDATER_STATE_ROOT"

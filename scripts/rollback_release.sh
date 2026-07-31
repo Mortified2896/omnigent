@@ -104,24 +104,16 @@ log "current -> $TARGET"
 
 # daemon-reload + restart (the live service has no idea the symlink
 # changed; the drop-in update is the actual configuration change).
-# Unset the override env vars so the helpers fall back to their
-# built-in defaults instead of inheriting a caller-set literal.
+# The service / port / host names are hard-coded here rather than
+# resolved through ``omnigent.deploy.ops.systemd`` so the rollback
+# works against older releases that predate ``host_service_spec``
+# (see issue #38 §5 rollback-compat). If those constants ever
+# change, this script must be updated together with
+# ``omnigent/deploy/ops/systemd.py``.
 unset OMNIGENT_DEPLOY_SERVICE_NAME OMNIGENT_DEPLOY_SERVICE_PORT
-SERVICE_NAME=$(python3 -c "
-import sys; sys.path.insert(0, '$REPO_ROOT')
-from omnigent.deploy.ops.systemd import service_name
-print(service_name())
-")
-SERVICE_PORT=$(python3 -c "
-import sys; sys.path.insert(0, '$REPO_ROOT')
-from omnigent.deploy.ops.systemd import service_port
-print(service_port())
-")
-HOST_SERVICE_NAME=$(python3 -c "
-import sys; sys.path.insert(0, '$REPO_ROOT')
-from omnigent.deploy.ops.systemd import host_service_spec
-print(host_service_spec().service_name)
-")
+SERVICE_NAME="omnigent-eval-web.service"
+SERVICE_PORT="4097"
+HOST_SERVICE_NAME="omnigent-eval-host.service"
 
 sudo systemctl daemon-reload || fail "systemctl daemon-reload failed"
 sudo systemctl restart "$SERVICE_NAME" || fail "systemctl restart $SERVICE_NAME failed"
