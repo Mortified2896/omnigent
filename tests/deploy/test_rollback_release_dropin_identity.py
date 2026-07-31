@@ -226,18 +226,23 @@ def test_rollback_script_writes_dropins_for_both_services() -> None:
 
 
 def test_rollback_script_verifies_host_pinned_to_release_venv() -> None:
-    """``rollback_release.sh`` verifies the host daemon's binary
-    lives inside the rolled-back release's ``.venv``.
+    """``rollback_release.sh`` verifies the host daemon's launch
+    cmdline lives inside the rolled-back release's
+    ``.venv/bin/python``.
 
     The check mirrors :func:`test_promote_script_verifies_host_pinned_to_release_venv`
     so the rollback path matches the promotion path: both refuse
-    to declare success when the host daemon's executable is not
-    pinned to the release directory.
+    to declare success when the host daemon was not launched
+    from inside the release's ``.venv/bin/python``. We pin on
+    ``/proc/<pid>/cmdline`` (not ``exe``) for the same reason as
+    the promotion check — the release's ``python`` is a symlink
+    to a uv-managed interpreter living outside the venv.
     """
     text = _ROLLBACK_SCRIPT.read_text()
     assert "systemctl show -p MainPID --value" in text
-    assert "/proc/" in text and "/exe" in text
-    assert '"$TARGET"/.venv/*' in text, (
-        "rollback_release.sh must case-match the host executable against "
-        "the rolled-back release's .venv/ prefix"
+    assert "/proc/" in text and "/cmdline" in text
+    assert '"$TARGET"/.venv/bin/python*' in text, (
+        "rollback_release.sh must case-match the host cmdline against "
+        "the rolled-back release's .venv/bin/python prefix (the path "
+        "systemd invoked, not the resolved interpreter outside the venv)"
     )

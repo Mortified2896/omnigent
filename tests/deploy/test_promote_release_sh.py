@@ -230,26 +230,36 @@ def test_promote_script_verifies_host_pinned_to_release_venv() -> None:
 
     A host unit can report ``active`` while still running from a
     previous binary if the drop-in was overwritten mid-restart;
-    the script must additionally read ``/proc/<pid>/exe`` for the
-    host's MainPID and confirm the binary lives inside
-    ``<release>/.venv``. If it does not, the script must roll
-    back both services rather than declaring success.
+    the script must additionally read ``/proc/<pid>/cmdline`` for
+    the host's MainPID and confirm the launch command lives
+    inside ``<release>/.venv/bin/python``. We pin on ``cmdline``
+    (not ``exe``) because the release's ``python`` is a symlink
+    to a uv-managed interpreter living outside the release
+    ``.venv``; ``/proc/<pid>/exe`` resolves to that symlink target
+    (always outside the venv), while ``/proc/<pid>/cmdline``
+    records the literal argv[0] systemd launched (the symlink
+    path inside ``.venv/bin/``). If the cmdline does not match,
+    the script must roll back both services rather than
+    declaring success.
     """
     text = _SCRIPT_PATH.read_text()
     body_marker = "set -euo pipefail"
     body = text[text.find(body_marker) :]
-    # The script reads the host's MainPID and resolves its exe.
+    # The script reads the host's MainPID and reads its cmdline.
     assert "systemctl show -p MainPID --value" in body, (
         "promote_release.sh must read the host daemon's MainPID to verify pinning"
     )
-    assert "/proc/" in body and "/exe" in body, (
-        "promote_release.sh must read /proc/<pid>/exe to verify the "
-        "host daemon is running the release's binary"
+    assert "/proc/" in body and "/cmdline" in body, (
+        "promote_release.sh must read /proc/<pid>/cmdline to verify the "
+        "host daemon was launched from inside the release venv (not /proc/<pid>/exe, "
+        "which resolves through the python symlink to an interpreter outside the venv)"
     )
-    # The expected case statement checks the binary is inside the release's venv.
-    assert '"$RELEASE_DIR"/.venv/*' in body, (
-        "promote_release.sh must case-match the host's executable against "
-        "the release's .venv/ prefix"
+    # The expected case statement checks the launch cmdline starts with the
+    # release's ``.venv/bin/python`` (the literal argv[0] systemd invoked).
+    assert '"$RELEASE_DIR"/.venv/bin/python*' in body, (
+        "promote_release.sh must case-match the host's cmdline against the "
+        "release's .venv/bin/python prefix (the path systemd invoked, not the "
+        "resolved interpreter outside the venv)"
     )
     # On mismatch the script rolls back BOTH services, not just the host.
     rollback_idx = body.find("rolling back BOTH services")
