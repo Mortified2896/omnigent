@@ -91,14 +91,25 @@ jobs:
       # tolerates cosmetic drift (dev/extraneous flags, metadata) that a
       # fresh resolution would rewrite. Regenerate the lockfile and fail
       # if it differs from the committed one.
+      #
+      # Note: do NOT pass --legacy-peer-deps here. That flag tells npm to
+      # *skip* installing peer dependencies, which collapses the locked
+      # tree (e.g. drops ``@lobehub/ui`` and its transitive
+      # ``micromark-factory-mdx-expression``) and rewrites the lockfile
+      # on every run, masking any real drift. The regen command in
+      # ``oss-regenerate-and-smoke.yml`` does not use the flag either.
+      # The React 18 / React 19 peer mismatch is only an install-time
+      # warning under npm 11 (peer-warnings are non-fatal), so the bare
+      # regen succeeds; ``npm ci --legacy-peer-deps`` further down keeps
+      # React peer warnings quiet at install time.
       - name: Check web/package-lock.json is up to date
         working-directory: web
         env:
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
         run: |
-          npm install --package-lock-only --legacy-peer-deps --no-audit --no-fund
+          npm install --package-lock-only --no-audit --no-fund
           git diff --exit-code package-lock.json || {
-            echo "::error::web/package-lock.json is out of date. Run 'npm install --package-lock-only --legacy-peer-deps' in web/ and commit the result."
+            echo "::error::web/package-lock.json is out of date. Run 'npm install --package-lock-only' in web/ and commit the result."
             exit 1
           }
 
