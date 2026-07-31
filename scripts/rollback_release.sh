@@ -156,13 +156,19 @@ if [[ "$host_up_after" -eq 0 ]]; then
   fail "host service $HOST_SERVICE_NAME did not become active after restart"
 fi
 
-HOST_EXE=$(readlink "/proc/$(systemctl show -p MainPID --value "$HOST_SERVICE_NAME")/exe" 2>/dev/null || echo "")
-case "$HOST_EXE" in
-  "$TARGET"/.venv/*) log "host daemon running from $HOST_EXE (release-pinned to $TARGET_SHA)" ;;
-  *) echo "host daemon executable $HOST_EXE is NOT inside $TARGET/.venv" >> "$FAILED_DIR/info.txt"
+# Verify the host daemon is launched from inside the rolled-back
+# release's ``.venv/bin/python``. We read ``/proc/<PID>/cmdline``
+# (the literal argv[0] systemd launched) rather than
+# ``/proc/<PID>/exe`` (the resolved interpreter, which lives
+# outside the release venv because the release's ``python`` is a
+# symlink to a uv-managed interpreter).
+HOST_CMDLINE=$(tr '\0' ' ' < "/proc/$(systemctl show -p MainPID --value "$HOST_SERVICE_NAME")/cmdline" 2>/dev/null || echo "")
+case "$HOST_CMDLINE" in
+  "$TARGET"/.venv/bin/python*) log "host daemon launched from $HOST_CMDLINE (release-pinned to $TARGET_SHA)" ;;
+  *) echo "host daemon executable $HOST_CMDLINE is NOT inside $TARGET/.venv" >> "$FAILED_DIR/info.txt"
      systemctl status --no-pager "$HOST_SERVICE_NAME" > "$FAILED_DIR/host-systemctl-status.txt" 2>&1 || true
      journalctl -n 200 --no-pager -u "$HOST_SERVICE_NAME" > "$FAILED_DIR/host-journal.txt" 2>&1 || true
-     fail "host daemon is running from $HOST_EXE, not $TARGET/.venv/..." ;;
+     fail "host daemon is launched from $HOST_CMDLINE, not $TARGET/.venv/bin/python ..." ;;
 esac
 
 # Loopback probe. systemd reports ``active`` before uvicorn binds the
