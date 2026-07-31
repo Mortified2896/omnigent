@@ -1,13 +1,15 @@
-"""Pins the production schema lineage to ``ze1b2c3d4e5f``.
+"""Pins the production schema lineage to ``zg1a2b3c4d5e``.
 
-Production's chat.db reaches ``ze1b2c3d4e5f`` via PR #37 (durable
-issue-run persistence + atomic leasing), which advanced the head
-from ``zd1b2c3d4e5f`` after PR #37 was deployed to the staging /
-production lineage. Fork/main must walk to that same head so the
-deployment schema gate (which compares ``alembic_version`` to the
-current head) can match. Before the ``ze1b2c3d4e5f`` migration
-existed in fork/main, the updater's migration rehearsal refused
-the candidate because the production revision was unknown on disk.
+Production's chat.db reaches ``zg1a2b3c4d5e`` via the repair
+migration (``zg1a2b3c4d5e_repair_conversations_kind``), which
+extended the chain beyond ``ze1b2c3d4e5f`` (PR #37 durable
+issue-run persistence + atomic leasing) so the deployment updater
+could promote the bc22b799 release. Fork/main must walk to that
+same head so the deployment schema gate (which compares
+``alembic_version`` to the current head) can match. Before the
+``zg1a2b3c4d5e`` migration existed in fork/main, the updater's
+migration rehearsal refused the candidate because the production
+revision was unknown on disk.
 
 The regression test here uses the canonical online-safe SQLite
 backup API rather than ``shutil.copy`` so a long-running
@@ -92,7 +94,7 @@ def _build_config(uri: str) -> Config:
     return config
 
 
-def test_copied_production_db_alembic_version_is_ze1b2c3d4e5f(
+def test_copied_production_db_alembic_version_is_zg1a2b3c4d5e(
     copied_production_db: Path,
 ) -> None:
     uri = f"sqlite:///{copied_production_db}"
@@ -100,8 +102,8 @@ def test_copied_production_db_alembic_version_is_ze1b2c3d4e5f(
     try:
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn)
-            assert ctx.get_current_revision() == "ze1b2c3d4e5f", (
-                "Production alembic_version drifted from ze1b2c3d4e5f; "
+            assert ctx.get_current_revision() == "zg1a2b3c4d5e", (
+                "Production alembic_version drifted from zg1a2b3c4d5e; "
                 "this regression test must be re-baselined before deploying."
             )
     finally:
@@ -109,20 +111,20 @@ def test_copied_production_db_alembic_version_is_ze1b2c3d4e5f(
 
 
 def test_fork_main_head_recognises_production_revision(copied_production_db: Path) -> None:
-    """Fork/main's migration chain now ends at ze1b2c3d4e5f.
+    """Fork/main's migration chain now ends at zg1a2b3c4d5e.
 
-    Before the PR #37 follow-up migration was added to fork/main,
-    the chain ended at ``zd1b2c3d4e5f`` and the updater's
-    migration rehearsal refused the candidate because the
-    production revision ``ze1b2c3d4e5f`` was unknown on disk.
+    Before the repair migration was added to fork/main, the chain
+    ended at ``zf1a2b3c4d5e`` and the updater's migration rehearsal
+    refused the candidate because the production revision
+    ``zg1a2b3c4d5e`` was unknown on disk.
     """
     uri = f"sqlite:///{copied_production_db}"
     config = _build_config(uri)
     script = ScriptDirectory.from_config(config)
     head = script.get_current_head()
-    assert head == "ze1b2c3d4e5f", (
-        f"Expected fork/main migration head to be ze1b2c3d4e5f; "
-        f"got {head!r}. The PR #37 issue_runs migration is missing or renamed."
+    assert head == "zg1a2b3c4d5e", (
+        f"Expected fork/main migration head to be zg1a2b3c4d5e; "
+        f"got {head!r}. The repair migration is missing or renamed."
     )
 
 
@@ -144,7 +146,7 @@ def test_copied_production_db_starts_without_schema_upgrade(
     try:
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn)
-            assert ctx.get_current_revision() == "ze1b2c3d4e5f"
+            assert ctx.get_current_revision() == "zg1a2b3c4d5e"
     finally:
         engine.dispose()
 
@@ -216,12 +218,15 @@ def test_zd1b2c3d4e5f_converts_routing_id_columns_to_binary() -> None:
 
 
 def test_zd1b2c3d4e5f_downgrade_is_unsupported() -> None:
-    """In-place downgrade of the binary uuid conversion is forbidden.
+    """In-place downgrade of the head migration is forbidden.
 
     Forces a downgrade call against a fresh DB and asserts the
-    RuntimeError that the migration raises. Prevents a future
+    RuntimeError that the head migration raises. Prevents a future
     refactor from silently making downgrade a no-op (which would
     re-introduce the schema-skew class of bug we just fixed).
+
+    Re-baselined to ``zg1a2b3c4d5e`` once the repair migration was
+    adopted into the deployment lineage.
     """
     import tempfile
 
@@ -229,12 +234,12 @@ def test_zd1b2c3d4e5f_downgrade_is_unsupported() -> None:
         uri = f"sqlite:///{Path(tmp) / 'downgrade.db'}"
         config = _build_config(uri)
         command.upgrade(config, "head")
-        with pytest.raises(RuntimeError, match="ze1b2c3d4e5f is not safely reversible"):
+        with pytest.raises(RuntimeError, match="zg1a2b3c4d5e is not safely reversible"):
             command.downgrade(config, "-1")
 
 
 def test_live_production_db_revision_unchanged() -> None:
-    """Live production database must remain at ze1b2c3d4e5f after validation.
+    """Live production database must remain at zg1a2b3c4d5e after validation.
 
     Sanity check that the copied-production-DB tests above did
     not accidentally mutate the live database via a stray
@@ -249,7 +254,7 @@ def test_live_production_db_revision_unchanged() -> None:
     try:
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn)
-            assert ctx.get_current_revision() == "ze1b2c3d4e5f"
+            assert ctx.get_current_revision() == "zg1a2b3c4d5e"
     finally:
         engine.dispose()
 
