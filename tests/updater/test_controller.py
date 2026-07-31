@@ -503,103 +503,13 @@ def test_recover_non_terminal_classifies_record_rollback(
 # ---------------------------------------------------------------------------
 
 
-def test_check_host_pinned_passes_when_host_runs_release_venv(
+def _configure_host_probe(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    *,
+    pids: list[str] | None = None,
 ) -> None:
-    """The host pinning check accepts a host executable that lives
-    inside the release's ``.venv``.
-
-    Reproduces the happy path: ``systemctl is-active`` returns 0,
-    ``MainPID`` resolves to a process whose ``/proc/<pid>/exe`` is
-    inside ``<deploy>/releases/<sha>/.venv``. The probe must not
-    raise.
-    """
-    deploy = tmp_path / "deploy"
-    release = deploy / "releases" / "0123456789abcdef0123456789abcdef01234567"
-    venv_bin = release / ".venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    expected_exe = venv_bin / "omni"
-    expected_exe.touch()
-
-    # Patch Path.resolve so the /proc/<pid>/exe symlink resolves to
-    # the fake venv binary. The kernel does not let tests poke a
-    # real /proc/<pid>/exe link, but the probe uses ``Path.resolve``
-    # which we can intercept here.
-    original_resolve = Path.resolve
-
-    def fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
-        resolved = original_resolve(self, *args, **kwargs)
-        if str(self).startswith("/proc/") and str(self).endswith("/exe"):
-            return expected_exe.resolve()
-        return resolved
-
-    monkeypatch.setattr(Path, "resolve", fake_resolve)
     monkeypatch.setattr("shutil.which", lambda _name: "/bin/systemctl")
-
-    def fake_run(
-        args: list[str] | tuple[str, ...],
-        *rest: object,
-        **kwargs: object,
-    ) -> subprocess.CompletedProcess[str]:
-        a = tuple(args)
-        # Compare by basename: the production code resolves
-        # ``systemctl`` to its absolute path (e.g.
-        # ``/usr/bin/systemctl``) and passes that to ``subprocess.run``;
-        # tests need to match regardless of the resolved path.
-        base = tuple(x.rsplit("/", 1)[-1] for x in a[:3])
-        if base == ("systemctl", "is-active", "--quiet"):
-            return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
-        if base == ("systemctl", "show", "-p"):
-            return subprocess.CompletedProcess(args=a, returncode=0, stdout="12345\n", stderr="")
-        return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-
-    cfg = ControllerConfig(
-        deploy_root=deploy,
-        host_service_name="omnigent-eval-host.service",
-        dry_run=False,
-    )
-    controller = UpdaterController(cfg)
-    # Should not raise.
-    controller._check_host_pinned("0123456789abcdef0123456789abcdef01234567")
-
-
-def test_check_host_pinned_fails_when_host_runs_mutable_checkout(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """The host pinning check raises when the host executable does
-    NOT live under the target release's ``.venv``.
-
-    Reproduces the production bug this issue fixes: the host daemon
-    is active but its binary is the mutable repository's
-    ``.venv/bin/omni`` (or any path outside the target release).
-    The probe must raise ``HealthCheckFailedError`` so the
-    controller transitions to a rollback.
-    """
-    deploy = tmp_path / "deploy"
-    release = deploy / "releases" / "0123456789abcdef0123456789abcdef01234567"
-    release.mkdir(parents=True)
-
-    # Mock the host's executable to live in the mutable checkout,
-    # NOT in the target release's venv.
-    mutable_root = tmp_path / "home" / "hermes" / "workspace" / "repos" / "omnigent-eval"
-    mutable_exe = mutable_root / ".venv" / "bin" / "omni"
-    mutable_exe.parent.mkdir(parents=True)
-    mutable_exe.touch()
-
-    original_resolve = Path.resolve
-
-    def fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
-        resolved = original_resolve(self, *args, **kwargs)
-        if str(self).startswith("/proc/") and str(self).endswith("/exe"):
-            return mutable_exe.resolve()
-        return resolved
-
-    monkeypatch.setattr(Path, "resolve", fake_resolve)
-    monkeypatch.setattr("shutil.which", lambda _name: "/bin/systemctl")
+    reported_pids = iter(pids or ["12345", "12345"])
 
     def fake_run(
         args: list[str] | tuple[str, ...],
@@ -611,19 +521,179 @@ def test_check_host_pinned_fails_when_host_runs_mutable_checkout(
         if base == ("systemctl", "is-active", "--quiet"):
             return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
         if base == ("systemctl", "show", "-p"):
-            return subprocess.CompletedProcess(args=a, returncode=0, stdout="12345\n", stderr="")
-        return subprocess.CompletedProcess(args=a, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(
+                args=a, returncode=0, stdout=next(reported_pids) + "\n", stderr=""
+            )
+        raise AssertionError(f"unexpected subprocess: {a!r}")
 
     monkeypatch.setattr("subprocess.run", fake_run)
 
-    cfg = ControllerConfig(
-        deploy_root=deploy,
-        host_service_name="omnigent-eval-host.service",
-        dry_run=False,
+
+def _host_cmdline(interpreter: Path, *command: str) -> bytes:
+    argv = (str(interpreter), *(command or ("-P", "-m", "omnigent", "host")))
+    return b"\0".join(arg.encode() for arg in argv) + b"\0"
+
+
+def _host_controller(deploy: Path) -> UpdaterController:
+    return UpdaterController(
+        ControllerConfig(
+            deploy_root=deploy,
+            host_service_name="omnigent-eval-host.service",
+            dry_run=False,
+        )
     )
-    controller = UpdaterController(cfg)
-    with pytest.raises(HealthCheckFailedError, match="not pinned to the target release"):
-        controller._check_host_pinned("0123456789abcdef0123456789abcdef01234567")
+
+
+def test_check_host_pinned_passes_for_release_local_host_cmdline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    deploy = tmp_path / "deploy"
+    expected_python = deploy / "releases" / sha / ".venv" / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.touch()
+    _configure_host_probe(monkeypatch)
+
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/12345/cmdline"):
+            return _host_cmdline(expected_python)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    _host_controller(deploy)._check_host_pinned(sha)
+
+
+@pytest.mark.parametrize("exe_behavior", ["external", "permission_error"])
+def test_check_host_pinned_never_consults_proc_exe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    exe_behavior: str,
+) -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    deploy = tmp_path / "deploy"
+    expected_python = deploy / "releases" / sha / ".venv" / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.touch()
+    _configure_host_probe(monkeypatch)
+    original_read_bytes = Path.read_bytes
+    original_resolve = Path.resolve
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/12345/cmdline"):
+            return _host_cmdline(expected_python)
+        return original_read_bytes(path)
+
+    def guarded_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if str(path) == "/proc/12345/exe":
+            if exe_behavior == "permission_error":
+                raise PermissionError("exe denied")
+            return Path("/home/hermes/.local/share/uv/python/cpython/bin/python")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    monkeypatch.setattr(Path, "resolve", guarded_resolve)
+    _host_controller(deploy)._check_host_pinned(sha)
+
+
+@pytest.mark.parametrize(
+    ("cmdline_factory", "match"),
+    [
+        (
+            lambda expected, deploy: _host_cmdline(
+                deploy / "releases" / ("f" * 40) / ".venv" / "bin" / "python"
+            ),
+            "not pinned to the target release",
+        ),
+        (
+            lambda expected, deploy: _host_cmdline(expected, "-P", "-m", "other_module", "host"),
+            "wrong command",
+        ),
+        (
+            lambda expected, deploy: _host_cmdline(expected, "-P", "-m", "omnigent", "server"),
+            "wrong command",
+        ),
+        (lambda expected, deploy: b"", "empty cmdline"),
+        (lambda expected, deploy: b"python\0-P", "malformed cmdline"),
+        (lambda expected, deploy: b"python\0\0", "malformed cmdline"),
+        (lambda expected, deploy: b"\xff\0", "malformed cmdline"),
+    ],
+)
+def test_check_host_pinned_rejects_invalid_cmdline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    cmdline_factory,
+    match: str,
+) -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    deploy = tmp_path / "deploy"
+    expected_python = deploy / "releases" / sha / ".venv" / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.touch()
+    _configure_host_probe(monkeypatch)
+    cmdline = cmdline_factory(expected_python, deploy)
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/12345/cmdline"):
+            return cmdline
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    with pytest.raises(HealthCheckFailedError, match=match):
+        _host_controller(deploy)._check_host_pinned(sha)
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("gone"), PermissionError("denied")])
+def test_check_host_pinned_rejects_missing_or_unreadable_cmdline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    error: OSError,
+) -> None:
+    _configure_host_probe(monkeypatch)
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/12345/cmdline"):
+            raise error
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    with pytest.raises(HealthCheckFailedError, match=r"could not read.*cmdline"):
+        _host_controller(tmp_path)._check_host_pinned("0" * 40)
+
+
+def test_check_host_pinned_rejects_zero_pid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_host_probe(monkeypatch, pids=["0"])
+    with pytest.raises(HealthCheckFailedError, match="has no MainPID"):
+        _host_controller(tmp_path)._check_host_pinned("0" * 40)
+
+
+def test_check_host_pinned_fails_closed_when_process_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    deploy = tmp_path / "deploy"
+    expected_python = deploy / "releases" / sha / ".venv" / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.touch()
+    _configure_host_probe(monkeypatch, pids=["12345", "54321"])
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/12345/cmdline"):
+            return _host_cmdline(expected_python)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    with pytest.raises(HealthCheckFailedError, match="MainPID changed"):
+        _host_controller(deploy)._check_host_pinned(sha)
 
 
 def test_check_host_pinned_fails_when_unit_inactive(

@@ -883,8 +883,8 @@ class UpdaterController:
         * the public (Tailscale) probe responds when the host has
           one configured (best-effort, never fatal);
         * the live host daemon unit is active;
-        * the host daemon's running executable lives inside the
-          release's ``.venv`` (not the mutable repository checkout).
+        * the host daemon's command line uses the target release's
+          ``.venv/bin/python`` to run ``-P -m omnigent host``.
 
         Raises :class:`HealthCheckFailedError` on any failure.
         """
@@ -918,14 +918,10 @@ class UpdaterController:
                     )
         except (urllib.error.URLError, ConnectionError, OSError) as exc:
             raise HealthCheckFailedError(f"loopback / failed: {exc}") from exc
-        # Host daemon: the unit must be active AND pinned to the
-        # release venv. ``active`` alone is insufficient — the unit
-        # could be active but still running from a previous binary
-        # if the drop-in was overwritten while systemd held an
-        # open connection. We check the running executable lives
-        # under ``<release>/.venv``; if not, the host is on the
-        # wrong release (mutable checkout or another release) and
-        # must be rolled back.
+        # Host daemon: the unit must be active AND its literal command
+        # line must pin the release-local interpreter and host command.
+        # ``/proc/<pid>/exe`` cannot establish this: venv interpreters
+        # may resolve to an external uv-managed Python installation.
         self._check_host_pinned(expected_sha)
         # Public probe is best-effort.
         try:
@@ -937,20 +933,17 @@ class UpdaterController:
             pass
 
     def _check_host_pinned(self, expected_sha: str) -> None:
-        """Confirm ``omnigent-eval-host.service`` is active and the
-        running executable is inside the target release's ``.venv``.
+        """Confirm the host service runs the expected release-local command.
 
-        Skipped when :attr:`dry_run` is set (the controller cannot
-        safely shell out to ``systemctl`` in a unit-test
-        environment). The check is also tolerant of missing
-        ``systemctl`` (a non-systemd test host); a missing binary is
-        not a host-pinning failure — the test environment is
-        configured separately.
+        The kernel-reported executable is not suitable for release pinning:
+        virtual-environment Python symlinks can resolve outside the release.
+        Instead, read the process's NUL-separated argv and require the exact
+        release-local interpreter followed by ``-P -m omnigent host``.
 
         :param expected_sha: SHA the live release should be at.
-        :raises HealthCheckFailedError: When the unit is not
-            active, or the running executable does not live under
-            ``<deploy_root>/releases/<expected_sha>/.venv``.
+        :raises HealthCheckFailedError: When the unit or process is absent,
+            its cmdline cannot be read safely, or argv does not match the
+            expected release-local host command.
         """
         if self._config.dry_run:
             return
@@ -989,31 +982,56 @@ class UpdaterController:
             raise HealthCheckFailedError(
                 f"{host_service} MainPID is not numeric: {main_pid!r}"
             ) from None
-        exe_link = Path(f"/proc/{pid_int}/exe")
+        cmdline_path = Path(f"/proc/{pid_int}/cmdline")
         try:
-            host_exe = exe_link.resolve()
+            cmdline = cmdline_path.read_bytes()
         except OSError as exc:
+            raise HealthCheckFailedError(f"could not read {host_service} cmdline: {exc}") from exc
+        if not cmdline:
+            raise HealthCheckFailedError(f"{host_service} has an empty cmdline")
+        if not cmdline.endswith(b"\0"):
             raise HealthCheckFailedError(
-                f"could not resolve {host_service} executable: {exc}"
-            ) from exc
-        # The deploy root carries releases under
-        # ``releases/<sha>/.venv/...``; confirm the host binary
-        # is somewhere under the expected release's ``.venv``.
-        deploy_root = self._config.resolved_deploy_root()
-        expected_release = (deploy_root / "releases" / expected_sha).resolve()
-        expected_exe_root = (expected_release / ".venv").resolve()
+                f"{host_service} has a malformed cmdline: missing NUL terminator"
+            )
+        raw_argv = cmdline[:-1].split(b"\0")
+        if not raw_argv or any(not arg for arg in raw_argv):
+            raise HealthCheckFailedError(f"{host_service} has a malformed cmdline: empty argument")
         try:
-            host_exe.is_relative_to(expected_exe_root)
-        except OSError:
-            pinned = False
-        else:
-            pinned = host_exe.is_relative_to(expected_exe_root)
-        if not pinned:
+            argv = [arg.decode("utf-8") for arg in raw_argv]
+        except UnicodeDecodeError as exc:
             raise HealthCheckFailedError(
-                f"{host_service} is running from {host_exe}; "
-                f"expected it to live under {expected_exe_root}. "
-                f"The host daemon is not pinned to the target release "
-                f"{expected_sha}; rolling back."
+                f"{host_service} has a malformed cmdline: invalid UTF-8"
+            ) from exc
+
+        deploy_root = self._config.resolved_deploy_root()
+        expected_python = (
+            deploy_root / "releases" / expected_sha / ".venv" / "bin" / "python"
+        ).resolve()
+        if Path(argv[0]) != expected_python:
+            raise HealthCheckFailedError(
+                f"{host_service} is running interpreter {argv[0]!r}; "
+                f"expected {str(expected_python)!r}. The host daemon is not "
+                f"pinned to the target release {expected_sha}; rolling back."
+            )
+        expected_command = ["-P", "-m", "omnigent", "host"]
+        if argv[1:5] != expected_command:
+            raise HealthCheckFailedError(
+                f"{host_service} is running the wrong command; expected "
+                f"{expected_command!r} immediately after the interpreter"
+            )
+
+        # Re-read MainPID after inspecting procfs. A service restart or process
+        # exit during verification must not let argv from a stale PID pass.
+        confirm_pid_proc = _subprocess.run(
+            [systemctl, "show", "-p", "MainPID", "--value", host_service],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        confirmed_pid = (confirm_pid_proc.stdout or "").strip()
+        if confirm_pid_proc.returncode != 0 or confirmed_pid != main_pid:
+            raise HealthCheckFailedError(
+                f"{host_service} MainPID changed during host pinning verification"
             )
 
     # ------------------------------------------------------------------
