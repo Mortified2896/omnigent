@@ -1,4 +1,4 @@
-"""Tests for issue #18 — ``ze1b2c3d4e5f`` migration landing at head.
+"""Tests for issue #18 — ``zg1a2b3c4d5e`` migration landing at head.
 
 Covers:
 
@@ -69,8 +69,14 @@ def fresh_migrated_db(tmp_path: Path) -> Iterator[Path]:
         clear_engine_cache()
 
 
-def test_head_includes_ze1b2c3d4e5f(fresh_migrated_db: Path) -> None:
-    """The chain terminates at ``ze1b2c3d4e5f`` after upgrade."""
+def test_head_includes_zg1a2b3c4d5e(fresh_migrated_db: Path) -> None:
+    """The chain terminates at ``zg1a2b3c4d5e`` after upgrade.
+
+    Re-baselined from ``ze1b2c3d4e5f`` once the repair migration
+    (``zg1a2b3c4d5e_repair_conversations_kind``) landed on the
+    deployment lineage so the deployment updater can promote the
+    bc22b799 release.
+    """
     engine = sa.create_engine(f"sqlite:///{fresh_migrated_db}")
     try:
         with engine.connect() as conn:
@@ -78,10 +84,9 @@ def test_head_includes_ze1b2c3d4e5f(fresh_migrated_db: Path) -> None:
             revision = conn.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == "ze1b2c3d4e5f", (
-                f"expected migration head zd1b2c3d4e5f... wait, "
-                f"expected ze1b2c3d4e5f; got {revision!r}. The new "
-                f"migration is missing or the chain diverged."
+            assert revision == "zg1a2b3c4d5e", (
+                f"expected migration head zg1a2b3c4d5e; got {revision!r}. "
+                f"The repair migration is missing or the chain diverged."
             )
             # Sanity-check the inspector is reachable.
             assert "issue_runs" in ctx.get_table_names()
@@ -230,7 +235,7 @@ def test_live_production_database_revision_unchanged() -> None:
     """A read of ``alembic_version`` against the live DB still says ``zd1b2c3d4e5f``.
 
     The migration is forward-only and the deployment flow never
-    applies ``ze1b2c3d4e5f`` against production until the
+    applies ``zg1a2b3c4d5e`` against production until the
     watchful deployment pipeline. This test is a safety net: if
     someone accidentally bumps the head during the issue #18
     PR review, the production DB's revision is still

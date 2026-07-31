@@ -33,7 +33,10 @@ def test_lifecycle_schema_and_historical_treatment(tmp_path) -> None:
     with engine.connect() as connection:
         # Issue #18 advanced the head from ``zd1b2c3d4e5f`` to
         # ``ze1b2c3d4e5f`` to add the ``issue_runs`` + ``issue_run_events``
-        # tables for durable Oversight Autopilot persistence.
+        # tables for durable Oversight Autopilot persistence. The
+        # repair migration (``zg1a2b3c4d5e``) extended the chain
+        # further so the deployment updater can promote the
+        # bc22b799 release.
         assert connection.execute(text("select version_num from alembic_version")).scalar() == (
-            "ze1b2c3d4e5f"
+            "zg1a2b3c4d5e"
         )
