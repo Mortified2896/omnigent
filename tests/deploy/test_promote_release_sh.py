@@ -180,3 +180,80 @@ def test_promote_script_does_not_use_main_checkout_runtime() -> None:
     assert "$RELEASE_DIR/.venv/bin/python" in body, (
         "promote_release.sh must exec the service from $RELEASE_DIR/.venv"
     )
+
+
+def test_promote_script_writes_dropin_for_both_services() -> None:
+    """``promote_release.sh`` writes a drop-in for **both** the web
+    and host services.
+
+    The host daemon must run from the same immutable release as
+    the web service; pinning only the web service lets the host
+    drift to a different checkout and silently breaks the
+    cross-service provenance invariant. The script invokes the
+    sudoers-gated wrapper with both ``web`` and ``host`` as the
+    service kind so both drop-ins land on disk before any
+    ``systemctl restart`` runs.
+    """
+    text = _SCRIPT_PATH.read_text()
+    body_marker = "set -euo pipefail"
+    body = text[text.find(body_marker) :]
+    # Both services are pinned via the wrapper.
+    assert "write-dropin.sh write web" in body, (
+        "promote_release.sh must invoke write-dropin.sh with the 'web' service kind"
+    )
+    assert "write-dropin.sh write host" in body, (
+        "promote_release.sh must invoke write-dropin.sh with the 'host' service kind"
+    )
+    # The disable calls also use the service-kind argument.
+    assert "write-dropin.sh disable web" in body
+    assert "write-dropin.sh disable host" in body
+    # Both units are restarted.
+    assert 'systemctl restart "$SERVICE_NAME"' in body, (
+        "promote_release.sh must restart the web service"
+    )
+    assert 'systemctl restart "$HOST_SERVICE_NAME"' in body, (
+        "promote_release.sh must restart the host daemon AFTER the web service"
+    )
+    # The web restart must precede the host restart; the host
+    # depends on the loopback web service being up.
+    web_restart_idx = body.find('systemctl restart "$SERVICE_NAME"')
+    host_restart_idx = body.find('systemctl restart "$HOST_SERVICE_NAME"')
+    assert 0 < web_restart_idx < host_restart_idx, (
+        "the host daemon must be restarted AFTER the web service so a "
+        "failing host restart cannot strand the web on a new release"
+    )
+
+
+def test_promote_script_verifies_host_pinned_to_release_venv() -> None:
+    """``promote_release.sh`` verifies the host daemon's running
+    executable is inside the release's ``.venv``.
+
+    A host unit can report ``active`` while still running from a
+    previous binary if the drop-in was overwritten mid-restart;
+    the script must additionally read ``/proc/<pid>/exe`` for the
+    host's MainPID and confirm the binary lives inside
+    ``<release>/.venv``. If it does not, the script must roll
+    back both services rather than declaring success.
+    """
+    text = _SCRIPT_PATH.read_text()
+    body_marker = "set -euo pipefail"
+    body = text[text.find(body_marker) :]
+    # The script reads the host's MainPID and resolves its exe.
+    assert "systemctl show -p MainPID --value" in body, (
+        "promote_release.sh must read the host daemon's MainPID to verify pinning"
+    )
+    assert "/proc/" in body and "/exe" in body, (
+        "promote_release.sh must read /proc/<pid>/exe to verify the "
+        "host daemon is running the release's binary"
+    )
+    # The expected case statement checks the binary is inside the release's venv.
+    assert '"$RELEASE_DIR"/.venv/*' in body, (
+        "promote_release.sh must case-match the host's executable against "
+        "the release's .venv/ prefix"
+    )
+    # On mismatch the script rolls back BOTH services, not just the host.
+    rollback_idx = body.find("rolling back BOTH services")
+    assert rollback_idx != -1, (
+        "promote_release.sh must roll back both services when the host "
+        "executable is not pinned to the release"
+    )

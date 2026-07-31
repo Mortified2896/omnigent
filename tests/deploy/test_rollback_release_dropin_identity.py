@@ -191,3 +191,53 @@ def test_rollback_script_captures_target_before_symlink_changes(
         "otherwise a concurrent previous overwrite between capture and swap "
         "silently redirects the drop-in to the wrong release"
     )
+
+
+def test_rollback_script_writes_dropins_for_both_services() -> None:
+    """``rollback_release.sh`` rewrites drop-ins for both the web
+    and host services.
+
+    Rolling back only the web side would leave the host daemon
+    pointing at the dropped release; the script must pin both
+    services to the rolled-back release before restarting
+    either.
+    """
+    text = _ROLLBACK_SCRIPT.read_text()
+    # The script uses a ``write_dropin`` bash function that
+    # delegates to the wrapper; the function must be invoked
+    # with both ``web`` and ``host`` arguments somewhere in the
+    # body.
+    assert "write_dropin web" in text, (
+        "rollback_release.sh must invoke write_dropin(web) so the "
+        "omnigent-eval-web.service drop-in is rewritten before "
+        "the service is restarted"
+    )
+    assert "write_dropin host" in text, (
+        "rollback_release.sh must invoke write_dropin(host) so the "
+        "omnigent-eval-host.service drop-in is rewritten before "
+        "the host daemon is restarted"
+    )
+    # And the wrapper itself is invoked with the service-kind
+    # argument.
+    assert 'write-dropin.sh write "$kind"' in text, (
+        "rollback_release.sh must dispatch to the write-dropin.sh "
+        "wrapper with the per-service kind argument"
+    )
+
+
+def test_rollback_script_verifies_host_pinned_to_release_venv() -> None:
+    """``rollback_release.sh`` verifies the host daemon's binary
+    lives inside the rolled-back release's ``.venv``.
+
+    The check mirrors :func:`test_promote_script_verifies_host_pinned_to_release_venv`
+    so the rollback path matches the promotion path: both refuse
+    to declare success when the host daemon's executable is not
+    pinned to the release directory.
+    """
+    text = _ROLLBACK_SCRIPT.read_text()
+    assert "systemctl show -p MainPID --value" in text
+    assert "/proc/" in text and "/exe" in text
+    assert '"$TARGET"/.venv/*' in text, (
+        "rollback_release.sh must case-match the host executable against "
+        "the rolled-back release's .venv/ prefix"
+    )

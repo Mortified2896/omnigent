@@ -215,6 +215,11 @@ After cutover the controller verifies:
 
 * `systemctl is-active` reports both `omnigent-eval-web.service` and
   `omnigent-eval-host.service` active;
+* the host daemon's running executable lives under
+  ``<deploy_root>/releases/<target_sha>/.venv`` — the host daemon
+  cannot run from the mutable repository checkout or from a
+  different release (a readlink of ``/proc/<MainPID>/exe`` is
+  compared against the target release's ``.venv`` prefix);
 * `/health` on the live port returns a non-empty body;
 * the `/` route returns the full web shell, not the
   `OMNIGENT_SKIP_WEB_UI` API-only landing page;

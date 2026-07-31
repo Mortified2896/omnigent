@@ -24,11 +24,18 @@
 #      verifies /health, /, an SPA route, and the assets index.html
 #      references — then tears it down.
 #   5. Atomically rotates the ``current`` symlink, writes the
-#      ``10-release-<sha>.conf`` drop-in, and asks systemd to
-#      (re)start the service.
+#      ``10-release-<sha>.conf`` drop-in for **both** the web and
+#      host services (they share the same release), and asks
+#      systemd to (re)start the web service first. The host daemon
+#      is restarted only after the web side has settled, so a
+#      failing host restart cannot strand the web service on a
+#      new release while the host stays on the old one.
 #   6. Re-checks /health and the loopback SPA / asset endpoints on
-#      the live service; only then writes ``deployed-sha`` and the
-#      release manifest.
+#      the live web service; then restarts the host daemon and
+#      verifies it is active AND running the release's
+#      ``.venv/bin/omni`` (process executable inside the release's
+#      venv, not the mutable repository checkout). Only then
+#      writes ``deployed-sha`` and the release manifest.
 #
 # The script is non-interactive. Network and sudo requirements are
 # declared up-front so a CI agent can decide whether to invoke it.
@@ -375,12 +382,26 @@ if [[ -n "$PREVIOUS_TARGET" ]] && [[ "$PREVIOUS_TARGET" != "$RELEASE_DIR" ]]; th
   log "previous -> $PREVIOUS_TARGET"
 fi
 
-# Write the active drop-in (systemd-side view of the same release).
-log "writing systemd drop-in"
-DROPIN_PATH=$(sudo /opt/omnigent/updater/bin/write-dropin.sh write "$sha" "$RELEASE_DIR" 2>&1) || fail "could not write systemd drop-in (sudo required)"
+# Write the active drop-in for **both** services (web + host). The
+# host daemon must point at the same immutable release as the web
+# service it connects to over loopback; pinning only the web service
+# leaves the host running from a different checkout and silently
+# breaks the cross-service provenance invariant. Both drop-ins are
+# written before any restart so a partial failure cannot leave the
+# host pinned at one release and the web at another.
+log "writing systemd drop-in (web + host)"
+WEB_DROPIN_PATH=$(sudo /opt/omnigent/updater/bin/write-dropin.sh write web "$sha" "$RELEASE_DIR" 2>&1) || fail "could not write omnigent-eval-web.service drop-in (sudo required)"
+log "  web drop-in: $WEB_DROPIN_PATH"
+HOST_DROPIN_PATH=$(sudo /opt/omnigent/updater/bin/write-dropin.sh write host "$sha" "$RELEASE_DIR" 2>&1) || fail "could not write omnigent-eval-host.service drop-in (sudo required)"
+log "  host drop-in: $HOST_DROPIN_PATH"
+DROPIN_PATH="$WEB_DROPIN_PATH"
 
-# Disable any leftover 10-deploy-main-*.conf and 10-release-<other-sha>.conf.
-sudo /opt/omnigent/updater/bin/write-dropin.sh disable "$sha" "$RELEASE_DIR" || log "(continuing) other drop-in cleanup failed"
+# Disable any leftover 10-deploy-main-*.conf and 10-release-<other-sha>.conf
+# in both drop-in directories. The ``disable`` action moves sibling
+# ``10-release-<other-sha>.conf`` to ``.disabled`` so the active
+# drop-in wins precedence.
+sudo /opt/omnigent/updater/bin/write-dropin.sh disable web "$sha" "$RELEASE_DIR" || log "(continuing) other web drop-in cleanup failed"
+sudo /opt/omnigent/updater/bin/write-dropin.sh disable host "$sha" "$RELEASE_DIR" || log "(continuing) other host drop-in cleanup failed"
 
 # If a ``BUILTIN_AGENT_DIRS`` env override is requested, also update the
 # control-room-polly drop-in to point at the new release's example dir.
@@ -396,6 +417,11 @@ if [[ -n "${OMNIGENT_BUILTIN_AGENT_DIRS:-}" ]]; then
 fi
 
 # --- 5. systemd restart and live validation ------------------------------
+# Resolve the canonical web service / port / host service from the
+# release's own python so a fork of ``omnigent.deploy.ops.systemd``
+# on the calling side cannot silently override them. ``host_*``
+# resolvers are pinned (no env-var override) — the host daemon
+# cannot be redirected to a different unit.
 SERVICE_NAME=$("$RELEASE_DIR/.venv/bin/python" -c "
 import sys
 from omnigent.deploy.ops.systemd import service_name
@@ -406,12 +432,24 @@ import sys
 from omnigent.deploy.ops.systemd import service_port
 print(service_port())
 ")
+HOST_SERVICE_NAME=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
+from omnigent.deploy.ops.systemd import host_service_spec
+print(host_service_spec().service_name)
+")
 
-log "running daemon-reload + systemctl restart $SERVICE_NAME"
+log "running daemon-reload"
 sudo systemctl daemon-reload || fail "systemctl daemon-reload failed"
+
+# Restart the web service FIRST. The host unit's ``After=`` already
+# orders startup after the web service; restarting in this order
+# means a failing host restart cannot strand the web service on a
+# new release while the host stays on the old one — the web side
+# has already settled before the host comes up.
+log "restarting $SERVICE_NAME (web)"
 sudo systemctl restart "$SERVICE_NAME" || fail "systemctl restart $SERVICE_NAME failed"
 
-# Wait for the service to come back up.
+# Wait for the web service to come back up.
 up_after=0
 for i in $(seq 1 30); do
   if systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -421,7 +459,7 @@ for i in $(seq 1 30); do
   sleep 2
 done
 if [[ "$up_after" -eq 0 ]]; then
-  log "service did not become active; rolling back to previous release"
+  log "$SERVICE_NAME did not become active; rolling back to previous release"
   if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
     mv -T "$PREVIOUS_LINK" "$CURRENT_LINK" || true
     sudo systemctl restart "$SERVICE_NAME" || true
@@ -436,7 +474,7 @@ if [[ "$up_after" -eq 0 ]]; then
   mark_failed
   fail "service $SERVICE_NAME did not become active after restart"
 fi
-log "service reached active state after $up_after probe(s)"
+log "$SERVICE_NAME reached active state after $up_after probe(s)"
 
 # Give uvicorn a moment to bind the listening socket after systemd
 # reports ``active``; the unit can reach ``active`` before the HTTP
@@ -490,6 +528,90 @@ if [[ "$loopback_ok" -ne 1 ]]; then
   cp "$MANIFEST_PATH" "$DEPLOY_ROOT/failed/$sha/manifest.json" 2>/dev/null || true
   fail "live loopback probe failed after restart"
 fi
+
+# Restart the host daemon AFTER the web service is healthy. The
+# host has no HTTP surface of its own (it is a websocket client of
+# the loopback web service), so its health probe is a process /
+# release-pin check rather than a curl. We resolve the active
+# host process via ``systemctl show`` and verify (a) the unit is
+# active and (b) the running executable is the release's
+# ``.venv/bin/omni``, not the mutable ``repos/omnigent-eval``
+# checkout's interpreter.
+log "restarting $HOST_SERVICE_NAME (host)"
+sudo systemctl restart "$HOST_SERVICE_NAME" || fail "systemctl restart $HOST_SERVICE_NAME failed"
+
+host_up_after=0
+for i in $(seq 1 30); do
+  if systemctl is-active --quiet "$HOST_SERVICE_NAME"; then
+    host_up_after=$i
+    break
+  fi
+  sleep 2
+done
+if [[ "$host_up_after" -eq 0 ]]; then
+  log "$HOST_SERVICE_NAME did not become active; rolling back BOTH services"
+  rollback_host_and_web() {
+    # Restore the previous release drop-ins for both services and
+    # restart them. Done as a single function so the failure path
+    # is the same regardless of which unit tripped the probe.
+    local prev_release="$1"
+    if [[ -z "$prev_release" ]] || [[ ! -d "$prev_release" ]]; then
+      log "(no previous release to roll back to)"
+      return 0
+    fi
+    local prev_sha
+    prev_sha=$(basename "$prev_release")
+    sudo /opt/omnigent/updater/bin/write-dropin.sh write web "$prev_sha" "$prev_release" || true
+    sudo /opt/omnigent/updater/bin/write-dropin.sh write host "$prev_sha" "$prev_release" || true
+    sudo systemctl restart "$SERVICE_NAME" || true
+    sudo systemctl restart "$HOST_SERVICE_NAME" || true
+  }
+  if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
+    rollback_host_and_web "$PREVIOUS_TARGET"
+  fi
+  mkdir -p "$DEPLOY_ROOT/failed/$sha"
+  cp "$MANIFEST_PATH" "$DEPLOY_ROOT/failed/$sha/manifest.json" 2>/dev/null || true
+  systemctl status --no-pager "$HOST_SERVICE_NAME" >"$DEPLOY_ROOT/failed/$sha/host-systemctl-status.txt" 2>&1 || true
+  journalctl -n 200 --no-pager -u "$HOST_SERVICE_NAME" >"$DEPLOY_ROOT/failed/$sha/host-journal.txt" 2>&1 || true
+  fail "$HOST_SERVICE_NAME did not become active after restart"
+fi
+log "$HOST_SERVICE_NAME reached active state after $host_up_after probe(s)"
+
+# Verify the host daemon's runtime is actually pinned to this
+# release (it is not enough for the unit to be active; an active
+# unit could still be running from a previous binary if the
+# drop-in was overwritten but systemd's cache was stale). The
+# check confirms the live process's executable lives under the
+# release's .venv, not under the mutable repository checkout.
+HOST_EXE=$(readlink "/proc/$(systemctl show -p MainPID --value "$HOST_SERVICE_NAME")/exe" 2>/dev/null || echo "")
+if [[ -z "$HOST_EXE" ]]; then
+  log "could not read host daemon's executable; rolling back BOTH services"
+  if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
+    PREV_SHA=$(basename "$PREVIOUS_TARGET")
+    sudo /opt/omnigent/updater/bin/write-dropin.sh write web "$PREV_SHA" "$PREVIOUS_TARGET" || true
+    sudo /opt/omnigent/updater/bin/write-dropin.sh write host "$PREV_SHA" "$PREVIOUS_TARGET" || true
+    sudo systemctl restart "$SERVICE_NAME" || true
+    sudo systemctl restart "$HOST_SERVICE_NAME" || true
+  fi
+  fail "host daemon process has no executable; pinning failed"
+fi
+case "$HOST_EXE" in
+  "$RELEASE_DIR"/.venv/*) log "host daemon running from $HOST_EXE (release-pinned)" ;;
+  *)
+    log "host daemon executable $HOST_EXE is NOT inside $RELEASE_DIR/.venv; rolling back BOTH services"
+    if [[ -L "$PREVIOUS_LINK" ]] && [[ -n "$PREVIOUS_TARGET" ]]; then
+      PREV_SHA=$(basename "$PREVIOUS_TARGET")
+      sudo /opt/omnigent/updater/bin/write-dropin.sh write web "$PREV_SHA" "$PREVIOUS_TARGET" || true
+      sudo /opt/omnigent/updater/bin/write-dropin.sh write host "$PREV_SHA" "$PREVIOUS_TARGET" || true
+      sudo systemctl restart "$SERVICE_NAME" || true
+      sudo systemctl restart "$HOST_SERVICE_NAME" || true
+    fi
+    mkdir -p "$DEPLOY_ROOT/failed/$sha"
+    cp "$MANIFEST_PATH" "$DEPLOY_ROOT/failed/$sha/manifest.json" 2>/dev/null || true
+    systemctl status --no-pager "$HOST_SERVICE_NAME" >"$DEPLOY_ROOT/failed/$sha/host-systemctl-status.txt" 2>&1 || true
+    journalctl -n 200 --no-pager -u "$HOST_SERVICE_NAME" >"$DEPLOY_ROOT/failed/$sha/host-journal.txt" 2>&1 || true
+    fail "host daemon is running from $HOST_EXE, not $RELEASE_DIR/.venv/..." ;;
+esac
 
 # Public Tailscale probe (skip if explicitly disabled).
 if [[ "${OMIT_HEALTH:-0}" != "1" ]]; then
