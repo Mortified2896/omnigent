@@ -157,6 +157,14 @@ def _spawn_canary(
         "OMNIGENT_DATABASE_URI": f"sqlite:///{db_path}",
         "OMNIGENT_ARTIFACT_LOCATION": str(artifact_path),
         "OMNIGENT_SKIP_WEB_UI": "1" if skip_web_ui else "",
+        # Redirect the per-AP harness sentinel dir away from the
+        # default ``/tmp/omnigent`` (owned by ``hermes``) to a
+        # canary-local path owned by the running user. Without this
+        # the canary process — invoked by the updater — cannot
+        # ``stat()`` the sentinel file the harness writes during
+        # orphan-sweep, raising ``PermissionError`` before binding the
+        # loopback port.
+        "OMNIGENT_HARNESS_TMP_PARENT": str(release_canary_dir / "harness-tmp"),
         "PYTHONUNBUFFERED": "1",
         "HOME": str(Path.home()),
         **(extra_env or {}),
