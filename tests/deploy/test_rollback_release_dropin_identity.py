@@ -219,7 +219,7 @@ def test_rollback_script_writes_dropins_for_both_services() -> None:
     )
     # And the wrapper itself is invoked with the service-kind
     # argument.
-    assert "write-dropin.sh write \"$kind\"" in text, (
+    assert 'write-dropin.sh write "$kind"' in text, (
         "rollback_release.sh must dispatch to the write-dropin.sh "
         "wrapper with the per-service kind argument"
     )
