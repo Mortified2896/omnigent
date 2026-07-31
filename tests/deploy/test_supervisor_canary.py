@@ -115,3 +115,42 @@ def test_extract_index_assets_caps_at_twenty() -> None:
     """At most 20 assets are returned so a buggy probe can't run forever."""
     refs = "".join(f'<script src="/assets/{i}.js"></script>' for i in range(50))
     assert len(_extract_index_assets(refs)) == 20
+
+
+def test_canary_subprocess_env_sandboxed_harness_tmp(tmp_path: Path) -> None:
+    """``_spawn_canary`` writes the harness tmp dir inside the release dir.
+
+    Regression for the deploy gate's ``PermissionError: '/tmp/omnigent/ap-.../AP_PID'``
+    that occurred when the updater-invoked canary process tried to
+    ``stat()`` the per-AP sentinel file owned by ``hermes``. The canary
+    now sets ``OMNIGENT_HARNESS_TMP_PARENT`` to a release-local path so
+    the harness writes its sentinel into a directory owned by the
+    invoking user.
+    """
+    from unittest.mock import patch
+
+    from omnigent.deploy.supervisor import canary as canary_mod
+
+    captured: dict[str, object] = {}
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["cmd"] = args[0] if args else kwargs.get("args")
+            self.pid = 0
+
+    with patch.object(canary_mod.subprocess, "Popen", _FakePopen):
+        canary_mod._spawn_canary(
+            tmp_path,
+            port=12345,
+            log_path=tmp_path / "log.txt",
+            skip_web_ui=True,
+            config=None,
+        )
+    env = captured["env"]
+    assert env is not None
+    expected_tmp_parent = tmp_path / "canary" / "harness-tmp"
+    assert env["OMNIGENT_HARNESS_TMP_PARENT"] == str(expected_tmp_parent), (
+        f"Canary subprocess should sandbox the harness tmp dir under "
+        f"{expected_tmp_parent}; got {env['OMNIGENT_HARNESS_TMP_PARENT']!r}"
+    )
