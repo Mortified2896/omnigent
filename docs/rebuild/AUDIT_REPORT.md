@@ -108,46 +108,60 @@ The following validation commands **were** run, all read-only:
 
 ## What is unproven / pending canary
 
-1. **None of the 15 acceptance tests have been run** — the canary
-   (Phase E) is the next milestone. The tests are designed to run
-   against the rebuild branch's `deploy/control-room/` layer plus a
-   fresh `omnigent==0.7.0` wheel.
+1. **None of the 15 fresh-DB acceptance tests have been run** — the
+   canary (Phase D) is the next milestone. The tests are designed
+   to run against the rebuild branch's wheel plus a **fresh empty
+   0.7 database** (no legacy DB state, no migration rehearsal).
 2. **No end-to-end OmniRoute round-trip has been verified live**.
-   Phase E must include a real `/routes:select` exchange with the
+   Phase D must include a real `/routes:select` exchange with the
    deployed OmniRoute instance.
-3. **No real Langfuse integration has been verified live**. Phase E
+3. **No real Langfuse integration has been verified live**. Phase D
    must include a real OTLP export to a Langfuse sandbox and an
    inspection of the resulting trace hierarchy.
-4. **The migration rehearsal on a disposable copy of the production
-   database has not run**. Phase E must run `alembic upgrade head`
-   on a copy of the live `chat.db` and confirm the head is
-   `zf1a2b3c4d5e` (or, with the fork-only repair migration applied,
-   `zg1a2b3c4d5e`) with no script-level changes.
-5. **The `agent_selector.py` and `opencode_provenance_proxy.py` work
-   has not been measured against v0.7.0's behavior** — the matrix
-   flags this as "already solved upstream" but the canary should
-   run a positive test (fuzzy OpenCode request, observe
+4. **The fresh-database first-boot migration path has not been
+   observed live** against the production host. Phase D must boot
+   the new wheel against an empty `<data_dir>/chat.db` on a
+   disposable VM and confirm the boot log contains
+   `"Running database migrations…"` (per
+   `omnigent/db/utils.py:460-510`) and the resulting
+   `alembic_version` row is `zf1a2b3c4d5e` (upstream v0.7 head).
+5. **The `agent_selector.py` and `opencode_provenance_proxy.py`
+   work has not been measured against v0.7.0's behavior** — the
+   matrix flags this as "already solved upstream" but the canary
+   should run a positive test (fuzzy OpenCode request, observe
    `opencode-native` resolution) and a negative test (Verity's
    text match, observe rejection) before declaring it unnecessary.
-6. **The two narrow upstream-quality PRs (liveness watchdog,
-   identity-scoped `HostRegistry.deregister`) have not been written**.
-   They are Phase C.1 and Phase C.2 of the implementation plan and
-   are scoped for the next task.
+6. **The backup-and-move script (`scripts/cutover.sh`) has not
+   been exercised against a real production-shaped data dir**. It
+   must be exercised end-to-end on the Phase D disposable host.
 
 ## Recommended next step
 
-Move to **Phase C (the two narrow upstream-quality PRs)** so the
-rebuild branch has its first actionable core change. The work is
-bounded:
+Move to **Phase C (runtime configuration recreation)**. The work
+is bounded and does **not** require the production database, the
+production release dirs, or any service restart:
 
-- A new `omnigent/runtime/harnesses/watchdog.py` (~700 LOC + 27
-  unit tests) plus a 4-budget update to
-  `omnigent/runtime/harnesses/_scaffold.py:_guarded_run_turn`.
-- An `deregister(connection: HostConnection | str) -> bool` overload
-  in `omnigent/server/host_registry.py` (~50 LOC + 4 tests) plus
-  a call-site update in `omnigent/server/routes/host_tunnel.py`.
+- **C.1** Author `/etc/omnigent/env.conf` (POSIX, EnvironmentFile-
+  compatible) with the runtime variables listed in
+  `PHASED_IMPLEMENTATION_PLAN.md` §C.1.
+- **C.2** Author `/var/lib/omnigent/config.yaml` (upstream server
+  config) with the providers, routing, allowed domains, and
+  artifact layout listed in §C.2.
+- **C.3** Author `/srv/omnigent/agents/` with the bundle dirs the
+  systemd `ExecStart=` registers via `omni --agent <bundle-path>`.
+- **C.4** Edit the existing `/etc/systemd/system/omnigent.service`
+  in place (no new unit); point `ExecStart=` at the new wheel's
+  `omni server` with `--host 0.0.0.0 --port <prod>`, an explicit
+  `--database-uri`, `--artifact-location`, `--config`, and the
+  `--agent` registrations.
+- **C.5** Author `scripts/cutover.sh` (POSIX `sh`) — idempotent
+  stop → backup-and-move → install → start → `/health` → smoke
+  test → stamp `deployed-sha`. Verify SHA-256 of the backup, mark
+  it read-only + immutable, and confirm the fresh DB's first-boot
+  migration log line.
+- **C.6** Rewrite the 15 acceptance tests for fresh-DB mode
+  (already authored in `ACCEPTANCE_TESTS.md`).
 
-Both are small, well-tested, and unambiguously upstream-quality.
-Neither requires the production database or any service. After
-Phase C is complete, Phase D (the Control-Room layer) can begin
-in a sibling worktree or a sibling repository.
+Phase D (disposable-host canary against an empty data dir) and
+Phase E (production cutover with the backup-and-move script) come
+after C.

@@ -105,13 +105,22 @@ upstream only via the narrowest possible hooks (e.g. the identity-scoped
 
 ## 4. Database-specific — only needed if migrating the production DB
 
+> **Fresh-DB cutover note.** Per the user's updated direction
+> (`PHASED_IMPLEMENTATION_PLAN.md`), the live production `chat.db`
+> is **disposable**. The cutover moves the legacy DB aside to a
+> read-only backup and initializes a fresh upstream 0.7 database.
+> **None of the rows in this section are required for the
+> in-place cutover.** They are listed here only so a future
+> operator can locate them if they ever want to attempt a
+> legacy-DB-to-0.7 migration (out of scope).
+
 | Custom commit(s) | Migration | Required? |
 | --- | --- | --- |
-| `87823d44` "fix(db): rejoin fork/main lineage at zd1b2c3d4e5f" | `zd1b2c3d4d5f_join_v06_control_room.py` (174 lines) | **Yes**, if the production DB at `zd1` needs to converge to upstream `zd1` head. On a fresh 0.7 install the upstream `zd1b2c3d4d5f` head already lands and the lineage is identical. |
-| `70b1a91c` "fix(db): port PR #37 ze1b2c3d4d5f issue_runs lineage" | `ze1b2c3d4d5f_add_issue_runs_table.py` + `omnigent/db/db_models.py` `SqlIssueRun` + `omnigent/entities/issue_run.py` + `omnigent/stores/issue_run_store/*` | **Yes**, only if the production DB's `issue_runs` table needs to exist (production is at `ze1`). On fresh 0.7 the table is part of the upstream head. |
-| `803809a4` "fix(db): land repair migration zg1a2b3c4d5e on the deployment lineage" | `zg1a2b3c4d5e_repair_conversations_kind.py` | **Yes** for the production DB (already at `zg1`); no-op for a fresh 0.7 install. |
-| `0f2fd5ab` "fix: reconcile v0.6 backend and preserve production identifiers" | production-prefixed legacy id migration | **Yes** for the production DB. Not needed for fresh 0.7. |
-| `6d23df0a`, `6d23df0a*` "fix(db): restore task-outcome migrations z7-z9" | restore the upstream task-outcome migrations on the fork | **No** for fresh 0.7 (they are already at head); only needed for the fork's migration chain. |
+| `87823d44` "fix(db): rejoin fork/main lineage at zd1b2b3c4d5e" | `zd1b2c3d4d5f_join_v06_control_room.py` (174 lines) | **No** — fresh DB. Listed for historical reference only. |
+| `70b1a91c` "fix(db): port PR #37 ze1b2c3d4d5f issue_runs lineage" | `ze1b2c3d4d5f_add_issue_runs_table.py` + `omnigent/db/db_models.py` `SqlIssueRun` + `omnigent/entities/issue_run.py` + `omnigent/stores/issue_run_store/*` | **No** — fresh DB. Listed for historical reference only. |
+| `803809a4` "fix(db): land repair migration zg1a2b3c4d5e on the deployment lineage" | `zg1a2b3c4d5e_repair_conversations_kind.py` | **No** — fresh DB. The legacy DB is moved aside read-only; the new DB does not need this repair. |
+| `0f2fd5ab` "fix: reconcile v0.6 backend and preserve production identifiers" | production-prefixed legacy id migration | **No** — fresh DB. |
+| `6d23df0a`, `6d23df0a*` "fix(db): restore task-outcome migrations z7-z9" | restore the upstream task-outcome migrations on the fork | **No** — fresh DB. |
 | `bad17a65` "fix(db): port PR #37 ze1b2c3d4d5f issue_runs lineage" + `4162967c` (ruff) | already covered by the row above. |
 | `b6f4c846` "fix(sidebar): reliable bulk conversation deletion" | web UI | web UI lives in upstream; not a DB concern. |
 | `9689b68e`, `60b43865` "fix(db): preserve SQLite task outcome links" / "migrate routing provenance in place" | pre-existing fork-side data fixes | n/a — already in upstream's `z6`-`z9` series. |
@@ -163,7 +172,7 @@ upstream only via the narrowest possible hooks (e.g. the identity-scoped
 | 1. Already solved upstream v0.7 | 14 |
 | 2. Still required, should be ported | 7 |
 | 3. Deployment-specific (move to Control-Room) | ≈ 24 files / scripts |
-| 4. Database-specific (only on production DB migration) | 4 migrations |
+| 4. Database-specific (only on legacy-DB-to-0.7 migration; **not** required for the in-place fresh-DB cutover) | 4 migrations |
 | 5. Obsolete / harmful | 12 |
 | 6. Unclear / reproduction needed | 5 |
 | 7. Suitable for upstream contribution | 2 (liveness watchdog + host registry) |

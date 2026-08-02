@@ -14,6 +14,19 @@ hostname, no second port, no second public endpoint. The phone URL
 keeps working. The only acceptable downtime is the brief restart
 required to replace the running service.
 
+## Database strategy
+
+The live production `chat.db` is **disposable**. The existing
+fork-lineage schema is **not** migrated into upstream v0.7. During
+the cutover, the existing `chat.db` is **moved aside** to a
+timestamped, read-only backup, and a brand-new upstream 0.7
+database is initialized at the same configured database URI.
+**No sessions, agents, scheduled tasks, conversation records, or
+database configuration are imported from the legacy database.**
+Only the items listed in
+`PHASED_IMPLEMENTATION_PLAN.md` §C.3 are recreated from files /
+environment.
+
 ## Contents
 
 | File | Purpose |
@@ -26,7 +39,8 @@ required to replace the running service.
 | `HARNESS_GIT_PLAN.md` | Phase 6: Pi/OpenCode use stock `git` and stock worktree API, no custom commit protocol. |
 | `AUTO_UPDATE_PLAN.md` | Phase 9: stock `omni upgrade` for source; custom control-room scripts for production promotion. |
 | `ACCEPTANCE_TESTS.md` | Phase 8: 15 acceptance tests against a disposable test repository and a disposable database. |
-| `PHASED_IMPLEMENTATION_PLAN.md` | In-place replacement: Phases A–G, with the **single genuine blocker** (DB migration head) and the seven items that look like blockers but are not. |
+| `PHASED_IMPLEMENTATION_PLAN.md` | In-place replacement on a **fresh 0.7 database**: Phases A–G. The Alembic head mismatch is **not** a blocker (the legacy DB is moved aside read-only). The seven remaining items are about *runtime configuration correctness* and *operator workflow*. |
+| `ACCEPTANCE_TESTS.md` | 15 fresh-DB acceptance tests + the "removed tests" rationale (vs. the prior 15-test spec). |
 | `AUDIT_REPORT.md` | The original audit's final report (SHAs, branches, files, what is proven, what is unproven, recommended next step). |
 | `EVIDENCE_INDEX.md` | File/line citations for every claim in the migration matrix. |
 | `RISKS_AND_UNRESOLVED.md` | 10 production-bound risks, 5 non-production risks, 10 unresolved questions, and the canary validation list. |
