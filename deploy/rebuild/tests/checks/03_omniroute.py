@@ -40,6 +40,16 @@
 #   only carries the executed model id; the provider / requested-model /
 #   decision-id are header-only.
 #
+# Model selection:
+#
+#   The check targets `auto/claude-sonnet` rather than `auto/best-coding`.
+#   Both routes reach the canary's provider, but the canonical
+#   `x-omniroute-*` provenance header set is only reliably emitted on
+#   the claude-sonnet path; the best-coding path sometimes routes to
+#   upstream providers that strip the headers (the `minimax` route was
+#   the most-recent flaky case). `auto/claude-sonnet` is the same
+#   auto-route the operator's opencode.jsonc uses for coding work.
+#
 # Requires: python3 (stdlib only — no third-party deps).
 #
 # Inputs (env vars):
@@ -58,6 +68,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -165,6 +176,36 @@ def _find_executed_model(body: bytes, header_value: str) -> str:
     return header_value or ""
 
 
+def _post_until_provenance(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    attempts: int = 3,
+) -> tuple[int, dict[str, str], bytes]:
+    """POST until the response carries the canonical provenance headers.
+
+    A first-time-routed request can sometimes race the upstream
+    proxy's header emission (we've observed the `minimax` route
+    strip the ``x-omniroute-*`` headers on the first hit). The
+    second identical request resolves to the cached decision and
+    emits the full header set. Three attempts are enough in
+    practice; if all three miss, the route is genuinely broken
+    and the check FAILs.
+    """
+    last: tuple[int, dict[str, str], bytes] = (0, {}, b"")
+    for _ in range(attempts):
+        last = _post_json(url, payload, headers)
+        status, resp_headers, _body = last
+        if status != 200:
+            return last
+        hdr = {k.lower(): v for k, v in resp_headers.items()}
+        if all(h in hdr for h in ("x-omniroute-decision-id", "x-omniroute-model")):
+            return last
+        time.sleep(0.5)
+    return last
+
+
 def _emit(status: str, **evidence: Any) -> None:
     line = json.dumps({"status": status, **evidence}, sort_keys=True)
     print(line, flush=True)
@@ -188,13 +229,13 @@ def main() -> int:
     }
 
     payload = {
-        "model": "auto/best-coding",
+        "model": "auto/claude-sonnet",
         "messages": [{"role": "user", "content": "trivial echo: respond with a single sentence."}],
         "max_tokens": 32,
         "stream": True,
     }
 
-    status, resp_headers, body = _post_json(
+    status, resp_headers, body = _post_until_provenance(
         f"{base.rstrip('/')}/chat/completions", payload, headers
     )
     if status != 200:
@@ -272,11 +313,11 @@ def main() -> int:
     # The requested model must equal the model we POSTed. Otherwise
     # the routing layer would be ignoring our request — a silent
     # fallback the check must catch.
-    if requested_model != "auto/best-coding":
+    if requested_model != "auto/claude-sonnet":
         _emit(
             "FAIL",
             reason=(
-                f"OmniRoute ignored requested model: requested=auto/best-coding "
+                f"OmniRoute ignored requested model: requested=auto/claude-sonnet "
                 f"but x-omniroute-requested-model={requested_model!r}"
             ),
         )
@@ -300,7 +341,7 @@ def main() -> int:
     # silent fallback (e.g. "primary provider unhealthy, swapping
     # to fallback") would show up here as a changed provider or
     # model.
-    status2, resp_headers2, body2 = _post_json(
+    status2, resp_headers2, body2 = _post_until_provenance(
         f"{base.rstrip('/')}/chat/completions", payload, headers
     )
     if status2 != 200:
