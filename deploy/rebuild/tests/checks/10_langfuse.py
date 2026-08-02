@@ -78,16 +78,27 @@ def _curl(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes
     return status, parsed_headers, body
 
 
-def _curl_post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+def _curl_post_json(
+    url: str, payload: dict[str, Any], headers: dict[str, str]
+) -> tuple[int, dict[str, str], bytes]:
     body = json.dumps(payload).encode("utf-8")
     args = [
-        "curl", "-sS", "--max-time", "30",
-        "-X", "POST",
-        "-H", "Content-Type: application/json",
-        "-d", body,
-        "-o", "-",
-        "-w", "%{http_code}",
-        "-D", "-",
+        "curl",
+        "-sS",
+        "--max-time",
+        "30",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        body,
+        "-o",
+        "-",
+        "-w",
+        "%{http_code}",
+        "-D",
+        "-",
         url,
     ]
     proc = subprocess.run(args, capture_output=True, check=False, env={**os.environ, **headers})
@@ -128,7 +139,9 @@ def main() -> int:
     secret_key = _env("LANGFUSE_SECRET_KEY")
 
     if not (host and public_key and secret_key):
-        emit("FAIL", reason="LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY must be set")
+        emit(
+            "FAIL", reason="LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY must be set"
+        )
         return 1
 
     # 1. Create a trivial session.
@@ -140,7 +153,10 @@ def main() -> int:
     agents_url = f"http://127.0.0.1:{port}/v1/agents"
     agents_status, _hdrs, agents_body = _curl(agents_url, {})
     if agents_status != 200:
-        emit("FAIL", reason=f"GET /v1/agents returned status={agents_status} body={agents_body[:200]!r}")
+        emit(
+            "FAIL",
+            reason=f"GET /v1/agents returned status={agents_status} body={agents_body[:200]!r}",
+        )
         return 1
     try:
         claude_agent_id = None
@@ -160,9 +176,7 @@ def main() -> int:
     # no traces, so this check would always FAIL on the trace
     # poll). Same auth caveat as in _harness_lib.sh:resolve_host_id
     # — local-mode canary needs no auth on /v1/hosts.
-    hosts_status, _hdrs, hosts_body = _curl(
-        f"http://127.0.0.1:{port}/v1/hosts", {}
-    )
+    hosts_status, _hdrs, hosts_body = _curl(f"http://127.0.0.1:{port}/v1/hosts", {})
     host_id = None
     if hosts_status == 200:
         try:
@@ -184,8 +198,28 @@ def main() -> int:
         # workspace is required when host_id is set; the SDK harness
         # needs a cwd. /tmp always exists on linux.
         "workspace": "/tmp",
-        "prompt": "trivial echo: respond with a single sentence.",
         "title": "acceptance-9-langfuse",
+        # The upstream v0.7 wire format seeds the session with
+        # initial_items (a list of SessionEventInput), not a flat
+        # `prompt` string. A user message event with content blocks
+        # is the documented shape (see SessionEventInput in
+        # omnigent/server/schemas.py). Without this, the session
+        # sits idle and never gets a runner turn — so this check
+        # would always FAIL on the trace poll.
+        "initial_items": [
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "trivial echo: respond with a single sentence.",
+                        },
+                    ],
+                },
+            }
+        ],
     }
     status, _hdrs, body = _curl_post_json(
         sessions_url,
@@ -198,6 +232,31 @@ def main() -> int:
     session_id = json.loads(body).get("id")
     if not session_id:
         emit("FAIL", reason=f"session create response missing id; body={body[:200]!r}")
+        return 1
+
+    # Wake the runner. initial_items only seeds the conversation
+    # row; the runner only drives a turn on POST .../events.
+    events_status, _, events_body = _curl_post_json(
+        f"{sessions_url}/{session_id}/events",
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "trivial echo: respond with a single sentence."}
+                ],
+            },
+        },
+        {auth_header: identity, "Content-Type": "application/json"},
+    )
+    if events_status >= 400:
+        emit(
+            "FAIL",
+            reason=(
+                f"POST /v1/sessions/{session_id}/events returned "
+                f"status={events_status} body={events_body[:200]!r}"
+            ),
+        )
         return 1
 
     # 2. Poll Langfuse for the trace. Upstream's _SessionIdSpanProcessor
@@ -223,13 +282,18 @@ def main() -> int:
             if isinstance(traces, list) and traces:
                 traces_found = traces
                 break
-            last_error = f"Langfuse returned 0 traces for session_id={session_id}; body={body[:200]!r}"
+            last_error = (
+                f"Langfuse returned 0 traces for session_id={session_id}; body={body[:200]!r}"
+            )
         else:
             last_error = f"Langfuse GET /traces status={status} body={body[:200]!r}"
         time.sleep(2)
 
     if not traces_found:
-        emit("FAIL", reason=f"no traces appeared in Langfuse for session_id={session_id} within 30 s; last error: {last_error}")
+        emit(
+            "FAIL",
+            reason=f"no traces appeared in Langfuse for session_id={session_id} within 30 s; last error: {last_error}",
+        )
         return 1
 
     # 3. Inspect at least one trace's full set of observations.
@@ -251,7 +315,9 @@ def main() -> int:
             obs_parsed = json.loads(body)
         except json.JSONDecodeError:
             continue
-        observations = obs_parsed.get("data", obs_parsed) if isinstance(obs_parsed, dict) else obs_parsed
+        observations = (
+            obs_parsed.get("data", obs_parsed) if isinstance(obs_parsed, dict) else obs_parsed
+        )
         if not isinstance(observations, list):
             continue
         for obs in observations:
@@ -275,10 +341,16 @@ def main() -> int:
             break
 
     if not found_session_id:
-        emit("FAIL", reason=f"traces appeared but none carry session.id={session_id}; saw {len(traces_found)} traces")
+        emit(
+            "FAIL",
+            reason=f"traces appeared but none carry session.id={session_id}; saw {len(traces_found)} traces",
+        )
         return 1
     if not (found_tool_child or found_llm_child):
-        emit("FAIL", reason=f"traces appeared but no child omnigent.tool/omnigent.llm.request spans found")
+        emit(
+            "FAIL",
+            reason=f"traces appeared but no child omnigent.tool/omnigent.llm.request spans found",
+        )
         return 1
 
     emit(

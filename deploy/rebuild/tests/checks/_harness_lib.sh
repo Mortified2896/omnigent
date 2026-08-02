@@ -177,8 +177,18 @@ run_harness_session() {
   "host_id": "${host_id}",
   "purpose": "${purpose}",
   "workspace": "${worktree}",
-  "prompt": "rename the function foo to bar. Run pytest, lint, and typecheck on what you changed. Push your branch when green. Open a PR with gh pr create if a remote is configured.",
-  "title": "canary-${agent_name}-${branch}"
+  "title": "canary-${agent_name}-${branch}",
+  "initial_items": [
+    {
+      "type": "message",
+      "data": {
+        "role": "user",
+        "content": [
+          {"type": "input_text", "text": "rename the function foo to bar. Then run `git commit -am 'rename foo to bar'` and `git push -u origin HEAD`. Report what you did."}
+        ]
+      }
+    }
+  ]
 }
 JSON
 )
@@ -197,6 +207,20 @@ JSON
     printf 'FAIL session create returned no id; body: %s\n' "$session_json" >&2
     return 1
   fi
+  # Wake the runner. SessionCreateRequest's ``initial_items`` only
+  # seeds the conversation row — the runner does not auto-process
+  # them on bind. The runner's POST /v1/sessions/{id}/events is
+  # the only thing that drives a turn. Re-POST the user message
+  # here so the runner picks it up and dispatches the harness turn.
+  curl -fsS --max-time 30 \
+    -H "Content-Type: application/json" \
+    "${auth_args[@]}" \
+    -X POST \
+    -d '{"type":"message","data":{"role":"user","content":[{"type":"input_text","text":"rename the function foo to bar. Then run `git commit -am '\''rename foo to bar'\''` and `git push -u origin HEAD`. Report what you did."}]}}' \
+    "${session_url%/}/v1/sessions/${session_id}/events" >/dev/null 2>&1 || {
+      printf 'FAIL POST /v1/sessions/%s/events failed\n' "$session_id" >&2
+      return 1
+    }
   # Wait for the session to reach status 'finished' or 'failed'.
   # The default session deadline is 240 s. CANARY_SESSION_DEADLINE_S
   # can override it (used by the canary-run orchestrator to keep

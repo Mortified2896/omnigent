@@ -110,8 +110,18 @@ BODY=$(cat <<JSON
   "agent_id": "${VERITY_AGENT_ID}",
   "host_id": "${HOST_ID}",
   "workspace": "${WORKTREE_DIR}",
-  "prompt": "rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green.",
-  "title": "canary-11-verity-${CANARY_RUN_ID}"
+  "title": "canary-11-verity-${CANARY_RUN_ID}",
+  "initial_items": [
+    {
+      "type": "message",
+      "data": {
+        "role": "user",
+        "content": [
+          {"type": "input_text", "text": "rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green."}
+        ]
+      }
+    }
+  ]
 }
 JSON
 )
@@ -127,6 +137,17 @@ case "$HTTP_CODE" in
   *) bad "POST /v1/sessions returned HTTP $HTTP_CODE; body: $(head -c 200 /tmp/canary-11-session.json)" ;;
 esac
 SESSION_ID=$(python3 -c "import sys, json; print(json.load(open('/tmp/canary-11-session.json'))['id'])")
+
+# Wake the runner with the same user message (initial_items only
+# seeds the row; the runner only acts on POST .../events).
+curl -fsS --max-time 30 \
+  -H "Content-Type: application/json" \
+  ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
+  -X POST \
+  -d "{\"type\":\"message\",\"data\":{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green.\"}]}}" \
+  "${SESSIONS_URL%/}/v1/sessions/${SESSION_ID}/events" >/dev/null 2>&1 || {
+  bad "POST /v1/sessions/${SESSION_ID}/events failed"
+}
 
 # Wait up to 240 s for the parent session to finish.
 DEADLINE=$((SECONDS + 240))
