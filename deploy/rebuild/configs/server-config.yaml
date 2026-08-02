@@ -1,0 +1,132 @@
+# ─────────────────────────────────────────────────────────────────────
+# /var/lib/omnigent/config.yaml — Omnigent 0.7 production server config
+# ─────────────────────────────────────────────────────────────────────
+#
+# This file is the SERVER config (operator-editable, non-secret settings)
+# the rebuild's omnigent.service reads via:
+#
+#     omni server --config /var/lib/omnigent/config.yaml ...
+#
+# It complements (does NOT duplicate):
+#   * /etc/omnigent/env.conf        — runtime env (auth, telemetry, data dir)
+#   * /home/<user>/.omnigent/config.yaml — per-user providers + routing
+#   * /etc/omnigent/admins          — admin roster (mtime-cached, no restart)
+#
+# What THIS file owns (server keys):
+#   admins, allowed_domains, artifact_location, database_uri,
+#   copy_max_files, copy_max_total_bytes, policy_modules,
+#   debug_router_modules, default_agent, execution_timeout,
+#   llm:, routing:, sandbox:, policies:, server:, policies:
+#
+# What this file deliberately AVOIDS (server-config keys upstream v0.7
+# does NOT read — see omnigent/server/server_config.py and
+# omnigent/cli.py:cfg.get(...) for the canonical list):
+#   providers: — per-user block; lives in ~/.omnigent/config.yaml instead.
+#   api keys / tokens / cookies — secrets stay in env.conf (mode 0640).
+#
+# INSTALL:
+#   sudo install -d -m 0750 -o root -g omnigent /var/lib/omnigent
+#   sudo install -m 0644 -o root -g omnigent \
+#       server-config.yaml /var/lib/omnigent/config.yaml
+#   sudo systemctl daemon-reload
+
+# ─── 1. Admin roster (canonical) ──────────────────────────────────
+# Identities promoted to admin on login. Union'd with the
+# mtime-cached `<data_dir>/admins` file (edit that for a no-restart
+# change). Additive: removing an entry here does NOT demote on its
+# own — demotion is a separate explicit admin action.
+#
+# Email in OIDC mode, username in accounts mode, header value in
+# header-auth mode (whatever the proxy injects as X-Forwarded-Email).
+admins:
+  - "<operator-identity>"
+
+# ─── 2. Email-domain allowlist ────────────────────────────────────
+# Header / OIDC modes: only these email domains may sign in.
+# Union'd with OMNIGENT_OIDC_ALLOWED_DOMAINS and the
+# `<data_dir>/allowed_domains` file. Admin-listed and invited
+# identities bypass this. Omit / empty to allow any authenticated
+# IdP user (the OSS default; matches the production deploy's
+# pre-existing behaviour).
+# allowed_domains:
+#   - example.com
+
+# ─── 3. Storage locations ─────────────────────────────────────────
+# Artifact store: where the server writes per-session artifacts
+# (transcript dumps, screenshots, file uploads). Created on first
+# boot; must be writable by the systemd unit's User=.
+artifact_location: /srv/omnigent/artifacts
+
+# Database URI. SQLAlchemy URL. On first boot, the new wheel's
+# get_or_create_engine → _initialize_or_verify_schema runs
+# alembic.command.upgrade('head') against this URI and creates the
+# file (plus its parent dir) if absent. Must be writable by the
+# systemd unit's User=.
+database_uri: sqlite:////var/lib/omnigent/chat.db
+
+# ─── 4. Copy-at-spawn limits ──────────────────────────────────────
+# A parent agent forwarding files to a subagent triggers a server-
+# side copy through the destination session. These bound a single
+# copy request so it can't spike shared-server memory. Defaults
+# (when unset) are 20 files / 256 MiB total.
+copy_max_files: 20
+copy_max_total_bytes: 268435456
+
+# ─── 5. Execution timeout (per agent turn, in seconds) ───────────
+execution_timeout: 7200
+
+# ─── 6. Default agent for `/sessions` POST without an explicit
+#        `agent:` block. Resolved through the harness plugin map
+#        (omnigent/harness_plugins.py:139 for OpenCode, etc.).
+default_agent: verity
+
+# ─── 7. Server-level LLM (smart-routing judge fallback) ───────────
+# When a request hits the routing layer without an OmniRoute or other
+# external routing client, the built-in LLMRoutingClient uses this
+# `llm:` block to drive its judge. Empty / absent = no built-in
+# routing (only external routing, if configured under `routing:`).
+# llm:
+#   model: openai/gpt-4o-mini
+#   connection:
+#     api_key: ${OPENAI_API_KEY}
+
+# ─── 8. External routing (OmniRoute gateway) ──────────────────────
+# The upstream v0.7 ExternalRoutingClient is wired here. Auth
+# precedence mirrors the `llm:` block: an explicit (provider-
+# agnostic) api_key wins (static bearer), else the Databricks
+# `profile` is passed through (OAuth refresh), else unauthenticated.
+# Set provider: external and supply base_url + router_name; the
+# server builds the client and uses it for `/v1/route` calls.
+routing:
+  provider: external
+  base_url: https://omniroute.example.com/v1
+  router_name: omniroute
+  api_key: ${OMNIROUTE_API_KEY}
+  # Optional: strip these prefixes from catalog ids sent to the
+  # router (and restore them on the answer).
+  # model_prefix:
+  #   - databricks-
+
+# ─── 9. Sandbox hosts (managed sessions) ──────────────────────────
+# Optional. Only relevant if some sessions are launched with
+# host_type: "managed" (the server provisions a cloud sandbox and
+# starts `omnigent host` inside it). The production deploy runs
+# external hosts only (the user's own machine), so this section is
+# commented out by default.
+# sandbox:
+#   provider: modal
+#   modal:
+#     image: docker.io/me/omnigent-host:latest
+#     secrets: [omnigent-llm]
+
+# ─── 10. Policy modules ───────────────────────────────────────────
+# Extra Python modules scanned for POLICY_REGISTRY lists at startup.
+# Comment out / omit if the production deploy does not ship custom
+# policy modules.
+# policy_modules:
+#   - myorg.policies.safety
+
+# ─── 11. Debug router modules (development only) ─────────────────
+# Extra Python modules that register custom LLM router plugins for
+# debugging routing behaviour. Leave commented in production.
+# debug_router_modules: []

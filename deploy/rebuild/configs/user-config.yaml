@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────
+# ~/.omnigent/config.yaml — per-user Omnigent 0.7 user config
+# ─────────────────────────────────────────────────────────────────────
+#
+# This file is the USER-LEVEL config (per-user, on whatever user the
+# systemd unit runs as — typically root, omnigent, or the operator's
+# own user). It owns:
+#   providers: — the OpenAI-compatible provider entries (OmniRoute is
+#               one such provider; OpenAI, Anthropic, Gemini, Bedrock,
+#               Vertex, Databricks, LiteLLM, etc. are also entries).
+#   routing:   — per-harness model routing overrides.
+#   harness:   — per-harness sub-configs (CLI path overrides at the
+#               user level; binary path overrides at the env level
+#               take precedence).
+#   server:    — default `--server` URL for `omnigent attach` /
+#               `omnigent session ...` invocations from this user.
+#   default_agent: — default agent for `omnigent run` (when the user
+#                   does not pass `--agent`).
+#
+# What this file deliberately AVOIDS:
+#   - secrets (api_key: ${OPENAI_API_KEY} expands at load time, but
+#     the file should still not contain literal tokens).
+#   - server-only keys (admins, allowed_domains, artifact_location,
+#     database_uri, policy_modules, sandbox) — those live in the
+#     server config at /var/lib/omnigent/config.yaml.
+#   - routing.provider=external — that lives in the server config
+#     too; this file holds the providers block only.
+#
+# INSTALL:
+#   sudo -u <service-user> -H bash -c 'install -d -m 0750 ~/.omnigent'
+#   sudo -u <service-user> -H bash -c \
+#       'install -m 0640 configs/user-config.yaml ~/.omnigent/config.yaml'
+#   $EDITOR ~<service-user>/.omnigent/config.yaml
+#
+# Path resolution (verified against omnigent/config.py):
+#   1. OMNIGENT_CONFIG_HOME env var (if set), else
+#   2. ~/.omnigent/config.yaml
+
+# ─── 1. Providers (OpenAI-compatible + native) ───────────────────
+# Each provider entry is a key in the providers map; the value
+# describes how to reach it. Upstream v0.7's `OpenAICompatibleAdapter`
+# (omnigent/llms/adapters/openai.py:48) accepts `base_url` and
+# `api_key_env` for every OpenAI-compatible provider.
+#
+# Provider entries MUST live here, NOT in
+# /var/lib/omnigent/config.yaml (the server config does not read
+# `providers:`).
+providers:
+  # OmniRoute gateway. The user's `OMNIROUTE_API_KEY` env var carries
+  # the bearer; the server config's `routing:` block's `base_url` +
+  # `router_name` declare the gateway itself.
+  omniroute:
+    base_url: https://omniroute.example.com/v1
+    api_key_env: OMNIROUTE_API_KEY
+    request_timeout_s: 60
+
+  # Native provider entries. Pick whichever the production deploy uses.
+  # Each one reads its API key from the matching env var.
+  # anthropic:
+  #   api_key_env: ANTHROPIC_API_KEY
+  # openai:
+  #   api_key_env: OPENAI_API_KEY
+  # databricks:
+  #   profile: DEFAULT
+
+# ─── 2. Routing (per-harness model overrides) ─────────────────────
+# Per-harness model routing. Each sub-key is a harness name; the
+# value is a model id (and optional provider) used for that harness.
+# `default:` covers any harness not explicitly listed.
+harness:
+  default:
+    model: omniroute/auto
+  # Examples:
+  # pi:
+  #   model: omniroute/auto
+  # opencode:
+  #   model: omniroute/auto
+
+# ─── 3. Default server for `omni attach` / `omni session` ────────
+# Used when the user does not pass `--server`. Format: full URL.
+# server: https://<prod-hostname>
+
+# ─── 4. Default agent for `omni run` without `--agent` ───────────
+# When the operator runs `omnigent run` from the command line without
+# an explicit `--agent`, this is the agent that loads. The rebuild's
+# default is `verity` (the orchestration agent shipped in
+# deploy/rebuild/agents/verity/).
+default_agent: verity
