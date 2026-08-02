@@ -1,0 +1,10 @@
+# check 11_verity_delegation — 2026-08-02T10:30:42Z
+exit_status=Preparing worktree (new branch 'polly/canary-11-verity-D-final5-20260802T102619Z')
+FAIL verity session did not finish within 240 s
+Preparing worktree (new branch 'polly/canary-11-verity-D-final5-20260802T102619Z')
+FAIL verity session did not finish within 240 s
+parsed_status=FAIL
+duration=241
+--- evidence ---
+Preparing worktree (new branch 'polly/canary-11-verity-D-final5-20260802T102619Z')
+FAIL verity session did not finish within 240 s

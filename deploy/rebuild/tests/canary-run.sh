@@ -191,7 +191,17 @@ REUSE_FLAG=""
 [ "$REUSE_DATA_DIR" = 1 ] && REUSE_FLAG="--reuse-data-dir"
 
 echo "canary-run: invoking canary.sh run --run-id $RUN_ID $REUSE_FLAG"
+
+# The runner always passes --reuse-data-dir because the wheel
+# has already booted against a fresh dir (this orchestrator
+# created and booted the wheel; the wheel did its first-boot
+# migration). The canary.sh's check 1 then verifies that
+# schema/alembic_version against the live wheel's DB.
+#
+# If the operator passed --reuse-data-dir AND the canary-run
+# orchestrator did NOT wipe, the canary uses the existing
+# wheel's state (which may or may not be a freshly-booted DB).
 exec "$REPO_ROOT/deploy/rebuild/tests/canary.sh" run \
   --rebuild-sha "$REBUILD_SHA" \
   --run-id "$RUN_ID" \
-  $REUSE_FLAG
+  --reuse-data-dir

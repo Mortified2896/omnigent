@@ -1,0 +1,22 @@
+# check 01_db_init — 2026-08-02T10:25:48Z
+exit_status=note: did not observe "Running database migrations" in journalctl (wheel may have skipped the log line; not a FAIL for the temp foreground launcher)
+db_path=/tmp/canary-data/chat.db
+alembic_head=b3c4d5e6f7a8
+data_dir=/tmp/canary-data
+tables=account_tokens agents alembic_version comments conversation_items conversation_items_fts conversation_items_fts_config conversation_items_fts_content conversation_items_fts_data conversation_items_fts_docsize conversation_items_fts_idx conversation_labels conversations device_grants files hosts omnigent_conversation_metadata policies projects scheduled_task_runs scheduled_tasks session_permissions user_daily_cost users
+PASS
+note: did not observe "Running database migrations" in journalctl (wheel may have skipped the log line; not a FAIL for the temp foreground launcher)
+db_path=/tmp/canary-data/chat.db
+alembic_head=b3c4d5e6f7a8
+data_dir=/tmp/canary-data
+tables=account_tokens agents alembic_version comments conversation_items conversation_items_fts conversation_items_fts_config conversation_items_fts_content conversation_items_fts_data conversation_items_fts_docsize conversation_items_fts_idx conversation_labels conversations device_grants files hosts omnigent_conversation_metadata policies projects scheduled_task_runs scheduled_tasks session_permissions user_daily_cost users
+PASS
+parsed_status=FAIL
+duration=1
+--- evidence ---
+note: did not observe "Running database migrations" in journalctl (wheel may have skipped the log line; not a FAIL for the temp foreground launcher)
+db_path=/tmp/canary-data/chat.db
+alembic_head=b3c4d5e6f7a8
+data_dir=/tmp/canary-data
+tables=account_tokens agents alembic_version comments conversation_items conversation_items_fts conversation_items_fts_config conversation_items_fts_content conversation_items_fts_data conversation_items_fts_docsize conversation_items_fts_idx conversation_labels conversations device_grants files hosts omnigent_conversation_metadata policies projects scheduled_task_runs scheduled_tasks session_permissions user_daily_cost users
+PASS

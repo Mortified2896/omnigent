@@ -122,7 +122,10 @@ JSON
     return 1
   fi
   # Wait for the session to reach status 'finished' or 'failed'.
-  local deadline=$((SECONDS + 240))
+  # The default session deadline is 240 s. CANARY_SESSION_DEADLINE_S
+  # can override it (used by the canary-run orchestrator to keep
+  # the total canary wall-time bounded).
+  local deadline=$((SECONDS + ${CANARY_SESSION_DEADLINE_S:-240}))
   while [ "$SECONDS" -lt "$deadline" ]; do
     local status
     status=$(curl -fsS --max-time 5 \
