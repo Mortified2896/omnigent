@@ -140,22 +140,46 @@ routing:
 YAML
 
 # Author the user config (providers + per-harness routing).
+#
 # The host process reads this on connect to resolve provider
-# credentials for Pi / OpenCode harness subprocesses.
+# credentials for Pi / OpenCode harness subprocesses. The Pi /
+# OpenCode readiness checks read the same config to decide whether
+# each harness is "ready" (configured) vs "needs-auth".
+#
+# Provider shape follows omnigent/onboarding/provider_config.py:
+#   kind: gateway  with an `openai:` family block (Pi / OpenCode
+#   consume the openai family). wire_api: chat because OmniRoute
+#   does not implement the OpenAI Responses API (the codex executor
+#   would otherwise default to that and fail). api_key_ref:
+#   env:OMNIROUTE_API_KEY resolves the secret from the wheel /
+#   host's environment at family-read time, never written to disk.
+#
+# `default: [openai, pi]` makes this the default for the openai
+# family AND the pi surface (Pi consumes either family and prefers
+# anthropic then openai — see _PI_FALLBACK_FAMILIES). Without the
+# explicit `pi` scope, the per-family default alone wouldn't claim
+# pi and the readiness check would still report "needs-auth".
+#
+# Model: auto/best-coding (the same canonical auto/route the
+# operator's opencode.jsonc uses for coding work). The base URL is
+# OmniRoute's OpenAI-compatible surface; Pi / OpenCode speak to it
+# as a generic gateway (no silent fallback, no per-call rewrite).
 cat > "$CANARY_HOME/.omnigent/config.yaml" <<YAML
 providers:
   omniroute:
-    base_url: ${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}
-    api_key_env: OMNIROUTE_API_KEY
-    request_timeout_s: 60
-
-harness:
-  default:
-    model: omniroute/auto
-  pi:
-    model: omniroute/auto
-  opencode:
-    model: omniroute/auto
+    kind: gateway
+    default: [openai, pi]
+    openai:
+      base_url: ${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}
+      api_key_ref: env:OMNIROUTE_API_KEY
+      wire_api: chat
+      models:
+        default: auto/best-coding
+    anthropic:
+      base_url: ${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}
+      api_key_ref: env:OMNIROUTE_API_KEY
+      models:
+        default: auto/claude-sonnet
 
 default_agent: verity
 YAML
@@ -170,6 +194,11 @@ export PATH="/home/hermes/.local/bin:/home/hermes/.hermes/node/bin:/usr/local/sb
 # wheel runs without auth, the host connects over WS without
 # X-Forwarded-Email, and all session/agent/runner routes accept
 # unauthenticated requests in this mode.
+#
+# HOME is set to $CANARY_HOME so the wheel's own CLI logs (under
+# $HOME/.omnigent/logs/cli/) go to the canary data dir, not the
+# operator's real ~/.omnigent/ (which on this VM is read-only).
+export HOME="$CANARY_HOME"
 export OMNIGENT_DATA_DIR="$CANARY_DATA_DIR"
 export OMNIGENT_PORT="$CANARY_PORT"
 export OMNIGENT_CONFIG_HOME="$CANARY_HOME/.omnigent"
@@ -181,6 +210,72 @@ export OMNIROUTE_API_KEY="$OMNIROUTE_API_KEY"
 export OMNIROUTE_BASE_URL="${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}"
 export OMNIROUTE_AUTH_TOKEN="${OMNIROUTE_AUTH_TOKEN:-$OMNIROUTE_API_KEY}"
 export OMNIROUTE_ROUTER_NAME=omniroute
+
+# Langfuse OTEL wiring (reuses the same tenant the operator's
+# OpenCode Web uses, with a distinct environment tag so canary
+# traces never collide with the operator's normal OpenCode
+# traffic). Credentials are read from /etc/hermes/hermes.env (the
+# operator's single source of truth, mode 0640 root:hermes). They
+# are passed to the wheel + host via env vars; nothing is ever
+# written to disk.
+#
+# If /etc/hermes/hermes.env is missing or unreadable, the canary
+# still runs but check 10 (Langfuse) will FAIL with a clear reason
+# (it cannot query the API without credentials).
+LANGFUSE_ENV_FILE="${LANGFUSE_ENV_FILE:-/etc/hermes/hermes.env}"
+if [ -r "$LANGFUSE_ENV_FILE" ]; then
+  # Read without eval: only set the names we use, and only if the
+  # operator has not already exported them. No values are logged.
+  while IFS= read -r line; do
+    case "$line" in
+      ""|\#*) continue ;;
+    esac
+    case "$line" in
+      HERMES_LANGFUSE_PUBLIC_KEY=*)
+        if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ]; then
+          export LANGFUSE_PUBLIC_KEY="${line#HERMES_LANGFUSE_PUBLIC_KEY=}"
+        fi ;;
+      HERMES_LANGFUSE_SECRET_KEY=*)
+        if [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
+          export LANGFUSE_SECRET_KEY="${line#HERMES_LANGFUSE_SECRET_KEY=}"
+        fi ;;
+      HERMES_LANGFUSE_BASE_URL=*)
+        if [ -z "${LANGFUSE_BASE_URL:-}" ]; then
+          export LANGFUSE_BASE_URL="${line#HERMES_LANGFUSE_BASE_URL=}"
+        fi ;;
+      HERMES_LANGFUSE_ENV=*)
+        if [ -z "${LANGFUSE_ENV:-}" ]; then
+          export LANGFUSE_ENV="${line#HERMES_LANGFUSE_ENV=}"
+        fi ;;
+    esac
+  done <"$LANGFUSE_ENV_FILE"
+fi
+# Distinct canary environment tag so canary traces never collide
+# with the operator's normal OpenCode traffic on the shared tenant.
+# If the operator's hermes.env already set LANGFUSE_ENV, prefer
+# that; otherwise default to a run-scoped tag.
+if [ -z "${LANGFUSE_ENV:-}" ]; then
+  export LANGFUSE_ENV="canary-${RUN_ID}"
+else
+  export LANGFUSE_ENV="${LANGFUSE_ENV}-canary-${RUN_ID}"
+fi
+export OTEL_SERVICE_NAME="omnigent-canary-${RUN_ID}"
+
+# Langfuse v3 accepts OTLP/HTTP at <host>/api/public/otel with a
+# Basic auth header (public-key:secret-key base64-encoded). The
+# OTEL_EXPORTER_OTLP_HEADERS value is URL-encoded key=value pairs;
+# the Authorization value is the basic header with %20 for the
+# space between "Basic" and the token (HTTP-header value rules).
+if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_BASE_URL:-}" ]; then
+  _lf_basic=$(printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 -w0 2>/dev/null || printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64)
+  export OTEL_EXPORTER_OTLP_ENDPOINT="${LANGFUSE_BASE_URL%/}/api/public/otel"
+  export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+  export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic%20${_lf_basic}"
+  # For check 10 (which queries the Langfuse REST API directly).
+  export LANGFUSE_HOST="$LANGFUSE_BASE_URL"
+  export CANARY_LANGFUSE_ENV="$LANGFUSE_ENV"
+  echo "canary-run: langfuse OTEL wired (host=$LANGFUSE_BASE_URL env=$LANGFUSE_ENV)"
+fi
 
 echo "canary-run: starting wheel on port $CANARY_PORT (log: $WHEEL_LOG)"
 setsid nohup "$WHEEL_BIN" server \
