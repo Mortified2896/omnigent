@@ -1,0 +1,19 @@
+# check 12_worktree_isolation — 2026-08-02T10:05:15Z
+exit_status=Preparing worktree (new branch 'polly/canary-12-pi-a-D8-20260802T100513Z')
+Preparing worktree (new branch 'polly/canary-12-pi-b-D8-20260802T100513Z')
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/12_worktree_isolation.sh: 126: SECONDS: parameter not set
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/12_worktree_isolation.sh: 126: SECONDS: parameter not set
+FAIL no git.commit.outcome in session A
+Preparing worktree (new branch 'polly/canary-12-pi-a-D8-20260802T100513Z')
+Preparing worktree (new branch 'polly/canary-12-pi-b-D8-20260802T100513Z')
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/12_worktree_isolation.sh: 126: SECONDS: parameter not set
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/12_worktree_isolation.sh: 126: SECONDS: parameter not set
+FAIL no git.commit.outcome in session A
+parsed_status=FAIL
+duration=0
+--- evidence ---
+Preparing worktree (new branch 'polly/canary-12-pi-a-D8-20260802T100513Z')
+Preparing worktree (new branch 'polly/canary-12-pi-b-D8-20260802T100513Z')
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/12_worktree_isolation.sh: 126: SECONDS: parameter not set
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/12_worktree_isolation.sh: 126: SECONDS: parameter not set
+FAIL no git.commit.outcome in session A

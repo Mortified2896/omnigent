@@ -1,0 +1,12 @@
+01_db_init	FAIL	0
+02_web_health	FAIL	0
+03_omniroute	FAIL	1
+04_pi_repo_edit	FAIL	0
+05_pi_commit	FAIL	0
+06_pi_push	FAIL	0
+07_opencode_repo_edit	FAIL	0
+08_opencode_commit	FAIL	0
+09_opencode_push	FAIL	0
+10_langfuse	FAIL	0
+11_verity_delegation	FAIL	0
+12_worktree_isolation	FAIL	1

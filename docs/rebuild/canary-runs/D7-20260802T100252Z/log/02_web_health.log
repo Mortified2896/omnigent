@@ -1,0 +1,7 @@
+# check 02_web_health — 2026-08-02T10:03:00Z
+exit_status=FAIL canary port 17670 equals production port 17670 — Phase D isolation broken
+FAIL canary port 17670 equals production port 17670 — Phase D isolation broken
+parsed_status=FAIL
+duration=0
+--- evidence ---
+FAIL canary port 17670 equals production port 17670 — Phase D isolation broken

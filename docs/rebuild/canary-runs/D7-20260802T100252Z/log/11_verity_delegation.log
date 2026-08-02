@@ -1,0 +1,10 @@
+# check 11_verity_delegation — 2026-08-02T10:03:02Z
+exit_status=Preparing worktree (new branch 'polly/canary-11-verity-D7-20260802T100252Z')
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/11_verity_delegation.sh: 128: SECONDS: parameter not set
+Preparing worktree (new branch 'polly/canary-11-verity-D7-20260802T100252Z')
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/11_verity_delegation.sh: 128: SECONDS: parameter not set
+parsed_status=FAIL
+duration=0
+--- evidence ---
+Preparing worktree (new branch 'polly/canary-11-verity-D7-20260802T100252Z')
+/home/hermes/workspace/repos/omnigent-eval-rebuild-upstream-0.7/deploy/rebuild/tests/checks/11_verity_delegation.sh: 128: SECONDS: parameter not set

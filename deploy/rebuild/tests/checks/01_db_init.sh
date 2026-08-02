@@ -49,7 +49,7 @@ DB_PATH="$OMNIGENT_DATA_DIR/chat.db"
 # least these tables; any other tables indicate fork-only state
 # was migrated in, which Phase D does not do.
 TABLES=$(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-for required in alembic_version agents conversations comments files policies permissions scheduled_tasks projects inbox tasks; do
+for required in alembic_version agents conversations comments files policies scheduled_tasks projects users hosts session_permissions; do
   case "$TABLES" in
     *"$required"*) ;;
     *) bad "expected table $required missing from fresh schema; got: $(printf '%s' "$TABLES" | tr '\n' ' ')" ;;

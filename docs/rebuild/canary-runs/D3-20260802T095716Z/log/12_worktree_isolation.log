@@ -1,0 +1,76 @@
+# check 12_worktree_isolation — 2026-08-02T09:57:18Z
+exit_status=Preparing worktree (new branch 'polly/canary-12-pi-a-D3-20260802T095716Z')
+Preparing worktree (new branch 'polly/canary-12-pi-b-D3-20260802T095716Z')
+curl: (22) The requested URL returned error: 500
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+  File "/usr/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+FAIL POST /v1/sessions failed; body: {
+  "agent_id": "a1b7caa17404f6716180ba69aa37c592",
+  "purpose": "implement",
+  "workspace": "/tmp/canary-fixtures/D3-20260802T095716Z/parallel/wt-b",
+  "prompt": "rename the function foo to bar. Run pytest, lint, and typecheck on what you changed. Push your branch when green. Open a PR with gh pr create if a remote is configured.",
+  "title": "canary-pi-native-ui-polly/canary-12-pi-b-D3-20260802T095716Z"
+}
+Preparing worktree (new branch 'polly/canary-12-pi-a-D3-20260802T095716Z')
+Preparing worktree (new branch 'polly/canary-12-pi-b-D3-20260802T095716Z')
+curl: (22) The requested URL returned error: 500
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+  File "/usr/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+FAIL POST /v1/sessions failed; body: {
+  "agent_id": "a1b7caa17404f6716180ba69aa37c592",
+  "purpose": "implement",
+  "workspace": "/tmp/canary-fixtures/D3-20260802T095716Z/parallel/wt-b",
+  "prompt": "rename the function foo to bar. Run pytest, lint, and typecheck on what you changed. Push your branch when green. Open a PR with gh pr create if a remote is configured.",
+  "title": "canary-pi-native-ui-polly/canary-12-pi-b-D3-20260802T095716Z"
+}
+parsed_status=FAIL
+duration=1
+--- evidence ---
+Preparing worktree (new branch 'polly/canary-12-pi-a-D3-20260802T095716Z')
+Preparing worktree (new branch 'polly/canary-12-pi-b-D3-20260802T095716Z')
+curl: (22) The requested URL returned error: 500
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+  File "/usr/lib/python3.11/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+FAIL POST /v1/sessions failed; body: {
+  "agent_id": "a1b7caa17404f6716180ba69aa37c592",
+  "purpose": "implement",
+  "workspace": "/tmp/canary-fixtures/D3-20260802T095716Z/parallel/wt-b",
+  "prompt": "rename the function foo to bar. Run pytest, lint, and typecheck on what you changed. Push your branch when green. Open a PR with gh pr create if a remote is configured.",
+  "title": "canary-pi-native-ui-polly/canary-12-pi-b-D3-20260802T095716Z"
+}

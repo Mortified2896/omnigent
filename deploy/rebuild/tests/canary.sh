@@ -6,7 +6,9 @@
 # Note: this runner is intentionally /usr/bin/env bash (not POSIX
 # sh) because it uses bash-only features: associative arrays
 # (declare -A), process substitution, and local variables in
-# functions. The per-check scripts (checks/*.sh) are POSIX sh.
+# functions. The per-check scripts (checks/*.sh) are bash
+# (shebanged `#!/usr/bin/env bash` — they use `SECONDS`,
+# `declare`, `local`, and other bash-only constructs).
 #
 # This script orchestrates the per-check scripts; it does NOT
 # itself issue network requests or read the database. The checks
@@ -196,15 +198,32 @@ mkdir -p "$RUN_DIR" "$LOG_DIR"
 # Reset the temp data dir for this run, unless the operator
 # explicitly asked us to keep it (D.2 re-runs preserve the
 # directory by default; D.2 wipes it by design).
+#
+# DEFAULT (no --reuse-data-dir): wipe the data dir. The canary
+# is meant to test the wheel's *first-boot* behavior — the wheel
+# must do the first-boot migration and create the fresh schema.
+# The canary operator is responsible for stopping the wheel
+# before running the canary, or for restarting the wheel after
+# the wipe. (The cutover-script's Phase E step restarts the
+# wheel; the Phase D canary orchestrator should mirror that.)
+#
+# --reuse-data-dir: keep the data dir. Use this when the canary
+# is running against an already-started wheel (e.g. the wheel
+# is launched as a long-running temp systemd unit and the canary
+# checks are just running against the live wheel's state).
 if [ "$REPEAT_MODE" = 1 ]; then
   if [ "$RESUE_DATA_DIR" = 0 ]; then
     printf 'canary repeat: wiping temp data dir %s\n' "$OMNIGENT_DATA_DIR" >&2
     rm -rf "$OMNIGENT_DATA_DIR"
+  else
+    printf 'canary repeat: keeping existing data dir %s (--reuse-data-dir)\n' "$OMNIGENT_DATA_DIR" >&2
   fi
 else
   if [ "$RESUE_DATA_DIR" = 0 ]; then
     printf 'canary run: wiping temp data dir %s\n' "$OMNIGENT_DATA_DIR" >&2
     rm -rf "$OMNIGENT_DATA_DIR"
+  else
+    printf 'canary run: keeping existing data dir %s (--reuse-data-dir)\n' "$OMNIGENT_DATA_DIR" >&2
   fi
 fi
 mkdir -p "$OMNIGENT_DATA_DIR"
@@ -255,7 +274,10 @@ run_check() {
   else
     case "$script" in
       *.sh)
-        status_line=$(sh "$script" 2>&1) || true
+        # The check scripts are shebanged `#!/usr/bin/env bash`
+        # because they use bash-only constructs (`SECONDS`,
+        # `declare`, `local`, etc.). Run them with bash, NOT sh.
+        status_line=$(bash "$script" 2>&1) || true
         ;;
       *.py)
         status_line=$(python3 "$script" 2>&1) || true

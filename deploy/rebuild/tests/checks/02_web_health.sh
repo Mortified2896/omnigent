@@ -103,6 +103,9 @@ if command -v ss >/dev/null 2>&1; then
 fi
 
 # 7. Print a small evidence block for the report.
+# The status line MUST be first (the canary runner parses the
+# first non-empty line as PASS|FAIL|SKIPPED).
+ok
 cat <<EVIDENCE
 canary_port=$OMNIGENT_PORT
 prod_port=$PROD_PORT
@@ -111,5 +114,3 @@ version_body=$VERSION_BODY
 unit_name=$UNIT_NAME
 run_id=$CANARY_RUN_ID
 EVIDENCE
-
-ok
