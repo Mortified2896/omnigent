@@ -24,8 +24,7 @@ if [ ! -d "$WORKTREE_DIR" ]; then
   : "${OMNIGENT_PORT:=6767}"
   : "${OMNIGENT_AUTH_HEADER:=X-Forwarded-Email}"
   : "${CANARY_IDENTITY:=canary@omnigent.local}"
-  SESSION_ID=$(run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-    "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+  SESSION_ID=$(run_harness_session     "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
 fi
 
 SHA=$(verify_commit_and_push "$WORKTREE_DIR" "$REMOTE_DIR" "$BRANCH") || exit 1

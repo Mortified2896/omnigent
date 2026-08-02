@@ -19,13 +19,41 @@ require_harness_binary() {
   fi
 }
 
+# Canary auth handling:
+#
+# The canary wheel runs on 127.0.0.1 in single-user local mode
+# (OMNIGENT_LOCAL_SINGLE_USER=1 is auto-set when the server binds
+# loopback with the default header auth source). In that mode:
+#   * /v1/hosts unauthenticated returns the local-owned hosts.
+#   * POST /v1/sessions unauthenticated resolves to RESERVED_USER_LOCAL
+#     and binds the session to whatever host_id was supplied.
+#   * An X-Forwarded-Email header from the canary script makes the
+#     request resolve to that email instead of "local"; the temp
+#     host is owned by "local", so the bind fails with
+#     "not your host" / 403.
+#
+# Helpers that talk to the canary wheel therefore DO NOT send any
+# auth header by default. An operator running these checks against
+# a production-shape wheel can still opt in by setting
+# CANARY_AUTH_HEADER / CANARY_AUTH_IDENTITY before invoking.
+: "${CANARY_AUTH_HEADER:=}"
+: "${CANARY_AUTH_IDENTITY:=}"
+
 # Resolve an agent NAME to its database id via GET /v1/agents.
-# Usage: resolve_agent_id <port> <auth_header> <identity> <agent_name>
-# Prints the id on stdout, or empty.
+# Usage: resolve_agent_id <port> <name>
+#
+# Uses CANARY_AUTH_HEADER / CANARY_AUTH_IDENTITY env vars when set;
+# the canary local mode leaves them unset so the request is
+# unauthenticated (which the single-user wheel treats as the
+# reserved "local" user — same identity as the temporary host).
 resolve_agent_id() {
-  local port="$1" auth_header="$2" identity="$3" name="$4"
+  local port="$1" name="$2"
+  local extra=()
+  if [ -n "$CANARY_AUTH_HEADER" ]; then
+    extra=(-H "${CANARY_AUTH_HEADER}: ${CANARY_AUTH_IDENTITY}")
+  fi
   curl -fsS --max-time 10 \
-    -H "${auth_header}: ${identity}" \
+    "${extra[@]}" \
     "http://127.0.0.1:${port}/v1/agents" \
     | python3 -c "
 import json, sys
@@ -101,8 +129,7 @@ for h in hosts:
 
 # Launch a session via POST /v1/sessions and wait for it to
 # complete. Usage:
-#   run_harness_session <auth-header-name> <identity>
-#                       <port> <agent_name>
+#   run_harness_session <port> <agent_name>
 #                       <worktree_path> <branch> <purpose>
 # Prints the session_id on stdout.
 # Side-effects: writes the SSE stream to $WORKTREE_DIR/.sse.log
@@ -112,18 +139,28 @@ for h in hosts:
 #
 # Wire format: upstream v0.7 binds a session by `agent_id` (a
 # durable db id resolved via GET /v1/agents), not by name. The
-# helper resolves <agent_name> → <agent_id> and posts that. The
+# helper resolves <agent_name> -> <agent_id> and posts that. The
 # session also needs a `host_id` to actually dispatch to a host —
 # the server uses `host_id` to generate a binding token and send
 # the host a `host.launch_runner` frame over its tunnel. Without
 # it, the session is unbound and never gets a runner, so it sits
 # in `idle` indefinitely.
+#
+# Auth: when CANARY_AUTH_HEADER / CANARY_AUTH_IDENTITY are set
+# (production-shape wheel behind a proxy), the helper sends the
+# configured header. In the canary's local mode both are empty
+# and the request goes unauthenticated — the loopback single-user
+# wheel resolves the absent header to RESERVED_USER_LOCAL, which
+# owns the temporary host.
 run_harness_session() {
-  local auth_header="$1" identity="$2" port="$3" agent_name="$4" \
-        worktree="$5" branch="$6" purpose="$7"
+  local port="$1" agent_name="$2" worktree="$3" branch="$4" purpose="$5"
   local session_url="http://127.0.0.1:${port}/v1/sessions"
+  local auth_args=()
+  if [ -n "$CANARY_AUTH_HEADER" ]; then
+    auth_args=(-H "${CANARY_AUTH_HEADER}: ${CANARY_AUTH_IDENTITY}")
+  fi
   local agent_id host_id
-  agent_id=$(resolve_agent_id "$port" "$auth_header" "$identity" "$agent_name")
+  agent_id=$(resolve_agent_id "$port" "$agent_name")
   if [ -z "$agent_id" ]; then
     printf 'FAIL could not resolve agent_id for agent_name=%s on port %s\n' "$agent_name" "$port" >&2
     return 1
@@ -148,7 +185,7 @@ JSON
   local session_json
   session_json=$(curl -fsS --max-time 30 \
     -H "Content-Type: application/json" \
-    -H "${auth_header}: ${identity}" \
+    "${auth_args[@]}" \
     -X POST -d "$body" "$session_url" 2>/dev/null) || {
       printf 'FAIL POST /v1/sessions failed; body: %s\n' "$body" >&2
       return 1
@@ -164,11 +201,11 @@ JSON
   # The default session deadline is 240 s. CANARY_SESSION_DEADLINE_S
   # can override it (used by the canary-run orchestrator to keep
   # the total canary wall-time bounded).
-  local deadline=$((SECONDS + ${CANARY_SESSION_DEADLINE_S:-240}))
+  local deadline=$(($SECONDS + ${CANARY_SESSION_DEADLINE_S:-240}))
   while [ "$SECONDS" -lt "$deadline" ]; do
     local status
     status=$(curl -fsS --max-time 5 \
-      -H "${auth_header}: ${identity}" \
+      "${auth_args[@]}" \
       "http://127.0.0.1:${port}/v1/sessions/${session_id}" \
       | python3 -c "import sys, json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
     case "$status" in

@@ -99,7 +99,7 @@ SESSIONS_URL="http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions"
 # Resolve verity's agent_id (the upstream wire format binds by
 # agent_id, not by name; resolve_agent_id lives in _harness_lib.sh).
 . "$HERE/_harness_lib.sh"
-VERITY_AGENT_ID=$(resolve_agent_id "${OMNIGENT_PORT}" "${OMNIGENT_AUTH_HEADER}" "${CANARY_IDENTITY}" "verity")
+VERITY_AGENT_ID=$(resolve_agent_id "${OMNIGENT_PORT}" "verity")
 [ -n "$VERITY_AGENT_ID" ] || bad "could not resolve verity agent_id on port ${OMNIGENT_PORT}"
 # Resolve the online host_id — the server needs it to dispatch
 # the parent session to the host runner.
@@ -120,7 +120,7 @@ JSON
 # instead of curl aborting.
 HTTP_CODE=$(curl -sS -o /tmp/canary-11-session.json -w '%{http_code}' --max-time 30 \
   -H "Content-Type: application/json" \
-  -H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}" \
+  ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
   -X POST -d "$BODY" "$SESSIONS_URL" || true)
 case "$HTTP_CODE" in
   2*) ;;
@@ -132,7 +132,7 @@ SESSION_ID=$(python3 -c "import sys, json; print(json.load(open('/tmp/canary-11-
 DEADLINE=$((SECONDS + 240))
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
   STATUS=$(curl -fsS --max-time 5 \
-    -H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}" \
+    ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
     "http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions/${SESSION_ID}" \
     | python3 -c "import sys, json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
   case "$STATUS" in
@@ -145,7 +145,7 @@ done
 
 # Read the full session JSON.
 curl -fsS --max-time 10 \
-  -H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}" \
+  ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
   "http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions/${SESSION_ID}" \
   >/tmp/canary-11-full.json
 

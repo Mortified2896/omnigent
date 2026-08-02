@@ -26,8 +26,7 @@ BRANCH="polly/canary-4-pi-${CANARY_RUN_ID}"
 create_fixture_repo "$REPO_DIR"
 create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
 
-SESSION_ID=$(run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-  "$OMNIGENT_PORT" "pi-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+SESSION_ID=$(run_harness_session   "$OMNIGENT_PORT" "pi-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
 
 DIFF=$(git -C "$WORKTREE_DIR" diff main)
 case "$DIFF" in
