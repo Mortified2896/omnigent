@@ -132,10 +132,58 @@ def main() -> int:
         return 1
 
     # 1. Create a trivial session.
+    # The upstream v0.7 wire format binds a session by agent_id, not
+    # agent_selector. Resolve claude-sdk's agent_id via GET /v1/agents.
+    # /v1/agents returns the same built-in catalog regardless of
+    # auth, so this call works in the canary's local-auth-disabled
+    # mode.
+    agents_url = f"http://127.0.0.1:{port}/v1/agents"
+    agents_status, _hdrs, agents_body = _curl(agents_url, {})
+    if agents_status != 200:
+        emit("FAIL", reason=f"GET /v1/agents returned status={agents_status} body={agents_body[:200]!r}")
+        return 1
+    try:
+        claude_agent_id = None
+        for a in json.loads(agents_body).get("data", []):
+            if a.get("name") == "claude-sdk":
+                claude_agent_id = a.get("id")
+                break
+    except json.JSONDecodeError as exc:
+        emit("FAIL", reason=f"GET /v1/agents response not valid JSON: {exc}")
+        return 1
+    if not claude_agent_id:
+        emit("FAIL", reason="could not resolve agent_id for claude-sdk on port {port}")
+        return 1
+
+    # Resolve the online host_id so the session is actually
+    # dispatched to a runner (unbound sessions stay idle and emit
+    # no traces, so this check would always FAIL on the trace
+    # poll). Same auth caveat as in _harness_lib.sh:resolve_host_id
+    # — local-mode canary needs no auth on /v1/hosts.
+    hosts_status, _hdrs, hosts_body = _curl(
+        f"http://127.0.0.1:{port}/v1/hosts", {}
+    )
+    host_id = None
+    if hosts_status == 200:
+        try:
+            for h in json.loads(hosts_body).get("hosts", []):
+                if h.get("status") == "online" and h.get("host_id"):
+                    host_id = h["host_id"]
+                    break
+        except json.JSONDecodeError:
+            pass
+    if not host_id:
+        emit("FAIL", reason=f"could not resolve an online host_id on port {port}")
+        return 1
+
     sessions_url = f"http://127.0.0.1:{port}/v1/sessions"
     session_payload = {
-        "agent_selector": "claude-sdk",
+        "agent_id": claude_agent_id,
+        "host_id": host_id,
         "purpose": "explore",
+        # workspace is required when host_id is set; the SDK harness
+        # needs a cwd. /tmp always exists on linux.
+        "workspace": "/tmp",
         "prompt": "trivial echo: respond with a single sentence.",
         "title": "acceptance-9-langfuse",
     }

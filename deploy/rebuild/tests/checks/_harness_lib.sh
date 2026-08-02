@@ -72,12 +72,18 @@ create_worktree() {
 }
 
 # Resolve an online host_id from GET /v1/hosts. Usage:
-#   resolve_host_id <port> <auth_header> <identity>
-# Prints the first online host's id on stdout, or empty.
+#   resolve_host_id <port>
+#
+# Auth is intentionally omitted: in the canary's local mode the
+# server has no auth_provider, so /v1/hosts reads the reserved
+# "local" user. With auth enabled and the canary's identity
+# (canary@omnigent.local) attached, the same call returns []
+# because the temporary host is owned by "local", not by the
+# canary user. Polling the unauthenticated route is the correct
+# local-mode behavior.
 resolve_host_id() {
-  local port="$1" auth_header="$2" identity="$3"
+  local port="$1"
   curl -fsS --max-time 10 \
-    -H "${auth_header}: ${identity}" \
     "http://127.0.0.1:${port}/v1/hosts" \
     | python3 -c "
 import json, sys
@@ -122,7 +128,7 @@ run_harness_session() {
     printf 'FAIL could not resolve agent_id for agent_name=%s on port %s\n' "$agent_name" "$port" >&2
     return 1
   fi
-  host_id=$(resolve_host_id "$port" "$auth_header" "$identity")
+  host_id=$(resolve_host_id "$port")
   if [ -z "$host_id" ]; then
     printf 'FAIL could not resolve an online host_id on port %s\n' "$port" >&2
     return 1

@@ -103,7 +103,7 @@ VERITY_AGENT_ID=$(resolve_agent_id "${OMNIGENT_PORT}" "${OMNIGENT_AUTH_HEADER}" 
 [ -n "$VERITY_AGENT_ID" ] || bad "could not resolve verity agent_id on port ${OMNIGENT_PORT}"
 # Resolve the online host_id — the server needs it to dispatch
 # the parent session to the host runner.
-HOST_ID=$(resolve_host_id "${OMNIGENT_PORT}" "${OMNIGENT_AUTH_HEADER}" "${CANARY_IDENTITY}")
+HOST_ID=$(resolve_host_id "${OMNIGENT_PORT}")
 [ -n "$HOST_ID" ] || bad "could not resolve an online host_id on port ${OMNIGENT_PORT}"
 BODY=$(cat <<JSON
 {
