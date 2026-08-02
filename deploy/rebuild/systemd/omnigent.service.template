@@ -1,0 +1,156 @@
+# ─────────────────────────────────────────────────────────────────────
+# /etc/systemd/system/omnigent.service — Omnigent 0.7 production unit
+# ─────────────────────────────────────────────────────────────────────
+#
+# INSTALL:
+#   1. Resolve the absolute path to the `omni` shim on this host.
+#      The cutover script (scripts/cutover.sh) does this for you
+#      at install time; the placeholder below is rewritten by the
+#      script before the unit is enabled. Do NOT hard-code
+#      /usr/local/bin/omni or any other specific path — the actual
+#      location depends on the chosen installation method:
+#         uv tool install --force -> \$(uv tool dir --bin)/omni
+#                                (typically ~/.local/bin/omni on
+#                                 Linux/macOS, or wherever
+#                                 XDG_BIN_HOME / UV_TOOL_BIN_DIR
+#                                 points)
+#         pip install --force-reinstall --user
+#                                -> \$(python -m site --user-base)/bin/omni
+#                                (typically ~/.local/bin/omni)
+#         pipx install --force
+#                                -> \$(pipx environment --value PIPX_BIN_DIR)
+#                                (typically ~/.local/bin/omni)
+#         pip install --force-reinstall  (system, no --user)
+#                                -> /usr/local/bin/omni (Debian) or
+#                                   /usr/bin/omni (some platforms)
+#      Verification command:
+#         command -v omni && readlink -f \$(command -v omni)
+#      Expected output: an absolute path like
+#         /home/<user>/.local/bin/omni -> /home/<user>/.local/share/uv/tools/omnigent/bin/omni
+#      The placeholder below must be replaced with that absolute path.
+#
+#   2. Edit the placeholders below:
+#        <PROD_HOSTNAME>     -> the production hostname the reverse
+#                               proxy terminates at
+#        <PROD_PORT>         -> the production TCP port (e.g. 6767)
+#        <SERVICE_USER>       -> the user the unit runs as (typically
+#                               root, omnigent, or a dedicated
+#                               app user)
+#        <OMNI_BIN_PATH>     -> the absolute path resolved in step 1
+#
+#   3. Copy to /etc/systemd/system/ and enable:
+#         sudo install -m 0644 omnigent.service.template \\
+#             /etc/systemd/system/omnigent.service
+#         sudo systemctl daemon-reload
+#         sudo systemctl enable omnigent.service
+#
+#   4. The script that writes the live unit (scripts/cutover.sh)
+#      performs steps 1-3 at install time. This file is the
+#      documentation / scaffolding.
+
+[Unit]
+Description=Omnigent 0.7 production server
+Documentation=https://docs.omnigent.dev
+# Network is required to bind the production port.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- Identity ------------------------------------------------------
+# The user the service runs as. The script that installs this unit
+# must replace <SERVICE_USER> with the actual user (typically root
+# for a single-tenant production deploy, or a dedicated `omnigent`
+# user for multi-tenant isolation).
+User=<SERVICE_USER>
+Group=<SERVICE_USER>
+
+# --- Working directory ---------------------------------------------
+# Required so the omni CLI can resolve ~/.omnigent/config.yaml (the
+# user-level config) via HOME, and so any sub-process the runner
+# spawns (the harness CLIs, bwrap, tmux) inherits the right cwd.
+WorkingDirectory=/var/lib/omnigent
+
+# --- Environment ---------------------------------------------------
+# Single source of truth for runtime config (auth, telemetry, data
+# dir, harness paths, secrets). Edit env.conf.template, install to
+# /etc/omnigent/env.conf. Mode 0640; owner root:omnigent.
+EnvironmentFile=/etc/omnigent/env.conf
+
+# PATH: append the resolved omni bin dir so subprocesses (the
+# harness CLIs `pi`, `opencode`, etc.) find their companions on
+# the same PATH. The cutover script writes the actual dir at
+# install time; this is just enough so subprocess inheritance
+# works during the cutover window.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# --- Executable ----------------------------------------------------
+# PLACEHOLDER. The cutover script replaces <OMNI_BIN_PATH> with
+# the absolute path resolved at install time (see header).
+ExecStart=<OMNI_BIN_PATH> server \
+    --host 0.0.0.0 \
+    --port <PROD_PORT> \
+    --database-uri sqlite:////var/lib/omnigent/chat.db \
+    --artifact-location /srv/omnigent/artifacts \
+    --config /var/lib/omnigent/config.yaml \
+    --agent /srv/omnigent/agents/verity \
+    --agent /srv/omnigent/agents/pi \
+    --agent /srv/omnigent/agents/opencode
+
+# --- Process lifecycle ---------------------------------------------
+# Restart on failure (NOT on success — omnigent.server's graceful
+# shutdown runs the ASGI lifespan, so a SIGTERM during a cutover
+# gets a clean drain). RestartSec is short enough to recover from
+# a crash but long enough to not thrash.
+Restart=on-failure
+RestartSec=5s
+
+# Graceful shutdown timeout. omnigent.server's drain logic stops
+# in-flight SSE streams, waits for active harnesses to finish
+# their current turn, and exits. 60s matches the
+# `_LOCAL_SERVER_READY_TIMEOUT_SECONDS` budget in
+# omnigent/host/local_server.py.
+TimeoutStopSec=60s
+
+# --- Resource limits -----------------------------------------------
+# The harness tmp + artifact + worktree dirs are the volume
+# bottleneck. NOFILE matches the openapi-server's default.
+LimitNOFILE=65536
+# Memory limit is intentionally not set — the runner + the harness
+# CLIs can use real memory during a long fan-out. Add a cgroup
+# ceiling only after a production load profile is observed.
+
+# --- Security hardening -------------------------------------------
+# Default to a hardened sandbox; tighten further if the host
+# supports it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/omnigent /srv/omnigent
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+MemoryDenyWriteExecute=true
+# Note: MemoryDenyWriteExecute=true blocks the harness CLIs from
+# JITting. If a harness needs JIT (e.g. Node 22), drop this one
+# line. The other hardening remains.
+
+# --- Watchdog (optional) ------------------------------------------
+# systemd's WatchdogSec fires WatchdogSignal if ExecStart does not
+# call sd_notify(WATCHDOG=1) within the budget. omnigent-server
+# does not currently implement sd_notify; leave WatchdogSec unset
+# (commented out below) so the watchdog is disabled.
+# WatchdogSec=120s
+
+[Install]
+WantedBy=multi-user.target
