@@ -71,6 +71,28 @@ create_worktree() {
   printf '%s\n' "$worktree_dir"
 }
 
+# Resolve an online host_id from GET /v1/hosts. Usage:
+#   resolve_host_id <port> <auth_header> <identity>
+# Prints the first online host's id on stdout, or empty.
+resolve_host_id() {
+  local port="$1" auth_header="$2" identity="$3"
+  curl -fsS --max-time 10 \
+    -H "${auth_header}: ${identity}" \
+    "http://127.0.0.1:${port}/v1/hosts" \
+    | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+hosts = d.get('hosts') or d.get('data') or []
+for h in hosts:
+    if h.get('status') == 'online' and h.get('host_id'):
+        print(h['host_id'])
+        break
+" 2>/dev/null
+}
+
 # Launch a session via POST /v1/sessions and wait for it to
 # complete. Usage:
 #   run_harness_session <auth-header-name> <identity>
@@ -84,21 +106,32 @@ create_worktree() {
 #
 # Wire format: upstream v0.7 binds a session by `agent_id` (a
 # durable db id resolved via GET /v1/agents), not by name. The
-# helper resolves <agent_name> → <agent_id> and posts that.
+# helper resolves <agent_name> → <agent_id> and posts that. The
+# session also needs a `host_id` to actually dispatch to a host —
+# the server uses `host_id` to generate a binding token and send
+# the host a `host.launch_runner` frame over its tunnel. Without
+# it, the session is unbound and never gets a runner, so it sits
+# in `idle` indefinitely.
 run_harness_session() {
   local auth_header="$1" identity="$2" port="$3" agent_name="$4" \
         worktree="$5" branch="$6" purpose="$7"
   local session_url="http://127.0.0.1:${port}/v1/sessions"
-  local agent_id
+  local agent_id host_id
   agent_id=$(resolve_agent_id "$port" "$auth_header" "$identity" "$agent_name")
   if [ -z "$agent_id" ]; then
     printf 'FAIL could not resolve agent_id for agent_name=%s on port %s\n' "$agent_name" "$port" >&2
+    return 1
+  fi
+  host_id=$(resolve_host_id "$port" "$auth_header" "$identity")
+  if [ -z "$host_id" ]; then
+    printf 'FAIL could not resolve an online host_id on port %s\n' "$port" >&2
     return 1
   fi
   local body
   body=$(cat <<JSON
 {
   "agent_id": "${agent_id}",
+  "host_id": "${host_id}",
   "purpose": "${purpose}",
   "workspace": "${worktree}",
   "prompt": "rename the function foo to bar. Run pytest, lint, and typecheck on what you changed. Push your branch when green. Open a PR with gh pr create if a remote is configured.",

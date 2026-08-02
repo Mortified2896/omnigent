@@ -101,9 +101,14 @@ SESSIONS_URL="http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions"
 . "$HERE/_harness_lib.sh"
 VERITY_AGENT_ID=$(resolve_agent_id "${OMNIGENT_PORT}" "${OMNIGENT_AUTH_HEADER}" "${CANARY_IDENTITY}" "verity")
 [ -n "$VERITY_AGENT_ID" ] || bad "could not resolve verity agent_id on port ${OMNIGENT_PORT}"
+# Resolve the online host_id — the server needs it to dispatch
+# the parent session to the host runner.
+HOST_ID=$(resolve_host_id "${OMNIGENT_PORT}" "${OMNIGENT_AUTH_HEADER}" "${CANARY_IDENTITY}")
+[ -n "$HOST_ID" ] || bad "could not resolve an online host_id on port ${OMNIGENT_PORT}"
 BODY=$(cat <<JSON
 {
   "agent_id": "${VERITY_AGENT_ID}",
+  "host_id": "${HOST_ID}",
   "workspace": "${WORKTREE_DIR}",
   "prompt": "rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green.",
   "title": "canary-11-verity-${CANARY_RUN_ID}"
