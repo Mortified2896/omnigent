@@ -210,6 +210,14 @@ export OMNIROUTE_API_KEY="$OMNIROUTE_API_KEY"
 export OMNIROUTE_BASE_URL="${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}"
 export OMNIROUTE_AUTH_TOKEN="${OMNIROUTE_AUTH_TOKEN:-$OMNIROUTE_API_KEY}"
 export OMNIROUTE_ROUTER_NAME=omniroute
+# Allow the host to forward these into runner subprocess env so
+# Pi / OpenCode harness invocations see the same OmniRoute
+# credential as the wheel (used by user-config's api_key_ref:
+# env:OMNIROUTE_API_KEY to resolve the provider secret). The
+# host's env allowlist deliberately excludes random env vars to
+# avoid leaking the operator's full env to runners; the explicit
+# passthrough is the operator knob for that.
+export OMNIGENT_RUNNER_ENV_PASSTHROUGH="OMNIROUTE_API_KEY,OMNIROUTE_BASE_URL,OMNIROUTE_AUTH_TOKEN,OMNIROUTE_ROUTER_NAME"
 
 # Langfuse OTEL wiring (reuses the same tenant the operator's
 # OpenCode Web uses, with a distinct environment tag so canary
