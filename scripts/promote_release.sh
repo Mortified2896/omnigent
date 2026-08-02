@@ -279,21 +279,15 @@ if [[ ! -d "$RELEASE_DIR" ]]; then
 
   # 2e. write the manifest.
   log "writing release manifest"
-  # Derive the canonical module / server-app paths from the
-  # FINAL_RELEASE_DIR rather than from the running interpreter's
-  # ``omnigent.__file__`` — at this point we are still inside the
-  # staging directory, and capturing ``__file__`` here would bake
-  # the soon-to-be-removed ``.staging-<sha>-...`` path into the
-  # manifest, breaking any future verification step that follows
-  # the staging-to-canonical rename.
-  CANONICAL_OMNIGENT_INIT="$FINAL_RELEASE_DIR/omnigent/__init__.py"
-  CANONICAL_OMNIGENT_SERVER_APP="$FINAL_RELEASE_DIR/omnigent/server/app.py"
   if ! OMNIGENT_DEPLOY_ALLOW_MANIFEST_OVERWRITE=1 \
        "$RELEASE_DIR/.venv/bin/python" \
        -c "
 import os, sys, json
 sys.path.insert(0, '$RELEASE_DIR')
 import pathlib
+import omnigent
+import omnigent.server
+import omnigent.server.app
 from omnigent.deploy.supervisor.manifest import ReleaseManifest, write_manifest
 frontend_version = ''
 version_json = pathlib.Path('$RELEASE_DIR/omnigent/server/static/web-ui/version.json')
@@ -308,14 +302,13 @@ manifest = ReleaseManifest.from_directory(
     repository='Mortified2896/omnigent',
     python_executable=str(pathlib.Path(sys.executable).resolve()),
     python_version='%d.%d.%d' % sys.version_info[:3],
-    omnigent_module_path=os.environ['CANONICAL_OMNIGENT_INIT'],
-    omnigent_server_app_path=os.environ['CANONICAL_OMNIGENT_SERVER_APP'],
+    omnigent_module_path=str(pathlib.Path(omnigent.__file__).resolve()),
+    omnigent_server_app_path=str(pathlib.Path(omnigent.server.app.__file__).resolve()),
     frontend_build_version=frontend_version,
     canonical_release_dir=pathlib.Path('$FINAL_RELEASE_DIR'),
 )
 write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
-" CANONICAL_OMNIGENT_INIT="$CANONICAL_OMNIGENT_INIT" \
-       CANONICAL_OMNIGENT_SERVER_APP="$CANONICAL_OMNIGENT_SERVER_APP"; then
+"; then
     log "manifest write failed; cleaning $RELEASE_DIR"
     rm -rf "$RELEASE_DIR"
     fail "manifest write failed"
@@ -334,51 +327,7 @@ write_manifest(pathlib.Path('$RELEASE_DIR'), manifest)
   RELEASE_DIR="$FINAL_RELEASE_DIR"
   MANIFEST_PATH="$RELEASE_DIR/manifest.json"
 
-  # 2f. Rewrite the venv console-script shims' embedded staging
-  # path. ``uv pip install`` generates ``.venv/bin/<entry-point>``
-  # launchers whose body contains
-  # ``'''exec' '<staging>/.venv/bin/python' "$0" "$@"`` — a literal
-  # copy of the build-time staging path. Without rewriting them,
-  # every entry point in the canonical release would exec a
-  # ``python`` interpreter that no longer exists at that path
-  # (because the staging dir was renamed into ``$FINAL_RELEASE_DIR``
-  # by ``mv -T`` above and the old path is gone). The rewrite
-  # updates every ``.venv/bin/<name>`` file (console scripts,
-  # ``activate``/``activate.fish``'s ``VIRTUAL_ENV`` string, etc.)
-  # that still references the now-defunct staging path. The
-  # rewrite is purely textual, idempotent, and only touches the
-  # release's own copy of those files — the underlying venv at
-  # ``$RELEASE_DIR/.venv`` is otherwise left untouched.
-  log "rewriting venv shim paths from staging to canonical release"
-  shopt -s nullglob
-  rewrite_count=0
-  for f in "$RELEASE_DIR"/.venv/bin/*; do
-      # Skip symlinks (the only symlink here is ``python`` →
-      # interpreter, which doesn't reference the staging path).
-      [[ -L "$f" ]] && continue
-      # Only rewrite files whose contents include the literal
-      # staging-path prefix for this build. Doing a quick
-      # ``grep -q`` keeps the no-op case cheap.
-      if grep -qF "/.staging-$sha-" "$f" 2>/dev/null; then
-          sed -i "s|/\\.staging-$sha-[0-9]*-[0-9]*|$FINAL_RELEASE_DIR|g" "$f"
-          rewrite_count=$((rewrite_count + 1))
-      fi
-  done
-  shopt -u nullglob
-  log "rewrote $rewrite_count venv shim file(s) to canonical paths"
-
-  # After the rewrite, refuse to proceed if any staging-path
-  # reference still exists in the canonical release's venv bin
-  # directory. This pins the relocatability invariant end-to-end:
-  # the canonical release must contain no references to the
-  # build-time staging path.
-  stale=$(grep -RIl -- "/.staging-$sha-" "$RELEASE_DIR/.venv/bin/" 2>/dev/null || true)
-  if [[ -n "$stale" ]]; then
-      quarantine_invalid "staging-path references survived shim rewrite"
-      fail "venv shim rewrite left stale staging-path references: $stale"
-  fi
-
-  # 2g. strict canonical-path verification immediately after the atomic
+  # 2f. strict canonical-path verification immediately after the atomic
   # rename. The manifest records ``$FINAL_RELEASE_DIR`` because the
   # shell script passed it explicitly to ``from_directory``; this
   # check pins that contract end-to-end. On failure we must NOT leave
@@ -468,16 +417,26 @@ if [[ -n "${OMNIGENT_BUILTIN_AGENT_DIRS:-}" ]]; then
 fi
 
 # --- 5. systemd restart and live validation ------------------------------
-# Resolve the canonical web service / port / host service. These
-# constants are hard-coded here rather than resolved through
-# ``omnigent.deploy.ops.systemd`` so the promotion works against
-# older releases that predate ``host_service_spec`` (see issue
-# #38 §5 rollback-compat). If those constants ever change, this
-# script must be updated together with
-# ``omnigent/deploy/ops/systemd.py``.
-SERVICE_NAME="omnigent-eval-web.service"
-SERVICE_PORT="4097"
-HOST_SERVICE_NAME="omnigent-eval-host.service"
+# Resolve the canonical web service / port / host service from the
+# release's own python so a fork of ``omnigent.deploy.ops.systemd``
+# on the calling side cannot silently override them. ``host_*``
+# resolvers are pinned (no env-var override) — the host daemon
+# cannot be redirected to a different unit.
+SERVICE_NAME=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
+from omnigent.deploy.ops.systemd import service_name
+print(service_name())
+")
+SERVICE_PORT=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
+from omnigent.deploy.ops.systemd import service_port
+print(service_port())
+")
+HOST_SERVICE_NAME=$("$RELEASE_DIR/.venv/bin/python" -c "
+import sys
+from omnigent.deploy.ops.systemd import host_service_spec
+print(host_service_spec().service_name)
+")
 
 log "running daemon-reload"
 sudo systemctl daemon-reload || fail "systemctl daemon-reload failed"

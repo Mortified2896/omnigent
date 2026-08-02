@@ -22,20 +22,9 @@ from typing import Any, Protocol
 
 from cachetools import TTLCache
 
-from omnigent.db.db_models import InvalidUuidError, uuid_to_bytes
 from omnigent.host.frames import HostHelloFrame
 
 _logger = logging.getLogger(__name__)
-
-
-def _canonical_host_id(host_id: str) -> str:
-    """Return the bare-hex registry key for accepted UUID host IDs."""
-    try:
-        return uuid_to_bytes(host_id).hex()
-    except InvalidUuidError:
-        # Local/test identifiers remain distinct; malformed IDs fail by miss.
-        return host_id
-
 
 # How long a runner exit report stays answerable, and how many are kept.
 # Reports only matter while a client is still waiting for the runner to
@@ -264,7 +253,6 @@ class HostRegistry:
         :param owner: Authenticated user ID, or ``None``.
         :returns: The new :class:`HostConnection`.
         """
-        host_id = _canonical_host_id(host_id)
         now = time.time()
         conn = HostConnection(
             host_id=host_id,
@@ -286,22 +274,15 @@ class HostRegistry:
             self._hosts[host_id] = conn
         return conn
 
-    def deregister(self, connection: HostConnection | str) -> bool:
-        """Remove a connection, conditionally when an object is supplied.
+    def deregister(self, host_id: str) -> None:
+        """Remove a host connection.
 
-        Routes pass the connection object so stale cleanup cannot remove a
-        replacement. The string form remains for simple callers and legacy
-        tests, but should not be used by tunnel cleanup.
+        No-op if ``host_id`` is not registered.
+
+        :param host_id: Host identifier to remove.
         """
         with self._lock:
-            if isinstance(connection, str):
-                return self._hosts.pop(_canonical_host_id(connection), None) is not None
-            current = self._hosts.get(connection.host_id)
-            if current is not connection:
-                _logger.info("ignored stale host unregister host_id=%s", connection.host_id)
-                return False
-            del self._hosts[connection.host_id]
-            return True
+            self._hosts.pop(host_id, None)
 
     def get(self, host_id: str) -> HostConnection | None:
         """Look up a live host connection.
@@ -312,7 +293,7 @@ class HostRegistry:
             otherwise ``None``.
         """
         with self._lock:
-            return self._hosts.get(_canonical_host_id(host_id))
+            return self._hosts.get(host_id)
 
     def online_host_ids(self) -> list[str]:
         """Return IDs of all currently connected hosts.

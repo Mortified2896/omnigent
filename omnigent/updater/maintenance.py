@@ -315,14 +315,6 @@ def reconcile_marker(*, owner_pid: int | None) -> MaintenanceState:
     cleared (the operator is the only one who can re-engage it).
     If the owner is alive, the marker is left in place.
 
-    When ``owner_pid`` is ``None`` (the web service never learns
-    the controller's pid directly) we fall back to a state-root
-    lookup: if the request id named in the marker already has a
-    terminal result file, the marker is stale and is cleared.
-    This is the recovery path that lets a crashed-and-rolled-back
-    update release the maintenance flag the next time the web
-    service restarts.
-
     :param owner_pid: The pid of the controller that set the
         marker, if known. ``None`` means the marker is older than
         the current owner-tracking generation; the safest behavior
@@ -332,15 +324,6 @@ def reconcile_marker(*, owner_pid: int | None) -> MaintenanceState:
     if not state.active:
         return state
     if owner_pid is None:
-        # Fallback: look up the request id in the durable state
-        # root. A terminal result file means the update finished
-        # (success, failure, rejection, or rollback) and the
-        # maintenance flag should be released — this is how a
-        # crashed ``rollback_failed`` update no longer strands the
-        # web service in maintenance mode.
-        if state.request_id and _request_has_terminal_result(state.request_id):
-            clear_marker()
-            return MaintenanceState(active=False, request_id="", set_at="")
         return state
     try:
         os.kill(owner_pid, 0)
@@ -353,32 +336,6 @@ def reconcile_marker(*, owner_pid: int | None) -> MaintenanceState:
     except OSError:
         return state
     return state
-
-
-def _request_has_terminal_result(request_id: str) -> bool:
-    """Return ``True`` iff ``request_id`` has a terminal result file.
-
-    Used by :func:`reconcile_marker` as a fallback signal when the
-    controller's pid is unknown: a terminal result means the
-    update finished (success, failure, rejection, or rollback)
-    and the maintenance flag should be released. Imported
-    lazily so the maintenance module does not pull the full
-    store layer at import time.
-    """
-    from omnigent.updater import layout as updater_layout
-    from omnigent.updater.state_machine import is_terminal
-
-    path = updater_layout.result_path(request_id)
-    if not path.is_file():
-        return False
-    try:
-        import json
-
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    final = data.get("final_status", "")
-    return bool(final) and is_terminal(final)
 
 
 __all__ = [

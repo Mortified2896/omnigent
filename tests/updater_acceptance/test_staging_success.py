@@ -62,7 +62,7 @@ def _hooks(
     def _promote(_repo: Path, _sha: str) -> subprocess.CompletedProcess:
         return ok
 
-    def _rollback(_repo: Path, **_kw: object) -> subprocess.CompletedProcess:
+    def _rollback(_repo: Path) -> subprocess.CompletedProcess:
         return ok
 
     def _drain(_rid: str) -> None:
