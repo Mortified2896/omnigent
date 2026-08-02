@@ -301,6 +301,22 @@ run_check() {
   #                 "PASS"|"FAIL"|"SKIPPED", and the rest of the keys
   #                 are evidence.
   first_line=$(printf '%s\n' "$status_line" | head -1)
+  # Some checks write a "note: ..." informational line to stderr
+  # BEFORE the PASS line. The status_line captured both, so the
+  # first non-empty / non-note line carries the verdict.
+  verdict_line=""
+  while IFS= read -r line; do
+    case "$line" in
+      PASS|FAIL|SKIPPED) verdict_line="$line"; break ;;
+      \{*) verdict_line="$line"; break ;;
+      note:*) continue ;;
+      "") continue ;;
+      *) continue ;;
+    esac
+  done <<STATUS_LINES
+$status_line
+STATUS_LINES
+  first_line="${verdict_line:-$first_line}"
   case "$first_line" in
     PASS|FAIL|SKIPPED)
       status="$first_line"
