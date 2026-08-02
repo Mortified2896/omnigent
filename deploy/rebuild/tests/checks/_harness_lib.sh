@@ -19,6 +19,24 @@ require_harness_binary() {
   fi
 }
 
+# Resolve an agent NAME to its database id via GET /v1/agents.
+# Usage: resolve_agent_id <port> <auth_header> <identity> <agent_name>
+# Prints the id on stdout, or empty.
+resolve_agent_id() {
+  local port="$1" auth_header="$2" identity="$3" name="$4"
+  curl -fsS --max-time 10 \
+    -H "${auth_header}: ${identity}" \
+    "http://127.0.0.1:${port}/v1/agents" \
+    | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for a in d.get('data', []):
+    if a.get('name') == '${name}':
+        print(a.get('id', ''))
+        break
+"
+}
+
 # Create a fresh disposable git fixture repo. Usage:
 #   create_fixture_repo /tmp/canary-fixtures/<run-id>/<harness>/repo
 # Writes a single file `module.py` containing `def foo(): return 1`
@@ -56,25 +74,35 @@ create_worktree() {
 # Launch a session via POST /v1/sessions and wait for it to
 # complete. Usage:
 #   run_harness_session <auth-header-name> <identity>
-#                       <port> <agent_selector>
+#                       <port> <agent_name>
 #                       <worktree_path> <branch> <purpose>
 # Prints the session_id on stdout.
 # Side-effects: writes the SSE stream to $WORKTREE_DIR/.sse.log
 # and the session JSON to $WORKTREE_DIR/.session.json (so the
 # follow-up commit/push checks can read the git.commit.outcome
 # event without re-running).
+#
+# Wire format: upstream v0.7 binds a session by `agent_id` (a
+# durable db id resolved via GET /v1/agents), not by name. The
+# helper resolves <agent_name> → <agent_id> and posts that.
 run_harness_session() {
-  local auth_header="$1" identity="$2" port="$3" selector="$4" \
+  local auth_header="$1" identity="$2" port="$3" agent_name="$4" \
         worktree="$5" branch="$6" purpose="$7"
   local session_url="http://127.0.0.1:${port}/v1/sessions"
+  local agent_id
+  agent_id=$(resolve_agent_id "$port" "$auth_header" "$identity" "$agent_name")
+  if [ -z "$agent_id" ]; then
+    printf 'FAIL could not resolve agent_id for agent_name=%s on port %s\n' "$agent_name" "$port" >&2
+    return 1
+  fi
   local body
   body=$(cat <<JSON
 {
-  "agent_selector": "${selector}",
+  "agent_id": "${agent_id}",
   "purpose": "${purpose}",
   "workspace": "${worktree}",
   "prompt": "rename the function foo to bar. Run pytest, lint, and typecheck on what you changed. Push your branch when green. Open a PR with gh pr create if a remote is configured.",
-  "title": "acceptance-${selector}-${branch}"
+  "title": "canary-${agent_name}-${branch}"
 }
 JSON
 )
@@ -82,10 +110,17 @@ JSON
   session_json=$(curl -fsS --max-time 30 \
     -H "Content-Type: application/json" \
     -H "${auth_header}: ${identity}" \
-    -X POST -d "$body" "$session_url")
+    -X POST -d "$body" "$session_url" 2>/dev/null) || {
+      printf 'FAIL POST /v1/sessions failed; body: %s\n' "$body" >&2
+      return 1
+    }
   printf '%s' "$session_json" >"$worktree/.session.json"
   local session_id
-  session_id=$(printf '%s' "$session_json" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+  session_id=$(printf '%s' "$session_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null) || true
+  if [ -z "$session_id" ]; then
+    printf 'FAIL session create returned no id; body: %s\n' "$session_json" >&2
+    return 1
+  fi
   # Wait for the session to reach status 'finished' or 'failed'.
   local deadline=$((SECONDS + 240))
   while [ "$SECONDS" -lt "$deadline" ]; do

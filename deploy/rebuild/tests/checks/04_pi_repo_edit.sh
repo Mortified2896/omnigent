@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Check 4 — Pi edits a disposable repository
 #
-# Symmetric to check 7 (OpenCode) but with `agent_selector: "pi"`.
+# Symmetric to check 7 (OpenCode) but with `agent_name: "pi-native-ui"`
+# (resolved to the wheel's agent_id before the POST).
 # Skipped if the `pi` binary is missing from PATH; once the binary
 # is installed this check must report PASS, not SKIPPED.
 
@@ -26,7 +27,7 @@ create_fixture_repo "$REPO_DIR"
 create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
 
 SESSION_ID=$(run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-  "$OMNIGENT_PORT" "pi" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+  "$OMNIGENT_PORT" "pi-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
 
 DIFF=$(git -C "$WORKTREE_DIR" diff main)
 case "$DIFF" in

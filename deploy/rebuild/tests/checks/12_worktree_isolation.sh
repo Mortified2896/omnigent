@@ -36,10 +36,10 @@ WT_B_HASH_BEFORE=$(find "$WT_B" -type f -exec sha256sum {} \; | sort | sha256sum
 
 # Launch the two sessions in parallel.
 run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-  "$OMNIGENT_PORT" "pi" "$WT_A" "polly/acceptance-11-pi-a" "implement" >/dev/null &
+  "$OMNIGENT_PORT" "pi-native-ui" "$WT_A" "polly/canary-12-pi-a-${CANARY_RUN_ID}" "implement" >/dev/null &
 PID_A=$!
 run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-  "$OMNIGENT_PORT" "pi" "$WT_B" "polly/acceptance-11-pi-b" "implement" >/dev/null &
+  "$OMNIGENT_PORT" "pi-native-ui" "$WT_B" "polly/canary-12-pi-b-${CANARY_RUN_ID}" "implement" >/dev/null &
 PID_B=$!
 wait "$PID_A" || true
 wait "$PID_B" || true

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Check 7 — OpenCode edits a disposable repository
 #
-# Symmetric to check 4 (Pi) but with `agent_selector: "opencode"`.
+# Symmetric to check 4 (Pi) but with `agent_name: "opencode-native-ui"`
+# (resolved to the wheel's agent_id before the POST).
 # Skipped if the `opencode` binary is missing from PATH; once the
 # binary is installed this check must report PASS, not SKIPPED.
 
@@ -26,7 +27,7 @@ create_fixture_repo "$REPO_DIR"
 create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
 
 SESSION_ID=$(run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-  "$OMNIGENT_PORT" "opencode" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+  "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
 
 DIFF=$(git -C "$WORKTREE_DIR" diff main)
 case "$DIFF" in

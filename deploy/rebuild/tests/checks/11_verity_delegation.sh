@@ -96,9 +96,14 @@ git -C "$REPO_DIR" worktree add -b "$BRANCH" "$WORKTREE_DIR" main >/dev/null
 
 # Post the parent session.
 SESSIONS_URL="http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions"
+# Resolve verity's agent_id (the upstream wire format binds by
+# agent_id, not by name; resolve_agent_id lives in _harness_lib.sh).
+. "$HERE/_harness_lib.sh"
+VERITY_AGENT_ID=$(resolve_agent_id "${OMNIGENT_PORT}" "${OMNIGENT_AUTH_HEADER}" "${CANARY_IDENTITY}" "verity")
+[ -n "$VERITY_AGENT_ID" ] || bad "could not resolve verity agent_id on port ${OMNIGENT_PORT}"
 BODY=$(cat <<JSON
 {
-  "agent_selector": "verity",
+  "agent_id": "${VERITY_AGENT_ID}",
   "workspace": "${WORKTREE_DIR}",
   "prompt": "rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green.",
   "title": "canary-11-verity-${CANARY_RUN_ID}"
