@@ -39,6 +39,13 @@ require_harness_binary() {
 : "${CANARY_AUTH_HEADER:=}"
 : "${CANARY_AUTH_IDENTITY:=}"
 
+# Never let git prompt interactively for credentials while the
+# canary runs. Fixture remotes are local bare paths, so no
+# credential helper is needed; if an accidental http(s) remote is
+# ever pushed to, git must fail fast instead of hanging on a
+# username prompt (or invoking the operator's github helper).
+export GIT_TERMINAL_PROMPT=0
+
 # Resolve an agent NAME to its database id via GET /v1/agents.
 # Usage: resolve_agent_id <port> <name>
 #
@@ -69,33 +76,70 @@ for a in d.get('data', []):
 #   create_fixture_repo /tmp/canary-fixtures/<run-id>/<harness>/repo
 # Writes a single file `module.py` containing `def foo(): return 1`
 # and commits it on `main`.
+#
+# Fail-fast on every step: any `git` failure exits 1 so a dependent
+# check never inherits a half-built fixture. Returns the bare remote
+# dir on stdout (callers don't need it; logged for debug).
 create_fixture_repo() {
   local repo_dir="$1"
   rm -rf "$repo_dir"
-  mkdir -p "$repo_dir"
-  git -C "$repo_dir" init --quiet --initial-branch=main
-  git -C "$repo_dir" config user.email "canary@omnigent.local"
-  git -C "$repo_dir" config user.name "Canary Bot"
+  mkdir -p "$repo_dir" \
+    || { printf 'FAIL create_fixture_repo: mkdir %s failed\n' "$repo_dir" >&2; exit 1; }
+  git -C "$repo_dir" init --quiet --initial-branch=main \
+    || { printf 'FAIL create_fixture_repo: git init at %s failed\n' "$repo_dir" >&2; exit 1; }
+  git -C "$repo_dir" config user.email "canary@omnigent.local" \
+    || { printf 'FAIL create_fixture_repo: git config user.email at %s failed\n' "$repo_dir" >&2; exit 1; }
+  git -C "$repo_dir" config user.name "Canary Bot" \
+    || { printf 'FAIL create_fixture_repo: git config user.name at %s failed\n' "$repo_dir" >&2; exit 1; }
+  # Disable the operator's inherited github credential helper for this
+  # repo so the canary process (which inherits $HOME from the runner
+  # shell) never tries to talk to github.com from inside the
+  # fixture. The fixture remote is a local file path; no network
+  # auth is needed.
+  git -C "$repo_dir" config credential.helper "" \
+    || { printf 'FAIL create_fixture_repo: git config credential.helper at %s failed\n' "$repo_dir" >&2; exit 1; }
   printf 'def foo():\n    return 1\n' >"$repo_dir/module.py"
-  git -C "$repo_dir" add module.py
-  git -C "$repo_dir" commit --quiet -m "initial"
+  git -C "$repo_dir" add module.py \
+    || { printf 'FAIL create_fixture_repo: git add at %s failed\n' "$repo_dir" >&2; exit 1; }
+  git -C "$repo_dir" commit --quiet -m "initial" \
+    || { printf 'FAIL create_fixture_repo: initial commit at %s failed\n' "$repo_dir" >&2; exit 1; }
   # Bare remote.
   local remote_dir="${repo_dir%/*}/remote.git"
   rm -rf "$remote_dir"
-  git init --quiet --bare "$remote_dir"
-  git -C "$repo_dir" remote add origin "$remote_dir"
-  git -C "$repo_dir" push --quiet --set-upstream origin main
+  git init --quiet --bare "$remote_dir" \
+    || { printf 'FAIL create_fixture_repo: bare remote init at %s failed\n' "$remote_dir" >&2; exit 1; }
+  git -C "$repo_dir" remote add origin "$remote_dir" \
+    || { printf 'FAIL create_fixture_repo: remote add origin at %s failed\n' "$repo_dir" >&2; exit 1; }
+  git -C "$repo_dir" push --quiet --set-upstream origin main \
+    || { printf 'FAIL create_fixture_repo: initial push to %s failed\n' "$remote_dir" >&2; exit 1; }
+  printf '%s\n' "$remote_dir"
 }
 
 # Create a fresh disposable worktree under
 #   /tmp/canary-fixtures/<run-id>/<harness>/worktree
 # bound to a NEW branch. Returns the worktree path on stdout.
+#
+# Fail-fast: any git error exits 1 so a downstream check never
+# inherits a broken or missing worktree. Stale .git/worktrees
+# entries / index.lock files left behind by a prior crashed run
+# are cleared up-front so `git worktree add` doesn't refuse on a
+# leftover lock or stale metadata.
 create_worktree() {
   local repo_dir="$1"
   local branch="$2"
   local worktree_dir="$3"
   rm -rf "$worktree_dir"
-  git -C "$repo_dir" worktree add -b "$branch" "$worktree_dir" main >/dev/null
+  # Stale index.lock in the parent repo blocks worktree add. The
+  # canary never holds a real git index lock — it's a leftover
+  # from a crashed previous run. Remove defensively.
+  rm -f "$repo_dir/.git/index.lock"
+  git -C "$repo_dir" worktree prune \
+    || true
+  git -C "$repo_dir" worktree add -b "$branch" "$worktree_dir" main >/dev/null \
+    || { printf 'FAIL create_worktree: git worktree add at %s failed\n' "$worktree_dir" >&2; exit 1; }
+  # Sanity check the worktree.
+  [ -d "$worktree_dir/.git" ] || [ -f "$worktree_dir/.git" ] \
+    || { printf 'FAIL create_worktree: %s has no .git after add\n' "$worktree_dir" >&2; exit 1; }
   printf '%s\n' "$worktree_dir"
 }
 
@@ -133,9 +177,8 @@ for h in hosts:
 #                       <worktree_path> <branch> <purpose>
 # Prints the session_id on stdout.
 # Side-effects: writes the SSE stream to $WORKTREE_DIR/.sse.log
-# and the session JSON to $WORKTREE_DIR/.session.json (so the
-# follow-up commit/push checks can read the git.commit.outcome
-# event without re-running).
+# and the session create JSON to $WORKTREE_DIR/.session.json as
+# evidence for follow-up checks.
 #
 # Wire format: upstream v0.7 binds a session by `agent_id` (a
 # durable db id resolved via GET /v1/agents), not by name. The
@@ -171,26 +214,45 @@ run_harness_session() {
     return 1
   fi
   local body
-  body=$(cat <<JSON
-{
-  "agent_id": "${agent_id}",
-  "host_id": "${host_id}",
-  "purpose": "${purpose}",
-  "workspace": "${worktree}",
-  "title": "canary-${agent_name}-${branch}",
-  "initial_items": [
-    {
-      "type": "message",
-      "data": {
-        "role": "user",
-        "content": [
-          {"type": "input_text", "text": "rename the function foo to bar. Then run `git commit -am 'rename foo to bar'` and `git push -u origin HEAD`. Report what you did."}
-        ]
-      }
-    }
-  ]
-}
-JSON
+  # Build the JSON in a python heredoc to avoid bash
+  # command-substitution eating the backticks in the prompt text.
+  # An earlier version of this helper used `body=$(cat <<JSON ...)`
+  # with literal backticks around the git commands, and bash
+  # executed those backticks at heredoc-expand time — the captured
+  # session payload ended up containing `git status` output
+  # ("On branch rebuild/upstream-0.7...") instead of the intended
+  # git instructions. Single-quote the python heredoc to keep the
+  # payload byte-exact.
+  #
+  # The argv args must sit on the SAME line as the heredoc redirect
+  # (`python3 - "$arg" ... <<'PYBODY'`): words after the PYBODY
+  # terminator line would be parsed as a separate command, not as
+  # python's argv, and python would raise IndexError on sys.argv[1].
+  body=$(python3 - "$agent_id" "$host_id" "$purpose" "$worktree" "canary-${agent_name}-${branch}" <<'PYBODY'
+import json, sys
+print(json.dumps({
+    "agent_id": sys.argv[1],
+    "host_id": sys.argv[2],
+    "purpose": sys.argv[3],
+    "workspace": sys.argv[4],
+    "title": sys.argv[5],
+    "initial_items": [{
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": (
+                    "rename the function foo to bar in module.py. "
+                    "Then run `git commit -am 'rename foo to bar'` "
+                    "and `git push -u origin HEAD`. "
+                    "Report what you did."
+                ),
+            }],
+        },
+    }],
+}, indent=None))
+PYBODY
 )
   local session_json
   session_json=$(curl -fsS --max-time 30 \
@@ -212,57 +274,94 @@ JSON
   # them on bind. The runner's POST /v1/sessions/{id}/events is
   # the only thing that drives a turn. Re-POST the user message
   # here so the runner picks it up and dispatches the harness turn.
+  local wake_body
+  wake_body=$(python3 - <<'PYBODY'
+import json
+print(json.dumps({
+    "type": "message",
+    "data": {
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": (
+                "rename the function foo to bar in module.py. "
+                "Then run `git commit -am 'rename foo to bar'` "
+                "and `git push -u origin HEAD`. "
+                "Report what you did."
+            ),
+        }],
+    },
+}))
+PYBODY
+)
   curl -fsS --max-time 30 \
     -H "Content-Type: application/json" \
     "${auth_args[@]}" \
     -X POST \
-    -d '{"type":"message","data":{"role":"user","content":[{"type":"input_text","text":"rename the function foo to bar. Then run `git commit -am '\''rename foo to bar'\''` and `git push -u origin HEAD`. Report what you did."}]}}' \
-    "${session_url%/}/v1/sessions/${session_id}/events" >/dev/null 2>&1 || {
+    -d "$wake_body" \
+    "${session_url}/${session_id}/events" >/dev/null 2>&1 || {
       printf 'FAIL POST /v1/sessions/%s/events failed\n' "$session_id" >&2
       return 1
     }
-  # Wait for the session to reach status 'finished' or 'failed'.
+  # Wait for the harness to complete the work. For the native-TUI
+  # harnesses (pi, opencode) the runner dispatches the turn and the
+  # session returns to `idle` immediately — the TUI then performs
+  # the edit/commit/push asynchronously, so session status does not
+  # track progress. Poll the worktree instead: the work is done when
+  # the worktree HEAD moves past the fixture's `main`. `failed`
+  # status is a hard error; no work within 90 s means the runner
+  # never picked up the wake (fail fast rather than waiting out the
+  # full deadline).
   # The default session deadline is 240 s. CANARY_SESSION_DEADLINE_S
   # can override it (used by the canary-run orchestrator to keep
   # the total canary wall-time bounded).
   local deadline=$(($SECONDS + ${CANARY_SESSION_DEADLINE_S:-240}))
+  local progress_deadline=$(($SECONDS + 90))
+  local main_sha
+  main_sha=$(git -C "$worktree" rev-parse main 2>/dev/null || true)
   while [ "$SECONDS" -lt "$deadline" ]; do
-    local status
+    local status head
     status=$(curl -fsS --max-time 5 \
       "${auth_args[@]}" \
       "http://127.0.0.1:${port}/v1/sessions/${session_id}" \
       | python3 -c "import sys, json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
-    case "$status" in
-      finished) printf '%s\n' "$session_id"; return 0 ;;
-      failed)   printf '%s\n' "$session_id"; return 1 ;;
-    esac
+    if [ "$status" = failed ]; then
+      printf 'FAIL session %s reported status failed\n' "$session_id" >&2
+      printf '%s\n' "$session_id"
+      return 1
+    fi
+    head=$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)
+    if [ -n "$head" ] && [ -n "$main_sha" ] && [ "$head" != "$main_sha" ]; then
+      printf '%s\n' "$session_id"
+      return 0
+    fi
+    if [ "$SECONDS" -ge "$progress_deadline" ]; then
+      printf 'FAIL session %s made no progress in worktree %s (runner missing?)\n' "$session_id" "$worktree" >&2
+      printf '%s\n' "$session_id"
+      return 1
+    fi
     sleep 2
   done
   printf '%s\n' "$session_id"
   return 1
 }
 
-# Read the most recent git.commit.outcome event from a session's
-# JSON dump. Usage:
+# Read the commit the harness made in the worktree. The upstream
+# v0.7 session event surface has no git.commit.outcome event, so the
+# SHA is read from the worktree HEAD itself. Usage:
 #   read_commit_sha <worktree_path>
-# Prints the commit SHA on stdout, or empty.
+# Prints the commit SHA on stdout, or empty. Returns 1 if the
+# worktree has no commit beyond the fixture's main (the harness did
+# not commit), so downstream checks fail rather than false-pass.
 read_commit_sha() {
   local worktree="$1"
-  local session_json="$worktree/.session.json"
-  if [ ! -f "$session_json" ]; then
+  local head main_sha
+  head=$(git -C "$worktree" rev-parse HEAD 2>/dev/null) || return 1
+  main_sha=$(git -C "$worktree" rev-parse main 2>/dev/null || true)
+  if [ -n "$main_sha" ] && [ "$head" = "$main_sha" ]; then
     return 1
   fi
-  python3 - <<PY
-import json
-with open("$session_json") as f:
-    s = json.load(f)
-events = s.get("events", [])
-sha = ""
-for ev in events:
-    if ev.get("type") == "git.commit.outcome":
-        sha = ev.get("payload", {}).get("commit_sha", "")
-print(sha)
-PY
+  printf '%s\n' "$head"
 }
 
 # Verify the commit + push.
@@ -274,13 +373,19 @@ verify_commit_and_push() {
   local branch="$3"
   local sha
   sha=$(read_commit_sha "$worktree")
-  [ -n "$sha" ] || { printf 'FAIL no git.commit.outcome event in session JSON\n' >&2; return 1; }
-  local remote_sha
-  remote_sha=$(git -C "$remote_dir" rev-parse "refs/heads/${branch}" 2>/dev/null || true)
-  if [ "$remote_sha" != "$sha" ]; then
-    printf 'FAIL remote branch %s has SHA %s (expected %s)\n' "$branch" "$remote_sha" "$sha" >&2
-    return 1
-  fi
-  printf '%s\n' "$sha"
-  return 0
+  [ -n "$sha" ] || { printf 'FAIL no harness commit found in worktree\n' >&2; return 1; }
+  # The TUI pushes a moment after committing; poll briefly so the
+  # check does not race the push.
+  local remote_sha=""
+  local deadline=$(($SECONDS + 30))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    remote_sha=$(git -C "$remote_dir" rev-parse "refs/heads/${branch}" 2>/dev/null || true)
+    if [ "$remote_sha" = "$sha" ]; then
+      printf '%s\n' "$sha"
+      return 0
+    fi
+    sleep 2
+  done
+  printf 'FAIL remote branch %s has SHA %s (expected %s)\n' "$branch" "$remote_sha" "$sha" >&2
+  return 1
 }

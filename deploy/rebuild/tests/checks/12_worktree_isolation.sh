@@ -45,8 +45,8 @@ wait "$PID_B" || true
 # The two commits must be byte-distinct.
 SHA_A=$(read_commit_sha "$WT_A")
 SHA_B=$(read_commit_sha "$WT_B")
-[ -n "$SHA_A" ] || { printf 'FAIL no git.commit.outcome in session A\n' >&2; exit 1; }
-[ -n "$SHA_B" ] || { printf 'FAIL no git.commit.outcome in session B\n' >&2; exit 1; }
+[ -n "$SHA_A" ] || { printf 'FAIL no harness commit in worktree A\n' >&2; exit 1; }
+[ -n "$SHA_B" ] || { printf 'FAIL no harness commit in worktree B\n' >&2; exit 1; }
 [ "$SHA_A" != "$SHA_B" ] || { printf 'FAIL parallel sessions produced identical SHA %s\n' "$SHA_A" >&2; exit 1; }
 
 # The two commits must exist on the remote.

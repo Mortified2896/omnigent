@@ -205,25 +205,32 @@ gateway is deterministic for the same input.
 - `POST /v1/sessions` with `agent_selector: "pi"`,
   `workspace: /tmp/canary-fixtures/<run-id>/pi/worktree`,
   `prompt: "rename the function foo to bar"`.
-- Wait up to 180 s for `session.finished`.
-- Assert `git -C <worktree> diff main` contains `bar` and does
-  NOT contain `foo`.
+- Wait up to 240 s for the session to complete. The v0.7 session
+  status has no `finished` value, and native-TUI harnesses return
+  the session to `idle` as soon as the turn is dispatched (the TUI
+  then works asynchronously) — the helper waits for the worktree
+  HEAD to advance past the fixture's `main` instead.
+- Assert the worktree's `module.py` contains `def bar()` and does
+  NOT contain `def foo()`. (A rename appears in `git diff main` as
+  `-def foo():` / `+def bar():`, so the diff itself always contains
+  `foo` and cannot be the assertion target.)
 
-**Pass criteria**: the diff shows `bar`, not `foo`, and the
-session completed inside 180 s. (SKIPPED only while diagnosing
-an absent `pi` binary on the VM; once `pi` is installed, this
-check must report PASS, not SKIPPED.)
+**Pass criteria**: the worktree's `module.py` shows `def bar()`,
+not `def foo()`, and the session completed inside 240 s. (SKIPPED
+only while diagnosing an absent `pi` binary on the VM; once `pi`
+is installed, this check must report PASS, not SKIPPED.)
 
 ### Check 5 — Pi commits the change
 
-- The Pi session from check 4 must produce at least one
-  `git.commit.outcome` SSE event with a non-empty `commit_sha`.
+- The Pi session's worktree HEAD must be a new commit beyond the
+  fixture's `main` (read from the worktree directly — the v0.7
+  session event surface has no `git.commit.outcome` event).
 - `git -C <worktree> log --oneline` shows a commit authored by
   the harness identity (any email; the harness's identity is
   config-driven, not asserted here).
 
-**Pass criteria**: the session emitted `git.commit.outcome`
-with a non-empty SHA, and `git log` shows the new commit.
+**Pass criteria**: the worktree HEAD is a new commit with a
+non-empty SHA, and `git log` shows it.
 
 ### Check 6 — Pi pushes the branch
 
@@ -232,7 +239,7 @@ with a non-empty SHA, and `git log` shows the new commit.
   `/tmp/canary-fixtures/<run-id>/pi/remote.git`, OR a dedicated
   disposable GitHub test repo).
 - Assert the remote's `polly/canary-6-pi-<run-id>` branch tip
-  equals the SHA from `git.commit.outcome`.
+  equals the worktree HEAD SHA.
 
 **Pass criteria**: the pushed SHA matches the session's
 reported commit SHA.

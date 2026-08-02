@@ -33,8 +33,9 @@
 #
 # Inputs (env vars):
 #   OMNIGENT_PORT       the canary wheel's TCP port
-#   OMNIGENT_AUTH_HEADER the auth header name
-#   CANARY_IDENTITY     the canary's auth identity
+#   CANARY_AUTH_HEADER / CANARY_AUTH_IDENTITY  optional auth header
+#                       pair (empty in canary local mode; see
+#                       _harness_lib.sh for the auth model)
 #   CANARY_FIXTURES_ROOT the canary fixtures root
 #   CANARY_RUN_ID       the per-run ID
 #   REQUESTED_CHILD_HARNESS the harness selector the user asked
@@ -54,8 +55,8 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 : "${OMNIGENT_PORT:=6767}"
-: "${OMNIGENT_AUTH_HEADER:=X-Forwarded-Email}"
-: "${CANARY_IDENTITY:=canary@omnigent.local}"
+: "${CANARY_AUTH_HEADER:=}"
+: "${CANARY_AUTH_IDENTITY:=}"
 : "${CANARY_FIXTURES_ROOT:=/tmp/canary-fixtures}"
 : "${CANARY_RUN_ID:=$(date -u +%Y%m%dT%H%M%SZ)}"
 : "${REQUESTED_CHILD_HARNESS:=pi}"
@@ -83,54 +84,70 @@ REPO_DIR="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/verity/repo"
 WORKTREE_DIR="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/verity/worktree"
 BRANCH="polly/canary-11-verity-${CANARY_RUN_ID}"
 
-# Fixture repo + worktree.
-rm -rf "$REPO_DIR" "$WORKTREE_DIR"
-mkdir -p "$REPO_DIR"
-git -C "$REPO_DIR" init --quiet --initial-branch=main
-git -C "$REPO_DIR" config user.email "canary@omnigent.local"
-git -C "$REPO_DIR" config user.name "Canary Bot"
-printf 'def foo():\n    return 1\n' >"$REPO_DIR/module.py"
-git -C "$REPO_DIR" add module.py
-git -C "$REPO_DIR" commit --quiet -m "initial"
-git -C "$REPO_DIR" worktree add -b "$BRANCH" "$WORKTREE_DIR" main >/dev/null
+# Shared helpers (fail-fast fixture creation, agent/host resolution,
+# auth model). Sourced before the fixture so the fixture setup is
+# fail-fast just like checks 04/05/06.
+. "$HERE/_harness_lib.sh"
+
+# Fixture repo + worktree. create_fixture_repo / create_worktree
+# exit 1 on any git failure, so a half-built fixture never reaches
+# the session POST.
+create_fixture_repo "$REPO_DIR" >/dev/null
+create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
+
+# Auth args. In canary local mode CANARY_AUTH_HEADER is empty, so no
+# auth header is sent and the loopback single-user wheel resolves the
+# request to RESERVED_USER_LOCAL — the same owner as the temporary
+# host. An operator running against a production-shape wheel can set
+# CANARY_AUTH_HEADER / CANARY_AUTH_IDENTITY to opt in.
+AUTH_ARGS=()
+if [ -n "$CANARY_AUTH_HEADER" ]; then
+  AUTH_ARGS=(-H "${CANARY_AUTH_HEADER}: ${CANARY_AUTH_IDENTITY}")
+fi
 
 # Post the parent session.
 SESSIONS_URL="http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions"
 # Resolve verity's agent_id (the upstream wire format binds by
 # agent_id, not by name; resolve_agent_id lives in _harness_lib.sh).
-. "$HERE/_harness_lib.sh"
 VERITY_AGENT_ID=$(resolve_agent_id "${OMNIGENT_PORT}" "verity")
 [ -n "$VERITY_AGENT_ID" ] || bad "could not resolve verity agent_id on port ${OMNIGENT_PORT}"
 # Resolve the online host_id — the server needs it to dispatch
 # the parent session to the host runner.
 HOST_ID=$(resolve_host_id "${OMNIGENT_PORT}")
 [ -n "$HOST_ID" ] || bad "could not resolve an online host_id on port ${OMNIGENT_PORT}"
-BODY=$(cat <<JSON
-{
-  "agent_id": "${VERITY_AGENT_ID}",
-  "host_id": "${HOST_ID}",
-  "workspace": "${WORKTREE_DIR}",
-  "title": "canary-11-verity-${CANARY_RUN_ID}",
-  "initial_items": [
-    {
-      "type": "message",
-      "data": {
-        "role": "user",
-        "content": [
-          {"type": "input_text", "text": "rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green."}
-        ]
-      }
-    }
-  ]
-}
-JSON
+# The argv args must sit on the SAME line as the heredoc redirect;
+# words after the PYBODY terminator would be parsed as a separate
+# command, not python's argv.
+BODY=$(python3 - "$VERITY_AGENT_ID" "$HOST_ID" "$WORKTREE_DIR" "$CANARY_RUN_ID" "$REQUESTED_CHILD_HARNESS" <<'PYBODY'
+import json, sys
+print(json.dumps({
+    "agent_id": sys.argv[1],
+    "host_id": sys.argv[2],
+    "workspace": sys.argv[3],
+    "title": "canary-11-verity-" + sys.argv[4],
+    "initial_items": [{
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": (
+                    "rename foo to bar in module.py using a "
+                    + sys.argv[5]
+                    + " sub-agent. Push the branch when green."
+                ),
+            }],
+        },
+    }],
+}))
+PYBODY
 )
 
 # POST and capture status code separately so we can FAIL on non-2xx
 # instead of curl aborting.
 HTTP_CODE=$(curl -sS -o /tmp/canary-11-session.json -w '%{http_code}' --max-time 30 \
   -H "Content-Type: application/json" \
-  ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
+  "${AUTH_ARGS[@]}" \
   -X POST -d "$BODY" "$SESSIONS_URL" || true)
 case "$HTTP_CODE" in
   2*) ;;
@@ -139,13 +156,32 @@ esac
 SESSION_ID=$(python3 -c "import sys, json; print(json.load(open('/tmp/canary-11-session.json'))['id'])")
 
 # Wake the runner with the same user message (initial_items only
-# seeds the row; the runner only acts on POST .../events).
+# seeds the row; the runner only acts on POST .../events). Build the
+# body with python so the child-harness name is the only interpolation.
+WAKE_BODY=$(python3 - "$REQUESTED_CHILD_HARNESS" <<'PYBODY'
+import json, sys
+print(json.dumps({
+    "type": "message",
+    "data": {
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": (
+                "rename foo to bar in module.py using a "
+                + sys.argv[1]
+                + " sub-agent. Push the branch when green."
+            ),
+        }],
+    },
+}))
+PYBODY
+)
 curl -fsS --max-time 30 \
   -H "Content-Type: application/json" \
-  ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
+  "${AUTH_ARGS[@]}" \
   -X POST \
-  -d "{\"type\":\"message\",\"data\":{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"rename foo to bar in module.py using a ${REQUESTED_CHILD_HARNESS} sub-agent. Push the branch when green.\"}]}}" \
-  "${SESSIONS_URL%/}/v1/sessions/${SESSION_ID}/events" >/dev/null 2>&1 || {
+  -d "$WAKE_BODY" \
+  "${SESSIONS_URL}/${SESSION_ID}/events" >/dev/null 2>&1 || {
   bad "POST /v1/sessions/${SESSION_ID}/events failed"
 }
 
@@ -153,7 +189,7 @@ curl -fsS --max-time 30 \
 DEADLINE=$((SECONDS + 240))
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
   STATUS=$(curl -fsS --max-time 5 \
-    ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
+    "${AUTH_ARGS[@]}" \
     "http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions/${SESSION_ID}" \
     | python3 -c "import sys, json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
   case "$STATUS" in
@@ -166,7 +202,7 @@ done
 
 # Read the full session JSON.
 curl -fsS --max-time 10 \
-  ${OMNIGENT_AUTH_HEADER:+-H "${OMNIGENT_AUTH_HEADER}: ${CANARY_IDENTITY}"} \
+  "${AUTH_ARGS[@]}" \
   "http://127.0.0.1:${OMNIGENT_PORT}/v1/sessions/${SESSION_ID}" \
   >/tmp/canary-11-full.json
 

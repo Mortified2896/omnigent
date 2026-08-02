@@ -26,14 +26,22 @@ BRANCH="polly/canary-7-opencode-${CANARY_RUN_ID}"
 create_fixture_repo "$REPO_DIR"
 create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
 
-SESSION_ID=$(run_harness_session   "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+SESSION_ID=$(run_harness_session   "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement") || {
+  printf 'FAIL run_harness_session for opencode-native-ui on port %s (agent/host/session prerequisite failed)\n' "$OMNIGENT_PORT" >&2
+  exit 1
+}
 
-DIFF=$(git -C "$WORKTREE_DIR" diff main)
-case "$DIFF" in
-  *foo*) printf 'FAIL function foo still present in diff\n' >&2; exit 1 ;;
-esac
-case "$DIFF" in
-  *bar*) printf 'PASS\n'; exit 0 ;;
-esac
-printf 'FAIL function bar not present in diff\n%s\n' "$DIFF" >&2
-exit 1
+# Assert the edit in the worktree itself. A rename shows up in
+# `git diff main` as `-def foo():` / `+def bar():`, so grepping the
+# diff for `foo` can never pass — check the file content instead.
+if ! grep -q 'def bar' "$WORKTREE_DIR/module.py"; then
+  printf 'FAIL function bar not present in %s\n' "$WORKTREE_DIR/module.py" >&2
+  exit 1
+fi
+if grep -q 'def foo' "$WORKTREE_DIR/module.py"; then
+  printf 'FAIL function foo still present in %s\n' "$WORKTREE_DIR/module.py" >&2
+  exit 1
+fi
+
+printf 'PASS\n'
+exit 0

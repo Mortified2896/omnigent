@@ -23,17 +23,19 @@ if [ ! -d "$WORKTREE_DIR" ]; then
   : "${OMNIGENT_PORT:=6767}"
   : "${OMNIGENT_AUTH_HEADER:=X-Forwarded-Email}"
   : "${CANARY_IDENTITY:=canary@omnigent.local}"
-  SESSION_ID=$(run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-    "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+  SESSION_ID=$(run_harness_session "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement") || {
+    printf 'FAIL run_harness_session for opencode-native-ui on port %s (agent/host/session prerequisite failed)\n' "$OMNIGENT_PORT" >&2
+    exit 1
+  }
 fi
 
 SHA=$(read_commit_sha "$WORKTREE_DIR")
 if [ -z "$SHA" ]; then
-  printf 'FAIL no git.commit.outcome event in session JSON\n' >&2
+  printf 'FAIL no harness commit in worktree %s\n' "$WORKTREE_DIR" >&2
   exit 1
 fi
 if ! git -C "$WORKTREE_DIR" cat-file -e "$SHA" 2>/dev/null; then
-  printf 'FAIL git.commit.outcome SHA %s is not a valid object\n' "$SHA" >&2
+  printf 'FAIL harness commit SHA %s is not a valid object\n' "$SHA" >&2
   exit 1
 fi
 printf 'PASS\n%s\n' "$SHA"

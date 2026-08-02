@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Check 5 — Pi commits the change
 #
-# Depends on check 4 having run (and produced a session JSON
-# with at least one git.commit.outcome event).
+# Depends on check 4 having run (or runs the session standalone
+# when the worktree does not exist yet).
 
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -27,18 +27,21 @@ if [ ! -d "$WORKTREE_DIR" ]; then
   : "${OMNIGENT_PORT:=6767}"
   : "${OMNIGENT_AUTH_HEADER:=X-Forwarded-Email}"
   : "${CANARY_IDENTITY:=canary@omnigent.local}"
-  SESSION_ID=$(run_harness_session     "$OMNIGENT_PORT" "pi-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+  SESSION_ID=$(run_harness_session     "$OMNIGENT_PORT" "pi-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement") || {
+    printf 'FAIL run_harness_session for pi-native-ui on port %s (agent/host/session prerequisite failed)\n' "$OMNIGENT_PORT" >&2
+    exit 1
+  }
 fi
 
 SHA=$(read_commit_sha "$WORKTREE_DIR")
 if [ -z "$SHA" ]; then
-  printf 'FAIL no git.commit.outcome event in session JSON at %s\n' "$WORKTREE_DIR/.session.json" >&2
+  printf 'FAIL no harness commit in worktree %s\n' "$WORKTREE_DIR" >&2
   exit 1
 fi
 
 # Confirm the commit actually exists in the worktree.
 if ! git -C "$WORKTREE_DIR" cat-file -e "$SHA" 2>/dev/null; then
-  printf 'FAIL git.commit.outcome SHA %s is not a valid object in %s\n' "$SHA" "$WORKTREE_DIR" >&2
+  printf 'FAIL harness commit SHA %s is not a valid object in %s\n' "$SHA" "$WORKTREE_DIR" >&2
   exit 1
 fi
 
