@@ -228,9 +228,13 @@ run_harness_session() {
   # (`python3 - "$arg" ... <<'PYBODY'`): words after the PYBODY
   # terminator line would be parsed as a separate command, not as
   # python's argv, and python would raise IndexError on sys.argv[1].
-  body=$(python3 - "$agent_id" "$host_id" "$purpose" "$worktree" "canary-${agent_name}-${branch}" <<'PYBODY'
+  local model_override=""
+  if [ "$agent_name" = "opencode-native-ui" ] || [ "$agent_name" = "opencode" ]; then
+    model_override="${CANARY_OPENCODE_MODEL:-}"
+  fi
+  body=$(python3 - "$agent_id" "$host_id" "$purpose" "$worktree" "canary-${agent_name}-${branch}" "$model_override" <<'PYBODY'
 import json, sys
-print(json.dumps({
+payload = {
     "agent_id": sys.argv[1],
     "host_id": sys.argv[2],
     "purpose": sys.argv[3],
@@ -251,7 +255,10 @@ print(json.dumps({
             }],
         },
     }],
-}, indent=None))
+}
+if sys.argv[6]:
+    payload["model_override"] = sys.argv[6]
+print(json.dumps(payload, indent=None))
 PYBODY
 )
   local session_json
@@ -294,7 +301,7 @@ print(json.dumps({
 }))
 PYBODY
 )
-  curl -fsS --max-time 30 \
+  curl -fsS --max-time 90 \
     -H "Content-Type: application/json" \
     "${auth_args[@]}" \
     -X POST \

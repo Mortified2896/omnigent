@@ -111,16 +111,37 @@ mkdir -p "$CANARY_DATA_DIR/artifacts" \
          "$CANARY_DATA_DIR/worktrees"
 mkdir -p "$CANARY_HOME/.omnigent"
 
-# Lay out the rebuild's agent bundles in the upstream-canonical
-# layout (verity's sub-agents go under verity/agents/).
-mkdir -p "$CANARY_DATA_DIR/agents/verity/agents/pi" \
-         "$CANARY_DATA_DIR/agents/verity/agents/opencode"
-mkdir -p "$CANARY_DATA_DIR/agents/pi" "$CANARY_DATA_DIR/agents/opencode"
+# Preserve isolation while exposing the operator-selected, non-secret
+# OpenCode provider catalog. Upstream merges this catalog into each
+# native session's generated XDG config.
+if [ -f /home/hermes/.config/opencode/opencode.jsonc ]; then
+  mkdir -p "$CANARY_HOME/.config/opencode"
+  cp /home/hermes/.config/opencode/opencode.jsonc "$CANARY_HOME/.config/opencode/opencode.jsonc"
+  config_tmp="$CANARY_HOME/.config/opencode/opencode.jsonc.tmp"
+  jq 'del(.provider.omniroute.options.apiKey)' \
+    "$CANARY_HOME/.config/opencode/opencode.jsonc" >"$config_tmp"
+  mv "$config_tmp" "$CANARY_HOME/.config/opencode/opencode.jsonc"
+fi
+if [ -f /home/hermes/.local/share/opencode/auth.json ]; then
+  mkdir -p "$CANARY_HOME/.local/share/opencode"
+  install -m 0600 /home/hermes/.local/share/opencode/auth.json \
+    "$CANARY_HOME/.local/share/opencode/auth.json"
+fi
+if [ -n "$OMNIROUTE_API_KEY" ] && command -v jq >/dev/null 2>&1; then
+  auth_path="$CANARY_HOME/.local/share/opencode/auth.json"
+  mkdir -p "$(dirname "$auth_path")"
+  [ -f "$auth_path" ] || printf '{}\n' >"$auth_path"
+  auth_tmp="${auth_path}.tmp"
+  jq --arg key "$OMNIROUTE_API_KEY" \
+    '.omniroute = {"type": "api", "key": $key}' \
+    "$auth_path" >"$auth_tmp"
+  chmod 0600 "$auth_tmp"
+  mv "$auth_tmp" "$auth_path"
+fi
 
-cp "$REPO_ROOT/deploy/rebuild/agents/verity/config.yaml" "$CANARY_DATA_DIR/agents/verity/"
-cp "$REPO_ROOT/deploy/rebuild/agents/pi/config.yaml"      "$CANARY_DATA_DIR/agents/verity/agents/pi/"
-cp "$REPO_ROOT/deploy/rebuild/agents/opencode/config.yaml" \
-   "$CANARY_DATA_DIR/agents/verity/agents/opencode/"
+# Register only the standalone OpenCode agent used in production.
+mkdir -p "$CANARY_DATA_DIR/agents/opencode"
+cp "$REPO_ROOT/deploy/rebuild/agents/opencode/config.yaml" "$CANARY_DATA_DIR/agents/opencode/"
 
 # Author the server config.
 #
@@ -143,7 +164,7 @@ copy_max_files: 20
 copy_max_total_bytes: 268435456
 execution_timeout: 7200
 
-default_agent: verity
+default_agent: opencode
 
 routing:
   provider: external
@@ -194,7 +215,7 @@ providers:
       models:
         default: auto/claude-sonnet
 
-default_agent: verity
+default_agent: opencode
 YAML
 
 # Path the host subprocess will see for its pi/opencode binaries.
@@ -223,6 +244,7 @@ export OMNIROUTE_API_KEY="$OMNIROUTE_API_KEY"
 export OMNIROUTE_BASE_URL="${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}"
 export OMNIROUTE_AUTH_TOKEN="${OMNIROUTE_AUTH_TOKEN:-$OMNIROUTE_API_KEY}"
 export OMNIROUTE_ROUTER_NAME=omniroute
+export CANARY_OPENCODE_MODEL="${CANARY_OPENCODE_MODEL:-omniroute/custom/best-coding}"
 # Allow the host to forward these into runner subprocess env so
 # Pi / OpenCode harness invocations see the same OmniRoute
 # credential as the wheel (used by user-config's api_key_ref:
@@ -304,7 +326,7 @@ setsid nohup "$WHEEL_BIN" server \
   --config "$CANARY_DATA_DIR/config.yaml" \
   --database-uri "sqlite:///$CANARY_DATA_DIR/chat.db" \
   --artifact-location "$CANARY_DATA_DIR/artifacts" \
-  --agent "$CANARY_DATA_DIR/agents/verity" \
+  --agent "$CANARY_DATA_DIR/agents/opencode" \
   > "$WHEEL_LOG" 2>&1 < /dev/null &
 WHEEL_PID=$!
 disown "$WHEEL_PID" 2>/dev/null || true

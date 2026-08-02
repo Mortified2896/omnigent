@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Check 7 — OpenCode edits a disposable repository
 #
-# Symmetric to check 4 (Pi) but with `agent_name: "opencode-native-ui"`
-# (resolved to the wheel's agent_id before the POST).
+# Runs the standalone production OpenCode agent registered by the canary.
 # Skipped if the `opencode` binary is missing from PATH; once the
 # binary is installed this check must report PASS, not SKIPPED.
 
@@ -26,8 +25,8 @@ BRANCH="polly/canary-7-opencode-${CANARY_RUN_ID}"
 create_fixture_repo "$REPO_DIR"
 create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
 
-SESSION_ID=$(run_harness_session   "$OMNIGENT_PORT" "opencode-native-ui" "$WORKTREE_DIR" "$BRANCH" "implement") || {
-  printf 'FAIL run_harness_session for opencode-native-ui on port %s (agent/host/session prerequisite failed)\n' "$OMNIGENT_PORT" >&2
+SESSION_ID=$(run_harness_session "$OMNIGENT_PORT" "opencode" "$WORKTREE_DIR" "$BRANCH" "implement") || {
+  printf 'FAIL run_harness_session for opencode on port %s (agent/host/session prerequisite failed)\n' "$OMNIGENT_PORT" >&2
   exit 1
 }
 
@@ -43,5 +42,11 @@ if grep -q 'def foo' "$WORKTREE_DIR/module.py"; then
   exit 1
 fi
 
-printf 'PASS\n'
+SHA=$(verify_commit_and_push "$WORKTREE_DIR" "$REPO_DIR/../remote.git" "$BRANCH") || exit 1
+[ "$(git -C "$WORKTREE_DIR" rev-parse HEAD)" = "$SHA" ] || {
+  printf 'FAIL worktree HEAD does not match pushed SHA %s\n' "$SHA" >&2
+  exit 1
+}
+
+printf 'PASS\n%s\n' "$SHA"
 exit 0
