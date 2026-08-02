@@ -25,6 +25,7 @@
 #
 # Usage:
 #   canary.sh run [--rebuild-sha <sha>] [--run-id <id>] [--reuse-data-dir]
+#   canary.sh run --check <name> [--rebuild-sha <sha>] [--run-id <id>]
 #   canary.sh repeat --run-id <id> [--rebuild-sha <sha>]
 #   canary.sh status
 #
@@ -32,6 +33,11 @@
 #   run     Run a fresh canary (D.1) against a NEW temp data dir.
 #           Writes docs/rebuild/canary-report-<run-id>.md. Exits
 #           non-zero on any FAIL or required SKIPPED.
+#           --check <name> runs a single named check (e.g.
+#           04_pi_repo_edit) against an already-running canary
+#           wheel+host; the report only covers that check. Use this
+#           while the temporary canary server remains available so
+#           prerequisite failures fail fast instead of cascading.
 #   repeat  Run a second canary (D.2) against the SAME temp config
 #           as the original D.1 run, but a freshly-emptied temp
 #           data dir. The temp data dir is wiped before the run;
@@ -126,6 +132,7 @@ usage() {
   cat <<'USAGE' >&2
 Usage:
   canary.sh run [--rebuild-sha <sha>] [--run-id <id>] [--reuse-data-dir]
+  canary.sh run --check <name> [--rebuild-sha <sha>] [--run-id <id>]
   canary.sh repeat --run-id <id> [--rebuild-sha <sha>]
   canary.sh status
 USAGE
@@ -151,10 +158,12 @@ fi
 
 REPEAT_MODE=0
 RESUE_DATA_DIR=0
+ONLY_CHECK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --rebuild-sha) REBUILD_SHA="$2"; shift 2 ;;
     --run-id)      CANARY_RUN_ID="$2"; shift 2 ;;
+    --check)       ONLY_CHECK="$2"; shift 2 ;;
     --reuse-data-dir) RESUE_DATA_DIR=1; shift ;;
     *) usage ;;
   esac
@@ -162,6 +171,16 @@ done
 
 if [ "$cmd" = "repeat" ]; then
   REPEAT_MODE=1
+fi
+
+# Validate a --check name up-front (before any data-dir wipe) so a
+# typo fails immediately instead of producing an empty run.
+if [ -n "$ONLY_CHECK" ]; then
+  if [ ! -e "$CHECKS_DIR/${ONLY_CHECK}.sh" ] && [ ! -e "$CHECKS_DIR/${ONLY_CHECK}.py" ]; then
+    printf 'canary: unknown check name %s (no %s.sh / %s.py under %s)\n' \
+      "$ONLY_CHECK" "$ONLY_CHECK" "$ONLY_CHECK" "$CHECKS_DIR" >&2
+    exit 2
+  fi
 fi
 
 # Per-run evidence directory. Each D.1 / D.2 run gets its own
@@ -257,6 +276,35 @@ CHECKS=(
   "11_verity_delegation"
   "12_worktree_isolation"
 )
+
+# Targeted execution: --check <name> runs exactly one named check
+# against an already-running canary wheel+host. Validate the name
+# up-front so a typo fails immediately instead of producing an
+# empty run.
+if [ -n "$ONLY_CHECK" ]; then
+  found=0
+  for c in "${CHECKS[@]}"; do
+    if [ "$c" = "$ONLY_CHECK" ]; then
+      found=1
+      break
+    fi
+  done
+  if [ "$found" != 1 ]; then
+    printf 'canary: unknown check name %s; valid names:\n' "$ONLY_CHECK" >&2
+    printf '  %s\n' "${CHECKS[@]}" >&2
+    exit 2
+  fi
+fi
+
+# The set of checks this invocation will actually run (used for the
+# report and the final verdict).
+RUN_CHECKS=()
+for c in "${CHECKS[@]}"; do
+  if [ -n "$ONLY_CHECK" ] && [ "$c" != "$ONLY_CHECK" ]; then
+    continue
+  fi
+  RUN_CHECKS+=("$c")
+done
 
 run_check() {
   local name="$1"
@@ -384,8 +432,11 @@ if [ "$REPEAT_MODE" = 1 ]; then
 else
   printf 'canary D.1 RUN starting (run-id=%s, port=%s, data-dir=%s)\n' "$CANARY_RUN_ID" "$OMNIGENT_PORT" "$OMNIGENT_DATA_DIR"
 fi
+if [ -n "$ONLY_CHECK" ]; then
+  printf 'canary: targeted run — check(s): %s\n' "${RUN_CHECKS[*]}" >&2
+fi
 
-for c in "${CHECKS[@]}"; do
+for c in "${RUN_CHECKS[@]}"; do
   run_check "$c"
 done
 
@@ -410,7 +461,7 @@ done
   printf '## Summary\n\n'
   printf '| # | Check | Status | Duration |\n'
   printf '| --- | --- | --- | --- |\n'
-  for c in "${CHECKS[@]}"; do
+  for c in "${RUN_CHECKS[@]}"; do
     status="${STATUS[$c]:-UNKNOWN}"
     duration="${DURATION[$c]:-0}"
     printf '| %s | `%s` | **%s** | %ss |\n' "${c:0:2}" "$c" "$status" "$duration"
@@ -418,7 +469,7 @@ done
   printf '\n'
 
   printf '## Evidence\n\n'
-  for c in "${CHECKS[@]}"; do
+  for c in "${RUN_CHECKS[@]}"; do
     status="${STATUS[$c]:-UNKNOWN}"
     evidence="${EVIDENCE[$c]:-}"
     printf '### `%s` — %s\n\n' "$c" "$status"
@@ -446,7 +497,7 @@ fi
 
 # Final verdict.
 GREEN=1
-for c in "${CHECKS[@]}"; do
+for c in "${RUN_CHECKS[@]}"; do
   case "${STATUS[$c]:-UNKNOWN}" in
     PASS) ;;
     *) GREEN=0 ;;
@@ -455,7 +506,7 @@ done
 
 # A required SKIPPED is also a RED (Pi and OpenCode checks are
 # mandatory; SKIPPED is only acceptable while diagnosing initial
-# harness setup).
+# harness setup). Only applies to the checks actually run.
 for c in 04_pi_repo_edit 05_pi_commit 06_pi_push 07_opencode_repo_edit 08_opencode_commit 09_opencode_push; do
   case "${STATUS[$c]:-UNKNOWN}" in
     SKIPPED) GREEN=0 ;;

@@ -43,6 +43,7 @@
 #   RUN_ID=D-20260101T120000Z ./canary-run.sh
 #   ./canary-run.sh --reuse-data-dir   # keep existing canary DB
 #   ./canary-run.sh --no-host          # skip host launch (manual runner)
+#   ./canary-run.sh --check 04_pi_repo_edit   # run one named check
 #
 # Exit codes:
 #   0  all 12 checks PASS (Phase E authorized)
@@ -64,12 +65,24 @@ REPO_ROOT="${REPO_ROOT:-/home/hermes/workspace/repos/omnigent-eval-rebuild-upstr
 
 REUSE_DATA_DIR=0
 LAUNCH_HOST=1
-for arg in "$@"; do
+ONLY_CHECK=""
+i=1
+while [ "$i" -le "$#" ]; do
+  arg="${!i}"
   case "$arg" in
     --reuse-data-dir) REUSE_DATA_DIR=1 ;;
     --no-host)        LAUNCH_HOST=0 ;;
+    --check)
+      if [ "$i" -eq "$#" ]; then
+        echo "canary-run: --check requires a check name (e.g. 04_pi_repo_edit)" >&2
+        exit 2
+      fi
+      i=$((i + 1))
+      ONLY_CHECK="${!i}"
+      ;;
     *) ;;
   esac
+  i=$((i + 1))
 done
 
 # Where we keep transient logs and pid files for the orchestrator
@@ -399,7 +412,16 @@ export PROD_HOSTNAME="$PROD_HOSTNAME"
 unset OMNIGENT_AUTH_HEADER || true
 
 echo "canary-run: invoking canary.sh run --run-id $RUN_ID --reuse-data-dir"
-exec "$REPO_ROOT/deploy/rebuild/tests/canary.sh" run \
+CANARY_ARGS=()
+if [ -n "$ONLY_CHECK" ]; then
+  CANARY_ARGS+=(--check "$ONLY_CHECK")
+fi
+# Run canary.sh as a child (not exec) so the EXIT trap above fires
+# when it finishes and the temporary wheel + host are always killed.
+# `exec` would replace this process image and skip the trap, leaking
+# the canary processes.
+"$REPO_ROOT/deploy/rebuild/tests/canary.sh" run \
   --rebuild-sha "$REBUILD_SHA" \
   --run-id "$RUN_ID" \
-  --reuse-data-dir
+  --reuse-data-dir \
+  "${CANARY_ARGS[@]}"
