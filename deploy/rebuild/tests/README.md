@@ -94,9 +94,13 @@ must be validated, an **isolated temporary systemd unit** at
 name) that is removed at the end of Phase D. **It must not
 replace or modify `omnigent.service`.**
 
-`canary.sh run` performs the 12 checks in order. A failure on
-check N halts the canary and exits non-zero; checks N+1..12 are
-NOT attempted.
+`canary.sh run` performs the 12 checks in order. The runner
+records every check's status; a failure on check N does not
+halt the runner — the runner continues to attempt the
+remaining checks so the operator gets a complete picture of
+which checks PASS, FAIL, or SKIPPED. The runner exits 0
+only when all 12 checks PASS (and no Pi/OpenCode check is
+SKIPPED); a single FAIL or required SKIPPED exits non-zero.
 
 ### Fresh temp DB
 
@@ -128,17 +132,17 @@ script prints a structured status line on stdout (`PASS`, `FAIL
 aggregates them into `canary-report.md`.
 
 The per-check script filenames under `deploy/rebuild/tests/checks/`
-currently use a different ordering from the user's 12-check
-specification: the existing files are numbered in commit-time order
-(`01_boot.sh` combines DB init + health; `02_omniroute.py` is
-OmniRoute; etc.). The implementation chat that picks up Phase D
-re-aligns the script filenames under `checks/` to the spec below
-(check 1 = DB init, check 2 = health on the temp port, check 3 =
-OmniRoute, checks 4–6 = Pi, checks 7–9 = OpenCode, check 10 =
-Langfuse, check 11 = Verity, check 12 = parallel-isolation). The
-**content of each check does not change** — only the script
-filename under `checks/` and the per-check launcher in `canary.sh`
-are re-indexed. The descriptions below are the spec.
+are numbered to match the user's 12-check specification
+(01 = DB init, 02 = health on the temp port, 03 = OmniRoute,
+04–06 = Pi, 07–09 = OpenCode, 10 = Langfuse, 11 = Verity, 12 =
+parallel-isolation). The launcher `canary.sh` runs them in this
+order and aggregates per-check outcomes into
+`docs/rebuild/canary-report.md`. Each check writes a structured
+status line on stdout (`PASS`, `FAIL <reason>`, or `SKIPPED
+(harness binary missing)`) and a structured evidence block
+the runner appends to the per-run log under
+`docs/rebuild/canary-runs/<run-id>/log/<check>.log`. The
+descriptions below are the spec.
 
 ### Check 1 — Fresh Omnigent 0.7 database initialization
 
@@ -321,14 +325,30 @@ must report PASS, not SKIPPED. A run containing a required
 SKIPPED is treated as a FAIL for purposes of authorizing
 Phase E.
 
-## Output: `canary-report.md`
+## Output: per-run report + durable run directory
 
-Each successful canary run writes a structured report to
-`docs/rebuild/canary-report.md` (or `canary-report-<run-id>.md`
-if multiple runs were captured). The report includes:
+Each canary run writes:
+
+- A structured report to `docs/rebuild/canary-runs/<run-id>/canary-report.md`
+  (the durable, per-run artifact).
+- A mirror at `docs/rebuild/canary-report.md` (the latest D.1
+  run) or `docs/rebuild/canary-report-repeat.md` (the latest
+  D.2 run).
+- A per-run env snapshot at
+  `docs/rebuild/canary-runs/<run-id>/canary.env`.
+- A per-check log under
+  `docs/rebuild/canary-runs/<run-id>/log/<check>.log`
+  (full stdout + stderr + parsed status + duration + evidence).
+- A TSV summary at
+  `docs/rebuild/canary-runs/<run-id>/results.tsv`.
+
+Each report includes:
 
 - run timestamp, canary host fingerprint (whoami + uname +
   ip route, NOT a destructive fingerprint)
+- the rebuild SHA the canary is exercising
+- the canary port, the production port, the data dir, and
+  the auth header
 - per-check status (PASS / FAIL / SKIPPED) + duration
 - per-check evidence (the assertion outputs, the journalctl
   excerpts, the Langfuse trace ID, the Pi/OpenCode commit
@@ -340,6 +360,41 @@ A canary run is considered "all green" only when **all 12
 checks PASS or the SKIPPED are limited to harness-binary
 diagnostic runs**. A single FAIL halts the canary and the
 report is written with the failure highlighted at the top.
+
+## Phase D.2 — repeatability run (separate evidence)
+
+The canary runs twice: **D.1** is the initial canary against
+a fresh empty temp data dir; **D.2** is the repeatability
+run against the **same temp configuration** (env.conf,
+configs, agent bundles) but a freshly-emptied temp data
+dir. The runner distinguishes the two:
+
+```sh
+# D.1 — fresh canary against a NEW temp data dir.
+canary.sh run --rebuild-sha <sha> --run-id 20260802T091500Z
+
+# D.2 — same temp config, freshly emptied data dir.
+canary.sh repeat --rebuild-sha <sha> --run-id 20260802T091500Z
+```
+
+`repeat` wipes `OMNIGENT_DATA_DIR` before the run (the
+operator can opt out with `--reuse-data-dir`) and writes its
+report to `docs/rebuild/canary-runs/<run-id>-repeat/`
+(symmetric to the D.1 layout). The mirrored top-level
+report is `docs/rebuild/canary-report-repeat.md` (D.1's
+top-level mirror is `docs/rebuild/canary-report.md`).
+
+**The D.1 and D.2 reports are kept separate so the operator
+can diff them** (Phase E is authorized only when both
+reports show 12/12 PASS). The runner enforces the same
+green/red rules for both:
+
+- A Pi/OpenCode check (#4–#9) reporting `SKIPPED` is treated
+  as a FAIL for the purposes of authorizing Phase E.
+- A `FAIL` halts the run; remaining checks are not
+  attempted.
+- A red D.2 run halts the authorization gate even if D.1
+  was green.
 
 ## What the canary does NOT do
 

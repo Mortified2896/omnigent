@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Check 6 — OpenCode completes a real repository task
+# Check 4 — Pi edits a disposable repository
 #
-# Skipped if the `opencode` binary is missing from PATH.
+# Symmetric to check 7 (OpenCode) but with `agent_selector: "pi"`.
+# Skipped if the `pi` binary is missing from PATH; once the binary
+# is installed this check must report PASS, not SKIPPED.
 
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -14,17 +16,17 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 : "${CANARY_FIXTURES_ROOT:=/tmp/canary-fixtures}"
 : "${CANARY_RUN_ID:=$(date -u +%Y%m%dT%H%M%SZ)}"
 
-require_harness_binary opencode opencode
+require_harness_binary pi pi
 
-REPO_DIR="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/opencode/repo"
-WORKTREE_DIR="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/opencode/worktree"
-BRANCH="polly/acceptance-6-opencode"
+REPO_DIR="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/pi/repo"
+WORKTREE_DIR="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/pi/worktree"
+BRANCH="polly/canary-4-pi-${CANARY_RUN_ID}"
 
 create_fixture_repo "$REPO_DIR"
 create_worktree "$REPO_DIR" "$BRANCH" "$WORKTREE_DIR" >/dev/null
 
 SESSION_ID=$(run_harness_session "$OMNIGENT_AUTH_HEADER" "$CANARY_IDENTITY" \
-  "$OMNIGENT_PORT" "opencode" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
+  "$OMNIGENT_PORT" "pi" "$WORKTREE_DIR" "$BRANCH" "implement" || true)
 
 DIFF=$(git -C "$WORKTREE_DIR" diff main)
 case "$DIFF" in

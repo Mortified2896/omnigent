@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
 # Shared helpers for the per-harness Pi / OpenCode checks
-# (03_pi_repo_edit, 04_pi_commit, 05_pi_push, 06_opencode_repo_edit,
-#  07_opencode_commit, 08_opencode_push).
+# (04_pi_repo_edit, 05_pi_commit, 06_pi_push, 07_opencode_repo_edit,
+#  08_opencode_commit, 09_opencode_push).
 # ─────────────────────────────────────────────────────────────────────
 #
 # Sourced (not executed) by each per-harness check.

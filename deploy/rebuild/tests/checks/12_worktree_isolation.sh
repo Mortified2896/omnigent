@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check 11 — Worktrees remain isolated
+# Check 12 — Parallel workers remain isolated in separate worktrees
 #
 # Runs two parallel Pi sessions in parallel against the same
 # fixture repo, verifies each gets its own worktree, distinct
@@ -27,8 +27,8 @@ WT_B="$CANARY_FIXTURES_ROOT/$CANARY_RUN_ID/parallel/wt-b"
 # Fixtures.
 create_fixture_repo "$REPO_DIR"
 # create_fixture_repo already pushed main to the bare remote.
-create_worktree "$REPO_DIR" "polly/acceptance-11-pi-a" "$WT_A" >/dev/null
-create_worktree "$REPO_DIR" "polly/acceptance-11-pi-b" "$WT_B" >/dev/null
+create_worktree "$REPO_DIR" "polly/canary-12-pi-a-${CANARY_RUN_ID}" "$WT_A" >/dev/null
+create_worktree "$REPO_DIR" "polly/canary-12-pi-b-${CANARY_RUN_ID}" "$WT_B" >/dev/null
 
 # Snapshot each worktree's filesystem before the run.
 WT_A_HASH_BEFORE=$(find "$WT_A" -type f -exec sha256sum {} \; | sort | sha256sum)
@@ -52,10 +52,10 @@ SHA_B=$(read_commit_sha "$WT_B")
 [ "$SHA_A" != "$SHA_B" ] || { printf 'FAIL parallel sessions produced identical SHA %s\n' "$SHA_A" >&2; exit 1; }
 
 # The two commits must exist on the remote.
-REMOTE_A=$(git -C "$REMOTE_DIR" rev-parse "polly/acceptance-11-pi-a" 2>/dev/null || true)
-REMOTE_B=$(git -C "$REMOTE_DIR" rev-parse "polly/acceptance-11-pi-b" 2>/dev/null || true)
-[ "$REMOTE_A" = "$SHA_A" ] || { printf 'FAIL remote polly/acceptance-11-pi-a is %s, expected %s\n' "$REMOTE_A" "$SHA_A" >&2; exit 1; }
-[ "$REMOTE_B" = "$SHA_B" ] || { printf 'FAIL remote polly/acceptance-11-pi-b is %s, expected %s\n' "$REMOTE_B" "$SHA_B" >&2; exit 1; }
+REMOTE_A=$(git -C "$REMOTE_DIR" rev-parse "polly/canary-12-pi-a-${CANARY_RUN_ID}" 2>/dev/null || true)
+REMOTE_B=$(git -C "$REMOTE_DIR" rev-parse "polly/canary-12-pi-b-${CANARY_RUN_ID}" 2>/dev/null || true)
+[ "$REMOTE_A" = "$SHA_A" ] || { printf 'FAIL remote polly/canary-12-pi-a-%s is %s, expected %s\n' "$CANARY_RUN_ID" "$REMOTE_A" "$SHA_A" >&2; exit 1; }
+[ "$REMOTE_B" = "$SHA_B" ] || { printf 'FAIL remote polly/canary-12-pi-b-%s is %s, expected %s\n' "$CANARY_RUN_ID" "$REMOTE_B" "$SHA_B" >&2; exit 1; }
 
 # The OTHER session's worktree must be unchanged.
 WT_A_HASH_AFTER=$(find "$WT_A" -type f -exec sha256sum {} \; | sort | sha256sum)

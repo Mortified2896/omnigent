@@ -1,0 +1,121 @@
+# ─────────────────────────────────────────────────────────────────────
+# /etc/systemd/system/omnigent-canary.service — Phase D temp unit
+# ─────────────────────────────────────────────────────────────────────
+#
+# This is a TEMPLATE for an optional Phase D canary unit. Phase D's
+# default is a temp foreground process under bash; this unit exists
+# for operators who need to validate systemd-level service behaviour
+# (e.g. ResourceLimit integration, journald field capture) under the
+# same isolation rules as the foreground process.
+#
+# PHASE D INVARIANTS this unit must respect:
+#   1. The unit name MUST be `omnigent-canary.service` (not
+#      `omnigent.service`). The live production unit is
+#      `omnigent.service`; this template MUST NEVER replace or
+#      modify it.
+#   2. The unit MUST bind 127.0.0.1 (loopback only) on a TEMPORARY
+#      port that differs from the production port. Use
+#      `--host 127.0.0.1` and `--port <TEMPORARY_PORT>`.
+#   3. The unit MUST point OMNIGENT_DATA_DIR at a fresh temp
+#      directory; never at /var/lib/omnigent or
+#      /home/<user>/.omnigent (the production data dirs).
+#   4. The unit MUST install the rebuild wheel to a temp-prefixed
+#      bin dir (e.g. /opt/canary-bin) and reference it from there.
+#      The unit MUST NOT install the wheel over the current
+#      production installation.
+#   5. The unit is REMOVED at the end of Phase D. Do not enable
+#      it for boot-time start.
+#
+# INSTALL (operator-driven, NOT part of cutover.sh):
+#   1. Resolve the absolute path to the canary-installed `omni`
+#      shim (the canary wheel installed under /opt/canary-bin/).
+#         command -v omni
+#         readlink -f $(command -v omni)
+#   2. Choose an UNUSED temporary loopback port, e.g. 17670.
+#   3. Choose a fresh temp data dir, e.g.
+#         /home/<user>/.canary-omnigent-<run-id>/
+#   4. Edit the placeholders below:
+#         <OMNI_BIN_PATH>           -> the absolute path from step 1
+#         <CANARY_PORT>             -> the temp port from step 2
+#         <CANARY_DATA_DIR>         -> the temp dir from step 3
+#         <SERVICE_USER>            -> the user the unit runs as
+#                                      (typically the operator)
+#         <CANARY_ENV_FILE>         -> the path to the canary's
+#                                      env.conf (separate from the
+#                                      production /etc/omnigent/env.conf)
+#   5. Copy to /etc/systemd/system/omnigent-canary.service and
+#      enable (do NOT enable for boot):
+#         sudo install -m 0644 omnigent-canary.service.template \
+#             /etc/systemd/system/omnigent-canary.service
+#         sudo systemctl daemon-reload
+#         # DO NOT `systemctl enable omnigent-canary.service` —
+#         # the unit is started on demand and removed at the end
+#         # of Phase D.
+#   6. Run the canary:
+#         sudo systemctl start omnigent-canary.service
+#         journalctl -u omnigent-canary.service -f
+#   7. At the end of Phase D, stop and remove:
+#         sudo systemctl stop omnigent-canary.service
+#         sudo rm -f /etc/systemd/system/omnigent-canary.service
+#         sudo systemctl daemon-reload
+#
+# WHAT THIS UNIT DOES NOT DO:
+#   - Does not stop or restart omnigent.service.
+#   - Does not bind the production port.
+#   - Does not touch the production chat.db.
+#   - Does not alter the reverse proxy.
+#   - Does not install the rebuild wheel over the production
+#     installation.
+#   - Does not perform the Phase E cutover.
+
+[Unit]
+Description=Omnigent 0.7 Phase D pre-cutover canary (temp unit; removed at end of Phase D)
+Documentation=https://github.com/omnigent-ai/omnigent
+# Run AFTER the network is online so /v1/sessions can be created
+# against the OmniRoute gateway.
+After=network-online.target
+Wants=network-online.target
+# Explicitly do not start the production unit. The canary is
+# isolated from the production service.
+# (No `BindsTo=`, `Requires=`, or `PartOf=omnigent.service` — that
+# would couple the canary to the production lifecycle.)
+
+[Service]
+Type=simple
+User=<SERVICE_USER>
+Group=<SERVICE_USER>
+WorkingDirectory=/tmp
+# Phase D isolation: EnvironmentFile points at the CANARY env
+# file, NOT the production /etc/omnigent/env.conf.
+EnvironmentFile=<CANARY_ENV_FILE>
+# Explicit temp data dir; never the production data dir.
+Environment=OMNIGENT_DATA_DIR=<CANARY_DATA_DIR>
+# Explicit temp loopback port; never the production port.
+Environment=OMNIGENT_PORT=<CANARY_PORT>
+# Phase D must run as a foreground process under systemd so the
+# unit's lifecycle matches the bash-mode default. Restart= is
+# intentionally `no` to avoid masking failures.
+Restart=no
+TimeoutStartSec=180
+# The canary wheel's launch command. OMNIGENT_DATA_DIR +
+# OMNIGENT_PORT are read from the env above; --host is pinned to
+# 127.0.0.1 so the canary does not expose itself to non-loopback
+# interfaces.
+ExecStart=<OMNI_BIN_PATH> server \
+    --host 127.0.0.1 \
+    --port ${OMNIGENT_PORT} \
+    --no-open \
+    --config <CANARY_DATA_DIR>/config.yaml \
+    --database-uri sqlite:///<CANARY_DATA_DIR>/chat.db \
+    --artifact-location <CANARY_DATA_DIR>/artifacts \
+    --agent <CANARY_DATA_DIR>/agents/verity \
+    --agent <CANARY_DATA_DIR>/agents/pi \
+    --agent <CANARY_DATA_DIR>/agents/opencode
+# Hard limit on file descriptors; matches the production unit's
+# LimitNOFILE=.
+LimitNOFILE=65536
+
+[Install]
+# The canary is started on demand and removed at the end of
+# Phase D; it is NOT enabled for boot-time start.
+WantedBy=

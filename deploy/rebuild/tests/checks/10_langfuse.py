@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────────
-# Check 9 — Langfuse receives traces
+# Check 10 — Langfuse receives the trace and it is verified
+#             from Langfuse (not assumed)
 # ─────────────────────────────────────────────────────────────────────
 #
 # Runs a single trivial session with telemetry enabled, then polls
@@ -21,6 +22,15 @@
 #                           username)
 #   LANGFUSE_SECRET_KEY     the Langfuse secret key (Basic auth
 #                           password)
+
+# Verification source: this check queries Langfuse's public API
+# (`GET /api/public/v2/traces?sessionId=<id>` and
+# `GET /api/public/v2/observations?traceId=<id>`) with Basic auth
+# over the LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY the operator
+# sets. There is NO mock: a trace that does not appear in Langfuse
+# within 30 s is a FAIL. The canary does NOT use any local
+# placeholder; if LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY are not set
+# the check FAILs up front with a clear reason.
 
 from __future__ import annotations
 

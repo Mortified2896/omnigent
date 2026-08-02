@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────────
-# Check 2 — OmniRoute routes requests correctly
+# Check 3 — Real OmniRoute-routed request with requested and
+#             executed model provenance
 # ─────────────────────────────────────────────────────────────────────
 #
 # Sends a real /v1/route POST against the deployed OmniRoute
