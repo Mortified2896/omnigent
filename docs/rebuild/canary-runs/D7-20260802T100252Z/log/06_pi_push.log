@@ -1,7 +1,0 @@
-# check 06_pi_push — 2026-08-02T10:03:01Z
-exit_status=FAIL no git.commit.outcome event in session JSON
-FAIL no git.commit.outcome event in session JSON
-parsed_status=FAIL
-duration=0
---- evidence ---
-FAIL no git.commit.outcome event in session JSON

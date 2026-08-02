@@ -1,7 +1,0 @@
-# check 09_opencode_push — 2026-08-02T10:25:48Z
-exit_status=FAIL no git.commit.outcome event in session JSON
-FAIL no git.commit.outcome event in session JSON
-parsed_status=FAIL
-duration=0
---- evidence ---
-FAIL no git.commit.outcome event in session JSON

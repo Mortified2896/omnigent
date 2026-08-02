@@ -1,7 +1,0 @@
-# check 06_pi_push — 2026-08-02T10:25:48Z
-exit_status=SKIPPED (harness binary missing: pi)
-SKIPPED (harness binary missing: pi)
-parsed_status=FAIL
-duration=0
---- evidence ---
-SKIPPED (harness binary missing: pi)

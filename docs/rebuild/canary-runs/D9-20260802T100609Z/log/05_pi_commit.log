@@ -1,7 +1,0 @@
-# check 05_pi_commit — 2026-08-02T10:10:11Z
-exit_status=FAIL no git.commit.outcome event in session JSON at /tmp/canary-fixtures/D9-20260802T100609Z/pi/worktree/.session.json
-FAIL no git.commit.outcome event in session JSON at /tmp/canary-fixtures/D9-20260802T100609Z/pi/worktree/.session.json
-parsed_status=FAIL
-duration=0
---- evidence ---
-FAIL no git.commit.outcome event in session JSON at /tmp/canary-fixtures/D9-20260802T100609Z/pi/worktree/.session.json

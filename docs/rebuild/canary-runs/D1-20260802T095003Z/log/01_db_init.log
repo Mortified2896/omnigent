@@ -1,7 +1,0 @@
-# check 01_db_init — 2026-08-02T09:50:03Z
-exit_status=FAIL chat.db not present at /tmp/canary-data/chat.db (the wheel did not boot, or its first-boot migration did not fire)
-FAIL chat.db not present at /tmp/canary-data/chat.db (the wheel did not boot, or its first-boot migration did not fire)
-parsed_status=FAIL
-duration=0
---- evidence ---
-FAIL chat.db not present at /tmp/canary-data/chat.db (the wheel did not boot, or its first-boot migration did not fire)

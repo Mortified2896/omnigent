@@ -1,6 +1,0 @@
-01_db_init	FAIL	0
-02_web_health	PASS	0
-03_omniroute	FAIL	0
-04_pi_repo_edit	FAIL	241
-05_pi_commit	FAIL	0
-06_pi_push	FAIL	0
