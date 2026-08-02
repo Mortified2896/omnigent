@@ -55,7 +55,11 @@
 #   --skip-systemd        do not touch the unit file; only install
 #                        the wheel and run the DB backup / move /
 #                        fresh-init dance. Useful for the Phase D
-#                        disposable-host canary.
+#                        canary when the rebuild wheel is started
+#                        as a foreground process on the existing
+#                        Omnigent VM (Phase D does NOT use a
+#                        disposable VM and does NOT use a temp
+#                        unit).
 #   --dry-run             print every action, run the DB backup +
 #                        verify steps, but do NOT install the wheel,
 #                        do NOT modify the unit, do NOT start the

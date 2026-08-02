@@ -109,20 +109,33 @@ The following validation commands **were** run, all read-only:
 ## What is unproven / pending canary
 
 1. **None of the 15 fresh-DB acceptance tests have been run** — the
-   canary (Phase D) is the next milestone. The tests are designed
-   to run against the rebuild branch's wheel plus a **fresh empty
-   0.7 database** (no legacy DB state, no migration rehearsal).
+   canary (Phase D) is the next milestone. Phase D runs on the
+   **existing Omnigent VM** (NOT on a disposable VM and NOT on
+   another host) under the isolation rules in
+   `PHASED_IMPLEMENTATION_PLAN.md` §D.0a (what Phase D uses) + §D.0b
+   (what Phase D does NOT do): unused temp loopback
+   port, temp `OMNIGENT_DATA_DIR`, fresh temp SQLite, temp
+   artifact + harness dirs, temp configs, disposable Git branches
+   (or a dedicated disposable GitHub test repo). Phase D must
+   NOT stop or restart the running service, modify the live
+   systemd unit, bind the production port, touch the live
+   `chat.db`, alter the reverse proxy, install the rebuild wheel
+   over the current production installation, or perform the
+   Phase E cutover. The tests are designed to run against the
+   rebuild branch's wheel plus a **fresh empty 0.7 database** (no
+   legacy DB state, no migration rehearsal).
 2. **No end-to-end OmniRoute round-trip has been verified live**.
    Phase D must include a real `/routes:select` exchange with the
-   deployed OmniRoute instance.
+   deployed OmniRoute instance (acceptance check #3).
 3. **No real Langfuse integration has been verified live**. Phase D
    must include a real OTLP export to a Langfuse sandbox and an
-   inspection of the resulting trace hierarchy.
+   inspection of the resulting trace hierarchy (acceptance check
+   #9).
 4. **The fresh-database first-boot migration path has not been
-   observed live** against the production host. Phase D must boot
-   the new wheel against an empty `<data_dir>/chat.db` on a
-   disposable VM and confirm the boot log contains
-   `"Running database migrations…"` (per
+   observed live** against the existing Omnigent VM. Phase D must
+   boot the new wheel against an **empty temp `OMNIGENT_DATA_DIR`**
+   on the existing VM (NOT a disposable VM) and confirm the boot
+   log contains `"Running database migrations…"` (per
    `omnigent/db/utils.py:460-510`) and the resulting
    `alembic_version` row is `zf1a2b3c4d5e` (upstream v0.7 head).
 5. **The `agent_selector.py` and `opencode_provenance_proxy.py`
@@ -132,8 +145,12 @@ The following validation commands **were** run, all read-only:
    `opencode-native` resolution) and a negative test (Verity's
    text match, observe rejection) before declaring it unnecessary.
 6. **The backup-and-move script (`scripts/cutover.sh`) has not
-   been exercised against a real production-shaped data dir**. It
-   must be exercised end-to-end on the Phase D disposable host.
+   been exercised end-to-end**. Phase D does not exercise
+   `cutover.sh` (the cutover is a Phase E operation); Phase D
+   only exercises the rebuild wheel + the temp configs + the
+   12-acceptance-check runner against an empty temp data
+   directory. The cutover.sh script's own dry-run validation was
+   performed during Phase C.5 against synthetic fixtures.
 
 ## Recommended next step
 
@@ -162,6 +179,11 @@ production release dirs, or any service restart:
 - **C.6** Rewrite the 15 acceptance tests for fresh-DB mode
   (already authored in `ACCEPTANCE_TESTS.md`).
 
-Phase D (disposable-host canary against an empty data dir) and
-Phase E (production cutover with the backup-and-move script) come
-after C.
+Phase D (pre-cutover canary on the **existing Omnigent VM** under
+the §D.0a isolation rules — NOT on a disposable VM and NOT on
+another host; D.1 + D.2 both 12/12 PASS, no SKIPPED, before Phase E
+is authorized) and Phase E (production cutover: stop the existing
+service, preserve and move aside the old database, install the
+rebuilt wheel, start the new version on the existing production
+port, keep the same hostname and phone URL — the **only** in-place
+production operation in this plan) come after C.

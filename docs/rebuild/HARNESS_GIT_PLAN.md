@@ -95,9 +95,14 @@ session subprocess `cwd` binding.
 
 Phase 8 acceptance tests #3, #4, #5 ("Pi can edit / commit / push",
 "OpenCode can do the same", "parallel workers isolated") are exercised
-against a disposable fixture repo created per test run by
+against a **disposable fixture repo created per test run** by
 `deploy/control-room/tests/conftest.py:fixture_repo` (a `git init` +
-`git checkout -b` per test). The test:
+`git checkout -b` per test). The disposable repo is the test fixture;
+it is unrelated to whether the test runner itself runs on a
+disposable VM. Phase D, the pre-cutover canary, runs on the
+**existing Omnigent VM** (see
+`PHASED_IMPLEMENTATION_PLAN.md` §D) and uses disposable fixture
+repos under `/tmp/canary-fixtures/<run-id>/`. The test:
 
 1. Spins up the upstream `omnigent` server (or calls the LLM adapter
    directly) and asks the harness to perform a one-line edit.

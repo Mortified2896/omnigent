@@ -459,12 +459,17 @@ were **deployment-tooling tests**, not **fresh-0.7 acceptance
 tests**. They exercised the fork's `promote_release.sh` /
 `rollback_release.sh` / supervisor canary machinery, which the
 rebuild does not need. Their contract is now covered by the
-fresh-0.7 acceptance tests + the Phase D disposable-host canary.
+fresh-0.7 acceptance tests + the Phase D pre-cutover canary on
+the existing Omnigent VM (NOT on a disposable VM and NOT on
+another host — see `PHASED_IMPLEMENTATION_PLAN.md` §D for the
+isolation rules that keep Phase D off the live production
+service).
 
 - **test_12** "A failed candidate release does not replace
   production" — was a fork deployment test; superseded by the
   cutover script's `cutover.sh --confirm` gate and the Phase D
-  canary.
+  pre-cutover canary on the existing Omnigent VM (see
+  `PHASED_IMPLEMENTATION_PLAN.md` §D).
 - **test_13** "Rollback restores the exact previously live SHA" —
   was a fork deployment test; the rebuild's Phase G rollback
   re-runs the new wheel against a fresh DB, not the fork wheel.
@@ -477,6 +482,18 @@ rewritten as **test_15** "No test imports legacy database state"
 above, because the fresh-DB cutover means there is no legacy DB
 to protect — the legacy DB is moved aside as a read-only backup,
 and the new DB is empty when the suite starts.
+
+> **Phase D relationship.** Phase D runs the rebuild wheel on the
+> **existing Omnigent VM** (NOT a disposable VM, NOT another host)
+> under the isolation rules in `PHASED_IMPLEMENTATION_PLAN.md`
+> §D.0a (what Phase D uses) + §D.0b (what Phase D does NOT do): unused temp loopback port, temp `OMNIGENT_DATA_DIR`, fresh
+> temp SQLite, temp artifact + harness dirs, temp configs,
+> disposable Git branches (or a dedicated disposable GitHub test
+> repo). Phase D does NOT touch the production database, the live
+> systemd unit, the production port, or the reverse proxy. The
+> acceptance tests in this file are the contract Phase D proves
+> against that canary deployment; the per-check scripts under
+> `deploy/rebuild/tests/checks/` are the implementations.
 
 ## Fixtures
 

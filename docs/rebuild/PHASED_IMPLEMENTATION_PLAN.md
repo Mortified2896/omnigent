@@ -23,6 +23,24 @@ phase's evidence is recorded. **Production is touched only by Phase E**,
 which is a single stop → backup-and-move → install → start on the
 existing systemd unit (no second unit, no second port).
 
+**Phase D is a pre-cutover canary on the existing Omnigent VM, not on a
+disposable VM and not on another host.** The existing VM already contains
+the real environment we need to validate (installed Pi / OpenCode
+harnesses, Git + GitHub credentials, OmniRoute connectivity, Langfuse
+connectivity, filesystem paths and permissions, systemd, reverse-proxy
+and network environment, production-equivalent runtime dependencies).
+Phase D is still strictly isolated from the running production stack
+by using an unused temporary loopback port, a temporary
+`OMNIGENT_DATA_DIR`, a fresh temporary SQLite database, temporary
+artifact + harness directories, temporary configuration files, and
+disposable Git branches (or a dedicated disposable GitHub test
+repository). Phase D does NOT stop or restart the existing production
+service, does NOT modify the live systemd unit, does NOT bind the
+current production port, does NOT touch, move, copy, migrate, or
+modify the live `chat.db`, does NOT alter the reverse proxy, does NOT
+install the rebuild wheel over the current production installation,
+and does NOT perform the Phase E cutover.
+
 ## Phase A — preservation (DONE in this audit)
 
 A1. Verify repository state and produce `REPOSITORY_STATE_REPORT.md`.
@@ -336,41 +354,170 @@ assertions. See `ACCEPTANCE_TESTS.md` §1 for the full list and
 `ACCEPTANCE_TESTS.md` §"Fresh-DB mode" for the changes from the
 previous 15-test spec.
 
-## Phase D — disposable-host canary
+## Phase D — pre-cutover canary on the existing Omnigent VM
 
-The canary is **not** a parallel production deployment. It is a
-disposable VM (or local container) with:
+Phase D is **not** a parallel production deployment. It is a pre-cutover
+canary that runs **on the existing Omnigent VM** (the same host that
+already runs production), using a strictly isolated set of temporary
+resources. The existing VM is the right host because it already contains
+the production-shaped environment we need to validate: the installed Pi
+and OpenCode harnesses, Git + GitHub credentials, OmniRoute connectivity,
+Langfuse connectivity, filesystem paths and permissions, systemd, the
+reverse-proxy / network environment, and production-equivalent runtime
+dependencies. Spawning a separate VM would mean rebuilding all of those,
+which would not validate anything the production cutover actually has
+to do. **A disposable VM is explicitly NOT used.**
 
-- a fresh install of upstream `omnigent==0.7.0`,
-- a **fresh** empty database at the same `<data_dir>/chat.db`
-  path the production deploy uses,
-- the same `EnvironmentFile` (C.1) symlinked in,
-- the same `<data_dir>/config.yaml` (C.2) symlinked in,
-- the same systemd unit (C.4) symlinked in,
-- the cutover script (C.5) run end-to-end on this disposable host.
+### D.0a — what Phase D uses (isolation rules)
 
-The canary must demonstrate, in order:
+| Resource | Production value | Phase D uses |
+| --- | --- | --- |
+| Service bind host / port | `<PROD_HOST>` on `<PROD_PORT>` | `127.0.0.1` (loopback only) on an **unused** temporary TCP port (e.g. `17670`) |
+| Data directory | `/var/lib/omnigent` | A fresh empty temp dir, e.g. `/var/lib/omnigent-canary-<run-id>` |
+| Database file | `<data_dir>/chat.db` | A fresh empty SQLite file the rebuild wheel creates on first boot; no schema copy, no migration shim, no import |
+| Artifact directory | `/srv/omnigent/artifacts` | A fresh temp dir, e.g. `/srv/omnigent-canary-<run-id>/artifacts` |
+| Harness tmp parent | `/srv/omnigent/harness-tmp` (via `OMNIGENT_HARNESS_TMP_PARENT`) | A fresh temp dir, e.g. `/srv/omnigent-canary-<run-id>/harness-tmp` |
+| Configuration files | `/etc/omnigent/env.conf`, `/var/lib/omnigent/config.yaml`, `/srv/omnigent/agents/` | Temp copies of the same files in a temp directory tree (e.g. `/etc/omnigent-canary-<run-id>/`, `/var/lib/omnigent-canary-<run-id>/config.yaml`, `/srv/omnigent-canary-<run-id>/agents/`); the production files are not read by the canary |
+| systemd unit | `/etc/systemd/system/omnigent.service` (the live production unit) | Either a temp foreground process under `bash` (the default) **or**, if service behaviour under systemd must be validated, an isolated temp unit at `/etc/systemd/system/omnigent-canary.service` (clearly separate name) that is removed after the canary. **It must not replace or modify `omnigent.service`.** |
+| Git repository branches | `polly/*`, etc. | Disposable branches (e.g. `polly/canary-3-pi-<run-id>`) or a dedicated disposable GitHub test repo; never the production branches |
 
-- **D.1** `cutover.sh --confirm` on an empty data dir:
-  - `/health` returns 200 inside 45 s.
-  - `journalctl -u omnigent -n 50` contains
-    `"Running database migrations…"` (proves the first-boot
-    migration path fired) and no `"schema is out of date"`
-    error.
-  - `sqlite3 /var/lib/omnigent/chat.db ".tables"` returns a
-    non-empty list (proves the fresh schema is in place).
-- **D.2** All 15 acceptance tests pass against the rebuild URL.
-- **D.3** The cutover is **idempotent**: re-running it on top of
-  the same release produces no diff (same wheel, same hash, same
-  `deployed-sha`).
-- **D.4** A simulated webhook load (50 turns, 5 concurrent) does
-  not leak processes or connections.
-- **D.5** A `journalctl -u omnigent -n 1000` capture is attached to
-  `docs/rebuild/canary-report.md`.
+### D.0b — what Phase D does NOT do (non-negotiables)
 
-The canary's host is destroyed after the canary; nothing about it
-remains in production. **The canary never sees the production
-database; it uses a fresh empty database.**
+- Does **NOT** stop or restart the current production Omnigent service.
+- Does **NOT** modify the live systemd unit (`omnigent.service`).
+- Does **NOT** bind the current production port.
+- Does **NOT** touch, move, copy, migrate, or modify the live `chat.db`.
+- Does **NOT** alter the reverse proxy (Cloudflare Access, NGINX, etc.).
+- Does **NOT** install the rebuild wheel over the current production
+  installation.
+- Does **NOT** perform the Phase E cutover.
+
+The canary does not see production database state. The canary does not
+change production configuration. The canary does not bind the production
+port. If any of these accidentally happens, Phase D is by definition
+failed and the response is to abort Phase D immediately, fix the
+isolation mistake, and re-run.
+
+### D.1 — initial canary (mandatory, must be all-green before D.2)
+
+Run `deploy/rebuild/tests/canary.sh run --rebuild-sha <sha>` against a
+fresh empty temp data directory (`OMNIGENT_DATA_DIR` pointing at a newly
+created empty dir) on the unused temporary loopback port. The runner
+executes the 12 acceptance checks in order and stops on the first FAIL.
+
+The 12 checks are:
+
+1. **Fresh Omnigent 0.7 database initialization** — first-boot
+   migration path fires (`Running database migrations…` in the boot
+   log), no `schema is out of date` error, `alembic_version` row is the
+   upstream v0.7 head SHA (`zf1a2b3c4d5e`).
+2. **Web/API health on the temporary port** — `/health` returns 200
+   inside 45 s on the unused temp port (NOT on the production port).
+3. **Real OmniRoute-routed request with requested and executed model
+   provenance** — `POST /v1/route` against the deployed OmniRoute
+   gateway; the response carries `provider`, `model`, `decision_id`,
+   and the canonical `x-omniroute-request-id`,
+   `x-omniroute-decision-id`, `x-omniroute-selected-provider`,
+   `x-omniroute-selected-model`,
+   `x-omniroute-requested-model` response headers (both requested and
+   executed model are present and agree).
+4. **Pi edits a disposable repository** — Pi session renames `foo` to
+   `bar` in a temp fixture repo, observed via `git diff main`.
+5. **Pi commits the change** — `git.commit.outcome` SSE event with
+   a non-empty `commit_sha`; `git log` shows the commit on the
+   branch.
+6. **Pi pushes the branch** — the SHA from `git.commit.outcome`
+   matches the remote's branch tip at `polly/canary-5-pi-<run-id>`.
+7. **OpenCode edits a disposable repository** — symmetric to check 4,
+   using `agent_selector: "opencode"`.
+8. **OpenCode commits the change** — symmetric to check 5.
+9. **OpenCode pushes the branch** — symmetric to check 6.
+10. **Langfuse receives the trace and it is verified from Langfuse** —
+    a real session with `OMNIGENT_TELEMETRY_ENABLED=1`; a trace
+    appears in the real Langfuse tenant within 30 s; the trace
+    carries `session.id == <session_id>` on the root span, child
+    spans for `omnigent.tool` / `omnigent.llm.request`, and the
+    OmniRoute provenance attributes from check 3 when OmniRoute
+    was used.
+11. **Verity delegates to the intended harness without silent
+    fallback** — `POST /v1/sessions` with `agent_selector:
+    "verity"` produces a session log containing
+    `sys_session_send{purpose: "implement"}`, a child
+    `session.created` event with the requested harness selector
+    (Pi or OpenCode), a `session.harness` event with
+    `payload.harness` matching that selector, a
+    `session.child_session.updated` event in the parent's
+    stream, and a `sub_agent` item in the parent's
+    `sys_read_inbox`. The harness name is verified end-to-end;
+    no silent fallback to `claude-sdk` or to the default agent.
+12. **Parallel workers remain isolated in separate worktrees** —
+    two parallel harness sessions in the same canary run produce
+    distinct worktrees under `<canary_data_dir>/worktrees/`,
+    distinct branches, distinct byte-distinct commit SHAs,
+    and no cross-worktree filesystem contamination
+    (snapshot-hash before / after matches).
+
+### D.2 — repeatability run (same temp deployment configuration, second full canary)
+
+Re-run `deploy/rebuild/tests/canary.sh run --rebuild-sha <sha>` against
+a freshly emptied temp data directory (the operator wipes the previous
+canary's temp `OMNIGENT_DATA_DIR` and reuses the same temp configuration
+files). All 12 checks must pass again, with the same checks, against
+the same temporary deployment configuration. This proves the canary is
+not flaky and that the rebuild wheel is reproducible.
+
+### D.3 — acceptance rule
+
+Phase E is authorized only when **all three** are true:
+
+- D.1: 12/12 PASS.
+- D.2: 12/12 PASS on the repeatability run with the same configuration.
+- No FAIL anywhere in `docs/rebuild/canary-report.md` (or its
+  repeatability twin).
+
+Pi and OpenCode checks (#4–#9) are **mandatory**; a SKIPPED for any of
+them does not authorize Phase E. SKIPPED may appear **only while
+diagnosing setup** (e.g. a missing `pi` or `opencode` binary on the
+canary VM during initial bring-up); once the harness binaries are
+installed, every Pi and OpenCode check must report PASS, not
+SKIPPED. SKIPPED in D.1 or D.2 is a FAIL for the purposes of
+authorizing Phase E.
+
+The canary is only considered successful when **all 12 of D.1 and D.2
+genuinely report PASS**. A single FAIL halts the canary; the operator
+diagnoses from the per-check `## Evidence` block in
+`docs/rebuild/canary-report.md`.
+
+### D.4 — evidence
+
+`deploy/rebuild/tests/canary.sh run` writes
+`docs/rebuild/canary-report.md` with a summary table (12 rows + per-row
+duration) and a per-check evidence section (PASS/FAIL/SKIPPED + the
+structured `evidence` block the check emitted). Phase E cannot begin
+until both the D.1 report and the D.2 repeatability report are
+committed to the rebuild branch and reviewed.
+
+### D.5 — what Phase D does NOT do (recap, in deployment terms)
+
+- Does NOT stop or restart the current production Omnigent service.
+- Does NOT modify the live systemd unit (`omnigent.service`); if a
+  temp unit is required for service-behaviour validation, it is a
+  separate file (e.g. `omnigent-canary.service`) and is removed at
+  the end of Phase D.
+- Does NOT bind the current production port.
+- Does NOT touch, move, copy, migrate, or modify the live `chat.db`.
+- Does NOT alter the reverse proxy.
+- Does NOT install the rebuild wheel over the current production
+  installation; the rebuild wheel is installed to a temp-prefixed
+  path (e.g. `uv tool install --force --bin-dir /opt/canary-bin`)
+  and the temp unit (or temp foreground process) references it from
+  there.
+- Does NOT perform the Phase E cutover.
+
+**Phase E remains the only in-place production operation** in this plan:
+stop the existing service, preserve and move aside the old database,
+install the rebuilt wheel, start the new version on the existing
+production port, keep the same hostname and phone URL.
 
 ## Phase E — production cutover (THE SINGLE IN-PLACE REPLACEMENT)
 
@@ -432,8 +579,9 @@ Each is a single command captured to `cutover-report.md`:
 | 9 | Langfuse receives traces | one real session + grep the Langfuse API for `session.id` |
 | 10 | Mobile access works | the user's phone opens the existing URL |
 
-Each check is gated on green from Phase D. If any check fails,
-the script proceeds to Phase G.
+Each check is gated on green from Phase D.1 + Phase D.2 (both
+12/12 PASS, no SKIPPED). If any check fails, the script proceeds to
+Phase G.
 
 ## Phase G — rollback (ready in advance, executed only on failure)
 
@@ -567,13 +715,14 @@ file operations. Resolvable.
   port of fork migrations, no Alembic head compatibility work.
   The old DB lives as a read-only backup.
 - "What if we want A/B testing of the new wheel against the
-  fork?" Answer: not a blocker. The Phase D disposable host
-  is the canary. The phone URL is one user with one harness
-  workflow; A/B testing is a marketing concept that does not
-  map to single-user load.
+  fork?" Answer: not a blocker. The Phase D canary on the
+  existing Omnigent VM (with isolation rules in §D.0a + §D.0b) is the
+  canary. The phone URL is one user with one harness workflow;
+  A/B testing is a marketing concept that does not map to
+  single-user load.
 - "What if we want a canary deployment that takes 5% of traffic?"
-  Answer: same as above. The Phase D disposable host is the
-  canary.
+  Answer: same as above. The Phase D canary on the existing
+  Omnigent VM is the canary.
 - "What if we want to preserve the old wheel for rollback?"
   Answer: the previous fork wheel is preserved as a historical
   artifact (in `legacy/custom-pre-0.7` + the dirty-index commit

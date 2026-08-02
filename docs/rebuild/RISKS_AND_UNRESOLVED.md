@@ -75,10 +75,13 @@
    `codex`, `cursor`, `kiro`, `goose`, `hermes`, `qwen`, or
    `kimi` binaries on the production host are outside the
    upstream-supported ranges, the new wheel will refuse to launch
-   them. **Mitigation:** capture the installed versions during
-   Phase D; if any are out of range, either upgrade them in
-   place or pin the supported range via the harness's
-   `OMNIGENT_<NAME>_VERSION_OVERRIDE` knob.
+   them. **Mitigation:** capture the installed versions on the
+   existing Omnigent VM during Phase D (the canary runs on the
+   existing VM, so the host's installed binary versions are
+   exactly the ones the production cutover will see); if any are
+   out of range, either upgrade them in place or pin the supported
+   range via the harness's `OMNIGENT_<NAME>_VERSION_OVERRIDE`
+   knob.
 
 9. **Existing systemd unit runs a non-`omni` binary.** If the
    existing fork unit runs `python -m omnigent` from a clone at
@@ -89,10 +92,13 @@
    `/usr/local/bin/omni server …`.
 
 10. **`rebuild/upstream-0.7` is not yet built or tested
-    end-to-end.** The cutover's canary (Phase D) is the next
-    milestone. Until the canary is green, the rebuild branch is
-    a planning artifact, not a production candidate. Do **not**
-    schedule a maintenance window until Phase D is complete.
+    end-to-end.** The cutover's canary (Phase D — the
+    pre-cutover canary on the existing Omnigent VM, NOT on a
+    disposable VM) is the next milestone. Until Phase D.1
+    AND Phase D.2 both show 12/12 PASS with no SKIPPED,
+    the rebuild branch is a planning artifact, not a
+    production candidate. Do **not** schedule a maintenance
+    window until Phase D is complete.
 
 ## Risks (non-production)
 
@@ -169,8 +175,10 @@
    (it is not automatic on `omni upgrade`).
 
 7. **Does the fork's `routing_agent.py:routes:select` integration
-   still work on the v0.7.0 OmniRoute endpoint?** Untested. Phase
-   E's canary must include a real `/routes:select` round-trip.
+   still work on the v0.7.0 OmniRoute endpoint?** Untested. The
+   Phase D canary (on the existing Omnigent VM) must include a
+   real `/routes:select` round-trip — that is acceptance check
+   #3.
 
 8. **Is the production host's `omni-control-room-host.service`
    unit file checked into the repository, or is it managed
@@ -197,22 +205,38 @@
 
 ## Things to validate during the canary
 
+Phase D runs the rebuild wheel on the **existing Omnigent VM** (NOT
+on a disposable VM and NOT on another host) using the isolation
+rules in `PHASED_IMPLEMENTATION_PLAN.md` §D.0a (what Phase D uses): unused temp loopback
+port, temp `OMNIGENT_DATA_DIR`, fresh temp SQLite, temp artifact +
+harness dirs, temp configs, disposable Git branches or a dedicated
+disposable GitHub test repo. Phase D must NOT stop or restart the
+production service, modify the live systemd unit, bind the production
+port, touch the live `chat.db`, alter the reverse proxy, install the
+rebuild wheel over the current production installation, or perform
+the Phase E cutover.
+
+Within those isolation rules, the canary must demonstrate:
+
 - Real Pi session on the live harness binary; check that the
-  watchdog survives a 10-minute quiet turn.
+  watchdog survives a 10-minute quiet turn (acceptance check #4–#6).
 - Real OpenCode session; check the canonical resolver picks
-  `opencode-native` even with a fuzzy request.
+  `opencode-native` even with a fuzzy request (acceptance check
+  #7–#9).
 - Real Verity fan-out; check the per-task worktree isolation
-  works for two concurrent children.
-- Real `omni upgrade` from v0.7.0 to v0.8.0 (when released);
-  check that the drain posture is correct and the
-  control-room deployment tooling handles the cutover.
-- Real `promote_release.sh` + `rollback_release.sh` cycle on a
-  fixture deploy root; check the exact-SHA rollback and the
-  cmdline-based host-pin check.
+  works for two concurrent children (acceptance check #11).
 - Real Langfuse integration; check the trace hierarchy and the
-  secret-redaction filter.
+  secret-redaction filter (acceptance check #10).
 - Real OmniRoute combo selection; check that the
-  `x-omniroute-*` headers are captured into the Langfuse trace.
+  `x-omniroute-*` headers are captured into the Langfuse trace
+  (acceptance check #3 + #10).
+- Real `/v1/route` round-trip with both requested and executed
+  model provenance (acceptance check #3).
+
+The canary must run twice (D.1 + D.2) — first from an empty
+temporary data directory, second with the same temporary deployment
+configuration to prove repeatability. Both runs must report
+12/12 PASS with no SKIPPED before Phase E is authorized.
 
 ## Open PRs the audit found but did not evaluate
 

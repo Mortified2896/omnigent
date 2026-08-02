@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
-# canary.sh — Phase D disposable-host canary runner
+# canary.sh — Phase D pre-cutover canary runner
 # ─────────────────────────────────────────────────────────────────────
 #
 # Note: this runner is intentionally /usr/bin/env bash (not POSIX
@@ -12,18 +12,24 @@
 # itself issue network requests or read the database. The checks
 # do that.
 #
-# Runs the 12 acceptance checks against a fresh install of the
-# rebuild's Omnigent 0.7 wheel, against an empty data dir, on a
-# disposable host. Aggregates per-check outcomes into
-# docs/rebuild/canary-report.md.
+# Phase D is the pre-cutover canary. It runs the 12 acceptance
+# checks against a fresh install of the rebuild's Omnigent 0.7
+# wheel, against an empty data dir, on the **existing Omnigent
+# VM** (NOT on a disposable VM and NOT on another host). Isolation
+# from the running production stack is enforced via an unused
+# temporary loopback port, a temporary OMNIGENT_DATA_DIR, and
+# temporary copies of the rebuild's config files. Aggregates
+# per-check outcomes into docs/rebuild/canary-report.md.
 #
 # Usage:
-#   /opt/canary-fixtures/canary.sh run [--rebuild-sha <sha>]
+#   /opt/canary/rebuild-canary.sh run [--rebuild-sha <sha>]
 #
 # Exit codes:
-#   0  all 12 checks PASS (or the harness-binary-missing ones
-#      SKIPPED); canary is green.
-#   1  at least one check FAIL; canary is red.
+#   0  all 12 checks PASS (and the harness-binary checks are not
+#      SKIPPED). Canary is green and Phase E is authorized (subject
+#      to the D.2 repeatability run also being green).
+#   1  at least one check FAIL, OR a Pi/OpenCode check is SKIPPED.
+#      Canary is red and Phase E is NOT authorized.
 
 set -eu
 

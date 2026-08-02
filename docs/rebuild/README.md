@@ -38,8 +38,8 @@ environment.
 | `LANGFUSE_PLAN.md` | Phase 7: Langfuse via stock OpenTelemetry exporter + `OMNIGENT_TELEMETRY_ENABLED` master opt-in. |
 | `HARNESS_GIT_PLAN.md` | Phase 6: Pi/OpenCode use stock `git` and stock worktree API, no custom commit protocol. |
 | `AUTO_UPDATE_PLAN.md` | Phase 9: stock `omni upgrade` for source; custom control-room scripts for production promotion. |
-| `ACCEPTANCE_TESTS.md` | Phase 8: 15 acceptance tests against a disposable test repository and a disposable database. |
-| `PHASED_IMPLEMENTATION_PLAN.md` | In-place replacement on a **fresh 0.7 database**: Phases A–G. The Alembic head mismatch is **not** a blocker (the legacy DB is moved aside read-only). The seven remaining items are about *runtime configuration correctness* and *operator workflow*. |
+| `ACCEPTANCE_TESTS.md` | Phase 8 (contract): 15 fresh-DB acceptance tests that are exercised as **a subset of the 12 Phase D checks** on the existing Omnigent VM; the suite assumes a fresh 0.7 database with no legacy state imported. |
+| `PHASED_IMPLEMENTATION_PLAN.md` | In-place replacement on a **fresh 0.7 database**: Phases A–G. **Phase D is a pre-cutover canary on the existing Omnigent VM** (NOT on a disposable VM and NOT on another host); §D.0a + §D.0b enumerate the strict isolation rules. **Phase E remains the only in-place production operation.** |
 | `ACCEPTANCE_TESTS.md` | 15 fresh-DB acceptance tests + the "removed tests" rationale (vs. the prior 15-test spec). |
 | `AUDIT_REPORT.md` | The original audit's final report (SHAs, branches, files, what is proven, what is unproven, recommended next step). |
 | `EVIDENCE_INDEX.md` | File/line citations for every claim in the migration matrix. |

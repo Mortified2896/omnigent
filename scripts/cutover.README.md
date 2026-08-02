@@ -91,7 +91,7 @@ half-state at this point; read the log file before re-running.
 | Flag | Effect |
 | --- | --- |
 | `--dry-run` | Performs the backup + verify + move-aside steps; does NOT install the wheel, does NOT touch the unit, does NOT start the service. Exit 0 when the backup is sound. |
-| `--skip-systemd` | Does not touch the unit file. Used by the Phase D disposable-host canary. |
+| `--skip-systemd` | Does not touch the unit file. Used by the Phase D canary when the rebuild wheel is started as a foreground process (the canary runs on the existing Omnigent VM, NOT on a disposable VM, and does not need to install a temp unit). |
 | `--rebuild-sha <sha>` | Label written to `<data_dir>/deployed-sha`. |
 | `--wheel <path>` | Install a specific local wheel instead of the configured index. |
 | `--port <port>` | Override the production TCP port (default: read from the existing unit file, fall back to 6767). |
@@ -119,8 +119,14 @@ install method, deployed-sha contents.
 ## Not handled by this script
 
 - **The canary.** This script is the cutover step itself. The
-  Phase D canary (against a disposable VM) is a separate workflow
-  documented in `deploy/rebuild/tests/README.md`.
+  Phase D canary (a pre-cutover canary on the existing Omnigent
+  VM, NOT a disposable VM and NOT another host) is a separate
+  workflow documented in `deploy/rebuild/tests/README.md` and
+  `docs/rebuild/PHASED_IMPLEMENTATION_PLAN.md` §D. Phase D does
+  NOT execute `cutover.sh`; Phase D only starts the rebuild
+  wheel against a temp `OMNIGENT_DATA_DIR` and exercises the
+  12-acceptance-check runner. `cutover.sh` runs once, in Phase
+  E, on the production host.
 - **Rollback to a previous rebuild release.** This script only
   installs the rebuild wheel and writes the unit. If the cutover
   succeeds but the verification smoke tests fail, the operator

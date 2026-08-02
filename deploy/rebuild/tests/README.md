@@ -1,27 +1,57 @@
-# Disposable-host canary acceptance tests
+# Pre-cutover canary acceptance tests (Phase D)
 
-The Phase D canary is a **disposable VM** (or local container) with
-a fresh install of the rebuild's Omnigent 0.7 wheel, a fresh
-empty database, and the rebuild's env.conf + server-config.yaml +
-user-config.yaml + agent bundles wired in. **The canary never sees
-the production database** — it uses a fresh empty SQLite file the
-new wheel initializes itself on first boot.
+Phase D is the **pre-cutover canary**. It runs the rebuild's Omnigent
+0.7 wheel on the **existing Omnigent VM** (the same host that
+already runs production), NOT on a disposable VM and NOT on
+another host. The existing VM already contains the real environment
+the canary must validate (installed Pi / OpenCode harnesses, Git +
+GitHub credentials, OmniRoute connectivity, Langfuse connectivity,
+filesystem paths and permissions, systemd, the reverse-proxy /
+network environment, production-equivalent runtime dependencies).
 
-The canary is only considered successful if it proves **all 12 of
-the following**, in order:
+Isolation from the running production stack is enforced by
+**pointing the rebuild wheel at temporary resources**: an unused
+loopback TCP port, a temporary `OMNIGENT_DATA_DIR`, a fresh
+temporary SQLite database (created by the wheel itself on first
+boot), a temporary artifact directory, a temporary harness tmp
+directory, temporary copies of the rebuild's env.conf +
+server-config.yaml + user-config.yaml + agent bundles, and
+disposable Git branches (or a dedicated disposable GitHub test
+repo). The canary does **NOT** stop or restart the current
+production Omnigent service, does **NOT** modify the live
+`omnigent.service` unit, does **NOT** bind the current production
+port, does **NOT** touch, move, copy, migrate, or modify the
+live `chat.db`, does **NOT** alter the reverse proxy, does
+**NOT** install the rebuild wheel over the current production
+installation, and does **NOT** perform the Phase E cutover.
 
-1. Omnigent boots.
-2. OmniRoute routes requests correctly.
-3. Pi completes a real repository task.
-4. Pi commits.
-5. Pi pushes.
-6. OpenCode completes a real repository task.
-7. OpenCode commits.
-8. OpenCode pushes.
-9. Langfuse receives traces.
-10. Verity orchestrates delegation correctly.
-11. Worktrees remain isolated.
-12. The same production URL and port configuration are used.
+The 12 acceptance checks are:
+
+1. Omnigent boots (fresh 0.7 database initialization on the
+   existing VM, against the temp `OMNIGENT_DATA_DIR`).
+2. Web/API health on the **temporary** loopback port (NOT the
+   production port).
+3. **A real OmniRoute-routed request with requested and executed
+   model provenance** (the response carries `provider`, `model`,
+   `decision_id`, and the canonical `x-omniroute-*` response
+   headers including the requested and selected model).
+4. Pi edits a disposable repository.
+5. Pi commits the change.
+6. Pi pushes the branch.
+7. OpenCode edits a disposable repository.
+8. OpenCode commits the change.
+9. OpenCode pushes the branch.
+10. Langfuse receives the trace and it is verified from Langfuse
+    (real OTLP export, real Langfuse tenant, real `session.id` +
+    child-span inspection from Langfuse's API).
+11. Verity delegates to the intended harness **without silent
+    fallback** (no fallback to `claude-sdk` or to the default
+    agent; the requested harness selector is honored end-to-end).
+12. Parallel workers remain isolated in separate worktrees
+    (two parallel Pi sessions in the same canary run produce
+    distinct worktrees, distinct branches, distinct
+    byte-distinct SHAs, and no cross-worktree filesystem
+    contamination).
 
 The goal is **not** to prove that Omnigent starts. The goal is to
 prove that the rebuilt **Control Room workflow** is fully usable
@@ -29,96 +59,145 @@ prove that the rebuilt **Control Room workflow** is fully usable
 
 ## How the canary runs
 
-### Disposable host setup
+### Setup on the existing Omnigent VM
+
+The canary runs **on the existing Omnigent VM**. No new VM is
+provisioned.
 
 ```sh
-# 1. Create a fresh VM or container. Debian 12 / Ubuntu 24.04 /
-#    any Linux with systemd. The host has the rebuild wheel
-#    installed via uv tool install --force (see Phase C.5).
-# 2. Copy the canary fixtures into /opt/canary-fixtures/ on the
-#    disposable host (see fixtures/ subdir).
-# 3. Start the canary runner:
-OMNIGENT_DATA_DIR=/var/lib/canary-omnigent \
-    /opt/canary-fixtures/canary.sh run
+# On the existing VM (as the operator) — preparation:
+#
+# 1. Copy the rebuild's deployment fixtures into a temp prefix:
+#    /etc/omnigent-canary-<run-id>/   (env.conf)
+#    /var/lib/omnigent-canary-<run-id>/config.yaml
+#    /srv/omnigent-canary-<run-id>/agents/
+#    /srv/omnigent-canary-<run-id>/artifacts/
+#    /srv/omnigent-canary-<run-id>/harness-tmp/
+# 2. Install the rebuild wheel to a temp-prefixed bin dir
+#    (uv tool install --force --bin-dir /opt/canary-bin
+#     /srv/omnigent/wheels/omnigent-0.7.0+rebuild-<sha>.whl).
+# 3. Pick an UNUSED TCP loopback port, e.g. 17670.
+# 4. Start the canary runner with the temp resources:
+ENV_FILE=/etc/omnigent-canary-<run-id>/env.conf \
+OMNIGENT_DATA_DIR=/var/lib/omnigent-canary-<run-id> \
+OMNIGENT_PORT=17670 \
+OMNIGENT_AUTH_HEADER=X-Forwarded-Email \
+CANARY_IDENTITY=canary@omnigent.local \
+CANARY_FIXTURES_ROOT=/tmp/canary-fixtures \
+/opt/canary/rebuild-canary.sh run --rebuild-sha <sha>
 ```
+
+The canary executes as either a **temporary foreground process**
+under `bash` (the default) or, if systemd-level service behaviour
+must be validated, an **isolated temporary systemd unit** at
+`/etc/systemd/system/omnigent-canary.service` (clearly separate
+name) that is removed at the end of Phase D. **It must not
+replace or modify `omnigent.service`.**
 
 `canary.sh run` performs the 12 checks in order. A failure on
 check N halts the canary and exits non-zero; checks N+1..12 are
 NOT attempted.
 
-### Disposable DB
+### Fresh temp DB
 
 The canary's `OMNIGENT_DATA_DIR` is a fresh empty directory. The
 rebuild wheel's first-boot migration path creates `chat.db` and
 brings it to upstream v0.7 head (per
 `omnigent/db/utils.py:_initialize_or_verify_schema`). The canary
-does **NOT** touch the production `chat.db`.
+does **NOT** touch the production `chat.db`; the production
+`OMNIGENT_DATA_DIR` is never read by the canary process.
 
-### Disposable harness binaries
+### Harness binaries
 
-The canary disposable host has `pi` and `opencode` CLIs installed
-under the system PATH (`/usr/local/bin/pi`,
+The existing Omnigent VM must have `pi` and `opencode` CLIs
+installed under the system PATH (`/usr/local/bin/pi`,
 `/usr/local/bin/opencode`). If a binary is missing, the
-corresponding harness check (#3-#8) is SKIPPED with a clear log
-message; checks #1, #2, #9, #10, #11, #12 still run.
+corresponding harness check (#4–#9) is SKIPPED with a clear log
+message, and **a run containing such a SKIPPED is NOT green** —
+Pi and OpenCode checks are mandatory for Phase E authorization.
+SKIPPED may appear only while diagnosing initial harness setup;
+once the binaries are installed, every Pi and OpenCode check
+must report PASS.
 
 ## The 12 checks
 
-Each check is a single pytest-style function or shell command that
-asserts the expected outcome. The full check implementations are
-under `checks/` in this directory; each one returns a structured
-`{name, status, evidence}` dict the canary runner aggregates.
+Each check is one of: a shell script (POSIX `sh`) under
+`checks/`, or a python3 (stdlib only) script under `checks/`. Each
+script prints a structured status line on stdout (`PASS`, `FAIL
+<reason>`, or `SKIPPED (harness binary missing)`) and the runner
+aggregates them into `canary-report.md`.
 
-### Check 1 — Omnigent boots
+The per-check script filenames under `deploy/rebuild/tests/checks/`
+currently use a different ordering from the user's 12-check
+specification: the existing files are numbered in commit-time order
+(`01_boot.sh` combines DB init + health; `02_omniroute.py` is
+OmniRoute; etc.). The implementation chat that picks up Phase D
+re-aligns the script filenames under `checks/` to the spec below
+(check 1 = DB init, check 2 = health on the temp port, check 3 =
+OmniRoute, checks 4–6 = Pi, checks 7–9 = OpenCode, check 10 =
+Langfuse, check 11 = Verity, check 12 = parallel-isolation). The
+**content of each check does not change** — only the script
+filename under `checks/` and the per-check launcher in `canary.sh`
+are re-indexed. The descriptions below are the spec.
 
-`checks/01_boot.py` (or `01_boot.sh`).
+### Check 1 — Fresh Omnigent 0.7 database initialization
 
-- Boot the new wheel against an empty `OMNIGENT_DATA_DIR`.
-- Wait up to 45 s for `/health` to return 200.
-- Assert `journalctl -u omnigent -n 50` contains
-  `"Running database migrations"` and does NOT contain
-  `"schema is out of date"`.
-- Assert `sqlite3 <data_dir>/chat.db ".tables"` returns at
+- Boot the rebuild wheel against the temp `OMNIGENT_DATA_DIR`
+  (an empty directory on the existing Omnigent VM; NOT the
+  production `/var/lib/omnigent`, NOT a disposable VM).
+- Wait up to 45 s for the first-boot migration path to fire
+  (`Running database migrations…` log line on stdout / journalctl).
+- Assert no `schema is out of date` error.
+- Assert `sqlite3 <temp_data_dir>/chat.db ".tables"` returns at
   least: `alembic_version`, `agents`, `conversations`,
   `comments`, `files`, `policies`, `permissions`,
   `scheduled_tasks`, `projects`, `inbox`, `tasks`.
-- Assert `sqlite3 <data_dir>/chat.db "SELECT version_num
+- Assert `sqlite3 <temp_data_dir>/chat.db "SELECT version_num
   FROM alembic_version"` returns the upstream v0.7 head SHA
   (`zf1a2b3c4d5e`).
 
-**Pass criteria**: every assertion above passes; `/health` returns
-200 inside 45 s.
+**Pass criteria**: every assertion above passes; the fresh
+schema is at upstream v0.7 head.
 
-### Check 2 — OmniRoute routes requests correctly
+### Check 2 — Web/API health on the temporary port
 
-`checks/02_omniroute.py`.
+- The rebuild wheel is bound to an **unused temporary loopback
+  TCP port** (e.g. `127.0.0.1:17670`), NOT to the production
+  port (e.g. NOT `0.0.0.0:6767`).
+- Assert `curl -fsS http://127.0.0.1:<canary-port>/health`
+  returns 200 inside 10 s.
+- Assert the wheel is reachable on the canary port from the
+  reverse-proxy network namespace equivalent
+  (e.g. `curl --unix-socket` if so configured, or a
+  same-network curl with the auth header injected).
 
-- A real `/v1/route` POST against the deployed OmniRoute
-  gateway. The request body is a minimal "trivial echo" prompt
-  with `available_models` containing the provider's known
-  catalog.
+**Pass criteria**: `/health` returns 200 on the temp port; the
+production port is not bound by the canary wheel.
+
+### Check 3 — A real OmniRoute-routed request with requested and executed model provenance
+
+- A real `POST /v1/route` (or `POST <omniroute>/routes:select`)
+  against the deployed OmniRoute gateway. The request body is a
+  minimal prompt with `available_models` containing the
+  provider's known catalog.
 - Assert the response contains a non-empty `provider`, `model`,
   and `decision_id`.
 - Assert the response carries the canonical OmniRoute response
-  headers (`x-omniroute-request-id`,
-  `x-omniroute-decision-id`, `x-omniroute-selected-provider`,
-  `x-omniroute-selected-model`,
-  `x-omniroute-requested-model`).
-- Assert a follow-up `/v1/route` POST with the SAME prompt and
-  DIFFERENT catalog produces a deterministic response (idempotent
-  or at least cacheable within a single decision_id).
+  headers including **both** the requested model
+  (`x-omniroute-requested-model`) **and** the executed model
+  (`x-omniroute-selected-model` / `x-omniroute-selected-provider`).
+- Assert a follow-up POST with the same prompt + same catalog
+  returns the same `decision_id` (determinism).
 
-**Pass criteria**: both assertions above pass; the gateway
-returned a real provider+model pairing with all expected headers.
+**Pass criteria**: a real provider+model pairing was returned;
+both requested and executed model provenance are present; the
+gateway is deterministic for the same input.
 
-### Check 3 — Pi completes a real repository task
+### Check 4 — Pi edits a disposable repository
 
-`checks/03_pi_repo_edit.sh`.
-
-- Create a disposable git fixture repo at
+- A disposable git fixture repo at
   `/tmp/canary-fixtures/<run-id>/pi/repo` with a single file
   `module.py` containing `def foo(): return 1`.
-- Boot the new wheel (still alive from check 1).
 - `POST /v1/sessions` with `agent_selector: "pi"`,
   `workspace: /tmp/canary-fixtures/<run-id>/pi/worktree`,
   `prompt: "rename the function foo to bar"`.
@@ -127,204 +206,171 @@ returned a real provider+model pairing with all expected headers.
   NOT contain `foo`.
 
 **Pass criteria**: the diff shows `bar`, not `foo`, and the
-session completed inside 180 s. (Or SKIPPED if `pi` binary is
-missing from PATH.)
+session completed inside 180 s. (SKIPPED only while diagnosing
+an absent `pi` binary on the VM; once `pi` is installed, this
+check must report PASS, not SKIPPED.)
 
-### Check 4 — Pi commits
+### Check 5 — Pi commits the change
 
-`checks/04_pi_commit.sh` (depends on check 3).
-
-- The Pi session from check 3 must produce at least one
+- The Pi session from check 4 must produce at least one
   `git.commit.outcome` SSE event with a non-empty `commit_sha`.
 - `git -C <worktree> log --oneline` shows a commit authored by
   the harness identity (any email; the harness's identity is
   config-driven, not asserted here).
 
-**Pass criteria**: the session emitted `git.commit.outcome` with
-a non-empty SHA, and `git log` shows the new commit.
+**Pass criteria**: the session emitted `git.commit.outcome`
+with a non-empty SHA, and `git log` shows the new commit.
 
-### Check 5 — Pi pushes
-
-`checks/05_pi_push.sh` (depends on check 4).
+### Check 6 — Pi pushes the branch
 
 - The Pi session's commit must be pushed to a branch on a
   disposable remote (the canary fixture's bare repo at
-  `/tmp/canary-fixtures/<run-id>/pi/remote.git`).
-- Assert `git -C <remote-worktree> rev-parse
-  polly/acceptance-5-pi` returns the SHA from the
-  `git.commit.outcome` event.
+  `/tmp/canary-fixtures/<run-id>/pi/remote.git`, OR a dedicated
+  disposable GitHub test repo).
+- Assert the remote's `polly/canary-6-pi-<run-id>` branch tip
+  equals the SHA from `git.commit.outcome`.
 
-**Pass criteria**: the pushed SHA on the remote matches the
-session's reported commit SHA.
+**Pass criteria**: the pushed SHA matches the session's
+reported commit SHA.
 
-### Check 6 — OpenCode completes a real repository task
+### Check 7 — OpenCode edits a disposable repository
 
-`checks/06_opencode_repo_edit.sh`.
+- Symmetric to check 4, but with `agent_selector: "opencode"`
+  on a fresh fixture repo at
+  `/tmp/canary-fixtures/<run-id>/opencode/repo`.
 
-- Symmetric to check 3, but with `agent_selector: "opencode"`.
-- Assert `git -C <worktree> diff main` contains `bar` and does
-  NOT contain `foo`.
+**Pass criteria**: same as check 4. (SKIPPED only while
+diagnosing an absent `opencode` binary.)
 
-**Pass criteria**: same as check 3. (Or SKIPPED if `opencode`
-binary is missing from PATH.)
+### Check 8 — OpenCode commits the change
 
-### Check 7 — OpenCode commits
+- Symmetric to check 5.
 
-`checks/07_opencode_commit.sh`.
+### Check 9 — OpenCode pushes the branch
 
-- Symmetric to check 4. Asserts the
-  `git.commit.outcome` SSE event and the resulting `git log`
-  entry.
+- Symmetric to check 6; branch name `polly/canary-9-opencode-<run-id>`.
 
-### Check 8 — OpenCode pushes
+### Check 10 — Langfuse receives the trace and it is verified from Langfuse
 
-`checks/08_opencode_push.sh`.
-
-- Symmetric to check 5. Asserts the remote's
-  `polly/acceptance-8-opencode` branch carries the session's
-  reported SHA.
-
-### Check 9 — Langfuse receives traces
-
-`checks/09_langfuse.py`.
-
-- Boot the new wheel with
-  `OMNIGENT_TELEMETRY_ENABLED=1` + the configured
-  `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at a real Langfuse
-  sandbox (the canary does NOT mock this).
-- Run a single trivial session (a `claude-sdk` session with
-  `prompt: "trivial echo"`).
-- Poll Langfuse's public API
-  (`/api/public/sessions/<session_id>`) for up to 30 s for the
-  emitted trace.
-- Assert the trace hierarchy contains:
-    - one root span with `session.id == <session_id>`,
-    - one or more child spans (e.g. `omnigent.tool`,
-      `omnigent.llm.request`) each carrying the same
-      `session.id`,
-    - the OmniRoute provenance attributes from check 2 (when
-      OmniRoute was used).
+- The rebuild wheel is booted with `OMNIGENT_TELEMETRY_ENABLED=1`
+  + the configured `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at a
+  real Langfuse tenant (the canary does NOT mock this).
+- Run a single trivial session.
+- Poll Langfuse's public API for up to 30 s for the trace.
+- Verify the trace hierarchy contains a `session.id` matching
+  the session, child spans for `omnigent.tool` /
+  `omnigent.llm.request`, and (when OmniRoute was used) the
+  OmniRoute provenance attributes from check 3.
 
 **Pass criteria**: a real trace appeared in Langfuse with the
 expected hierarchy and attributes within 30 s of session
-completion.
+completion; the verification is read from Langfuse's API, not
+assumed.
 
-### Check 10 — Verity orchestrates delegation correctly
+### Check 11 — Verity delegates to the intended harness without silent fallback
 
-`checks/10_verity_delegation.sh`.
-
-- Boot the new wheel with the rebuild's three agent bundles
-  (`verity`, `pi`, `opencode`) registered via `--agent` on the
-  systemd unit.
+- The rebuild's three agent bundles (`verity`, `pi`, `opencode`)
+  are registered via `--agent` (or a temp config file +
+  `--agent`).
 - `POST /v1/sessions` with `agent_selector: "verity"`,
-  `prompt: "rename foo to bar across the test repo using a
-  Pi sub-agent"`.
-- Wait up to 240 s for `session.finished`.
-- Assert the session log contains:
-    - one `sys_session_send` tool call with `args.purpose: "implement"`,
-    - one child `session.created` event with
-      `agent_selector: "pi"`,
-    - one `session.harness` event with
-      `payload.harness == "pi-native"`,
-    - one `session.child_session.updated` event in the parent's
-      stream,
-    - one `sub_agent` item in the parent's `sys_read_inbox`
-      when the child finished.
-- Assert the worktree directory recorded by the parent session
-  for the child differs from the parent's worktree (per-session
-  worktree isolation; see check 11).
+  `prompt: "rename foo to bar using a Pi sub-agent"`.
+- Assert the parent's session log contains the lifecycle:
+  `sys_session_send{purpose: "implement"}` → a child
+  `session.created` with the requested selector → a
+  `session.harness` event with `payload.harness` matching the
+  requested harness (NOT silently falling back to
+  `claude-sdk` or to the default agent).
+- Assert a `session.child_session.updated` event and a
+  `sub_agent` item in the parent's `sys_read_inbox`.
 
-**Pass criteria**: every assertion above passes; the
-parent's stream shows the full delegation lifecycle.
+**Pass criteria**: the requested harness name is honored
+end-to-end; no silent fallback to `claude-sdk` or to the
+default agent.
 
-### Check 11 — Worktrees remain isolated
+### Check 12 — Parallel workers remain isolated in separate worktrees
 
-`checks/11_worktree_isolation.sh`.
-
-- Boot the new wheel.
-- Run two parallel Pi sessions in parallel (two
-  `POST /v1/sessions` with `agent_selector: "pi"` against the
-  same disposable fixture repo, both `prompt: "rename foo to
-  <something>"`).
+- Run two parallel Pi sessions against the same disposable
+  fixture repo (both `prompt: "rename foo to <something>"`).
 - Wait up to 240 s for both to finish.
-- Assert each session created a distinct worktree directory
-  under `<data_dir>/worktrees/<session_id>-<n>/`.
-- Assert the two sessions produced commits on distinct branches
-  (e.g. `polly/acceptance-11-pi-a` and
-  `polly/acceptance-11-pi-b`).
-- Assert the two commits are byte-distinct (different SHAs).
-- Assert no session ever wrote outside its own worktree
-  (filesystem snapshot of `<data_dir>/worktrees/<other-session>/`
-  is unchanged before / after the parallel run).
+- Assert each session has a distinct worktree directory under
+  the temp data dir's `worktrees/`.
+- Assert the two sessions produced byte-distinct commits on
+  distinct branches.
+- Assert no session wrote outside its own worktree
+  (filesystem snapshot hash unchanged).
 
 **Pass criteria**: every assertion above passes; no session
 clobbered another's worktree.
 
-### Check 12 — Same production URL and port configuration are used
+## Acceptance rule (Phase E gate)
 
-`checks/12_prod_url.py`.
+Phase E (the production cutover) is authorized only when:
 
-- Boot the new wheel with the SAME `--host 0.0.0.0` and the
-  SAME `--port <PROD_PORT>` the production deploy uses.
-- Assert `curl -fsS http://127.0.0.1:<PROD_PORT>/health`
-  returns 200.
-- Assert the `OMNIGENT_AUTH_HEADER` env var matches what the
-  production reverse proxy injects (the canary reads this from
-  `env.conf` and asserts the value matches the operator's
-  pre-cutover note).
-- Assert the `OMNIGENT_DATA_DIR` env var points at
-  `/var/lib/omnigent` (the same path the production deploy
-  uses; the canary's `<data_dir>/deployed-sha` is the canary's
-  own marker, not the production's, but the env var must
-  match).
-- Assert the systemd unit's `ExecStart=` matches the
-  canonical template the Phase C.4 unit template renders, with
-  `<OMNI_BIN_PATH>` substituted for the actual installed
-  shim's absolute path.
-- Assert the rebuild's `deployed-sha` marker (if present)
-  carries the rebuild release SHA, not the fork's pre-cutover
-  SHA.
+- Phase D.1: 12/12 PASS.
+- Phase D.2 (repeatability run with the same temp
+  configuration, against a freshly emptied temp
+  `OMNIGENT_DATA_DIR`): 12/12 PASS.
+- No FAIL anywhere in either `docs/rebuild/canary-report.md`.
 
-**Pass criteria**: every assertion above passes; the canary
-unit is configurationally identical to the production unit
-except for the data dir and the deployed-sha marker.
+**Pi and OpenCode checks (#4–#9) are mandatory**; a SKIPPED
+for any of them does not authorize Phase E. SKIPPED may
+appear **only while diagnosing setup** (e.g. a missing `pi`
+or `opencode` binary during initial bring-up); once the
+harness binaries are installed, every Pi and OpenCode check
+must report PASS, not SKIPPED. A run containing a required
+SKIPPED is treated as a FAIL for purposes of authorizing
+Phase E.
 
 ## Output: `canary-report.md`
 
 Each successful canary run writes a structured report to
-`docs/rebuild/canary-report.md` on the rebuild branch (via the
-`canary-publish.sh` script the canary runner calls on success).
-The report includes:
+`docs/rebuild/canary-report.md` (or `canary-report-<run-id>.md`
+if multiple runs were captured). The report includes:
 
-- run timestamp, canary host fingerprint
+- run timestamp, canary host fingerprint (whoami + uname +
+  ip route, NOT a destructive fingerprint)
 - per-check status (PASS / FAIL / SKIPPED) + duration
 - per-check evidence (the assertion outputs, the journalctl
   excerpts, the Langfuse trace ID, the Pi/OpenCode commit
   SHAs, etc.)
-- summary table at the top: 12 rows, one per check, color-coded
+- summary table at the top: 12 rows, one per check, with
+  per-row PASS/FAIL/SKIPPED + duration.
 
-A canary run is considered "all green" only when all 12 checks
-PASS or are explicitly SKIPPED (a SKIPPED check must be one of
-the harness-binary-missing checks: #3, #4, #5, #6, #7, #8). A
-single FAIL halts the canary and the report is written with the
-failure highlighted at the top.
+A canary run is considered "all green" only when **all 12
+checks PASS or the SKIPPED are limited to harness-binary
+diagnostic runs**. A single FAIL halts the canary and the
+report is written with the failure highlighted at the top.
 
 ## What the canary does NOT do
 
 - It does NOT touch the production database. The canary uses
-  a fresh empty SQLite file the new wheel creates itself.
-- It does NOT touch the production release dir, the production
-  systemd unit, or the production reverse-proxy config.
-- It does NOT install a wheel on the production host.
-- It does NOT open PRs against the production repo (the
-  disposable remote is a bare git repo inside the canary
-  fixture, NOT `Mortified2896/omnigent`).
+  a fresh empty SQLite file the new wheel creates itself,
+  inside the temp `OMNIGENT_DATA_DIR` the canary started
+  with.
+- It does NOT modify the live `omnigent.service` unit; if a
+  temp unit is needed for service-behaviour validation, it is
+  installed at `omnigent-canary.service` and removed at the
+  end of Phase D.
+- It does NOT bind the production port; the canary binds an
+  unused temp loopback port.
+- It does NOT alter the reverse proxy, the env vars the
+  production service reads, or anything else the running
+  production service depends on.
+- It does NOT install the rebuild wheel over the current
+  production installation; the rebuild wheel is installed to
+  a temp-prefixed bin dir (e.g. `uv tool install --force
+  --bin-dir /opt/canary-bin`) and referenced from there.
+- It does NOT perform the Phase E cutover.
 
-## Next step after a green canary
+## Next step after a green canary (Phase D + repeatability run)
 
-Move to **Phase E** — the production cutover. The script is
-`scripts/cutover.sh` (committed in Phase C.5), invoked with
-`--confirm --rebuild-sha <canary-passing-sha> --port <PROD_PORT>
---user <service-user>`. The cutover script's output is the
-"Phase E" evidence captured in
-`docs/rebuild/cutover-report.md`.
+Move to **Phase E** — the production cutover. **Phase E is the
+only in-place production operation in this plan**: stop the
+existing service, preserve and move aside the old database,
+install the rebuilt wheel, start the new version on the
+**existing production port**, keep the same hostname and
+phone URL. The script is `scripts/cutover.sh` (committed in
+Phase C.5), invoked with `--confirm --rebuild-sha
+<canary-passing-sha> --port <PROD_PORT> --user <service-user>`.
+The cutover script's output is the "Phase E" evidence captured
+in `docs/rebuild/cutover-report.md`.
