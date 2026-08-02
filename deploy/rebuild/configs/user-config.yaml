@@ -46,13 +46,13 @@
 # /var/lib/omnigent/config.yaml (the server config does not read
 # `providers:`).
 providers:
-  # OmniRoute gateway. The user's `OMNIROUTE_API_KEY` env var carries
+  # Optional OmniRoute gateway. The user's `OMNIROUTE_API_KEY` env var carries
   # the bearer; the server config's `routing:` block's `base_url` +
   # `router_name` declare the gateway itself.
-  omniroute:
-    base_url: https://omniroute.example.com/v1
-    api_key_env: OMNIROUTE_API_KEY
-    request_timeout_s: 60
+  # omniroute:
+  #   base_url: https://omniroute.example.com/v1
+  #   api_key_env: OMNIROUTE_API_KEY
+  #   request_timeout_s: 60
 
   # Native provider entries. Pick whichever the production deploy uses.
   # Each one reads its API key from the matching env var.
@@ -67,9 +67,10 @@ providers:
 # Per-harness model routing. Each sub-key is a harness name; the
 # value is a model id (and optional provider) used for that harness.
 # `default:` covers any harness not explicitly listed.
-harness:
-  default:
-    model: omniroute/auto
+# Select a supported model explicitly; do not rely on silent fallback.
+# harness:
+#   opencode:
+#     model: openai/gpt-5.2-codex
   # Examples:
   # pi:
   #   model: omniroute/auto
@@ -83,6 +84,5 @@ harness:
 # ─── 4. Default agent for `omni run` without `--agent` ───────────
 # When the operator runs `omnigent run` from the command line without
 # an explicit `--agent`, this is the agent that loads. The rebuild's
-# default is `verity` (the orchestration agent shipped in
-# deploy/rebuild/agents/verity/).
-default_agent: verity
+# default is upstream's standalone OpenCode native agent.
+default_agent: opencode-native-ui

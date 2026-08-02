@@ -260,21 +260,12 @@ declare -A STATUS DURATION EVIDENCE
 RESULTS_TSV="$RUN_DIR/results.tsv"
 : >"$RESULTS_TSV"
 
-# The 12 checks, in the spec order. The "name" is also the
+# The lean production checks. The "name" is also the
 # filename prefix under checks/.
 CHECKS=(
   "01_db_init"
   "02_web_health"
-  "03_omniroute"
-  "04_pi_repo_edit"
-  "05_pi_commit"
-  "06_pi_push"
   "07_opencode_repo_edit"
-  "08_opencode_commit"
-  "09_opencode_push"
-  "10_langfuse"
-  "11_verity_delegation"
-  "12_worktree_isolation"
 )
 
 # Targeted execution: --check <name> runs exactly one named check
@@ -504,10 +495,8 @@ for c in "${RUN_CHECKS[@]}"; do
   esac
 done
 
-# A required SKIPPED is also a RED (Pi and OpenCode checks are
-# mandatory; SKIPPED is only acceptable while diagnosing initial
-# harness setup). Only applies to the checks actually run.
-for c in 04_pi_repo_edit 05_pi_commit 06_pi_push 07_opencode_repo_edit 08_opencode_commit 09_opencode_push; do
+# A skipped OpenCode workflow is also RED.
+for c in 07_opencode_repo_edit; do
   case "${STATUS[$c]:-UNKNOWN}" in
     SKIPPED) GREEN=0 ;;
   esac

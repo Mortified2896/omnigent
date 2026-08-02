@@ -78,7 +78,7 @@ execution_timeout: 7200
 # ─── 6. Default agent for `/sessions` POST without an explicit
 #        `agent:` block. Resolved through the harness plugin map
 #        (omnigent/harness_plugins.py:139 for OpenCode, etc.).
-default_agent: verity
+default_agent: opencode-native-ui
 
 # ─── 7. Server-level LLM (smart-routing judge fallback) ───────────
 # When a request hits the routing layer without an OmniRoute or other
@@ -97,11 +97,13 @@ default_agent: verity
 # `profile` is passed through (OAuth refresh), else unauthenticated.
 # Set provider: external and supply base_url + router_name; the
 # server builds the client and uses it for `/v1/route` calls.
-routing:
-  provider: external
-  base_url: https://omniroute.example.com/v1
-  router_name: omniroute
-  api_key: ${OMNIROUTE_API_KEY}
+# Optional OmniRoute smart routing. Leave disabled when an explicit
+# OpenCode provider/model is selected in the user config.
+# routing:
+#   provider: external
+#   base_url: https://omniroute.example.com/v1
+#   router_name: omniroute
+#   api_key: ${OMNIROUTE_API_KEY}
   # Optional: strip these prefixes from catalog ids sent to the
   # router (and restore them on the answer).
   # model_prefix:

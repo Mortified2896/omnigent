@@ -93,10 +93,7 @@ ExecStart=<OMNI_BIN_PATH> server \
     --port <PROD_PORT> \
     --database-uri sqlite:////var/lib/omnigent/chat.db \
     --artifact-location /srv/omnigent/artifacts \
-    --config /var/lib/omnigent/config.yaml \
-    --agent /srv/omnigent/agents/verity \
-    --agent /srv/omnigent/agents/pi \
-    --agent /srv/omnigent/agents/opencode
+    --config /var/lib/omnigent/config.yaml
 
 # --- Process lifecycle ---------------------------------------------
 # Restart on failure (NOT on success — omnigent.server's graceful
