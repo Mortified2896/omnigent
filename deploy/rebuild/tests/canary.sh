@@ -61,7 +61,8 @@
 #                       for check 10
 #   OMNIROUTE_BASE_URL, OMNIROUTE_AUTH_TOKEN
 #                       for check 3
-#   UPSTREAM_HEAD_SHA   the expected alembic_version row
+#   UPSTREAM_HEAD_SHA   the expected alembic_version row, e.g.
+#                       b3c4d5e6f7a8 (upstream v0.7.0 head)
 #   UNIT_NAME           the systemd unit name (default: omnigent)
 #   REBUILD_SHA         the wheel SHA the canary is exercising
 #
@@ -103,7 +104,7 @@ CHECKS_DIR="$CANARY_ROOT/checks"
 : "${CANARY_IDENTITY:=canary@omnigent.local}"
 : "${CANARY_FIXTURES_ROOT:=/tmp/canary-fixtures}"
 : "${CANARY_RUN_ID:=$(date -u +%Y%m%dT%H%M%SZ)}"
-: "${UPSTREAM_HEAD_SHA:=zf1a2b3c4d5e}"
+: "${UPSTREAM_HEAD_SHA:=b3c4d5e6f7a8}"
 : "${UNIT_NAME:=omnigent}"
 : "${LANGFUSE_HOST:=}"
 : "${LANGFUSE_PUBLIC_KEY:=}"

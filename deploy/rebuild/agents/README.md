@@ -9,8 +9,17 @@ patterns and verified against upstream v0.7's spec loader.
 | Bundle | Harness | Role |
 | --- | --- | --- |
 | `verity/` | `claude-sdk` | The default orchestration agent. Plans, decomposes, dispatches to sub-agents, runs cross-vendor review. The `claude-sdk` harness resolves whatever Claude provider is configured (`omnigent setup` / `OPENAI_API_KEY` / Databricks / an OpenAI-compatible gateway). |
-| `pi/` | `pi-native` | The REVIEW / EXPLORE specialist for read-mostly work. The only worker that can run any gateway model. |
-| `opencode/` | `opencode-native` | The primary IMPLEMENTER for the production rebuild. |
+| `verity/agents/pi/` | `pi-native` | Verity's Pi sub-agent (Review/Explore specialist). |
+| `verity/agents/opencode/` | `opencode-native` | Verity's OpenCode sub-agent (primary Implementer). |
+| `pi/` | `pi-native` | Standalone Pi bundle (registered when Verity is not). |
+| `opencode/` | `opencode-native` | Standalone OpenCode bundle (registered when Verity is not). |
+
+**Sub-agents live under `verity/agents/<name>/`.** The upstream
+v0.7 spec loader's `_discover_sub_agents` walks `<parent>/agents/`
+for sub-bundles; the spec's `tools.agents:` list is validated
+against the names of those siblings. Dropping the sub-agents
+under `verity/agents/` is the canonical upstream shape (mirrors
+`examples/polly/agents/` in upstream's tree).
 
 Verity is registered as the **default agent** in both
 `/var/lib/omnigent/config.yaml` (`default_agent: verity`) and

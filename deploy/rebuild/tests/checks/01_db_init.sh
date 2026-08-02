@@ -19,7 +19,7 @@
 #   OMNIGENT_DATA_DIR   the data dir to verify (must be empty
 #                       except for the chat.db the wheel creates)
 #   UPSTREAM_HEAD_SHA   the expected alembic_version row, e.g.
-#                       zf1a2b3c4d5e
+#                       b3c4d5e6f7a8 (upstream v0.7.0 head)
 #   UNIT_NAME           the systemd unit name (default: omnigent)
 #
 # Output: prints "PASS" or "FAIL <reason>" on stdout; returns 0
@@ -28,7 +28,7 @@
 set -eu
 
 : "${OMNIGENT_DATA_DIR:=/var/lib/canary-omnigent}"
-: "${UPSTREAM_HEAD_SHA:=zf1a2b3c4d5e}"
+: "${UPSTREAM_HEAD_SHA:=b3c4d5e6f7a8}"
 : "${UNIT_NAME:=omnigent}"
 : "${OMNIGENT_PORT:=6767}"
 
