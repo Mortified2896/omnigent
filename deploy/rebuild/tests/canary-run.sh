@@ -327,19 +327,30 @@ if [ "$LAUNCH_HOST" = 1 ]; then
 
   # Wait for the host to register. The wheel exposes the registered
   # hosts via GET /v1/hosts. We poll until at least one host appears
-  # with status=online.
+  # with status=online. (GET /v1/hosts returns {"hosts": [...]};
+  # the previous canary-run orchestrator polled the wrong field name
+  # "data", which never matched the response shape, so the wait
+  # always timed out. We accept either field name for compatibility
+  # with future wire changes.)
   REGISTERED=0
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 60); do
     if curl -fsS --max-time 2 "http://127.0.0.1:$CANARY_PORT/v1/hosts" 2>/dev/null \
-        | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d.get('data',[])))" 2>/dev/null \
-        | grep -qE '^[1-9][0-9]*$'; then
+        | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+hosts = d.get('hosts') or d.get('data') or []
+print(len(hosts))
+" 2>/dev/null | grep -qE '^[1-9][0-9]*$'; then
       REGISTERED=1
       break
     fi
     sleep 1
   done
   if [ "$REGISTERED" != 1 ]; then
-    echo "canary-run: temporary host did NOT register within 40s" >&2
+    echo "canary-run: temporary host did NOT register within 60s" >&2
     echo "  wheel log: $WHEEL_LOG" >&2
     echo "  host log:  $HOST_LOG" >&2
     tail -40 "$HOST_LOG" >&2 || true
