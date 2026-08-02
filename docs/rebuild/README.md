@@ -5,6 +5,15 @@ Omnigent-rebuild task. Nothing here runs the production installation;
 nothing here is deployed; nothing here changes `fork/main`, the live
 release, the production database, or the production systemd units.
 
+## Goal
+
+The new upstream-based Omnigent 0.7 installation **becomes** the
+production instance on the existing website and the existing
+production port. There is **no second permanent install**, no second
+hostname, no second port, no second public endpoint. The phone URL
+keeps working. The only acceptable downtime is the brief restart
+required to replace the running service.
+
 ## Contents
 
 | File | Purpose |
@@ -17,20 +26,23 @@ release, the production database, or the production systemd units.
 | `HARNESS_GIT_PLAN.md` | Phase 6: Pi/OpenCode use stock `git` and stock worktree API, no custom commit protocol. |
 | `AUTO_UPDATE_PLAN.md` | Phase 9: stock `omni upgrade` for source; custom control-room scripts for production promotion. |
 | `ACCEPTANCE_TESTS.md` | Phase 8: 15 acceptance tests against a disposable test repository and a disposable database. |
-| `PHASED_IMPLEMENTATION_PLAN.md` | The 7 phases (A through G) that gate each step on evidence. |
+| `PHASED_IMPLEMENTATION_PLAN.md` | In-place replacement: Phases A–G, with the **single genuine blocker** (DB migration head) and the seven items that look like blockers but are not. |
+| `AUDIT_REPORT.md` | The original audit's final report (SHAs, branches, files, what is proven, what is unproven, recommended next step). |
+| `EVIDENCE_INDEX.md` | File/line citations for every claim in the migration matrix. |
 | `RISKS_AND_UNRESOLVED.md` | 10 production-bound risks, 5 non-production risks, 10 unresolved questions, and the canary validation list. |
 
 ## How to read this
 
-1. `REPOSITORY_STATE_REPORT.md` — establishes the ground truth.
-2. `MIGRATION_MATRIX.md` — decides what is in scope.
-3. `ARCHITECTURE_PROPOSAL.md` — decides how the in-scope items are
+1. `PHASED_IMPLEMENTATION_PLAN.md` — the current ordering of work,
+   including the production cutover (Phase E) and rollback (Phase G).
+2. `REPOSITORY_STATE_REPORT.md` — establishes the ground truth.
+3. `MIGRATION_MATRIX.md` — decides what is in scope.
+4. `ARCHITECTURE_PROPOSAL.md` — decides how the in-scope items are
    laid out (Control-Room layer + two narrow core patches).
-4. The five `*_PLAN.md` files — decide the contract for each concern.
-5. `ACCEPTANCE_TESTS.md` — proves the contract works.
-6. `PHASED_IMPLEMENTATION_PLAN.md` — orders the work by gate, not by
-   commit.
+5. The four `*_PLAN.md` files — decide the contract for each concern.
+6. `ACCEPTANCE_TESTS.md` — proves the contract works.
 7. `RISKS_AND_UNRESOLVED.md` — what can still bite us.
+8. `EVIDENCE_INDEX.md` / `AUDIT_REPORT.md` — verification anchors.
 
 ## Branch and tag refs (Phase 1 preservation)
 
