@@ -10,7 +10,7 @@
 # OmniRoute provenance attributes (when OmniRoute was used),
 # and child spans for tool/llm calls.
 #
-# Requires: python3 (stdlib only), curl on PATH.
+# Requires: python3 (stdlib only — no third-party deps).
 #
 # Inputs (env vars):
 #   OMNIGENT_PORT           the canary wheel's TCP port
@@ -37,7 +37,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import subprocess
 import sys
 import time
 import urllib.error
@@ -49,84 +48,41 @@ def _env(name: str) -> str | None:
     return os.environ.get(name)
 
 
-def _curl(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
-    args = ["curl", "-sS", "--max-time", "30", "-o", "-", "-w", "%{http_code}", "-D", "-", url]
-    proc = subprocess.run(args, capture_output=True, check=False, env={**os.environ, **headers})
-    if proc.returncode != 0:
-        return 0, {}, proc.stdout
-    raw = proc.stdout
-    # Split headers from body. The body is JSON; the headers are
-    # above. We split on the first blank line.
-    sep = raw.find(b"\r\n\r\n")
-    if sep == -1:
-        sep = raw.find(b"\n\n")
-    if sep == -1:
-        return 0, {}, raw
-    header_block = raw[:sep].decode("latin-1", errors="replace")
-    body = raw[sep:].lstrip(b"\r\n")
-    parsed_headers: dict[str, str] = {}
-    for line in header_block.splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1)
-            parsed_headers[k.strip().lower()] = v.strip()
-    # The last "header line" we appended via -w is the status code.
-    status = 200
-    for line in reversed(header_block.splitlines()):
-        if line.isdigit():
-            status = int(line)
-            break
-    return status, parsed_headers, body
+def _request(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    """Issue one HTTP request via urllib, keeping the three channels
+    separate: the response body, the status code, and the headers.
+
+    Strict by construction: the body returned is exactly the HTTP
+    body — no curl ``-w`` status suffix and no header block mixed
+    into the same stream — so ``json.loads(body)`` can never see
+    ``Extra data`` from a trailing status code.
+    """
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers or {}), exc.read() or b""
 
 
-def _curl_post_json(
+def _http_get(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+    return _request("GET", url, headers)
+
+
+def _http_post_json(
     url: str, payload: dict[str, Any], headers: dict[str, str]
 ) -> tuple[int, dict[str, str], bytes]:
-    body = json.dumps(payload).encode("utf-8")
-    args = [
-        "curl",
-        "-sS",
-        "--max-time",
-        "30",
-        "-X",
-        "POST",
-        "-H",
-        "Content-Type: application/json",
-        "-d",
-        body,
-        "-o",
-        "-",
-        "-w",
-        "%{http_code}",
-        "-D",
-        "-",
-        url,
-    ]
-    proc = subprocess.run(args, capture_output=True, check=False, env={**os.environ, **headers})
-    if proc.returncode != 0:
-        return 0, {}, proc.stdout
-    raw = proc.stdout
-    sep = raw.find(b"\r\n\r\n")
-    if sep == -1:
-        sep = raw.find(b"\n\n")
-    if sep == -1:
-        return 0, {}, raw
-    header_block = raw[:sep].decode("latin-1", errors="replace")
-    body = raw[sep:].lstrip(b"\r\n")
-    parsed_headers: dict[str, str] = {}
-    for line in header_block.splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1)
-            parsed_headers[k.strip().lower()] = v.strip()
-    status = 200
-    for line in reversed(header_block.splitlines()):
-        if line.isdigit():
-            status = int(line)
-            break
-    return status, parsed_headers, body
+    return _request("POST", url, headers, payload)
 
 
 def _basic_auth_header(public_key: str, secret_key: str) -> str:
-    cred = f"{public_key}:{secret_key}".encode("utf-8")
+    cred = f"{public_key}:{secret_key}".encode()
     return "Basic " + base64.b64encode(cred).decode("ascii")
 
 
@@ -151,24 +107,28 @@ def main() -> int:
     # auth, so this call works in the canary's local-auth-disabled
     # mode.
     agents_url = f"http://127.0.0.1:{port}/v1/agents"
-    agents_status, _hdrs, agents_body = _curl(agents_url, {})
+    agents_status, _hdrs, agents_body = _http_get(agents_url, {})
     if agents_status != 200:
         emit(
             "FAIL",
             reason=f"GET /v1/agents returned status={agents_status} body={agents_body[:200]!r}",
         )
         return 1
+    # The body is the raw HTTP body (no header block, no trailing
+    # -w status suffix), so a strict parse is safe: exactly one JSON
+    # document, no tolerance for concatenated garbage.
     try:
-        claude_agent_id = None
-        for a in json.loads(agents_body).get("data", []):
-            if a.get("name") == "claude-sdk":
-                claude_agent_id = a.get("id")
-                break
+        agents_json = json.loads(agents_body)
     except json.JSONDecodeError as exc:
         emit("FAIL", reason=f"GET /v1/agents response not valid JSON: {exc}")
         return 1
+    claude_agent_id = None
+    for a in agents_json.get("data", []):
+        if a.get("name") == "claude-sdk":
+            claude_agent_id = a.get("id")
+            break
     if not claude_agent_id:
-        emit("FAIL", reason="could not resolve agent_id for claude-sdk on port {port}")
+        emit("FAIL", reason=f"could not resolve agent_id for claude-sdk on port {port}")
         return 1
 
     # Resolve the online host_id so the session is actually
@@ -176,7 +136,7 @@ def main() -> int:
     # no traces, so this check would always FAIL on the trace
     # poll). Same auth caveat as in _harness_lib.sh:resolve_host_id
     # — local-mode canary needs no auth on /v1/hosts.
-    hosts_status, _hdrs, hosts_body = _curl(f"http://127.0.0.1:{port}/v1/hosts", {})
+    hosts_status, _hdrs, hosts_body = _http_get(f"http://127.0.0.1:{port}/v1/hosts", {})
     host_id = None
     if hosts_status == 200:
         try:
@@ -221,12 +181,12 @@ def main() -> int:
             }
         ],
     }
-    status, _hdrs, body = _curl_post_json(
+    status, _hdrs, body = _http_post_json(
         sessions_url,
         session_payload,
         {auth_header: identity, "Content-Type": "application/json"},
     )
-    if status != 201:
+    if status < 200 or status >= 300:
         emit("FAIL", reason=f"session create returned status={status} body={body[:200]!r}")
         return 1
     session_id = json.loads(body).get("id")
@@ -236,7 +196,7 @@ def main() -> int:
 
     # Wake the runner. initial_items only seeds the conversation
     # row; the runner only drives a turn on POST .../events.
-    events_status, _, events_body = _curl_post_json(
+    events_status, _, events_body = _http_post_json(
         f"{sessions_url}/{session_id}/events",
         {
             "type": "message",
@@ -249,7 +209,7 @@ def main() -> int:
         },
         {auth_header: identity, "Content-Type": "application/json"},
     )
-    if events_status >= 400:
+    if events_status < 200 or events_status >= 300:
         emit(
             "FAIL",
             reason=(
@@ -270,7 +230,7 @@ def main() -> int:
     while time.monotonic() < deadline:
         # Langfuse v2 exposes GET /api/public/v2/traces?sessionId=<id>
         url = f"{host.rstrip('/')}/api/public/v2/traces?sessionId={session_id}&limit=10"
-        status, _hdrs, body = _curl(url, api_headers)
+        status, _hdrs, body = _http_get(url, api_headers)
         if status == 200:
             try:
                 parsed = json.loads(body)
@@ -292,7 +252,10 @@ def main() -> int:
     if not traces_found:
         emit(
             "FAIL",
-            reason=f"no traces appeared in Langfuse for session_id={session_id} within 30 s; last error: {last_error}",
+            reason=(
+                f"no traces appeared in Langfuse for session_id={session_id} "
+                f"within 30 s; last error: {last_error}"
+            ),
         )
         return 1
 
@@ -308,7 +271,7 @@ def main() -> int:
         if not trace_id:
             continue
         obs_url = f"{host.rstrip('/')}/api/public/v2/observations?traceId={trace_id}&limit=50"
-        status, _hdrs, body = _curl(obs_url, api_headers)
+        status, _hdrs, body = _http_get(obs_url, api_headers)
         if status != 200:
             continue
         try:
@@ -343,13 +306,16 @@ def main() -> int:
     if not found_session_id:
         emit(
             "FAIL",
-            reason=f"traces appeared but none carry session.id={session_id}; saw {len(traces_found)} traces",
+            reason=(
+                f"traces appeared but none carry session.id={session_id}; "
+                f"saw {len(traces_found)} traces"
+            ),
         )
         return 1
     if not (found_tool_child or found_llm_child):
         emit(
             "FAIL",
-            reason=f"traces appeared but no child omnigent.tool/omnigent.llm.request spans found",
+            reason="traces appeared but no child omnigent.tool/omnigent.llm.request spans found",
         )
         return 1
 
@@ -374,6 +340,6 @@ if __name__ == "__main__":
         sys.exit(main())
     except SystemExit:
         raise
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 — guarantee a FAIL line on stdout
         emit("FAIL", reason=f"unhandled exception: {type(exc).__name__}: {exc}")
         sys.exit(1)
