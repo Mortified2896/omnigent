@@ -1,0 +1,19 @@
+[Unit]
+Description=Omnigent 0.7 host
+After=network-online.target omnigent.service
+Wants=network-online.target omnigent.service
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/home/hermes/workspace
+EnvironmentFile=/etc/omnigent/omnigent.env
+ExecStart=/opt/omnigent/venv/bin/omnigent host --server http://127.0.0.1:4097 --non-interactive
+ExecStopPost=-/opt/omnigent/venv/bin/omnigent host stop --server http://127.0.0.1:4097
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

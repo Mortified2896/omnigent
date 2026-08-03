@@ -1,0 +1,18 @@
+[Unit]
+Description=Omnigent 0.7 server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/var/lib/omnigent
+EnvironmentFile=/etc/omnigent/omnigent.env
+ExecStart=/opt/omnigent/venv/bin/omnigent server --host 127.0.0.1 --port 4097 --no-open --config /etc/omnigent/config.yaml --database-uri sqlite:////var/lib/omnigent/chat.db --artifact-location /var/lib/omnigent/artifacts --agent /etc/omnigent/agents/pi
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

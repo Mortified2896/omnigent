@@ -1,0 +1,14 @@
+providers:
+  omniroute:
+    kind: gateway
+    default: [openai, pi]
+    openai:
+      base_url: http://127.0.0.1:20128/v1
+      api_key_ref: env:OMNIROUTE_API_KEY
+      wire_api: chat
+      models:
+        default: custom/best-coding
+harness:
+  default: pi
+  pi:
+    command: /opt/omnigent/pi/node_modules/.bin/pi

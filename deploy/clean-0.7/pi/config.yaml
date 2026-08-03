@@ -1,0 +1,16 @@
+spec_version: 1
+name: pi
+description: Pi coding agent routed through OmniRoute.
+executor:
+  type: omnigent
+  model: custom/best-coding
+  config:
+    harness: pi
+prompt: |
+  You are a coding agent. Work directly in the selected repository, follow the
+  user's instructions, and verify your changes.
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
