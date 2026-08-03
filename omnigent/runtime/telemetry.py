@@ -302,7 +302,60 @@ def _make_session_id_processor() -> Any:
     return _SessionIdSpanProcessor()
 
 
-def _fastapi_instrumentation_enabled() -> bool:
+# Default set of OpenTelemetry instrumentation scope names that are allowed
+# through to the exporter. Everything else is dropped at the span-processor
+# boundary so the trace backend only carries the agent/tool/policy trees an
+# operator actually wants to inspect.
+_DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES = ("omnigent", "omnigent.frames")
+
+
+def _allowed_instrumentation_scopes() -> tuple[str, ...]:
+    """Return safe defaults plus normalized, explicitly configured scopes."""
+    raw = os.environ.get("OMNIGENT_OTEL_ALLOWED_INSTRUMENTATION_SCOPES", "")
+    result: list[str] = []
+    for scope in (*_DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES, *raw.split(",")):
+        scope = scope.strip()
+        if scope and scope not in result:
+            result.append(scope)
+    return tuple(result)
+
+
+def _scope_allowed(span: Any, allowed: frozenset[str]) -> bool:
+    """Check the public and SDK-private scope paths, denying failures safely."""
+    try:
+        scope = getattr(span, "instrumentation_scope", None)
+        if scope is None:
+            scope = getattr(span, "_instrumentation_scope", None)
+        return bool(scope and getattr(scope, "name", None) in allowed)
+    except Exception:  # telemetry filtering must never affect application flow
+        return False
+
+
+def _make_scope_filter_processor(inner: Any, allowed_scopes: tuple[str, ...]) -> Any:
+    """Forward only spans whose instrumentation scope is explicitly allowed."""
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    allowed = frozenset(allowed_scopes)
+
+    class _ScopeFilterSpanProcessor(SpanProcessor):
+        def on_start(self, span: Any, parent_context: Any = None) -> None:
+            if _scope_allowed(span, allowed):
+                inner.on_start(span, parent_context)
+
+        def on_end(self, span: Any) -> None:
+            if _scope_allowed(span, allowed):
+                inner.on_end(span)
+
+        def shutdown(self) -> None:
+            inner.shutdown()
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return inner.force_flush(timeout_millis)
+
+    return _ScopeFilterSpanProcessor()
+
+
+
     """
     Decide whether to install FastAPI server instrumentation.
 
@@ -921,7 +974,15 @@ def _init_otel_traces(endpoint: str) -> None:
             # Enrich every span with session.id from the active context (set via
             # session_scope at the request hook / executor turn / forwarder).
             provider.add_span_processor(_make_session_id_processor())
-            provider.add_span_processor(BatchSpanProcessor(_create_otlp_span_exporter()))
+            allowed_scopes = _allowed_instrumentation_scopes()
+            exporter = BatchSpanProcessor(_create_otlp_span_exporter())
+            provider.add_span_processor(
+                _make_scope_filter_processor(exporter, allowed_scopes)
+            )
+            _logger.info(
+                "otel trace scope filter active: allowed=%s",
+                ",".join(allowed_scopes),
+            )
             trace.set_tracer_provider(provider)
 
         from omnigent.inner.tracing import enable_tracing
