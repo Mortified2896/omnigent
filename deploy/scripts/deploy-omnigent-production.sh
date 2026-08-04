@@ -110,6 +110,14 @@ require_root_or_sudo() {
 }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || guard_die "missing required command: $1"; }
+resolve_python312() {
+  if [[ -x "/home/hermes/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12" ]]; then
+    echo "/home/hermes/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12"
+    return 0
+  fi
+  echo "3.12"
+}
+
 resolve_cmd() {
   local found
   found=$(command -v "$1" 2>/dev/null || true)
@@ -170,8 +178,9 @@ build_release() {
   local sha="$1"
   local release_dir="$OMNIGENT_PROD_RELEASE_ROOT/releases/$sha"
   require_cmd git; require_repo
-  local uv_path
+  local uv_path python_path
   uv_path=$(resolve_cmd uv)
+  python_path=$(resolve_python312)
   if [[ -d "$release_dir" ]]; then
     if [[ -d "$release_dir/venv" && -f "$release_dir/.complete" ]] && \
        "$release_dir/venv/bin/python" -c "from omnigent.runtime import telemetry; assert callable(telemetry._fastapi_instrumentation_enabled)" >/dev/null 2>&1; then
@@ -187,7 +196,7 @@ build_release() {
   trap '[[ -n "${build_dir:-}" ]] && rm -rf "$build_dir"' EXIT
   (cd "$OMNIGENT_PROD_REPO" && git worktree add --detach "$build_dir" "$sha" >/dev/null)
   $SUDO mkdir -p "$release_dir"
-  $SUDO "$uv_path" venv --python 3.12 "$release_dir/venv"
+  $SUDO "$uv_path" venv --python "$python_path" "$release_dir/venv"
   (cd "$build_dir" && "$uv_path" build --out-dir "$build_dir/dist")
   local wheels=()
   shopt -s nullglob
@@ -223,15 +232,16 @@ deploy() {
     [[ -f "$wheel_arg" ]] || guard_die "wheel not found: $wheel_arg"
     sha="wheel-$(sha256sum "$wheel_arg" | awk '{print substr($1,1,16)}')"
     release_dir="$OMNIGENT_PROD_RELEASE_ROOT/releases/$sha"
-    local uv_path wheel_path
+    local uv_path python_path wheel_path
     uv_path=$(resolve_cmd uv)
+    python_path=$(resolve_python312)
     wheel_path=$(readlink -f "$wheel_arg")
     if [[ -d "$release_dir" ]]; then
       guard_log "removing existing wheel release before install: $release_dir"
       $SUDO rm -rf "$release_dir"
     fi
     $SUDO mkdir -p "$release_dir"
-    $SUDO "$uv_path" venv --python 3.12 "$release_dir/venv"
+    $SUDO "$uv_path" venv --python "$python_path" "$release_dir/venv"
     $SUDO "$uv_path" pip install --python "$release_dir/venv/bin/python" "${wheel_path}[all]"
     $SUDO touch "$release_dir/.complete"
   else
