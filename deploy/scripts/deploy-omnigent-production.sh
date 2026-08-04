@@ -114,6 +114,7 @@ resolve_cmd() {
   local found
   found=$(command -v "$1" 2>/dev/null || true)
   if [[ -z "$found" && -x "$HOME/.local/bin/$1" ]]; then found="$HOME/.local/bin/$1"; fi
+  if [[ -z "$found" && -x "/home/hermes/.local/bin/$1" ]]; then found="/home/hermes/.local/bin/$1"; fi
   [[ -n "$found" ]] || guard_die "missing required command: $1"
   readlink -f "$found"
 }
