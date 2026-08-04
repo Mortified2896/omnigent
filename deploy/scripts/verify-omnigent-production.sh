@@ -101,16 +101,18 @@ if grep -q "ts.net:2222" <<<"$status"; then
 else
   bad "https://hermes-agent.taile0361b.ts.net:2222 not in tailscale serve status"
 fi
-# Ensure the maintenance URLs are still mapped (regression guard).
+# Ensure the maintenance URL is still mapped (regression guard).
 if grep -q "ts.net:1111" <<<"$status"; then
   ok "https://hermes-agent.taile0361b.ts.net:1111 still mapped"
 else
   bad "https://hermes-agent.taile0361b.ts.net:1111 mapping missing"
 fi
+# The legacy :9461 alias was deliberately removed after the dual-instance
+# acceptance pass; the verifier asserts the removal held.
 if grep -q "ts.net:9461" <<<"$status"; then
-  ok "https://hermes-agent.taile0361b.ts.net:9461 still mapped"
+  bad "https://hermes-agent.taile0361b.ts.net:9461 is mapped (must be removed)"
 else
-  bad "https://hermes-agent.taile0361b.ts.net:9461 mapping missing"
+  ok "https://hermes-agent.taile0361b.ts.net:9461 not mapped (legacy alias removed)"
 fi
 
 if [[ $fail -ne 0 ]]; then

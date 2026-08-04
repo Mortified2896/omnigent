@@ -33,7 +33,6 @@ times; this work must never restart `omnigent.service` or
 | Logs | `/var/log/omnigent` | `/var/lib/omnigent-production/logs` |
 | Artifacts | `/var/lib/omnigent/...` | `/var/lib/omnigent-production/artifacts` |
 | Server port | `4097` | `4197` |
-| Telemetry port | `9461` | (separate OTel export) |
 | Server systemd unit | `omnigent.service` | `omnigent-production.service` |
 | Host systemd unit | `omnigent-host.service` | `omnigent-production-host.service` |
 | Tailscale URL | `https://hermes-agent.taile0361b.ts.net:1111/` | `https://hermes-agent.taile0361b.ts.net:2222/` |
@@ -63,8 +62,10 @@ out-of-immutables for this task and is the harness both instances launch).
 
 4. **Different port + bind host.** Production binds `127.0.0.1:4197`.
    Maintenance binds `127.0.0.1:4097`. Tailscale Serve fronts them on
-   `:2222` and `:1111` respectively, distinct host-port mappings so the
-   existing `:9461` mapping is untouched.
+   `:2222` and `:1111` respectively. The legacy `:9461` alias for the
+   maintenance backend was deliberately removed after both Tailnet URLs
+   were proven live so that the only Tailnet mapping for `4097` is now
+   `:1111` (see `deploy/docs/dual-instance-deployment.md`).
 
 5. **Different service units, independent lifecycle.**
    `omnigent-production.service` and `omnigent-production-host.service`
@@ -80,15 +81,26 @@ out-of-immutables for this task and is the harness both instances launch).
 7. **Hard-refusal controller.** `/usr/local/sbin/deploy-omnigent-production`
    aborts on any argument, env var, or path that resolves into
    `/opt/omnigent`, `/etc/omnigent`, or `/var/lib/omnigent`, or that
-   names `omnigent.service`, `omnigent-host.service`, or ports
-   `4097`/`9461`. This is belt-and-braces — neither shell scripting nor
-   operator mistake can reach into the maintenance instance.
+   names `omnigent.service`, `omnigent-host.service`, or port `4097`.
+   This is belt-and-braces — neither shell scripting nor operator
+   mistake can reach into the maintenance instance.
 
 ## Tailscale Serve
 
-Production serves through `:2222`; maintenance continues through `:1111`
-and `:9461`. New mapping is additive only — existing mappings were not
-removed or replaced.
+| URL | Backend | Purpose |
+|---|---|---|
+| `https://hermes-agent.taile0361b.ts.net:1111/` | `127.0.0.1:4097` | Omnigent 1 maintenance (primary alias) |
+| `https://hermes-agent.taile0361b.ts.net:2222/` | `127.0.0.1:4197` | Omnigent 2 production |
+| `https://hermes-agent.taile0361b.ts.net:9460/` | `127.0.0.1:4096` | (other, pre-existing) |
+| `https://hermes-agent.taile0361b.ts.net:9462/` | `127.0.0.1:5000` | (other, pre-existing) |
+
+The legacy `:9461` alias for the maintenance backend was removed in the
+dual-instance acceptance pass after both `:1111` and `:2222` were proven
+live. The removal was scoped (`tailscale serve --https=9461 off`); no
+`tailscale serve reset` was used. See
+`deploy/docs/dual-instance-deployment.md` for the acceptance evidence
+(session ID, runner ID, file-edit acceptance, PIDs before/after the
+controlled `omnigent-production.service` restart).
 
 ## Deployment
 
@@ -107,5 +119,8 @@ Captured before this work began:
 - `omnigent.service` `MainPID=1620126`, `ActiveEnterTimestamp=Tue 2026-08-04 07:54:42 UTC`
 - `omnigent-host.service` `MainPID=1614576`, `ActiveEnterTimestamp=Tue 2026-08-04 07:45:46 UTC`
 
-`deploy/scripts/verify-omnigent-production.sh` re-asserts these at every
+Both PIDs were re-checked after the controlled
+`omnigent-production.service` restart (acceptance step 5) that confirmed
+Omnigent 2 self-recovers. They remain `1620126` / `1614576` unchanged.
+`deploy/scripts/verify-omnigent-production.sh` re-asserts this at every
 post-deploy check.
