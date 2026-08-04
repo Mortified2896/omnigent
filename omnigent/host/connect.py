@@ -770,7 +770,7 @@ class HostProcess:
                 self._reap_orphans_once()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 — a reaper must never die on a stray error
+            except Exception:
                 _logger.debug("orphan reaper sweep failed", exc_info=True)
 
     def _reap_orphans_once(self) -> int:
@@ -1336,7 +1336,7 @@ class HostProcess:
             try:
                 await ws.send(frame)
                 return
-            except Exception:  # noqa: BLE001 — any send failure parks the report
+            except Exception:
                 _logger.debug(
                     "Could not send runner_exited for %s; queueing for reconnect",
                     runner_id,
@@ -1838,27 +1838,59 @@ class HostProcess:
         agent spec to pin). A session whose spec pins a different provider
         resolves its own catalog at launch, and the in-session picker
         re-reads that authoritative snapshot after bind.
+
+        Resolution order: claude-native keeps its own picker (it embeds
+        tier/env round-tripping Pi/codex do not need); every other harness
+        routes through the OmniRoute-backed picker, which reads the active
+        gateway's live ``/v1/models`` catalog. The picker fails loud — never
+        silently substitutes another provider or an empty list — so a
+        misconfigured provider surfaces immediately.
         """
-        if canonicalize_harness(frame.harness) != "claude-native":
+        canonical_harness = canonicalize_harness(frame.harness)
+        if canonical_harness == "claude-native":
+            try:
+                from omnigent.claude_native import (
+                    claude_native_model_options,
+                    resolve_native_claude_config,
+                )
+
+                config = await asyncio.to_thread(resolve_native_claude_config, spec=None)
+                models = await asyncio.to_thread(claude_native_model_options, config)
+            except Exception:
+                _logger.exception("Failed to resolve pre-launch Claude model options")
+                return HostModelOptionsResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error="failed to resolve Claude model options",
+                )
             return HostModelOptionsResultFrame(
                 request_id=frame.request_id,
-                status="failed",
-                error=f"model options are unsupported for harness {frame.harness!r}",
+                status="ok",
+                models=models,
             )
+        # Non-claude-native harnesses (pi, codex, openai-agents, qwen, …)
+        # route through the OmniRoute picker so the operator's configured
+        # OpenAI-compatible gateway drives the launch catalog.
         try:
-            from omnigent.claude_native import (
-                claude_native_model_options,
-                resolve_native_claude_config,
+            from omnigent.omni_route_picker import (
+                OmniRouteModelOptionsError,
+                omni_route_model_options,
             )
 
-            config = await asyncio.to_thread(resolve_native_claude_config, spec=None)
-            models = await asyncio.to_thread(claude_native_model_options, config)
-        except Exception:
-            _logger.exception("Failed to resolve pre-launch Claude model options")
+            models = await asyncio.to_thread(omni_route_model_options, frame.harness)
+        except OmniRouteModelOptionsError as exc:
+            _logger.info("OmniRoute picker rejected harness %r: %s", frame.harness, exc)
             return HostModelOptionsResultFrame(
                 request_id=frame.request_id,
                 status="failed",
-                error="failed to resolve Claude model options",
+                error=str(exc),
+            )
+        except Exception:
+            _logger.exception("Failed to resolve OmniRoute model options")
+            return HostModelOptionsResultFrame(
+                request_id=frame.request_id,
+                status="failed",
+                error=f"failed to resolve OmniRoute model options for harness {frame.harness!r}",
             )
         return HostModelOptionsResultFrame(
             request_id=frame.request_id,
@@ -2265,7 +2297,7 @@ class HostProcess:
                     self._auth_token_factory_resolved = True
             if self._auth_token_factory is not None:
                 return self._auth_token_factory()
-        except Exception:  # noqa: BLE001
+        except Exception:
             _logger.debug("Could not obtain auth token", exc_info=True)
         return None
 
