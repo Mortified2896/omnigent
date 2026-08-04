@@ -110,6 +110,7 @@ require_root_or_sudo() {
 }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || guard_die "missing required command: $1"; }
+resolve_cmd() { command -v "$1" || guard_die "missing required command: $1"; }
 
 require_repo() {
   [[ -d "$OMNIGENT_PROD_REPO/.git" ]] || guard_die "not a git repo: $OMNIGENT_PROD_REPO"
@@ -161,22 +162,38 @@ rollback() {
 build_release() {
   local sha="$1"
   local release_dir="$OMNIGENT_PROD_RELEASE_ROOT/releases/$sha"
-  [[ -d "$release_dir/venv" ]] && { echo "$release_dir"; return 0; }
   require_cmd git; require_cmd uv; require_repo
+  local uv_path
+  uv_path=$(resolve_cmd uv)
+  if [[ -d "$release_dir" ]]; then
+    if [[ -d "$release_dir/venv" && -f "$release_dir/.complete" ]] && \
+       "$release_dir/venv/bin/python" -c "from omnigent.runtime import telemetry; assert callable(telemetry._fastapi_instrumentation_enabled)" >/dev/null 2>&1; then
+      echo "$release_dir"
+      return 0
+    fi
+    guard_log "removing incomplete release: $release_dir"
+    $SUDO rm -rf "$release_dir"
+  fi
   (cd "$OMNIGENT_PROD_REPO" && git rev-parse --verify "$sha" >/dev/null) || guard_die "unknown commit $sha"
   local build_dir
   build_dir=$(mktemp -d /tmp/omnigent-prod-build.XXXXXX)
   trap 'rm -rf "$build_dir"' EXIT
   (cd "$OMNIGENT_PROD_REPO" && git worktree add --detach "$build_dir" "$sha" >/dev/null)
   $SUDO mkdir -p "$release_dir"
-  $SUDO uv venv --python 3.12 "$release_dir/venv"
-  (cd "$build_dir" && uv build --out-dir "$build_dir/dist")
-  $SUDO uv pip install --python "$release_dir/venv/bin/python" \
-    "$build_dir/dist"/omnigent-*.whl'[all]'
+  $SUDO "$uv_path" venv --python 3.12 "$release_dir/venv"
+  (cd "$build_dir" && "$uv_path" build --out-dir "$build_dir/dist")
+  local wheels=()
+  shopt -s nullglob
+  wheels=("$build_dir/dist"/omnigent-*.whl)
+  shopt -u nullglob
+  (( ${#wheels[@]} == 1 )) || guard_die "expected exactly one built wheel, found ${#wheels[@]}"
+  local wheel_path
+  wheel_path=$(readlink -f "${wheels[0]}")
+  $SUDO "$uv_path" pip install --python "$release_dir/venv/bin/python" "${wheel_path}[all]"
   {
     echo "sha=$sha"
     echo "package_version=$("$release_dir/venv/bin/python" -c "from omnigent.version import VERSION; print(VERSION)")"
-    echo "wheel_sha256=$(sha256sum "$build_dir/dist"/omnigent-*.whl | awk '{print $1}')"
+    echo "wheel_sha256=$(sha256sum "$wheel_path" | awk '{print $1}')"
     echo "built_at_utc=$(date -u +%FT%TZ)"
     echo "builder=$(whoami)@$(hostname)"
   } | $SUDO tee "$release_dir/PROVENANCE.txt" >/dev/null
@@ -185,6 +202,7 @@ build_release() {
     $SUDO rm -rf "$release_dir"
     guard_die "release verification failed: missing _fastapi_instrumentation_enabled"
   fi
+  $SUDO touch "$release_dir/.complete"
   echo "$release_dir"
 }
 
@@ -198,9 +216,17 @@ deploy() {
     [[ -f "$wheel_arg" ]] || guard_die "wheel not found: $wheel_arg"
     sha="wheel-$(sha256sum "$wheel_arg" | awk '{print substr($1,1,16)}')"
     release_dir="$OMNIGENT_PROD_RELEASE_ROOT/releases/$sha"
+    local uv_path wheel_path
+    uv_path=$(resolve_cmd uv)
+    wheel_path=$(readlink -f "$wheel_arg")
+    if [[ -d "$release_dir" ]]; then
+      guard_log "removing existing wheel release before install: $release_dir"
+      $SUDO rm -rf "$release_dir"
+    fi
     $SUDO mkdir -p "$release_dir"
-    $SUDO uv venv --python 3.12 "$release_dir/venv"
-    $SUDO uv pip install --python "$release_dir/venv/bin/python" "$wheel_arg[all]"
+    $SUDO "$uv_path" venv --python 3.12 "$release_dir/venv"
+    $SUDO "$uv_path" pip install --python "$release_dir/venv/bin/python" "${wheel_path}[all]"
+    $SUDO touch "$release_dir/.complete"
   else
     release_dir=$(build_release "$sha")
     sha=$(basename "$release_dir")
