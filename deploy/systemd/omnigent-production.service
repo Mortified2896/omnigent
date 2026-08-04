@@ -1,0 +1,41 @@
+[Unit]
+Description=Omnigent 2 production server (independent of maintenance instance)
+Documentation=file:/home/hermes/workspace/repos/omnigent-production/deploy/docs/architecture.md
+# Deliberately does NOT After / Wants / Requires omnigent.service — the
+# maintenance and production instances are independent. A failure of one
+# must not impact the other.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/omnigent-production/current
+EnvironmentFile=/etc/omnigent-production/omnigent.env
+ExecStart=/opt/omnigent-production/current/venv/bin/omnigent server --host 127.0.0.1 --port 4197
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/omnigent-production /opt/omnigent-production
+RuntimeDirectory=omnigent-production
+RuntimeDirectoryMode=0750
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+ExecStop=/bin/kill -TERM $MAINPID
+TimeoutStopSec=20s
+SuccessExitStatus=0 143
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target
