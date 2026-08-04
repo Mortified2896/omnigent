@@ -1,0 +1,52 @@
+[Unit]
+Description=Omnigent 2 production host daemon (independent of maintenance instance)
+Documentation=file:/home/hermes/workspace/repos/omnigent-production/deploy/docs/architecture.md
+# Only talks to the local production server on 4197; never the maintenance
+# server on 4097. The maintenance and production instances are independent
+# — neither references the other's service units.
+After=network-online.target omnigent-production.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+EnvironmentFile=/etc/omnigent-production/omnigent.env
+# HOME points at the isolated state root so ~/.omnigent/ holds production
+# host identity, PID file and daemon registry distinct from the maintenance
+# instance. TMPDIR is sandboxed for any tempfile.mkdtemp the host makes.
+Environment=HOME=/var/lib/omnigent-production/home TMPDIR=/var/lib/omnigent-production/tmp XDG_RUNTIME_DIR=/var/run/omnigent-production
+ExecStart=/opt/omnigent-production/current/venv/bin/omnigent host --server http://127.0.0.1:4197
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/omnigent-production /opt/omnigent-production /var/run/omnigent-production
+# The Omnigent runtime hardcodes its instance directory to
+# /tmp/omnigent-<uid> on POSIX (see
+# omnigent/runtime/harnesses/process_manager.py:_TMP_PARENT). We bind a
+# writable production-owned directory over that path so the
+# read-only /tmp under ProtectSystem=strict doesn't break runner
+# startups. This only affects THIS service's mount namespace; the
+# maintenance instance's /tmp/omnigent-1000 stays under /tmp.
+BindPaths=/var/lib/omnigent-production/tmp:/tmp/omnigent-1000
+RuntimeDirectory=omnigent-production
+RuntimeDirectoryMode=0750
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+ExecStop=/bin/kill -TERM $MAINPID
+TimeoutStopSec=20s
+SuccessExitStatus=0 143
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target

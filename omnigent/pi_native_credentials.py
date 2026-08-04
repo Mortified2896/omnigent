@@ -809,6 +809,13 @@ def _inline_family_pi_provider(
         # ``zai-org/GLM-4.7``) and already-bare ids through unchanged. Family
         # defaults are bare, so the no-override path is unaffected.
         resolved_model = normalize_model_for_provider(resolved_model, KEY_KIND)
+        extra_models: list[dict[str, Any]] = []
+        seen_models: set[str] = set()
+        for configured_model in family.models.values():
+            normalized = normalize_model_for_provider(configured_model, KEY_KIND)
+            if normalized and normalized not in seen_models:
+                extra_models.append({"id": normalized, "input": ["text", "image"]})
+                seen_models.add(normalized)
         return PiProviderConfig(
             provider_id=_PI_PROVIDER_ID,
             base_url=family.base_url,
@@ -816,6 +823,7 @@ def _inline_family_pi_provider(
             model=resolved_model,
             api_key=api_key,
             auth_header=auth_header,
+            extra_models=extra_models,
         )
     return None
 

@@ -1878,6 +1878,46 @@ class HostProcess:
         re-reads that authoritative snapshot after bind.
         """
         harness = canonicalize_harness(frame.harness) or frame.harness
+        if harness in {"pi", "pi-native"}:
+            try:
+                from omnigent.pi_native_credentials import resolve_pi_native_provider
+
+                provider = await asyncio.to_thread(resolve_pi_native_provider)
+                if provider is None:
+                    models: list[dict[str, object]] = []
+                else:
+                    models = []
+                    seen: set[str] = set()
+                    for payload in provider.to_models_config()["providers"].values():
+                        for entry in payload["models"]:
+                            model_id = entry["id"]
+                            if model_id in seen:
+                                continue
+                            seen.add(model_id)
+                            models.append(
+                                {
+                                    "id": model_id,
+                                    "displayName": model_id,
+                                    **(
+                                        {"isDefault": True}
+                                        if model_id == provider.model
+                                        else {}
+                                    ),
+                                }
+                            )
+            except Exception:
+                _logger.exception("Failed to resolve pre-launch Pi model options")
+                return HostModelOptionsResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error="failed to resolve Pi model options",
+                )
+            return HostModelOptionsResultFrame(
+                request_id=frame.request_id,
+                status="ok",
+                models=models,
+            )
+
         if harness == "codex-native":
             try:
                 from omnigent.codex_native_app_server import (

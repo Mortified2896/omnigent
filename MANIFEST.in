@@ -1,0 +1,5 @@
+include package.json
+include pnpm-lock.yaml
+include pnpm-workspace.yaml
+recursive-include web *
+recursive-include omnigent/server/static *
