@@ -8,6 +8,9 @@ providers:
       wire_api: chat
       models:
         default: custom/best-coding
+        gpt56_sol: codex/gpt-5.6-sol
+        gpt56_terra: codex/gpt-5.6-terra
+        gpt56_luna: codex/gpt-5.6-luna
 harness:
   default: pi
   pi:
