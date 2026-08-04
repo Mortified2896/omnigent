@@ -110,7 +110,13 @@ require_root_or_sudo() {
 }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || guard_die "missing required command: $1"; }
-resolve_cmd() { command -v "$1" || guard_die "missing required command: $1"; }
+resolve_cmd() {
+  local found
+  found=$(command -v "$1" 2>/dev/null || true)
+  if [[ -z "$found" && -x "$HOME/.local/bin/$1" ]]; then found="$HOME/.local/bin/$1"; fi
+  [[ -n "$found" ]] || guard_die "missing required command: $1"
+  readlink -f "$found"
+}
 
 require_repo() {
   [[ -d "$OMNIGENT_PROD_REPO/.git" ]] || guard_die "not a git repo: $OMNIGENT_PROD_REPO"
@@ -162,7 +168,7 @@ rollback() {
 build_release() {
   local sha="$1"
   local release_dir="$OMNIGENT_PROD_RELEASE_ROOT/releases/$sha"
-  require_cmd git; require_cmd uv; require_repo
+  require_cmd git; require_repo
   local uv_path
   uv_path=$(resolve_cmd uv)
   if [[ -d "$release_dir" ]]; then
