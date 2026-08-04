@@ -302,6 +302,32 @@ def _make_session_id_processor() -> Any:
     return _SessionIdSpanProcessor()
 
 
+def _fastapi_instrumentation_enabled() -> bool:
+    """
+    Decide whether to install FastAPI server instrumentation.
+
+    Default-on when a tracing backend is configured
+    (``OTEL_EXPORTER_OTLP_ENDPOINT`` is set) — that is the only situation
+    where HTTP server spans have somewhere to go, and it is where
+    end-to-end trace propagation across the server / runner / harness
+    ASGI apps matters.
+
+    The explicit ``OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION`` flag always
+    wins when set: ``true`` forces it on (e.g. with an in-memory
+    exporter in tests), any other value forces it off. Bare installs
+    with no backend stay uninstrumented, avoiding span overhead for
+    users who are not tracing.
+
+    :returns: ``True`` if FastAPI instrumentation should be installed.
+    """
+    if not telemetry_enabled():
+        return False
+    explicit = os.environ.get("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION")
+    if explicit is not None:
+        return explicit.strip().lower() in ("true", "1", "yes")
+    return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip())
+
+
 # Default set of OpenTelemetry instrumentation scope names that are allowed
 # through to the exporter. Everything else is dropped at the span-processor
 # boundary so the trace backend only carries the agent/tool/policy trees an
