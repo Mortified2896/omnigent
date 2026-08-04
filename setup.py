@@ -39,8 +39,34 @@ class _GenerateBuildInfo(build_py):
         self._build_web_ui()
         self._write_build_info()
         super().run()
+        self._bundle_web_ui()
         self._bundle_examples()
         self._bundle_scripts()
+
+
+    def _bundle_web_ui(self) -> None:
+        """Copy built web UI assets into the wheel build directory."""
+        import shutil
+
+        root = Path(__file__).resolve().parent
+        src_root = root / "omnigent" / "server" / "static"
+        dest_root = Path(self.build_lib) / "omnigent" / "server" / "static"
+        if not src_root.is_dir():
+            return
+        for name in ("web-ui", "api_only_landing.html"):
+            src = src_root / name
+            if not src.exists():
+                continue
+            dst = dest_root / name
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            elif dst.exists() or dst.is_symlink():
+                dst.unlink()
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
 
     def _bundle_scripts(self) -> None:
         """Copy top-level maintenance scripts into package resources."""
