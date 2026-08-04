@@ -184,7 +184,7 @@ build_release() {
   (cd "$OMNIGENT_PROD_REPO" && git rev-parse --verify "$sha" >/dev/null) || guard_die "unknown commit $sha"
   local build_dir
   build_dir=$(mktemp -d /tmp/omnigent-prod-build.XXXXXX)
-  trap 'rm -rf "$build_dir"' EXIT
+  trap '[[ -n "${build_dir:-}" ]] && rm -rf "$build_dir"' EXIT
   (cd "$OMNIGENT_PROD_REPO" && git worktree add --detach "$build_dir" "$sha" >/dev/null)
   $SUDO mkdir -p "$release_dir"
   $SUDO "$uv_path" venv --python 3.12 "$release_dir/venv"
