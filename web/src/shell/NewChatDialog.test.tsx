@@ -3021,6 +3021,140 @@ describe("NewChatLandingScreen inline model picker (pre-launch)", () => {
     expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toBe("Opus 4.8");
     expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-luna")).toBeNull();
   });
+
+  it("renders Pi's default id inside the popover's Default row", () => {
+    // The popover's first item is the explicit "Default" choice. When the
+    // backend flagged a real default (custom/best-coding) the row reads
+    // "Default (custom/best-coding)" so the operator sees the exact id Pi
+    // will boot on. Selecting this row leaves the launch payload free of a
+    // model_override.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    openSelect("new-chat-landing-model-trigger");
+    const defaultRow = screen.getByTestId("new-chat-landing-model-default");
+    expect(defaultRow.textContent).toContain("Default (custom/best-coding)");
+  });
+
+  it("marks codex/gpt-5.6-sol as Codex's backend default in the popover", () => {
+    // Spec §3: "Codex default is codex/gpt-5.6-sol". The backend's
+    // build_picker_options marks the default-model row with isDefault: true;
+    // the popover surfaces it on the dedicated Default row, AND tags the
+    // underlying catalog row with "(default)" so the operator can spot it
+    // even when Default is not selected.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a2"); // codex-native-ui
+    openSelect("new-chat-landing-model-trigger");
+    const defaultRow = screen.getByTestId("new-chat-landing-model-default");
+    expect(defaultRow.textContent).toContain("codex/gpt-5.6-sol");
+  });
+
+  it("excludes Claude-family rows from the Codex picker (no leakage)", () => {
+    // Spec §3: Codex must NOT surface Claude models. Backend catalog
+    // filtering already enforces this; this test asserts the inline picker
+    // honors it (Claude opus / sonnet / haiku must not appear under Codex).
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a2"); // codex-native-ui
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.queryByTestId("new-chat-landing-model-option-opus")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-sonnet")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-haiku")).toBeNull();
+  });
+
+  it("excludes custom/best-coding and the GPT-5.6 aliases from the Claude picker", () => {
+    // Spec §3 (companion): Claude's picker must NOT include custom/best-coding
+    // (Pi's default) nor any of the codex/gpt-5.6-* aliases — Claude Code
+    // is Claude-family-only.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a1"); // claude-native-ui
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.queryByTestId("new-chat-landing-model-option-custom/best-coding")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-sol")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-terra")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-luna")).toBeNull();
+  });
+
+  it("sends a Codex non-default pick as model_override and persists per-harness", async () => {
+    // Spec §8: explicit picks ride on session create as model_override. This
+    // covers Codex (Claude + Pi already covered) and verifies Codex's
+    // per-harness snapshot doesn't bleed into Pi's remembered pick.
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_inline_codex_terra" }),
+    } as unknown as Response);
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a2"); // codex-native-ui
+    pickSelectOption("new-chat-landing-model-trigger", "codex/gpt-5.6-terra");
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "summarize codex" },
+    });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    const callArgs = authenticatedFetchMock.mock.calls[0]!;
+    const body = JSON.parse((callArgs[1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(body.model_override).toBe("codex/gpt-5.6-terra");
+    // Switch to Pi and back; Codex's pick must NOT have leaked into Pi.
+    selectAgent("a_pi");
+    expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toContain(
+      "custom/best-coding",
+    );
+  });
+
+  it("omits model_override when Codex's picker stays at Default", async () => {
+    // Symmetric to the Pi coverage: leaving the Codex picker on Default
+    // omits model_override so the harness keeps its configured default
+    // (codex/gpt-5.6-sol).
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_inline_codex_default" }),
+    } as unknown as Response);
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a2"); // codex-native-ui
+    expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toContain(
+      "codex/gpt-5.6-sol",
+    );
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), { target: { value: "noop" } });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    const callArgs = authenticatedFetchMock.mock.calls[0]!;
+    const body = JSON.parse((callArgs[1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(body.model_override).toBeUndefined();
+  });
+
+  it("shows 'Harness default' (NOT the first row's name) when no row has isDefault", () => {
+    // Spec correction: the React fallback MUST NOT silently pick options[0]
+    // when the backend didn't flag a default. This test exercises that
+    // exact case — a catalog with several rows but no isDefault — and
+    // asserts the trigger reads "Harness default" instead of any first-row
+    // displayName.
+    setupPiNativeOnly();
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        ({
+          data:
+            harness === "pi-native"
+              ? [
+                  { id: "row-a", displayName: "Row A" },
+                  { id: "row-b", displayName: "Row B" },
+                  { id: "row-c", displayName: "Row C" },
+                ]
+              : undefined,
+          isLoading: false,
+          isError: false,
+        }) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    renderLanding();
+    selectAgent("a_pi");
+    const label = screen.getByTestId("new-chat-landing-model-trigger-label");
+    expect(label.textContent).toBe("Harness default");
+    // Specifically: the first catalog row's displayName MUST NOT be used.
+    expect(label.textContent).not.toContain("Row A");
+  });
 });
 
 describe("NewChatLandingScreen custom-agent sandbox gating", () => {
