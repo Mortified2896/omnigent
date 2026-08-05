@@ -1284,18 +1284,18 @@ function InlineModelPicker({
   const dflt = options.find((option) => option.isDefault);
   const defaultLabel = dflt ? `Default (${dflt.displayName ?? dflt.id})` : "Default";
 
-  // Trigger label: an explicit pick wins; otherwise surface the default
-  // resolution so the user knows what Pi will boot on, and only show
-  // "Loading…" while the catalog is settling without a default known.
-  // We render the human-friendly `displayName` when present (Codex/Claude
-  // rows ship displayName="Opus 4.8" while id="opus"); Pi-native rows
-  // happen to use the id as its display name, so both pickers read the
-  // same label without a second code path.
+  // Trigger label: an explicit pick wins; otherwise surface the backend's
+  // `isDefault: true` row so the user knows what the harness will boot on,
+  // and only show "Loading…" while the catalog is settling without a
+  // default known. We render the human-friendly `displayName` when present
+  // (Codex/Claude rows ship displayName="Opus 4.8" while id="opus");
+  // Pi-native rows happen to use the id as their display name, so both
+  // pickers read the same label without a second code path.
   //
-  // When the catalog is loaded but reports no `isDefault` flag (the
-  // claude-native / codex-native backends don't always set one), we fall
-  // back to the *first* row's displayName so the composer still surfaces
-  // the harness-flavored default rather than a blank "Model" placeholder.
+  // When the catalog has rows but the backend doesn't flag a default, the
+  // trigger must NOT silently pick the first row — that fabricates a
+  // default that doesn't exist. Show "Harness default" so the operator
+  // sees the unresolved state and can wait for a real catalog refresh.
   let triggerLabel: string;
   if (pickedModel) {
     const pickedRow = options.find((option) => option.id === pickedModel);
@@ -1305,7 +1305,7 @@ function InlineModelPicker({
   } else if (loading) {
     triggerLabel = "Loading…";
   } else if (options.length > 0) {
-    triggerLabel = options[0]!.displayName ?? options[0]!.id;
+    triggerLabel = "Harness default";
   } else {
     triggerLabel = "Model";
   }
@@ -2050,10 +2050,12 @@ export function NewChatLandingScreen() {
         ? CLAUDE_NATIVE_MODELS.map((model) => ({
             id: model.id,
             displayName: model.label,
+            isDefault: model.id === "opus",
           }))
         : (hostClaudeModelOptions ?? []).map((option) => ({
             id: option.id,
             displayName: option.displayName ?? option.id,
+            isDefault: option.isDefault,
           })),
     [hostClaudeModelOptions, sandboxSelected],
   );
@@ -2447,6 +2449,24 @@ export function NewChatLandingScreen() {
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
+  // Fetch the catalog keyed off the *selected agent's* harness string too,
+  // so SDK-style agents whose harness differs from the native wrapper (e.g.
+  // an SDK Codex agent whose agent.harness is "codex" rather than
+  // "codex-native") surface the OmniRoute catalog including the configured
+  // `codex/gpt-5.6-*` pins that live on the non-native catalog. Disabled
+  // when no agent is picked or when the agent's harness is one of the
+  // native-wrapper strings we already fetch above (avoids duplicate
+  // requests) or when the agent's harness equals what the native wrapper
+  // query already covers.
+  const selectedAgentHarness = selectedAgent?.harness ?? null;
+  const directHarnessFetchEnabled =
+    selectedAgentHarness != null &&
+    selectedAgentHarness !== "claude-native" &&
+    selectedAgentHarness !== "codex-native" &&
+    selectedAgentHarness !== "pi-native" &&
+    !sandboxSelected;
+  const { data: hostDirectHarnessOptions, isLoading: hostDirectHarnessLoading } =
+    useHostModelOptions(selectedHostId, selectedAgentHarness ?? "", directHarnessFetchEnabled);
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
   // Smart Routing (per-session model selection) is superseded by the Auto
   // harness which handles both harness + model. Hide it entirely for now.
@@ -3226,11 +3246,16 @@ export function NewChatLandingScreen() {
             // the runner launches. Claude, Codex, and Pi-native read
             // model_override at terminal launch (Pi-native accepts it as a
             // `--model` flag); an unselected ("") knob is omitted so the
-            // harness keeps its own configured/default model.
+            // harness keeps its own configured/default model. SDK agents
+            // whose harness string is "codex" / "claude" / "pi" also
+            // forward `model_override` (the OmniRoute-backed picker on the
+            // harness honors it at launch), so any harness whose catalog
+            // is exposed through `useHostModelOptions` accepts the override.
             model_override:
               (agentSupportsPermissionMode ||
                 nativeAgent?.harness === "codex-native" ||
-                nativeAgent?.harness === "pi-native") &&
+                nativeAgent?.harness === "pi-native" ||
+                selectedAgentHarness != null) &&
               pickedModel
                 ? pickedModel
                 : undefined,
@@ -3686,7 +3711,7 @@ export function NewChatLandingScreen() {
                   permanently-empty dropdown.
                 */}
                 <InlineModelPicker
-                  harness={selectedNativeHarness ?? ""}
+                  harness={selectedAgentHarness ?? selectedNativeHarness ?? ""}
                   options={
                     selectedNativeHarness === "claude-native"
                       ? claudeModelOptions
@@ -3694,7 +3719,11 @@ export function NewChatLandingScreen() {
                         ? codexModelOptions
                         : selectedNativeHarness === "pi-native"
                           ? piNativeModelOptions
-                          : []
+                          : (hostDirectHarnessOptions ?? []).map((option) => ({
+                              id: option.id,
+                              displayName: option.displayName ?? option.id,
+                              isDefault: option.isDefault,
+                            }))
                   }
                   loading={
                     selectedNativeHarness === "claude-native"
@@ -3703,7 +3732,7 @@ export function NewChatLandingScreen() {
                         ? hostCodexModelsLoading
                         : selectedNativeHarness === "pi-native"
                           ? hostPiNativeModelsLoading
-                          : false
+                          : hostDirectHarnessLoading
                   }
                   pickedModel={pickedModel}
                   onPickedModelChange={(model) => {
@@ -3713,13 +3742,17 @@ export function NewChatLandingScreen() {
                     // remember the same value for the same harness. Without
                     // this, switching harnesses (Claude → Pi) and back would
                     // silently reset Pi's pick — failing the persistence
-                    // requirement of the spec.
+                    // requirement of the spec. For SDK-style agents whose
+                    // harness string doesn't fold into a native wrapper, we
+                    // persist under the agent's direct harness so the
+                    // remember-your-last-pick behavior stays per-harness.
                     setPickedModel(model);
-                    if (selectedNativeHarness) {
-                      writeHarnessOption(selectedNativeHarness, { model });
+                    const writeKey = selectedNativeHarness ?? selectedAgentHarness;
+                    if (writeKey) {
+                      writeHarnessOption(writeKey, { model });
                     }
                   }}
-                  visible={selectedNativeHarness != null}
+                  visible={selectedNativeHarness != null || selectedAgentHarness != null}
                 />
                 {/* Gear — opens the selected agent's run-config modal. Hidden
                   when the selected agent has no knobs to configure. Hovering
