@@ -8,6 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -491,8 +492,30 @@ async def test_handle_model_options_keeps_custom_gateway_catalog(
     ]
 
 
-async def test_handle_model_options_rejects_unsupported_harness() -> None:
-    """Only launch paths with host-resolved model catalogs are accepted."""
+async def test_handle_model_options_falls_back_to_omni_route_for_unsupported_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``cursor-native`` (no specialized branch) routes through the OmniRoute picker.
+
+    Pre-v0.8.1 the catch-all returned ``failed`` with an "unsupported"
+    error. The OmniRoute-backed picker now drives every harness whose
+    default provider is an OpenAI-compatible gateway; the picker is
+    exercised here and its error is surfaced verbatim (no silent fall
+    back to another provider).
+    """
+    from omnigent import omni_route_picker as omni_route_picker_module
+    from omnigent.omni_route_picker import OmniRouteModelOptionsError
+
+    def fake_omni_route_model_options(harness: str) -> list[dict[str, Any]]:
+        raise OmniRouteModelOptionsError(
+            "no default provider configured for harness 'cursor-native'"
+        )
+
+    monkeypatch.setattr(
+        omni_route_picker_module,
+        "omni_route_model_options",
+        fake_omni_route_model_options,
+    )
     host = _make_host_process()
 
     result = await host._handle_model_options(
@@ -502,7 +525,7 @@ async def test_handle_model_options_rejects_unsupported_harness() -> None:
     assert result == HostModelOptionsResultFrame(
         request_id="req_models",
         status="failed",
-        error="model options are unsupported for harness 'cursor-native'",
+        error="no default provider configured for harness 'cursor-native'",
     )
 
 
