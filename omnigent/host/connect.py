@@ -2023,10 +2023,40 @@ class HostProcess:
             )
 
         if harness != "claude-native":
+            # OmniRoute / OpenRouter / LiteLLM-style gateways: read the
+            # authoritative live model catalog and let the picker fail loud
+            # when the provider is misconfigured. Claude-native keeps its
+            # existing claude_native_model_options path below.
+            try:
+                from omnigent.omni_route_picker import (
+                    OmniRouteModelOptionsError,
+                    omni_route_model_options,
+                )
+
+                models = await asyncio.to_thread(omni_route_model_options, harness)
+            except OmniRouteModelOptionsError as exc:
+                _logger.info(
+                    "OmniRoute picker rejected harness %r: %s", frame.harness, exc
+                )
+                return HostModelOptionsResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error=str(exc),
+                )
+            except Exception:
+                _logger.exception("Failed to resolve pre-launch OmniRoute model options")
+                return HostModelOptionsResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error=(
+                        f"failed to resolve OmniRoute model options for harness "
+                        f"{frame.harness!r}"
+                    ),
+                )
             return HostModelOptionsResultFrame(
                 request_id=frame.request_id,
-                status="failed",
-                error=f"model options are unsupported for harness {frame.harness!r}",
+                status="ok",
+                models=models,
             )
         try:
             from omnigent.claude_native import (
