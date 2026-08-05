@@ -199,10 +199,22 @@ function openSelect(testId: string): void {
   fireEvent.click(screen.getByTestId(testId));
 }
 
-/** Open the config-modal Select at <triggerTestId> and click the option labeled <label>. */
+/** Open the config-modal Select at <triggerTestId> and click the option labeled <label>.
+ *
+ * The new-session composer now also has an inline model picker (a Radix
+ * DropdownMenu) with its own trigger button. When the text <label>
+ * happens to be the same string the inline picker's CLOSED trigger label
+ * uses (both pickers render the resolved default `displayName`), a plain
+ * `getByText` returns multiple matches and breaks the click. Scope to the
+ * just-opened option role: the inline picker's items are Radix
+ * `menuitem`s (and they're only mounted when its dropdown is open), while
+ * the gear modal's picker items are `option` roles. Matching role="option"
+ * scopes the click to whichever select is currently open — the modal's
+ * here (triggerTestId is a gear-modal select).
+ */
 function pickSelectOption(triggerTestId: string, label: string): void {
   openSelect(triggerTestId);
-  fireEvent.click(screen.getByText(label));
+  fireEvent.click(screen.getByRole("option", { name: label }));
 }
 
 /** Close the config modal by clicking Save (commits the draft). */

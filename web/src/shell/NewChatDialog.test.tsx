@@ -1061,9 +1061,12 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByTestId("new-chat-landing-config-permission")).toBeTruthy();
     // The model select offers the selected host's live catalog (mocked to
     // Opus 4.8 / Sonnet 4.6 / Haiku 4.5) — never the removed/static rows.
+    // The catalog also drives the inline picker in the composer footer, so
+    // each option can appear in two places (gear modal + inline popover);
+    // we assert presence with getAllByText rather than getByText.
     openSelect("new-chat-landing-config-model");
-    expect(screen.getByText("Opus 4.8")).toBeTruthy();
-    expect(screen.getByText("Sonnet 4.6")).toBeTruthy();
+    expect(screen.getAllByText("Opus 4.8").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Sonnet 4.6").length).toBeGreaterThan(0);
     expect(screen.queryByText("Fable")).toBeNull();
     expect(screen.queryByText("Sonnet 5")).toBeNull();
     closeMenu();
@@ -2682,6 +2685,341 @@ describe("NewChatLandingScreen agent picker + config gear", () => {
     renderLanding({ smart_routing_enabled: true });
     // opencode-native has no knobs and isn't routable → no gear.
     expect(screen.queryByTestId("new-chat-landing-config-gear")).toBeNull();
+  });
+});
+
+describe("NewChatLandingScreen inline model picker (pre-launch)", () => {
+  // Regression coverage for fix/render-prelaunch-model-selector. The user
+  // spec mandated the model picker to be visibly present in the composer
+  // (not buried inside the gear modal or the harness dropdown's "More"
+  // submenu). Before the fix the composer had only an AgentHarnessPicker +
+  // gear — the launch-time model catalog was unreachable without first
+  // selecting a native agent AND opening the gear modal.
+  beforeEach(setupLandingMocks);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  function setupPiNativeOnly(): void {
+    // Add Pi-native to the default Claude/Codex fixture so the harness we
+    // switch to has its own backend catalog (custom/best-coding as default
+    // plus the three codex/gpt-5.6-* pins). Claude / Codex stay in the list
+    // so cross-harness remembered-state assertions keep working.
+    // `mockAgents` REPLACES the list (it doesn't merge), so we re-supply the
+    // defaults from setupLandingMocks here.
+    mockAgents([
+      {
+        id: "a1",
+        name: "claude-native-ui",
+        display_name: "Claude Code",
+        description: null,
+        harness: "claude-native",
+        skills: [],
+      },
+      {
+        id: "a2",
+        name: "codex-native-ui",
+        display_name: "Codex",
+        description: null,
+        harness: "codex-native",
+        skills: [],
+      },
+      {
+        id: "a_pi",
+        name: "pi-native-ui",
+        display_name: "Pi",
+        description: null,
+        harness: "pi-native",
+        skills: [],
+      },
+    ]);
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        ({
+          data:
+            harness === "pi-native"
+              ? [
+                  { id: "custom/best-coding", displayName: "custom/best-coding", isDefault: true },
+                  { id: "codex/gpt-5.6-sol", displayName: "codex/gpt-5.6-sol" },
+                  { id: "codex/gpt-5.6-terra", displayName: "codex/gpt-5.6-terra" },
+                  { id: "codex/gpt-5.6-luna", displayName: "codex/gpt-5.6-luna" },
+                ]
+              : harness === "codex-native"
+                ? [
+                    // Family-compatible GPT/OpenAI pins reused across the
+                    // Pi-native and Codex harnesses (the backend confirms this
+                    // in production — pinned ids reuse across harnesses after
+                    // model_family_mismatch filtering).
+                    { id: "codex/gpt-5.6-sol", displayName: "codex/gpt-5.6-sol", isDefault: true },
+                    { id: "codex/gpt-5.6-terra", displayName: "codex/gpt-5.6-terra" },
+                    { id: "codex/gpt-5.6-luna", displayName: "codex/gpt-5.6-luna" },
+                    { id: "databricks-gpt-5-6", displayName: "GPT-5.6" },
+                  ]
+                : [
+                    {
+                      id: "opus",
+                      model: "system.ai.claude-opus-4-8[1m]",
+                      displayName: "Opus 4.8",
+                      isDefault: true,
+                    },
+                    {
+                      id: "sonnet",
+                      model: "system.ai.claude-sonnet-4-6[1m]",
+                      displayName: "Sonnet 4.6",
+                    },
+                    {
+                      id: "haiku",
+                      model: "system.ai.claude-haiku-4-5",
+                      displayName: "Haiku 4.5",
+                    },
+                  ],
+          isLoading: false,
+          isError: false,
+        }) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+  }
+
+  it("renders the inline model trigger inside the composer before any gear interaction", () => {
+    // The fix surface — the trigger is visible the moment Claude Code is
+    // selected, NO gear click required. (Before the fix the only model row
+    // lived inside the gear modal.)
+    setupPiNativeOnly();
+    renderLanding();
+    expect(screen.getByTestId("new-chat-landing-model-trigger")).toBeTruthy();
+    // It must NOT be the same control as the harness select.
+    expect(screen.getByTestId("new-chat-landing-agent-select")).toBeTruthy();
+  });
+
+  it("renders the inline model trigger for Pi-native (the bug repro)", () => {
+    // Pi-native was the harness the user picked in the failing screenshot.
+    // Before the fix: no inline trigger + no useHostModelOptions call —
+    // picking Pi hid every model affordance.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    const trigger = screen.getByTestId("new-chat-landing-model-trigger");
+    expect(trigger).toBeTruthy();
+    expect(trigger.getAttribute("data-harness")).toBe("pi-native");
+  });
+
+  it("renders Pi's default id directly inside the composer trigger label", () => {
+    // Spec requirement: "display the selected/default model directly in the
+    // composer". Pi's backend default is custom/best-coding; the trigger
+    // label must read that, not a generic placeholder.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    const label = screen.getByTestId("new-chat-landing-model-trigger-label");
+    expect(label.textContent).toContain("custom/best-coding");
+  });
+
+  it("opens the picker popover and lists the four pi-native rows (catalog-driven)", () => {
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    openSelect("new-chat-landing-model-trigger");
+    // The default row carries the resolved backend default id; the three
+    // non-default rows mirror the catalog exactly.
+    expect(screen.getByTestId("new-chat-landing-model-default")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-sol")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-terra")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-luna")).toBeTruthy();
+  });
+
+  it("lists Codex catalog rows (GPT/OpenAI family only) when the harness is Codex", () => {
+    // Spec §3: "Codex Show only compatible GPT/OpenAI-family entries,
+    // including the configured codex/gpt-5.6-* pins." The catalog is
+    // server-side family-filtered; this asserts the inline picker
+    // surfaces rows from that filtered catalog. Note that the three
+    // `codex/gpt-5.6-*` ids are pinned across BOTH Pi-native and Codex
+    // harnesses — the same catalog row appears under each harness as a
+    // result of model_family_mismatch filtering, not as a Pi leak.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a2"); // codex-native-ui
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.getByTestId("new-chat-landing-model-default")).toBeTruthy();
+    // The three configured GPT-5.6 pins surface under Codex as required.
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-sol")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-terra")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-luna")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-databricks-gpt-5-6")).toBeTruthy();
+  });
+
+  it("lists Claude Code catalog rows (Claude family) without leaking GPT/custom pins", () => {
+    // Spec §3: "Claude SDK Show only Claude-family entries." Even though
+    // `codex/gpt-5.6-*` rows appear under Pi-native AND Codex (they're
+    // family-compatible GPT/OpenAI pins and the backend intentionally
+    // surfaces them under each), they MUST NOT show under Claude Code,
+    // which is Claude-family-only. Same for the Pi's `custom/best-coding`
+    // default row. Catalog filtering is enforced server-side; this test
+    // asserts the inline picker respects it.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a1"); // claude-native-ui
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.getByTestId("new-chat-landing-model-option-opus")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-sonnet")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-option-haiku")).toBeTruthy();
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-sol")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-terra")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-luna")).toBeNull();
+  });
+
+  it("fetches the catalog for the selected harness (pi-native, claude-native, codex-native)", () => {
+    // Spec §1: changing harness refreshes the model list. This is captured
+    // by ensuring the hook is consulted with each native harness string when
+    // its agent is the selected one.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    // Each native harness type triggers its own model-options query. The
+    // "missing call" is exactly the bug this fix targets.
+    expect(useHostModelOptionsMock).toHaveBeenCalledWith("host_1", "pi-native", true);
+    expect(useHostModelOptionsMock).toHaveBeenCalledWith("host_1", "claude-native", true);
+    expect(useHostModelOptionsMock).toHaveBeenCalledWith("host_1", "codex-native", true);
+  });
+
+  it("sends the picked non-default pi-native model on session create (model_override)", async () => {
+    // Spec §8: "a non-default choice is included in the launch request".
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_inline_pi" }),
+    } as unknown as Response);
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    pickSelectOption("new-chat-landing-model-trigger", "codex/gpt-5.6-terra");
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "summarize" },
+    });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    const callArgs = authenticatedFetchMock.mock.calls[0]!;
+    const body = JSON.parse((callArgs[1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(body.model_override).toBe("codex/gpt-5.6-terra");
+  });
+
+  it("omits model_override when the inline picker stays at Default", async () => {
+    // Spec: empty pick → harness uses its own configured default. The
+    // trigger label still reads the default id (custom/best-coding) so
+    // the user knows what Pi boots on — but the payload must NOT carry
+    // an empty/Default override.
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_inline_pi_default" }),
+    } as unknown as Response);
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    // Don't touch the picker — leave it on Default.
+    expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toContain(
+      "custom/best-coding",
+    );
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "noop" },
+    });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    const callArgs = authenticatedFetchMock.mock.calls[0]!;
+    const body = JSON.parse((callArgs[1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(body.model_override).toBeUndefined();
+  });
+
+  it("refreshes the model list when the harness flips from Claude to Pi", async () => {
+    // Spec §1 / §3: "update when the harness changes". The query key in
+    // useHostModelOptions(hostId, harness) is `[hostId, harness]`, so
+    // flipping the harness re-issues the fetch with the new harness.
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a1");
+    openSelect("new-chat-landing-model-trigger");
+    // Claude's rows visible.
+    expect(screen.getByTestId("new-chat-landing-model-option-opus")).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    selectAgent("a_pi");
+    openSelect("new-chat-landing-model-trigger");
+    // Pi's rows visible — Claude rows gone.
+    expect(screen.getByTestId("new-chat-landing-model-option-codex/gpt-5.6-sol")).toBeTruthy();
+    expect(screen.queryByTestId("new-chat-landing-model-option-opus")).toBeNull();
+  });
+
+  it("renders the loading state while the catalog is settling", () => {
+    setupPiNativeOnly();
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        ({
+          data: undefined,
+          isLoading: harness === "pi-native",
+          isError: false,
+        }) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    renderLanding();
+    selectAgent("a_pi");
+    // The trigger label degrades to "Loading…" so the operator sees the
+    // spinner-state rather than a phantom "Model" / empty list.
+    expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toBe("Loading…");
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.getByTestId("new-chat-landing-model-loading")).toBeTruthy();
+  });
+
+  it("renders Models unavailable when the catalog errors or is empty (does not silently hide)", () => {
+    // Spec: "show a visible error when model options cannot be loaded";
+    // "do not silently substitute another model".
+    setupPiNativeOnly();
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        ({
+          data: harness === "pi-native" ? [] : undefined,
+          isLoading: false,
+          isError: false,
+        }) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    renderLanding();
+    selectAgent("a_pi");
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.getByTestId("new-chat-landing-model-unavailable")).toBeTruthy();
+    // Trigger still renders (control stays usable for re-attempt after a
+    // harness switch), and "Default" row still reads.
+    expect(screen.getByTestId("new-chat-landing-model-trigger")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-model-default")).toBeTruthy();
+  });
+
+  it("keeps a user-selected pi-native pick across reopens (per-harness persistence)", async () => {
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_inline_persist" }),
+    } as unknown as Response);
+    setupPiNativeOnly();
+    renderLanding();
+    // First visit: pick a non-default pin.
+    selectAgent("a_pi");
+    pickSelectOption("new-chat-landing-model-trigger", "codex/gpt-5.6-sol");
+    // Submit, then a fresh session starts with the same harness — the
+    // picked id must still be reflected in the trigger label.
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "x" },
+    });
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    selectAgent("a_pi");
+    expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toContain(
+      "codex/gpt-5.6-sol",
+    );
+  });
+
+  it("does not leak a pi-native pick into Claude Code's per-harness memory", () => {
+    setupPiNativeOnly();
+    renderLanding();
+    selectAgent("a_pi");
+    pickSelectOption("new-chat-landing-model-trigger", "codex/gpt-5.6-luna");
+    // Switch to Claude Code — its trigger must reset to Default (its own
+    // harness's stored value, not Pi's).
+    selectAgent("a1");
+    openSelect("new-chat-landing-model-trigger");
+    expect(screen.getByTestId("new-chat-landing-model-trigger-label").textContent).toBe("Opus 4.8");
+    expect(screen.queryByTestId("new-chat-landing-model-option-codex/gpt-5.6-luna")).toBeNull();
   });
 });
 
