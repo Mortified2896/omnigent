@@ -1221,6 +1221,201 @@ export function AgentHarnessPicker({
 }
 
 /**
+ * Inline model picker rendered in the new-session composer (between the harness
+ * picker and the gear/submit). Stays visible before launch so the operator can
+ * pin a non-default LLM at spawn time without opening the gear modal. Reads
+ * the catalog from `useHostModelOptions(hostId, harness)` — the same hook the
+ * gear modal uses, so changing the harness to Pi/Codex/Claude/… refreshes the
+ * model list automatically (the harness flips the resolved `harness` string,
+ * the query key changes, and the catalog reloads).
+ *
+ * UI states the spec mandates this component covers:
+ *  - **loaded**        → trigger shows the picked (or defaulted) model name;
+ *                        open lists the entire catalog with the picked row
+ *                        checked. Picking a row commits to `pickedModel`, which
+ *                        is what `model_override` reads on session create.
+ *  - **loading**       → trigger reads "Model · Loading"; the popover shows
+ *                        a "Loading models…" footer item so the empty area
+ *                        never reads as "no models available".
+ *  - **error/empty**   → trigger still works (shows "Model" and the default
+ *                        label); the popover prints "Models unavailable" so the
+ *                        failure is visible rather than silently absent. An
+ *                        empty/error catalog does NOT clobber an explicit prior
+ *                        pick — the user's choice stays sticky through the
+ *                        next harness switch.
+ *  - **default**       → "Default" row maps to backend's `isDefault` model,
+ *                        which the spawn-time override omits so the harness
+ *                        keeps its configured default. Visible label stays
+ *                        the resolved default id (e.g. "custom/best-coding")
+ *                        so the user knows what Pi will actually boot on.
+ *
+ * The picker hides entirely (no trigger, no menu) when no harness is selected
+ * — e.g. the sandbox "no host" edge case. The "missing host" branch keeps the
+ * gear modal visible (existing behavior); inline selector match.
+ */
+function InlineModelPicker({
+  harness,
+  options,
+  loading,
+  pickedModel,
+  onPickedModelChange,
+  visible = true,
+}: {
+  /** Resolved harness string for the selected agent (e.g. "pi-native",
+   *  "claude-native", "codex-native"). Drives the query-key for the catalog
+   *  the parent already fetched. Empty string hides the picker. */
+  harness: string;
+  /** Catalog rows for the resolved harness. Empty array means the host
+   *  rejected / has no providers / not yet loaded. */
+  options: readonly Pick<NativeModelOption, "id" | "displayName" | "isDefault">[];
+  /** True while the parent's `useHostModelOptions` is still settling. */
+  loading: boolean;
+  /** Current model pick. "" = "Default" (no override sent). */
+  pickedModel: string;
+  /** Commit hook back to the parent (`setPickedModel`). */
+  onPickedModelChange: (model: string) => void;
+  /** Lets the parent hide the picker when no harness is selected.
+   *  Defaults to showing when `harness` is non-empty. */
+  visible?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!visible || harness === "") return null;
+
+  const dflt = options.find((option) => option.isDefault);
+  const defaultLabel = dflt ? `Default (${dflt.displayName ?? dflt.id})` : "Default";
+
+  // Trigger label: an explicit pick wins; otherwise surface the default
+  // resolution so the user knows what Pi will boot on, and only show
+  // "Loading…" while the catalog is settling without a default known.
+  // We render the human-friendly `displayName` when present (Codex/Claude
+  // rows ship displayName="Opus 4.8" while id="opus"); Pi-native rows
+  // happen to use the id as its display name, so both pickers read the
+  // same label without a second code path.
+  //
+  // When the catalog is loaded but reports no `isDefault` flag (the
+  // claude-native / codex-native backends don't always set one), we fall
+  // back to the *first* row's displayName so the composer still surfaces
+  // the harness-flavored default rather than a blank "Model" placeholder.
+  let triggerLabel: string;
+  if (pickedModel) {
+    const pickedRow = options.find((option) => option.id === pickedModel);
+    triggerLabel = pickedRow?.displayName ?? pickedRow?.id ?? pickedModel;
+  } else if (dflt) {
+    triggerLabel = dflt.displayName ?? dflt.id;
+  } else if (loading) {
+    triggerLabel = "Loading…";
+  } else if (options.length > 0) {
+    triggerLabel = options[0]!.displayName ?? options[0]!.id;
+  } else {
+    triggerLabel = "Model";
+  }
+  const isOnDefault = pickedModel === "";
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          data-testid="new-chat-landing-model-trigger"
+          data-harness={harness}
+          aria-label={`Model — ${triggerLabel}`}
+          className="h-8 gap-1.5 pr-1 pl-2.5 font-normal text-muted-foreground hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-60"
+          // The launch-time requirement: the picker MUST be reachable before
+          // the user types any prompt. Disabled only when the harness is
+          // explicitly empty (sandbox + no host, etc.).
+          disabled={harness === ""}
+        >
+          <span
+            className="max-w-[16rem] truncate text-xs text-foreground"
+            data-testid="new-chat-landing-model-trigger-label"
+          >
+            {triggerLabel}
+          </span>
+          <ChevronDownIcon className="size-3.5 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        collisionPadding={12}
+        avoidCollisions
+        // 320px ≈ 4–5 long model ids per row on desktop; capped at viewport
+        // width on mobile so it can never overflow the composer. Footer items
+        // (loading / unavailable) live inside the same scroll container so a
+        // 60-row Codex catalog scrolls cleanly on a phone.
+        className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-64 max-w-[calc(100vw-2rem)] overflow-y-auto p-1"
+        data-testid="new-chat-landing-model-content"
+      >
+        <div className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground">
+          Model
+        </div>
+        <DropdownMenuItem
+          data-testid="new-chat-landing-model-default"
+          data-active={isOnDefault ? "true" : undefined}
+          onSelect={(e) => {
+            e.preventDefault();
+            onPickedModelChange("");
+            setOpen(false);
+          }}
+          // The spec wants the backend-designated default to read out
+          // directly in the composer. When the default doesn't yet exist
+          // (catalog hasn't loaded), the row reads "Default"; once the
+          // catalog resolves the row exposes the exact id Pi will boot on
+          // (so the operator sees the wiring, not a generic label).
+          className={isOnDefault ? "bg-accent/60" : ""}
+        >
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate">{isOnDefault ? defaultLabel : "Default"}</span>
+          </span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {options.map((option) => {
+          const isPicked = pickedModel === option.id;
+          const rowLabel = option.displayName ?? option.id;
+          return (
+            <DropdownMenuItem
+              key={option.id}
+              data-testid={`new-chat-landing-model-option-${option.id}`}
+              data-active={isPicked ? "true" : undefined}
+              onSelect={(e) => {
+                e.preventDefault();
+                onPickedModelChange(option.id);
+                setOpen(false);
+              }}
+              className={isPicked ? "bg-accent/60" : ""}
+            >
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span className="truncate">{rowLabel}</span>
+                {option.isDefault && (
+                  <span className="text-[10px] text-muted-foreground">(default)</span>
+                )}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+        {loading && (
+          <div
+            className="px-2.5 py-1.5 text-xs text-muted-foreground"
+            data-testid="new-chat-landing-model-loading"
+          >
+            Loading models…
+          </div>
+        )}
+        {!loading && options.length === 0 && (
+          <div
+            className="px-2.5 py-1.5 text-xs text-amber-600 dark:text-amber-400"
+            data-testid="new-chat-landing-model-unavailable"
+          >
+            Models unavailable
+          </div>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
  * Harness-configuration modal opened from the composer's gear icon. Shows the
  * selected agent's run-config knobs — Claude: model / effort / permissions;
  * Codex/OpenCode: approval mode (+ Codex's dangerous full-bypass opt-in);
@@ -1840,6 +2035,15 @@ export function NewChatLandingScreen() {
     "codex-native",
     !sandboxSelected,
   );
+  // Pi-native (the operator's pre-launch picker for the "Pi" harness). The
+  // composing fold-in here keeps the inline model selector in the composer
+  // footer honest: even when the gear-only path isn't open, choosing Pi in
+  // the harness picker must refetch and re-render the catalog driven by the
+  // selected host — without this call, the inline selector would stay empty
+  // (see fix/render-prelaunch-model-selector). The gear flow reads the same
+  // hook; nothing about the API surface changes.
+  const { data: hostPiNativeModelOptions, isLoading: hostPiNativeModelsLoading } =
+    useHostModelOptions(selectedHostId, "pi-native", !sandboxSelected);
   const claudeModelOptions = useMemo(
     () =>
       sandboxSelected
@@ -1856,6 +2060,10 @@ export function NewChatLandingScreen() {
   const codexModelOptions = useMemo(
     () => (sandboxSelected ? [] : (hostCodexModelOptions ?? [])),
     [hostCodexModelOptions, sandboxSelected],
+  );
+  const piNativeModelOptions = useMemo(
+    () => (sandboxSelected ? [] : (hostPiNativeModelOptions ?? [])),
+    [hostPiNativeModelOptions, sandboxSelected],
   );
   // Desktop-shell host status for THIS machine (null outside Electron), so the
   // picker can tag the current machine and offer to auto-connect it.
@@ -2408,11 +2616,23 @@ export function NewChatLandingScreen() {
       );
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
+    } else if (selectedNativeHarness === "pi-native") {
+      // Pi-native has no permission/approval surface of its own — only the
+      // model knob. The per-harness snapshot records the last explicit pick,
+      // validated against the live catalog so a retired id falls back to ""
+      // (Pi uses its configured default). The inline model picker reads the
+      // exact same `pickedModel` so its trigger label stays in lock-step with
+      // what the launch payload will carry.
+      setPickedModel(
+        stored.model != null && piNativeModelOptions.some((m) => m.id === stored.model)
+          ? stored.model
+          : "",
+      );
     }
     // Reseed on harness changes and when the selected host's catalog resolves;
     // capability flags are derived from the same harness and stay omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedNativeHarness, claudeModelOptions, codexModelOptions]);
+  }, [selectedNativeHarness, claudeModelOptions, codexModelOptions, piNativeModelOptions]);
   // Native-terminal agents interpret slash commands inside their own CLI
   // (the runner injects the text verbatim), so the landing composer must
   // not intercept them — no skills menu, no slash_command routing.
@@ -3003,11 +3223,14 @@ export function NewChatLandingScreen() {
                     ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ?? [])
                     : undefined,
             // Model + reasoning effort, persisted on the session row before
-            // the runner launches. Claude and Codex read model_override at
-            // terminal launch; an unselected ("") knob is omitted so the
+            // the runner launches. Claude, Codex, and Pi-native read
+            // model_override at terminal launch (Pi-native accepts it as a
+            // `--model` flag); an unselected ("") knob is omitted so the
             // harness keeps its own configured/default model.
             model_override:
-              (agentSupportsPermissionMode || nativeAgent?.harness === "codex-native") &&
+              (agentSupportsPermissionMode ||
+                nativeAgent?.harness === "codex-native" ||
+                nativeAgent?.harness === "pi-native") &&
               pickedModel
                 ? pickedModel
                 : undefined,
@@ -3440,6 +3663,63 @@ export function NewChatLandingScreen() {
                   onSelectPending={handleSelectPending}
                   onCreateCustomAgent={() => setCreateAgentOpen(true)}
                   sandboxSelected={sandboxSelected}
+                />
+                {/*
+                  Inline model picker — visible before launch, separate from
+                  the harness picker (not buried in the harness dropdown's
+                  "More" submenu). Reads the same catalog the gear modal
+                  reads; flipping the harness re-runs `useHostModelOptions`
+                  under a different key, so switching from Claude to Pi
+                  refreshes the model list automatically. The picker is also
+                  enabled for native harnesses whose only knob IS the model
+                  (Pi-native), because the spec mandates every supported
+                  launch exposes the model selector visibly.
+
+                  Order in the composer: harness → model → gear → submit.
+                  Two side-by-side triggers read as "what runs the task" +
+                  "on which model" without forcing the user to open a
+                  modal before they can pick a default-flavored LLM.
+
+                  Visibility: gated on `selectedNativeHarness` (resolved
+                  above) so bundle / SDK / sandbox paths that lack a
+                  model catalog drop the trigger rather than render a
+                  permanently-empty dropdown.
+                */}
+                <InlineModelPicker
+                  harness={selectedNativeHarness ?? ""}
+                  options={
+                    selectedNativeHarness === "claude-native"
+                      ? claudeModelOptions
+                      : selectedNativeHarness === "codex-native"
+                        ? codexModelOptions
+                        : selectedNativeHarness === "pi-native"
+                          ? piNativeModelOptions
+                          : []
+                  }
+                  loading={
+                    selectedNativeHarness === "claude-native"
+                      ? hostClaudeModelsLoading
+                      : selectedNativeHarness === "codex-native"
+                        ? hostCodexModelsLoading
+                        : selectedNativeHarness === "pi-native"
+                          ? hostPiNativeModelsLoading
+                          : false
+                  }
+                  pickedModel={pickedModel}
+                  onPickedModelChange={(model) => {
+                    // Per-harness persistence: the gear modal stores its
+                    // pick the same way (readHarnessOptions / writeHarnessOption),
+                    // so the pre-launch composer and the advanced gear-flow
+                    // remember the same value for the same harness. Without
+                    // this, switching harnesses (Claude → Pi) and back would
+                    // silently reset Pi's pick — failing the persistence
+                    // requirement of the spec.
+                    setPickedModel(model);
+                    if (selectedNativeHarness) {
+                      writeHarnessOption(selectedNativeHarness, { model });
+                    }
+                  }}
+                  visible={selectedNativeHarness != null}
                 />
                 {/* Gear — opens the selected agent's run-config modal. Hidden
                   when the selected agent has no knobs to configure. Hovering
