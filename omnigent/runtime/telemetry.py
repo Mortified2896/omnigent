@@ -359,14 +359,35 @@ def _scope_allowed(span: Any, allowed: frozenset[str]) -> bool:
 
 
 def _make_scope_filter_processor(inner: Any, allowed_scopes: tuple[str, ...]) -> Any:
-    """Forward only spans whose instrumentation scope is explicitly allowed."""
+    """Forward allowed spans and detach parents that will be filtered out."""
     from opentelemetry.sdk.trace import SpanProcessor
 
     allowed = frozenset(allowed_scopes)
 
+    def _detach_unexported_parent(span: Any, parent_context: Any) -> None:
+        """Keep an allowed span from becoming a rootless exported trace.
+
+        OpenTelemetry parent contexts carry a span ID, but not the parent's
+        instrumentation scope. When a manual Omnigent span is created under a
+        filtered HTTPX/FastAPI/ASGI span, forwarding the child alone would
+        leave MLflow with no exported root and an ``IN_PROGRESS`` trace. The
+        child already has the desired trace ID, so clear only that unexported
+        parent before the exporter sees the span.
+        """
+        try:
+            from opentelemetry import trace
+
+            parent = trace.get_current_span(parent_context)
+            if not parent.get_span_context().is_valid or _scope_allowed(parent, allowed):
+                return
+            span._parent = None  # type: ignore[attr-defined]
+        except Exception:  # telemetry filtering must never affect application flow
+            return
+
     class _ScopeFilterSpanProcessor(SpanProcessor):
         def on_start(self, span: Any, parent_context: Any = None) -> None:
             if _scope_allowed(span, allowed):
+                _detach_unexported_parent(span, parent_context)
                 inner.on_start(span, parent_context)
 
         def on_end(self, span: Any) -> None:

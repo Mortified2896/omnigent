@@ -324,6 +324,26 @@ def test_scope_filter_processor_drops_disallowed_spans() -> None:
         assert forbidden not in seen, f"scope filter leaked {forbidden}"
 
 
+def test_scope_filter_processor_detaches_filtered_parent() -> None:
+    """Allowed children of dropped framework spans remain true roots."""
+    from omnigent.runtime.telemetry import _make_scope_filter_processor
+
+    exporter = InMemorySpanExporter()
+    inner = SimpleSpanProcessor(exporter)
+    wrapped = _make_scope_filter_processor(inner, ("omnigent", "omnigent.frames"))
+    provider = TracerProvider()
+    provider.add_span_processor(wrapped)
+
+    with provider.get_tracer("httpx").start_as_current_span("request") as parent:
+        with provider.get_tracer("omnigent").start_as_current_span("host.fs_request"):
+            pass
+
+    exported = exporter.get_finished_spans()
+    assert [span.name for span in exported] == ["host.fs_request"]
+    assert exported[0].parent is None
+    assert exported[0].context.trace_id == parent.get_span_context().trace_id
+
+
 def test_scope_filter_processor_robust_to_missing_scope_attr() -> None:
     """A span with no instrumentation scope attribute must not crash
     the filter and must default to deny.
