@@ -21,6 +21,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 
 from omnigent.inner.tracing import TracingContext, enable_tracing
+from omnigent.runtime import telemetry
 
 
 @pytest.fixture
@@ -152,16 +153,31 @@ def test_content_capture_off_by_default_drops_input_and_output(
     ctx = TracingContext()
     agent = ctx.start_agent_span(agent_name="a", user_message="PII: user@example.com")
     tool = ctx.start_tool_span(tool_name="cred-store", tool_args={"secret": "PII: sk-abcdef"})
+    policy = ctx.start_policy_span(
+        policy_name="egress",
+        phase="pre_tool_use",
+        content={"payload": "PII: policy@example.com"},
+    )
     ctx.end_tool_span(tool, result={"value": "PII: leaked@example.com"})
+    ctx.end_policy_span(policy, action="deny", reason="policy@example.com")
     ctx.end_agent_span(agent, response="PII: response with email@example.com")
 
     for span in exporter.get_finished_spans():
         attrs = dict(span.attributes or {})
-        assert "input.value" not in attrs, f"input.value leaked on {span.name}: {attrs}"
-        assert "output.value" not in attrs, f"output.value leaked on {span.name}: {attrs}"
+        for forbidden in (
+            "input.value",
+            "output.value",
+            "mlflow.spanInputs",
+            "mlflow.spanOutputs",
+            "error.message",
+        ):
+            assert forbidden not in attrs, f"{forbidden} leaked on {span.name}: {attrs}"
         for v in attrs.values():
             assert "@example.com" not in str(v), f"PII string leaked via {span.name}: {attrs}"
             assert "sk-abcdef" not in str(v), f"secret leaked via {span.name}: {attrs}"
+    policy_attrs = dict(_spans_by_name(exporter, "policy:")[0].attributes or {})
+    assert policy_attrs["policy.action"] == "deny"
+    assert policy_attrs["policy.name"] == "egress"
 
 
 def test_content_capture_on_includes_input_and_output(
@@ -232,6 +248,87 @@ def test_content_capture_on_includes_error_message(
 
     attrs = dict(_spans_by_name(exporter, "agent:")[0].attributes or {})
     assert attrs["error.message"] == "boom"
+
+
+@pytest.mark.parametrize("finish_mode", ["success", "cancellation", "exception"])
+def test_task_root_finishes_exactly_once_for_each_terminal_path(
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    finish_mode: str,
+):
+    """Every terminal turn path ends its task root once, never twice."""
+    monkeypatch.setattr("omnigent.runtime.telemetry._capture_content", False)
+    from opentelemetry.sdk.trace import Span as SdkSpan
+
+    end_calls = []
+    original_end = SdkSpan.end
+
+    def counted_end(self, *args, **kwargs):
+        if self.name == "agent:root":
+            end_calls.append(self)
+        return original_end(self, *args, **kwargs)
+
+    monkeypatch.setattr(SdkSpan, "end", counted_end)
+
+    ctx = TracingContext()
+    root = ctx.start_agent_span(agent_name="root", user_message="safe")
+    if finish_mode == "cancellation":
+        telemetry.record_cancellation(root)
+        ctx.end_agent_span(root, response=None)
+    elif finish_mode == "exception":
+        telemetry.record_error(root, RuntimeError("sensitive detail"))
+        ctx.end_agent_span(root, response=None)
+    else:
+        ctx.end_agent_span(root, response="safe response")
+
+    assert end_calls == [root]
+    assert root.is_recording() is False
+    assert [span.name for span in exporter.get_finished_spans()] == ["agent:root"]
+
+
+def test_response_root_has_response_trace_id_and_no_parent(
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The sentinel-parent correction exports the response span as a true root."""
+    monkeypatch.setattr("omnigent.runtime.telemetry._capture_content", False)
+    response_id = "resp_" + "b" * 32
+
+    with telemetry.trace_context_for_response(response_id=response_id):
+        ctx = TracingContext()
+        root = ctx.start_agent_span(agent_name="root", user_message="safe")
+        ctx.end_agent_span(root, response="ok")
+
+    exported = [span for span in exporter.get_finished_spans() if span.name == "agent:root"]
+    assert len(exported) == 1
+    root_span = exported[0]
+    assert format(root_span.context.trace_id, "032x") == "b" * 32
+    assert root_span.parent is None
+
+
+def test_subagent_stays_nested_under_response_root(
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Subagent spans share the root trace and retain the task parent edge."""
+    monkeypatch.setattr("omnigent.runtime.telemetry._capture_content", False)
+    response_id = "resp_" + "c" * 32
+
+    with telemetry.trace_context_for_response(response_id=response_id):
+        ctx = TracingContext()
+        root = ctx.start_agent_span(agent_name="root", user_message="safe")
+        child_ctx = ctx.create_child_context()
+        child = child_ctx.start_agent_span(agent_name="subagent", user_message="safe")
+        child_ctx.end_agent_span(child, response="ok")
+        ctx.end_agent_span(root, response="ok")
+
+    spans = exporter.get_finished_spans()
+    root_span = next(span for span in spans if span.name == "agent:root")
+    child_span = next(span for span in spans if span.name == "agent:subagent")
+    assert root_span.parent is None
+    assert child_span.parent is not None
+    assert child_span.parent.span_id == root_span.context.span_id
+    assert child_span.context.trace_id == root_span.context.trace_id
 
 
 # ---
