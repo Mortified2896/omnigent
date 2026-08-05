@@ -1248,6 +1248,8 @@ function HarnessConfigModal({
   claudeModelsLoading,
   codexModelOptions,
   codexModelsLoading,
+  piNativeModelOptions,
+  piNativeModelsLoading,
   pickedEffort,
   pickedHarness,
   costControlMode,
@@ -1276,6 +1278,8 @@ function HarnessConfigModal({
   claudeModelsLoading: boolean;
   codexModelOptions: readonly Pick<NativeModelOption, "id" | "displayName" | "isDefault">[];
   codexModelsLoading: boolean;
+  piNativeModelOptions: readonly Pick<NativeModelOption, "id" | "displayName" | "isDefault">[];
+  piNativeModelsLoading: boolean;
   pickedEffort: string;
   pickedHarness: string | null;
   costControlMode: CostControlMode;
@@ -1296,9 +1300,18 @@ function HarnessConfigModal({
   const hasApproval = nativeAgentHasCapability(agent, "approvalMode");
   const hasCursor = nativeAgentHasCapability(agent, "cursorMode");
   const isCodex = entryHarness === "codex-native";
+  const isPiNative = entryHarness === "pi-native";
+  // Pi-native has no permission / approval knob — only a model override. The
+  // picker row reads from a harness-specific options list, mirroring how
+  // Claude and Codex split the same hook call into their own buckets.
   const modelOptions = isCodex ? codexModelOptions : claudeModelOptions;
   const modelsLoading = isCodex ? codexModelsLoading : claudeModelsLoading;
   const modelDisplay = isCodex ? displayModelId : displayModelName;
+  // Pi-native's model id IS its display name (the picker exposes gateway model
+  // ids verbatim); Claude/Codex keep their existing display conventions.
+  const piNativeDisplay = (option: Pick<NativeModelOption, "id">) => option.id;
+  const piNativeOptions = piNativeModelOptions;
+  const piNativeLoading = piNativeModelsLoading;
   const brainDefault =
     agent.harness != null && agent.harness in brainHarnessLabels ? agent.harness : null;
 
@@ -1377,6 +1390,12 @@ function HarnessConfigModal({
     } else if (hasCursor) {
       setCursorExecMode(draftCursor);
       if (entryHarness) writeHarnessOption(entryHarness, { mode: draftCursor });
+    } else if (isPiNative) {
+      // Pi-native has no permission/approval surface — only a model override.
+      // Persist the picked id so the next visit seeds the same default and
+      // the create body's `model_override` field stays accurate.
+      setPickedModel(draftModel);
+      if (entryHarness) writeHarnessOption(entryHarness, { model: draftModel });
     } else if (brainDefault) {
       // Picking the spec default clears the override so the session tracks it.
       setPickedHarness(draftHarness === brainDefault ? null : draftHarness, agent.id);
@@ -1532,6 +1551,47 @@ function HarnessConfigModal({
                     <div className="px-2.5 py-1 text-xs text-muted-foreground">Loading models…</div>
                   )}
                   {!modelsLoading && modelOptions.length === 0 && (
+                    <div className="px-2.5 py-1 text-xs text-muted-foreground">
+                      Models unavailable
+                    </div>
+                  )}
+                </SelectContent>
+              </Select>
+            </ConfigRow>
+          )}
+
+          {/* Pi-native has no permission / approval knob, only a model override
+          at launch time. Mirror Codex's Model row so the gear exposes the
+          underlying LLM choice from the same catalog the in-session picker
+          reads — Default falls through to Pi's configured model (no
+          --model flag), each explicit choice emits --model on spawn. */}
+          {isPiNative && (
+            <ConfigRow label="Model" description="Underlying LLM">
+              <Select value={draftModel || MODEL_SELECT_DEFAULT} onValueChange={onModelChange}>
+                <SelectTrigger
+                  className="w-full"
+                  data-testid="new-chat-landing-config-model"
+                  aria-label="Model"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent
+                  position="popper"
+                  align="start"
+                  className="[&_[data-slot=select-item]]:pl-2.5"
+                >
+                  <SelectItem value={MODEL_SELECT_DEFAULT}>
+                    {defaultModelLabel(piNativeOptions, piNativeDisplay)}
+                  </SelectItem>
+                  {piNativeOptions.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {piNativeDisplay(m)}
+                    </SelectItem>
+                  ))}
+                  {piNativeLoading && (
+                    <div className="px-2.5 py-1 text-xs text-muted-foreground">Loading models…</div>
+                  )}
+                  {!piNativeLoading && piNativeOptions.length === 0 && (
                     <div className="px-2.5 py-1 text-xs text-muted-foreground">
                       Models unavailable
                     </div>
@@ -1840,6 +1900,13 @@ export function NewChatLandingScreen() {
     "codex-native",
     !sandboxSelected,
   );
+  // Pi-native has no permission/approval knob of its own, but it CAN still be
+  // pinned to a specific underlying LLM at launch time (`--model`). Resolve
+  // the picker catalog the same way the in-session gear does, so a freshly
+  // built Pi session shows the OmniRoute catalog rather than always booting
+  // on the operator's default.
+  const { data: hostPiNativeModelOptions, isLoading: hostPiNativeModelsLoading } =
+    useHostModelOptions(selectedHostId, "pi-native", !sandboxSelected);
   const claudeModelOptions = useMemo(
     () =>
       sandboxSelected
@@ -1856,6 +1923,10 @@ export function NewChatLandingScreen() {
   const codexModelOptions = useMemo(
     () => (sandboxSelected ? [] : (hostCodexModelOptions ?? [])),
     [hostCodexModelOptions, sandboxSelected],
+  );
+  const piNativeModelOptions = useMemo(
+    () => (sandboxSelected ? [] : (hostPiNativeModelOptions ?? [])),
+    [hostPiNativeModelOptions, sandboxSelected],
   );
   // Desktop-shell host status for THIS machine (null outside Electron), so the
   // picker can tag the current machine and offer to auto-connect it.
@@ -2239,6 +2310,11 @@ export function NewChatLandingScreen() {
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
+  // Resolved here (before `selectedAgentHasKnobs`) so the gear-visibility gate
+  // can short-circuit on Pi-native's model picker — Pi has no permission /
+  // approval surface of its own, but it does expose a model override at
+  // launch and so still needs the gear to be reachable.
+  const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
   // Smart Routing (per-session model selection) is superseded by the Auto
   // harness which handles both harness + model. Hide it entirely for now.
@@ -2253,6 +2329,7 @@ export function NewChatLandingScreen() {
     supportsApprovalMode ||
     supportsCursorMode ||
     smartRoutingEligible ||
+    selectedNativeHarness === "pi-native" ||
     (selectedAgent?.harness != null && selectedAgent.harness in brainHarnessLabels);
   // Label/value pairs summarizing the selected agent's current run-config, for
   // the gear icon's hover tooltip. Mirrors the modal's per-capability rows so a
@@ -2314,6 +2391,22 @@ export function NewChatLandingScreen() {
         CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.label ?? cursorExecMode;
       return [{ label: "Mode", value: modeValue }, ...routingRow];
     }
+    // Pi-native exposes only a model picker (no permission/approval knob).
+    // Mirror its single config row in the gear tooltip so a hover reads the
+    // picked model without opening the modal — the default label matches
+    // Codex's behaviour (fall back to the picker default before the catalog
+    // has resolved).
+    if (selectedNativeHarness === "pi-native") {
+      return [
+        {
+          label: "Model",
+          value:
+            piNativeModelOptions.find((m) => m.id === pickedModel)?.id ??
+            defaultModelLabel(piNativeModelOptions, (option) => option.id),
+        },
+        ...routingRow,
+      ];
+    }
     if (selectedAgent?.harness != null && selectedAgent.harness in brainHarnessLabels) {
       const active = pickedHarness ?? selectedAgent.harness;
       return [
@@ -2328,11 +2421,13 @@ export function NewChatLandingScreen() {
     supportsCursorMode,
     smartRoutingEligible,
     selectedAgent,
+    selectedNativeHarness,
     brainHarnessLabels,
     routingOn,
     pickedModel,
     claudeModelOptions,
     codexModelOptions,
+    piNativeModelOptions,
     pickedEffort,
     permissionMode,
     approvalMode,
@@ -2361,7 +2456,8 @@ export function NewChatLandingScreen() {
   // The selected native harness, used to persist/seed its option knobs (mode /
   // model / effort), which are harness-specific. null for non-native agents,
   // which have no knobs to remember.
-  const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  // (`selectedNativeHarness` is declared earlier — see the gear-visibility gate
+  // above — so it already exists by the time this effect references it.)
   // Seed the harness's knobs from the user's last picks when the selected
   // harness changes (including the first mount), so a returning user starts a
   // new session on the options they used last for that harness instead of the
@@ -2408,11 +2504,21 @@ export function NewChatLandingScreen() {
       );
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
+    } else if (selectedNativeHarness === "pi-native") {
+      // Pi-native seeds its model from the same per-harness snapshot the
+      // Claude/Codex knobs read, validated against the resolved gateway
+      // catalog (empty catalog = no stored id is valid yet, so pick "" and
+      // let Pi use its configured default on first paint).
+      setPickedModel(
+        stored.model != null && piNativeModelOptions.some((m) => m.id === stored.model)
+          ? stored.model
+          : "",
+      );
     }
     // Reseed on harness changes and when the selected host's catalog resolves;
     // capability flags are derived from the same harness and stay omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedNativeHarness, claudeModelOptions, codexModelOptions]);
+  }, [selectedNativeHarness, claudeModelOptions, codexModelOptions, piNativeModelOptions]);
   // Native-terminal agents interpret slash commands inside their own CLI
   // (the runner injects the text verbatim), so the landing composer must
   // not intercept them — no skills menu, no slash_command routing.
@@ -3003,11 +3109,13 @@ export function NewChatLandingScreen() {
                     ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ?? [])
                     : undefined,
             // Model + reasoning effort, persisted on the session row before
-            // the runner launches. Claude and Codex read model_override at
-            // terminal launch; an unselected ("") knob is omitted so the
-            // harness keeps its own configured/default model.
+            // the runner launches. Claude, Codex, and Pi-native read
+            // model_override at terminal launch; an unselected ("") knob is
+            // omitted so the harness keeps its own configured/default model.
             model_override:
-              (agentSupportsPermissionMode || nativeAgent?.harness === "codex-native") &&
+              (agentSupportsPermissionMode ||
+                nativeAgent?.harness === "codex-native" ||
+                nativeAgent?.harness === "pi-native") &&
               pickedModel
                 ? pickedModel
                 : undefined,
@@ -3498,6 +3606,10 @@ export function NewChatLandingScreen() {
                     codexModelOptions={codexModelOptions}
                     codexModelsLoading={
                       !sandboxSelected && selectedHostId !== null && hostCodexModelsLoading
+                    }
+                    piNativeModelOptions={piNativeModelOptions}
+                    piNativeModelsLoading={
+                      !sandboxSelected && selectedHostId !== null && hostPiNativeModelsLoading
                     }
                     pickedEffort={pickedEffort}
                     pickedHarness={pickedHarness}
