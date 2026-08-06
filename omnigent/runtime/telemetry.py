@@ -1077,7 +1077,7 @@ def _append_v1_traces(endpoint: str) -> str:
     """
     if not endpoint:
         return endpoint
-    if endpoint.endswith("/v1/traces") or endpoint.endswith("/v1/traces/"):
+    if endpoint.endswith(("/v1/traces", "/v1/traces/")):  # tuple-form endswith: ruff: noqa: PIE810
         return endpoint
     return endpoint.rstrip("/") + "/v1/traces"
 
@@ -1316,9 +1316,7 @@ def _init_otel_logs() -> None:
 # install the package elsewhere can set ``OMNIGENT_TELEMETRY_ENV_FILE``
 # to a path of their choosing; setting it to the empty string disables
 # the side-load entirely.
-DEFAULT_TELEMETRY_ENV_FILE = (
-    "/var/lib/omnigent-production/mlflow-tracing.env"
-)
+DEFAULT_TELEMETRY_ENV_FILE = "/var/lib/omnigent-production/mlflow-tracing.env"
 
 
 def _load_telemetry_env_file() -> None:
@@ -1331,9 +1329,7 @@ def _load_telemetry_env_file() -> None:
     Existing ``os.environ`` values are not overwritten so a process
     inherits the parent's settings when present.
     """
-    path = os.environ.get(
-        "OMNIGENT_TELEMETRY_ENV_FILE", DEFAULT_TELEMETRY_ENV_FILE
-    )
+    path = os.environ.get("OMNIGENT_TELEMETRY_ENV_FILE", DEFAULT_TELEMETRY_ENV_FILE)
     if not path:
         return
     try:

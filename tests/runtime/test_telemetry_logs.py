@@ -159,9 +159,7 @@ def test_init_otel_logs_attaches_handler_with_opt_in(
     bridge_handlers = [
         handler for handler in root_logger.handlers if handler.get_name() == _BRIDGE_NAME
     ]
-    assert bridge_handlers == [], (
-        "expected no OTel log bridge handler when logs are not opted in"
-    )
+    assert bridge_handlers == [], "expected no OTel log bridge handler when logs are not opted in"
 
 
 def test_init_otel_logs_attaches_handler_when_opt_in(

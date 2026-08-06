@@ -29,14 +29,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter as _InMemorySpanExporter,  # re-export for clarity
-)
-from opentelemetry.trace import (
-    NonRecordingSpan,
-    StatusCode,
 )
 
 from omnigent.runtime import telemetry
@@ -135,6 +128,7 @@ def test_init_with_master_opt_in_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:5000")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
     from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+
     telemetry.init("omni-server")
     assert isinstance(otel_trace.get_tracer_provider(), SdkTracerProvider)
     assert os.environ["OTEL_SERVICE_NAME"] == "omni-server"
@@ -260,9 +254,7 @@ def test_span_exporter_appends_v1_traces_when_generic_only(
     affected (they speak a fixed path).
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-    monkeypatch.setenv(
-        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:5000"
-    )
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:5000")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     exporter = telemetry._create_otlp_span_exporter()
     assert getattr(exporter, "_endpoint", None) == "http://127.0.0.1:5000/v1/traces"
@@ -274,14 +266,8 @@ def test_append_v1_traces_idempotent() -> None:
         telemetry._append_v1_traces("http://mlflow:5000/v1/traces")
         == "http://mlflow:5000/v1/traces"
     )
-    assert (
-        telemetry._append_v1_traces("http://mlflow:5000/")
-        == "http://mlflow:5000/v1/traces"
-    )
-    assert (
-        telemetry._append_v1_traces("http://mlflow:5000")
-        == "http://mlflow:5000/v1/traces"
-    )
+    assert telemetry._append_v1_traces("http://mlflow:5000/") == "http://mlflow:5000/v1/traces"
+    assert telemetry._append_v1_traces("http://mlflow:5000") == "http://mlflow:5000/v1/traces"
     assert telemetry._append_v1_traces("") == ""
 
 
@@ -404,6 +390,7 @@ def test_allowed_span_under_blocked_parent_exports_as_root(
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter as SpanExporter,
     )
+
     exporter: SpanExporter = SpanExporter()
     provider = otel_trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
@@ -488,7 +475,8 @@ def test_exporter_initialization_failure_is_observable(
     # init() catches the ValueError from _otlp_protocol so the rest
     # of init runs without crashing; the error must surface in logs.
     error_records = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if r.levelno >= logging.ERROR and "OpenTelemetry" in r.getMessage()
     ]
     assert error_records, "exporter init failure must be logged at ERROR level"
@@ -516,13 +504,9 @@ def test_init_logs_resolved_endpoint(
     caplog.set_level(logging.INFO, logger="omnigent.runtime.telemetry")
     telemetry.init("omni-server")
 
-    info_records = [
-        r.getMessage() for r in caplog.records if r.levelno == logging.INFO
-    ]
+    info_records = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert any("otel trace exporter configured" in m for m in info_records)
-    assert any(
-        "endpoint=http://127.0.0.1:5000/v1/traces" in m for m in info_records
-    )
+    assert any("endpoint=http://127.0.0.1:5000/v1/traces" in m for m in info_records)
     assert any("service=omni-server" in m for m in info_records)
 
 
@@ -599,6 +583,7 @@ def test_record_error_omits_message_when_capture_off(
     """
     monkeypatch.delenv("OMNIGENT_OTEL_CAPTURE_CONTENT", raising=False)
     from opentelemetry.sdk.trace import TracerProvider
+
     otel_trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
     otel_trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
     otel_trace.set_tracer_provider(TracerProvider())
@@ -672,13 +657,11 @@ def test_side_loaded_env_file_overrides_main(
     monkeypatch.setenv("OMNIGENT_TELEMETRY_ENV_FILE", str(env_file))
 
     from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+
     telemetry.init("omni-server")
     assert isinstance(otel_trace.get_tracer_provider(), SdkTracerProvider)
     assert os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] == "http/protobuf"
-    assert (
-        os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
-        == "http://127.0.0.1:5000/v1/traces"
-    )
+    assert os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://127.0.0.1:5000/v1/traces"
 
 
 def test_side_loaded_env_file_missing_is_noop(
@@ -690,12 +673,11 @@ def test_side_loaded_env_file_missing_is_noop(
     systemd EnvironmentFile is the primary source of env vars; the
     side-load is opportunistic.
     """
-    monkeypatch.setenv(
-        "OMNIGENT_TELEMETRY_ENV_FILE", str(tmp_path / "does-not-exist.env")
-    )
+    monkeypatch.setenv("OMNIGENT_TELEMETRY_ENV_FILE", str(tmp_path / "does-not-exist.env"))
     # Master opt-in is on; no endpoint is configured; no provider installed.
     telemetry.init("omni-server")
     from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+
     assert not isinstance(otel_trace.get_tracer_provider(), SdkTracerProvider)
 
 
@@ -751,6 +733,3 @@ def test_normalize_otlp_headers_keeps_value_verbatim() -> None:
     # Empty value is preserved (operators sometimes set X-Foo= to
     # send an empty header).
     assert telemetry._parse_otlp_headers("x-empty=") == {"x-empty": ""}
-
-
-
