@@ -43,7 +43,6 @@ class _GenerateBuildInfo(build_py):
         self._bundle_examples()
         self._bundle_scripts()
 
-
     def _bundle_web_ui(self) -> None:
         """Copy built web UI assets into the wheel build directory."""
         import shutil

@@ -1898,11 +1898,7 @@ class HostProcess:
                                 {
                                     "id": model_id,
                                     "displayName": model_id,
-                                    **(
-                                        {"isDefault": True}
-                                        if model_id == provider.model
-                                        else {}
-                                    ),
+                                    **({"isDefault": True} if model_id == provider.model else {}),
                                 }
                             )
             except Exception:
@@ -2035,9 +2031,7 @@ class HostProcess:
 
                 models = await asyncio.to_thread(omni_route_model_options, harness)
             except OmniRouteModelOptionsError as exc:
-                _logger.info(
-                    "OmniRoute picker rejected harness %r: %s", frame.harness, exc
-                )
+                _logger.info("OmniRoute picker rejected harness %r: %s", frame.harness, exc)
                 return HostModelOptionsResultFrame(
                     request_id=frame.request_id,
                     status="failed",
@@ -2049,8 +2043,7 @@ class HostProcess:
                     request_id=frame.request_id,
                     status="failed",
                     error=(
-                        f"failed to resolve OmniRoute model options for harness "
-                        f"{frame.harness!r}"
+                        f"failed to resolve OmniRoute model options for harness {frame.harness!r}"
                     ),
                 )
             return HostModelOptionsResultFrame(
