@@ -2030,7 +2030,7 @@ class HostProcess:
                 )
 
                 models = await asyncio.to_thread(omni_route_model_options, harness)
-            except OmniRouteModelOptionsError as exc:
+            except OmniRouteModelOptionsError as exc:  # pyrefly: ignore[unbound-name]
                 _logger.info("OmniRoute picker rejected harness %r: %s", frame.harness, exc)
                 return HostModelOptionsResultFrame(
                     request_id=frame.request_id,
