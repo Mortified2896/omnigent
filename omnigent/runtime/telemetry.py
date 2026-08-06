@@ -359,14 +359,35 @@ def _scope_allowed(span: Any, allowed: frozenset[str]) -> bool:
 
 
 def _make_scope_filter_processor(inner: Any, allowed_scopes: tuple[str, ...]) -> Any:
-    """Forward only spans whose instrumentation scope is explicitly allowed."""
+    """Forward allowed spans and detach parents that will be filtered out."""
     from opentelemetry.sdk.trace import SpanProcessor
 
     allowed = frozenset(allowed_scopes)
 
+    def _detach_unexported_parent(span: Any, parent_context: Any) -> None:
+        """Keep an allowed span from becoming a rootless exported trace.
+
+        OpenTelemetry parent contexts carry a span ID, but not the parent's
+        instrumentation scope. When a manual Omnigent span is created under a
+        filtered HTTPX/FastAPI/ASGI span, forwarding the child alone would
+        leave MLflow with no exported root and an ``IN_PROGRESS`` trace. The
+        child already has the desired trace ID, so clear only that unexported
+        parent before the exporter sees the span.
+        """
+        try:
+            from opentelemetry import trace
+
+            parent = trace.get_current_span(parent_context)
+            if not parent.get_span_context().is_valid or _scope_allowed(parent, allowed):
+                return
+            span._parent = None  # type: ignore[attr-defined]
+        except Exception:  # telemetry filtering must never affect application flow
+            return
+
     class _ScopeFilterSpanProcessor(SpanProcessor):
         def on_start(self, span: Any, parent_context: Any = None) -> None:
             if _scope_allowed(span, allowed):
+                _detach_unexported_parent(span, parent_context)
                 inner.on_start(span, parent_context)
 
         def on_end(self, span: Any) -> None:
@@ -380,8 +401,6 @@ def _make_scope_filter_processor(inner: Any, allowed_scopes: tuple[str, ...]) ->
             return inner.force_flush(timeout_millis)
 
     return _ScopeFilterSpanProcessor()
-
-
 
     """
     Decide whether to install FastAPI server instrumentation.
@@ -653,11 +672,10 @@ def trace_context_for_response(
     effective = root_response_id or response_id
     trace_id_hex = trace_id_from_response_id(effective)
 
-    # Inject a synthetic traceparent to pin all spans to the response-derived
-    # trace ID. The dummy parent span ID (1000000000000001) is a sentinel —
-    # it never matches any real span so the agent span is effectively the
-    # root for display purposes, even though it has a non-null parent_id in
-    # the OTLP payload.
+    # Inject a synthetic traceparent to pin the task tree to the
+    # response-derived trace ID. The dummy parent span ID is a sentinel;
+    # start_agent_span uses it to preserve that ID and removes the synthetic
+    # parent before the task root is exported.
     traceparent = f"00-{trace_id_hex}-{SENTINEL_PARENT_SPAN_ID:016x}-01"
     ctx = TraceContextTextMapPropagator().extract({"traceparent": traceparent})
     token = context.attach(ctx)
@@ -711,21 +729,28 @@ def record_llm_usage(span: Span, usage: dict[str, Any]) -> None:
 
 def record_error(span: Span, exc: BaseException) -> None:
     """
-    Mark a span as failed with an ``error.type`` attribute.
+    Mark a span as failed while respecting the content-capture gate.
 
-    ``span.record_exception`` captures the stack trace and message;
-    this helper adds the ``error.type`` attribute (exception class
-    name) so operators can filter by class in the trace backend
-    without reading the exception event.
+    Metadata-only tracing records only the exception class name and an
+    ``ERROR`` status with no description. It deliberately does not call
+    ``str(exc)``, set ``error.message``, or record an exception event, because
+    exception text and stack traces can contain user content or secrets.
+    When content capture is explicitly enabled, the detailed exception event
+    and message are retained for compatibility with the opt-in mode.
 
     :param span: The span to mark as failed.
     :param exc: The exception that caused the failure.
     """
     from opentelemetry.trace import StatusCode
 
-    span.set_status(StatusCode.ERROR, str(exc))
     span.set_attribute("error.type", type(exc).__name__)
-    span.set_attribute("error.message", str(exc))
+    if not should_capture_content():
+        span.set_status(StatusCode.ERROR)
+        return
+
+    message = str(exc)
+    span.set_status(StatusCode.ERROR, message)
+    span.set_attribute("error.message", message)
     span.record_exception(exc)
 
 
@@ -1007,9 +1032,7 @@ def _init_otel_traces(endpoint: str) -> None:
             provider.add_span_processor(_make_session_id_processor())
             allowed_scopes = _allowed_instrumentation_scopes()
             exporter = BatchSpanProcessor(_create_otlp_span_exporter())
-            provider.add_span_processor(
-                _make_scope_filter_processor(exporter, allowed_scopes)
-            )
+            provider.add_span_processor(_make_scope_filter_processor(exporter, allowed_scopes))
             _logger.info(
                 "otel trace scope filter active: allowed=%s",
                 ",".join(allowed_scopes),

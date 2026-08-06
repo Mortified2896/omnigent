@@ -17,7 +17,6 @@ span-processor boundary.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from unittest.mock import MagicMock
 
@@ -30,7 +29,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from omnigent.runtime import telemetry
-
 
 # ── Fixtures ────────────────────────────────────────────
 
@@ -261,8 +259,7 @@ def _make_span(scope_name: str) -> ReadableSpan:
 )
 def test_scope_filter_passes_allowed_scopes(scope_name: str) -> None:
     """Allowed scopes pass through the filter."""
-    from omnigent.runtime.telemetry import _DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES
-    from omnigent.runtime.telemetry import _scope_allowed
+    from omnigent.runtime.telemetry import _DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES, _scope_allowed
 
     allowed = frozenset(_DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES)
     assert _scope_allowed(_make_span(scope_name), allowed) is True
@@ -281,12 +278,17 @@ def test_scope_filter_passes_allowed_scopes(scope_name: str) -> None:
         "opentelemetry.instrumentation.asgi",
         "websocket",
         "opentelemetry.instrumentation.websocket",
+        "sse",
+        "opentelemetry.instrumentation.sse",
+        "health-check",
+        "healthcheck",
+        "starlette",
+        "uvicorn",
     ],
 )
 def test_scope_filter_blocks_disallowed_scopes(scope_name: str) -> None:
     """SQLAlchemy / HTTPX / FastAPI / ASGI / websocket scopes must be filtered."""
-    from omnigent.runtime.telemetry import _DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES
-    from omnigent.runtime.telemetry import _scope_allowed
+    from omnigent.runtime.telemetry import _DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES, _scope_allowed
 
     allowed = frozenset(_DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES)
     assert _scope_allowed(_make_span(scope_name), allowed) is False
@@ -305,11 +307,10 @@ def test_scope_filter_processor_drops_disallowed_spans() -> None:
 
     provider = TracerProvider()
     provider.add_span_processor(wrapped)
-    tracer = provider.get_tracer(__name__)
 
     # Allowed scopes — must be exported.
     allowed_tracer = provider.get_tracer("omnigent")
-    allowed_tracer.start_as_current_span("agent-turn").__enter__()  # noqa: PLC2801
+    allowed_tracer.start_as_current_span("agent-turn").__enter__()
     # Disallowed scopes — must be filtered.
     for name in ("sqlalchemy", "httpx", "fastapi", "asgi", "websocket"):
         scoped = provider.get_tracer(name)
@@ -321,6 +322,26 @@ def test_scope_filter_processor_drops_disallowed_spans() -> None:
     assert "agent-turn" in seen
     for forbidden in ("op-sqlalchemy", "op-httpx", "op-fastapi", "op-asgi", "op-websocket"):
         assert forbidden not in seen, f"scope filter leaked {forbidden}"
+
+
+def test_scope_filter_processor_detaches_filtered_parent() -> None:
+    """Allowed children of dropped framework spans remain true roots."""
+    from omnigent.runtime.telemetry import _make_scope_filter_processor
+
+    exporter = InMemorySpanExporter()
+    inner = SimpleSpanProcessor(exporter)
+    wrapped = _make_scope_filter_processor(inner, ("omnigent", "omnigent.frames"))
+    provider = TracerProvider()
+    provider.add_span_processor(wrapped)
+
+    with provider.get_tracer("httpx").start_as_current_span("request") as parent:
+        with provider.get_tracer("omnigent").start_as_current_span("host.fs_request"):
+            pass
+
+    exported = exporter.get_finished_spans()
+    assert [span.name for span in exported] == ["host.fs_request"]
+    assert exported[0].parent is None
+    assert exported[0].context.trace_id == parent.get_span_context().trace_id
 
 
 def test_scope_filter_processor_robust_to_missing_scope_attr() -> None:

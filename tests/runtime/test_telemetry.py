@@ -396,12 +396,12 @@ def test_record_llm_usage_without_cache_omits_fields(
 # ── record_error / record_cancellation ─────────────────
 
 
-def test_record_error_sets_error_type_and_status(
+def test_record_error_metadata_only_is_message_free(
     in_memory_exporter: InMemorySpanExporter,
 ) -> None:
     """
-    ``record_error`` marks the span as ERROR and sets ``error.type``
-    to the exception class name.
+    Metadata-only errors retain the exception class but never export the
+    exception text, status description, or exception event details.
     """
     tracer = otel_trace.get_tracer("test")
 
@@ -410,13 +410,46 @@ def test_record_error_sets_error_type_and_status(
 
     with telemetry.trace_context_for_response(response_id=_RESP_ID):
         with tracer.start_as_current_span("test") as span:
-            telemetry.record_error(span, CustomError("boom"))
+            telemetry.record_error(span, CustomError("sensitive user payload"))
 
     spans = in_memory_exporter.get_finished_spans()
     assert len(spans) == 1
-    attrs = spans[0].attributes or {}
+    exported = spans[0]
+    attrs = exported.attributes or {}
     assert attrs.get("error.type") == "CustomError"
-    assert spans[0].status.status_code == StatusCode.ERROR
+    assert "error.message" not in attrs
+    assert exported.status.status_code == StatusCode.ERROR
+    assert exported.status.description is None
+    assert all(event.name != "exception" for event in exported.events)
+    assert "sensitive user payload" not in repr(exported)
+
+
+def test_record_error_content_capture_preserves_detailed_exception(
+    in_memory_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detailed exception capture is explicit and opt-in."""
+    monkeypatch.setattr(telemetry, "_capture_content", True)
+    tracer = otel_trace.get_tracer("test")
+
+    class CustomError(Exception):
+        pass
+
+    with telemetry.trace_context_for_response(response_id=_RESP_ID):
+        with tracer.start_as_current_span("test") as span:
+            telemetry.record_error(span, CustomError("diagnostic detail"))
+
+    exported = in_memory_exporter.get_finished_spans()[0]
+    attrs = exported.attributes or {}
+    assert attrs["error.type"] == "CustomError"
+    assert attrs["error.message"] == "diagnostic detail"
+    assert exported.status.status_code == StatusCode.ERROR
+    assert exported.status.description == "diagnostic detail"
+    exception_events = [event for event in exported.events if event.name == "exception"]
+    assert len(exception_events) == 1
+    exception_attrs = exception_events[0].attributes or {}
+    assert exception_attrs["exception.message"] == "diagnostic detail"
+    assert "exception.stacktrace" in exception_attrs
 
 
 def test_record_cancellation_sets_cancelled_error_type(
