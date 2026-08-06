@@ -59,13 +59,50 @@ from omnigent.server.host_registry import (
     HostRegistry,
     RunnerExitReports,
 )
-from omnigent.stores.host_store import HostStore
+from omnigent.stores.host_store import Host, HostStore, host_is_live
 
 _logger = logging.getLogger(__name__)
 
 SUPPORTED_FRAME_PROTOCOL_MAJOR = 1
 PING_INTERVAL_S = 30.0
 PING_MISS_THRESHOLD = 3
+
+
+def _find_live_host_name_collision(
+    host_store: HostStore,
+    *,
+    host_id: str,
+    user_id: str,
+    name: str,
+) -> Host | None:
+    """Find a different live host already using this owner/name identity.
+
+    A regenerated or stray config can produce a second persistent
+    ``host_id`` while retaining the same ``(user_id, name)``. Rotating
+    the database row to that second id while the original daemon is
+    still heartbeating makes the two tunnels repeatedly replace each
+    other (last writer wins), routing control and model-discovery calls
+    to whichever process reconnected most recently.
+
+    Only a different, currently-live host is a collision. Reconnects
+    with the same ``host_id`` remain valid, and a cleanly-offline or
+    heartbeat-stale row may still rotate through the existing store
+    path so legitimate identity regeneration remains supported.
+
+    :param host_store: Persistent host registration store.
+    :param host_id: Canonical id of the connecting host.
+    :param user_id: Authenticated owner of the connecting host.
+    :param name: Name advertised in its ``host.hello`` frame.
+    :returns: The conflicting live host, or ``None`` when rotation is safe.
+    """
+    for existing in host_store.list_hosts(user_id):
+        if (
+            existing.name == name
+            and existing.host_id != host_id
+            and host_is_live(existing)
+        ):
+            return existing
+    return None
 
 
 def create_host_tunnel_router(
@@ -138,10 +175,11 @@ def create_host_tunnel_router(
         2. Accept the WS upgrade.
         3. Receive the ``host.hello`` frame.
         4. Validate ``frame_protocol_version`` (strict-major).
-        5. Upsert in the ``hosts`` DB table.
-        6. Register in the :class:`HostRegistry`.
-        7. Start sender, receiver, and ping loops.
-        8. On disconnect: deregister, set offline in DB.
+        5. Reject a different live host using the same owner/name.
+        6. Upsert in the ``hosts`` DB table.
+        7. Register in the :class:`HostRegistry`.
+        8. Start sender, receiver, and ping loops.
+        9. On disconnect: deregister, set offline in DB.
         """
         # Legacy hosts dial in with ``host_<hex>`` — normalise to the stored
         # bare form. Malformed ids are refused here because WebSocket routes
@@ -243,6 +281,34 @@ def create_host_tunnel_router(
                         f"frame_protocol_version mismatch: "
                         f"server supports {SUPPORTED_FRAME_PROTOCOL_MAJOR}, "
                         f"host sent {remote_major}"
+                    ),
+                )
+                return
+
+            collision = await asyncio.to_thread(
+                _find_live_host_name_collision,
+                host_store,
+                host_id=host_id,
+                user_id=tunnel_owner,
+                name=frame.name,
+            )
+            if collision is not None:
+                _logger.warning(
+                    "Refusing host identity collision: connecting host %s "
+                    "advertised owner=%r name=%r while live host %s already "
+                    "uses that identity. Stop the duplicate daemon or give it "
+                    "a distinct host name before reconnecting.",
+                    host_id,
+                    tunnel_owner,
+                    frame.name,
+                    collision.host_id,
+                )
+                await ws.close(
+                    code=4009,
+                    reason=(
+                        "Another live host with this account and name is already "
+                        "connected. Stop the duplicate host process or configure "
+                        "a distinct host name before reconnecting."
                     ),
                 )
                 return
