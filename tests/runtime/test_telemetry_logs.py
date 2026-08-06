@@ -90,18 +90,21 @@ def reset_log_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 # ── _logs_exporter_name ─────────────────────────────────
 
 
-def test_logs_exporter_name_otlp_from_endpoint(
+def test_logs_exporter_name_defaults_to_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    When only ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, the helper
-    returns ``"otlp"`` so logs ride the same OTLP path as traces.
+    When only ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, logs STILL
+    default to ``"none"``. Auto-enabling logs from a trace-only
+    endpoint (e.g. MLflow 3.x, which accepts only traces via OTLP)
+    would silently flood the receiver with rejected batches. Operators
+    must opt in explicitly via ``OTEL_LOGS_EXPORTER=otlp``.
 
     :param monkeypatch: Pytest monkeypatch fixture.
     """
     monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    assert telemetry._logs_exporter_name() == "otlp"
+    assert telemetry._logs_exporter_name() == "none"
 
 
 def test_logs_exporter_name_none_when_unset(
@@ -134,20 +137,47 @@ def test_logs_exporter_name_explicit_none_wins(
 # ── _init_otel_logs ─────────────────────────────────────
 
 
-def test_init_otel_logs_attaches_handler_with_endpoint(
+def test_init_otel_logs_attaches_handler_with_opt_in(
     monkeypatch: pytest.MonkeyPatch,
     reset_log_state: None,
 ) -> None:
     """
-    With an OTLP endpoint set, ``_init_otel_logs`` installs a
-    ``LoggingHandler`` on the root logger so logs flow into the OTel
-    bridge.
+    Logs require explicit opt-in via ``OTEL_LOGS_EXPORTER=otlp``.
+    With only the trace endpoint set, the bridge handler is NOT
+    attached — sending logs to a trace-only receiver (MLflow 3.x)
+    would silently drop them.
 
     :param monkeypatch: Pytest monkeypatch fixture.
     :param reset_log_state: Bridge state reset fixture.
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
+
+    telemetry._init_otel_logs()
+
+    root_logger = logging.getLogger()
+    bridge_handlers = [
+        handler for handler in root_logger.handlers if handler.get_name() == _BRIDGE_NAME
+    ]
+    assert bridge_handlers == [], (
+        "expected no OTel log bridge handler when logs are not opted in"
+    )
+
+
+def test_init_otel_logs_attaches_handler_when_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_log_state: None,
+) -> None:
+    """
+    With ``OTEL_LOGS_EXPORTER=otlp`` and an endpoint set,
+    ``_init_otel_logs`` installs a ``LoggingHandler`` on the root
+    logger so logs flow into the OTel bridge.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param reset_log_state: Bridge state reset fixture.
+    """
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    monkeypatch.setenv("OTEL_LOGS_EXPORTER", "otlp")
 
     telemetry._init_otel_logs()
 
@@ -198,7 +228,7 @@ def test_init_otel_logs_idempotent_via_init(
     :param reset_log_state: Bridge state reset fixture.
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
+    monkeypatch.setenv("OTEL_LOGS_EXPORTER", "otlp")
     monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
     monkeypatch.setattr(telemetry, "_initialized", False)
     monkeypatch.setattr(telemetry, "_metrics_initialized", False)

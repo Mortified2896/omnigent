@@ -12,10 +12,11 @@ concerns:
   a synthetic ``traceparent`` via the W3C TraceContext propagator.
 
 * **Runtime init.** :func:`init` installs an OTLP ``TracerProvider``
-  when ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set. When the endpoint is
-  absent, tracing is still enabled so operators who install their own
-  provider externally get spans for free; the default no-op provider
-  discards them silently.
+  when ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` (or the generic
+  ``OTEL_EXPORTER_OTLP_ENDPOINT``) is set. When no endpoint is set,
+  tracing is still enabled so operators who install their own provider
+  externally get spans for free; the default no-op provider discards
+  them silently.
 
 * **Subprocess trace propagation.** :func:`get_traceparent_env`
   serializes the current trace context into env vars the executor
@@ -308,7 +309,8 @@ def _fastapi_instrumentation_enabled() -> bool:
     Decide whether to install FastAPI server instrumentation.
 
     Default-on when a tracing backend is configured
-    (``OTEL_EXPORTER_OTLP_ENDPOINT`` is set) — that is the only situation
+    (``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` or the generic
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set) — that is the only situation
     where HTTP server spans have somewhere to go, and it is where
     end-to-end trace propagation across the server / runner / harness
     ASGI apps matters.
@@ -326,7 +328,7 @@ def _fastapi_instrumentation_enabled() -> bool:
     explicit = os.environ.get("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION")
     if explicit is not None:
         return explicit.strip().lower() in ("true", "1", "yes")
-    return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip())
+    return bool(_traces_endpoint())
 
 
 # Default set of OpenTelemetry instrumentation scope names that are allowed
@@ -401,30 +403,6 @@ def _make_scope_filter_processor(inner: Any, allowed_scopes: tuple[str, ...]) ->
             return inner.force_flush(timeout_millis)
 
     return _ScopeFilterSpanProcessor()
-
-    """
-    Decide whether to install FastAPI server instrumentation.
-
-    Default-on when a tracing backend is configured
-    (``OTEL_EXPORTER_OTLP_ENDPOINT`` is set) — that is the only situation
-    where HTTP server spans have somewhere to go, and it is where
-    end-to-end trace propagation across the server / runner / harness
-    ASGI apps matters.
-
-    The explicit ``OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION`` flag always
-    wins when set: ``true`` forces it on (e.g. with an in-memory
-    exporter in tests), any other value forces it off. Bare installs
-    with no backend stay uninstrumented, avoiding span overhead for
-    users who are not tracing.
-
-    :returns: ``True`` if FastAPI instrumentation should be installed.
-    """
-    if not telemetry_enabled():
-        return False
-    explicit = os.environ.get("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION")
-    if explicit is not None:
-        return explicit.strip().lower() in ("true", "1", "yes")
-    return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip())
 
 
 # Session id as it appears in a request path (``/v1/sessions/<id>/…``), used to
@@ -925,22 +903,63 @@ def span(
         yield started
 
 
+def _configured_otlp_endpoint(*names: str) -> str:
+    """
+    Return the first non-empty OTLP endpoint from a list of env var names.
+
+    Used to honor OpenTelemetry's signal-specific variables — e.g. an
+    operator may set only ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` and
+    leave the generic ``OTEL_EXPORTER_OTLP_ENDPOINT`` unset, in which
+    case metrics / logs stay disabled. A signal-specific setting always
+    wins over the generic one so a deploy can route traces to a
+    dedicated collector without exporting metrics/logs to it.
+
+    :param names: Env var names to check, in priority order.
+    :returns: The first non-empty value, stripped; ``""`` when none set.
+    """
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _traces_endpoint() -> str:
+    """
+    Return the OTLP endpoint used for trace export.
+
+    Prefers the signal-specific ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``
+    when set, falling back to the generic ``OTEL_EXPORTER_OTLP_ENDPOINT``.
+    The OTel HTTP exporter appends ``/v1/traces`` to a base URL, so the
+    generic endpoint is sufficient for receivers exposing the standard
+    path — but MLflow 3.x and some managed collectors require the
+    signal-specific form to disambiguate the path / headers / auth.
+
+    :returns: The endpoint string, or ``""`` when no endpoint is set.
+    """
+    return _configured_otlp_endpoint(
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+    )
+
+
 def _metrics_exporter_name() -> str:
     """
     Return the configured OpenTelemetry metrics exporter name.
 
-    ``OTEL_METRICS_EXPORTER`` is the standard OpenTelemetry knob. If
-    it is unset and an OTLP endpoint is configured, Omnigent uses
-    ``"otlp"`` so server performance metrics are exported alongside
-    traces.
+    ``OTEL_METRICS_EXPORTER`` is the standard OpenTelemetry knob.
+    Omnigent defaults to ``"none"`` (no metrics export) — operators
+    must opt in explicitly. Auto-enabling metrics whenever an OTLP
+    endpoint is set would silently send metrics to receivers that do
+    not accept them (e.g. MLflow 3.x only ingests traces), generating
+    noise and a flood of export errors. Set
+    ``OTEL_METRICS_EXPORTER=otlp`` to opt in to OTLP metric export.
 
     :returns: Exporter name, e.g. ``"otlp"`` or ``"none"``.
     """
     configured = os.environ.get("OTEL_METRICS_EXPORTER")
     if configured is not None:
         return configured.strip().lower()
-    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
-        return "otlp"
     return "none"
 
 
@@ -963,25 +982,104 @@ def _otlp_protocol() -> str:
     raise ValueError(f"Unsupported OTLP protocol for metrics export: {protocol!r}")
 
 
+def _parse_otlp_headers(value: str) -> dict[str, str] | None:
+    """
+    Parse the standard ``OTEL_EXPORTER_OTLP_*_HEADERS`` string into a dict.
+
+    Format is ``"key1=value1,key2=value2"``. The OpenTelemetry SDK
+    normally does this when it reads the env var; we replicate the
+    parse when passing the value directly to an exporter constructor
+    so the same string syntax works whether the env var reaches the
+    exporter via the OTel default or via our explicit override.
+
+    :param value: Raw header string from the env, e.g.
+        ``"x-mlflow-experiment-id=1,Authorization=Bearer xyz"``.
+    :returns: Parsed dict, or ``None`` when ``value`` is empty.
+    """
+    if not value:
+        return None
+    result: dict[str, str] = {}
+    for pair in value.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            # Match OTel SDK tolerance: a header without '=' is dropped,
+            # not raised. Operators see the missing header in MLflow and
+            # fix their config.
+            continue
+        key, _, val = pair.partition("=")
+        key = key.strip()
+        if key:
+            result[key] = val.strip()
+    return result or None
+
+
 def _create_otlp_span_exporter() -> SpanExporter:
     """
     Create an OTLP span exporter using standard OTel environment vars.
+
+    Resolves the trace endpoint and headers in this priority order so
+    each signal is routed correctly:
+
+    * ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` / ``_TRACES_HEADERS`` win
+      over the generic vars, so a deploy can target a trace-specific
+      path (``http://mlflow:5000/v1/traces``) and supply trace-only
+      auth (``x-mlflow-experiment-id=…``) without affecting metrics or
+      logs. The generic ``OTEL_EXPORTER_OTLP_ENDPOINT`` /
+      ``OTEL_EXPORTER_OTLP_HEADERS`` remain the fallback when the
+      trace-specific vars are unset.
+
+    For the HTTP exporter, the OTel SDK normally appends ``/v1/traces``
+    to the generic endpoint. When we pass ``endpoint=`` explicitly
+    that auto-appending is bypassed, so we re-apply the same
+    rule here: append ``/v1/traces`` if and only if the URL does
+    not already end with it. gRPC exporters are unaffected because
+    they speak a fixed path on the collector port.
 
     :returns: OTLP span exporter configured from the process environment.
     :raises ValueError: If ``OTEL_EXPORTER_OTLP_PROTOCOL`` is not supported.
     """
     protocol = _otlp_protocol()
+    endpoint = _traces_endpoint() or None
+    headers_str = _configured_otlp_endpoint(
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    )
+    headers = _parse_otlp_headers(headers_str)
     if protocol == "http/protobuf":
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HttpOTLPSpanExporter,
         )
 
-        return HttpOTLPSpanExporter()
+        http_endpoint = _append_v1_traces(endpoint) if endpoint else None
+        return HttpOTLPSpanExporter(endpoint=http_endpoint, headers=headers)
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
         OTLPSpanExporter as GrpcOTLPSpanExporter,
     )
 
-    return GrpcOTLPSpanExporter()
+    # gRPC has no /v1/traces suffix appended; a full URL is required.
+    return GrpcOTLPSpanExporter(endpoint=endpoint, headers=headers)
+
+
+def _append_v1_traces(endpoint: str) -> str:
+    """
+    Append ``/v1/traces`` to a base OTLP endpoint if not already present.
+
+    Replicates the rule the OpenTelemetry SDK applies when deriving
+    ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` from the generic
+    ``OTEL_EXPORTER_OTLP_ENDPOINT``. We re-apply it because we pass
+    ``endpoint=`` to the HTTP exporter explicitly, which bypasses
+    the SDK's auto-append.
+
+    :param endpoint: Base OTLP endpoint URL.
+    :returns: URL with ``/v1/traces`` appended if needed.
+    """
+    if not endpoint:
+        return endpoint
+    if endpoint.endswith("/v1/traces") or endpoint.endswith("/v1/traces/"):
+        return endpoint
+    return endpoint.rstrip("/") + "/v1/traces"
 
 
 def _create_otlp_metric_exporter() -> MetricExporter:
@@ -1011,12 +1109,15 @@ def _init_otel_traces(endpoint: str) -> None:
     """
     Initialize the OpenTelemetry SDK tracer provider.
 
-    When ``endpoint`` is set, installs a ``TracerProvider`` backed by
-    an OTLP ``BatchSpanProcessor``. When absent, tracing is still
-    enabled so operators who install their own provider externally get
-    spans; the default no-op provider discards them silently.
+    Resolves the actual export target from ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``
+    first and falls back to the generic ``OTEL_EXPORTER_OTLP_ENDPOINT``
+    so a trace-specific deployment (e.g. MLflow 3.x, which routes traces
+    to ``/v1/traces`` with ``x-mlflow-experiment-id``) is honored. When
+    no endpoint is configured, tracing is still enabled so operators
+    who install their own ``TracerProvider`` externally get spans; the
+    default OTel no-op provider discards them silently.
 
-    :param endpoint: ``OTEL_EXPORTER_OTLP_ENDPOINT`` value (may be empty).
+    :param endpoint: The resolved OTLP endpoint to target (may be empty).
     """
     try:
         if endpoint:
@@ -1031,11 +1132,18 @@ def _init_otel_traces(endpoint: str) -> None:
             # session_scope at the request hook / executor turn / forwarder).
             provider.add_span_processor(_make_session_id_processor())
             allowed_scopes = _allowed_instrumentation_scopes()
-            exporter = BatchSpanProcessor(_create_otlp_span_exporter())
+            span_exporter = _create_otlp_span_exporter()
+            exporter = BatchSpanProcessor(span_exporter)
             provider.add_span_processor(_make_scope_filter_processor(exporter, allowed_scopes))
             _logger.info(
                 "otel trace scope filter active: allowed=%s",
                 ",".join(allowed_scopes),
+            )
+            _logger.info(
+                "otel trace exporter configured: protocol=%s endpoint=%s service=%s",
+                _otlp_protocol(),
+                endpoint,
+                service_name,
             )
             trace.set_tracer_provider(provider)
 
@@ -1095,17 +1203,19 @@ def _logs_exporter_name() -> str:
     """
     Return the configured OpenTelemetry logs exporter name.
 
-    ``OTEL_LOGS_EXPORTER`` is the standard OpenTelemetry knob. If
-    it is unset and an OTLP endpoint is configured, Omnigent uses
-    ``"otlp"`` so log records flow alongside traces and metrics.
+    ``OTEL_LOGS_EXPORTER`` is the standard OpenTelemetry knob.
+    Omnigent defaults to ``"none"`` (no log bridge) — operators must
+    opt in explicitly. Auto-enabling log export whenever an OTLP
+    endpoint is set would silently send logs to receivers that do not
+    accept them (e.g. MLflow 3.x only ingests traces), generating
+    noise and a flood of export errors. Set
+    ``OTEL_LOGS_EXPORTER=otlp`` to opt in to OTLP log export.
 
     :returns: Exporter name, e.g. ``"otlp"`` or ``"none"``.
     """
     configured = os.environ.get("OTEL_LOGS_EXPORTER")
     if configured is not None:
         return configured.strip().lower()
-    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
-        return "otlp"
     return "none"
 
 
@@ -1193,6 +1303,63 @@ def _init_otel_logs() -> None:
         _logs_initialized = True
 
 
+# Operators can drop telemetry configuration into this file without
+# touching the main systemd ``EnvironmentFile`` (which is often
+# root-owned and read-only). When the file is present and readable,
+# each ``KEY=VALUE`` line is loaded into ``os.environ`` before any
+# telemetry provider is installed, so the OTel SDK and our own
+# ``_traces_endpoint`` / ``_otlp_protocol`` helpers all see the same
+# values. Lines beginning with ``#`` and blank lines are ignored.
+#
+# The default path matches the production deployment layout
+# (``/etc/omnigent-production/mlflow-tracing.env``). Operators who
+# install the package elsewhere can set ``OMNIGENT_TELEMETRY_ENV_FILE``
+# to a path of their choosing; setting it to the empty string disables
+# the side-load entirely.
+DEFAULT_TELEMETRY_ENV_FILE = (
+    "/var/lib/omnigent-production/mlflow-tracing.env"
+)
+
+
+def _load_telemetry_env_file() -> None:
+    """
+    Side-load telemetry env vars from a deployer-managed file.
+
+    Used when the main systemd ``EnvironmentFile`` is root-owned and
+    read-only (typical production container layout) and a separate
+    writable file is provided for operator-managed telemetry config.
+    Existing ``os.environ`` values are not overwritten so a process
+    inherits the parent's settings when present.
+    """
+    path = os.environ.get(
+        "OMNIGENT_TELEMETRY_ENV_FILE", DEFAULT_TELEMETRY_ENV_FILE
+    )
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        # File missing or not readable — silently ignore. The main
+        # env file (systemd EnvironmentFile) is the primary source;
+        # this side-load is opportunistic.
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        # Strip matching quotes (single or double) that operators often
+        # leave around in env files.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
 def init(service_name: str | None = None) -> None:
     """
     Initialize OpenTelemetry tracing for the omnigent runtime.
@@ -1201,7 +1368,8 @@ def init(service_name: str | None = None) -> None:
     default): when it is unset/false this is a no-op — no provider is
     installed, no instrumentation is wired, and no spans are created, so
     a default install incurs zero telemetry cost. Set it truthy to opt
-    in; ``OTEL_EXPORTER_OTLP_ENDPOINT`` then selects the export target.
+    in; ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` (or the generic
+    ``OTEL_EXPORTER_OTLP_ENDPOINT``) then selects the export target.
 
     Safe to call multiple times; the second and subsequent calls
     refresh the content-capture flag but do not re-register providers.
@@ -1219,16 +1387,22 @@ def init(service_name: str | None = None) -> None:
     Two modes based on the environment:
 
     * **OTLP export to an external collector.** When
-      ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, installs a
+      ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` (or the generic
+      ``OTEL_EXPORTER_OTLP_ENDPOINT``) is set, installs a
       ``TracerProvider`` backed by an OTLP ``BatchSpanProcessor``
-      (Jaeger, Tempo, Grafana, etc.).
+      (Jaeger, Tempo, Grafana, MLflow 3.x, etc.). The HTTP exporter
+      appends ``/v1/traces`` to the base URL; MLflow 3.x in particular
+      needs the trace-specific form so the ``x-mlflow-experiment-id``
+      header is routed to the right experiment.
 
-    * **No-op / external provider.** When the endpoint is absent,
+    * **No-op / external provider.** When no endpoint is set,
       tracing is still enabled so operators who configure their own
       ``TracerProvider`` externally get spans automatically. The
       default OTel no-op provider discards spans silently.
     """
     global _capture_content, _initialized
+
+    _load_telemetry_env_file()
 
     if not telemetry_enabled():
         # Master opt-in off (the default): stay fully inert — no provider, no
@@ -1251,7 +1425,7 @@ def init(service_name: str | None = None) -> None:
         service_name or os.environ.get("OTEL_SERVICE_NAME") or "omnigent"
     )
 
-    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    endpoint = _traces_endpoint()
     _init_otel_traces(endpoint)
     _init_otel_metrics()
     _init_otel_logs()

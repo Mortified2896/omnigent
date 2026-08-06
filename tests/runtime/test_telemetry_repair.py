@@ -55,9 +55,15 @@ def _opt_in_telemetry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Strip env flags so each test sees a deterministic baseline."""
+    # Disable the operator side-load env file so it cannot leak the
+    # production ``/var/lib/omnigent-production/mlflow-tracing.env``
+    # configuration into unit tests that intend to assert a default-off
+    # baseline.
+    monkeypatch.setenv("OMNIGENT_TELEMETRY_ENV_FILE", "")
     for var in (
         "OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION",
         "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
         "OMNIGENT_OTEL_ALLOWED_INSTRUMENTATION_SCOPES",
         "OMNIGENT_TELEMETRY_ENABLED",
     ):
