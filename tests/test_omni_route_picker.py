@@ -315,7 +315,7 @@ async def test_host_handle_model_options_routes_pi_through_omni_route(
 ) -> None:
     import omnigent.omni_route_picker as omni_route_picker_module
     from omnigent.host.connect import HostProcess
-    from omnigent.host.frames import HostModelOptionsFrame, HostModelOptionsResultFrame
+    from omnigent.host.frames import HostModelOptionsFrame
     from omnigent.host.identity import HostIdentity
 
     host = HostProcess(HostIdentity(host_id="t1", name="test"), "http://localhost:8000")

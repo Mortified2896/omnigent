@@ -465,6 +465,9 @@ extend-exclude = [
     # Protobuf-generated code (DO NOT EDIT); not ours to restyle.
     "omnigent/api/**/*_pb2.py",
     "omnigent/api/**/*_pb2.pyi",
+    # Jupyter notebook fixtures intentionally contain a control character to
+    # exercise the parse-error path; skip from formatter/linter.
+    "**/*.ipynb",
 ]
 
 [tool.ruff.lint]
