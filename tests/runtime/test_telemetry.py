@@ -700,7 +700,13 @@ def test_init_defaults_service_name_when_unset(
     With no argument and no operator-set ``OTEL_SERVICE_NAME``, the
     service name defaults to ``omnigent`` so spans are never anonymous.
     """
+    # Disable the operator side-load env file so it cannot leak the
+    # production ``/var/lib/omnigent-production/mlflow-tracing.env``
+    # configuration into a unit test that intends to assert a clean
+    # baseline.
+    monkeypatch.setenv("OMNIGENT_TELEMETRY_ENV_FILE", "")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
     monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
     monkeypatch.setenv("OTEL_LOGS_EXPORTER", "none")
@@ -756,8 +762,14 @@ def test_instrument_fastapi_app_disabled_without_backend(
     With no flag and no tracing backend configured, FastAPI
     instrumentation is skipped — bare installs pay no span overhead.
     """
+    # Disable the operator side-load env file so it cannot leak the
+    # production ``/var/lib/omnigent-production/mlflow-tracing.env``
+    # configuration into a unit test that intends to assert a clean
+    # baseline.
+    monkeypatch.setenv("OMNIGENT_TELEMETRY_ENV_FILE", "")
     monkeypatch.delenv("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION", raising=False)
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     calls = _stub_fastapi_instrumentor(monkeypatch)
 
     telemetry.instrument_fastapi_app(FastAPI())

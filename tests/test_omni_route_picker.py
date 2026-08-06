@@ -318,9 +318,7 @@ async def test_host_handle_model_options_routes_pi_through_omni_route(
     from omnigent.host.frames import HostModelOptionsFrame, HostModelOptionsResultFrame
     from omnigent.host.identity import HostIdentity
 
-    host = HostProcess(
-        HostIdentity(host_id="t1", name="test"), "http://localhost:8000"
-    )
+    host = HostProcess(HostIdentity(host_id="t1", name="test"), "http://localhost:8000")
 
     def fake_omni_route_model_options(harness: str) -> list[dict[str, Any]]:
         return [
@@ -366,9 +364,7 @@ async def test_host_handle_model_options_surfaces_picker_errors(
     from omnigent.host.frames import HostModelOptionsFrame
     from omnigent.host.identity import HostIdentity
 
-    host = HostProcess(
-        HostIdentity(host_id="t1", name="test"), "http://localhost:8000"
-    )
+    host = HostProcess(HostIdentity(host_id="t1", name="test"), "http://localhost:8000")
 
     def fake_omni_route_model_options(harness: str) -> list[dict[str, Any]]:
         raise OmniRouteModelOptionsError(
