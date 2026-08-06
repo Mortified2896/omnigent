@@ -15,11 +15,8 @@ _EXISTING_HOST_ID = "ed5ddb6695a84c3091d8925b7394a6c4"
 _CONNECTING_HOST_ID = "07e100efd05744b593285539f0e985ec"
 
 
-def _host_store(db_uri: str) -> HostStore:
-    return HostStore(db_uri)
-
-
 def _register_existing(host_store: HostStore, *, name: str = "ai-control-hub") -> None:
+    """Create the currently connected host row used by each scenario."""
     host_store.upsert_on_connect(
         host_id=_EXISTING_HOST_ID,
         name=name,
@@ -28,7 +25,8 @@ def _register_existing(host_store: HostStore, *, name: str = "ai-control-hub") -
 
 
 def test_rejects_different_live_host_with_same_owner_and_name(db_uri: str) -> None:
-    host_store = _host_store(db_uri)
+    """A second live id cannot take over an already-live owner/name."""
+    host_store = HostStore(db_uri)
     _register_existing(host_store)
 
     collision = _find_live_host_name_collision(
@@ -43,7 +41,8 @@ def test_rejects_different_live_host_with_same_owner_and_name(db_uri: str) -> No
 
 
 def test_allows_reconnect_with_same_host_id(db_uri: str) -> None:
-    host_store = _host_store(db_uri)
+    """A normal reconnect with the existing persistent id remains valid."""
+    host_store = HostStore(db_uri)
     _register_existing(host_store)
 
     collision = _find_live_host_name_collision(
@@ -57,7 +56,8 @@ def test_allows_reconnect_with_same_host_id(db_uri: str) -> None:
 
 
 def test_allows_rotation_when_previous_host_is_offline(db_uri: str) -> None:
-    host_store = _host_store(db_uri)
+    """A cleanly offline old id may rotate to a regenerated id."""
+    host_store = HostStore(db_uri)
     _register_existing(host_store)
     host_store.set_offline(_EXISTING_HOST_ID)
 
@@ -72,7 +72,8 @@ def test_allows_rotation_when_previous_host_is_offline(db_uri: str) -> None:
 
 
 def test_allows_rotation_when_previous_host_heartbeat_is_stale(db_uri: str) -> None:
-    host_store = _host_store(db_uri)
+    """A crashed host beyond the liveness TTL does not block rotation."""
+    host_store = HostStore(db_uri)
     _register_existing(host_store)
     engine = get_or_create_engine(db_uri)
     with Session(engine) as session:
@@ -94,7 +95,8 @@ def test_allows_rotation_when_previous_host_heartbeat_is_stale(db_uri: str) -> N
 
 
 def test_allows_distinct_live_host_name(db_uri: str) -> None:
-    host_store = _host_store(db_uri)
+    """Two live hosts remain valid when their advertised names differ."""
+    host_store = HostStore(db_uri)
     _register_existing(host_store, name="maintenance-host")
 
     collision = _find_live_host_name_collision(
