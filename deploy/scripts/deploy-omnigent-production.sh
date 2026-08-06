@@ -9,12 +9,13 @@
 # aborts the run. This script never touches the maintenance instance.
 #
 # Usage:
-#   deploy-omnigent-production                            # deploy HEAD of the
-#                                                       # bootstrap branch
-#   deploy-omnigent-production <commit-sha>               # deploy a specific commit
+#   deploy-omnigent-production <commit-sha>               # deploy an exact commit
 #   deploy-omnigent-production --wheel <path> --no-build  # install pre-built wheel
 #   deploy-omnigent-production --rollback [sha]           # manual rollback
 #   deploy-omnigent-production --status                   # show current state
+#
+# Source deployments require an explicit full SHA. Resolve and review the
+# desired main SHA before invoking this production controller.
 #
 # Exit codes:
 #   0  success
@@ -27,7 +28,6 @@ set -euo pipefail
 shopt -s lastpipe
 
 OMNIGENT_PROD_REPO="${OMNIGENT_PROD_REPO:-/home/hermes/workspace/repos/omnigent-production}"
-OMNIGENT_PROD_BRANCH="${OMNIGENT_PROD_BRANCH:-bootstrap/omnigent-production-2}"
 OMNIGENT_PROD_HOME="${OMNIGENT_PROD_HOME:-/var/lib/omnigent-production}"
 OMNIGENT_PROD_RELEASE_ROOT="${OMNIGENT_PROD_RELEASE_ROOT:-/opt/omnigent-production}"
 OMNIGENT_PROD_HEALTH_TIMEOUT_S="${OMNIGENT_PROD_HEALTH_TIMEOUT_S:-60}"
@@ -130,6 +130,18 @@ resolve_cmd() {
 require_repo() {
   [[ -d "$OMNIGENT_PROD_REPO/.git" ]] || guard_die "not a git repo: $OMNIGENT_PROD_REPO"
   (cd "$OMNIGENT_PROD_REPO" && git rev-parse --verify HEAD >/dev/null)
+}
+
+resolve_source_sha() {
+  local requested="$1" resolved
+  [[ "$requested" =~ ^[0-9a-f]{40}$ ]] || \
+    guard_die "source deployment requires an explicit full 40-character commit SHA"
+  require_repo
+  resolved=$(cd "$OMNIGENT_PROD_REPO" && git rev-parse --verify "${requested}^{commit}") || \
+    guard_die "unknown commit $requested"
+  [[ "$resolved" == "$requested" ]] || guard_die "source SHA did not resolve exactly: $requested"
+  guard_log "resolved source SHA: $resolved"
+  printf '%s\n' "$resolved"
 }
 
 require_services_present() {
@@ -292,8 +304,10 @@ case "$mode" in
   rollback) rollback "${sha:-}" ;;
   deploy)
     if [[ -z "$sha" && -z "$wheel" ]]; then
-      require_repo
-      sha=$(cd "$OMNIGENT_PROD_REPO" && git rev-parse "$OMNIGENT_PROD_BRANCH")
+      guard_die "source deployment requires an explicit full 40-character commit SHA"
+    fi
+    if [[ -n "$sha" ]]; then
+      sha=$(resolve_source_sha "$sha")
     fi
     deploy "${sha:-}" "${wheel:-}" "$no_build"
     ;;
