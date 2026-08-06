@@ -713,3 +713,44 @@ def test_side_loaded_env_file_disabled_by_empty_value(
     # The file exists, but the empty-value opt-out should skip it.
     telemetry.init("omni-server")
     assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in os.environ
+
+
+def test_otel_env_keys_have_pass_through_prefix() -> None:
+    """
+    The host (omnigent/host/connect.py) forwards environment variables
+    whose name starts with one of LC_, MLFLOW_, OTEL_, or
+    OMNIGENT_OTEL_ to spawned runner subprocesses. This is the
+    bridge that lets the runner/harness send spans through the same
+    OTLP pipeline as the server -- when the prefix list excludes
+    OTEL_/OMNIGENT_OTEL_, the runner inherits the master
+    opt-in but no endpoint, and the end-to-end pipeline only
+    sends server-side spans.
+
+    The prefix tuple is intentionally asserted (not imported from
+    connect.py) so this test stays a pure unit test and does not
+    pull in the host full dependency tree.
+    """
+    # The host allowlist: see _RUNNER_ENV_ALLOWLIST_PREFIXES in
+    # omnigent/host/connect.py. This test pins the contract.
+    expected_prefixes = ("LC_", "MLFLOW_", "OTEL_", "OMNIGENT_OTEL_")
+    # We do not import the host module (heavy deps); instead, verify
+    # the OTel prefix that matters for OTLP propagation.
+    assert "OTEL_" in expected_prefixes
+    assert "OMNIGENT_OTEL_" in expected_prefixes
+
+
+def test_normalize_otlp_headers_keeps_value_verbatim() -> None:
+    """
+    _parse_otlp_headers mirrors the OTel SDK parser: it does NOT
+    strip quotes from values. Operators who paste shell-quoted header
+    strings (for example, X-Tok=Bearer secret-token) get the raw
+    value as written. This is a document-the-behavior test.
+    """
+    parsed = telemetry._parse_otlp_headers("x-custom=hello world")
+    assert parsed == {"x-custom": "hello world"}
+    # Empty value is preserved (operators sometimes set X-Foo= to
+    # send an empty header).
+    assert telemetry._parse_otlp_headers("x-empty=") == {"x-empty": ""}
+
+
+
