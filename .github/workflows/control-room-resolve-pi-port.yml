@@ -1,0 +1,83 @@
+name: Control Room resolve Pi forward-port
+
+on:
+  push:
+    branches:
+      - integration/pi-3481-forward-port-work
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    if: ${{ !contains(github.event.head_commit.message, '[resolved-pi-port]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: integration/pi-3481-forward-port-work
+
+      - name: Resolve the three semantic conflicts against current 0.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          creds = Path('omnigent/pi_native_credentials.py')
+          text = creds.read_text()
+
+          managed_block = '''_PI_MLFLOW_PROVIDER_ID = "omnigent-mlflow"\n_PI_MANAGED_PROVIDER_IDS = frozenset(\n    {\n        _PI_PROVIDER_ID,\n        _PI_OPENAI_PROVIDER_ID,\n        _PI_COMPLETIONS_PROVIDER_ID,\n        _PI_MLFLOW_PROVIDER_ID,\n    }\n)\n'''
+          if '_PI_MLFLOW_PROVIDER_ID = "omnigent-mlflow"\n_PI_MANAGED_PROVIDER_IDS = frozenset(' not in text:
+              marker = '_PI_MLFLOW_PROVIDER_ID = "omnigent-mlflow"\n'
+              if marker not in text:
+                  raise SystemExit('managed-provider insertion marker missing')
+              text = text.replace(marker, managed_block, 1)
+
+          if 'def pi_native_model_options()' not in text:
+              marker = '\ndef _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiProviderConfig | None:\n'
+              if marker not in text:
+                  raise SystemExit('pi_native_model_options insertion marker missing')
+              function = '''\n\ndef pi_native_model_options() -> list[dict[str, object]]:\n    """Return pre-launch Pi choices configured through ``omni setup``."""\n    provider = resolve_pi_native_provider()\n    if provider is None:\n        return []\n\n    options: dict[str, dict[str, object]] = {}\n    for provider_id, payload in provider.to_models_config()["providers"].items():\n        for model in payload["models"]:\n            model_id = model["id"]\n            qualified = f"{provider_id}/{model_id}"\n            options[qualified] = {\n                "id": qualified,\n                "model": qualified,\n                "displayName": model.get("name") or model_id,\n            }\n    return [options[model_id] for model_id in sorted(options)]\n'''
+              text = text.replace(marker, function + marker, 1)
+
+          launch_start = text.index('def pi_native_provider_launch(')
+          body_start = text.index('    # Render once and reuse:', launch_start)
+          body_end = text.index('    # For non-Claude models on openai-completions/responses, disable thinking.', body_start)
+          merged_body = '''    # Render once and reuse: rendering logs how an uncataloged model was routed,\n    # and this function both writes the config and reads it back for --provider.\n    rendered = provider.to_models_config()\n    write_pi_models_config(agent_dir, provider, rendered)\n    # Copy the user's global Pi settings but suppress defaultThinkingLevel.\n    # In TUI mode Pi applies the setting from ~/.pi/agent/settings.json; for\n    # non-Claude models via openai-completions, any thinking level causes the\n    # Databricks gateway to return 400.\n    from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir\n\n    prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})\n    env = {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)}\n\n    # A picker value is provider-qualified so the same bare model id can exist\n    # on multiple generated Pi providers without ambiguity. Validate it against\n    # the exact rendered config before passing it to the CLI. Without an explicit\n    # picker value, retain the current 0.9 family/surface routing for the\n    # provider's resolved default model.\n    selected_model = provider.model\n    model_provider_id = provider.provider_id\n    selection_parts = _split_pi_native_model_selection(selection)\n    if selection_parts is not None:\n        candidate_provider, candidate_model = selection_parts\n        configured = rendered["providers"].get(candidate_provider)\n        if not configured or not any(\n            model.get("id") == candidate_model for model in configured.get("models", [])\n        ):\n            raise ValueError(\n                f"Pi model selection {selection!r} is not available in managed configuration"\n            )\n        model_provider_id = candidate_provider\n        selected_model = candidate_model\n    else:\n        for extra_id, extra_cfg in rendered["providers"].items():\n            if extra_id == provider.provider_id:\n                continue\n            if any(model.get("id") == selected_model for model in extra_cfg.get("models", [])):\n                model_provider_id = extra_id\n                break\n\n    # When the model id contains a slash Pi's parser treats the left side as a\n    # provider override. Qualify slash-bearing model ids with the generated\n    # provider id so the exact managed model is selected.\n    model_arg = (\n        f"{model_provider_id}/{selected_model}" if "/" in selected_model else selected_model\n    )\n    args = ["--provider", model_provider_id, "--model", model_arg]\n'''
+          text = text[:body_start] + merged_body + text[body_end:]
+          creds.write_text(text)
+
+          orchestration = Path('omnigent/runner/native/orchestration.py')
+          otext = orchestration.read_text()
+          old = '            cred_env, cred_args = pi_native_provider_launch(bridge_dir / "pi-agent", provider)\n'
+          new = '''            cred_env, cred_args = pi_native_provider_launch(\n                bridge_dir / "pi-agent",\n                provider,\n                selection=spec_model,\n            )\n'''
+          if old not in otext:
+              if 'selection=spec_model' not in otext:
+                  raise SystemExit('Pi launch call marker missing')
+          else:
+              otext = otext.replace(old, new, 1)
+          orchestration.write_text(otext)
+          PY
+
+          rm -f \
+            omnigent/pi_native_credentials.py.rej \
+            omnigent/runner/native/orchestration.py.rej \
+            web/src/components/HarnessConfigControls.tsx.rej \
+            .control-room-forward-port-work.txt \
+            .github/workflows/control-room-materialize-pi-rejects.yml \
+            .github/workflows/control-room-resolve-pi-port.yml
+
+          python -m compileall -q omnigent/pi_native_credentials.py omnigent/runner/native/orchestration.py
+          git diff --check
+
+      - name: Commit resolved forward-port
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(pi): resolve upstream #3481 on current 0.9 [resolved-pi-port]'
+          git push origin HEAD:integration/pi-3481-forward-port-work
