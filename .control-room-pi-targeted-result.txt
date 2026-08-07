@@ -1,0 +1,117 @@
+Control Room Pi picker targeted acceptance
+backend=success
+typecheck=success
+webtests=success
+lint=success
+upstream_head=2f4fc8c3cceb476424d8aeb23f65bb8159308131
+
+--- backend tail ---
+  tests/host/test_connect.py:2848: PytestWarning: The test <Function test_handle_install_harness_rejects_non_allowlisted> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_install_harness_rejects_non_allowlisted(
+
+tests/host/test_connect.py::test_handle_store_secret_key_writes_and_returns_readiness
+  tests/host/test_connect.py:2874: PytestWarning: The test <Function test_handle_store_secret_key_writes_and_returns_readiness> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_key_writes_and_returns_readiness(
+
+tests/host/test_connect.py::test_handle_store_secret_pi_maps_to_anthropic_family
+  tests/host/test_connect.py:2921: PytestWarning: The test <Function test_handle_store_secret_pi_maps_to_anthropic_family> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_pi_maps_to_anthropic_family(
+
+tests/host/test_connect.py::test_handle_store_secret_adopt_calls_adopt_core
+  tests/host/test_connect.py:2945: PytestWarning: The test <Function test_handle_store_secret_adopt_calls_adopt_core> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_adopt_calls_adopt_core(
+
+tests/host/test_connect.py::test_handle_store_secret_pi_adopt_uses_detected_family_not_harness
+  tests/host/test_connect.py:2978: PytestWarning: The test <Function test_handle_store_secret_pi_adopt_uses_detected_family_not_harness> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_pi_adopt_uses_detected_family_not_harness(
+
+tests/host/test_connect.py::test_handle_store_secret_adopt_refuses_undetected_env_var
+  tests/host/test_connect.py:3017: PytestWarning: The test <Function test_handle_store_secret_adopt_refuses_undetected_env_var> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_adopt_refuses_undetected_env_var(
+
+tests/host/test_connect.py::test_handle_store_secret_rejects_non_ui_harness
+  tests/host/test_connect.py:3057: PytestWarning: The test <Function test_handle_store_secret_rejects_non_ui_harness> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_rejects_non_ui_harness(monkeypatch: pytest.MonkeyPatch) -> None:
+
+tests/host/test_connect.py::test_handle_store_secret_surfaces_core_failure
+  tests/host/test_connect.py:3073: PytestWarning: The test <Function test_handle_store_secret_surfaces_core_failure> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_store_secret_surfaces_core_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+
+tests/host/test_connect.py::test_handle_detect_credentials_returns_non_secret_descriptors
+  tests/host/test_connect.py:3092: PytestWarning: The test <Function test_handle_detect_credentials_returns_non_secret_descriptors> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_handle_detect_credentials_returns_non_secret_descriptors(
+
+tests/host/test_connect.py::test_build_connect_headers_adds_org_header
+  tests/host/test_connect.py:3292: PytestWarning: The test <Function test_build_connect_headers_adds_org_header> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_build_connect_headers_adds_org_header(monkeypatch: pytest.MonkeyPatch) -> None:
+
+tests/host/test_connect.py::test_build_connect_headers_retains_auth_factory
+  tests/host/test_connect.py:3317: PytestWarning: The test <Function test_build_connect_headers_retains_auth_factory> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_build_connect_headers_retains_auth_factory(
+
+tests/host/test_connect.py::test_run_host_process_exits_nonzero_on_fatal
+  tests/host/test_connect.py:3693: PytestWarning: The test <Function test_run_host_process_exits_nonzero_on_fatal> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_run_host_process_exits_nonzero_on_fatal(
+
+tests/host/test_connect.py::test_run_host_process_announces_session_log_dir_on_start
+  tests/host/test_connect.py:3723: PytestWarning: The test <Function test_run_host_process_announces_session_log_dir_on_start> is marked with '@pytest.mark.asyncio' but it is not an async function. Please remove the asyncio mark. If the test is not marked explicitly, check for global marks applied via 'pytestmark'.
+    def test_run_host_process_announces_session_log_dir_on_start(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= Top tests by peak-RSS delta ==========================
++  159.5 MB  (now    159.5 MB)  tests/host/test_connect.py::test_handle_model_options_uses_host_claude_configuration
++   55.1 MB  (now    237.2 MB)  tests/test_pi_native_credentials.py::test_resolves_databricks_default_to_anthropic_gateway
++    8.9 MB  (now    178.7 MB)  tests/host/test_connect.py::test_build_runner_env_passthrough_survives_remote_daemon_hop
++    6.3 MB  (now    169.7 MB)  tests/host/test_connect.py::test_unreported_exit_flushes_after_reconnect
++    3.8 MB  (now    163.4 MB)  tests/host/test_connect.py::test_handle_model_options_tolerates_codex_discovery_failure
++    2.1 MB  (now    181.1 MB)  tests/host/test_connect.py::test_build_connect_headers_retains_auth_factory
++    2.0 MB  (now    242.5 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_auto_create_guard_skips_rotation_targets[legacy-clear_rotation_target_skips]
++    1.8 MB  (now    238.9 MB)  tests/test_pi_native_credentials.py::test_unresolvable_secret_falls_back_to_none
++    0.9 MB  (now    240.4 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_auto_create_cursor_terminal_injects_spec_model
++    0.9 MB  (now    182.0 MB)  tests/host/test_connect.py::test_run_retries_on_login_redirect
++    0.5 MB  (now    243.4 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_auto_create_guard_skips_rotation_targets[legacy-active_is_self_creates]
++    0.5 MB  (now    244.0 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_auto_create_guard_skips_rotation_targets[envelope-clear_rotation_target_skips]
++    0.5 MB  (now    245.1 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_antigravity_auto_create_guard_skips_rotation_targets[clear_rotation_target_skips]
++    0.5 MB  (now    245.6 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_antigravity_auto_create_guard_skips_rotation_targets[active_is_self_creates]
++    0.5 MB  (now    246.2 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_codex_auto_create_guard_skips_rotation_targets[new_rotation_target_skips]
++    0.5 MB  (now    246.7 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_codex_auto_create_guard_skips_rotation_targets[active_is_self_creates]
++    0.4 MB  (now    242.9 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_auto_create_guard_skips_rotation_targets[legacy-fresh_session_creates]
++    0.4 MB  (now    244.5 MB)  tests/runner/test_app_sessions_native_terminals_autocreate.py::test_create_session_auto_create_guard_skips_rotation_targets[envelope-active_is_self_creates]
++    0.2 MB  (now    239.2 MB)  tests/test_pi_native_credentials.py::test_provider_launch_rejects_unavailable_qualified_selection
++    0.1 MB  (now    169.8 MB)  tests/host/test_connect.py::test_install_child_subreaper_is_safe_to_call
+================================== slow tests ==================================
+[slow] 3.04s tests/test_pi_native_credentials.py::test_resolves_databricks_default_to_anthropic_gateway
+=========================== short test summary info ============================
+FAILED tests/test_pi_native_credentials.py::test_provider_launch_rejects_unavailable_qualified_selection - AssertionError: assert not True
+ +  where True = exists()
+ +    where exists = PosixPath('/tmp/pytest-of-runner/pytest-0/test_provider_launch_rejects_u0/pi-agent').exists
+1 failed, 282 passed, 56 warnings in 14.82s
+
+--- typecheck tail ---
+
+--- webtests tail ---
+[dev-proxy] target=http://localhost:6767
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/omnigent/omnigent/web[39m
+
+ [32m✓[39m src/shell/NewChatDialog.flow.test.tsx [2m([22m[2m57 tests[22m[2m)[22m[33m 3921[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m57 passed[39m[22m[90m (57)[39m
+[2m   Start at [22m 15:05:49
+[2m   Duration [22m 5.89s[2m (transform 644ms, setup 109ms, import 1.02s, tests 3.92s, environment 702ms)[22m
+
+
+--- lint tail ---
+E501 Line too long (108 > 99)
+    --> omnigent/pi_native_credentials.py:1050:100
+     |
+1048 |                 if selection is not None:
+1049 |                     raise ValueError(
+1050 |                         f"Pi model selection {selection!r} could not be resolved by the configured provider"
+     |                                                                                                    ^^^^^^^^^
+1051 |                     )
+1052 |                 _LOGGER.warning("pi-native: no usable provider found; Pi will use its own login.")
+     |
+
+Found 1 error.
