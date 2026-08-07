@@ -373,12 +373,17 @@ class PiProviderConfig:
         )
 
 
-
 def pi_native_model_options() -> list[dict[str, object]]:
-    """Return pre-launch Pi choices configured through ``omni setup``."""
+    """Return truthful pre-launch Pi choices configured through ``omni setup``.
+
+    Provider-qualified ids are preserved so launch cannot confuse identical bare
+    model ids across generated Pi providers. A missing provider or empty rendered
+    catalog is an error for this host-query surface, not an invitation to invent
+    a default or silently fall back to Pi's unrelated local login.
+    """
     provider = resolve_pi_native_provider()
     if provider is None:
-        return []
+        raise ValueError("no Omnigent-configured Pi provider resolved on this host")
 
     options: dict[str, dict[str, object]] = {}
     for provider_id, payload in provider.to_models_config()["providers"].items():
@@ -390,7 +395,10 @@ def pi_native_model_options() -> list[dict[str, object]]:
                 "model": qualified,
                 "displayName": model.get("name") or model_id,
             }
+    if not options:
+        raise ValueError("configured Pi provider returned no launchable models")
     return [options[model_id] for model_id in sorted(options)]
+
 
 def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiProviderConfig | None:
     """Resolve a Databricks-profile provider into Pi gateway config.
@@ -974,6 +982,10 @@ def resolve_pi_native_provider(
         # no longer shadows it.
         entry = default_provider_for_harness(config, PI_SURFACE)
         if entry is None:
+            if selection is not None:
+                raise ValueError(
+                    f"Pi model selection {selection!r} requires an Omnigent-configured Pi provider"
+                )
             _LOGGER.info(
                 "pi-native: no omnigent-configured provider for the pi/anthropic/openai "
                 "surface; Pi will use its own login."
@@ -990,8 +1002,14 @@ def resolve_pi_native_provider(
         elif entry.kind in (KEY_KIND, GATEWAY_KIND, LOCAL_KIND):
             resolved = _inline_family_pi_provider(entry, model=model)
         else:
-            # subscription (a CLI's own login can't be reused outside that CLI):
-            # let Pi use its own login.
+            # A CLI-owned subscription cannot drive native Pi. Falling back to
+            # Pi's own login is fine only when no managed picker value was
+            # explicitly selected.
+            if selection is not None:
+                raise ValueError(
+                    f"Pi model selection {selection!r} cannot use configured provider "
+                    f"{entry.name!r} (kind {entry.kind!r})"
+                )
             _LOGGER.info(
                 "pi-native: configured provider %r (kind %r) cannot drive Pi; "
                 "Pi will use its own login.",
@@ -1027,12 +1045,18 @@ def resolve_pi_native_provider(
             if db_entry is not None:
                 resolved = _databricks_pi_provider(db_entry, model=model)
             if resolved is None:
+                if selection is not None:
+                    raise ValueError(
+                        f"Pi model selection {selection!r} could not be resolved by the configured provider"
+                    )
                 _LOGGER.warning("pi-native: no usable provider found; Pi will use its own login.")
         return resolved
-    except Exception:  # noqa: BLE001 — any resolution failure must not break launch
-        # Any failure (malformed config, duplicate per-family default, or an
-        # unresolved ``api_key: $VAR``) falls back to Pi's own login rather than
-        # failing the terminal launch.
+    except Exception:
+        # Preserve the historical own-login fallback for an unpinned Pi launch.
+        # An explicit managed picker choice is a contract: propagate the failure
+        # so the runner surfaces it instead of silently launching another model.
+        if selection is not None:
+            raise
         _LOGGER.warning(
             "pi-native: failed to resolve the omnigent-configured provider; Pi will "
             "use its own login.",

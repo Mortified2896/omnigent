@@ -1342,11 +1342,17 @@ function SearchableModelPicker({
   options,
   loading,
   onValueChange,
+  compact = false,
+  testId = "new-chat-landing-config-model",
+  searchTestId = "new-chat-landing-config-model-search",
 }: {
   value: string;
   options: readonly { id: string; displayName: string }[];
   loading: boolean;
   onValueChange: (value: string) => void;
+  compact?: boolean;
+  testId?: string;
+  searchTestId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const selectedLabel =
@@ -1367,8 +1373,11 @@ function SearchableModelPicker({
           role="combobox"
           aria-expanded={open}
           aria-label="Model"
-          className="h-8 w-full justify-between gap-2 px-2.5 font-normal"
-          data-testid="new-chat-landing-config-model"
+          className={cn(
+            "h-8 justify-between gap-2 px-2.5 font-normal",
+            compact ? "w-auto max-w-48" : "w-full",
+          )}
+          data-testid={testId}
         >
           <span className="min-w-0 truncate">{selectedLabel}</span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -1381,7 +1390,7 @@ function SearchableModelPicker({
         <Command className="h-auto min-h-0">
           <CommandInput
             placeholder="Search models…"
-            data-testid="new-chat-landing-config-model-search"
+            data-testid={searchTestId}
           />
           <CommandList
             className="max-h-72 min-h-0 overflow-y-auto overscroll-contain"
@@ -4294,6 +4303,22 @@ export function NewChatLandingScreen() {
                     </>
                   )}
                 </div>
+                {selectedAgent &&
+                  supportsModelPicker &&
+                  !sandboxSelected &&
+                  selectedHostId !== null && (
+                    <SearchableModelPicker
+                      value={pickedModel || MODEL_SELECT_DEFAULT}
+                      options={piModelOptions}
+                      loading={hostPiModelsLoading}
+                      onValueChange={(value) =>
+                        setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value)
+                      }
+                      compact
+                      testId="new-chat-landing-inline-model"
+                      searchTestId="new-chat-landing-inline-model-search"
+                    />
+                  )}
                 {selectedAgent && selectedAgentHasKnobs && (
                   <HarnessConfigModal
                     open={configOpen}
