@@ -1,0 +1,54 @@
+name: Control Room fix Pi picker validation order
+
+on:
+  push:
+    branches:
+      - integration/pi-3481-forward-port-work
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[pi-validation-order]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: integration/pi-3481-forward-port-work
+
+      - name: Validate explicit selection before filesystem side effects
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('omnigent/pi_native_credentials.py')
+          text = path.read_text()
+          func = text.index('def pi_native_provider_launch(')
+          start = text.index('    # Render once and reuse:', func)
+          end = text.index('    # When the model id contains a slash Pi\'s parser treats the left side as a', start)
+          replacement = '''    # Render once so selection validation and the eventual models.json write\n    # operate on the exact same provider/model catalog.\n    rendered = provider.to_models_config()\n\n    # Validate an explicit provider-qualified picker value before creating the\n    # managed Pi directory or writing credentials to disk. A rejected selection\n    # must be side-effect free. Without an explicit picker value, retain current\n    # 0.9 family/surface routing for the provider's resolved default model.\n    selected_model = provider.model\n    model_provider_id = provider.provider_id\n    selection_parts = _split_pi_native_model_selection(selection)\n    if selection_parts is not None:\n        candidate_provider, candidate_model = selection_parts\n        configured = rendered["providers"].get(candidate_provider)\n        if not configured or not any(\n            model.get("id") == candidate_model for model in configured.get("models", [])\n        ):\n            raise ValueError(\n                f"Pi model selection {selection!r} is not available in managed configuration"\n            )\n        model_provider_id = candidate_provider\n        selected_model = candidate_model\n    else:\n        for extra_id, extra_cfg in rendered["providers"].items():\n            if extra_id == provider.provider_id:\n                continue\n            if any(model.get("id") == selected_model for model in extra_cfg.get("models", [])):\n                model_provider_id = extra_id\n                break\n\n    # Selection is valid; only now materialize the per-session credential config.\n    write_pi_models_config(agent_dir, provider, rendered)\n    from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir\n\n    prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})\n    env = {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)}\n\n'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace(
+              '                        f"Pi model selection {selection!r} could not be resolved by the configured provider"\n',
+              '                        f"Pi model selection {selection!r} could not be resolved "\n'
+              '                        "by the configured provider"\n',
+              1,
+          )
+          path.write_text(text)
+          PY
+          rm -f .control-room-pi-targeted-result.txt .github/workflows/control-room-pi-fix-validation-order.yml
+          python -m compileall -q omnigent/pi_native_credentials.py
+          git diff --check
+
+      - name: Commit fix
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(pi): validate picker selection before side effects [pi-validation-order]'
+          git push origin HEAD:integration/pi-3481-forward-port-work
