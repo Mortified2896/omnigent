@@ -1,0 +1,14 @@
+status=blocked
+reason=git apply --check failed
+upstream_head=2f4fc8c3cceb476424d8aeb23f65bb8159308131
+
+error: patch failed: omnigent/pi_native_credentials.py:81
+error: omnigent/pi_native_credentials.py: patch does not apply
+error: patch failed: omnigent/runner/native/orchestration.py:2122
+error: omnigent/runner/native/orchestration.py: patch does not apply
+error: patch failed: web/src/components/HarnessConfigControls.tsx:9
+error: web/src/components/HarnessConfigControls.tsx: patch does not apply
+error: patch failed: omnigent/pi_native_credentials.py:81
+error: omnigent/pi_native_credentials.py: patch does not apply
+error: patch failed: omnigent/runner/native/orchestration.py:2125
+error: omnigent/runner/native/orchestration.py: patch does not apply
