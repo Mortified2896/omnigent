@@ -112,8 +112,19 @@ _DATABRICKS_AI_GATEWAY_LABEL = DATABRICKS_AI_GATEWAY_LABEL
 _is_databricks_ai_gateway_url = is_databricks_ai_gateway_url
 
 
+def _split_pi_native_model_selection(selection: str | None) -> tuple[str, str] | None:
+    """Split an Omnigent-managed ``provider/model`` picker value."""
+    if not selection:
+        return None
+    provider_id, separator, model_id = selection.partition("/")
+    if separator and provider_id in _PI_MANAGED_PROVIDER_IDS and model_id:
+        return provider_id, model_id
+    return None
+
+
 class _PiModelEntry(TypedDict):
     id: str
+    name: NotRequired[str]
     input: NotRequired[list[str]]
     reasoning: NotRequired[bool]
 
@@ -921,6 +932,9 @@ def resolve_pi_native_provider(
     :returns: The resolved provider config, or ``None`` to fall back to Pi's
         own credentials.
     """
+    selection = _split_pi_native_model_selection(model)
+    if selection is not None:
+        _, model = selection
     try:
         config = config_loader()
         # Pi is multi-family; ``omnigent setup`` marks defaults per family, not
@@ -1027,7 +1041,10 @@ def write_pi_models_config(
 
 
 def pi_native_provider_launch(
-    agent_dir: Path, provider: PiProviderConfig
+    agent_dir: Path,
+    provider: PiProviderConfig,
+    *,
+    selection: str | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Write the managed config and return the launch env + CLI args for Pi.
 

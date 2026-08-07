@@ -1,0 +1,9 @@
+diff a/web/src/components/HarnessConfigControls.tsx b/web/src/components/HarnessConfigControls.tsx	(rejected hunks)
+@@ -9,6 +9,7 @@ import {
+   SelectValue,
+ } from "@/components/ui/select";
+ import { SMART_ROUTING_LABEL } from "@/lib/agentLabels";
++import { cn } from "@/lib/utils";
+ 
+ // Sentinel Select values for the Model row. Radix requires a non-empty value,
+ // so the two "no explicit model" choices ride on reserved tokens rather than
