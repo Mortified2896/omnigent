@@ -1,0 +1,106 @@
+name: Control Room Pi picker overlay
+
+on:
+  push:
+    branches:
+      - integration/pi-3481-forward-port-work
+
+permissions:
+  contents: write
+
+jobs:
+  overlay:
+    if: ${{ !contains(github.event.head_commit.message, '[pi-overlay]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: integration/pi-3481-forward-port-work
+
+      - name: Apply Control Room semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          creds = Path('omnigent/pi_native_credentials.py')
+          text = creds.read_text()
+
+          # Keep normal Pi-login fallback when no explicit managed model was
+          # selected, but fail loud once the user chose a provider-qualified
+          # Omnigent model. Silent fallback after an explicit picker choice is
+          # materially misleading.
+          entry_none = '''        if entry is None:\n            _LOGGER.info(\n                "pi-native: no omnigent-configured provider for the pi/anthropic/openai "\n                "surface; Pi will use its own login."\n            )\n            return None\n'''
+          entry_none_new = '''        if entry is None:\n            if selection is not None:\n                raise ValueError(\n                    f"Pi model selection {selection!r} requires an Omnigent-configured Pi provider"\n                )\n            _LOGGER.info(\n                "pi-native: no omnigent-configured provider for the pi/anthropic/openai "\n                "surface; Pi will use its own login."\n            )\n            return None\n'''
+          if entry_none in text:
+              text = text.replace(entry_none, entry_none_new, 1)
+
+          unsupported = '''        else:\n            # subscription (a CLI's own login can't be reused outside that CLI):\n            # let Pi use its own login.\n            _LOGGER.info(\n                "pi-native: configured provider %r (kind %r) cannot drive Pi; "\n                "Pi will use its own login.",\n                entry.name,\n                entry.kind,\n            )\n            return None\n'''
+          unsupported_new = '''        else:\n            # A CLI-owned subscription cannot drive native Pi. Falling back to\n            # Pi's own login is fine only when no managed picker value was\n            # explicitly selected.\n            if selection is not None:\n                raise ValueError(\n                    f"Pi model selection {selection!r} cannot use configured provider "\n                    f"{entry.name!r} (kind {entry.kind!r})"\n                )\n            _LOGGER.info(\n                "pi-native: configured provider %r (kind %r) cannot drive Pi; "\n                "Pi will use its own login.",\n                entry.name,\n                entry.kind,\n            )\n            return None\n'''
+          if unsupported in text:
+              text = text.replace(unsupported, unsupported_new, 1)
+
+          no_usable = '''            if resolved is None:\n                _LOGGER.warning("pi-native: no usable provider found; Pi will use its own login.")\n        return resolved\n    except Exception:  # noqa: BLE001 — any resolution failure must not break launch\n        # Any failure (malformed config, duplicate per-family default, or an\n        # unresolved ``api_key: $VAR``) falls back to Pi's own login rather than\n        # failing the terminal launch.\n        _LOGGER.warning(\n            "pi-native: failed to resolve the omnigent-configured provider; Pi will "\n            "use its own login.",\n            exc_info=True,\n        )\n        return None\n'''
+          no_usable_new = '''            if resolved is None:\n                if selection is not None:\n                    raise ValueError(\n                        f"Pi model selection {selection!r} could not be resolved by the configured provider"\n                    )\n                _LOGGER.warning("pi-native: no usable provider found; Pi will use its own login.")\n        return resolved\n    except Exception:\n        # Preserve the historical own-login fallback for an unpinned Pi launch.\n        # An explicit managed picker choice is a contract: propagate the failure\n        # so the runner surfaces it instead of silently launching another model.\n        if selection is not None:\n            raise\n        _LOGGER.warning(\n            "pi-native: failed to resolve the omnigent-configured provider; Pi will "\n            "use its own login.",\n            exc_info=True,\n        )\n        return None\n'''
+          if no_usable in text:
+              text = text.replace(no_usable, no_usable_new, 1)
+          elif 'if selection is not None:\n            raise\n        _LOGGER.warning(' not in text:
+              raise SystemExit('resolve_pi_native_provider exception marker changed unexpectedly')
+
+          # The host API must fail rather than return a deceptively empty list
+          # when the selected host cannot resolve any configured Pi models.
+          old_options = '''def pi_native_model_options() -> list[dict[str, object]]:\n    """Return pre-launch Pi choices configured through ``omni setup``."""\n    provider = resolve_pi_native_provider()\n    if provider is None:\n        return []\n\n    options: dict[str, dict[str, object]] = {}\n    for provider_id, payload in provider.to_models_config()["providers"].items():\n        for model in payload["models"]:\n            model_id = model["id"]\n            qualified = f"{provider_id}/{model_id}"\n            options[qualified] = {\n                "id": qualified,\n                "model": qualified,\n                "displayName": model.get("name") or model_id,\n            }\n    return [options[model_id] for model_id in sorted(options)]\n'''
+          new_options = '''def pi_native_model_options() -> list[dict[str, object]]:\n    """Return truthful pre-launch Pi choices configured through ``omni setup``.\n\n    Provider-qualified ids are preserved so launch cannot confuse identical bare\n    model ids across generated Pi providers. A missing provider or empty rendered\n    catalog is an error for this host-query surface, not an invitation to invent\n    a default or silently fall back to Pi's unrelated local login.\n    """\n    provider = resolve_pi_native_provider()\n    if provider is None:\n        raise ValueError("no Omnigent-configured Pi provider resolved on this host")\n\n    options: dict[str, dict[str, object]] = {}\n    for provider_id, payload in provider.to_models_config()["providers"].items():\n        for model in payload["models"]:\n            model_id = model["id"]\n            qualified = f"{provider_id}/{model_id}"\n            options[qualified] = {\n                "id": qualified,\n                "model": qualified,\n                "displayName": model.get("name") or model_id,\n            }\n    if not options:\n        raise ValueError("configured Pi provider returned no launchable models")\n    return [options[model_id] for model_id in sorted(options)]\n'''
+          if old_options in text:
+              text = text.replace(old_options, new_options, 1)
+          elif 'configured Pi provider returned no launchable models' not in text:
+              raise SystemExit('pi_native_model_options marker changed unexpectedly')
+
+          # Normalize top-level function spacing after the conflict resolution.
+          text = text.replace('\n\n\ndef pi_native_model_options()', '\n\ndef pi_native_model_options()', 1)
+          text = text.replace('return [options[model_id] for model_id in sorted(options)]\n\ndef _databricks_pi_provider', 'return [options[model_id] for model_id in sorted(options)]\n\n\ndef _databricks_pi_provider', 1)
+          creds.write_text(text)
+
+          ui = Path('web/src/shell/NewChatDialog.tsx')
+          utext = ui.read_text()
+
+          # Reuse the exact same pickedModel state and searchable options used by
+          # the gear modal; the inline composer control is only another view of
+          # that state, never a second source of truth.
+          old_sig = '''function SearchableModelPicker({\n  value,\n  options,\n  loading,\n  onValueChange,\n}: {\n  value: string;\n  options: readonly { id: string; displayName: string }[];\n  loading: boolean;\n  onValueChange: (value: string) => void;\n}) {'''
+          new_sig = '''function SearchableModelPicker({\n  value,\n  options,\n  loading,\n  onValueChange,\n  compact = false,\n  testId = "new-chat-landing-config-model",\n  searchTestId = "new-chat-landing-config-model-search",\n}: {\n  value: string;\n  options: readonly { id: string; displayName: string }[];\n  loading: boolean;\n  onValueChange: (value: string) => void;\n  compact?: boolean;\n  testId?: string;\n  searchTestId?: string;\n}) {'''
+          if old_sig in utext:
+              utext = utext.replace(old_sig, new_sig, 1)
+
+          old_button = '''          className="h-8 w-full justify-between gap-2 px-2.5 font-normal"\n          data-testid="new-chat-landing-config-model"'''
+          new_button = '''          className={cn(\n            "h-8 justify-between gap-2 px-2.5 font-normal",\n            compact ? "w-auto max-w-48" : "w-full",\n          )}\n          data-testid={testId}'''
+          if old_button in utext:
+              utext = utext.replace(old_button, new_button, 1)
+          old_search = '            data-testid="new-chat-landing-config-model-search"\n'
+          if old_search in utext:
+              utext = utext.replace(old_search, '            data-testid={searchTestId}\n', 1)
+
+          insertion_marker = '''                </div>\n                {selectedAgent && selectedAgentHasKnobs && (\n                  <HarnessConfigModal'''
+          inline = '''                </div>\n                {selectedAgent &&\n                  supportsModelPicker &&\n                  !sandboxSelected &&\n                  selectedHostId !== null && (\n                    <SearchableModelPicker\n                      value={pickedModel || MODEL_SELECT_DEFAULT}\n                      options={piModelOptions}\n                      loading={hostPiModelsLoading}\n                      onValueChange={(value) =>\n                        setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value)\n                      }\n                      compact\n                      testId="new-chat-landing-inline-model"\n                      searchTestId="new-chat-landing-inline-model-search"\n                    />\n                  )}\n                {selectedAgent && selectedAgentHasKnobs && (\n                  <HarnessConfigModal'''
+          if insertion_marker in utext:
+              utext = utext.replace(insertion_marker, inline, 1)
+          elif 'testId="new-chat-landing-inline-model"' not in utext:
+              raise SystemExit('inline model picker insertion marker changed unexpectedly')
+          ui.write_text(utext)
+          PY
+
+          rm -f .github/workflows/control-room-pi-overlay.yml
+          python -m compileall -q omnigent/pi_native_credentials.py omnigent/runner/native/orchestration.py
+          git diff --check
+
+      - name: Commit Control Room overlay
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(pi): add inline picker and fail-loud selection [pi-overlay]'
+          git push origin HEAD:integration/pi-3481-forward-port-work
