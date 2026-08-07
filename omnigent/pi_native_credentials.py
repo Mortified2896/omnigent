@@ -1047,7 +1047,8 @@ def resolve_pi_native_provider(
             if resolved is None:
                 if selection is not None:
                     raise ValueError(
-                        f"Pi model selection {selection!r} could not be resolved by the configured provider"
+                        f"Pi model selection {selection!r} could not be resolved "
+                        "by the configured provider"
                     )
                 _LOGGER.warning("pi-native: no usable provider found; Pi will use its own login.")
         return resolved
@@ -1105,24 +1106,14 @@ def pi_native_provider_launch(
         (relocating Pi's config dir) and the ``--provider``/``--model`` args to
         append to the Pi command.
     """
-    # Render once and reuse: rendering logs how an uncataloged model was routed,
-    # and this function both writes the config and reads it back for --provider.
+    # Render once so selection validation and the eventual models.json write
+    # operate on the exact same provider/model catalog.
     rendered = provider.to_models_config()
-    write_pi_models_config(agent_dir, provider, rendered)
-    # Copy the user's global Pi settings but suppress defaultThinkingLevel.
-    # In TUI mode Pi applies the setting from ~/.pi/agent/settings.json; for
-    # non-Claude models via openai-completions, any thinking level causes the
-    # Databricks gateway to return 400.
-    from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir
 
-    prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})
-    env = {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)}
-
-    # A picker value is provider-qualified so the same bare model id can exist
-    # on multiple generated Pi providers without ambiguity. Validate it against
-    # the exact rendered config before passing it to the CLI. Without an explicit
-    # picker value, retain the current 0.9 family/surface routing for the
-    # provider's resolved default model.
+    # Validate an explicit provider-qualified picker value before creating the
+    # managed Pi directory or writing credentials to disk. A rejected selection
+    # must be side-effect free. Without an explicit picker value, retain current
+    # 0.9 family/surface routing for the provider's resolved default model.
     selected_model = provider.model
     model_provider_id = provider.provider_id
     selection_parts = _split_pi_native_model_selection(selection)
@@ -1144,6 +1135,13 @@ def pi_native_provider_launch(
             if any(model.get("id") == selected_model for model in extra_cfg.get("models", [])):
                 model_provider_id = extra_id
                 break
+
+    # Selection is valid; only now materialize the per-session credential config.
+    write_pi_models_config(agent_dir, provider, rendered)
+    from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir
+
+    prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})
+    env = {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)}
 
     # When the model id contains a slash Pi's parser treats the left side as a
     # provider override. Qualify slash-bearing model ids with the generated
