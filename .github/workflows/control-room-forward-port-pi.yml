@@ -1,0 +1,47 @@
+name: Control Room forward-port Pi picker
+
+on:
+  push:
+    branches:
+      - feat/upstream-0.9-inline-model-picker
+
+permissions:
+  contents: write
+
+jobs:
+  forward-port:
+    if: github.event.head_commit.message != 'feat(pi): forward-port upstream #3481 onto Control Room 0.9'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feat/upstream-0.9-inline-model-picker
+
+      - name: Fetch exact upstream PR patch
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/omnigent-ai/omnigent/pull/3481.patch -o /tmp/upstream-3481.patch
+          test -s /tmp/upstream-3481.patch
+
+      - name: Verify patch applies without conflict
+        run: |
+          set -euo pipefail
+          git apply --check /tmp/upstream-3481.patch
+
+      - name: Apply upstream patch and retire superseded prototype
+        run: |
+          set -euo pipefail
+          git apply /tmp/upstream-3481.patch
+          rm -f omnigent/prelaunch_model_options.py tests/test_prelaunch_model_options.py
+          git diff --check
+
+      - name: Commit exact forward-port result
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(pi): forward-port upstream #3481 onto Control Room 0.9'
+          git push origin HEAD:feat/upstream-0.9-inline-model-picker
