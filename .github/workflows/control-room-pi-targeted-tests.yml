@@ -1,0 +1,115 @@
+name: Control Room Pi picker targeted acceptance
+
+on:
+  push:
+    branches:
+      - integration/pi-3481-forward-port-work
+
+permissions:
+  contents: write
+
+env:
+  OMNIGENT_SKIP_WEB_UI: "true"
+  UV_INDEX_URL: https://pypi.org/simple
+  PIP_INDEX_URL: https://pypi.org/simple
+
+jobs:
+  targeted:
+    if: ${{ !contains(github.event.head_commit.message, '[pi-targeted-result]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: integration/pi-3481-forward-port-work
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --locked --extra all --extra dev
+
+      - name: Run focused backend/host/Pi tests
+        id: backend
+        continue-on-error: true
+        run: |
+          uv run pytest -q \
+            tests/host/test_connect.py \
+            tests/test_pi_native_credentials.py \
+            tests/runner/test_app_sessions_native_terminals_autocreate.py \
+            tests/test_pi_native_extension.py \
+            | tee /tmp/backend.log
+
+      - name: Set up pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Install web dependencies
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --filter web
+
+      - name: Type-check web
+        id: typecheck
+        continue-on-error: true
+        run: pnpm --filter web exec tsc -b | tee /tmp/typecheck.log
+
+      - name: Run focused new-session flow tests
+        id: webtests
+        continue-on-error: true
+        run: pnpm --filter web exec vitest run src/shell/NewChatDialog.flow.test.tsx | tee /tmp/webtests.log
+
+      - name: Run diff hygiene and targeted Ruff
+        id: lint
+        continue-on-error: true
+        run: |
+          git diff --check HEAD^..HEAD
+          uv run ruff check \
+            omnigent/host/connect.py \
+            omnigent/pi_native_credentials.py \
+            omnigent/runner/native/orchestration.py \
+            tests/host/test_connect.py \
+            tests/test_pi_native_credentials.py \
+            tests/runner/test_app_sessions_native_terminals_autocreate.py \
+            tests/test_pi_native_extension.py \
+            | tee /tmp/lint.log
+
+      - name: Record result and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          backend='${{ steps.backend.outcome }}'
+          typecheck='${{ steps.typecheck.outcome }}'
+          webtests='${{ steps.webtests.outcome }}'
+          lint='${{ steps.lint.outcome }}'
+          {
+            echo 'Control Room Pi picker targeted acceptance'
+            echo "backend=$backend"
+            echo "typecheck=$typecheck"
+            echo "webtests=$webtests"
+            echo "lint=$lint"
+            echo 'upstream_head=2f4fc8c3cceb476424d8aeb23f65bb8159308131'
+            for log in backend typecheck webtests lint; do
+              echo
+              echo "--- $log tail ---"
+              test -f "/tmp/$log.log" && tail -n 80 "/tmp/$log.log" || true
+            done
+          } > .control-room-pi-targeted-result.txt
+          rm -f .github/workflows/control-room-pi-targeted-tests.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test(pi): record targeted acceptance [pi-targeted-result]'
+          git push origin HEAD:integration/pi-3481-forward-port-work
+
+      - name: Fail job if any targeted gate failed
+        if: ${{ steps.backend.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.webtests.outcome != 'success' || steps.lint.outcome != 'success' }}
+        run: exit 1
