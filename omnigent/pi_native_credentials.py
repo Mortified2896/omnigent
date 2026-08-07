@@ -83,6 +83,14 @@ _PI_OPENAI_PROVIDER_ID = "omnigent-openai"
 # work via /chat/completions: Kimi, Llama, GLM, Gemini, older GPT models).
 _PI_COMPLETIONS_PROVIDER_ID = "omnigent-completions"
 _PI_MLFLOW_PROVIDER_ID = "omnigent-mlflow"
+_PI_MANAGED_PROVIDER_IDS = frozenset(
+    {
+        _PI_PROVIDER_ID,
+        _PI_OPENAI_PROVIDER_ID,
+        _PI_COMPLETIONS_PROVIDER_ID,
+        _PI_MLFLOW_PROVIDER_ID,
+    }
+)
 
 # Which provider id serves each Databricks gateway surface. The Anthropic
 # surface is the primary provider, so it is registered inline, not here.
@@ -364,6 +372,25 @@ class PiProviderConfig:
             surface.value,
         )
 
+
+
+def pi_native_model_options() -> list[dict[str, object]]:
+    """Return pre-launch Pi choices configured through ``omni setup``."""
+    provider = resolve_pi_native_provider()
+    if provider is None:
+        return []
+
+    options: dict[str, dict[str, object]] = {}
+    for provider_id, payload in provider.to_models_config()["providers"].items():
+        for model in payload["models"]:
+            model_id = model["id"]
+            qualified = f"{provider_id}/{model_id}"
+            options[qualified] = {
+                "id": qualified,
+                "model": qualified,
+                "displayName": model.get("name") or model_id,
+            }
+    return [options[model_id] for model_id in sorted(options)]
 
 def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiProviderConfig | None:
     """Resolve a Databricks-profile provider into Pi gateway config.
@@ -1061,34 +1088,44 @@ def pi_native_provider_launch(
     # Copy the user's global Pi settings but suppress defaultThinkingLevel.
     # In TUI mode Pi applies the setting from ~/.pi/agent/settings.json; for
     # non-Claude models via openai-completions, any thinking level causes the
-    # Databricks gateway to return 400 (reasoning_effort is sent even when
-    # supportsReasoningEffort is false in the compat block, because TUI mode
-    # applies the session-level thinking before the compat check fires).
-    # Passing None in the overlay makes _deep_merge_settings write null for the
-    # key; Pi's getDefaultThinkingLevel() returns null (falsy) → no thinking.
+    # Databricks gateway to return 400.
     from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir
 
     prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})
     env = {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)}
-    # Resolve which provider the selected model lives in. Non-Claude models
-    # (GLM, GPT, Llama…) are in secondary providers (omnigent-openai); Claude
-    # models are in the primary provider (omnigent). Read the *rendered* config
-    # rather than additional_providers so a model routed by the family fallback
-    # gets the same --provider that models.json registered it under.
+
+    # A picker value is provider-qualified so the same bare model id can exist
+    # on multiple generated Pi providers without ambiguity. Validate it against
+    # the exact rendered config before passing it to the CLI. Without an explicit
+    # picker value, retain the current 0.9 family/surface routing for the
+    # provider's resolved default model.
+    selected_model = provider.model
     model_provider_id = provider.provider_id
-    for extra_id, extra_cfg in rendered["providers"].items():
-        if extra_id == provider.provider_id:
-            continue
-        if any(m.get("id") == provider.model for m in extra_cfg.get("models", [])):
-            model_provider_id = extra_id
-            break
-    # When the model id contains a "/" Pi's arg parser splits on the first
-    # slash and treats the left part as a provider name, overriding
-    # --provider. Pass the fully-qualified "provider/model" reference so Pi's
-    # findExactModelReferenceMatch matches the canonical form exactly and
-    # routes to our custom provider, not a builtin with the same model id.
+    selection_parts = _split_pi_native_model_selection(selection)
+    if selection_parts is not None:
+        candidate_provider, candidate_model = selection_parts
+        configured = rendered["providers"].get(candidate_provider)
+        if not configured or not any(
+            model.get("id") == candidate_model for model in configured.get("models", [])
+        ):
+            raise ValueError(
+                f"Pi model selection {selection!r} is not available in managed configuration"
+            )
+        model_provider_id = candidate_provider
+        selected_model = candidate_model
+    else:
+        for extra_id, extra_cfg in rendered["providers"].items():
+            if extra_id == provider.provider_id:
+                continue
+            if any(model.get("id") == selected_model for model in extra_cfg.get("models", [])):
+                model_provider_id = extra_id
+                break
+
+    # When the model id contains a slash Pi's parser treats the left side as a
+    # provider override. Qualify slash-bearing model ids with the generated
+    # provider id so the exact managed model is selected.
     model_arg = (
-        f"{model_provider_id}/{provider.model}" if "/" in provider.model else provider.model
+        f"{model_provider_id}/{selected_model}" if "/" in selected_model else selected_model
     )
     args = ["--provider", model_provider_id, "--model", model_arg]
     # For non-Claude models on openai-completions/responses, disable thinking.

@@ -1,7 +1,0 @@
-Upstream PR #3481 partial forward-port materialized.
-Exact upstream head: 2f4fc8c3cceb476424d8aeb23f65bb8159308131
-
-Reject files:
-./omnigent/pi_native_credentials.py.rej
-./omnigent/runner/native/orchestration.py.rej
-./web/src/components/HarnessConfigControls.tsx.rej
