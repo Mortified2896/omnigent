@@ -1102,3 +1102,215 @@ def test_instrument_httpx_client_injects_over_custom_transport(
         f"{_RESP_HEX!r} after instrument_client — the server->runner forward "
         "would not stay in the originating trace."
     )
+
+
+# ── Control Room upstream-0.9 telemetry adaptations ───────────
+
+
+def test_trace_endpoint_precedence_over_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` wins over the generic
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` for the trace pipeline so a
+    dedicated MLflow trace ingest port can be configured without
+    also routing traces/metrics/logs there via the generic knob.
+    """
+    monkeypatch.setattr(telemetry, "_initialized", False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://mlflow:5000/v1/traces")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+
+    observed: list[str] = []
+
+    def fake_init(endpoint: str) -> None:
+        observed.append(endpoint)
+
+    monkeypatch.setattr(telemetry, "_init_otel_traces", fake_init)
+    telemetry.init(service_name="omnigent-trace-precedence")
+    assert observed == ["http://mlflow:5000/v1/traces"]
+
+
+def test_trace_endpoint_falls_back_to_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    When only ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, traces fall
+    back to it so single-endpoint deployments keep working.
+    """
+    monkeypatch.setattr(telemetry, "_initialized", False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+
+    observed: list[str] = []
+
+    def fake_init(endpoint: str) -> None:
+        observed.append(endpoint)
+
+    monkeypatch.setattr(telemetry, "_init_otel_traces", fake_init)
+    telemetry.init(service_name="omnigent-trace-fallback")
+    assert observed == ["http://collector:4318"]
+
+
+def test_trace_specific_endpoint_activates_fastapi_instrumentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A trace-only endpoint alone is enough to flip FastAPI
+    instrumentation on (the only case in which HTTP server spans
+    have somewhere to go).
+    """
+    monkeypatch.delenv("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://mlflow:5000/v1/traces")
+    assert telemetry._fastapi_instrumentation_enabled() is True
+
+
+def test_metrics_exporter_defaults_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A generic OTLP trace endpoint MUST NOT implicitly enable metrics.
+    Operators must opt in via ``OTEL_METRICS_EXPORTER=otlp``.
+    """
+    monkeypatch.delenv("OTEL_METRICS_EXPORTER", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+    assert telemetry._metrics_exporter_name() == "none"
+
+
+def test_logs_exporter_defaults_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A generic OTLP trace endpoint MUST NOT implicitly enable logs.
+    Operators must opt in via ``OTEL_LOGS_EXPORTER=otlp``.
+    """
+    monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+    assert telemetry._logs_exporter_name() == "none"
+
+
+def test_explicit_metrics_exporter_otlp_still_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Operators can still enable metrics by setting
+    ``OTEL_METRICS_EXPORTER=otlp`` even with no generic endpoint.
+    """
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "otlp")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert telemetry._metrics_exporter_name() == "otlp"
+
+
+def test_explicit_logs_exporter_otlp_still_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Operators can still enable logs by setting
+    ``OTEL_LOGS_EXPORTER=otlp`` even with no generic endpoint.
+    """
+    monkeypatch.setenv("OTEL_LOGS_EXPORTER", "otlp")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert telemetry._logs_exporter_name() == "otlp"
+
+
+def test_trace_specific_protocol_overrides_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` lets traces ship on
+    HTTP/protobuf (e.g. MLflow) while the rest of the OTLP pipeline
+    stays on gRPC.
+    """
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+    assert telemetry._otlp_trace_protocol() == "http/protobuf"
+
+
+def test_trace_protocol_falls_back_to_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    When the trace-specific knob is unset, the trace protocol falls
+    back to the generic ``OTEL_EXPORTER_OTLP_PROTOCOL`` so single-
+    protocol deployments keep their existing behavior.
+    """
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    assert telemetry._otlp_trace_protocol() == "http/protobuf"
+
+
+def test_trace_protocol_rejects_unsupported_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    An unsupported protocol value surfaces as a ValueError so
+    misconfigurations cannot silently fall back to gRPC.
+    """
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "ftp")
+    with pytest.raises(ValueError, match="Unsupported OTLP protocol for traces export"):
+        telemetry._otlp_trace_protocol()
+
+
+def test_record_error_content_off_omits_exception_text(
+    in_memory_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    With ``OMNIGENT_OTEL_CAPTURE_CONTENT=false``, ``record_error``
+    preserves only ``error.type`` and the ERROR status. No
+    exception event, status description, ``error.message``
+    attribute or stack trace is exported.
+    """
+    monkeypatch.setenv("OMNIGENT_OTEL_CAPTURE_CONTENT", "false")
+    telemetry._capture_content = False
+
+    tracer = otel_trace.get_tracer("test")
+
+    class BoomError(Exception):
+        pass
+
+    with telemetry.trace_context_for_response(response_id=_RESP_ID):
+        with tracer.start_as_current_span("test") as span:
+            telemetry.record_error(span, BoomError("sensitive secret"))
+
+    spans = in_memory_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes or {}
+    assert attrs.get("error.type") == "BoomError"
+    assert "error.message" not in attrs
+    # No description text on the status.
+    assert spans[0].status.status_code == StatusCode.ERROR
+    # No exception events recorded.
+    assert not list(spans[0].events)
+
+
+def test_record_error_content_on_keeps_full_diagnostics(
+    in_memory_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    With content capture ON, ``record_error`` preserves the full
+    diagnostic surface (status description, error.message attribute,
+    exception event with stack trace) so operators retain the
+    detail needed to debug a failure.
+    """
+    monkeypatch.setenv("OMNIGENT_OTEL_CAPTURE_CONTENT", "true")
+    telemetry._capture_content = True
+
+    tracer = otel_trace.get_tracer("test")
+
+    class BoomError(Exception):
+        pass
+
+    with telemetry.trace_context_for_response(response_id=_RESP_ID):
+        with tracer.start_as_current_span("test") as span:
+            telemetry.record_error(span, BoomError("legitimate detail"))
+
+    spans = in_memory_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes or {}
+    assert attrs.get("error.type") == "BoomError"
+    assert attrs.get("error.message") == "legitimate detail"
+    assert spans[0].status.status_code == StatusCode.ERROR
+    # The exception event is recorded (carries stack trace).
+    assert any(ev.name == "exception" for ev in spans[0].events)
