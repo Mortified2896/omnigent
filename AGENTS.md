@@ -3,6 +3,25 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
+## Control Room dual-instance safety
+
+This repository maintains the Control Room dual-instance deployment
+(O1 maintenance + O2 production). The hard invariant is:
+
+> Never let an Omnigent instance upgrade itself. O1 upgrades O2;
+> O2 upgrades O1. The healthy peer stays alive and supervises the
+> entire operation.
+
+Any deployment action MUST explicitly declare a target and supervisor
+identity, and the two must be different instances. The deployment
+tooling (`deploy/scripts/peer_deployer/`) refuses to run if target
+and supervisor resolve to the same instance.
+
+The authoritative safety contract is in
+`deploy/docs/control-room-dual-instance-upgrade-safety.md`. That
+document overrides any less-specific deployment wording in this
+repository. Read it before any deployment work.
+
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or
