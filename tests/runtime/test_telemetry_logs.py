@@ -90,18 +90,19 @@ def reset_log_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 # ── _logs_exporter_name ─────────────────────────────────
 
 
-def test_logs_exporter_name_otlp_from_endpoint(
+def test_logs_exporter_name_otlp_only_when_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    When only ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, the helper
-    returns ``"otlp"`` so logs ride the same OTLP path as traces.
+    A generic OTLP endpoint for traces MUST NOT implicitly enable
+    logs. Operators must opt in by setting ``OTEL_LOGS_EXPORTER=otlp``
+    explicitly; otherwise the helper returns ``"none"``.
 
     :param monkeypatch: Pytest monkeypatch fixture.
     """
     monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    assert telemetry._logs_exporter_name() == "otlp"
+    assert telemetry._logs_exporter_name() == "none"
 
 
 def test_logs_exporter_name_none_when_unset(
@@ -134,20 +135,21 @@ def test_logs_exporter_name_explicit_none_wins(
 # ── _init_otel_logs ─────────────────────────────────────
 
 
-def test_init_otel_logs_attaches_handler_with_endpoint(
+def test_init_otel_logs_attaches_handler_only_when_explicit(
     monkeypatch: pytest.MonkeyPatch,
     reset_log_state: None,
 ) -> None:
     """
-    With an OTLP endpoint set, ``_init_otel_logs`` installs a
-    ``LoggingHandler`` on the root logger so logs flow into the OTel
-    bridge.
+    The OTel log bridge is installed only when the operator opts in
+    via ``OTEL_LOGS_EXPORTER=otlp``. A generic trace endpoint is not
+    sufficient, since logs can carry user payload that should not be
+    silently exported alongside traces.
 
     :param monkeypatch: Pytest monkeypatch fixture.
     :param reset_log_state: Bridge state reset fixture.
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
+    monkeypatch.setenv("OTEL_LOGS_EXPORTER", "otlp")
 
     telemetry._init_otel_logs()
 
@@ -198,7 +200,7 @@ def test_init_otel_logs_idempotent_via_init(
     :param reset_log_state: Bridge state reset fixture.
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    monkeypatch.delenv("OTEL_LOGS_EXPORTER", raising=False)
+    monkeypatch.setenv("OTEL_LOGS_EXPORTER", "otlp")
     monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
     monkeypatch.setattr(telemetry, "_initialized", False)
     monkeypatch.setattr(telemetry, "_metrics_initialized", False)
