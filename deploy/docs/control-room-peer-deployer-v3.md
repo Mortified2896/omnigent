@@ -2,7 +2,9 @@
 
 `peer_promote_o1_v3.py` is the approved host-side O2 -> O1 promotion orchestrator for the Control Room 0.9 rollout.
 
-It supersedes `peer_promote_o1_v2.sh` for live promotion. The v2 script remains historical evidence but must not be used for production because its rollback selected `venv.legacy-*` globally and its shell control flow did not guarantee paired rollback for every post-mutation failure.
+It supersedes `peer_promote_o1_v2.sh` for live promotion. The old v2 implementation remains available in Git history for incident analysis, but the live `peer_promote_o1_v2.sh` path is now a hard refusal shim that exits non-zero and points operators to v3. This prevents accidental reuse of the unsafe path.
+
+The v2 implementation was rejected because its rollback selected `venv.legacy-*` globally and its shell control flow did not guarantee paired rollback for every post-mutation failure.
 
 ## Direction invariant
 
@@ -58,7 +60,7 @@ sudo -E /opt/omnigent-production/current/venv/bin/python \
   --promote
 ```
 
-Do not copy/paste the Python file out of Git and do not run the historical v2 shell script.
+Do not copy/paste the Python file out of Git and do not run the v2 path. The v2 path is intentionally non-operational.
 
 ## Failure contract
 
