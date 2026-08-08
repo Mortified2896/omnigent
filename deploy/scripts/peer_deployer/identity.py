@@ -13,13 +13,41 @@ This module provides vetted helpers that prove, from a *single* snapshot
 of the host, what each instance is, what it is running, and whether it
 is healthy. The peer-deployer consults these helpers at every preflight
 check.
+
+SHA / version discovery
+-----------------------
+
+The deployed runtime identity (commit SHA + version) is read by
+importing the installed package from its on-disk site-packages, in a
+neutral cwd with the source tree and ``PYTHONPATH`` cleared. This is
+deliberately *not* a text-regex parse of ``_build_info.py``: the file's
+exact source form (annotations, quotes, ordering) is not part of the
+identity contract, and a regex parser is fragile against future style
+changes such as ``COMMIT_SHA: str = '...'``.
+
+The shared helpers are:
+
+  * ``runtime_identity(python, *, cwd="/tmp")`` — invoke a specific
+    interpreter and ask it for ``omnigent._build_info`` plus the
+    installed ``omnigent`` distribution version.
+  * ``installed_sha(deployment_root)`` / ``installed_version(deployment_root)``
+    — convenience wrappers that locate the active interpreter and
+    delegate to ``runtime_identity``.
+
+The active interpreter is located by following the deployment root's
+``current`` symlink. If ``current`` is missing or stale, the helper
+falls back to ``deployment_root/venv/bin/python``. This mirrors the
+layout on both O1 and O2: ``current`` -> a release directory, and the
+venv lives inside the release directory.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -182,45 +210,153 @@ def read_current_symlink(deployment_root: Path) -> Path:
     return target
 
 
-def installed_sha(deployment_root: Path) -> str:
-    """Return the SHA recorded in the active runtime's ``_build_info.py``.
+# Path to the minimal helper script that, when run inside a target
+# venv, returns the runtime identity as a single JSON document.
+# The script deliberately uses ``import`` (rather than regex) so the
+# source-tree formatting of ``_build_info.py`` is irrelevant.
+_RUNTIME_IDENTITY_HELPER = """\
+import json
+import sys
 
-    The active runtime is determined by following the ``current`` symlink
-    under the deployment root, if any. If ``current`` is missing, the
-    helper falls back to looking at the ``venv`` subdirectory directly.
-    This mirrors the layout on both O1 and O2: ``current`` -> a release
-    directory, and the venv lives inside the release directory.
+# Read from the installed package, NOT from any source-tree shadowing.
+# The cwd has been cleared by the caller; ``PYTHONPATH`` is empty.
+result = {}
+try:
+    from omnigent._build_info import COMMIT_SHA  # type: ignore
+    if isinstance(COMMIT_SHA, str) and len(COMMIT_SHA) == 40:
+        result["commit_sha"] = COMMIT_SHA
+    else:
+        result["error"] = "COMMIT_SHA is not a 40-char string: %r" % (COMMIT_SHA,)
+except Exception as exc:  # pragma: no cover - defensive
+    result["error"] = "import failed: %s" % exc
+
+# Try to read the installed distribution version from importlib.metadata
+# (the canonical source — the same one ``pip show`` consults).
+try:
+    from importlib.metadata import version as _v
+    result["version"] = _v("omnigent")
+except Exception as exc:
+    # Fall back to package __version__ if it exists, but only after
+    # the canonical path has been tried.
+    try:
+        import omnigent
+        v = getattr(omnigent, "__version__", None)
+        if isinstance(v, str):
+            result["version"] = v
+        else:
+            result["error_version"] = "omnigent has no __version__: %s" % exc
+    except Exception as exc2:
+        result["error_version"] = "no metadata, no __version__: %s / %s" % (exc, exc2)
+
+json.dump(result, sys.stdout)
+"""
+
+
+def _resolve_active_python(deployment_root: Path) -> Path:
+    """Return the path to the active runtime's ``python`` binary.
+
+    Follows the ``current`` symlink under the deployment root. Falls
+    back to ``deployment_root/venv/bin/python`` if ``current`` is
+    missing. Raises ``IdentityError`` if no python interpreter can
+    be located.
     """
-    # Try the current symlink first.
     try:
         current = read_current_symlink(deployment_root)
     except IdentityError:
         current = None
     if current is not None:
-        site_packages = sorted((current / "venv" / "lib").glob("python*/site-packages"))
-        if site_packages:
-            return _parse_installed_sha(site_packages[0])
-    # Fallback: deploy_root/venv/lib
-    site_packages = sorted((deployment_root / "venv" / "lib").glob("python*/site-packages"))
-    if not site_packages:
-        raise IdentityError(f"no site-packages under {deployment_root}/venv/lib")
-    if len(site_packages) != 1:
-        raise IdentityError(
-            f"expected exactly one python site-packages under {deployment_root}/venv/lib, "
-            f"found {len(site_packages)}"
+        candidate = current / "venv" / "bin" / "python"
+        if candidate.is_file():
+            return candidate
+    fallback = deployment_root / "venv" / "bin" / "python"
+    if fallback.is_file():
+        return fallback
+    raise IdentityError(f"no python interpreter found under {deployment_root}/venv/bin/")
+
+
+def runtime_identity(python: Path, *, cwd: Path | str = "/tmp") -> dict[str, str]:
+    """Return the runtime identity (commit SHA + version) for ``python``.
+
+    ``python`` is the absolute path to the interpreter that owns the
+    runtime we want to inspect. ``cwd`` defaults to ``/tmp`` to avoid
+    source-tree shadowing, and ``PYTHONPATH`` is explicitly cleared
+    in the child environment.
+
+    The helper runs ``python -c '<script>'`` with a small embedded
+    script that imports ``omnigent._build_info`` (canonical
+    runtime identity) and reads ``importlib.metadata.version``
+    (canonical distribution identity). Returns a dict with at least
+    the ``commit_sha`` and ``version`` keys on success.
+
+    The previous implementation parsed ``_build_info.py`` with a
+    text regex expecting ``COMMIT_SHA = '...'``. That format is
+    *not* part of the identity contract; the package currently emits
+    ``COMMIT_SHA: str = '...'`` which broke the regex. This helper
+    uses the actual Python ``import`` machinery and works against
+    any source form.
+
+    Raises ``IdentityError`` if either key cannot be recovered.
+    """
+    if not python.is_file():
+        raise IdentityError(f"interpreter not found: {python}")
+    env = {
+        # Minimal PATH so ``python -c`` can find its own bits; we don't
+        # want any user-installed ``omnigent`` shadowing via PATH.
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HOME": str(cwd),
+        # Force the child to import only from its own site-packages.
+        "PYTHONPATH": "",
+        # Disable any user-site / virtualenv manipulation.
+        "PYTHONNOUSERSITE": "1",
+    }
+    try:
+        result = subprocess.run(
+            [str(python), "-c", _RUNTIME_IDENTITY_HELPER],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(cwd),
+            env=env,
         )
-    return _parse_installed_sha(site_packages[0])
+    except FileNotFoundError as exc:
+        raise IdentityError(f"failed to exec {python}: {exc}") from exc
+    if result.returncode != 0:
+        raise IdentityError(
+            f"runtime identity probe failed (rc={result.returncode}): "
+            f"stderr={result.stderr.strip()!r}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise IdentityError(
+            f"runtime identity probe returned non-JSON: {result.stdout[:200]!r}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise IdentityError(
+            f"runtime identity probe returned non-dict: {payload!r}"
+        )
+    return payload
 
 
-def _parse_installed_sha(site_packages: Path) -> str:
-    build_info = site_packages / "omnigent" / "_build_info.py"
-    if not build_info.is_file():
-        raise IdentityError(f"missing _build_info.py: {build_info}")
-    tree = build_info.read_text()
-    match = re.search(r"COMMIT_SHA[^\n]*?([0-9a-f]{40})", tree)
-    if not match:
-        raise IdentityError(f"could not parse COMMIT_SHA from {build_info}")
-    return match.group(1)
+def installed_sha(deployment_root: Path) -> str:
+    """Return the SHA recorded in the active runtime's installed package.
+
+    Uses ``runtime_identity`` so the answer reflects the *installed*
+    wheel, not any source-tree checkout. The active interpreter is
+    located by following ``deployment_root/current`` (or by falling
+    back to ``deployment_root/venv/bin/python``).
+    """
+    payload = runtime_identity(_resolve_active_python(deployment_root))
+    sha = payload.get("commit_sha")
+    if not isinstance(sha, str):
+        raise IdentityError(
+            f"runtime identity probe did not return a commit_sha: {payload!r}"
+        )
+    if not SHA_RE.fullmatch(sha):
+        raise IdentityError(
+            f"runtime identity commit_sha is not a 40-char SHA: {sha!r}"
+        )
+    return sha
 
 
 def installed_version(deployment_root: Path) -> str:
@@ -230,33 +366,12 @@ def installed_version(deployment_root: Path) -> str:
     installed wheel, not the workspace checkout. The active runtime
     is determined by following the ``current`` symlink.
     """
-    python = None
-    try:
-        current = read_current_symlink(deployment_root)
-        candidate = current / "venv" / "bin" / "python"
-        if candidate.is_file():
-            python = candidate
-    except IdentityError:
-        pass
-    if python is None:
-        python = deployment_root / "venv" / "bin" / "python"
-    if not python.is_file():
-        raise IdentityError(f"missing python: {python}")
-    result = subprocess.run(
-        [str(python), "-c", "from omnigent.version import VERSION; print(VERSION)"],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd="/tmp",
-        env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-    )
-    if result.returncode != 0:
+    payload = runtime_identity(_resolve_active_python(deployment_root))
+    version = payload.get("version")
+    if not isinstance(version, str) or not version:
         raise IdentityError(
-            f"failed to read installed version from {python}: {result.stderr.strip()}"
+            f"runtime identity probe did not return a version: {payload!r}"
         )
-    version = result.stdout.strip()
-    if not version:
-        raise IdentityError("installed version returned empty string")
     return version
 
 
@@ -334,6 +449,7 @@ __all__ = [
     "require_distinct",
     "read_provenance",
     "read_current_symlink",
+    "runtime_identity",
     "installed_sha",
     "installed_version",
     "http_health_ok",

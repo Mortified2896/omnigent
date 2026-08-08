@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import traceback
 from pathlib import Path
 
-from . import identity, preflight, rollback, transaction
+from . import identity, preflight, rollback, staging, transaction
 from .preflight import (
     ACCEPTED_ARTIFACT_SHA,
     ACCEPTED_ARTIFACT_VERSION,
@@ -233,6 +234,141 @@ def cmd_rollback(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stage(args: argparse.Namespace) -> int:
+    """Run the staging phase for an existing transaction.
+
+    Reads the transaction, captures the supervisor's closure, and
+    stages a complete candidate runtime under the transaction's
+    staging root. On success, registers the staging root as owned
+    and advances the transaction to ``candidate_verified``. On any
+    failure, the partial staging root is removed before the function
+    returns, so the next attempt starts from a clean slate.
+
+    This command is the host-level deployer's entry point for the
+    deterministic staging phase. It performs no network access and
+    never touches the supervisor's runtime or the target's active
+    runtime.
+    """
+    target = identity.get(args.target)
+    supervisor = identity.get(args.supervisor)
+    identity.require_distinct(target, supervisor)
+    record = transaction.load(args.tx_id)
+    if record.target != target.name or record.supervisor != supervisor.name:
+        raise SystemExit(
+            f"transaction {args.tx_id} does not match target={target.name} "
+            f"supervisor={supervisor.name}"
+        )
+    staging_root = staging.transaction_owned_staging_path(target, args.tx_id)
+    if staging_root.exists() and (staging_root / ".complete").is_file():
+        _log(f"staging root already complete at {staging_root}; "
+             "running verification gate only")
+    else:
+        if staging_root.exists():
+            _log(f"removing previous partial staging at {staging_root}")
+            shutil.rmtree(staging_root)
+        supervisor_release = (
+            identity.O2.deployment_root
+            / "releases"
+            / ACCEPTED_ARTIFACT_SHA
+        )
+        if not supervisor_release.is_dir():
+            raise SystemExit(
+                f"supervisor release missing: {supervisor_release}"
+            )
+        artifacts = supervisor_release / "artifacts"
+        wheels: dict[str, Path] = {}
+        for pattern, label in (
+            ("omnigent-*.whl", "main"),
+            ("omnigent_client-*.whl", "sdk_client"),
+            ("omnigent_ui_sdk-*.whl", "sdk_ui"),
+        ):
+            matches = sorted(artifacts.glob(pattern))
+            if not matches:
+                raise SystemExit(f"missing {label} wheel under {artifacts}")
+            wheels[label] = matches[0]
+        try:
+            closure = staging.stage_candidate_runtime(
+                staging_root, supervisor, wheels
+            )
+        except staging.StagingError as exc:
+            transaction.fail_record(
+                record,
+                f"staging failed: {exc}",
+                root=transaction.DEFAULT_TX_ROOT,
+            )
+            raise SystemExit(f"STAGING FAILED: {exc}")
+        manifest_path = staging.write_staging_manifest(staging_root, closure)
+        _log(f"wrote staging manifest: {manifest_path}")
+        transaction.register_owned(record, str(staging_root))
+        transaction.register_owned(record, str(manifest_path))
+    failures = staging.verify_candidate_complete(staging_root)
+    if failures:
+        transaction.fail_record(
+            record,
+            f"candidate verification failed: {' ; '.join(failures)}",
+            root=transaction.DEFAULT_TX_ROOT,
+        )
+        try:
+            shutil.rmtree(staging_root)
+        except OSError:
+            pass
+        raise SystemExit(f"VERIFICATION FAILED: {' ; '.join(failures)}")
+    if not staging.candidate_identity_matches(
+        staging_root,
+        ACCEPTED_ARTIFACT_SHA,
+        ACCEPTED_ARTIFACT_VERSION,
+    ):
+        transaction.fail_record(
+            record,
+            f"candidate identity mismatch: expected {ACCEPTED_ARTIFACT_SHA}/"
+            f"{ACCEPTED_ARTIFACT_VERSION}",
+            root=transaction.DEFAULT_TX_ROOT,
+        )
+        try:
+            shutil.rmtree(staging_root)
+        except OSError:
+            pass
+        raise SystemExit("VERIFICATION FAILED: candidate identity mismatch")
+    try:
+        candidate_python = staging._candidate_python(staging_root)
+        closure = staging.capture_supervisor_closure(supervisor)
+        mismatches = staging.verify_candidate_versions(
+            candidate_python, closure.expected_versions()
+        )
+    except staging.StagingError as exc:
+        transaction.fail_record(
+            record, f"version probe failed: {exc}",
+            root=transaction.DEFAULT_TX_ROOT,
+        )
+        try:
+            shutil.rmtree(staging_root)
+        except OSError:
+            pass
+        raise SystemExit(f"VERIFICATION FAILED: version probe: {exc}")
+    if mismatches:
+        transaction.fail_record(
+            record,
+            f"version mismatch: {' ; '.join(mismatches)}",
+            root=transaction.DEFAULT_TX_ROOT,
+        )
+        try:
+            shutil.rmtree(staging_root)
+        except OSError:
+            pass
+        raise SystemExit(f"VERIFICATION FAILED: {', '.join(mismatches)}")
+    transaction.advance(record, "candidate_verified", root=transaction.DEFAULT_TX_ROOT)
+    transaction.save(record, root=transaction.DEFAULT_TX_ROOT)
+    _emit({
+        "status": "candidate_verified",
+        "tx_id": args.tx_id,
+        "staging_root": str(staging_root),
+        "expected_sha": ACCEPTED_ARTIFACT_SHA,
+        "expected_version": ACCEPTED_ARTIFACT_VERSION,
+        "record": record.to_dict(),
+    })
+    return 0
+
+
 def cmd_load(args: argparse.Namespace) -> int:
     record = transaction.load(args.tx_id)
     _emit(record.to_dict())
@@ -294,6 +430,15 @@ def _parser() -> argparse.ArgumentParser:
     p_rollback.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
     p_rollback.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
     p_rollback.set_defaults(func=cmd_rollback)
+
+    p_stage = sub.add_parser(
+        "stage",
+        help="Stage a complete, verified candidate runtime for an existing tx",
+    )
+    p_stage.add_argument("--tx-id", required=True)
+    p_stage.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
+    p_stage.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
+    p_stage.set_defaults(func=cmd_stage)
 
     p_load = sub.add_parser("load", help="Print a transaction record as JSON")
     p_load.add_argument("--tx-id", required=True)

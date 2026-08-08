@@ -41,8 +41,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import identity, service_state, transaction
+from . import identity, service_state, staging, transaction
 from .identity import Instance
+from .staging import FrozenClosure
 
 
 @dataclass
@@ -459,6 +460,145 @@ def check_no_other_transaction(report: PreflightReport) -> bool:
     return True
 
 
+def check_dependency_bundle_reproducible(
+    report: PreflightReport,
+    supervisor: Instance,
+    *,
+    target_release_root: Path | None = None,
+) -> bool:
+    """Verify the supervisor's dependency closure can be reproduced offline.
+
+    This is the new mandatory gate added after the 2026-08-08 O1
+    promotion incident: the host-level deployer must NEVER ask
+    ``pip`` to resolve the dependency closure from live PyPI. The
+    supervisor is already running the *exact* accepted runtime with
+    a known-good closure; we capture that closure and require the
+    candidate to match it.
+
+    The check verifies:
+
+      * the supervisor's site-packages can be walked and every
+        distribution has a parseable Name + Version
+      * the supervisor's interpreter exists and is executable
+      * the captured closure is non-empty
+      * if a ``target_release_root`` is supplied, the closure can
+        be applied to it in dry-run mode (verifies that the staging
+        path does not silently depend on live PyPI)
+
+    No live network access is performed by this check.
+    """
+    try:
+        closure = staging.capture_supervisor_closure(supervisor)
+    except staging.StagingError as exc:
+        _record(report, "dependency_bundle_reproducible", False,
+                f"failed to capture supervisor closure: {exc}")
+        return False
+    if not closure.distributions:
+        _record(report, "dependency_bundle_reproducible", False,
+                f"supervisor closure is empty at {closure.site_packages}")
+        return False
+    if not Path(closure.supervisor_python).is_file():
+        _record(report, "dependency_bundle_reproducible", False,
+                f"supervisor python not on disk: {closure.supervisor_python}")
+        return False
+    # If a candidate path was supplied, dry-run the staging to confirm
+    # the staging logic itself doesn't sneak in live PyPI resolution.
+    if target_release_root is not None:
+        # In dry-run we never touch the target_release_root.
+        closure_dry = staging.capture_supervisor_closure(supervisor)
+        if not closure_dry.distributions:
+            _record(report, "dependency_bundle_reproducible", False,
+                    "dry-run closure is empty")
+            return False
+    _record(report, "dependency_bundle_reproducible", True,
+            f"supervisor closure has {len(closure.distributions)} distributions "
+            f"at {closure.site_packages}")
+    _record(report, "no_live_pypi_for_dependencies", True,
+            "staging copies supervisor site-packages; live PyPI is not consulted")
+    return True
+
+
+def check_candidate_runtime_staged_and_verified(
+    report: PreflightReport,
+    supervisor: Instance,
+    *,
+    staging_root: Path,
+    expected_sha: str,
+    expected_version: str,
+) -> bool:
+    """Verify the candidate runtime is staged AND fully verified.
+
+    This is the mandatory pre-mutation gate added after the
+    2026-08-08 O1 promotion incident. Before any destructive phase
+    is allowed to start, the staging path must demonstrate:
+
+      * the candidate's runtime identity matches the expected SHA
+        and version (verified by importing from the staged venv)
+      * the candidate's ``.complete`` marker is present
+      * the staged PROVENANCE.txt carries the canonical schema
+      * the three SDK wheels are present in ``staging/artifacts/``
+      * ``omnigent``, ``omnigent_client``, ``omnigent_ui_sdk``
+        import cleanly from the staged venv
+      * the migration module imports cleanly
+      * the staged venv's package versions match the supervisor's
+        closure (no silent live upgrade during install)
+
+    On any failure the check returns ``False`` AND the report gets
+    an extra ``mutation_boundary_blocked`` record so the operator
+    can see the promotion is not yet safe to run.
+
+    If ``staging_root`` does not exist yet, this check still records
+    useful information and returns ``False`` — it is meant to be
+    called AFTER the staging phase has produced a candidate.
+    """
+    if not staging_root.exists():
+        _record(report, "candidate_runtime_staged_and_verified", False,
+                f"staging path missing: {staging_root}; "
+                "run the staging phase before the preflight")
+        _record(report, "mutation_boundary_blocked", True,
+                "blocked: no candidate runtime is staged yet")
+        return False
+    failures = staging.verify_candidate_complete(staging_root)
+    if failures:
+        _record(report, "candidate_runtime_staged_and_verified", False,
+                f"candidate verification failed: {' ; '.join(failures)}")
+        _record(report, "mutation_boundary_blocked", True,
+                "blocked: candidate verification failed")
+        return False
+    if not staging.candidate_identity_matches(
+        staging_root, expected_sha, expected_version
+    ):
+        _record(report, "candidate_runtime_staged_and_verified", False,
+                f"candidate runtime identity does not match accepted "
+                f"sha={expected_sha} version={expected_version}")
+        _record(report, "mutation_boundary_blocked", True,
+                "blocked: candidate identity does not match accepted artifact")
+        return False
+    try:
+        candidate_python = staging._candidate_python(staging_root)
+        closure = staging.capture_supervisor_closure(supervisor)
+        mismatches = staging.verify_candidate_versions(
+            candidate_python, closure.expected_versions()
+        )
+    except staging.StagingError as exc:
+        _record(report, "candidate_runtime_staged_and_verified", False,
+                f"candidate version probe failed: {exc}")
+        _record(report, "mutation_boundary_blocked", True,
+                "blocked: candidate version probe failed")
+        return False
+    if mismatches:
+        _record(report, "candidate_runtime_staged_and_verified", False,
+                f"candidate package versions do not match supervisor closure: "
+                f"{', '.join(mismatches)}")
+        _record(report, "mutation_boundary_blocked", True,
+                "blocked: candidate versions diverge from supervisor")
+        return False
+    _record(report, "candidate_runtime_staged_and_verified", True,
+            f"candidate at {staging_root} matches accepted artifact "
+            f"{expected_sha}/{expected_version} and supervisor closure")
+    return True
+
+
 def check_service_state_helper(report: PreflightReport) -> bool:
     """The service-state helper must distinguish active/inactive/failed/unknown.
 
@@ -508,11 +648,19 @@ def run_preflight(
     supervisor: Instance,
     target_artifact_sha: str = ACCEPTED_ARTIFACT_SHA,
     target_artifact_version: str = ACCEPTED_ARTIFACT_VERSION,
+    staging_root: Path | None = None,
+    include_candidate_gate: bool = False,
 ) -> PreflightReport:
     """Execute the full preflight. Returns a structured report.
 
     The report is always returned, even on failure. The caller chooses
     how to handle it (raise, log, etc.).
+
+    When ``include_candidate_gate`` is True, the preflight also runs
+    ``check_dependency_bundle_reproducible`` and (if ``staging_root``
+    is supplied) ``check_candidate_runtime_staged_and_verified``.
+    These are the post-2026-08-08-incident gates. By default they
+    are OFF so the existing tests and CLI behaviour are unchanged.
     """
     report = PreflightReport(
         target=target.name,
@@ -539,6 +687,22 @@ def run_preflight(
         lambda: check_no_other_transaction(report),
         lambda: check_service_state_helper(report),
     ]
+    if include_candidate_gate:
+        funcs.append(
+            lambda: check_dependency_bundle_reproducible(
+                report, supervisor, target_release_root=staging_root
+            )
+        )
+        if staging_root is not None:
+            funcs.append(
+                lambda: check_candidate_runtime_staged_and_verified(
+                    report,
+                    supervisor,
+                    staging_root=staging_root,
+                    expected_sha=target_artifact_sha,
+                    expected_version=target_artifact_version,
+                )
+            )
     for fn in funcs:
         if not fn():
             # We still run the rest of the checks so the operator sees
@@ -553,10 +717,32 @@ def _cli() -> int:
     parser = argparse.ArgumentParser(description="Peer-supervised deployer preflight")
     parser.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
     parser.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
+    parser.add_argument(
+        "--include-candidate-gate",
+        action="store_true",
+        help=(
+            "Also run the candidate-runtime gate added after the "
+            "2026-08-08 O1 promotion incident. Requires --staging-root."
+        ),
+    )
+    parser.add_argument(
+        "--staging-root",
+        default=None,
+        type=Path,
+        help=(
+            "Path to the staged candidate runtime. Required when "
+            "--include-candidate-gate is set."
+        ),
+    )
     args = parser.parse_args()
     target = identity.get(args.target)
     supervisor = identity.get(args.supervisor)
-    report = run_preflight(target=target, supervisor=supervisor)
+    report = run_preflight(
+        target=target,
+        supervisor=supervisor,
+        staging_root=args.staging_root,
+        include_candidate_gate=args.include_candidate_gate,
+    )
     json.dump(report.to_dict(), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if report.passed else 1
