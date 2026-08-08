@@ -3,6 +3,44 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
+## Control Room deployment safety — hard invariant
+
+For the Control Room HomeLab O1/O2 deployment, read
+`deploy/docs/control-room-dual-instance-upgrade-safety.md` before any deployment,
+promotion, rollback, runtime replacement, service restart, or migration task.
+
+The non-negotiable rule is:
+
+> **Never let an Omnigent instance upgrade itself. O1 upgrades O2; O2 upgrades
+> O1. The healthy peer stays alive and supervises the entire operation.**
+
+Before any deployment, explicitly identify the target and supervisor. The only
+valid normal pairs are:
+
+- target O2 -> supervisor O1
+- target O1 -> supervisor O2
+
+If target == supervisor, STOP. Do not work around this with a detached
+self-update executor. Detached executors are emergency recovery tools only.
+
+Additional Control Room requirements:
+
+- both instances ultimately track the same authoritative `main` lineage;
+- O2 receives a candidate first; after acceptance/soak, O2 supervises promotion
+  of the exact accepted immutable artifact to O1;
+- do not rebuild the accepted artifact during O1 promotion;
+- privileged deployment actions belong in a narrowly scoped host-level deployer,
+  not by weakening the Omnigent service sandbox;
+- preflight must complete before destructive mutation;
+- rollback cleanup may delete only paths explicitly created by that same
+  deployment transaction;
+- application and database rollback must remain paired;
+- if another promotion/rollback executor may still be active, STOP and inspect
+  it before starting anything else.
+
+This safety section overrides less-specific deployment wording elsewhere in the
+repository.
+
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or
