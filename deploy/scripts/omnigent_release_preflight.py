@@ -111,32 +111,46 @@ def inspect_wheel(wheel: Path, expected_sha: str) -> dict[str, str]:
             if bad_member:
                 raise PreflightError(f"wheel has a corrupt member: {bad_member}")
             names = set(archive.namelist())
-            build_info = "omnigent/_build_info.py"
-            if build_info not in names:
-                raise PreflightError("wheel is missing omnigent/_build_info.py")
-            built_sha = _literal_assignment(archive.read(build_info).decode(), "COMMIT_SHA")
-            if built_sha != expected_sha:
-                raise PreflightError(
-                    f"wheel commit SHA {built_sha!r} does not match requested SHA {expected_sha}"
-                )
+            # The SDK wheels (omnigent_client, omnigent_ui_sdk) are
+            # separate packages with their own dist-info; they have no
+            # ``omnigent/_build_info.py``. Detect them by package name
+            # and use a lighter check that only proves the wheel is
+            # a valid omnigent SDK at the same release SHA.
             metadata_names = sorted(
-                name for name in names if re.fullmatch(r"omnigent-[^/]+\.dist-info/METADATA", name)
+                name for name in names
+                if re.fullmatch(r"omnigent_[a-z_]+-[^/]+\.dist-info/METADATA", name)
+                or re.fullmatch(r"omnigent-[^/]+\.dist-info/METADATA", name)
             )
             if len(metadata_names) != 1:
-                raise PreflightError("wheel must contain exactly one omnigent dist-info METADATA")
-            metadata = Parser().parsestr(archive.read(metadata_names[0]).decode())
-            version = metadata.get("Version")
-            if metadata.get("Name", "").lower() != "omnigent" or not version:
                 raise PreflightError(
-                    "wheel package metadata is not a versioned omnigent distribution"
+                    f"wheel must contain exactly one omnigent* dist-info METADATA, found {metadata_names}"
                 )
-            prefix = "omnigent/server/static/web-ui/"
-            _validate_spa(names, lambda name: archive.read(name).decode(), prefix)
+            metadata = Parser().parsestr(archive.read(metadata_names[0]).decode())
+            name = (metadata.get("Name") or "").lower()
+            version = metadata.get("Version")
+            if not name.startswith("omnigent") or not version:
+                raise PreflightError(
+                    "wheel package metadata is not a versioned omnigent* distribution"
+                )
+            # Only the main omnigent wheel carries the build SHA + SPA.
+            # SDK wheels are validated by name+version pin.
+            if name == "omnigent":
+                build_info = "omnigent/_build_info.py"
+                if build_info not in names:
+                    raise PreflightError("wheel is missing omnigent/_build_info.py")
+                built_sha = _literal_assignment(archive.read(build_info).decode(), "COMMIT_SHA")
+                if built_sha != expected_sha:
+                    raise PreflightError(
+                        f"wheel commit SHA {built_sha!r} does not match requested SHA {expected_sha}"
+                    )
+                prefix = "omnigent/server/static/web-ui/"
+                _validate_spa(names, lambda name: archive.read(name).decode(), prefix)
             return {
                 "sha": expected_sha,
                 "wheel_sha256": sha256_file(wheel),
                 "package_version": version,
                 "wheel_filename": wheel.name,
+                "package_name": name,
             }
     except zipfile.BadZipFile as exc:
         raise PreflightError(f"invalid wheel zip: {wheel}") from exc
@@ -193,6 +207,13 @@ def _inspect_installed_identity(release: Path) -> dict[str, str]:
         capture_output=True,
         text=True,
         timeout=30,
+        # Run from ``/tmp`` so ``omnigent`` resolves from the installed
+        # venv site-packages, not from whatever working tree the caller
+        # happened to invoke the controller from.
+        cwd="/tmp",
+        # Clear PYTHONPATH explicitly so a developer environment can't
+        # shadow the installed package.
+        env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
     )
     if check.returncode:
         raise PreflightError(f"installed import check failed: {check.stderr.strip()}")
@@ -228,6 +249,12 @@ def inspect_release(
     for key in ("wheel_sha256", "package_version", "wheel_filename"):
         if wheel[key] != provenance[key]:
             raise PreflightError(f"wheel {key} does not match provenance")
+
+    # Validate any sibling SDK wheels stored alongside the main wheel.
+    artifacts_dir = release / "artifacts"
+    if artifacts_dir.is_dir():
+        for sdk_wheel in sorted(artifacts_dir.glob("omnigent_*.whl")):
+            inspect_wheel(sdk_wheel, expected_sha)
 
     site_packages = sorted((release / "venv" / "lib").glob("python*/site-packages"))
     package_dirs = [path / "omnigent" for path in site_packages if (path / "omnigent").is_dir()]
