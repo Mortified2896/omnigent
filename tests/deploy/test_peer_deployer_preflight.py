@@ -88,12 +88,14 @@ def test_preflight_runs_all_checks_even_when_one_fails() -> None:
 
 def test_preflight_passed_only_when_all_checks_pass() -> None:
     report = preflight.run_preflight(target=identity.O1, supervisor=identity.O2)
-    # The O1 service is unknown on this host (we have not deployed it),
-    # so the preflight is expected to fail. The key invariants still
-    # hold: the report is structured, every check is recorded, and the
-    # overall passed flag is False.
-    assert report.passed is False
+    # On the live host, the preflight may pass (when O1 is healthy and
+    # O2 is the accepted artifact) or fail. The key invariant is the
+    # structured report: every check is recorded, and the overall
+    # passed flag is derived from the check statuses.
+    assert isinstance(report.passed, bool)
     assert all(isinstance(c, preflight.CheckResult) for c in report.checks)
+    reconstructed = all(c.ok for c in report.checks)
+    assert report.passed == reconstructed
 
 
 def test_check_target_distinct_from_supervisor_records_failure() -> None:
@@ -295,7 +297,8 @@ def test_preflight_report_to_dict_is_serializable() -> None:
 
 
 def test_preflight_does_not_mutate_target_on_failure(tmp_path: Path) -> None:
-    """When the preflight fails, no file under the target's home is changed.
+    """The preflight must not mutate any target files regardless of
+    pass/fail outcome.
 
     The test limits its comparison to the canonical control files
     (PROVENANCE.txt, venv symlink, chat.db) rather than every file
@@ -315,8 +318,7 @@ def test_preflight_does_not_mutate_target_on_failure(tmp_path: Path) -> None:
         identity.O1.deployment_root / "venv",
     ]
     before = {str(p): p.stat().st_mtime_ns for p in canonical if p.exists()}
-    report = preflight.run_preflight(target=identity.O1, supervisor=identity.O2)
-    assert report.passed is False
+    preflight.run_preflight(target=identity.O1, supervisor=identity.O2)
     after = {str(p): p.stat().st_mtime_ns for p in canonical if p.exists()}
     assert before == after
 

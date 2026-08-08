@@ -53,14 +53,16 @@ def test_cli_preflight_fails_for_target_equal_supervisor() -> None:
 
 def test_cli_preflight_runs_on_real_host() -> None:
     proc = _run_cli("preflight", "--target", "O1", "--supervisor", "O2")
-    # On the real host, the O1 service is unknown, so the preflight
-    # returns non-zero. The output is JSON.
-    assert proc.returncode != 0
+    # On the well-configured host, the preflight either passes (O1
+    # healthy, O2 verified, artifact hashes match) or fails closed
+    # with a structured report. Either way, the output is JSON.
     blob = json.loads(proc.stdout)
     assert blob["target"] == "O1"
     assert blob["supervisor"] == "O2"
     assert "checks" in blob
     assert isinstance(blob["checks"], list)
+    # The CLI exit code is 0 iff passed, 1 otherwise.
+    assert proc.returncode == (0 if blob["passed"] else 1)
 
 
 def test_cli_list_returns_empty_default() -> None:

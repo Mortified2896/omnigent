@@ -131,8 +131,21 @@ def require_distinct(target: Instance, supervisor: Instance) -> None:
 
 
 def read_provenance(deployment_root: Path) -> dict[str, str]:
-    """Parse the PROVENANCE.txt file at the deployment root."""
-    path = Path(deployment_root) / "PROVENANCE.txt"
+    """Parse the PROVENANCE.txt file at the deployment root.
+
+    Also supports the release layout where PROVENANCE.txt lives
+    directly under the current symlink target.
+    """
+    # Try the current symlink first.
+    try:
+        current = read_current_symlink(deployment_root)
+        candidate = current / "PROVENANCE.txt"
+        if candidate.is_file():
+            path = candidate
+        else:
+            path = Path(deployment_root) / "PROVENANCE.txt"
+    except IdentityError:
+        path = Path(deployment_root) / "PROVENANCE.txt"
     if not path.is_file():
         raise IdentityError(f"PROVENANCE.txt missing: {path}")
     result: dict[str, str] = {}
@@ -170,7 +183,24 @@ def read_current_symlink(deployment_root: Path) -> Path:
 
 
 def installed_sha(deployment_root: Path) -> str:
-    """Return the SHA recorded in the active runtime's ``_build_info.py``."""
+    """Return the SHA recorded in the active runtime's ``_build_info.py``.
+
+    The active runtime is determined by following the ``current`` symlink
+    under the deployment root, if any. If ``current`` is missing, the
+    helper falls back to looking at the ``venv`` subdirectory directly.
+    This mirrors the layout on both O1 and O2: ``current`` -> a release
+    directory, and the venv lives inside the release directory.
+    """
+    # Try the current symlink first.
+    try:
+        current = read_current_symlink(deployment_root)
+    except IdentityError:
+        current = None
+    if current is not None:
+        site_packages = sorted((current / "venv" / "lib").glob("python*/site-packages"))
+        if site_packages:
+            return _parse_installed_sha(site_packages[0])
+    # Fallback: deploy_root/venv/lib
     site_packages = sorted((deployment_root / "venv" / "lib").glob("python*/site-packages"))
     if not site_packages:
         raise IdentityError(f"no site-packages under {deployment_root}/venv/lib")
@@ -179,11 +209,15 @@ def installed_sha(deployment_root: Path) -> str:
             f"expected exactly one python site-packages under {deployment_root}/venv/lib, "
             f"found {len(site_packages)}"
         )
-    build_info = site_packages[0] / "omnigent" / "_build_info.py"
+    return _parse_installed_sha(site_packages[0])
+
+
+def _parse_installed_sha(site_packages: Path) -> str:
+    build_info = site_packages / "omnigent" / "_build_info.py"
     if not build_info.is_file():
         raise IdentityError(f"missing _build_info.py: {build_info}")
     tree = build_info.read_text()
-    match = re.search(r"COMMIT_SHA[:\s]*['\"]?([0-9a-f]{40})", tree)
+    match = re.search(r"COMMIT_SHA[^\n]*?([0-9a-f]{40})", tree)
     if not match:
         raise IdentityError(f"could not parse COMMIT_SHA from {build_info}")
     return match.group(1)
@@ -193,9 +227,19 @@ def installed_version(deployment_root: Path) -> str:
     """Return the version recorded by the deployed package.
 
     Uses the deployed Python interpreter so the answer reflects the
-    installed wheel, not the workspace checkout.
+    installed wheel, not the workspace checkout. The active runtime
+    is determined by following the ``current`` symlink.
     """
-    python = deployment_root / "venv" / "bin" / "python"
+    python = None
+    try:
+        current = read_current_symlink(deployment_root)
+        candidate = current / "venv" / "bin" / "python"
+        if candidate.is_file():
+            python = candidate
+    except IdentityError:
+        pass
+    if python is None:
+        python = deployment_root / "venv" / "bin" / "python"
     if not python.is_file():
         raise IdentityError(f"missing python: {python}")
     result = subprocess.run(
@@ -203,8 +247,6 @@ def installed_version(deployment_root: Path) -> str:
         capture_output=True,
         text=True,
         check=False,
-        # Run from /tmp so the omnigent package resolves from the
-        # deployed venv, not from any surrounding checkout.
         cwd="/tmp",
         env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
     )
