@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOST = REPO_ROOT / "deploy" / "scripts" / "peer_deployer" / "host_promotion.py"
 WRAPPER = REPO_ROOT / "deploy" / "scripts" / "peer_promote_o1_v3.py"
+V2 = REPO_ROOT / "deploy" / "scripts" / "peer_promote_o1_v2.sh"
 
 
 def _src() -> str:
@@ -20,6 +21,14 @@ def test_v3_direction_is_fixed_o2_to_o1() -> None:
     assert "identity.require_distinct(TARGET, SUPERVISOR)" in s
     assert 'add_argument("--target"' not in WRAPPER.read_text()
     assert 'add_argument("--supervisor"' not in WRAPPER.read_text()
+
+
+def test_v2_live_promotion_path_is_hard_disabled() -> None:
+    s = V2.read_text()
+    assert "REFUSED: peer_promote_o1_v2.sh is permanently disabled" in s
+    assert "peer_promote_o1_v3.py --preflight-only" in s
+    assert "peer_promote_o1_v3.py --promote" in s
+    assert "exit 64" in s
 
 
 def test_v3_uses_transaction_specific_legacy_runtime_not_glob() -> None:
