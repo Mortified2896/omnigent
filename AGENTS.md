@@ -3,43 +3,24 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
-## Control Room deployment safety — hard invariant
+## Control Room dual-instance safety
 
-For the Control Room HomeLab O1/O2 deployment, read
-`deploy/docs/control-room-dual-instance-upgrade-safety.md` before any deployment,
-promotion, rollback, runtime replacement, service restart, or migration task.
+This repository maintains the Control Room dual-instance deployment
+(O1 maintenance + O2 production). The hard invariant is:
 
-The non-negotiable rule is:
+> Never let an Omnigent instance upgrade itself. O1 upgrades O2;
+> O2 upgrades O1. The healthy peer stays alive and supervises the
+> entire operation.
 
-> **Never let an Omnigent instance upgrade itself. O1 upgrades O2; O2 upgrades
-> O1. The healthy peer stays alive and supervises the entire operation.**
+Any deployment action MUST explicitly declare a target and supervisor
+identity, and the two must be different instances. The deployment
+tooling (`deploy/scripts/peer_deployer/`) refuses to run if target
+and supervisor resolve to the same instance.
 
-Before any deployment, explicitly identify the target and supervisor. The only
-valid normal pairs are:
-
-- target O2 -> supervisor O1
-- target O1 -> supervisor O2
-
-If target == supervisor, STOP. Do not work around this with a detached
-self-update executor. Detached executors are emergency recovery tools only.
-
-Additional Control Room requirements:
-
-- both instances ultimately track the same authoritative `main` lineage;
-- O2 receives a candidate first; after acceptance/soak, O2 supervises promotion
-  of the exact accepted immutable artifact to O1;
-- do not rebuild the accepted artifact during O1 promotion;
-- privileged deployment actions belong in a narrowly scoped host-level deployer,
-  not by weakening the Omnigent service sandbox;
-- preflight must complete before destructive mutation;
-- rollback cleanup may delete only paths explicitly created by that same
-  deployment transaction;
-- application and database rollback must remain paired;
-- if another promotion/rollback executor may still be active, STOP and inspect
-  it before starting anything else.
-
-This safety section overrides less-specific deployment wording elsewhere in the
-repository.
+The authoritative safety contract is in
+`deploy/docs/control-room-dual-instance-upgrade-safety.md`. That
+document overrides any less-specific deployment wording in this
+repository. Read it before any deployment work.
 
 ## Committing
 
