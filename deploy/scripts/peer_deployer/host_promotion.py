@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import identity, staging, transaction
+from . import identity, reconcile, staging, transaction
 
 TARGET = identity.O1
 SUPERVISOR = identity.O2
@@ -151,20 +151,49 @@ def _artifacts() -> dict[str, Path]:
 
 
 def _no_live_transactions() -> None:
+    """Refuse to proceed if any non-terminal transaction is active.
+
+    A non-terminal historical transaction is allowed ONLY when
+    :func:`reconcile.validate_completed_reconciliation` classifies
+    it as ``VALIDLY_RECONCILED``. The validator is the single
+    authoritative overlay classifier; this function delegates to
+    it instead of reimplementing the safety logic.
+    """
     root = transaction.DEFAULT_TX_ROOT
     if not root.is_dir():
         return
-    bad = []
+    bad: list[str] = []
     for d in sorted(root.iterdir()):
         p = d / "transaction.json"
         if not p.is_file():
             continue
         try:
-            phase = str(json.loads(p.read_text()).get("phase", ""))
+            blob = json.loads(p.read_text())
+            phase = str(blob.get("phase", ""))
+            tx_id = str(blob.get("tx_id", d.name))
         except Exception:
-            phase = "corrupt"
-        if phase not in TERMINAL_PHASES:
-            bad.append(f"{d.name}:{phase}")
+            bad.append(f"{d.name}:corrupt")
+            continue
+        if phase in TERMINAL_PHASES:
+            continue
+        try:
+            validation = reconcile.validate_completed_reconciliation(
+                tx_id,
+                tx_root=root,
+                quarantine_root=reconcile.DEFAULT_QUARANTINE_ROOT,
+                allowed_target=TARGET,
+                allowed_supervisor=SUPERVISOR,
+            )
+        except Exception as exc:
+            bad.append(f"{d.name}:{phase}:validator_error:{exc}")
+            continue
+        if validation.is_validly_reconciled:
+            continue
+        if validation.is_invalid:
+            reasons = "; ".join(validation.reasons) or "invalid overlay"
+            bad.append(f"{d.name}:{phase}:INVALID:{reasons}")
+            continue
+        bad.append(f"{d.name}:{phase}")
     if bad:
         raise PromotionError("non-terminal transaction exists: " + ", ".join(bad))
 
