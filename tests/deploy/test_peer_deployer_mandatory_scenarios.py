@@ -248,7 +248,11 @@ class TestScenario7_ForensicPreservation:
         # and writes a NEW audit record.
         assert "read_bytes" in reconcile_src
         assert "_sha256_bytes" in reconcile_src
-        assert "audit_path.write_text" in reconcile_src
+        # The audit write is crash-consistent (atomic via os.replace
+        # after a temp file + fsync) so a crash never leaves a
+        # partially-written overlay visible to the preflight.
+        assert "os.replace" in reconcile_src
+        assert "os.fsync" in reconcile_src
         # The reconciler never calls save() on the historical record.
         assert "transaction.save(record" not in reconcile_src
 

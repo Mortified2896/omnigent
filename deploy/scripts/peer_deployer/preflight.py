@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import identity, service_state, staging, transaction
+from . import identity, reconcile, service_state, staging, transaction
 from .identity import Instance
 from .staging import FrozenClosure
 
@@ -430,14 +430,51 @@ def check_scripts_present(report: PreflightReport, target: Instance) -> bool:
     return True
 
 
-def check_no_other_transaction(report: PreflightReport) -> bool:
-    """No other promotion transaction is in flight."""
+def check_no_other_transaction(
+    report: PreflightReport,
+    *,
+    target: Instance | None = None,
+    supervisor: Instance | None = None,
+    quarantine_root: Path | None = None,
+) -> bool:
+    """No other promotion transaction is in flight.
+
+    The check classifies every historical transaction:
+
+      A. Terminal phase (``tx_committed``/``rolled_back``/``failure``):
+         ignore; counted as already-resolved.
+      B. Non-terminal, no reconciliation overlay: BLOCK as active.
+      C. Non-terminal, valid completed reconciliation: do NOT count
+         as in-flight. The historical transaction.json is preserved
+         forensically; the overlay is the verifiable terminal
+         attestation.
+      D. Non-terminal, overlay present but invalid: BLOCK. The
+         explicit validator reasons are surfaced in the preflight
+         detail so the operator can inspect.
+
+    The check delegates to
+    :func:`reconcile.validate_completed_reconciliation` for the
+    classification. The preflight MUST NOT reimplement the
+    reconciliation safety checks; the validator is the single
+    authoritative overlay classifier.
+
+    ``target`` and ``supervisor`` default to O1 / O2 (the canonical
+    Control Room pair). ``quarantine_root`` defaults to the
+    canonical reconciliation quarantine root. Tests may inject
+    different instances and roots.
+    """
     root = transaction.DEFAULT_TX_ROOT
     if not root.is_dir():
         _record(report, "no_other_transaction", True,
                 f"no transaction root: {root}")
         return True
-    in_flight = []
+    target = target or identity.O1
+    supervisor = supervisor or identity.O2
+    q_root = quarantine_root if quarantine_root is not None else reconcile.DEFAULT_QUARANTINE_ROOT
+
+    in_flight: list[str] = []
+    invalid_overlays: list[str] = []
+    reconciled: list[str] = []
     for entry in sorted(root.iterdir()):
         if not entry.is_dir():
             continue
@@ -447,16 +484,55 @@ def check_no_other_transaction(report: PreflightReport) -> bool:
         try:
             blob = json.loads(record_path.read_text())
         except json.JSONDecodeError:
+            # Malformed historical record: treat as in-flight so the
+            # operator inspects.
+            in_flight.append(f"{entry.name}/corrupt_record")
             continue
         phase = blob.get("phase", "init")
+        tx_id = blob.get("tx_id", entry.name)
         if phase in {"tx_committed", "rolled_back", "failure"}:
+            # Terminal; already resolved. Not in-flight.
             continue
+        # Non-terminal. Consult the authoritative validator.
+        try:
+            validation = reconcile.validate_completed_reconciliation(
+                tx_id,
+                tx_root=root,
+                quarantine_root=q_root,
+                allowed_target=target,
+                allowed_supervisor=supervisor,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            in_flight.append(f"{entry.name}/{phase}/validator_error:{exc}")
+            continue
+        if validation.is_validly_reconciled:
+            reconciled.append(f"{entry.name}/{phase} -> validly reconciled/quarantined")
+            continue
+        if validation.is_invalid:
+            reasons = "; ".join(validation.reasons) or "invalid overlay"
+            invalid_overlays.append(
+                f"{entry.name}/{phase} -> INVALID overlay: {reasons}"
+            )
+            continue
+        # ACTIVE_UNRESOLVED — non-terminal, no usable overlay.
         in_flight.append(f"{entry.name}/{phase}")
-    if in_flight:
-        _record(report, "no_other_transaction", False,
-                f"in-flight transactions: {', '.join(in_flight)}")
+    if in_flight or invalid_overlays:
+        parts: list[str] = []
+        if in_flight:
+            parts.append(f"in-flight: {', '.join(in_flight)}")
+        if invalid_overlays:
+            parts.append(f"invalid overlays: {', '.join(invalid_overlays)}")
+        _record(report, "no_other_transaction", False, "; ".join(parts))
         return False
-    _record(report, "no_other_transaction", True, "none in flight")
+    if reconciled:
+        detail = (
+            f"no active transactions; "
+            f"{len(reconciled)} historical transaction(s) validly reconciled: "
+            + "; ".join(reconciled)
+        )
+    else:
+        detail = "no active transactions"
+    _record(report, "no_other_transaction", True, detail)
     return True
 
 
@@ -684,7 +760,7 @@ def run_preflight(
         lambda: check_rollback_dir_writable(report, target),
         lambda: check_disk_space(report, target),
         lambda: check_scripts_present(report, target),
-        lambda: check_no_other_transaction(report),
+        lambda: check_no_other_transaction(report, target=target, supervisor=supervisor),
         lambda: check_service_state_helper(report),
     ]
     if include_candidate_gate:
