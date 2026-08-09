@@ -1,27 +1,29 @@
 """CLI entrypoint for the peer-supervised deployer.
 
-The peer-deployer is invoked by a host-level operator (or by the
-host-level deployer) with explicit target and supervisor identity.
-It will:
+The CLI is the inspection / maintenance surface for the peer-deployer.
+It exposes:
 
-  1. Run the strict preflight.
-  2. Create a transaction record.
-  3. Snapshot the target's current state.
-  4. Back up the target's DB.
-  5. Stage the accepted artifact in the target's release layout.
-  6. Stop the target's services.
-  7. Migrate the target's DB.
-  8. Switch the target's runtime symlink.
-  9. Start the target's services.
- 10. Wait for target health.
- 11. Run focused acceptance.
- 12. Commit the transaction on success.
- 13. Paired rollback on failure.
+  * ``preflight``         — run the strict preflight gate
+  * ``stage``             — deterministically stage a candidate
+  * ``rollback``          — pair-rollback a failed transaction
+  * ``complete``          — mark a transaction committed
+  * ``load``              — print a transaction record as JSON
+  * ``list``              — list all transaction records
+  * ``reconcile-stale``   — first-class reconcile of a stale
+                            transaction; quarantines the candidate
+                            if it is independently proven safe.
+                            Preserves the historical transaction
+                            record byte-identical.
 
-The CLI never reinvents this state machine — it delegates to the
+The CLI does NOT expose a generic ``promote`` subcommand. The
+canonical live promotion entrypoint is
+``deploy/scripts/peer_promote_o1_v3.py``. The CLI exists for
+inspection, automated maintenance, and reconciliation, not as
+an alternate deploy path.
+
+The CLI never reinvents the state machine — it delegates to the
 small, focused modules (transaction, preflight, rollback, identity,
-service_state). The orchestration here is the canonical host-level
-deployer for O2 supervising O1 (or vice versa).
+path_safety, reconcile, fsm, service_state).
 """
 
 from __future__ import annotations
@@ -33,7 +35,16 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import identity, preflight, rollback, staging, transaction
+from . import (
+    fsm,
+    identity,
+    path_safety,
+    preflight,
+    reconcile,
+    rollback,
+    staging,
+    transaction,
+)
 from .preflight import (
     ACCEPTED_ARTIFACT_SHA,
     ACCEPTED_ARTIFACT_VERSION,
@@ -64,158 +75,64 @@ def _preflight(target, supervisor) -> None:
         raise SystemExit(2)
 
 
-def _snapshot_target(target: identity.Instance, record: transaction.TransactionRecord) -> dict:
-    snap = identity.snapshot(target)
-    record.old_runtime_path = str(identity.read_current_symlink(target.deployment_root))
-    record.old_runtime_sha = snap["installed_sha"]
-    record.old_runtime_version = snap["installed_version"]
-    record.target_db_schema = _read_db_schema(target)
-    transaction.save(record)
-    return snap
-
-
-def _read_db_schema(target: identity.Instance) -> str:
-    """Read the target DB's alembic version, if any."""
-    target_home = identity.HOME_MAPPING[str(target.deployment_root)]
-    db_path = target_home / "chat.db"
-    if not db_path.is_file():
-        return ""
-    import shutil
-    import subprocess
-    sqlite = shutil.which("sqlite3")
-    if sqlite is None:
-        return ""
-    result = subprocess.run(
-        [sqlite, str(db_path), "SELECT version_num FROM alembic_version;"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip()
-
-
-def _backup_db(target: identity.Instance, record: transaction.TransactionRecord) -> str:
-    """Create a sqlite3 backup of the target DB. Returns the backup path."""
-    import shutil
-    import subprocess
-    if target.deployment_root == identity.O2.deployment_root:
-        home = identity.HOME_MAPPING[str(target.deployment_root)]
-    else:
-        home = identity.HOME_MAPPING[str(target.deployment_root)]
-    db_path = home / "chat.db"
-    if not db_path.is_file():
-        raise RuntimeError(f"target DB missing: {db_path}")
-    sqlite = shutil.which("sqlite3")
-    if sqlite is None:
-        raise RuntimeError("sqlite3 not available")
-    backup_dir = transaction.transaction_path(
-        transaction.DEFAULT_TX_ROOT, record.tx_id
-    ).parent / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    backup = backup_dir / "chat.db"
-    # Use sqlite3's `.backup` command for a safe, atomic dump that
-    # holds a shared lock briefly.
-    proc = subprocess.run(
-        [sqlite, str(db_path), f".backup {backup}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0 or not backup.is_file():
-        raise RuntimeError(
-            f"DB backup failed: rc={proc.returncode} stderr={proc.stderr.strip()}"
-        )
-    # Verify integrity immediately.
-    chk = subprocess.run(
-        [sqlite, str(backup), "PRAGMA integrity_check;"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if chk.returncode != 0 or chk.stdout.strip() != "ok":
-        raise RuntimeError(
-            f"DB backup integrity failed: {chk.stdout.strip()!r} {chk.stderr.strip()!r}"
-        )
-    record.db_backup_path = str(backup)
-    record.db_backup_sha256 = _sha256_file(backup)
-    record.db_backup_integrity = "ok"
-    transaction.save(record)
-    return str(backup)
-
-
-def _sha256_file(path: Path) -> str:
-    import hashlib
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def cmd_promote(args: argparse.Namespace) -> int:
+    """REFUSED: the CLI does not expose a generic promote subcommand.
+
+    The canonical live promotion entrypoint is the host-level
+    deployer at ``deploy/scripts/peer_promote_o1_v3.py``. That
+    script enforces the brief's hard architectural invariants
+    (TARGET=O1, SUPERVISOR=O2, exact accepted artifact, paired
+    rollback, supervised by O2, never run from inside an Omnigent
+    sandbox). The CLI is for inspection and reconciliation only.
+
+    Operators who want to promote must run the host entrypoint
+    directly:
+
+        sudo -E deploy/scripts/peer_promote_o1_v3.py --preflight-only
+        sudo -E deploy/scripts/peer_promote_o1_v3.py --promote
+    """
+    raise SystemExit(
+        "REFUSED: peer_deployer CLI does not expose a promote subcommand. "
+        "Use deploy/scripts/peer_promote_o1_v3.py as the canonical host "
+        "entrypoint. The CLI exposes preflight, stage, rollback, complete, "
+        "load, list, and reconcile-stale only."
+    )
+
+
+def cmd_reconcile_stale(args: argparse.Namespace) -> int:
+    """First-class stale-transaction reconciliation.
+
+    Inspects the historical transaction record and the current
+    filesystem state. If the candidate path is independently
+    proven safe (not active runtime, not O2, not referenced by
+    any service, not in the intrinsic-forbidden list), it is
+    MOVED into a per-transaction quarantine directory. The
+    historical transaction record is NEVER rewritten; a new
+    audit record is written alongside the quarantine dir.
+
+    This is the operator replacement for the old manual
+    ``python -c 'edit transaction.json' && rm -rf /opt/omnigent/releases/<sha>``
+    procedure. That procedure is not acceptable.
+    """
     target = identity.get(args.target)
     supervisor = identity.get(args.supervisor)
     identity.require_distinct(target, supervisor)
-
-    _log(f"TARGET = {target.name}")
-    _log(f"SUPERVISOR = {supervisor.name}")
-
-    # 1. Preflight.
-    _preflight(target, supervisor)
-
-    # 2. Create transaction.
-    tx_id = transaction.make_tx_id()
-    record = transaction.create(
-        tx_id=tx_id,
-        target=target.name,
-        supervisor=supervisor.name,
-        target_artifact_sha=ACCEPTED_ARTIFACT_SHA,
-        target_artifact_version=ACCEPTED_ARTIFACT_VERSION,
-        main_wheel_sha256=ACCEPTED_MAIN_WHEEL_SHA256,
-        sdk_client_wheel_sha256=ACCEPTED_SDK_CLIENT_WHEEL_SHA256,
-        sdk_ui_wheel_sha256=ACCEPTED_SDK_UI_WHEEL_SHA256,
-    )
-    _log(f"transaction created: {tx_id}")
-
-    # 3. Snapshot target.
-    transaction.advance(record, "schema_snapshot")
-    snapshot_before = _snapshot_target(target, record)
-    _log(f"snapshot: runtime={record.old_runtime_sha} version={record.old_runtime_version}")
-
-    # 4. Backup DB.
-    transaction.advance(record, "db_backup")
-    backup = _backup_db(target, record)
-    _log(f"db backup: {backup}")
-
-    # 5/6. Stage and verify the accepted artifact.
-    # The preflight already verified the artifact exists at the
-    # supervisor's release root. The host-level deployer is responsible
-    # for copying the artifact into the target's releases/, applying
-    # migrations, and switching the runtime symlink. The peer-deployer
-    # does not perform those operations directly; it delegates to OS
-    # principals via the host-level deployer.
-    transaction.advance(record, "candidate_staging")
-    transaction.register_owned(
-        record,
-        str(target.deployment_root / "releases" / ACCEPTED_ARTIFACT_SHA),
-    )
-    transaction.advance(record, "candidate_verified")
-
-    # The remainder of the sequence is delegated to the host-level
-    # deployer. The peer-deployer hands off with a clear handoff
-    # record. The host-level deployer must call
-    # ``peer_deployer record.handoff()`` when it has crossed the
-    # mutation boundary, then ``peer_deployer record.complete()`` on
-    # success or ``peer_deployer rollback.paired_rollback(record)`` on
-    # failure.
-    _emit({
-        "status": "ready_for_host_deployer",
-        "tx_id": tx_id,
-        "target": target.name,
-        "supervisor": supervisor.name,
-        "snapshot_before": snapshot_before,
-        "record": record.to_dict(),
-    })
+    try:
+        report = reconcile.reconcile_stale_transaction(
+            args.tx_id,
+            quarantine_root=reconcile.DEFAULT_QUARANTINE_ROOT,
+            tx_root=transaction.DEFAULT_TX_ROOT,
+            allowed_target=target,
+            allowed_supervisor=supervisor,
+        )
+    except reconcile.ReconciliationError as exc:
+        _emit({
+            "status": "refused",
+            "tx_id": args.tx_id,
+            "reason": str(exc),
+        })
+        return 2
+    _emit(report.to_dict())
     return 0
 
 
@@ -420,11 +337,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_promote = sub.add_parser("promote", help="Promote a target under supervisor")
-    p_promote.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
-    p_promote.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
-    p_promote.set_defaults(func=cmd_promote)
-
     p_rollback = sub.add_parser("rollback", help="Pair-rollback a failed transaction")
     p_rollback.add_argument("--tx-id", required=True)
     p_rollback.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
@@ -455,6 +367,33 @@ def _parser() -> argparse.ArgumentParser:
     p_preflight.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
     p_preflight.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
     p_preflight.set_defaults(func=cmd_preflight)
+
+    p_reconcile = sub.add_parser(
+        "reconcile-stale",
+        help=(
+            "Reconcile a stale transaction. Inspects the historical "
+            "transaction record and the current filesystem state, "
+            "and quarantines the candidate if it is independently "
+            "proven safe. The historical transaction record is "
+            "NEVER modified; a new audit record is written."
+        ),
+    )
+    p_reconcile.add_argument("--tx-id", required=True)
+    p_reconcile.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
+    p_reconcile.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
+    p_reconcile.set_defaults(func=cmd_reconcile_stale)
+
+    p_promote = sub.add_parser(
+        "promote",
+        help=(
+            "REFUSED: this CLI does not expose a promote subcommand. "
+            "Use deploy/scripts/peer_promote_o1_v3.py as the canonical "
+            "host entrypoint."
+        ),
+    )
+    p_promote.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
+    p_promote.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
+    p_promote.set_defaults(func=cmd_promote)
 
     return parser
 
