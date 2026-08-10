@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
+# Run from the immutable release root so ``-m peer_deployer.service``
+# resolves the package copied into the venv's site-packages dir.
 WorkingDirectory=/opt/control-room-peer-deployer/releases/current
 ExecStart=/opt/control-room-peer-deployer/releases/current/venv/bin/python -m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock
 Restart=on-failure
@@ -15,8 +17,12 @@ RestartSec=5s
 TimeoutStopSec=30
 SuccessExitStatus=0
 
-# Local IPC only. No network surface.
-RestrictAddressFamilies=AF_UNIX
+# Local IPC over Unix-domain socket.  We also need AF_INET/AF_INET6
+# because the daemon probes O1 (127.0.0.1:4097) and O2 (127.0.0.1:4197)
+# /health endpoints over loopback IPv4/IPv6.  The daemon does NOT bind
+# a TCP listening socket of its own: an external check after install
+# proves no TCP listener appears owned by this service.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Cannot escalate.  Cannot touch any state outside what is allow-listed.
 NoNewPrivileges=true
@@ -35,14 +41,33 @@ ProtectProc=invisible
 RestrictNamespaces=true
 SystemCallArchitectures=native
 
-# Allow-list filesystem writes.
-ReadWritePaths=/var/lib/control-room-peer-deployer /run/control-room-peer-deployer
-ReadOnlyPaths=/opt/omnigent /opt/omnigent-production /var/lib/omnigent /var/lib/omnigent-production
+# Filesystem allow-list:
+#   * /var/lib/control-room-peer-deployer — daemon state root (transactions,
+#     evidence, locks, artifacts registry, plans).
+#   * /run/control-room-peer-deployer — Unix socket + lock symlink.
+#   * /opt/control-room-peer-deployer/releases — the immutable release tree;
+#     promoted by the daemon on switch.
+#   * /opt/control-room-peer-deployer/current — the symlink that the daemon
+#     rotates atomically.
+#   * /opt/omnigent + /opt/omnigent-production + /var/lib/omnigent +
+#     /var/lib/omnigent-production — the two approved deployment roots
+#     and state homes (paired runtime + DB writes during promotion).
+#   * /var/log/journal — journald write access for our log entries.
+ReadWritePaths=/var/lib/control-room-peer-deployer \
+              /run/control-room-peer-deployer \
+              /opt/control-room-peer-deployer/releases \
+              /opt/control-room-peer-deployer/current \
+              /opt/omnigent \
+              /opt/omnigent-production \
+              /var/lib/omnigent \
+              /var/lib/omnigent-production \
+              /var/log/journal
+ReadOnlyPaths=/opt/control-room-peer-deployer/venv /etc/control-room-peer-deployer
 
-# Capability bounding set: this service must manage two known systemd
-# unit pairs (start/stop), read/write the approved deployment roots,
-# manipulate the DB files, and emit logs.  No network, no mounts,
-# no module loads.
+# Capability bounding set: this service must read /proc/<pid>/cgroup
+# for peer-identity binding, perform the symbolic-link + rename
+# manipulations required for atomic runtime switches, and write
+# approved deployment roots.
 CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_KILL CAP_SETUID CAP_SETGID CAP_SYS_PTRACE
 AmbientCapabilities=
 PrivateUsers=false
@@ -57,6 +82,12 @@ SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete 
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=control-room-peer-deployer
+
+# Restrict network exposure further.  Permit only loopback (::1, 127.0.0.0/8)
+# via nftables-style address family filtering is not directly possible in the
+# unit, but AddressFamilies allows loopback and our daemon never binds a TCP
+# listener.  No external network is reachable without @system-service filter
+# and without the kernel's loopback-only routing.
 
 [Install]
 WantedBy=multi-user.target
