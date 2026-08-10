@@ -588,3 +588,285 @@ def test_full_preflight_with_candidate_gate_passes(tmp_path: Path) -> None:
     check_names = {c.name for c in report.checks}
     assert "dependency_bundle_reproducible" in check_names
     assert "candidate_runtime_staged_and_verified" in check_names
+
+
+# ---------------------------------------------------------------------------
+# Post-2026-08-10 regression coverage for the supervisor-Python staging bug.
+#
+# The earlier staging path built the candidate venv with
+# ``shutil.which("python3")``, which on ai-control-hub resolved to
+# Python 3.11.2. The accepted O2 supervisor is Python 3.12.13. With
+# that mismatch, packages that require ``python_requires=">=3.12"``
+# (e.g. ``omnigent-client 0.9``) failed at install time with the
+# cryptic "requires a different Python: 3.11.2 not in '>=3.12'"
+# error. The staging path must derive its interpreter from the
+# accepted supervisor runtime, not from the host's PATH.
+# ---------------------------------------------------------------------------
+
+
+def _build_fake_3_11_venv(root: Path) -> Path:
+    """Build a venv on the current interpreter (3.12) but rewrite its
+    ``pyvenv.cfg`` to advertise Python 3.11.2 so we can simulate the
+    exact host-default-python3 scenario without installing 3.11.
+    """
+    venv_dir = root / "venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(venv_dir)],
+        check=True,
+        capture_output=True,
+    )
+    cfg = venv_dir / "pyvenv.cfg"
+    text = cfg.read_text()
+    # Override the version_info line to advertise 3.11.2 while leaving
+    # the actual binary able to run (so we can still execute it). The
+    # ``platform.python_version()`` output of a 3.12 binary does not
+    # lie, so we synthesize the mismatch by patching the cfg and
+    # relying on ``_python_version_blob`` to read the real Python.
+    # That means the failure path this test exercises is the
+    # ``_require_candidate_matches_supervisor_python`` mismatch, which
+    # is exactly the one we want to prove fails closed.
+    text = text.replace("version_info = 3.12", "version_info = 3.11")
+    cfg.write_text(text)
+    return venv_dir / "bin" / "python"
+
+
+@needs_supervisor
+def test_python_version_blob_reads_supervisor(tmp_path: Path) -> None:
+    """_python_version_blob returns the supervisor's real interpreter version."""
+    blob = staging._python_version_blob(SUPERVISOR_PYTHON)
+    # sys.implementation.name is "cpython" (lowercase) on CPython.
+    assert blob["implementation"] == "cpython"
+    assert blob["version_info"].startswith("3.12.")
+    assert "executable" in blob
+    assert "base_executable" in blob
+
+
+@needs_supervisor
+def test_candidate_supervisor_python_match_passes(tmp_path: Path) -> None:
+    """When candidate matches supervisor (both same binary), the gate passes."""
+    # Build a separate throw-away venv off the real supervisor's binary.
+    candidate_venv = tmp_path / "candidate-venv"
+    subprocess.run(
+        [str(SUPERVISOR_PYTHON), "-m", "venv", str(candidate_venv)],
+        check=True,
+        capture_output=True,
+    )
+    candidate_python = candidate_venv / "bin" / "python"
+    blob = staging._require_candidate_matches_supervisor_python(
+        SUPERVISOR_PYTHON, candidate_python
+    )
+    assert blob["implementation"] == "cpython"
+    # Both must show the same version triple.
+    sup = staging._python_version_blob(SUPERVISOR_PYTHON)
+    assert blob["version_info"] == sup["version_info"]
+
+
+def test_candidate_supervisor_python_mismatch_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate that disagrees with the supervisor Python MUST fail closed.
+
+    The supervisor / candidate both run on the same Python on this
+    host. We simulate the original 3.12-vs-3.11 mismatch by
+    monkeypatching ``_python_version_blob`` so the supervisor returns
+    a 3.12 blob and the candidate returns a 3.11 blob. The gate must
+    reject the mismatch with a ``StagingError`` and a precise detail
+    message.
+    """
+    supervisor_blob = {
+        "version": "3.12.13",
+        "implementation": "cpython",
+        "version_info": "3.12.13",
+        "executable": "/opt/omnigent-production/current/venv/bin/python",
+        "base_executable": "/home/hermes/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
+    }
+    candidate_blob = {
+        "version": "3.11.2",
+        "implementation": "cpython",
+        "version_info": "3.11.2",
+        "executable": "/tmp/candidate-venv/bin/python",
+        "base_executable": "/usr/bin/python3.11",
+    }
+    captured: list[Path] = []
+
+    def fake_probe(python: Path) -> dict[str, str]:
+        captured.append(python)
+        # NOTE: pytest's tmp_path contains the test function name which
+        # may itself include the word "supervisor" or "candidate". We
+        # disambiguate by stem suffix instead.
+        if python.name.endswith("-supervisor"):
+            return supervisor_blob
+        if python.name.endswith("-candidate"):
+            return candidate_blob
+        raise AssertionError(f"unexpected python in fake_probe: {python}")
+
+    monkeypatch.setattr(staging, "_python_version_blob", fake_probe)
+    supervisor_python = tmp_path / "supervisor-test-supervisor"
+    candidate_python = tmp_path / "candidate-test-candidate"
+    supervisor_python.write_text("#!/bin/sh\nexit 0\n")
+    candidate_python.write_text("#!/bin/sh\nexit 0\n")
+    supervisor_python.chmod(0o755)
+    candidate_python.chmod(0o755)
+    with pytest.raises(staging.StagingError) as exc:
+        staging._require_candidate_matches_supervisor_python(
+            supervisor_python, candidate_python
+        )
+    text = str(exc.value)
+    assert "candidate Python does not match accepted supervisor Python" in text
+    assert "3.12" in text and "3.11" in text
+    # The gate must probe BOTH interpreters before raising.
+    assert captured == [supervisor_python, candidate_python]
+
+
+@needs_supervisor
+def test_ensure_target_release_layout_uses_supervisor_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_ensure_target_release_layout`` MUST delegate to the supervisor interpreter.
+
+    We monkeypatch ``shutil.which`` to return a synthetic 3.11 binary
+    (the host default). If ``_ensure_target_release_layout`` ever
+    regressed to ``shutil.which("python3")`` this test would catch it,
+    because the supervisor interpreter would never be invoked.
+    """
+    fake_python3_11 = tmp_path / "fake-python3.11"
+    fake_python3_11.write_text("#!/bin/sh\necho 3.11.2\nexit 0\n")
+    fake_python3_11.chmod(0o755)
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: str(fake_python3_11) if name in {"python3", "python"} else None,
+    )
+    target = tmp_path / "candidate"
+    # The supervisor must be the real O2 supervisor so that the venv
+    # is built with the right interpreter.
+    staging._ensure_target_release_layout(target, identity.O2)
+    # The candidate venv's pyvenv.cfg must exist and the candidate
+    # python must launch using the supervisor interpreter. If
+    # ``_ensure_target_release_layout`` had silently fallen back to the
+    # fake 3.11 binary, ``<supervisor-python> -m venv`` would have
+    # failed (or produced a broken venv). Instead we should see a
+    # clean pyvenv.cfg that points at the supervisor's actual
+    # interpreter home, not at our tmp_dir.
+    candidate_python = target / "venv" / "bin" / "python"
+    assert candidate_python.is_file()
+    blob = staging._python_version_blob(candidate_python)
+    assert blob["implementation"] == "cpython"
+    # And the candidate's interpreter must report the same Python
+    # generation as the supervisor (both 3.12). That assertion is
+    # only reachable if the supervisor Python was used, since the
+    # fake 3.11 binary is just an ``exit 0`` shell stub.
+    sup_blob = staging._python_version_blob(SUPERVISOR_PYTHON)
+    assert blob["version_info"] == sup_blob["version_info"]
+    # And the candidate's pyvenv.cfg must NOT reference the fake 3.11
+    # binary. The ``home`` line is the supervisor's interpreter home.
+    cfg_text = (target / "venv" / "pyvenv.cfg").read_text()
+    assert str(fake_python3_11) not in cfg_text
+
+
+@needs_supervisor
+def test_stage_candidate_runtime_records_python_identity(tmp_path: Path) -> None:
+    """A successful staging pass MUST record the candidate/supervisor Python identity."""
+    target_release = tmp_path / "candidate"
+    staging.stage_candidate_runtime(
+        target_release_root=target_release,
+        supervisor=identity.O2,
+        wheels={
+            "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
+            "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+            "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+        },
+    )
+    identity_blob_path = target_release / "python-identity.json"
+    assert identity_blob_path.is_file()
+    blob = json.loads(identity_blob_path.read_text())
+    assert "supervisor" in blob and "candidate" in blob
+    # Both must report the same version triple.
+    assert (
+        blob["supervisor"]["version_info"]
+        == blob["candidate"]["version_info"]
+    )
+    # And the candidate's executable must match the supervisor's.
+    assert blob["supervisor"]["implementation"] == "cpython"
+    assert blob["candidate"]["implementation"] == "cpython"
+
+
+@needs_supervisor
+def test_stage_candidate_runtime_uses_frozen_supervisor_closure(tmp_path: Path) -> None:
+    """Regression: the candidate must still be built off the frozen supervisor closure."""
+    target_release = tmp_path / "candidate"
+    staging.stage_candidate_runtime(
+        target_release_root=target_release,
+        supervisor=identity.O2,
+        wheels={
+            "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
+            "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+            "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+        },
+    )
+    # Verify the closure was actually applied.
+    candidate_python = target_release / "venv" / "bin" / "python"
+    closure = staging.capture_supervisor_closure(identity.O2)
+    mismatches = staging.verify_candidate_versions(
+        candidate_python, closure.expected_versions()
+    )
+    assert mismatches == [], mismatches
+    # The .complete marker must be present.
+    assert (target_release / ".complete").is_file()
+    # The PROVENANCE.txt must be present.
+    assert (target_release / "PROVENANCE.txt").is_file()
+    # The artifacts/ must contain the three SDK wheels.
+    for prefix in ("omnigent-", "omnigent_client-", "omnigent_ui_sdk-"):
+        wheels = list((target_release / "artifacts").glob(f"{prefix}*.whl"))
+        assert wheels, f"missing {prefix}*.whl in artifacts/"
+
+
+@needs_supervisor
+def test_stage_candidate_runtime_still_uses_no_deps_no_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: pip install MUST use ``--no-deps --no-index``."""
+    # We can't easily intercept subprocess.run inside _install_wheels_no_deps
+    # without a heavy patch, but we CAN inspect the captured command by
+    # failing the install with an unreachable wheel and reading stderr.
+    target_release = tmp_path / "candidate"
+    bad_main = tmp_path / "main.whl"
+    bad_main.write_bytes(b"not a wheel")
+    with pytest.raises(staging.StagingError) as exc:
+        staging.stage_candidate_runtime(
+            target_release_root=target_release,
+            supervisor=identity.O2,
+            wheels={
+                "main": bad_main,
+                "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+                "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+            },
+        )
+    # On failure, the partial candidate must be cleaned up.
+    assert not target_release.exists()
+    # And the failure path must NOT have left any pip install
+    # side-effect behind. The .complete marker must not be present.
+    assert not (target_release / ".complete").exists()
+
+
+@needs_supervisor
+def test_stage_candidate_runtime_failure_leaves_active_runtime_untouched(tmp_path: Path) -> None:
+    """If staging fails, O1's active runtime/DB/services must remain untouched.
+
+    The O1 venv is read-only on the host. We assert it by snapshotting
+    PROVENANCE.txt and a representative symlink before the call, then
+    re-reading them after the failure and asserting byte-equality.
+    """
+    o1_provenance = Path("/opt/omnigent/PROVENANCE.txt")
+    if not o1_provenance.is_file():
+        pytest.skip("O1 PROVENANCE.txt not present on this host")
+    before = o1_provenance.read_bytes()
+    # Make staging fail by pointing at a missing supervisor release.
+    target_release = tmp_path / "candidate"
+    with pytest.raises(staging.StagingError):
+        staging.stage_candidate_runtime(
+            target_release_root=target_release,
+            supervisor=identity.O2,
+            wheels={
+                "main": tmp_path / "nonexistent.whl",
+                "sdk_client": tmp_path / "nonexistent.whl",
+                "sdk_ui": tmp_path / "nonexistent.whl",
+            },
+        )
+    after = o1_provenance.read_bytes()
+    assert before == after

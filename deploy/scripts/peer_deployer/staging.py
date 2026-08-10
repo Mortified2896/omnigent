@@ -329,34 +329,123 @@ def _candidate_python(target_release_root: Path) -> Path:
     return candidate
 
 
-def _ensure_target_release_layout(target_release_root: Path) -> None:
+def _ensure_target_release_layout(
+    target_release_root: Path,
+    supervisor: Instance,
+) -> None:
     """Make sure the candidate release directory exists with venv/ structure.
 
     Creates a uv-style venv skeleton (``pyvenv.cfg`` + ``bin/`` + ``lib/``)
-    by delegating to ``python3 -m venv``. The site-packages and include
-    directories are populated by ``_copy_supervisor_site_packages``.
+    by delegating to ``<supervisor-python> -m venv``. The site-packages
+    and include directories are populated by ``_copy_supervisor_site_packages``.
+
+    The candidate interpreter MUST be the same Python generation as the
+    accepted supervisor runtime. We derive that interpreter from the
+    supervisor's own ``current`` symlink (or its
+    ``<deployment_root>/venv/bin/python`` fallback) via
+    ``_locate_supervisor_python``. We never call
+    ``shutil.which("python3")`` here: on ``ai-control-hub`` the host
+    ``python3`` is 3.11 while the accepted O2 supervisor is 3.12, so a
+    candidate built from host ``python3`` would silently end up with the
+    wrong interpreter and any package that requires Python >=3.12 (e.g.
+    ``omnigent-client 0.9``) would fail at install time — which is the
+    exact failure mode the 2026-08-10 O1 promotion attempt ran into.
+
+    Raises ``StagingError`` if the supervisor interpreter cannot be
+    located or ``python -m venv`` fails. The caller is responsible for
+    cleaning up a partially-staged directory on failure.
     """
     if target_release_root.exists():
         raise StagingError(
             f"target release root already exists: {target_release_root}; "
             "refusing to overwrite. Use a transaction-owned staging path."
         )
+    supervisor_python = _locate_supervisor_python(supervisor)
     target_release_root.mkdir(parents=True)
     (target_release_root / "artifacts").mkdir()
-    python = shutil.which("python3") or shutil.which("python")
-    if python is None:
-        raise StagingError("python3 / python not available on PATH")
     venv_dir = target_release_root / "venv"
     result = subprocess.run(
-        [python, "-m", "venv", str(venv_dir)],
+        [str(supervisor_python), "-m", "venv", str(venv_dir)],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
         raise StagingError(
-            f"python3 -m venv failed: rc={result.returncode} stderr={result.stderr.strip()}"
+            f"supervisor python -m venv failed: rc={result.returncode} "
+            f"interpreter={supervisor_python} stderr={result.stderr.strip()}"
         )
+
+
+def _python_version_blob(python: Path) -> dict[str, str]:
+    """Return a dict describing ``python``'s identity for evidence.
+
+    Captures the interpreter version string, implementation name,
+    full version_info, and the executable paths so the operator can
+    audit exactly which interpreter the staging phase built on. Uses
+    a neutral cwd and a minimal env to avoid source-tree shadowing.
+    """
+    helper = (
+        "import json, sys, platform\n"
+        "out = {\n"
+        "  'version': platform.python_version(),\n"
+        "  'implementation': sys.implementation.name,\n"
+        "  'version_info': '%d.%d.%d' % sys.version_info[:3],\n"
+        "  'executable': sys.executable,\n"
+        "  'base_executable': getattr(sys, '_base_executable', sys.executable),\n"
+        "}\n"
+        "json.dump(out, sys.stdout)\n"
+    )
+    result = subprocess.run(
+        [str(python), "-c", helper],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/tmp",
+        env={
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+        },
+    )
+    if result.returncode != 0:
+        raise StagingError(
+            f"python version probe failed: rc={result.returncode} "
+            f"python={python} stderr={result.stderr.strip()}"
+        )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise StagingError(
+            f"python version probe returned non-JSON: {result.stdout[:200]!r}"
+        ) from exc
+
+
+def _require_candidate_matches_supervisor_python(
+    supervisor_python: Path,
+    candidate_python: Path,
+) -> dict[str, str]:
+    """Fail-closed pre-mutation gate: candidate Python must equal supervisor Python.
+
+    Returns a dict describing the candidate interpreter on success.
+    Raises ``StagingError`` on any mismatch — including mismatches in
+    the version string, implementation name, or version_info triple.
+    """
+    supervisor_blob = _python_version_blob(supervisor_python)
+    candidate_blob = _python_version_blob(candidate_python)
+    mismatches: list[str] = []
+    for key in ("version", "implementation", "version_info"):
+        if supervisor_blob.get(key) != candidate_blob.get(key):
+            mismatches.append(
+                f"{key}: supervisor={supervisor_blob.get(key)!r} "
+                f"candidate={candidate_blob.get(key)!r}"
+            )
+    if mismatches:
+        raise StagingError(
+            "candidate Python does not match accepted supervisor Python: "
+            + "; ".join(mismatches)
+        )
+    return candidate_blob
 
 
 def _copy_supervisor_site_packages(
@@ -552,12 +641,19 @@ def stage_candidate_runtime(
             supervisor_release_root = identity.read_current_symlink(supervisor.deployment_root)
         except identity.IdentityError:
             supervisor_release_root = supervisor.deployment_root
-    _ensure_target_release_layout(target_release_root)
+    _ensure_target_release_layout(target_release_root, supervisor)
     try:
+        supervisor_python = _locate_supervisor_python(supervisor)
         supervisor_site = _locate_site_packages(supervisor)
         candidate_site = _candidate_site_packages(target_release_root)
         _copy_supervisor_site_packages(supervisor_site, candidate_site)
         candidate_python = _candidate_python(target_release_root)
+        # Fail before any target mutation unless the staged candidate
+        # uses exactly the same Python generation as the accepted
+        # supervisor. This is the post-2026-08-10 hardening gate.
+        candidate_python_blob = _require_candidate_matches_supervisor_python(
+            supervisor_python, candidate_python
+        )
         # Install order: SDKs first (so the main wheel sees them), then
         # the main wheel last so its dist-info wins.
         ordered = [
@@ -596,6 +692,19 @@ def stage_candidate_runtime(
                 f"candidate runtime versions do not match supervisor closure: "
                 f"{', '.join(mismatches)}"
             )
+        # Persist the captured Python identity for audit. The
+        # operator can later diff this against the supervisor's
+        # interpreter evidence.
+        (target_release_root / "python-identity.json").write_text(
+            json.dumps(
+                {
+                    "supervisor": _python_version_blob(supervisor_python),
+                    "candidate": candidate_python_blob,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         (target_release_root / ".complete").touch()
         # Persist the staging manifest alongside the candidate so
         # operators can later audit what was installed.
