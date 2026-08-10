@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import identity, staging, transaction
+from . import eligibility, identity, staging, transaction
 
 TARGET = identity.O1
 SUPERVISOR = identity.O2
@@ -151,22 +151,11 @@ def _artifacts() -> dict[str, Path]:
 
 
 def _no_live_transactions() -> None:
-    root = transaction.DEFAULT_TX_ROOT
-    if not root.is_dir():
-        return
-    bad = []
-    for d in sorted(root.iterdir()):
-        p = d / "transaction.json"
-        if not p.is_file():
-            continue
-        try:
-            phase = str(json.loads(p.read_text()).get("phase", ""))
-        except Exception:
-            phase = "corrupt"
-        if phase not in TERMINAL_PHASES:
-            bad.append(f"{d.name}:{phase}")
-    if bad:
-        raise PromotionError("non-terminal transaction exists: " + ", ".join(bad))
+    """Delegate to the authoritative reconciliation-aware validator."""
+    try:
+        eligibility.assert_no_blocking_transactions(transaction.DEFAULT_TX_ROOT)
+    except transaction.TransactionError as exc:
+        raise PromotionError(str(exc)) from exc
 
 
 def _backup_db(dst: Path) -> str:

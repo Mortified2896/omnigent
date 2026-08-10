@@ -1,0 +1,62 @@
+[Unit]
+Description=Control Room peer-deployer (root-owned, O1<->O2 upgrade gate)
+Documentation=file:/opt/control-room-peer-deployer/releases/current/docs/permanent-peer-deployer.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/control-room-peer-deployer/releases/current
+ExecStart=/opt/control-room-peer-deployer/releases/current/venv/bin/python -m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30
+SuccessExitStatus=0
+
+# Local IPC only. No network surface.
+RestrictAddressFamilies=AF_UNIX
+
+# Cannot escalate.  Cannot touch any state outside what is allow-listed.
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectSystem=strict
+PrivateTmp=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+SystemCallArchitectures=native
+
+# Allow-list filesystem writes.
+ReadWritePaths=/var/lib/control-room-peer-deployer /run/control-room-peer-deployer
+ReadOnlyPaths=/opt/omnigent /opt/omnigent-production /var/lib/omnigent /var/lib/omnigent-production
+
+# Capability bounding set: this service must manage two known systemd
+# unit pairs (start/stop), read/write the approved deployment roots,
+# manipulate the DB files, and emit logs.  No network, no mounts,
+# no module loads.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_KILL CAP_SETUID CAP_SETGID CAP_SYS_PTRACE
+AmbientCapabilities=
+PrivateUsers=false
+
+# We deliberately retain CAP_SYS_PTRACE so the daemon can read
+# /proc/<pid>/cgroup of the connecting client for peer-identity
+# binding.  Everything else is denied.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+
+# Logs only to the journal; no socket activation, no environment file.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=control-room-peer-deployer
+
+[Install]
+WantedBy=multi-user.target
