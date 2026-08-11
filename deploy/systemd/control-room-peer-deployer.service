@@ -1,6 +1,6 @@
 [Unit]
 Description=Control Room peer-deployer (root-owned, O1<->O2 upgrade gate)
-Documentation=file:/opt/control-room-peer-deployer/releases/current/docs/permanent-peer-deployer.md
+Documentation=file:/opt/control-room-peer-deployer/current/docs/permanent-peer-deployer.md
 After=network-online.target
 Wants=network-online.target
 
@@ -8,10 +8,10 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
-# Run from the immutable release root so ``-m peer_deployer.service``
-# resolves the package copied into the venv's site-packages dir.
-WorkingDirectory=/opt/control-room-peer-deployer/releases/current
-ExecStart=/opt/control-room-peer-deployer/releases/current/venv/bin/python -m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock
+# Run through the canonical current symlink so a repaired or promoted
+# release uses the same path systemd starts from.
+WorkingDirectory=/opt/control-room-peer-deployer/current
+ExecStart=/opt/control-room-peer-deployer/current/venv/bin/python -m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30

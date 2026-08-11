@@ -210,6 +210,41 @@ def test_systemd_unit_permits_loopback_af_inet() -> None:
         assert required in text, f"missing ReadWritePath: {required}"
 
 
+def test_systemd_unit_starts_from_canonical_current_symlink() -> None:
+    unit = (
+        Path(__file__).resolve().parents[2]
+        / "deploy" / "systemd" / "control-room-peer-deployer.service"
+    )
+    text = unit.read_text()
+    assert "/opt/control-room-peer-deployer/releases/current" not in text
+    assert "Documentation=file:/opt/control-room-peer-deployer/current/" in text
+    assert "WorkingDirectory=/opt/control-room-peer-deployer/current" in text
+    assert (
+        "ExecStart=/opt/control-room-peer-deployer/current/venv/bin/python "
+        "-m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock"
+    ) in text
+
+
+def test_bootstrap_refuses_stale_systemd_releases_current_path() -> None:
+    bootstrap = _load(
+        "bootstrap_unit_paths",
+        Path(__file__).resolve().parents[2]
+        / "deploy" / "scripts" / "control_room_peer_deployer_bootstrap.py",
+    )
+    good = (
+        "WorkingDirectory=/opt/control-room-peer-deployer/current\n"
+        "ExecStart=/opt/control-room-peer-deployer/current/venv/bin/python "
+        "-m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock\n"
+    )
+    bootstrap._validate_unit_start_paths(good)
+    bad = good.replace(
+        "/opt/control-room-peer-deployer/current",
+        "/opt/control-room-peer-deployer/releases/current",
+    )
+    with pytest.raises(bootstrap.BootstrapError, match="stale releases/current"):
+        bootstrap._validate_unit_start_paths(bad)
+
+
 # ---------------------------------------------------------------------------
 # Trusted registry + plan modules
 # ---------------------------------------------------------------------------

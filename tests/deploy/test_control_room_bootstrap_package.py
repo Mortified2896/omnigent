@@ -59,7 +59,16 @@ def _make_clean_source(work: Path) -> Path:
     """
     work.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
-        ["rsync", "-a", "--no-links", f"{REPO_ROOT}/", f"{work}/"],
+        [
+            "rsync",
+            "-a",
+            "--no-links",
+            "--exclude=pytest-of-hermes/",
+            "--exclude=.pytest_cache/",
+            "--exclude=crpd-btest-*/",
+            f"{REPO_ROOT}/",
+            f"{work}/",
+        ],
         check=False, capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr
@@ -329,24 +338,40 @@ def test_tarball_path_traversal_fails(tmp_path: Path, handoff: Path) -> None:
 def test_verify_only_no_persistent_mutation(
     tmp_path: Path, handoff: Path
 ) -> None:
-    """Running --verify-only must not create /opt/control-room-peer-deployer,
-    /var/lib/control-room-peer-deployer, /run/control-room-peer-deployer,
-    must not install a systemd unit, must not daemon-reload, must not
-    restart anything.
+    """Running --verify-only must not mutate persistent installer state.
+
+    A repair run may start from an already-created partial install under
+    /opt/control-room-peer-deployer or /var/lib/control-room-peer-deployer.
+    Verify-only must leave that state untouched; it must not require the
+    host to be pristine.
     """
+    persistent_paths = [
+        Path("/opt/control-room-peer-deployer"),
+        Path("/var/lib/control-room-peer-deployer"),
+        Path("/run/control-room-peer-deployer"),
+        Path("/etc/systemd/system/control-room-peer-deployer.service"),
+    ]
+    before = {
+        str(path): (
+            os.path.lexists(path),
+            os.readlink(path) if path.is_symlink() else None,
+            path.stat().st_mtime_ns if os.path.exists(path) else None,
+        )
+        for path in persistent_paths
+    }
+
     proc = _run_verify_only(handoff)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    # No persistent state from this wrapper run.
-    for path in (
-        "/opt/control-room-peer-deployer",
-        "/var/lib/control-room-peer-deployer",
-        "/run/control-room-peer-deployer",
-    ):
-        assert not os.path.exists(path), f"verify-only created: {path}"
-    # No systemd unit installed.
-    unit = Path("/etc/systemd/system/control-room-peer-deployer.service")
-    assert not unit.exists(), f"verify-only installed unit: {unit}"
 
+    after = {
+        str(path): (
+            os.path.lexists(path),
+            os.readlink(path) if path.is_symlink() else None,
+            path.stat().st_mtime_ns if os.path.exists(path) else None,
+        )
+        for path in persistent_paths
+    }
+    assert after == before
 
 # ---------------------------------------------------------------------------
 # 10. exact packaged handoff produced by builder passes --verify-only

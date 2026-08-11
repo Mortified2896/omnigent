@@ -563,20 +563,48 @@ def _atomic_symlink(link: Path, target: Path) -> None:
     _chown_root(link, 0o755 if link.is_dir() else 0o777)
 
 
+def _validate_unit_start_paths(unit_text: str) -> None:
+    """Fail fast on the stale systemd path from the partial install incident."""
+    stale = "/opt/control-room-peer-deployer/releases/current"
+    current = "/opt/control-room-peer-deployer/current"
+    if stale in unit_text:
+        raise BootstrapError(
+            "systemd unit uses stale releases/current path; expected "
+            f"{current} for Documentation/WorkingDirectory/ExecStart"
+        )
+    for required in (
+        f"WorkingDirectory={current}",
+        f"ExecStart={current}/venv/bin/python -m peer_deployer.service",
+    ):
+        if required not in unit_text:
+            raise BootstrapError(f"systemd unit missing canonical start path: {required}")
+
+
 def _install_unit(release: Path) -> None:
     src_unit = release / "deploy" / "systemd" / "control-room-peer-deployer.service"
     if not src_unit.is_file():
         raise BootstrapError(f"missing unit: {src_unit}")
+    unit_text = src_unit.read_text()
+    _validate_unit_start_paths(unit_text)
     tmp = UNIT_PATH.with_name(UNIT_PATH.name + f".tmp.{os.getpid()}")
-    tmp.write_text(src_unit.read_text())
+    tmp.write_text(unit_text)
     os.replace(tmp, UNIT_PATH)
     _chown_root(UNIT_PATH, 0o644)
 
 
+def _run_checked(cmd: list[str], *, context: str) -> None:
+    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise BootstrapError(
+            f"{context} failed: rc={res.returncode} cmd={' '.join(cmd)} "
+            f"stdout={res.stdout.strip()[:600]!r} stderr={res.stderr.strip()[:600]!r}"
+        )
+
+
 def _reload_and_enable() -> None:
-    subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "control-room-peer-deployer.service"], check=True)
-    subprocess.run(["systemctl", "restart", "control-room-peer-deployer.service"], check=True)
+    _run_checked(["systemctl", "daemon-reload"], context="systemd daemon-reload")
+    _run_checked(["systemctl", "enable", "control-room-peer-deployer.service"], context="systemd enable control-room-peer-deployer.service")
+    _run_checked(["systemctl", "restart", "control-room-peer-deployer.service"], context="systemd restart control-room-peer-deployer.service")
 
 
 def _seed_trusted_registry(release: Path, payload_digest: str) -> None:
