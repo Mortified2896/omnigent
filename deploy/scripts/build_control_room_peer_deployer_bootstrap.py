@@ -175,11 +175,13 @@ def _build_tarball(payload_root: Path, manifest_blob: bytes, tarball_path: Path)
     # deterministic.
     files: list[tuple[str, Path]] = []
     for p in sorted(payload_root.rglob("*")):
+        rel = p.relative_to(payload_root).as_posix()
         if p.is_symlink():
-            raise RuntimeError(f"REFUSED: source contains symlink: {p}")
+            if _is_runtime(rel):
+                raise RuntimeError(f"REFUSED: runtime source contains symlink: {p}")
+            continue
         if not p.is_file():
             continue
-        rel = p.relative_to(payload_root).as_posix()
         if rel.endswith("__pycache__"):
             continue
         if rel.endswith((".pyc", ".wasm", ".map")):
