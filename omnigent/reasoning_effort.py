@@ -25,6 +25,8 @@ OPENAI_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}
 ANTHROPIC_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 CLAUDE_EFFORTS = ANTHROPIC_EFFORTS
 CODEX_EFFORTS = OPENAI_EFFORTS
+CODEX_GPT_55_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh"})
+CODEX_GPT_56_EFFORTS = CODEX_GPT_55_EFFORTS | {"max"}
 OPENAI_AGENTS_EFFORTS = OPENAI_EFFORTS
 GEMINI_EFFORTS = frozenset({"low", "medium", "high"})
 ANTIGRAVITY_EFFORTS = GEMINI_EFFORTS
@@ -166,6 +168,16 @@ def effort_for_model_switch(
     if model is None:
         return None
     return model_effort_caps(caps).fallback.get(_bare_model(model))
+
+
+def codex_efforts_for_model(model: str | None) -> frozenset[str]:
+    """Return the Codex effort ladder for a provider-facing model id."""
+    bare = _bare_model(model) if model else ""
+    if bare.startswith("gpt-5-6-"):
+        return CODEX_GPT_56_EFFORTS
+    if bare == "gpt-5-5":
+        return CODEX_GPT_55_EFFORTS
+    return CODEX_EFFORTS
 
 
 def validate_effort(effort: object, provider: str, supported: Iterable[str]) -> str | None:
