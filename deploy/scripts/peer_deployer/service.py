@@ -18,8 +18,9 @@ the operator bootstrapped a plan for, the daemon will execute.  If
 no plan exists, the daemon REFUSES.
 
 The service protocol is intentionally narrow.  It only accepts the
-keys needed for one of three operations: ``status``, ``preflight``,
-``promote``.  Anything else is a hard refusal.
+keys needed for four operations: ``status``, ``preflight``, ``promote``,
+and the root-only non-mutating ``installer_health`` check. Anything
+else is a hard refusal.
 """
 
 from __future__ import annotations
@@ -313,16 +314,14 @@ class Handler(socketserver.StreamRequestHandler):
             )
             pid = int.from_bytes(creds[0:4], "little")
             uid = int.from_bytes(creds[4:8], "little")
-            caller = authenticated_instance(pid, uid)
             op = req["op"]
             if op == "installer_health":
-                # Installer-only local verification. This op is
-                # callable ONLY when the caller's UID is root (e.g. the
-                # bootstrap installer). It returns a minimal health
-                # snapshot and explicitly CANNOT perform promotion or
-                # preflight. It exists to give the post-install check
-                # a non-mutating, root-only proof that the daemon is
-                # alive and the registry is loadable.
+                # Installer-only local verification is the one operation
+                # that intentionally does NOT authenticate as O1/O2. The
+                # bootstrap runs as UID 0, which would be rejected by
+                # authenticated_instance() before reaching this branch.
+                # Gate root here first; every operational request below
+                # still requires the normal hermes UID + recognized cgroup.
                 if uid != 0:
                     raise AuthorizationError(
                         "installer_health is root-only and cannot be "
@@ -335,61 +334,63 @@ class Handler(socketserver.StreamRequestHandler):
                     "registry_loadable": True,
                     "process_pid": os.getpid(),
                 }
-            elif op == "status":
-                resp = self.manager.status(req.get("tx_id"))
             else:
-                target = req["target"]
-                if caller == target:
-                    raise AuthorizationError(
-                        f"REFUSED: authenticated {caller} may not upgrade itself"
-                    )
-                if caller not in {"O1", "O2"} or target not in {"O1", "O2"}:
-                    raise AuthorizationError(
-                        "REFUSED: topology violation (caller/target)"
-                    )
-                if (caller, target) not in {("O1", "O2"), ("O2", "O1")}:
-                    raise AuthorizationError(
-                        "REFUSED: topology violation (must be O1<->O2)"
-                    )
-                try:
-                    plan = self.manager.trusted.plan_for(caller, target)
-                except (PlanError,) as exc:
-                    raise AuthorizationError(
-                        f"REFUSED: no accepted plan for {caller} -> {target}: {exc}"
-                    ) from exc
-                # Re-prove the supervisor==caller, target==target invariants
-                if plan.supervisor_name != caller or plan.target_name != target:
-                    raise AuthorizationError(
-                        "REFUSED: plan supervisor/target do not match caller/target"
-                    )
-                if op == "preflight":
-                    # Preflight-only: load artifact identity, verify health probes,
-                    # but never mutate.
-                    try:
-                        artifact_sha = plan.accepted_artifact_sha
-                        artifact = self.manager.trusted.registry.get(artifact_sha)
-                    except RegistryError as exc:
-                        raise AuthorizationError(
-                            f"REFUSED: artifact not in trusted registry: {exc}"
-                        ) from exc
-                    resp = {
-                        "ok": True,
-                        "caller": caller,
-                        "target": target,
-                        "accepted_sha": artifact.artifact_sha,
-                        "accepted_version": artifact.version,
-                        "supervisor_health": _quick_health(plan.supervisor_health_url),
-                        "target_health": _quick_health(plan.target_health_url),
-                    }
+                caller = authenticated_instance(pid, uid)
+                if op == "status":
+                    resp = self.manager.status(req.get("tx_id"))
                 else:
-                    st = self.manager.submit(plan=plan, promote=True)
-                    resp = {
-                        "ok": True,
-                        "caller": caller,
-                        "target": target,
-                        "tx_id": st.tx_id,
-                        "state": st.state,
-                    }
+                    target = req["target"]
+                    if caller == target:
+                        raise AuthorizationError(
+                            f"REFUSED: authenticated {caller} may not upgrade itself"
+                        )
+                    if caller not in {"O1", "O2"} or target not in {"O1", "O2"}:
+                        raise AuthorizationError(
+                            "REFUSED: topology violation (caller/target)"
+                        )
+                    if (caller, target) not in {("O1", "O2"), ("O2", "O1")}:
+                        raise AuthorizationError(
+                            "REFUSED: topology violation (must be O1<->O2)"
+                        )
+                    try:
+                        plan = self.manager.trusted.plan_for(caller, target)
+                    except (PlanError,) as exc:
+                        raise AuthorizationError(
+                            f"REFUSED: no accepted plan for {caller} -> {target}: {exc}"
+                        ) from exc
+                    # Re-prove the supervisor==caller, target==target invariants
+                    if plan.supervisor_name != caller or plan.target_name != target:
+                        raise AuthorizationError(
+                            "REFUSED: plan supervisor/target do not match caller/target"
+                        )
+                    if op == "preflight":
+                        # Preflight-only: load artifact identity, verify health probes,
+                        # but never mutate.
+                        try:
+                            artifact_sha = plan.accepted_artifact_sha
+                            artifact = self.manager.trusted.registry.get(artifact_sha)
+                        except RegistryError as exc:
+                            raise AuthorizationError(
+                                f"REFUSED: artifact not in trusted registry: {exc}"
+                            ) from exc
+                        resp = {
+                            "ok": True,
+                            "caller": caller,
+                            "target": target,
+                            "accepted_sha": artifact.artifact_sha,
+                            "accepted_version": artifact.version,
+                            "supervisor_health": _quick_health(plan.supervisor_health_url),
+                            "target_health": _quick_health(plan.target_health_url),
+                        }
+                    else:
+                        st = self.manager.submit(plan=plan, promote=True)
+                        resp = {
+                            "ok": True,
+                            "caller": caller,
+                            "target": target,
+                            "tx_id": st.tx_id,
+                            "state": st.state,
+                        }
         except Exception as exc:
             resp = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         self.wfile.write((json.dumps(resp, sort_keys=True) + "\n").encode())
