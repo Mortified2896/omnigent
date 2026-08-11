@@ -94,8 +94,9 @@ create_maintenance_release() {
   local staging_root="$MAINT_ROOT/releases/.staging-$sha-$$"
   local staging="$staging_root/$sha"
   [[ ! -e "$staging_root" ]] || refuse "staging path already exists: $staging_root"
-  "${SUDO[@]}" mkdir -p "$staging/artifacts"
-  trap '"${SUDO[@]}" rm -rf "$staging_root"' EXIT
+  [[ ! -e "$final" ]] || refuse "final release path already exists before creation: $final"
+  "${SUDO[@]}" mkdir -p "$staging_root" "$final/artifacts"
+  trap '"${SUDO[@]}" rm -rf "$staging_root"; [[ -f "$final/.complete" ]] || "${SUDO[@]}" rm -rf "$final"' EXIT
 
   local wheel_name wheel
   wheel_name=$(python3 - "$source/PROVENANCE.txt" <<'PY'
@@ -108,22 +109,21 @@ PY
 
   # Copy the *same* application artifact that O2 accepted. Never rebuild from a
   # branch tip during promotion.
-  "${SUDO[@]}" cp "$wheel" "$staging/artifacts/$wheel_name"
-  "${SUDO[@]}" "$UV_PATH" venv --python "$PYTHON_PATH" "$staging/venv" \
+  "${SUDO[@]}" cp "$wheel" "$final/artifacts/$wheel_name"
+  "${SUDO[@]}" "$UV_PATH" venv --python "$PYTHON_PATH" "$final/venv" \
     || refuse "maintenance venv creation failed"
-  "${SUDO[@]}" "$UV_PATH" pip install --python "$staging/venv/bin/python" \
-    "$staging/artifacts/$wheel_name[all]" || refuse "maintenance wheel install failed"
-  "${SUDO[@]}" cp "$source/PROVENANCE.txt" "$staging/PROVENANCE.txt"
+  "${SUDO[@]}" "$UV_PATH" pip install --python "$final/venv/bin/python" \
+    "$final/artifacts/$wheel_name[all]" || refuse "maintenance wheel install failed"
+  "${SUDO[@]}" cp "$source/PROVENANCE.txt" "$final/PROVENANCE.txt"
   {
     printf 'promoted_from=production\n'
     printf 'promoted_at_utc=%s\n' "$(date -u +%FT%TZ)"
-  } | "${SUDO[@]}" tee -a "$staging/PROVENANCE.txt" >/dev/null
+  } | "${SUDO[@]}" tee -a "$final/PROVENANCE.txt" >/dev/null
 
-  "$OMNIGENT_RELEASE_PREFLIGHT" release "$staging" "$sha" >/dev/null \
+  "$OMNIGENT_RELEASE_PREFLIGHT" release "$final" "$sha" >/dev/null \
     || refuse "installed maintenance release preflight failed"
-  "${SUDO[@]}" touch "$staging/.complete"
-  "${SUDO[@]}" chmod a-w "$staging/PROVENANCE.txt" "$staging/artifacts/$wheel_name"
-  "${SUDO[@]}" mv -T "$staging" "$final"
+  "${SUDO[@]}" touch "$final/.complete"
+  "${SUDO[@]}" chmod a-w "$final/PROVENANCE.txt" "$final/artifacts/$wheel_name"
   "${SUDO[@]}" rmdir "$staging_root"
   trap - EXIT
   RELEASE_DIR="$final"

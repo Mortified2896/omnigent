@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import stat
 import zipfile
 from pathlib import Path
 
@@ -87,6 +88,33 @@ def test_inspect_wheel_rejects_incomplete_spa(tmp_path: Path) -> None:
 
     with pytest.raises(preflight.PreflightError, match="SPA bundle is incomplete"):
         preflight.inspect_wheel(wheel, _SHA)
+
+
+def test_installed_identity_rejects_missing_console_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    release = tmp_path / _SHA
+    bin_dir = release / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    python.write_text("#!/usr/bin/env python\n")
+    python.chmod(python.stat().st_mode | stat.S_IXUSR)
+
+    with pytest.raises(preflight.PreflightError, match="missing python or omnigent"):
+        preflight._inspect_installed_identity(release)
+
+
+def test_installed_identity_rejects_missing_entrypoint_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    release = tmp_path / _SHA
+    bin_dir = release / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    python.write_text("#!/usr/bin/env python\n")
+    python.chmod(0o755)
+    cli = bin_dir / "omnigent"
+    cli.write_text(f"#!{tmp_path}/missing-python\n")
+    cli.chmod(0o755)
+
+    with pytest.raises(preflight.PreflightError, match="interpreter does not exist"):
+        preflight._inspect_installed_identity(release)
 
 
 def test_read_provenance_rejects_duplicate_or_malformed_fields(tmp_path: Path) -> None:

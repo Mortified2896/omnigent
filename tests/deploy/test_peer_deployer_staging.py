@@ -810,12 +810,39 @@ def test_stage_candidate_runtime_uses_frozen_supervisor_closure(tmp_path: Path) 
     assert mismatches == [], mismatches
     # The .complete marker must be present.
     assert (target_release / ".complete").is_file()
+    entrypoint = target_release / "venv" / "bin" / "omnigent"
+    assert entrypoint.is_file()
+    assert os.access(entrypoint, os.X_OK)
+    shebang = entrypoint.read_text().splitlines()[0]
+    assert shebang == f"#!{target_release}/venv/bin/python"
+    assert staging.verify_entry_point_executable(target_release) == []
+    assert subprocess.run(
+        [str(entrypoint), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/tmp",
+    ).returncode == 0
     # The PROVENANCE.txt must be present.
     assert (target_release / "PROVENANCE.txt").is_file()
     # The artifacts/ must contain the three SDK wheels.
     for prefix in ("omnigent-", "omnigent_client-", "omnigent_ui_sdk-"):
         wheels = list((target_release / "artifacts").glob(f"{prefix}*.whl"))
         assert wheels, f"missing {prefix}*.whl in artifacts/"
+
+
+@needs_supervisor
+def test_verify_candidate_complete_rejects_missing_console_entrypoint(tmp_path: Path) -> None:
+    """Regression: importable packages are insufficient if systemd CLI is missing."""
+    candidate = tmp_path / "candidate"
+    (candidate / "venv" / "bin").mkdir(parents=True)
+    (candidate / "venv" / "bin" / "python").write_text("#!/usr/bin/env python\n")
+    (candidate / "venv" / "bin" / "python").chmod(0o755)
+
+    failures = staging.verify_entry_point_executable(candidate)
+
+    assert failures
+    assert any("missing-entrypoint:" in item for item in failures)
 
 
 @needs_supervisor

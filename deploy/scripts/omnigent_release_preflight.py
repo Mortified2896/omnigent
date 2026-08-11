@@ -191,11 +191,40 @@ def read_provenance(path: Path) -> dict[str, str]:
 
 
 def _inspect_installed_identity(release: Path) -> dict[str, str]:
-    """Ask the release's own interpreter for installed version/build identity."""
+    """Ask the release's own interpreter and console entry point for identity."""
     python = release / "venv" / "bin" / "python"
     cli = release / "venv" / "bin" / "omnigent"
     if not python.is_file() or not cli.is_file():
         raise PreflightError("release venv is missing python or omnigent")
+    if not cli.stat().st_mode & 0o111:
+        raise PreflightError(f"release console entry point is not executable: {cli}")
+    try:
+        first_line = cli.open("rb").readline().decode("utf-8", errors="replace").strip()
+    except OSError as exc:
+        raise PreflightError(f"cannot read console entry point: {cli}") from exc
+    if not first_line.startswith("#!"):
+        raise PreflightError(f"console entry point has no shebang: {cli}")
+    interpreter = Path(first_line[2:].split()[0])
+    if not interpreter.exists():
+        raise PreflightError(
+            f"console entry point interpreter does not exist: {interpreter}"
+        )
+    cli_check = subprocess.run(
+        [str(cli), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd="/tmp",
+        env={
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+        },
+    )
+    if cli_check.returncode:
+        raise PreflightError(
+            f"console entry point execution failed: {cli_check.stderr.strip()}"
+        )
     snippet = (
         "import json; "
         "from omnigent import _build_info; "
@@ -213,7 +242,11 @@ def _inspect_installed_identity(release: Path) -> dict[str, str]:
         cwd="/tmp",
         # Clear PYTHONPATH explicitly so a developer environment can't
         # shadow the installed package.
-        env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+        env={
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+        },
     )
     if check.returncode:
         raise PreflightError(f"installed import check failed: {check.stderr.strip()}")

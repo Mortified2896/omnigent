@@ -487,6 +487,56 @@ def _copy_supervisor_site_packages(
             shutil.copy2(child, target)
 
 
+def _entry_point_executable(target_release_root: Path) -> Path:
+    """Return the console script path systemd will execute for a release."""
+    return target_release_root / "venv" / "bin" / "omnigent"
+
+
+def verify_entry_point_executable(target_release_root: Path) -> list[str]:
+    """Verify the release console entry point exists and executes.
+
+    Import checks through ``venv/bin/python`` are not enough: wheel installers
+    generate console scripts with shebangs, and those scripts are the exact
+    files systemd executes. A copied/relocated or skipped install can leave the
+    package importable while ``venv/bin/omnigent`` is missing or unexecutable.
+    """
+    failures: list[str] = []
+    cli = _entry_point_executable(target_release_root)
+    if not cli.is_file():
+        return [f"missing-entrypoint:{cli}"]
+    if not os.access(cli, os.X_OK):
+        failures.append(f"entrypoint-not-executable:{cli}")
+    try:
+        first_line = cli.open("rb").readline().decode("utf-8", errors="replace").strip()
+    except OSError as exc:
+        return [f"entrypoint-unreadable:{cli}:{exc}"]
+    if not first_line.startswith("#!"):
+        failures.append(f"entrypoint-missing-shebang:{cli}")
+    else:
+        interpreter = Path(first_line[2:].split()[0])
+        if not interpreter.exists():
+            failures.append(f"entrypoint-interpreter-missing:{interpreter}")
+    result = subprocess.run(
+        [str(cli), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/tmp",
+        env={
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+        },
+        timeout=30,
+    )
+    if result.returncode != 0:
+        failures.append(
+            f"entrypoint-exec-failed:rc={result.returncode}:"
+            f"{result.stderr.strip()[:200]}"
+        )
+    return failures
+
+
 def _install_wheels_no_deps(
     candidate_python: Path,
     wheels: Iterable[Path],
@@ -566,6 +616,7 @@ def _install_wheels_no_deps(
                 "--no-index",
                 "--disable-pip-version-check",
                 "--no-build-isolation",
+                "--force-reinstall",
                 str(wheel),
             ],
             capture_output=True,
@@ -669,6 +720,12 @@ def stage_candidate_runtime(
         prov_src = supervisor_release_root / "PROVENANCE.txt"
         if prov_src.is_file():
             shutil.copy2(prov_src, target_release_root / "PROVENANCE.txt")
+        entrypoint_failures = verify_entry_point_executable(target_release_root)
+        if entrypoint_failures:
+            raise StagingError(
+                "candidate console entry point is not executable: "
+                + "; ".join(entrypoint_failures)
+            )
         # Verify: runtime identity must match the accepted artifact.
         identity_blob = identity.runtime_identity(candidate_python)
         if "commit_sha" not in identity_blob:
@@ -879,6 +936,7 @@ def verify_candidate_complete(staging_root: Path) -> list[str]:
     except StagingError as exc:
         failures.append(f"missing-python:{exc}")
         return failures
+    failures.extend(verify_entry_point_executable(staging_root))
     import_check = subprocess.run(
         [
             str(python),
@@ -937,5 +995,6 @@ __all__ = [
     "write_artifacts",
     "candidate_identity_matches",
     "verify_candidate_complete",
+    "verify_entry_point_executable",
     "write_staging_manifest",
 ]
