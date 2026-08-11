@@ -908,16 +908,32 @@ def _post_install_verification(release: Path, payload_digest: str) -> None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(5)
             client.connect(str(sock))
-            client.sendall(b'{"op":"status"}\n')
+            # The bootstrap runs as root. The daemon's `status` op
+            # requires the caller's UID to equal the application UID
+            # (hermes), so root calling `status` would produce a
+            # false-negative AuthorizationError. Instead, the daemon
+            # exposes a dedicated `installer_health` op that is
+            # root-only and returns a minimal health snapshot. This
+            # op is NOT a general unauthenticated endpoint — it
+            # requires UID 0 and cannot perform preflight or
+            # promotion.
+            client.sendall(b'{"op":"installer_health"}\n')
             reply = client.recv(65536).decode(errors="replace")
         status = json.loads(reply)
     except Exception as exc:
         raise BootstrapError(
-            f"status request over peer-deployer socket failed: {type(exc).__name__}: {exc}\n\n"
+            f"installer_health request over peer-deployer socket failed: "
+            f"{type(exc).__name__}: {exc}\n\n"
             f"Diagnostics:\n{_service_diagnostics()}"
         ) from exc
     if not status.get("ok"):
-        raise BootstrapError(f"status request returned non-ok response: {status!r}")
+        raise BootstrapError(
+            f"installer_health request returned non-ok response: {status!r}"
+        )
+    if status.get("scope") != "installer_health":
+        raise BootstrapError(
+            f"installer_health returned wrong scope: {status!r}"
+        )
     before_restarts = _systemctl_show_value("NRestarts")
     time.sleep(10)
     active = _systemctl_show_value("ActiveState")

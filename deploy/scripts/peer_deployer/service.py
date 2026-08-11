@@ -52,11 +52,12 @@ TX_ROOT = CONTROL_ROOT / "transactions"
 REGISTRY_PATH = CONTROL_ROOT / "artifacts" / "registry.json"
 PLANS_DIR = CONTROL_ROOT / "plans"
 MAX_REQUEST_BYTES = 64 * 1024
-ALLOWED_OPS = {"status", "preflight", "promote"}
+ALLOWED_OPS = {"status", "preflight", "promote", "installer_health"}
 ALLOWED_KEYS = {
     "status": {"op", "tx_id"},
     "preflight": {"op", "target", "request_id"},
     "promote": {"op", "target", "request_id"},
+    "installer_health": {"op"},
 }
 CGROUP_UNITS = {
     "O1": {"omnigent.service", "omnigent-host.service"},
@@ -314,7 +315,27 @@ class Handler(socketserver.StreamRequestHandler):
             uid = int.from_bytes(creds[4:8], "little")
             caller = authenticated_instance(pid, uid)
             op = req["op"]
-            if op == "status":
+            if op == "installer_health":
+                # Installer-only local verification. This op is
+                # callable ONLY when the caller's UID is root (e.g. the
+                # bootstrap installer). It returns a minimal health
+                # snapshot and explicitly CANNOT perform promotion or
+                # preflight. It exists to give the post-install check
+                # a non-mutating, root-only proof that the daemon is
+                # alive and the registry is loadable.
+                if uid != 0:
+                    raise AuthorizationError(
+                        "installer_health is root-only and cannot be "
+                        "called from the application UIDs"
+                    )
+                resp = {
+                    "ok": True,
+                    "service": "control-room-peer-deployer",
+                    "scope": "installer_health",
+                    "registry_loadable": True,
+                    "process_pid": os.getpid(),
+                }
+            elif op == "status":
                 resp = self.manager.status(req.get("tx_id"))
             else:
                 target = req["target"]

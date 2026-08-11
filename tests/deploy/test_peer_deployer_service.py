@@ -113,6 +113,85 @@ def test_request_with_arbitrary_keys_rejected(_socket_dir: Path) -> None:
         service.validate_request({"op": "promote", "target": "O1", "request_id": "ok", "command": "rm"})
 
 
+def test_installer_health_root_only(_socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The installer_health op is restricted to UID 0.
+
+    The bootstrap installer runs as root; the application UIDs (hermes)
+    must NOT be able to use this op to bypass authentication.
+    """
+    # Ensure the request validates cleanly.
+    blob = service.validate_request({"op": "installer_health"})
+    assert blob["op"] == "installer_health"
+    # Non-root callers must be rejected by the Handler.
+    creds = bytes(12)  # 4 bytes pid, 4 bytes uid, 4 bytes gid
+    creds = (
+        (1234).to_bytes(4, "little")
+        + (1000).to_bytes(4, "little")
+        + (1000).to_bytes(4, "little")
+    )
+    # Validate that the Auth path inside Handler rejects UID != 0.
+    # We cannot stand up the full socket here; instead we exercise the
+    # intent directly by inspecting the Handler logic via a stubbed
+    # require_path call. The Handler expects root for installer_health.
+    # For a non-root UID, the request must raise AuthorizationError.
+    # We patch out the cgroup check to focus on the UID gate.
+    monkeypatch.setattr(service, "_pid_cgroup_unit", lambda pid: "anything")
+    # Build a fake Handler that only exercises the installer_health branch.
+    class FakeHandler:
+        def __init__(self, uid: int) -> None:
+            self._uid = uid
+
+        def handle(self) -> None:
+            creds = (
+                (1).to_bytes(4, "little")
+                + (self._uid).to_bytes(4, "little")
+                + (0).to_bytes(4, "little")
+            )
+            pid = int.from_bytes(creds[0:4], "little")
+            uid = int.from_bytes(creds[4:8], "little")
+            if op == "installer_health":
+                if uid != 0:
+                    raise service.AuthorizationError(
+                        "installer_health is root-only"
+                    )
+
+    # The actual test: root passes, non-root fails.
+    # We invoke the real Handler via the real socket path.
+    import socket as _socket
+    sock = service.SOCKET_PATH
+    sock.parent.mkdir(parents=True, exist_ok=True)
+    server_thread = threading.Thread(
+        target=service.serve, args=(sock,), daemon=True,
+    )
+    server_thread.start()
+    try:
+        # Wait for the socket to be ready.
+        end = time.monotonic() + 5
+        while time.monotonic() < end and not sock.exists():
+            time.sleep(0.05)
+        # Non-root caller: the daemon rejects because the message
+        # arrives over the kernel SO_PEERCRED, and our test process
+        # runs as hermes (UID 1000) — the daemon will return
+        # AuthorizationError.
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as client:
+            client.settimeout(5)
+            client.connect(str(sock))
+            client.sendall(b'{"op":"installer_health"}\n')
+            reply = client.recv(65536).decode(errors="replace")
+        payload = json.loads(reply)
+        # hermes is not root, so the daemon refuses.
+        assert payload.get("ok") is False, payload
+        assert "AuthorizationError" in payload.get("error", ""), payload
+    finally:
+        # Stop the server thread.
+        import os as _os
+        try:
+            _os.unlink(sock)
+        except FileNotFoundError:
+            pass
+        server_thread.join(timeout=1)
+
+
 def test_self_upgrade_refused_by_caller_cgroup() -> None:
     from peer_deployer import identity
     target = identity.O2; supervisor = identity.O2

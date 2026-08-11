@@ -227,50 +227,76 @@ def _backup_db(plan: PromotionPlan, dst: Path) -> str:
     return _sha(dst)
 
 
-def _stage_and_switch(
+def _resolve_old_runtime_path(target_root: Path) -> Path:
+    """Return the current release directory for ``target_root``.
+
+    The result is the absolute release directory (the parent of
+    ``<release>/venv``), NOT the venv subdirectory. This is the
+    directory registered as ``owned_resources`` by the engine and the
+    directory the rollback restores the symlink to.
+
+    Resolves the deployment root's ``current`` symlink, falling back to
+    the ``venv`` symlink target if ``current`` is missing. The venv
+    symlink points to ``<release>/venv``; we return its parent.
+    """
+    try:
+        return identity.read_current_symlink(target_root)
+    except identity.IdentityError:
+        pass
+    venv = Path(target_root) / "venv"
+    if venv.is_symlink():
+        target = Path(os.readlink(str(venv)))
+        if not target.is_absolute():
+            target = (venv.parent / target).resolve()
+        else:
+            target = target.resolve()
+        # The venv symlink points to <release>/venv; return the release.
+        if target.name == "venv":
+            return target.parent
+        return target
+    raise PromotionError(
+        f"could not resolve old runtime path for {target_root}: "
+        "no current symlink and no venv symlink"
+    )
+
+
+def _stage_candidate(
     plan: PromotionPlan,
     record: transaction.TransactionRecord,
     wheels: dict[str, Path],
     artifact: ArtifactEntry,
+    final_release: Path,
 ) -> Path:
-    """Stage the candidate and switch the target symlink under transaction control.
+    """Stage the candidate runtime under transaction ownership.
 
-    The runtime transition is atomic: rename staged-dir to
-    releases/<sha>/, then ``os.replace`` a temp symlink onto
-    ``<deployment_root>/venv``.  Nothing else in the host changes.
+    This function performs NO target mutation. It only:
+
+      1. Creates the staging directory under ``final_release.parent``
+         (the rename happens later in ``_switch_target_symlink``).
+      2. Stages wheels + supervisor closure into the staging tree.
+      3. Verifies the staged candidate matches the artifact identity.
+
+    Returns the staging root path (still owned by the transaction).
     """
     target_root = Path(plan.target_deployment_root)
-    final_release = target_root / "releases" / artifact.artifact_sha
     if final_release.exists() or final_release.is_symlink():
         raise PromotionError(
             f"final release already exists: {final_release}; cleanup must prove ownership"
         )
     supervisor_release_root = Path(artifact.release_root)
+    target_instance = identity.get(plan.target_name)
+    supervisor_instance = identity.get(plan.supervisor_name)
     staging_root = staging.transaction_owned_staging_path(
-        identity.Instance(
-            name=plan.target_name,
-            deployment_root=target_root,
-            service_unit=plan.target_service_units[0],
-            host_unit=plan.target_service_units[1],
-            port=0,
-            health_url=plan.target_health_url,
-        ),
+        target_instance,
         record.tx_id,
     )
     if staging_root.exists():
         raise PromotionError(f"TX staging unexpectedly exists: {staging_root}")
-    transaction.advance(record, "candidate_staging")
-    transaction.register_owned(record, str(staging_root))
+    transaction.advance(record, "candidate_staging", root=RUNTIME_TRANSACTION_ROOT())
+    transaction.register_owned(record, str(staging_root), root=RUNTIME_TRANSACTION_ROOT())
     staging.stage_candidate_runtime(
         staging_root,
-        identity.Instance(
-            name=plan.supervisor_name,
-            deployment_root=Path(plan.supervisor_deployment_root),
-            service_unit=plan.supervisor_service_units[0],
-            host_unit=plan.supervisor_service_units[1],
-            port=0,
-            health_url=plan.supervisor_health_url,
-        ),
+        supervisor_instance,
         wheels,
         supervisor_release_root=supervisor_release_root,
     )
@@ -281,16 +307,7 @@ def _stage_and_switch(
         raise PromotionError(
             "candidate verification failed: " + "; ".join(failures)
         )
-    closure = staging.capture_supervisor_closure(
-        identity.Instance(
-            name=plan.supervisor_name,
-            deployment_root=Path(plan.supervisor_deployment_root),
-            service_unit=plan.supervisor_service_units[0],
-            host_unit=plan.supervisor_service_units[1],
-            port=0,
-            health_url=plan.supervisor_health_url,
-        )
-    )
+    closure = staging.capture_supervisor_closure(supervisor_instance)
     mismatches = staging.verify_candidate_versions(
         staging._candidate_python(staging_root),
         closure.expected_versions(),
@@ -299,10 +316,32 @@ def _stage_and_switch(
         raise PromotionError(
             "candidate closure mismatch: " + "; ".join(mismatches)
         )
-    transaction.advance(record, "candidate_verified")
-    transaction.advance(record, "switch")
+    transaction.advance(record, "candidate_verified", root=RUNTIME_TRANSACTION_ROOT())
+    return staging_root
+
+
+def _switch_target_symlink(
+    plan: PromotionPlan,
+    record: transaction.TransactionRecord,
+    staging_root: Path,
+    final_release: Path,
+    artifact: ArtifactEntry,
+) -> Path:
+    """Perform the first target mutation: rename the staged candidate to
+    ``final_release`` and atomically swap the target's ``venv`` symlink.
+
+    This is the ONLY function in the engine that changes the target's
+    active runtime. It MUST be called only AFTER
+    ``transaction.cross_mutation_boundary`` has been recorded.
+
+    No mutation beyond the venv symlink, PROVENANCE.txt, and
+    DEPLOYED_SHA is performed here. The DB migration, service restart,
+    and acceptance checks all happen later.
+    """
+    target_root = Path(plan.target_deployment_root)
+    transaction.advance(record, "switch", root=RUNTIME_TRANSACTION_ROOT())
     os.rename(staging_root, final_release)
-    transaction.register_owned(record, str(final_release))
+    transaction.register_owned(record, str(final_release), root=RUNTIME_TRANSACTION_ROOT())
     tmp = target_root / f".venv.tmp.{record.tx_id}"
     if tmp.exists() or tmp.is_symlink():
         tmp.unlink()
@@ -409,24 +448,23 @@ def run_promotion(
     path).  All inputs are already authenticated.
     """
     artifact = registry.get(plan.accepted_artifact_sha)
-    identity.require_distinct(
-        identity.Instance(
-            name=plan.supervisor_name,
-            deployment_root=Path(plan.supervisor_deployment_root),
-            service_unit=plan.supervisor_service_units[0],
-            host_unit=plan.supervisor_service_units[1],
-            port=0,
-            health_url=plan.supervisor_health_url,
-        ),
-        identity.Instance(
-            name=plan.target_name,
-            deployment_root=Path(plan.target_deployment_root),
-            service_unit=plan.target_service_units[0],
-            host_unit=plan.target_service_units[1],
-            port=0,
-            health_url=plan.target_health_url,
-        ),
-    )
+    # Topology check: the supervisor and target must be distinct
+    # canonical instances. Use the canonical identity registry so the
+    # port/host-unit invariants are validated.
+    supervisor_instance = identity.get(plan.supervisor_name)
+    target_instance = identity.get(plan.target_name)
+    identity.require_distinct(supervisor_instance, target_instance)
+    # Sanity: the plan's deployment roots must match the canonical ones.
+    if str(supervisor_instance.deployment_root) != plan.supervisor_deployment_root:
+        raise PromotionError(
+            f"plan supervisor deployment_root {plan.supervisor_deployment_root!r} "
+            f"does not match canonical {supervisor_instance.deployment_root!r}"
+        )
+    if str(target_instance.deployment_root) != plan.target_deployment_root:
+        raise PromotionError(
+            f"plan target deployment_root {plan.target_deployment_root!r} "
+            f"does not match canonical {target_instance.deployment_root!r}"
+        )
     evidence_root.mkdir(parents=True, exist_ok=True)
     supervisor_before = _supervisor_guard(plan)
     target_before = _target_pre_state(plan)
@@ -453,23 +491,29 @@ def run_promotion(
         ]["sha256"],
         root=RUNTIME_TRANSACTION_ROOT(),
     )
+    # ---- Capture full pre-mutation identity into the record ----
+    # The transaction record MUST contain enough state on disk to
+    # support rollback after a process crash. We capture everything
+    # BEFORE any candidate staging. These fields are persisted by
+    # ``transaction.save`` below.
+    target_root = Path(plan.target_deployment_root)
+    old_runtime_path = str(_resolve_old_runtime_path(target_root))
+    new_runtime_path = str(target_root / "releases" / artifact.artifact_sha)
+    record.old_runtime_path = old_runtime_path
     record.old_runtime_sha = target_before["runtime"]["commit_sha"]
     record.old_runtime_version = target_before["runtime"]["version"]
+    record.new_runtime_path = new_runtime_path
+    record.new_runtime_sha = artifact.artifact_sha
+    record.new_runtime_version = artifact.version
     record.old_db_schema = target_before["schema"]
+    record.target_db_schema = artifact.version  # post-migration schema is the artifact's target schema
     record.log_path = str(evidence / "promotion.log")
     transaction.save(record, root=RUNTIME_TRANSACTION_ROOT())
     transaction.advance(record, "preflight", root=RUNTIME_TRANSACTION_ROOT())
     if not promote:
         try:
             staging.safe_cleanup_staging(
-                identity.Instance(
-                    name=plan.target_name,
-                    deployment_root=Path(plan.target_deployment_root),
-                    service_unit=plan.target_service_units[0],
-                    host_unit=plan.target_service_units[1],
-                    port=0,
-                    health_url=plan.target_health_url,
-                ),
+                identity.get(plan.target_name),
                 tx_id,
             )
         except staging.StagingError:
@@ -488,14 +532,34 @@ def run_promotion(
     record.db_backup_integrity = "ok"
     transaction.advance(record, "db_backup", root=RUNTIME_TRANSACTION_ROOT())
     transaction.save(record, root=RUNTIME_TRANSACTION_ROOT())
+    # ---- Re-affirm the transaction state after the DB backup ----
+    # If the backup step crashed and recovered, the record on disk
+    # still carries the old/new runtime paths and SHAs. The rollback
+    # subsystem can rely on this snapshot.
+    final_release = Path(record.new_runtime_path)
     crossed = False
     try:
-        final = _stage_and_switch(plan, record, wheels, artifact)
+        # ---- Stage candidate (NO target mutation) ----
+        # The staging tree is created under a transaction-owned path. The
+        # target's venv symlink is NOT touched here. The first target
+        # mutation is the symlink swap performed by
+        # ``_switch_target_symlink`` below.
+        staging_root = _stage_candidate(plan, record, wheels, artifact, final_release)
+        # ---- Persist the staged path as a transaction-owned resource ----
+        transaction.register_owned(record, str(staging_root), root=RUNTIME_TRANSACTION_ROOT())
+        # ---- Cross the mutation boundary BEFORE the first mutation ----
+        # The venv symlink swap is the FIRST target mutation. We record
+        # the boundary crossing now so that any failure during the
+        # switch itself is treated as a post-mutation failure and
+        # triggers rollback rather than a misleading "PRE-MUTATION
+        # FAILURE; TARGET UNTOUCHED" report.
         transaction.cross_mutation_boundary(record, root=RUNTIME_TRANSACTION_ROOT())
         crossed = True
         (evidence / "MUTATION_BOUNDARY_CROSSED").write_text("true\n")
+        # ---- First (and only) target mutation in this phase ----
+        _switch_target_symlink(plan, record, staging_root, final_release, artifact)
         _stop_target(plan)
-        _migrate(final, plan)
+        _migrate(final_release, plan)
         transaction.advance(record, "service_restart", root=RUNTIME_TRANSACTION_ROOT())
         _start_target(plan)
         transaction.advance(record, "acceptance", root=RUNTIME_TRANSACTION_ROOT())
@@ -517,19 +581,17 @@ def run_promotion(
     except BaseException as exc:
         reason = f"{type(exc).__name__}: {exc}"
         if not crossed:
+            # ---- Genuine pre-mutation failure: target untouched ----
+            # The boundary was NOT crossed, so the target's venv
+            # symlink still points to the old runtime. The only thing
+            # that may exist on disk is the transaction-owned staging
+            # tree, which we clean up.
             record.phase = "failure"
             record.rollback_reason = reason
             transaction.save(record, root=RUNTIME_TRANSACTION_ROOT())
             try:
                 staging.safe_cleanup_staging(
-                    identity.Instance(
-                        name=plan.target_name,
-                        deployment_root=Path(plan.target_deployment_root),
-                        service_unit=plan.target_service_units[0],
-                        host_unit=plan.target_service_units[1],
-                        port=0,
-                        health_url=plan.target_health_url,
-                    ),
+                    identity.get(plan.target_name),
                     tx_id,
                 )
             except staging.StagingError:
@@ -541,51 +603,41 @@ def run_promotion(
                 version=artifact.version,
                 reason=reason,
             )
-        # Honor the rollback contract: paired runtime + DB rollback.
+        # ---- Post-mutation failure: delegate to the rollback subsystem ----
+        # The canonical rollback contract lives in ``rollback.paired_rollback``.
+        # That function refuses to operate unless the transaction record
+        # has crossed the mutation boundary and the old/new runtime paths
+        # are populated. We re-load the record from disk here so a
+        # crash-recovered transaction still rolls back cleanly.
         try:
+            # Stop the target's services if they were started before
+            # the failure. The rollback contract expects the runtime to
+            # be either stopped or restored to the old release.
             _stop_target(plan)
-            # restore runtime symlink to old
-            target_root = Path(plan.target_deployment_root)
-            old_runtime = Path(record.old_runtime_path)
-            if target_root.joinpath("venv").is_symlink():
-                current = (target_root / "venv").resolve()
-                if current != (Path(record.new_runtime_path) / "venv"):
-                    raise PromotionError(
-                        f"unexpected current venv: {current}"
-                    )
-                (target_root / "venv").unlink()
-                tmp = target_root / f".venv.tmp.rollback.{record.tx_id}"
-                os.symlink(old_runtime, tmp)
-                os.replace(tmp, target_root / "venv")
-            # restore db from backup
-            backup = Path(record.db_backup_path)
-            db = Path(plan.target_state_root) / "chat.db"
-            for suffix in ("", "-shm", "-wal"):
-                p = Path(str(backup) + suffix)
-                if p.is_file():
-                    target = Path(str(db) + suffix)
-                    tmp = target.with_name(target.name + f".rollback.{os.getpid()}")
-                    shutil.copy2(p, tmp)
-                    os.replace(tmp, target)
-            # restore provenance
-            old_provenance = old_runtime / "PROVENANCE.txt"
-            target_provenance = target_root / "PROVENANCE.txt"
-            if old_provenance.is_file():
-                tmp = target_provenance.with_name(
-                    target_provenance.name + ".rollback"
-                )
-                shutil.copy2(old_provenance, tmp)
-                os.replace(tmp, target_provenance)
+            persisted = transaction.load(record.tx_id, root=RUNTIME_TRANSACTION_ROOT())
+            from . import rollback as _rollback
+            # The runtime_resolver callback returns (current_release_path,
+            # current_symlink_path). After the mutation boundary has
+            # been crossed, the venv symlink points to the NEW release;
+            # the rollback function checks that this release is owned by
+            # the transaction before swapping the symlink back to the
+            # old runtime.
+            _new_release = Path(persisted.new_runtime_path)
+            report = _rollback.paired_rollback(
+                persisted,
+                runtime_resolver=lambda root: (
+                    _new_release,
+                    str(Path(root) / "venv"),
+                ),
+            )
             _start_target(plan)
-            record.phase = "rolled_back"
-            record.rollback_completed = True
-            transaction.save(record, root=RUNTIME_TRANSACTION_ROOT())
             return PromotionResult(
-                tx_id=tx_id,
+                tx_id=record.tx_id,
                 verdict="ROLLED BACK",
                 sha=artifact.artifact_sha,
                 version=artifact.version,
                 reason=reason,
+                details={"rollback_report": report},
             )
         except BaseException as rb_exc:
             record.phase = "failure"

@@ -249,13 +249,18 @@ def paired_rollback(
                     "cannot restore without a paired legacy snapshot"
                 )
             # Atomically swap the symlink back to the old runtime.
+            # The engine stores ``old_runtime_path`` as the release
+            # directory (parent of ``venv``). The symlink target must
+            # therefore be ``<old>/venv`` so the layout after
+            # rollback matches the engine's pre-mutation layout.
             current_link = _resolve_current_link(target_root, runtime_resolver)
             tmp = Path(str(current_link) + ".tmp.rollback")
             if tmp.exists() or tmp.is_symlink():
                 tmp.unlink()
-            os.symlink(old, tmp)
+            symlink_target = old / "venv"
+            os.symlink(symlink_target, tmp)
             os.replace(tmp, current_link)
-            report["actions"].append(f"symlink_restored_to:{old}")
+            report["actions"].append(f"symlink_restored_to:{symlink_target}")
         else:
             # No legacy snapshot was captured. The rollback cannot
             # safely restore the runtime. We report the partial restore
