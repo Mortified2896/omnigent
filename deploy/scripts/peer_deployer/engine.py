@@ -365,10 +365,18 @@ def _migrate(final: Path, plan: PromotionPlan) -> None:
         "PYTHONNOUSERSITE": "1",
         "HOME": "/tmp",
     }
+    db_uri = f"sqlite:///{db_path}"
     _run([
         str(final / "venv" / "bin" / "python"),
-        "-m", "omnigent.db.migrate",
-        "--database-url", f"sqlite:///{db_path}",
+        "-c",
+        (
+            "from sqlalchemy import create_engine; "
+            "from omnigent.db.utils import _run_migrations; "
+            "db_uri = " + repr(db_uri) + "; "
+            "engine = create_engine(db_uri); "
+            "_run_migrations(engine, db_uri); "
+            "engine.dispose()"
+        ),
     ], env=env)  # type: ignore[arg-type]
     # The post-migration schema is whatever the runtime is committed to;
     # we accept any schema the migration produces, but the integration
