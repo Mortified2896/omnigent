@@ -1011,6 +1011,25 @@ def _enumerate_inline_family_models(
         # ``_fetch_pi_model_lists`` for the Databricks path.
         if unsupported_in_pi(lower):
             continue
+        # Restrict to genuinely OpenAI / GPT / Codex ids that the upstream
+        # router actually advertises as OpenAI-routed. OmniRoute's
+        # ``/v1/models`` is a merged catalog of every provider it serves
+        # (Claude, Gemini, Llama, DeepSeek, NVIDIA, Cloudflare, Mistral,
+        # GitHub Models, OpenRouter, etc.); without this filter the pre-launch
+        # picker would dump the entire catalog. Keep only the Codex / OpenAI
+        # surface itself (``codex/...`` and its ``cx/...`` alias — these are
+        # what OmniRoute's ``owned_by=codex`` bucket serves), and a bare
+        # ``gpt-...`` (OpenAI direct). GitHub Models (``gh/`` / ``github/``),
+        # DuckDuckGo (``ddgw/``), and other gateway prefixes are NOT OpenAI
+        # routed and are excluded by this filter.
+        if not (
+            lower.startswith("gpt-")
+            or lower.startswith("codex/gpt-")
+            or lower.startswith("codex/codex-")
+            or lower.startswith("cx/gpt-")
+            or lower.startswith("cx/codex-")
+        ):
+            continue
         pi_entry: _PiModelEntry = {"id": model_id, "input": ["text", "image"]}
         if seen_default and model_id == seen_default:
             selected = pi_entry
