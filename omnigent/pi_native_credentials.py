@@ -1016,19 +1016,15 @@ def _enumerate_inline_family_models(
         # ``/v1/models`` is a merged catalog of every provider it serves
         # (Claude, Gemini, Llama, DeepSeek, NVIDIA, Cloudflare, Mistral,
         # GitHub Models, OpenRouter, etc.); without this filter the pre-launch
-        # picker would dump the entire catalog. Keep only the Codex / OpenAI
-        # surface itself (``codex/...`` and its ``cx/...`` alias — these are
-        # what OmniRoute's ``owned_by=codex`` bucket serves), and a bare
-        # ``gpt-...`` (OpenAI direct). GitHub Models (``gh/`` / ``github/``),
-        # DuckDuckGo (``ddgw/``), and other gateway prefixes are NOT OpenAI
-        # routed and are excluded by this filter.
-        if not (
-            lower.startswith("gpt-")
-            or lower.startswith("codex/gpt-")
-            or lower.startswith("codex/codex-")
-            or lower.startswith("cx/gpt-")
-            or lower.startswith("cx/codex-")
-        ):
+        # picker would dump the entire catalog. Keep only the canonical
+        # Codex / OpenAI surface (``codex/gpt-*`` / ``codex/codex-*`` — these
+        # are what OmniRoute's ``owned_by=codex`` bucket serves). The ``cx/...``
+        # alias and the bare ``gpt-...`` are the same routes under second
+        # names and are intentionally suppressed here so the pre-launch
+        # picker doesn't expose duplicate aliases. GitHub Models (``gh/`` /
+        # ``github/``), DuckDuckGo (``ddgw/``), and other gateway prefixes
+        # are NOT OpenAI routed and are excluded by this filter.
+        if not lower.startswith(("codex/gpt-", "codex/codex-")):
             continue
         pi_entry: _PiModelEntry = {"id": model_id, "input": ["text", "image"]}
         if seen_default and model_id == seen_default:
