@@ -78,6 +78,9 @@ def _validate(path: Path, raw: dict[str, Any]) -> dict[str, ArtifactEntry]:
         raise RegistryError(f"registry missing release_digest")
     if not isinstance(raw.get("supervisor_python"), str):
         raise RegistryError(f"registry missing supervisor_python")
+    supervisor_python = raw["supervisor_python"]
+    if not Path(supervisor_python).is_absolute():
+        raise RegistryError("registry supervisor_python must be an absolute path")
     if not isinstance(raw.get("artifacts"), dict):
         raise RegistryError(f"registry missing artifacts dict")
     out: dict[str, ArtifactEntry] = {}

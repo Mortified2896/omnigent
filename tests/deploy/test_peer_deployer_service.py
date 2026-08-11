@@ -34,6 +34,10 @@ def _socket_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(service, "EVIDENCE_ROOT", tmp_path / "evidence")
     monkeypatch.setattr(service, "REGISTRY_PATH", tmp_path / "artifacts" / "registry.json")
     monkeypatch.setattr(service, "PLANS_DIR", tmp_path / "plans")
+    monkeypatch.setattr(service, "TX_ROOT", tmp_path / "transactions")
+    monkeypatch.setattr(service, "TRANSACTION_ROOT", tmp_path / "transactions")
+    monkeypatch.setattr(eligibility_transaction, "DEFAULT_TX_ROOT", tmp_path / "transactions")
+    monkeypatch.setattr(transaction, "DEFAULT_TX_ROOT", tmp_path / "transactions")
     (tmp_path / "artifacts").mkdir()
     (tmp_path / "plans").mkdir()
     registry = {

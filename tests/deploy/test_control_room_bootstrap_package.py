@@ -54,8 +54,12 @@ def _resolve_build_id() -> str:
 
 
 def _make_clean_source(work: Path) -> Path:
-    """Copy the repo to ``work`` without symlinks so the builder's
-    strict no-symlink rule is satisfied.
+    """Create a small synthetic runtime source for package tests.
+
+    The handoff builder only packages runtime files under ``deploy/`` plus a
+    tiny allow-list of top-level metadata.  Copying the whole checkout (venvs,
+    pytest temp trees, caches, prior handoffs) previously exploded temp usage;
+    these tests need only the real runtime payload, not a multi-GB repo clone.
     """
     work.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
@@ -63,15 +67,28 @@ def _make_clean_source(work: Path) -> Path:
             "rsync",
             "-a",
             "--no-links",
-            "--exclude=pytest-of-hermes/",
+            "--exclude=__pycache__/",
+            "--exclude=*.pyc",
             "--exclude=.pytest_cache/",
+            "--exclude=pytest-of-*/",
             "--exclude=crpd-btest-*/",
-            f"{REPO_ROOT}/",
-            f"{work}/",
+            "--exclude=venv/",
+            "--exclude=.venv/",
+            "--exclude=tmp/",
+            f"{REPO_ROOT}/deploy/",
+            f"{work}/deploy/",
         ],
         check=False, capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr
+    for name in ("build_bootstrap_manifest.py", "RELEASE_NOTES.md"):
+        src = REPO_ROOT / name
+        if src.is_file():
+            shutil.copy2(src, work / name)
+    # Minimal .git HEAD lets builder metadata derivation remain deterministic
+    # when a test deliberately omits --build-id.
+    (work / ".git").mkdir()
+    (work / ".git" / "HEAD").write_text(_resolve_build_id() + "\n")
     return work
 
 

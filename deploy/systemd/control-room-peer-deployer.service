@@ -3,6 +3,8 @@ Description=Control Room peer-deployer (root-owned, O1<->O2 upgrade gate)
 Documentation=file:/opt/control-room-peer-deployer/current/docs/permanent-peer-deployer.md
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=10min
+StartLimitBurst=5
 
 [Service]
 Type=simple

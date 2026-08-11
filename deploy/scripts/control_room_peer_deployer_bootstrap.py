@@ -48,10 +48,12 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 
 PAYLOAD_ROOT = Path("/opt/control-room-peer-deployer")
@@ -607,6 +609,68 @@ def _reload_and_enable() -> None:
     _run_checked(["systemctl", "restart", "control-room-peer-deployer.service"], context="systemd restart control-room-peer-deployer.service")
 
 
+def _bounded_cmd(cmd: list[str], *, timeout: float = 8.0, limit: int = 12000) -> str:
+    try:
+        res = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+        )
+        out = (res.stdout or "") + (res.stderr or "")
+        text = f"$ {' '.join(cmd)}\nrc={res.returncode}\n{out}"
+    except Exception as exc:
+        text = f"$ {' '.join(cmd)}\n{type(exc).__name__}: {exc}"
+    if len(text) > limit:
+        return text[-limit:]
+    return text
+
+
+def _service_diagnostics() -> str:
+    unit = "control-room-peer-deployer.service"
+    sections = [
+        _bounded_cmd(["systemctl", "status", unit, "--no-pager", "-l"]),
+        _bounded_cmd([
+            "systemctl", "show", unit, "--no-pager",
+            "-p", "ActiveState", "-p", "SubState", "-p", "Result",
+            "-p", "ExecMainCode", "-p", "ExecMainStatus", "-p", "NRestarts",
+            "-p", "ExecStart", "-p", "WorkingDirectory",
+        ]),
+        _bounded_cmd(["journalctl", "-u", unit, "-n", "80", "--no-pager", "-o", "short-precise"], limit=20000),
+    ]
+    return "\n\n".join(sections)
+
+
+def _systemctl_show_value(prop: str) -> str:
+    res = subprocess.run(
+        ["systemctl", "show", "control-room-peer-deployer.service", "--no-pager", "-p", prop, "--value"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def _wait_for_socket_or_diagnose(sock: Path, *, timeout: float = 20.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if sock.exists():
+            return
+        active = _systemctl_show_value("ActiveState")
+        if active in {"failed", "inactive"}:
+            raise BootstrapError(
+                f"unix socket did not appear before service became {active}: {sock}\n\n"
+                f"Diagnostics:\n{_service_diagnostics()}"
+            )
+        time.sleep(0.5)
+    raise BootstrapError(
+        f"unix socket did not appear before timeout: {sock}\n\n"
+        f"Diagnostics:\n{_service_diagnostics()}"
+    )
+
+
 def _seed_trusted_registry(release: Path, payload_digest: str) -> None:
     """Write the root-owned trusted registry binding SHA -> content.
 
@@ -626,9 +690,7 @@ def _seed_trusted_registry(release: Path, payload_digest: str) -> None:
     registry: dict[str, dict] = {
         "schema": "control-room-peer-deployer.trusted-artifact-registry.v1",
         "release_digest": payload_digest,
-        "interpreters": {
-            "supervisor_python": str(release_supervisor_python),
-        },
+        "supervisor_python": str(release_supervisor_python),
         "artifacts": {
             ACCEPTED_ARTIFACT_SHA: {
                 "version": ACCEPTED_ARTIFACT_VERSION,
@@ -838,11 +900,38 @@ def _post_install_verification(release: Path, payload_digest: str) -> None:
             raise BootstrapError(
                 f"systemd-analyze verify reported an issue: {res.stderr.strip()[:600]}"
             )
-    # 7. daemon started and socket appeared
-    if not sock.exists():
-        raise BootstrapError(f"unix socket did not appear: {sock}")
+    # 7. daemon started, socket appeared, and status protocol responds.
+    _wait_for_socket_or_diagnose(sock)
     if sock.stat().st_uid != 0:
         raise BootstrapError(f"socket is not root-owned: {sock}")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(5)
+            client.connect(str(sock))
+            client.sendall(b'{"op":"status"}\n')
+            reply = client.recv(65536).decode(errors="replace")
+        status = json.loads(reply)
+    except Exception as exc:
+        raise BootstrapError(
+            f"status request over peer-deployer socket failed: {type(exc).__name__}: {exc}\n\n"
+            f"Diagnostics:\n{_service_diagnostics()}"
+        ) from exc
+    if not status.get("ok"):
+        raise BootstrapError(f"status request returned non-ok response: {status!r}")
+    before_restarts = _systemctl_show_value("NRestarts")
+    time.sleep(10)
+    active = _systemctl_show_value("ActiveState")
+    after_restarts = _systemctl_show_value("NRestarts")
+    if active != "active":
+        raise BootstrapError(
+            f"peer-deployer did not remain active during soak: ActiveState={active}\n\n"
+            f"Diagnostics:\n{_service_diagnostics()}"
+        )
+    if before_restarts != after_restarts:
+        raise BootstrapError(
+            f"peer-deployer restarted during soak: {before_restarts} -> {after_restarts}\n\n"
+            f"Diagnostics:\n{_service_diagnostics()}"
+        )
     # 8. daemon is NOT listening on TCP
     for port in ("4097", "4197", "4050", "4150"):
         out = subprocess.run(
