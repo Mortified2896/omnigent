@@ -76,10 +76,12 @@ PrivateUsers=false
 
 # We deliberately retain CAP_SYS_PTRACE so the daemon can read
 # /proc/<pid>/cgroup of the connecting client for peer-identity
-# binding.  Keep @chown available: staging uses shutil.copy2(), which
-# may issue fchown/chown/lchown while preserving file metadata.
+# binding. Staging also uses shutil.copy2(), which may issue
+# fchown/chown/lchown while preserving file metadata. Keep the broad
+# privileged deny-list, then add back only the @chown syscall group.
 SystemCallFilter=@system-service
-SystemCallFilter=~@resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+SystemCallFilter=@chown
 
 # Logs only to the journal; no socket activation, no environment file.
 StandardOutput=journal
