@@ -699,29 +699,41 @@ def _paginate_list_dir(
     )
 
 
+def _codex_catalog_model_option(model_id: str, *, is_default: bool = False) -> dict[str, object]:
+    """Build a Codex picker row from an authoritative provider model id."""
+    from omnigent.reasoning_effort import codex_efforts_for_model, format_supported
+
+    bare = model_id.rsplit("/", 1)[-1]
+    if bare.startswith("gpt-5.6-"):
+        display_name = f"GPT-5.6 {bare.removeprefix('gpt-5.6-').title()}"
+    elif bare == "gpt-5.5":
+        display_name = "GPT-5.5"
+    else:
+        display_name = bare
+    option: dict[str, object] = {
+        "id": model_id,
+        "displayName": display_name,
+        **({"isDefault": True} if is_default else {}),
+    }
+    if bare == "gpt-5.5" or bare.startswith("gpt-5.6-"):
+        efforts = codex_efforts_for_model(model_id)
+        option["supportedReasoningEfforts"] = [
+            {"reasoningEffort": effort, "description": effort.title()}
+            for effort in format_supported(efforts).split(", ")
+        ]
+    return option
+
+
 def _codex_catalog_model_options(
     model_ids: Iterable[str],
     *,
     default_id: str | None,
 ) -> list[dict[str, object]]:
-    """Build ordered Codex picker rows from provider model ids."""
-    models: list[dict[str, object]] = []
-    for model_id in dict.fromkeys(model_ids):
-        bare = model_id.rsplit("/", 1)[-1]
-        if bare.startswith("gpt-5.6-"):
-            display_name = f"GPT-5.6 {bare.removeprefix('gpt-5.6-').title()}"
-        elif bare == "gpt-5.5":
-            display_name = "GPT-5.5"
-        else:
-            display_name = model_id
-        models.append(
-            {
-                "id": model_id,
-                "displayName": display_name,
-                **({"isDefault": True} if model_id == default_id else {}),
-            }
-        )
-    return models
+    """Build ordered, de-duplicated Codex picker rows."""
+    return [
+        _codex_catalog_model_option(model_id, is_default=model_id == default_id)
+        for model_id in dict.fromkeys(model_ids)
+    ]
 
 
 @dataclass
@@ -2138,13 +2150,37 @@ class HostProcess:
                 default_id = (
                     default_model if default_model in {m.id for m in listing.models} else None
                 )
-                provider = (
-                    resolve_model_provider(spec, "codex-native")
-                    if listing.source == "openai-compatible"
-                    else None
-                )
+                provider = resolve_model_provider(spec, "codex-native")
                 models: list[dict[str, object]]
-                if provider is not None and is_direct_openai_provider(provider):
+                if provider.kind == "none" and not listing.models:
+                    codex_options = await discover_codex_model_options()
+                    models = []
+                    seen: set[str] = set()
+                    selected_default = False
+                    for option in codex_options:
+                        raw_id = option.get("model") or option.get("id")
+                        if not isinstance(raw_id, str) or raw_id in seen:
+                            continue
+                        seen.add(raw_id)
+                        display_name = option.get("displayName")
+                        is_default = (raw_id == default_model) or (
+                            default_model is None
+                            and not selected_default
+                            and option.get("isDefault") is True
+                        )
+                        selected_default = selected_default or is_default
+                        models.append(
+                            {
+                                "id": raw_id,
+                                "displayName": (
+                                    display_name
+                                    if isinstance(display_name, str) and display_name
+                                    else raw_id
+                                ),
+                                **({"isDefault": True} if is_default else {}),
+                            }
+                        )
+                elif listing.source == "openai-compatible" and is_direct_openai_provider(provider):
                     available_ids = {model.id for model in listing.models}
                     models = []
                     seen: set[str] = set()
