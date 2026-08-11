@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -619,10 +620,13 @@ def test_engine_rollback_restores_venv_symlink_after_switch_failure(
             engine, "_verify_artifacts",
             lambda artifact: {"main": Path("/tmp/dummy"), "sdk_client": Path("/tmp/dummy"), "sdk_ui": Path("/tmp/dummy")},
         )
-        monkey.setattr(
-            engine, "_backup_db",
-            lambda plan, dst: "0" * 64,
-        )
+
+        def _backup_db_for_rollback(plan, dst):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(env["target_home"] / "chat.db", dst)
+            return "0" * 64
+
+        monkey.setattr(engine, "_backup_db", _backup_db_for_rollback)
 
         # DON'T stub _stage_candidate / _switch_target_symlink: let them
         # actually run so the venv symlink swap is observable.
@@ -633,14 +637,11 @@ def test_engine_rollback_restores_venv_symlink_after_switch_failure(
         def _stage_with_real_staging(
             plan, record, wheels, artifact, final_release,
         ):
-            """Build a stageable directory inside the test fixture and
-            return its path. This is the minimal amount of work needed
-            for ``_switch_target_symlink`` to succeed."""
-            staging_root = target_root / "staging" / record.tx_id
-            (staging_root / "venv").mkdir(parents=True)
-            # Match the structure expected by the engine.
+            """Build the future release at its final path in the test fixture.
+            This is the minimal amount of work needed for
+            ``_switch_target_symlink`` to succeed."""
             (final_release / "venv").mkdir(parents=True, exist_ok=True)
-            return staging_root
+            return final_release
 
         def _stop_target_fails(plan):
             raise RuntimeError("injected stop failure")

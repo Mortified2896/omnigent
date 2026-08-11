@@ -267,16 +267,15 @@ def _stage_candidate(
     artifact: ArtifactEntry,
     final_release: Path,
 ) -> Path:
-    """Stage the candidate runtime under transaction ownership.
+    """Build the candidate runtime at its final release pathname.
 
-    This function performs NO target mutation. It only:
+    This function does not alter the active runtime symlink or services. It
+    creates only the transaction-owned future release directory. Building the
+    virtualenv at ``final_release`` is required because console-script shebangs
+    embed the absolute interpreter path and systemd executes
+    ``/opt/omnigent/venv/bin/omnigent`` after activation.
 
-      1. Creates the staging directory under ``final_release.parent``
-         (the rename happens later in ``_switch_target_symlink``).
-      2. Stages wheels + supervisor closure into the staging tree.
-      3. Verifies the staged candidate matches the artifact identity.
-
-    Returns the staging root path (still owned by the transaction).
+    Returns the final release path (owned by the transaction).
     """
     target_root = Path(plan.target_deployment_root)
     if final_release.exists() or final_release.is_symlink():
@@ -293,23 +292,23 @@ def _stage_candidate(
     if staging_root.exists():
         raise PromotionError(f"TX staging unexpectedly exists: {staging_root}")
     transaction.advance(record, "candidate_staging", root=RUNTIME_TRANSACTION_ROOT())
-    transaction.register_owned(record, str(staging_root), root=RUNTIME_TRANSACTION_ROOT())
+    transaction.register_owned(record, str(final_release), root=RUNTIME_TRANSACTION_ROOT())
     staging.stage_candidate_runtime(
-        staging_root,
+        final_release,
         supervisor_instance,
         wheels,
         supervisor_release_root=supervisor_release_root,
     )
-    failures = staging.verify_candidate_complete(staging_root)
+    failures = staging.verify_candidate_complete(final_release)
     if failures or not staging.candidate_identity_matches(
-        staging_root, artifact.artifact_sha, artifact.version
+        final_release, artifact.artifact_sha, artifact.version
     ):
         raise PromotionError(
             "candidate verification failed: " + "; ".join(failures)
         )
     closure = staging.capture_supervisor_closure(supervisor_instance)
     mismatches = staging.verify_candidate_versions(
-        staging._candidate_python(staging_root),
+        staging._candidate_python(final_release),
         closure.expected_versions(),
     )
     if mismatches:
@@ -317,7 +316,7 @@ def _stage_candidate(
             "candidate closure mismatch: " + "; ".join(mismatches)
         )
     transaction.advance(record, "candidate_verified", root=RUNTIME_TRANSACTION_ROOT())
-    return staging_root
+    return final_release
 
 
 def _switch_target_symlink(
@@ -327,20 +326,24 @@ def _switch_target_symlink(
     final_release: Path,
     artifact: ArtifactEntry,
 ) -> Path:
-    """Perform the first target mutation: rename the staged candidate to
-    ``final_release`` and atomically swap the target's ``venv`` symlink.
+    """Perform the first target mutation: atomically swap target symlinks.
 
-    This is the ONLY function in the engine that changes the target's
-    active runtime. It MUST be called only AFTER
-    ``transaction.cross_mutation_boundary`` has been recorded.
+    The candidate release already exists at ``final_release`` so its generated
+    console-script shebangs point at the final interpreter path. This is the
+    ONLY function in the engine that changes the target's active runtime. It
+    MUST be called only AFTER ``transaction.cross_mutation_boundary`` has been
+    recorded.
 
     No mutation beyond the venv symlink, PROVENANCE.txt, and
     DEPLOYED_SHA is performed here. The DB migration, service restart,
     and acceptance checks all happen later.
     """
     target_root = Path(plan.target_deployment_root)
+    if staging_root != final_release:
+        raise PromotionError(
+            f"candidate must be built at final release path: {staging_root} != {final_release}"
+        )
     transaction.advance(record, "switch", root=RUNTIME_TRANSACTION_ROOT())
-    os.rename(staging_root, final_release)
     transaction.register_owned(record, str(final_release), root=RUNTIME_TRANSACTION_ROOT())
     tmp = target_root / f".venv.tmp.{record.tx_id}"
     if tmp.exists() or tmp.is_symlink():
@@ -539,11 +542,11 @@ def run_promotion(
     final_release = Path(record.new_runtime_path)
     crossed = False
     try:
-        # ---- Stage candidate (NO target mutation) ----
-        # The staging tree is created under a transaction-owned path. The
-        # target's venv symlink is NOT touched here. The first target
-        # mutation is the symlink swap performed by
-        # ``_switch_target_symlink`` below.
+        # ---- Stage candidate (NO active-runtime mutation) ----
+        # The candidate release is created at its final path so generated
+        # console-script shebangs remain executable after activation. The
+        # target's venv symlink is NOT touched here. The first active runtime
+        # mutation is the symlink swap performed by ``_switch_target_symlink``.
         staging_root = _stage_candidate(plan, record, wheels, artifact, final_release)
         # ---- Persist the staged path as a transaction-owned resource ----
         transaction.register_owned(record, str(staging_root), root=RUNTIME_TRANSACTION_ROOT())
@@ -584,12 +587,13 @@ def run_promotion(
             # ---- Genuine pre-mutation failure: target untouched ----
             # The boundary was NOT crossed, so the target's venv
             # symlink still points to the old runtime. The only thing
-            # that may exist on disk is the transaction-owned staging
-            # tree, which we clean up.
+            # that may exist on disk is the transaction-owned final
+            # release tree, which we clean up.
             record.phase = "failure"
             record.rollback_reason = reason
             transaction.save(record, root=RUNTIME_TRANSACTION_ROOT())
             try:
+                shutil.rmtree(final_release, ignore_errors=True)
                 staging.safe_cleanup_staging(
                     identity.get(plan.target_name),
                     tx_id,
@@ -613,7 +617,12 @@ def run_promotion(
             # Stop the target's services if they were started before
             # the failure. The rollback contract expects the runtime to
             # be either stopped or restored to the old release.
-            _stop_target(plan)
+            try:
+                _stop_target(plan)
+            except BaseException:
+                # Continue rollback even if stopping an already-broken target
+                # reports failure; restoring the symlink/DB is the safety action.
+                pass
             persisted = transaction.load(record.tx_id, root=RUNTIME_TRANSACTION_ROOT())
             from . import rollback as _rollback
             # The runtime_resolver callback returns (current_release_path,
