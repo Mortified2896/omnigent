@@ -42,6 +42,7 @@ from omnigent.onboarding.provider_config import (
     CHAT_WIRE_API,
     CLI_CONFIG_KIND,
     DATABRICKS_KIND,
+    FamilyConfig,
     GATEWAY_KIND,
     KEY_KIND,
     LOCAL_KIND,
@@ -900,6 +901,131 @@ def _inline_family_order(model: str | None) -> tuple[str, ...]:
     return ("anthropic", "openai")
 
 
+def _enumerate_inline_family_models(
+    entry: ProviderEntry,
+    family_name: str,
+    family: FamilyConfig,
+) -> list[_PiModelEntry]:
+    """Enumerate chat-mode models a gateway/local provider exposes live.
+
+    The Pi model picker is fed from the per-session ``models.json`` (see
+    :func:`write_pi_models_config`), not from a separate catalog fetch at
+    request time. For an inline-family provider (``key`` / ``gateway`` /
+    ``local``) the configured ``models:`` block is intentionally tiny — the
+    gateway often hosts dozens of routes (``custom/best-coding`` + explicit
+    OpenAI / Claude / DeepSeek / Gemini / Llama ids via the upstream router).
+    Without a live enumeration the picker only shows the explicit pin.
+
+    We hit ``GET <base_url>/v1/models`` with the family's credential (the
+    same call :mod:`omnigent.model_catalog` already uses for the runner's
+    worker model catalog), filter to chat-mode ids Pi can drive, and return
+    :class:`_PiModelEntry` dicts ready to merge into the primary provider's
+    ``models`` list. The selected model is added separately by
+    :meth:`PiProviderConfig.to_models_config`, so it never has to appear here.
+
+    Failures fall back to an empty list — the picker still shows the
+    configured default, the same as before this enumeration existed.
+
+    :param entry: The resolved provider entry.
+    :param family_name: The family name (``"anthropic"`` / ``"openai"``).
+    :param family: The expanded :class:`FamilyConfig` (base_url + credential).
+    :returns: Chat-mode Pi model entries sorted by id, with Pi-compatibility
+        filtering and listing metadata (context window, max output) attached
+        when the endpoint reports it.
+    """
+    # Only gateway / local kinds surface a live /v1/models listing here.
+    # A direct vendor ``key`` (api.openai.com / api.anthropic.com) is the
+    # canonical "no direct OpenAI API access" path — its listing is the
+    # bundled catalog, already served by ``get_chat_models``. The hard rule
+    # of this fix is "don't add direct OpenAI API access to Omnigent", so
+    # explicit canonical-vendor bases are skipped (a gateway / local proxy
+    # routed through a third-party endpoint — OmniRoute, OpenRouter,
+    # LiteLLM, Ollama — is the supported path).
+    if entry.kind not in (GATEWAY_KIND, LOCAL_KIND):
+        return []
+    base_url = family.base_url
+    if not base_url:
+        return []
+    # Hard guard: never enumerate api.openai.com / api.anthropic.com
+    # directly, even if a ``key`` kind somehow lands here.
+    try:
+        from omnigent.model_catalog import ResolvedModelProvider
+        from omnigent.model_catalog import is_direct_openai_provider
+        from omnigent.model_catalog import _fetch_openai_compatible_listing as _fetch_listing
+
+        provider = ResolvedModelProvider(
+            kind=entry.kind,
+            family=family_name,
+            base_url=base_url,
+            api_key=family.api_key,
+            auth_command=family.auth_command,
+            detail=f"provider {entry.name!r}",
+        )
+        if is_direct_openai_provider(provider):
+            return []
+        listing = _fetch_listing(provider, transport=None)
+    except Exception:  # noqa: BLE001 — enumeration must never break launch
+        _LOGGER.info(
+            "pi-native: inline-family model enumeration failed for provider %r; "
+            "Pi will show only the configured default.",
+            entry.name,
+            exc_info=True,
+        )
+        return []
+
+    seen_default = (entry.family_default_model(family_name) or "").strip()
+    selected: _PiModelEntry | None = None
+    out: list[_PiModelEntry] = []
+    for entry_model in listing.models:
+        model_id = entry_model.id
+        lower = model_id.lower()
+        # Filter out the non-chat rows an OpenAI-compatible ``/v1/models``
+        # surfaces: the upstream router exposes embedding / image / audio /
+        # video / rerank models under the same key. Pi's chat provider
+        # cannot drive them — picking them would fail at the first request.
+        # _fetch_openai_compatible_listing only captures ``context_length``
+        # (not the optional ``type`` field), so use distinctive id tokens.
+        if any(
+            token in lower
+            for token in (
+                "embed",
+                "rerank",
+                "whisper",
+                "parakeet",
+                "fastpitch",
+                "tacotron",
+                "speech",
+                "hailuo",
+                "t2v-01",
+                "music",
+                "flux",
+                "lyria",
+                "-image",
+                "image-",
+                "image-preview",
+                "image-2",
+            )
+        ):
+            continue
+        # Pi rejects a few response shapes; keep parity with
+        # ``_fetch_pi_model_lists`` for the Databricks path.
+        if unsupported_in_pi(lower):
+            continue
+        pi_entry: _PiModelEntry = {"id": model_id, "input": ["text", "image"]}
+        if seen_default and model_id == seen_default:
+            selected = pi_entry
+            continue
+        # DeepSeek streams on reasoning_content; needs reasoning:true so
+        # Pi reads from that channel.
+        if "deepseek" in lower:
+            pi_entry["reasoning"] = True
+        out.append(pi_entry)
+    out.sort(key=lambda item: item["id"])
+    if selected is not None:
+        out.insert(0, selected)
+    return out
+
+
 def _inline_family_pi_provider(
     entry: ProviderEntry, *, model: str | None
 ) -> PiProviderConfig | None:
@@ -910,6 +1036,13 @@ def _inline_family_pi_provider(
     family happens to be configured first. Falls back to the other family, which
     keeps protocol-translating proxies working: a LiteLLM ``/anthropic``
     passthrough is the only configured family and still serves any model.
+
+    When the resolved family is a gateway/local/key whose ``base_url`` exposes
+    an OpenAI-compatible ``/v1/models`` listing (the upstream router does),
+    the live chat-mode models are merged into the rendered ``models.json`` via
+    :func:`_enumerate_inline_family_models`. The picker then shows the gateway
+    route alongside the configured ``models.default``, all routed through the
+    same credential — no per-model direct OpenAI key.
 
     :param entry: The resolved default provider entry.
     :param model: Session model override, or ``None`` to use the family default.
@@ -954,6 +1087,7 @@ def _inline_family_pi_provider(
         # Strip bracket suffixes (e.g. "[1m]") — accepted by the direct
         # Anthropic API but rejected by the Databricks AI Gateway.
         resolved_model = re.sub(r"\[.*?\]$", "", resolved_model)
+        extra_models = _enumerate_inline_family_models(entry, family_name, family)
         return PiProviderConfig(
             provider_id=_PI_PROVIDER_ID,
             base_url=family.base_url,
@@ -961,6 +1095,7 @@ def _inline_family_pi_provider(
             model=resolved_model,
             api_key=api_key,
             auth_header=auth_header,
+            extra_models=extra_models,
         )
     return None
 
