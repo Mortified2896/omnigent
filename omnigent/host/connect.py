@@ -2113,13 +2113,37 @@ class HostProcess:
                 default_id = (
                     default_model if default_model in {m.id for m in listing.models} else None
                 )
-                provider = (
-                    resolve_model_provider(spec, "codex-native")
-                    if listing.source == "openai-compatible"
-                    else None
-                )
+                provider = resolve_model_provider(spec, "codex-native")
                 models: list[dict[str, object]]
-                if provider is not None and is_direct_openai_provider(provider):
+                if provider.kind == "none" and not listing.models:
+                    codex_options = await discover_codex_model_options()
+                    models = []
+                    seen: set[str] = set()
+                    selected_default = False
+                    for option in codex_options:
+                        raw_id = option.get("model") or option.get("id")
+                        if not isinstance(raw_id, str) or raw_id in seen:
+                            continue
+                        seen.add(raw_id)
+                        display_name = option.get("displayName")
+                        is_default = (raw_id == default_model) or (
+                            default_model is None
+                            and not selected_default
+                            and option.get("isDefault") is True
+                        )
+                        selected_default = selected_default or is_default
+                        models.append(
+                            {
+                                "id": raw_id,
+                                "displayName": (
+                                    display_name
+                                    if isinstance(display_name, str) and display_name
+                                    else raw_id
+                                ),
+                                **({"isDefault": True} if is_default else {}),
+                            }
+                        )
+                elif listing.source == "openai-compatible" and is_direct_openai_provider(provider):
                     available_ids = {model.id for model in listing.models}
                     models = []
                     seen: set[str] = set()

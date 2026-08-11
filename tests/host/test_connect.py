@@ -188,6 +188,63 @@ async def test_handle_model_options_uses_codex_provider_catalog(
     )
 
 
+async def test_handle_model_options_uses_direct_codex_cli_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct Codex CLI login uses Codex's own catalog for pre-launch choices."""
+    from omnigent import codex_native_app_server
+    from omnigent.model_catalog import ModelListing, ResolvedModelProvider
+
+    monkeypatch.setattr(
+        "omnigent.model_catalog.list_models_for_worker",
+        lambda spec, harness: ModelListing(
+            source="none",
+            verified=False,
+            models=(),
+            note="no model provider configured",
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(
+            kind="none",
+            detail="no model provider configured",
+        ),
+    )
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: codex_native_app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=None,
+            profile=None,
+        ),
+    )
+
+    async def _fake_codex_options() -> list[dict[str, object]]:
+        return [
+            {"model": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True},
+            {"id": "gpt-5.4", "displayName": "GPT-5.4", "isDefault": False},
+            {"model": "gpt-5.5", "displayName": "duplicate", "isDefault": False},
+        ]
+
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "discover_codex_model_options",
+        _fake_codex_options,
+    )
+    host = _make_host_process()
+
+    result = await host._handle_model_options(
+        HostModelOptionsFrame(request_id="req_models", harness="codex-native"),
+    )
+
+    assert result.models == [
+        {"id": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True},
+        {"id": "gpt-5.4", "displayName": "GPT-5.4"},
+    ]
+
+
 async def test_handle_model_options_does_not_invent_codex_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
