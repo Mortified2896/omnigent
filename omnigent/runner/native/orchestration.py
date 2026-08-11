@@ -2127,6 +2127,8 @@ async def _auto_create_pi_terminal(
     credential_warning: str | None = None
     if not _pi_args_have_provider(launch_config.terminal_launch_args or []):
         from omnigent.pi_native_credentials import (
+            _split_pi_native_codex_selection,
+            pi_native_codex_launch,
             pi_native_provider_launch,
             resolve_pi_native_provider,
         )
@@ -2139,19 +2141,36 @@ async def _auto_create_pi_terminal(
         # model_override (set by /model or sys_session_create's model arg)
         # takes precedence over the spec's pinned executor.model.
         spec_model = launch_config.model_override or _pi_native_model_from_spec(agent_spec)
-        provider = resolve_pi_native_provider(model=spec_model)
-        if provider is not None:
-            cred_env, cred_args = pi_native_provider_launch(
-                bridge_dir / "pi-agent",
-                provider,
-                selection=spec_model,
+        # Direct ChatGPT Plus/Pro subscription path (``openai-codex/<model>``):
+        # bypasses OmniRoute entirely — Pi launches against its native built-in
+        # provider and authenticates via the global auth store symlinked into
+        # the managed agent dir. Works even when no Omnigent-managed provider
+        # is configured, giving O1 a subscription fallback independent of
+        # OmniRoute.
+        codex_model = _split_pi_native_codex_selection(spec_model)
+        if codex_model is not None:
+            cred_env, cred_args = pi_native_codex_launch(
+                bridge_dir / "pi-agent", codex_model
             )
             pi_env.update(cred_env)
             pi_args.extend(cred_args)
-            # An unroutable model leaves Pi unable to select it, which looks
-            # like a silent hang; prefer that notice over the credential one
-            # since it names the model the user actually picked.
-            credential_warning = provider.unroutable_model_warning() or provider.credential_warning
+            # The codex path authenticates against Pi's own OAuth, not the
+            # managed provider — suppress any Omnigent credential warning.
+            credential_warning = None
+        else:
+            provider = resolve_pi_native_provider(model=spec_model)
+            if provider is not None:
+                cred_env, cred_args = pi_native_provider_launch(
+                    bridge_dir / "pi-agent",
+                    provider,
+                    selection=spec_model,
+                )
+                pi_env.update(cred_env)
+                pi_args.extend(cred_args)
+                # An unroutable model leaves Pi unable to select it, which looks
+                # like a silent hang; prefer that notice over the credential one
+                # since it names the model the user actually picked.
+                credential_warning = provider.unroutable_model_warning() or provider.credential_warning
     # Inherit the agent's os_env so its sandbox (e.g. ``type: none``),
     # egress_rules and env_passthrough are honoured. Without ``sandbox`` here
     # and ``parent_os_env`` below, launch_required_terminal falls back to
