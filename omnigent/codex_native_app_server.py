@@ -14,7 +14,7 @@ import sys
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, cast
 
@@ -1841,6 +1841,15 @@ def build_codex_native_server(
 
 
 @dataclass(frozen=True)
+class CodexTraceLaunchProvenance:
+    """Immutable, resolver-proven launch routing metadata for telemetry."""
+
+    access_lane: str
+    provider: str
+    provider_fallback: bool
+
+
+@dataclass(frozen=True)
 class NativeCodexLaunch:
     """How a native Codex terminal should be launched, across all offerings.
 
@@ -1864,6 +1873,25 @@ class NativeCodexLaunch:
     model: str | None
     profile: str | None
     summary: str = ""
+    trace_provenance: CodexTraceLaunchProvenance | None = None
+
+
+def _with_trace_provenance(
+    launch: NativeCodexLaunch,
+    *,
+    access_lane: str,
+    provider: str,
+    provider_fallback: bool = False,
+) -> NativeCodexLaunch:
+    """Attach resolver-proven routing metadata to a launch."""
+    return replace(
+        launch,
+        trace_provenance=CodexTraceLaunchProvenance(
+            access_lane=access_lane,
+            provider=provider,
+            provider_fallback=provider_fallback,
+        ),
+    )
 
 
 def codex_session_meta_model_provider(launch: NativeCodexLaunch) -> str:
@@ -2170,7 +2198,12 @@ def _first_routable_codex_provider(
                 exclude,
                 name,
             )
-            return launch
+            return _with_trace_provenance(
+                launch,
+                access_lane="omniroute",
+                provider=candidate.name,
+                provider_fallback=True,
+            )
     return None
 
 
@@ -2216,6 +2249,11 @@ def _resolve_subscription_launch(
             model=model,
             profile=None,
             summary=f"Codex CLI login (subscription provider {entry.name!r}; Codex is logged in)",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane="codex-direct",
+                provider="openai-codex-subscription",
+                provider_fallback=False,
+            ),
         )
     fallback = _first_routable_codex_provider(explicit, exclude=entry.name, model=model)
     if fallback is not None:
@@ -2233,6 +2271,11 @@ def _resolve_subscription_launch(
             f"Codex CLI login (subscription provider {entry.name!r} has no usable Codex "
             "login and no alternative provider is configured) — the TUI likely renders "
             "the sign-in screen and never starts a thread"
+        ),
+        trace_provenance=CodexTraceLaunchProvenance(
+            access_lane="codex-direct",
+            provider="openai-codex-subscription",
+            provider_fallback=True,
         ),
     )
 
@@ -2357,7 +2400,11 @@ def resolve_native_codex_launch(
                         spec_entry.name,
                         launch.model,
                     )
-                return launch
+                return _with_trace_provenance(
+                    launch,
+                    access_lane="omniroute",
+                    provider=spec_entry.name,
+                )
             _logger.warning(
                 "native-codex: spec-level provider %r has no usable openai credential — "
                 "falling back to machine-level resolution.",
@@ -2410,7 +2457,11 @@ def resolve_native_codex_launch(
             _logger.info("native-codex routing: Databricks ucode profile %r", launch.profile)
         else:
             _logger.info("native-codex routing: provider %r (model=%s)", entry.name, launch.model)
-        return launch
+        return _with_trace_provenance(
+            launch,
+            access_lane="omniroute",
+            provider=entry.name,
+        )
     # Default provider can't route on its own (no openai surface / no usable
     # credential / unresolvable secret) → Codex's own login.
     _logger.warning(
