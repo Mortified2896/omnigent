@@ -80,6 +80,7 @@ from omnigent.session_import.models import (
 from omnigent.stores.conversation_store import (
     _FORK_ONLY_DROPPED_LABEL_KEYS,
     _INSTANCE_SCOPED_LABEL_KEYS,
+    CODEX_ACCESS_LANE_LABEL_KEY,
     FORK_CARRY_HISTORY_LABEL_KEY,
     FORK_SOURCE_EXTERNAL_SESSION_LABEL_KEY,
     FORK_SOURCE_LABEL_KEY,
@@ -3629,6 +3630,8 @@ class SqlAlchemyConversationStore(ConversationStore):
                 if key not in (_INSTANCE_SCOPED_LABEL_KEYS | _FORK_ONLY_DROPPED_LABEL_KEYS)
                 and not key.startswith(f"{PINNED_LABEL_KEY}.")
             }
+            if not copy_model_settings:
+                fork_labels.pop(CODEX_ACCESS_LANE_LABEL_KEY, None)
             source_workspace = source_meta_ref.workspace if source_meta_ref else None
             source_ext_session = source_meta_ref.external_session_id if source_meta_ref else None
             # ``terminal_launch_args`` are CLI-specific launch flags. A fork
@@ -3756,6 +3759,8 @@ class SqlAlchemyConversationStore(ConversationStore):
         )
         if not carry_history_into_native:
             drop_keys.add(FORK_CARRY_HISTORY_LABEL_KEY)
+        if not copy_model_settings:
+            drop_keys.add(CODEX_ACCESS_LANE_LABEL_KEY)
         upserts: dict[str, str] = dict(presentation_labels)
         if carry_history_into_native:
             upserts[FORK_CARRY_HISTORY_LABEL_KEY] = "1"

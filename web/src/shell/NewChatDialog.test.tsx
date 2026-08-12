@@ -162,6 +162,8 @@ const CODEX_MODEL_OPTIONS_RESULT = {
     {
       id: "codex/gpt-5.6-luna",
       displayName: "GPT-5.6 Luna",
+      accessLane: "omniroute" as const,
+      groupLabel: "OmniRoute",
       supportedReasoningEfforts: [
         { reasoningEffort: "none", description: "None" },
         { reasoningEffort: "low", description: "Low" },
@@ -175,6 +177,8 @@ const CODEX_MODEL_OPTIONS_RESULT = {
     {
       id: "codex/gpt-5.5",
       displayName: "GPT-5.5",
+      accessLane: "omniroute" as const,
+      groupLabel: "OmniRoute",
       supportedReasoningEfforts: [
         { reasoningEffort: "none", description: "None" },
         { reasoningEffort: "low", description: "Low" },
@@ -1443,6 +1447,7 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("OmniRoute")).toBeTruthy();
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Default",
       "GPT-5.6 Luna",
@@ -1496,6 +1501,61 @@ describe("NewChatLandingScreen", () => {
     const { body } = await submitAndReadBody();
     expect(body.model_override).toBe("codex/gpt-5.6-luna");
     expect(body.reasoning_effort).toBe("max");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("omniroute");
+  });
+
+  it("retains lane identity when two Codex groups use the same model id", async () => {
+    const duplicateId = "codex/gpt-5.6-luna";
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                CODEX_MODEL_OPTIONS_RESULT.data[0],
+                {
+                  ...CODEX_MODEL_OPTIONS_RESULT.data[0],
+                  id: duplicateId,
+                  accessLane: "codex-direct" as const,
+                  groupLabel: "Codex Subscription — Direct",
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_duplicate_lane" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("Codex Subscription — Direct")).toBeTruthy();
+    const duplicateOptions = screen.getAllByRole("option", { name: "GPT-5.6 Luna" });
+    const directOption = duplicateOptions.find(
+      (option) => option.getAttribute("data-access-lane") === "codex-direct",
+    );
+    expect(directOption).toBeDefined();
+    fireEvent.click(directOption!);
+
+    openSelect("new-chat-landing-inline-model");
+    const reopened = screen.getAllByRole("option", { name: "GPT-5.6 Luna" });
+    expect(
+      reopened.find((option) => option.getAttribute("data-access-lane") === "codex-direct"),
+    ).toHaveAttribute("data-checked", "true");
+    expect(
+      reopened.find((option) => option.getAttribute("data-access-lane") === "omniroute"),
+    ).toHaveAttribute("data-checked", "false");
+    closeMenu();
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe(duplicateId);
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("codex-direct");
+    expect(JSON.parse(localStorage.getItem(HARNESS_OPTIONS_KEY) ?? "{}")).toMatchObject({
+      "codex-native": { model: duplicateId, accessLane: "codex-direct" },
+    });
   });
 
   it("omits model and effort launch overrides when both inline selectors are Default", async () => {

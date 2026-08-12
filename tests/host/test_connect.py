@@ -240,8 +240,21 @@ async def test_handle_model_options_uses_direct_codex_cli_catalog(
     )
 
     assert result.models == [
-        {"id": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True},
-        {"id": "gpt-5.4", "displayName": "GPT-5.4"},
+        {
+            "id": "gpt-5.5",
+            "model": "gpt-5.5",
+            "displayName": "GPT-5.5",
+            "accessLane": "codex-direct",
+            "groupLabel": "Codex Subscription — Direct",
+            "isDefault": True,
+        },
+        {
+            "id": "gpt-5.4",
+            "model": "gpt-5.4",
+            "displayName": "GPT-5.4",
+            "accessLane": "codex-direct",
+            "groupLabel": "Codex Subscription — Direct",
+        },
     ]
 
 
@@ -284,11 +297,37 @@ async def test_handle_model_options_exposes_omniroute_gpt56_capabilities(
         ),
     )
 
+    async def _direct_codex_options() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "gpt-5.5",
+                "model": "gpt-5.5",
+                "displayName": "GPT-5.5",
+                "isDefault": True,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low", "description": "Low"}
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "discover_codex_model_options",
+        _direct_codex_options,
+    )
+
     result = await _make_host_process()._handle_model_options(
         HostModelOptionsFrame(request_id="req_models", harness="codex-native"),
     )
 
-    assert [row["id"] for row in result.models] == list(model_ids)
+    assert [row["id"] for row in result.models] == [*model_ids, "gpt-5.5"]
+    assert all(row["accessLane"] == "omniroute" for row in result.models[:4])
+    assert all(row["groupLabel"] == "OmniRoute" for row in result.models[:4])
+    assert result.models[4]["accessLane"] == "codex-direct"
+    assert result.models[4]["groupLabel"] == "Codex Subscription — Direct"
+    assert result.models[4]["supportedReasoningEfforts"] == [
+        {"reasoningEffort": "low", "description": "Low"}
+    ]
     luna = result.models[2]
     assert luna["displayName"] == "GPT-5.6 Luna"
     assert [item["reasoningEffort"] for item in luna["supportedReasoningEfforts"]] == [

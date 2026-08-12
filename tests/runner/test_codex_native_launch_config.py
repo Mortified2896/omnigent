@@ -124,6 +124,7 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
             "omnigent.fork.source_external_session_id": "thread_src",
             "omnigent.fork.carry_history": "1",
             "omnigent.codex_native.bypass_sandbox": "1",
+            "omnigent.access_lane": "codex-direct",
         },
     }
     cfg = await _run(_Client(_Resp(200, snapshot)))
@@ -131,6 +132,7 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
     assert cfg.terminal_launch_args == ["--config", "approval_policy=on-request"]
     assert cfg.model_override == "gpt-5.4-mini"
     assert cfg.reasoning_effort == "low"
+    assert cfg.access_lane == "codex-direct"
     assert cfg.external_session_id == "thread_abc"
     assert cfg.fork_source_id == "conv_source", "Fork source id should be read from labels."
     assert cfg.fork_source_external_id == "thread_src"
@@ -170,3 +172,30 @@ async def test_bypass_sandbox_defaults_off_unless_label_is_one(
     cfg = await _run(_Client(_Resp(200, snapshot)))
     assert cfg.bypass_sandbox is False
     assert cfg.reasoning_effort is None
+    assert cfg.access_lane is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("access_lane", ["unknown", "", 42])
+async def test_invalid_access_lane_fails_loud(
+    monkeypatch: pytest.MonkeyPatch, access_lane: Any
+) -> None:
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "model_override": "gpt-5.5",
+        "labels": {"omnigent.access_lane": access_lane},
+    }
+    with pytest.raises(RuntimeError, match="Invalid native Codex access lane"):
+        await _run(_Client(_Resp(200, snapshot)))
+
+
+@pytest.mark.asyncio
+async def test_access_lane_requires_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "labels": {"omnigent.access_lane": "omniroute"},
+    }
+    with pytest.raises(RuntimeError, match="requires model_override"):
+        await _run(_Client(_Resp(200, snapshot)))

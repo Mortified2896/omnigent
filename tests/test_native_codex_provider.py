@@ -56,6 +56,103 @@ def _write_codex_login(home: Path, *, logged_in: bool) -> None:
     (codex_dir / "auth.json").write_text(content, encoding="utf-8")
 
 
+def test_explicit_omniroute_lane_uses_configured_default_and_model(_isolated: Path) -> None:
+    """The lane selects the known configured default without URL/name heuristics."""
+    _seed(
+        _isolated,
+        {
+            "production-gateway": {
+                "kind": "gateway",
+                "default": True,
+                "openai": {
+                    "base_url": "https://gateway.example.test/v1",
+                    "api_key": "test-placeholder",
+                },
+            },
+            "codex-sub": {"kind": "subscription", "cli": "codex"},
+        },
+    )
+
+    launch = resolve_native_codex_launch(
+        model="codex/gpt-5.6-luna",
+        access_lane="omniroute",
+    )
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.model == "codex/gpt-5.6-luna"
+    assert 'model_provider="omnigent_provider"' in joined
+    assert "gateway.example.test" in joined
+    assert "production-gateway" in launch.summary
+
+
+def test_explicit_codex_direct_lane_forces_subscription_transport(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct Codex always pins the built-in OpenAI subscription provider."""
+    monkeypatch.setattr(
+        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: True
+    )
+    _seed(
+        _isolated,
+        {
+            "omniroute": {
+                "kind": "gateway",
+                "default": True,
+                "openai": {
+                    "base_url": "http://127.0.0.1:20128/v1",
+                    "api_key": "test-placeholder",
+                },
+            }
+        },
+    )
+
+    launch = resolve_native_codex_launch(model="gpt-5.5", access_lane="codex-direct")
+
+    assert launch.config_overrides == ['model_provider="openai"']
+    assert launch.model == "gpt-5.5"
+    assert launch.profile is None
+
+
+def test_explicit_codex_direct_lane_fails_without_login(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: False
+    )
+
+    with pytest.raises(
+        OmnigentError, match=r"^Codex Subscription — Direct is not authenticated$"
+    ):
+        resolve_native_codex_launch(model="gpt-5.5", access_lane="codex-direct")
+
+
+def test_explicit_lane_rejects_missing_model(_isolated: Path) -> None:
+    with pytest.raises(OmnigentError, match="requires an explicit model"):
+        resolve_native_codex_launch(model=None, access_lane="omniroute")
+
+
+def test_direct_lane_accepts_model_id_also_used_by_omniroute(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lane identity, not model spelling, selects the subscription transport."""
+    monkeypatch.setattr(
+        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: True
+    )
+
+    launch = resolve_native_codex_launch(
+        model="codex/gpt-5.5",
+        access_lane="codex-direct",
+    )
+
+    assert launch.model == "codex/gpt-5.5"
+    assert launch.config_overrides == ['model_provider="openai"']
+
+
+def test_omniroute_lane_fails_clearly_without_configured_default(_isolated: Path) -> None:
+    with pytest.raises(OmnigentError, match=r"^OmniRoute lane unavailable$"):
+        resolve_native_codex_launch(model="gpt-5.5", access_lane="omniroute")
+
+
 def test_provider_codex_overrides_coerce_chat_wire_to_responses() -> None:
     """A ``chat`` provider wire is coerced to ``responses`` in the override.
 

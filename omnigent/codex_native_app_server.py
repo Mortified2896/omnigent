@@ -2186,8 +2186,76 @@ def _resolve_subscription_launch(
     )
 
 
+def _resolve_native_codex_access_lane(
+    *,
+    access_lane: str,
+    model: str | None,
+) -> NativeCodexLaunch:
+    """Resolve an explicit native-Codex lane without provider fallback."""
+    from omnigent.errors import ErrorCode, OmnigentError
+    from omnigent.onboarding.ambient import codex_auth_has_credential
+    from omnigent.onboarding.provider_config import default_provider_for_harness, load_config
+    from omnigent.stores.conversation_store import (
+        CODEX_ACCESS_LANE_DIRECT,
+        CODEX_ACCESS_LANE_OMNIROUTE,
+    )
+
+    if model is None:
+        raise OmnigentError(
+            f"Native Codex access lane {access_lane!r} requires an explicit model.",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    if access_lane == CODEX_ACCESS_LANE_DIRECT:
+        auth_path = _codex_home_config_source_from_env() / "auth.json"
+        if not codex_auth_has_credential(auth_path):
+            raise OmnigentError(
+                "Codex Subscription — Direct is not authenticated",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        # The direct lane must override a custom default from config.toml. This
+        # matches the existing subscription resolver and keeps OAuth on Codex's
+        # built-in provider rather than silently routing through a gateway.
+        return NativeCodexLaunch(
+            config_overrides=['model_provider="openai"'],
+            model=model,
+            profile=None,
+            summary=f"Codex Subscription — Direct (model={model!r})",
+        )
+
+    if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:
+        # The pre-launch catalog comes from this same configured default. Select
+        # that resolved entry directly; provider names and endpoint ports are
+        # deployment details, not stable OmniRoute identity.
+        entry = default_provider_for_harness(load_config(), "codex")
+        if entry is None:
+            raise OmnigentError(
+                "OmniRoute lane unavailable",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        launch = _codex_provider_launch(entry, model)
+        if launch is None:
+            raise OmnigentError(
+                "OmniRoute lane unavailable",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        return NativeCodexLaunch(
+            config_overrides=launch.config_overrides,
+            model=launch.model,
+            profile=launch.profile,
+            summary=f"OmniRoute lane via provider {entry.name!r} (model={model!r})",
+        )
+
+    raise OmnigentError(
+        f"Unsupported native Codex access lane {access_lane!r}.",
+        code=ErrorCode.INVALID_INPUT,
+    )
+
+
 def resolve_native_codex_launch(
-    *, model: str | None, spec: AgentSpec | None = None
+    *,
+    model: str | None,
+    spec: AgentSpec | None = None,
+    access_lane: str | None = None,
 ) -> NativeCodexLaunch:
     """Resolve the native Codex launch config across all offerings.
 
@@ -2230,8 +2298,13 @@ def resolve_native_codex_launch(
     :param spec: The custom agent spec launching this session, when there is
         one, so its ``executor.auth`` / legacy profile win over machine-level
         config (issue #2744 — parity with the in-process codex harness).
+    :param access_lane: Persisted explicit transport lane. ``"omniroute"``
+        forces the configured OmniRoute provider; ``"codex-direct"`` forces
+        Codex's built-in subscription transport. Neither lane falls back.
     :returns: The resolved :class:`NativeCodexLaunch`.
     """
+    if access_lane is not None:
+        return _resolve_native_codex_access_lane(access_lane=access_lane, model=model)
     from omnigent.onboarding.detected import (
         codex_config_provider_dismissed,
         effective_config_with_detected,

@@ -519,4 +519,8 @@ export interface NativeModelOption {
   supportedReasoningEfforts?: NativeReasoningEffortOption[];
   /** Whether the native catalog marks this as the default model. */
   isDefault?: boolean;
+  /** Persisted transport lane selected with this model. */
+  accessLane?: "omniroute" | "codex-direct";
+  /** User-facing group heading for lane-aware model pickers. */
+  groupLabel?: string;
 }
