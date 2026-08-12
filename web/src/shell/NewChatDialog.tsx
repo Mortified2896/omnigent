@@ -1421,10 +1421,7 @@ function SearchableModelPicker({
         className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <Command className="h-auto min-h-0">
-          <CommandInput
-            placeholder="Search models…"
-            data-testid={searchTestId}
-          />
+          <CommandInput placeholder="Search models…" data-testid={searchTestId} />
           <CommandList
             className="max-h-72 min-h-0 overflow-y-auto overscroll-contain"
             onWheel={(event) => event.stopPropagation()}
@@ -1441,7 +1438,7 @@ function SearchableModelPicker({
                 const label = option.groupLabel ?? "Models";
                 groups.set(label, [...(groups.get(label) ?? []), option]);
                 return groups;
-              }, new Map<string, typeof options[number][]>()),
+              }, new Map<string, (typeof options)[number][]>()),
             ).map(([label, group]) => (
               <CommandGroup
                 key={label}
@@ -1572,8 +1569,9 @@ function HarnessConfigModal({
   // Local draft — seeded from the live state each time the modal opens so
   // Cancel can discard and re-opening always reflects the committed state.
   const [draftModel, setDraftModel] = useState(pickedModel);
-  const [draftCodexAccessLane, setDraftCodexAccessLane] =
-    useState<CodexAccessLane | null>(pickedCodexAccessLane);
+  const [draftCodexAccessLane, setDraftCodexAccessLane] = useState<CodexAccessLane | null>(
+    pickedCodexAccessLane,
+  );
   const [draftEffort, setDraftEffort] = useState(pickedEffort);
   const [draftPermission, setDraftPermission] = useState(permissionMode);
   const [draftApproval, setDraftApproval] = useState(approvalMode);
@@ -1691,9 +1689,7 @@ function HarnessConfigModal({
       if (entryHarness)
         writeHarnessOption(entryHarness, {
           mode: draftApproval,
-          ...(isCodex
-            ? { model: draftModel, accessLane: draftCodexAccessLane ?? "" }
-            : {}),
+          ...(isCodex ? { model: draftModel, accessLane: draftCodexAccessLane ?? "" } : {}),
         });
     } else if (hasCursor) {
       setCursorExecMode(draftCursor);
@@ -2338,14 +2334,11 @@ export function NewChatLandingScreen() {
     setPickedCodexAccessLane(null);
     if (model) _setCostControlMode(null);
   }, []);
-  const setPickedCodexModel = useCallback(
-    (model: string, accessLane: CodexAccessLane | null) => {
-      _setPickedModel(model);
-      setPickedCodexAccessLane(model ? accessLane : null);
-      if (model) _setCostControlMode(null);
-    },
-    [],
-  );
+  const setPickedCodexModel = useCallback((model: string, accessLane: CodexAccessLane | null) => {
+    _setPickedModel(model);
+    setPickedCodexAccessLane(model ? accessLane : null);
+    if (model) _setCostControlMode(null);
+  }, []);
   const setCostControlMode = useCallback((mode: CostControlMode) => {
     _setCostControlMode(mode);
     if (mode === "on") {
@@ -3032,10 +3025,7 @@ export function NewChatLandingScreen() {
                 : null,
             )
           : undefined;
-      setPickedCodexModel(
-        storedCodexOption?.id ?? "",
-        storedCodexOption?.accessLane ?? null,
-      );
+      setPickedCodexModel(storedCodexOption?.id ?? "", storedCodexOption?.accessLane ?? null);
       if (storedRoutingOn) setPickedEffort("");
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
@@ -4459,7 +4449,9 @@ export function NewChatLandingScreen() {
                             : pickedModel
                       }
                       options={
-                        selectedNativeHarness === "codex-native" ? codexModelOptions : piModelOptions
+                        selectedNativeHarness === "codex-native"
+                          ? codexModelOptions
+                          : piModelOptions
                       }
                       loading={
                         selectedNativeHarness === "codex-native"
