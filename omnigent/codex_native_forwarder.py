@@ -29,6 +29,7 @@ from omnigent.claude_native_bridge import url_component
 from omnigent.codex_native_app_server import (
     CodexAppServerClient,
     CodexMessage,
+    CodexTraceLaunchProvenance,
     client_for_transport,
 )
 from omnigent.codex_native_bridge import (
@@ -437,6 +438,9 @@ class _CodexForwarderState:
     mcp_startup_settled: bool = False
     telemetry_turn_span: object | None = None
     telemetry_turn_id: str | None = None
+    trace_launch_provenance: CodexTraceLaunchProvenance | None = None
+    requested_model: str | None = None
+    requested_effort: str | None = None
 
     def note_resume_response(self, response: CodexMessage) -> None:
         """
@@ -449,6 +453,7 @@ class _CodexForwarderState:
         if not isinstance(result, dict):
             return
         self._note_model_fields(result)
+        self._note_effort_fields(result)
         self._note_approval_mode_fields(result)
         # Do NOT seed ``posted_model`` here. Omnigent must learn the session's
         # ACTUAL model — including the spawn default — because the cost-budget
@@ -1776,6 +1781,9 @@ async def supervise_forwarder(
     client: CodexAppServerClient | None = None,
     auth: httpx.Auth | None = None,
     ap_transport: httpx.AsyncBaseTransport | None = None,
+    trace_launch_provenance: CodexTraceLaunchProvenance | None = None,
+    requested_model: str | None = None,
+    requested_effort: str | None = None,
 ) -> None:
     """
     Mirror Codex app-server notifications into an Omnigent session.
@@ -1836,6 +1844,9 @@ async def supervise_forwarder(
         forwarder_state = _CodexForwarderState(
             parent_session_id=session_id,
             codex_client=client,
+            trace_launch_provenance=trace_launch_provenance,
+            requested_model=requested_model,
+            requested_effort=requested_effort,
         )
         # Released when the live event stream shows the thread became
         # active (its first turn materializes the rollout). Lets the
@@ -1909,8 +1920,12 @@ async def supervise_forwarder(
                         forwarder_state=forwarder_state,
                     )
                 except Exception:  # noqa: BLE001 - keep the long-lived mirror alive.
+                    with contextlib.suppress(Exception):
+                        _end_codex_turn_span("turn/failed", {}, forwarder_state)
                     _logger.warning("Codex forwarder event handling failed", exc_info=True)
         finally:
+            with contextlib.suppress(Exception):
+                _end_codex_turn_span("turn/failed", {}, forwarder_state)
             if mcp_settle_timer is not None:
                 mcp_settle_timer.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -3276,17 +3291,22 @@ def _start_codex_turn_span(
         "gen_ai.operation.name": "invoke_agent",
         "gen_ai.agent.name": _AGENT_NAME,
         "omnigent.harness": "codex-native",
-        "omnigent.access_lane": "codex-direct",
-        "gen_ai.provider.name": "openai",
-        "omnigent.provider.fallback": False,
     }
+    provenance = state.trace_launch_provenance
+    if provenance is not None:
+        attributes["omnigent.access_lane"] = provenance.access_lane
+        attributes["gen_ai.provider.name"] = provenance.provider
+        if provenance.provider_fallback is not None:
+            attributes["omnigent.provider.fallback"] = provenance.provider_fallback
     if turn_id:
-        attributes["omnigent.response.id"] = turn_id
+        attributes["omnigent.codex.turn_id"] = turn_id
+    if state.requested_model:
+        attributes["omnigent.requested_model"] = state.requested_model
     if state.model:
-        attributes["omnigent.requested_model"] = state.model
         attributes["gen_ai.response.model"] = state.model
+    if state.requested_effort:
+        attributes["omnigent.requested_reasoning_effort"] = state.requested_effort
     if state.effort:
-        attributes["omnigent.requested_reasoning_effort"] = state.effort
         attributes["omnigent.effective_reasoning_effort"] = state.effort
     span = trace.get_tracer("omnigent").start_span(
         "agent:codex-native-ui",
@@ -3308,12 +3328,16 @@ def _end_codex_turn_span(
 
     span = state.telemetry_turn_span
     error = _terminal_error_from_turn(params)
-    span.set_status(  # type: ignore[attr-defined]
-        StatusCode.OK if method == "turn/completed" and error is None else StatusCode.ERROR
-    )
-    span.end()  # type: ignore[attr-defined]
-    state.telemetry_turn_span = None
-    state.telemetry_turn_id = None
+    try:
+        span.set_status(  # type: ignore[attr-defined]
+            StatusCode.OK if method == "turn/completed" and error is None else StatusCode.ERROR
+        )
+    finally:
+        try:
+            span.end()  # type: ignore[attr-defined]
+        finally:
+            state.telemetry_turn_span = None
+            state.telemetry_turn_id = None
 
 
 def _handle_usage_update(

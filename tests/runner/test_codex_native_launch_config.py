@@ -199,13 +199,22 @@ async def test_deployment_trust_composes_with_session_label(
     """Deployment trust is explicit, fail-closed, and ORed with the label."""
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
     monkeypatch.setenv("OMNIGENT_CODEX_NATIVE_TRUSTED", deployment_value)
-    snapshot: dict[str, Any] = {"workspace": "/tmp/repo"}
+    labels = {"omnigent.access_lane": "codex-direct"}
     if label_value is not None:
-        snapshot["labels"] = {"omnigent.codex_native.bypass_sandbox": label_value}
+        labels["omnigent.codex_native.bypass_sandbox"] = label_value
+    snapshot: dict[str, Any] = {
+        "workspace": "/tmp/repo",
+        "model_override": "gpt-5.5",
+        "reasoning_effort": "low",
+        "labels": labels,
+    }
 
     cfg = await _run(_Client(_Resp(200, snapshot)))
 
     assert cfg.bypass_sandbox is expected
+    assert cfg.access_lane == "codex-direct"
+    assert cfg.model_override == "gpt-5.5"
+    assert cfg.reasoning_effort == "low"
 
 
 @pytest.mark.asyncio
