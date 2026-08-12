@@ -188,6 +188,51 @@ async def test_handle_model_options_uses_codex_provider_catalog(
     )
 
 
+async def test_handle_model_options_exposes_omniroute_openai_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The OmniRoute catalog exposes canonical model ids with useful labels."""
+    from omnigent import codex_native_app_server
+    from omnigent.model_catalog import ModelEntry, ModelListing
+
+    model_ids = (
+        "codex/gpt-5.6-sol",
+        "codex/gpt-5.6-terra",
+        "codex/gpt-5.6-luna",
+        "codex/gpt-5.5",
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.list_models_for_worker",
+        lambda spec, harness: ModelListing(
+            source="static",
+            verified=True,
+            models=tuple(ModelEntry(id=model_id, family="openai") for model_id in model_ids),
+            note="OmniRoute catalog",
+        ),
+    )
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: codex_native_app_server.NativeCodexLaunch(
+            config_overrides=[], model="codex/gpt-5.6-luna", profile=None
+        ),
+    )
+
+    result = await _make_host_process()._handle_model_options(
+        HostModelOptionsFrame(request_id="req_models", harness="codex-native"),
+    )
+
+    assert [row["id"] for row in result.models] == list(model_ids)
+    assert [row["displayName"] for row in result.models] == [
+        "GPT-5.6 Sol",
+        "GPT-5.6 Terra",
+        "GPT-5.6 Luna",
+        "GPT-5.5",
+    ]
+    assert result.models[2]["isDefault"] is True
+    assert all("accessLane" not in row for row in result.models)
+
+
 async def test_handle_model_options_does_not_invent_codex_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

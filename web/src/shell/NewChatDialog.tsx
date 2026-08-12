@@ -1565,7 +1565,7 @@ function HarnessConfigModal({
     [claudeModelOptions],
   );
   const codexModelSelectOptions = useMemo(
-    () => codexModelOptions.map((m) => ({ id: m.id, label: displayModelId(m) })),
+    () => codexModelOptions.map((m) => ({ id: m.id, label: displayModelName(m) })),
     [codexModelOptions],
   );
   const onModelChange = (value: string) => {
@@ -2138,7 +2138,13 @@ export function NewChatLandingScreen() {
     [hostClaudeModelOptions, sandboxSelected],
   );
   const codexModelOptions = useMemo(
-    () => (sandboxSelected ? [] : (hostCodexModelOptions ?? [])),
+    () =>
+      sandboxSelected
+        ? []
+        : (hostCodexModelOptions ?? []).map((option) => ({
+            ...option,
+            displayName: option.displayName ?? option.id,
+          })),
     [hostCodexModelOptions, sandboxSelected],
   );
   const piModelOptions = useMemo(
@@ -4312,13 +4318,19 @@ export function NewChatLandingScreen() {
                   )}
                 </div>
                 {selectedAgent &&
-                  supportsModelPicker &&
+                  (supportsModelPicker || selectedNativeHarness === "codex-native") &&
                   !sandboxSelected &&
                   selectedHostId !== null && (
                     <SearchableModelPicker
                       value={pickedModel || MODEL_SELECT_DEFAULT}
-                      options={piModelOptions}
-                      loading={hostPiModelsLoading}
+                      options={
+                        selectedNativeHarness === "codex-native" ? codexModelOptions : piModelOptions
+                      }
+                      loading={
+                        selectedNativeHarness === "codex-native"
+                          ? hostCodexModelsLoading
+                          : hostPiModelsLoading
+                      }
                       onValueChange={(value) =>
                         setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value)
                       }

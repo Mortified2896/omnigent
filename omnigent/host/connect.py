@@ -16,7 +16,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, SupportsIndex, SupportsInt, cast
@@ -697,6 +697,31 @@ def _paginate_list_dir(
         entries=page,
         has_more=has_more,
     )
+
+
+def _codex_catalog_model_options(
+    model_ids: Iterable[str],
+    *,
+    default_id: str | None,
+) -> list[dict[str, object]]:
+    """Build ordered Codex picker rows from provider model ids."""
+    models: list[dict[str, object]] = []
+    for model_id in dict.fromkeys(model_ids):
+        bare = model_id.rsplit("/", 1)[-1]
+        if bare.startswith("gpt-5.6-"):
+            display_name = f"GPT-5.6 {bare.removeprefix('gpt-5.6-').title()}"
+        elif bare == "gpt-5.5":
+            display_name = "GPT-5.5"
+        else:
+            display_name = model_id
+        models.append(
+            {
+                "id": model_id,
+                "displayName": display_name,
+                **({"isDefault": True} if model_id == default_id else {}),
+            }
+        )
+    return models
 
 
 @dataclass
@@ -2157,14 +2182,10 @@ class HostProcess:
                             }
                         )
                 else:
-                    models = [
-                        {
-                            "id": model.id,
-                            "displayName": model.id,
-                            **({"isDefault": True} if model.id == default_id else {}),
-                        }
-                        for model in listing.models
-                    ]
+                    models = _codex_catalog_model_options(
+                        (model.id for model in listing.models),
+                        default_id=default_id,
+                    )
             except Exception:
                 _logger.exception("Failed to resolve pre-launch Codex model options")
                 return HostModelOptionsResultFrame(
