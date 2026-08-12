@@ -2222,6 +2222,16 @@ class HostProcess:
                         (model.id for model in listing.models),
                         default_id=default_id,
                     )
+
+                # The OmniRoute-backed Codex picker exposes only canonical
+                # codex/* routes. The live gateway catalog also contains
+                # aliases and unrelated provider families that Codex must not
+                # present as duplicate or unusable choices.
+                canonical_codex_models = [
+                    model for model in models if str(model["id"]).startswith("codex/")
+                ]
+                if canonical_codex_models:
+                    models = canonical_codex_models
             except Exception:
                 _logger.exception("Failed to resolve pre-launch Codex model options")
                 return HostModelOptionsResultFrame(
