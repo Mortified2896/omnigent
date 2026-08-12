@@ -3209,6 +3209,9 @@ async def _handle_terminal_turn_boundary(
     :param forwarder_state: Optional Plan-mode prompt state.
     :returns: None.
     """
+    if forwarder_state is not None and forwarder_state.telemetry_turn_span is None:
+        # Reconnects can miss ``turn/started``; still emit one bounded terminal trace.
+        _start_codex_turn_span(session_id, params, forwarder_state)
     if delta_coalescer is not None:
         await delta_coalescer.flush()
     # Safety net: if a compaction was reported in progress but Codex never
