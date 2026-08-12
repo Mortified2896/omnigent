@@ -35,6 +35,7 @@ import os
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -327,10 +328,68 @@ def _fastapi_instrumentation_enabled() -> bool:
     explicit = os.environ.get("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION")
     if explicit is not None:
         return explicit.strip().lower() in ("true", "1", "yes")
-    return bool(
-        os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "").strip()
-        or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
-    )
+    return bool(_traces_endpoint())
+
+
+_DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES = ("omnigent", "omnigent.frames")
+
+
+def _allowed_instrumentation_scopes() -> tuple[str, ...]:
+    """Return safe defaults plus normalized explicitly configured scopes."""
+    raw = os.environ.get("OMNIGENT_OTEL_ALLOWED_INSTRUMENTATION_SCOPES", "")
+    result: list[str] = []
+    for scope in (*_DEFAULT_ALLOWED_INSTRUMENTATION_SCOPES, *raw.split(",")):
+        scope = scope.strip()
+        if scope and scope not in result:
+            result.append(scope)
+    return tuple(result)
+
+
+def _scope_allowed(span: Any, allowed: frozenset[str]) -> bool:
+    """Return whether a span belongs to an explicitly exported scope."""
+    try:
+        scope = getattr(span, "instrumentation_scope", None)
+        if scope is None:
+            scope = getattr(span, "_instrumentation_scope", None)
+        return bool(scope and getattr(scope, "name", None) in allowed)
+    except Exception:
+        return False
+
+
+def _make_scope_filter_processor(inner: Any, allowed_scopes: tuple[str, ...]) -> Any:
+    """Export allowed spans and detach parents that will not be exported."""
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    allowed = frozenset(allowed_scopes)
+
+    def detach_unexported_parent(span: Any, parent_context: Any) -> None:
+        try:
+            from opentelemetry import trace
+
+            parent = trace.get_current_span(parent_context)
+            if not parent.get_span_context().is_valid or _scope_allowed(parent, allowed):
+                return
+            span._parent = None  # type: ignore[attr-defined]
+        except Exception:
+            return
+
+    class ScopeFilterSpanProcessor(SpanProcessor):
+        def on_start(self, span: Any, parent_context: Any = None) -> None:
+            if _scope_allowed(span, allowed):
+                detach_unexported_parent(span, parent_context)
+                inner.on_start(span, parent_context)
+
+        def on_end(self, span: Any) -> None:
+            if _scope_allowed(span, allowed):
+                inner.on_end(span)
+
+        def shutdown(self) -> None:
+            inner.shutdown()
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return inner.force_flush(timeout_millis)
+
+    return ScopeFilterSpanProcessor()
 
 
 # Session id as it appears in a request path (``/v1/sessions/<id>/…``), used to
@@ -839,6 +898,41 @@ def span(
         yield started
 
 
+def _configured_otlp_value(*names: str) -> str:
+    """Return the first non-empty OTLP environment value."""
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _traces_endpoint() -> str:
+    """Resolve the signal-specific trace endpoint before the generic one."""
+    return _configured_otlp_value(
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"
+    )
+
+
+def _parse_otlp_headers(value: str) -> dict[str, str] | None:
+    """Parse the standard comma-separated OTLP header syntax."""
+    result: dict[str, str] = {}
+    for pair in value.split(","):
+        if "=" not in pair:
+            continue
+        key, _, header_value = pair.strip().partition("=")
+        if key:
+            result[key.strip()] = header_value.strip()
+    return result or None
+
+
+def _append_v1_traces(endpoint: str) -> str:
+    """Append the standard HTTP trace path when it is absent."""
+    if not endpoint or endpoint.endswith(("/v1/traces", "/v1/traces/")):
+        return endpoint
+    return endpoint.rstrip("/") + "/v1/traces"
+
+
 def _metrics_exporter_name() -> str:
     """
     Return the configured OpenTelemetry metrics exporter name.
@@ -891,10 +985,14 @@ def _otlp_trace_protocol() -> str:
     :returns: ``"grpc"`` or ``"http/protobuf"``.
     :raises ValueError: If the resolved protocol is unsupported.
     """
-    protocol = os.environ.get(
-        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-        os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
-    ).strip().lower()
+    protocol = (
+        os.environ.get(
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+        )
+        .strip()
+        .lower()
+    )
     if protocol in ("", "grpc"):
         return "grpc"
     if protocol == "http/protobuf":
@@ -903,28 +1001,24 @@ def _otlp_trace_protocol() -> str:
 
 
 def _create_otlp_span_exporter() -> SpanExporter:
-    """
-    Create an OTLP span exporter using standard OTel environment vars.
-
-    Honors the signal-specific ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL``
-    for MLflow HTTP/protobuf trace ingest without forcing the rest of
-    the OTLP pipeline to follow.
-
-    :returns: OTLP span exporter configured from the process environment.
-    :raises ValueError: If the resolved protocol is unsupported.
-    """
+    """Create an OTLP trace exporter with explicit endpoint and headers."""
     protocol = _otlp_trace_protocol()
+    endpoint = _traces_endpoint() or None
+    headers = _parse_otlp_headers(
+        _configured_otlp_value("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")
+    )
     if protocol == "http/protobuf":
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HttpOTLPSpanExporter,
         )
 
-        return HttpOTLPSpanExporter()
+        http_endpoint = _append_v1_traces(endpoint) if endpoint else None
+        return HttpOTLPSpanExporter(endpoint=http_endpoint, headers=headers)
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
         OTLPSpanExporter as GrpcOTLPSpanExporter,
     )
 
-    return GrpcOTLPSpanExporter()
+    return GrpcOTLPSpanExporter(endpoint=endpoint, headers=headers)
 
 
 def _create_otlp_metric_exporter() -> MetricExporter:
@@ -973,8 +1067,17 @@ def _init_otel_traces(endpoint: str) -> None:
             # Enrich every span with session.id from the active context (set via
             # session_scope at the request hook / executor turn / forwarder).
             provider.add_span_processor(_make_session_id_processor())
-            provider.add_span_processor(BatchSpanProcessor(_create_otlp_span_exporter()))
+            exporter = BatchSpanProcessor(_create_otlp_span_exporter())
+            allowed_scopes = _allowed_instrumentation_scopes()
+            provider.add_span_processor(_make_scope_filter_processor(exporter, allowed_scopes))
             trace.set_tracer_provider(provider)
+            _logger.info(
+                "otel trace exporter configured (protocol=%s, endpoint=%s, service=%s, scopes=%s)",
+                _otlp_trace_protocol(),
+                endpoint,
+                service_name,
+                ",".join(allowed_scopes),
+            )
 
         from omnigent.inner.tracing import enable_tracing
 
@@ -1129,6 +1232,30 @@ def _init_otel_logs() -> None:
         _logs_initialized = True
 
 
+DEFAULT_TELEMETRY_ENV_FILE = "/var/lib/omnigent-production/mlflow-tracing.env"
+
+
+def _load_telemetry_env_file() -> None:
+    """Load deployer-managed telemetry settings without overriding the process."""
+    path = os.environ.get("OMNIGENT_TELEMETRY_ENV_FILE", DEFAULT_TELEMETRY_ENV_FILE)
+    if not path:
+        return
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key.strip():
+            os.environ.setdefault(key.strip(), value)
+
+
 def init(service_name: str | None = None) -> None:
     """
     Initialize OpenTelemetry tracing for the omnigent runtime.
@@ -1165,6 +1292,8 @@ def init(service_name: str | None = None) -> None:
       default OTel no-op provider discards spans silently.
     """
     global _capture_content, _initialized
+
+    _load_telemetry_env_file()
 
     if not telemetry_enabled():
         # Master opt-in off (the default): stay fully inert — no provider, no
