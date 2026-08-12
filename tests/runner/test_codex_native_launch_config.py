@@ -166,6 +166,7 @@ async def test_bypass_sandbox_defaults_off_unless_label_is_one(
     canonical ``"1"`` (set by the guarded web toggle) arms it.
     """
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.delenv("OMNIGENT_CODEX_NATIVE_TRUSTED", raising=False)
     snapshot: dict[str, Any] = {"workspace": "/tmp/repo"}
     if labels is not None:
         snapshot["labels"] = labels
@@ -173,6 +174,38 @@ async def test_bypass_sandbox_defaults_off_unless_label_is_one(
     assert cfg.bypass_sandbox is False
     assert cfg.reasoning_effort is None
     assert cfg.access_lane is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_value", "label_value", "expected"),
+    [
+        ("false", None, False),
+        ("0", None, False),
+        ("unexpected", None, False),
+        ("true", None, True),
+        (" YES ", None, True),
+        ("on", "0", True),
+        ("false", "1", True),
+        ("true", "1", True),
+    ],
+)
+async def test_deployment_trust_composes_with_session_label(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_value: str,
+    label_value: str | None,
+    expected: bool,
+) -> None:
+    """Deployment trust is explicit, fail-closed, and ORed with the label."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.setenv("OMNIGENT_CODEX_NATIVE_TRUSTED", deployment_value)
+    snapshot: dict[str, Any] = {"workspace": "/tmp/repo"}
+    if label_value is not None:
+        snapshot["labels"] = {"omnigent.codex_native.bypass_sandbox": label_value}
+
+    cfg = await _run(_Client(_Resp(200, snapshot)))
+
+    assert cfg.bypass_sandbox is expected
 
 
 @pytest.mark.asyncio
