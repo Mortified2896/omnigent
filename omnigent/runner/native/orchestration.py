@@ -1009,10 +1009,15 @@ async def _codex_native_launch_config(
     fork_carry_history = False
     _harness_override = snapshot.get("harness_override")
     _cost_control = snapshot.get("cost_control_mode_override")
-    # DANGEROUS opt-in: full approval/sandbox bypass, stored as a plain
-    # conversation label ("1" to enable). Read here so the runner applies
-    # it at launch; any other value (incl. absent) leaves the normal stance.
-    bypass_sandbox = False
+    # DANGEROUS opt-in: deployment policy composes with the existing
+    # per-session label. Unknown environment values fail closed.
+    deployment_trusted = os.environ.get("OMNIGENT_CODEX_NATIVE_TRUSTED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    bypass_sandbox = deployment_trusted
     access_lane: str | None = None
     labels = snapshot.get("labels")
     if isinstance(labels, dict):
@@ -1023,7 +1028,9 @@ async def _codex_native_launch_config(
         if isinstance(_fse, str) and _fse:
             fork_source_external_id = _fse
         fork_carry_history = labels.get(FORK_CARRY_HISTORY_LABEL_KEY) == "1"
-        bypass_sandbox = labels.get(CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY) == "1"
+        bypass_sandbox = (
+            deployment_trusted or labels.get(CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY) == "1"
+        )
         raw_access_lane = labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
         if raw_access_lane is not None:
             if not isinstance(raw_access_lane, str) or raw_access_lane not in CODEX_ACCESS_LANES:
@@ -2186,9 +2193,7 @@ async def _auto_create_pi_terminal(
         # OmniRoute.
         codex_model = _split_pi_native_codex_selection(spec_model)
         if codex_model is not None:
-            cred_env, cred_args = pi_native_codex_launch(
-                bridge_dir / "pi-agent", codex_model
-            )
+            cred_env, cred_args = pi_native_codex_launch(bridge_dir / "pi-agent", codex_model)
             pi_env.update(cred_env)
             pi_args.extend(cred_args)
             # The codex path authenticates against Pi's own OAuth, not the
