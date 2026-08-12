@@ -23,6 +23,7 @@ import httpx
 import pytest
 
 from omnigent import codex_native_forwarder as fwd
+from omnigent.codex_native_app_server import CodexTraceLaunchProvenance
 from omnigent.codex_native_bridge import (
     CodexNativeBridgeState,
     codex_home_for_bridge_dir,
@@ -2676,7 +2677,8 @@ async def test_delta_coalescer_survives_a_cancelled_flush_caller() -> None:
 
 
 def test_codex_turn_span_records_metadata_without_content(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Native Codex turn spans expose provenance but no user payload."""
+    """Trusted mode changes permissions without mutating trace provenance."""
+    monkeypatch.setenv("OMNIGENT_CODEX_NATIVE_TRUSTED", "true")
 
     class Span:
         def __init__(self) -> None:
@@ -2693,23 +2695,67 @@ def test_codex_turn_span_records_metadata_without_content(monkeypatch: pytest.Mo
         def start_span(self, name: str, *, attributes: dict[str, object]) -> Span:
             assert name == "agent:codex-native-ui"
             assert attributes["session.id"] == "session-1"
-            assert attributes["omnigent.response.id"] == "turn-1"
-            assert attributes["omnigent.requested_model"] == "gpt-test"
-            assert attributes["gen_ai.response.model"] == "gpt-test"
-            assert attributes["omnigent.requested_reasoning_effort"] == "high"
-            assert attributes["omnigent.access_lane"] == "codex-direct"
+            assert attributes["omnigent.codex.turn_id"] == "turn-1"
+            assert "omnigent.response.id" not in attributes
+            assert attributes["omnigent.requested_model"] == "gpt-requested"
+            assert attributes["gen_ai.response.model"] == "gpt-observed"
+            assert attributes["omnigent.requested_reasoning_effort"] == "low"
+            assert attributes["omnigent.effective_reasoning_effort"] == "high"
+            assert attributes["omnigent.access_lane"] == "omniroute"
+            assert attributes["gen_ai.provider.name"] == "configured-router"
+            assert "omnigent.provider.fallback" not in attributes
             assert not any("input" in key or "output" in key for key in attributes)
             return span
 
     span = Span()
     monkeypatch.setattr("opentelemetry.trace.get_tracer", lambda _name: Tracer())
-    state = fwd._CodexForwarderState(model="gpt-test", effort="high")
+    state = fwd._CodexForwarderState(
+        model="gpt-observed",
+        effort="high",
+        requested_model="gpt-requested",
+        requested_effort="low",
+        trace_launch_provenance=CodexTraceLaunchProvenance(
+            access_lane="omniroute",
+            provider="configured-router",
+        ),
+    )
 
     fwd._start_codex_turn_span("session-1", {"turn": {"id": "turn-1"}}, state)
     fwd._end_codex_turn_span("turn/completed", {"turn": {"id": "turn-1"}}, state)
 
     assert span.ended is True
     assert state.telemetry_turn_span is None
+
+
+def test_note_resume_response_records_proven_effective_effort() -> None:
+    """A resume response may prove effective effort independently of the request."""
+    state = fwd._CodexForwarderState(requested_effort="low")
+
+    state.note_resume_response({"result": {"reasoningEffort": "high"}})
+
+    assert state.requested_effort == "low"
+    assert state.effort == "high"
+
+
+def test_codex_turn_span_omits_unobserved_effective_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requested settings do not imply observed/effective settings."""
+    captured: dict[str, object] = {}
+
+    class Tracer:
+        def start_span(self, _name: str, *, attributes: dict[str, object]) -> object:
+            captured.update(attributes)
+            return object()
+
+    monkeypatch.setattr("opentelemetry.trace.get_tracer", lambda _name: Tracer())
+    state = fwd._CodexForwarderState(requested_model="gpt-requested", requested_effort="low")
+
+    fwd._start_codex_turn_span("session-1", {"turn": {"id": "turn-1"}}, state)
+
+    assert "gen_ai.response.model" not in captured
+    assert "omnigent.effective_reasoning_effort" not in captured
+    assert "omnigent.provider.fallback" not in captured
 
 
 def test_codex_turn_span_closes_on_terminal_boundary() -> None:

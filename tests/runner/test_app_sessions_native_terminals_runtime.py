@@ -404,6 +404,7 @@ async def test_auto_create_codex_terminal_uses_persisted_resume_launch_config(
                         "approval_policy=on-request",
                     ],
                     "model_override": "gpt-5.4-mini",
+                    "reasoning_effort": "low",
                     "external_session_id": thread_id,
                 },
                 request=httpx.Request("GET", url),
@@ -619,12 +620,15 @@ async def test_auto_create_codex_terminal_uses_persisted_resume_launch_config(
     del forward_calls[0]["subagent_router"]
     assert "turn_router" in forward_calls[0]
     del forward_calls[0]["turn_router"]
+    assert forward_calls[0].pop("trace_launch_provenance") is None
     assert forward_calls == [
         {
             "session_id": session_id,
             "bridge_dir": bridge_dir,
             "codex_ws_url": app_server.listen_url,
             "thread_id": thread_id,
+            "requested_model": "gpt-5.4-mini",
+            "requested_effort": "low",
         }
     ]
     bridge_state = codex_native_bridge.read_bridge_state(bridge_dir)
@@ -1246,6 +1250,7 @@ async def test_auto_create_codex_terminal_uses_worktree_workspace_not_bundle_dir
                     "workspace": str(worktree),
                     "terminal_launch_args": None,
                     "model_override": None,
+                    "reasoning_effort": "low",
                     "external_session_id": None,
                 },
                 request=httpx.Request("GET", url),
@@ -1303,6 +1308,8 @@ async def test_auto_create_codex_terminal_uses_worktree_workspace_not_bundle_dir
         async def close(self) -> None:
             """:returns: None."""
 
+    discovery_calls: list[dict[str, Any]] = []
+
     async def _fake_discover_thread_and_forward(**kwargs: Any) -> None:
         """
         Stand in for the fresh-session discovery forwarder.
@@ -1315,6 +1322,7 @@ async def test_auto_create_codex_terminal_uses_worktree_workspace_not_bundle_dir
             "fresh Codex launch must clear stale bridge state before the "
             "discovery forwarder publishes the new thread"
         )
+        discovery_calls.append(kwargs)
 
     launch_captured: dict[str, Any] = {}
 
@@ -1412,6 +1420,9 @@ async def test_auto_create_codex_terminal_uses_worktree_workspace_not_bundle_dir
     )
     assert build_calls[0]["cwd"] != bundle_dir.resolve()  # never the spec-bundle dir
     assert "developer_instructions" not in build_calls[0]
+    assert len(discovery_calls) == 1
+    assert discovery_calls[0]["requested_model"] == "gpt-5-default"
+    assert discovery_calls[0]["requested_effort"] == "low"
 
     # Sandbox-override regression: the launched Codex terminal must inherit
     # the agent's sandbox: none rather than falling back to the platform

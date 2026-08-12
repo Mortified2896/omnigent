@@ -83,6 +83,10 @@ def test_explicit_omniroute_lane_uses_configured_default_and_model(_isolated: Pa
     assert 'model_provider="omnigent_provider"' in joined
     assert "gateway.example.test" in joined
     assert "production-gateway" in launch.summary
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "omniroute"
+    assert launch.trace_provenance.provider == "production-gateway"
+    assert launch.trace_provenance.provider_fallback is None
 
 
 def test_explicit_codex_direct_lane_forces_subscription_transport(
@@ -111,6 +115,10 @@ def test_explicit_codex_direct_lane_forces_subscription_transport(
     assert launch.config_overrides == ['model_provider="openai"']
     assert launch.model == "gpt-5.5"
     assert launch.profile is None
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "codex-direct"
+    assert launch.trace_provenance.provider == "openai-codex-subscription"
+    assert launch.trace_provenance.provider_fallback is False
 
 
 def test_explicit_codex_direct_lane_fails_without_login(
@@ -120,9 +128,7 @@ def test_explicit_codex_direct_lane_fails_without_login(
         "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: False
     )
 
-    with pytest.raises(
-        OmnigentError, match=r"^Codex Subscription — Direct is not authenticated$"
-    ):
+    with pytest.raises(OmnigentError, match=r"^Codex Subscription — Direct is not authenticated$"):
         resolve_native_codex_launch(model="gpt-5.5", access_lane="codex-direct")
 
 
