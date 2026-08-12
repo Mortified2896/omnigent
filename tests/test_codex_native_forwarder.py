@@ -2673,3 +2673,55 @@ async def test_delta_coalescer_survives_a_cancelled_flush_caller() -> None:
     )
     await asyncio.wait_for(coalescer.flush(), timeout=5.0)
     assert len(client.posts) > posts_before
+
+
+def test_codex_turn_span_records_metadata_without_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native Codex turn spans expose provenance but no user payload."""
+
+    class Span:
+        def __init__(self) -> None:
+            self.status = None
+            self.ended = False
+
+        def set_status(self, status: object) -> None:
+            self.status = status
+
+        def end(self) -> None:
+            self.ended = True
+
+    class Tracer:
+        def start_span(self, name: str, *, attributes: dict[str, object]) -> Span:
+            assert name == "agent:codex-native-ui"
+            assert attributes["session.id"] == "session-1"
+            assert attributes["omnigent.response.id"] == "turn-1"
+            assert attributes["omnigent.requested_model"] == "gpt-test"
+            assert attributes["gen_ai.response.model"] == "gpt-test"
+            assert attributes["omnigent.requested_reasoning_effort"] == "high"
+            assert attributes["omnigent.access_lane"] == "codex-direct"
+            assert not any("input" in key or "output" in key for key in attributes)
+            return span
+
+    span = Span()
+    monkeypatch.setattr("opentelemetry.trace.get_tracer", lambda _name: Tracer())
+    state = fwd._CodexForwarderState(model="gpt-test", effort="high")
+
+    fwd._start_codex_turn_span("session-1", {"turn": {"id": "turn-1"}}, state)
+    fwd._end_codex_turn_span("turn/completed", {"turn": {"id": "turn-1"}}, state)
+
+    assert span.ended is True
+    assert state.telemetry_turn_span is None
+
+
+def test_codex_turn_span_does_not_end_for_another_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale terminal notification cannot close the active turn span."""
+
+    class Span:
+        def set_status(self, _status: object) -> None:
+            raise AssertionError("wrong turn ended")
+
+        def end(self) -> None:
+            raise AssertionError("wrong turn ended")
+
+    state = fwd._CodexForwarderState(telemetry_turn_span=Span(), telemetry_turn_id="turn-current")
+    fwd._end_codex_turn_span("turn/completed", {"turn": {"id": "turn-old"}}, state)
+    assert state.telemetry_turn_span is not None
