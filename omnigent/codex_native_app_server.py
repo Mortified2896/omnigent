@@ -1875,6 +1875,15 @@ def build_codex_native_server(
 
 
 @dataclass(frozen=True)
+class CodexTraceLaunchProvenance:
+    """Immutable, resolver-proven launch routing metadata for telemetry."""
+
+    access_lane: str
+    provider: str
+    provider_fallback: bool
+
+
+@dataclass(frozen=True)
 class NativeCodexLaunch:
     """How a native Codex terminal should be launched, across all offerings.
 
@@ -1898,6 +1907,7 @@ class NativeCodexLaunch:
     model: str | None
     profile: str | None
     summary: str = ""
+    trace_provenance: CodexTraceLaunchProvenance | None = None
 
 
 def codex_session_meta_model_provider(launch: NativeCodexLaunch) -> str:
@@ -2220,6 +2230,11 @@ def _resolve_native_codex_access_lane(
             model=model,
             profile=None,
             summary=f"Codex Subscription — Direct (model={model!r})",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=access_lane,
+                provider="openai-codex-subscription",
+                provider_fallback=False,
+            ),
         )
 
     if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:
@@ -2243,6 +2258,11 @@ def _resolve_native_codex_access_lane(
             model=launch.model,
             profile=launch.profile,
             summary=f"OmniRoute lane via provider {entry.name!r} (model={model!r})",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=access_lane,
+                provider=entry.name,
+                provider_fallback=False,
+            ),
         )
 
     raise OmnigentError(

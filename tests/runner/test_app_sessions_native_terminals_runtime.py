@@ -625,6 +625,9 @@ async def test_auto_create_codex_terminal_uses_persisted_resume_launch_config(
             "bridge_dir": bridge_dir,
             "codex_ws_url": app_server.listen_url,
             "thread_id": thread_id,
+            "trace_launch_provenance": None,
+            "requested_model": "gpt-5.4-mini",
+            "requested_effort": None,
         }
     ]
     bridge_state = codex_native_bridge.read_bridge_state(bridge_dir)
