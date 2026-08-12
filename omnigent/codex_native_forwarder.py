@@ -3304,10 +3304,10 @@ def _end_codex_turn_span(
     from opentelemetry.trace import StatusCode
 
     span = state.telemetry_turn_span
-    terminal_id = _turn_id_from_payload(params.get("turn")) or _turn_id_from_payload(params)
-    if terminal_id and state.telemetry_turn_id and terminal_id != state.telemetry_turn_id:
-        return
-    span.set_status(StatusCode.OK if method == "turn/completed" else StatusCode.ERROR)  # type: ignore[attr-defined]
+    error = _terminal_error_from_turn(params)
+    span.set_status(  # type: ignore[attr-defined]
+        StatusCode.OK if method == "turn/completed" and error is None else StatusCode.ERROR
+    )
     span.end()  # type: ignore[attr-defined]
     state.telemetry_turn_span = None
     state.telemetry_turn_id = None
