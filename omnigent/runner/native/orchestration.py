@@ -432,6 +432,7 @@ class _CodexNativeLaunchConfig:
     policy_server_url: str
     terminal_launch_args: list[str] | None
     model_override: str | None
+    reasoning_effort: str | None
     external_session_id: str | None
     fork_source_id: str | None
     fork_source_external_id: str | None
@@ -958,6 +959,20 @@ async def _codex_native_launch_config(
             raise RuntimeError(
                 f"Invalid model_override for Codex session {session_id!r}: {exc}"
             ) from exc
+    reasoning_effort = snapshot.get("reasoning_effort")
+    if reasoning_effort is not None:
+        from omnigent.reasoning_effort import codex_efforts_for_model, validate_effort
+
+        try:
+            reasoning_effort = validate_effort(
+                reasoning_effort,
+                "codex",
+                codex_efforts_for_model(model_override),
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid reasoning_effort for Codex session {session_id!r}: {exc}"
+            ) from exc
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
@@ -1014,6 +1029,7 @@ async def _codex_native_launch_config(
         policy_server_url=_required_runner_env("RUNNER_SERVER_URL"),
         terminal_launch_args=terminal_launch_args,
         model_override=model_override,
+        reasoning_effort=reasoning_effort,
         external_session_id=external_session_id,
         fork_source_id=fork_source_id,
         fork_source_external_id=fork_source_external_id,
@@ -3993,6 +4009,7 @@ async def _auto_create_codex_terminal(
         codex_home=codex_home,
         cwd=Path(workspace),
         model=_codex_launch.model,
+        reasoning_effort=launch_config.reasoning_effort,
         profile=_codex_launch.profile,
         extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
         bridge_dir=bridge_dir,

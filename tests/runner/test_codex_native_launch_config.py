@@ -96,6 +96,8 @@ async def test_non_dict_snapshot_raises() -> None:
         ("terminal_launch_args", [1, 2], "terminal_launch_args"),
         ("model_override", "", "model_override"),
         ("model_override", 5, "model_override"),
+        ("reasoning_effort", "bogus", "reasoning_effort"),
+        ("reasoning_effort", 5, "reasoning_effort"),
         ("external_session_id", "", "external_session_id"),
         ("workspace", "", "workspace"),
     ],
@@ -115,6 +117,7 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
         "workspace": "/tmp/repo",
         "terminal_launch_args": ["--config", "approval_policy=on-request"],
         "model_override": "gpt-5.4-mini",
+        "reasoning_effort": "low",
         "external_session_id": "thread_abc",
         "labels": {
             "omnigent.fork.source_id": "conv_source",
@@ -127,6 +130,7 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
     assert cfg.policy_server_url == "http://127.0.0.1:8123"
     assert cfg.terminal_launch_args == ["--config", "approval_policy=on-request"]
     assert cfg.model_override == "gpt-5.4-mini"
+    assert cfg.reasoning_effort == "low"
     assert cfg.external_session_id == "thread_abc"
     assert cfg.fork_source_id == "conv_source", "Fork source id should be read from labels."
     assert cfg.fork_source_external_id == "thread_src"
@@ -165,3 +169,4 @@ async def test_bypass_sandbox_defaults_off_unless_label_is_one(
         snapshot["labels"] = labels
     cfg = await _run(_Client(_Resp(200, snapshot)))
     assert cfg.bypass_sandbox is False
+    assert cfg.reasoning_effort is None
