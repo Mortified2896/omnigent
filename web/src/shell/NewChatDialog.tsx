@@ -1385,7 +1385,7 @@ function SearchableModelPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] overflow-hidden p-0"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <Command className="h-auto min-h-0">
           <CommandInput
