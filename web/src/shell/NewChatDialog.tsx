@@ -1418,7 +1418,7 @@ function SearchableModelPicker({
       <PopoverContent
         align="start"
         collisionPadding={16}
-        className="max-h-[var(--radix-popover-content-available-height)] w-[min(22rem,calc(100vw-2rem))] overflow-hidden p-0"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <Command className="h-auto min-h-0">
           <CommandInput
