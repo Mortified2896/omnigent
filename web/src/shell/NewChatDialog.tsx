@@ -1407,17 +1407,18 @@ function SearchableModelPicker({
           aria-label="Model"
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
-            compact ? "w-56 max-w-[calc(100vw-2rem)]" : "w-full",
+            compact ? "w-48 max-w-[calc(100vw-2rem)] sm:w-60" : "w-full",
           )}
           data-testid={testId}
         >
-          <span className="min-w-0 truncate">{selectedLabel}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="max-h-[var(--radix-popover-content-available-height)] w-[min(20rem,calc(100vw-2rem))] overflow-hidden p-0"
+        collisionPadding={16}
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(22rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <Command className="h-auto min-h-0">
           <CommandInput
@@ -1442,7 +1443,11 @@ function SearchableModelPicker({
                 return groups;
               }, new Map<string, typeof options[number][]>()),
             ).map(([label, group]) => (
-              <CommandGroup key={label} heading={label}>
+              <CommandGroup
+                key={label}
+                heading={label}
+                className="mt-1 border-t border-border/70 pt-1 **:[[cmdk-group-heading]]:font-semibold **:[[cmdk-group-heading]]:text-foreground"
+              >
                 {group.map((option) => (
                   <CommandItem
                     key={`${option.accessLane ?? "legacy"}:${option.id}`}
@@ -1454,7 +1459,7 @@ function SearchableModelPicker({
                     data-checked={value === modelOptionSelectionIdentity(option)}
                     onSelect={() => select(modelOptionSelectionIdentity(option))}
                   >
-                    <span className="min-w-0 truncate">{option.displayName}</span>
+                    <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
                   </CommandItem>
                 ))}
               </CommandGroup>
