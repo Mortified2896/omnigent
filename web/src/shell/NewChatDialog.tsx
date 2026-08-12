@@ -136,6 +136,7 @@ import {
   type SmartRoutingUnavailableCause,
 } from "@/lib/smartRoutingAvailability";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
+import { codexEffortLevelsForModel } from "@/lib/codexNativeModels";
 import { partitionAgentsByKind, sortAgentsForDisplay } from "@/lib/agentGrouping";
 import { cn } from "@/lib/utils";
 import { isCurrentServerLocal } from "@/lib/serverOrigin";
@@ -2676,6 +2677,23 @@ export function NewChatLandingScreen() {
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
   const supportsModelPicker = nativeAgentHasCapability(selectedAgent, "modelPicker");
+  const codexEffortLevels = useMemo(
+    () =>
+      selectedNativeHarness === "codex-native"
+        ? codexEffortLevelsForModel(codexModelOptions, pickedModel || null)
+        : [],
+    [selectedNativeHarness, codexModelOptions, pickedModel],
+  );
+  useEffect(() => {
+    if (
+      selectedNativeHarness === "codex-native" &&
+      !hostCodexModelsLoading &&
+      pickedEffort &&
+      !codexEffortLevels.includes(pickedEffort)
+    ) {
+      setPickedEffort("");
+    }
+  }, [selectedNativeHarness, hostCodexModelsLoading, codexEffortLevels, pickedEffort]);
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
   // The selected native harness, used to persist/seed its option knobs (mode /
   // model / effort), which are harness-specific. null for non-native agents,
@@ -3785,7 +3803,7 @@ export function NewChatLandingScreen() {
             reasoning_effort:
               !smartRoutingHarnessSelected &&
               !routingOwnsModel &&
-              agentSupportsPermissionMode &&
+              (agentSupportsPermissionMode || nativeAgent?.harness === "codex-native") &&
               pickedEffort
                 ? pickedEffort
                 : undefined,
@@ -4312,13 +4330,19 @@ export function NewChatLandingScreen() {
                   )}
                 </div>
                 {selectedAgent &&
-                  supportsModelPicker &&
+                  (supportsModelPicker || selectedNativeHarness === "codex-native") &&
                   !sandboxSelected &&
                   selectedHostId !== null && (
                     <SearchableModelPicker
                       value={pickedModel || MODEL_SELECT_DEFAULT}
-                      options={piModelOptions}
-                      loading={hostPiModelsLoading}
+                      options={
+                        selectedNativeHarness === "codex-native" ? codexModelOptions : piModelOptions
+                      }
+                      loading={
+                        selectedNativeHarness === "codex-native"
+                          ? hostCodexModelsLoading
+                          : hostPiModelsLoading
+                      }
                       onValueChange={(value) =>
                         setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value)
                       }
@@ -4326,6 +4350,34 @@ export function NewChatLandingScreen() {
                       testId="new-chat-landing-inline-model"
                       searchTestId="new-chat-landing-inline-model-search"
                     />
+                  )}
+                {selectedAgent &&
+                  selectedNativeHarness === "codex-native" &&
+                  codexEffortLevels.length > 0 && (
+                    <Select
+                      value={pickedEffort || EFFORT_SELECT_NONE}
+                      onValueChange={(value) =>
+                        setPickedEffort(value === EFFORT_SELECT_NONE ? "" : value)
+                      }
+                    >
+                      <SelectTrigger
+                        className="h-9 w-auto min-w-24 md:h-8"
+                        data-testid="new-chat-landing-inline-effort"
+                        aria-label="Reasoning effort"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+                        {codexEffortLevels.map((effort) => (
+                          <SelectItem key={effort} value={effort}>
+                            {effort === "xhigh"
+                              ? "XHigh"
+                              : effort.charAt(0).toUpperCase() + effort.slice(1)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   )}
                 {selectedAgent && selectedAgentHasKnobs && (
                   <HarnessConfigModal
