@@ -2712,16 +2712,20 @@ def test_codex_turn_span_records_metadata_without_content(monkeypatch: pytest.Mo
     assert state.telemetry_turn_span is None
 
 
-def test_codex_turn_span_does_not_end_for_another_turn(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A stale terminal notification cannot close the active turn span."""
+def test_codex_turn_span_closes_on_terminal_boundary() -> None:
+    """A terminal boundary always closes the active span to avoid stale traces."""
 
     class Span:
+        ended = False
+
         def set_status(self, _status: object) -> None:
-            raise AssertionError("wrong turn ended")
+            pass
 
         def end(self) -> None:
-            raise AssertionError("wrong turn ended")
+            self.ended = True
 
-    state = fwd._CodexForwarderState(telemetry_turn_span=Span(), telemetry_turn_id="turn-current")
+    span = Span()
+    state = fwd._CodexForwarderState(telemetry_turn_span=span, telemetry_turn_id="turn-current")
     fwd._end_codex_turn_span("turn/completed", {"turn": {"id": "turn-old"}}, state)
-    assert state.telemetry_turn_span is not None
+    assert span.ended is True
+    assert state.telemetry_turn_span is None
