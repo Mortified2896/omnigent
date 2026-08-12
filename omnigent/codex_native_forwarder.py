@@ -435,6 +435,8 @@ class _CodexForwarderState:
     # thread rotation), so a settled round stays settled and later items
     # can skip re-reading the bridge file for the life of the session.
     mcp_startup_settled: bool = False
+    telemetry_turn_span: object | None = None
+    telemetry_turn_id: str | None = None
 
     def note_resume_response(self, response: CodexMessage) -> None:
         """
@@ -2999,6 +3001,7 @@ async def _maybe_handle_turn_event(
             await _sync_model_change(
                 client, session_id=session_id, forwarder_state=forwarder_state
             )
+            _start_codex_turn_span(session_id, params, forwarder_state)
         return True
     if method in {"turn/completed", "turn/failed"}:
         await _handle_terminal_turn_boundary(
@@ -3251,6 +3254,63 @@ async def _handle_terminal_turn_boundary(
         )
     if handled:
         await usage_coalescer.flush()
+    _end_codex_turn_span(method, params, forwarder_state)
+
+
+def _start_codex_turn_span(
+    session_id: str,
+    params: _JsonObject,
+    state: _CodexForwarderState,
+) -> None:
+    """Start one metadata-only span for a native Codex turn."""
+    if state.telemetry_turn_span is not None:
+        _end_codex_turn_span("turn/failed", {}, state)
+    from opentelemetry import trace
+
+    turn_id = _turn_id_from_payload(params.get("turn")) or _turn_id_from_payload(params)
+    attributes: dict[str, str | bool] = {
+        "session.id": session_id,
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.agent.name": _AGENT_NAME,
+        "omnigent.harness": "codex-native",
+        "omnigent.access_lane": "codex-direct",
+        "gen_ai.provider.name": "openai",
+        "omnigent.provider.fallback": False,
+    }
+    if turn_id:
+        attributes["omnigent.response.id"] = turn_id
+    if state.model:
+        attributes["omnigent.requested_model"] = state.model
+        attributes["gen_ai.response.model"] = state.model
+    if state.effort:
+        attributes["omnigent.requested_reasoning_effort"] = state.effort
+        attributes["omnigent.effective_reasoning_effort"] = state.effort
+    span = trace.get_tracer("omnigent").start_span(
+        "agent:codex-native-ui",
+        attributes=attributes,
+    )
+    state.telemetry_turn_span = span
+    state.telemetry_turn_id = turn_id
+
+
+def _end_codex_turn_span(
+    method: str,
+    params: _JsonObject,
+    state: _CodexForwarderState | None,
+) -> None:
+    """Finish the current native Codex turn span without recording payloads."""
+    if state is None or state.telemetry_turn_span is None:
+        return
+    from opentelemetry.trace import StatusCode
+
+    span = state.telemetry_turn_span
+    terminal_id = _turn_id_from_payload(params.get("turn")) or _turn_id_from_payload(params)
+    if terminal_id and state.telemetry_turn_id and terminal_id != state.telemetry_turn_id:
+        return
+    span.set_status(StatusCode.OK if method == "turn/completed" else StatusCode.ERROR)  # type: ignore[attr-defined]
+    span.end()  # type: ignore[attr-defined]
+    state.telemetry_turn_span = None
+    state.telemetry_turn_id = None
 
 
 def _handle_usage_update(
