@@ -42,6 +42,7 @@ from omnigent.onboarding.provider_config import (
     CHAT_WIRE_API,
     CLI_CONFIG_KIND,
     DATABRICKS_KIND,
+    FamilyConfig,
     GATEWAY_KIND,
     KEY_KIND,
     LOCAL_KIND,
@@ -83,6 +84,13 @@ _PI_OPENAI_PROVIDER_ID = "omnigent-openai"
 # work via /chat/completions: Kimi, Llama, GLM, Gemini, older GPT models).
 _PI_COMPLETIONS_PROVIDER_ID = "omnigent-completions"
 _PI_MLFLOW_PROVIDER_ID = "omnigent-mlflow"
+
+# Pi's built-in ChatGPT Plus/Pro subscription provider. Selected via
+# ``openai-codex/<model>`` in the pre-launch picker; routes through Pi's
+# native OAuth credentials in the global auth.json (symlinked into the
+# managed PI_CODING_AGENT_DIR by ``prepare_managed_pi_agent_dir``),
+# bypassing OmniRoute entirely.
+_PI_NATIVE_CODEX_PROVIDER_ID = "openai-codex"
 _PI_MANAGED_PROVIDER_IDS = frozenset(
     {
         _PI_PROVIDER_ID,
@@ -127,6 +135,16 @@ def _split_pi_native_model_selection(selection: str | None) -> tuple[str, str] |
     provider_id, separator, model_id = selection.partition("/")
     if separator and provider_id in _PI_MANAGED_PROVIDER_IDS and model_id:
         return provider_id, model_id
+    return None
+
+
+def _split_pi_native_codex_selection(selection: str | None) -> str | None:
+    """Return the model id when *selection* targets Pi's native Codex provider."""
+    if not selection:
+        return None
+    provider_id, separator, model_id = selection.partition("/")
+    if separator and provider_id == _PI_NATIVE_CODEX_PROVIDER_ID and model_id:
+        return model_id
     return None
 
 
@@ -381,20 +399,101 @@ def pi_native_model_options() -> list[dict[str, object]]:
     catalog is an error for this host-query surface, not an invitation to invent
     a default or silently fall back to Pi's unrelated local login.
     """
-    provider = resolve_pi_native_provider()
-    if provider is None:
-        raise ValueError("no Omnigent-configured Pi provider resolved on this host")
-
     options: dict[str, dict[str, object]] = {}
-    for provider_id, payload in provider.to_models_config()["providers"].items():
-        for model in payload["models"]:
-            model_id = model["id"]
-            qualified = f"{provider_id}/{model_id}"
-            options[qualified] = {
-                "id": qualified,
-                "model": qualified,
-                "displayName": model.get("name") or model_id,
-            }
+    provider = resolve_pi_native_provider()
+    if provider is not None:
+        for provider_id, payload in provider.to_models_config()["providers"].items():
+            for model in payload["models"]:
+                model_id = model["id"]
+                qualified = f"{provider_id}/{model_id}"
+                options[qualified] = {
+                    "id": qualified,
+                    "model": qualified,
+                    "displayName": model.get("name") or model_id,
+                }
+
+    # Append Pi's built-in ``openai-codex`` models — direct ChatGPT Plus/Pro
+    # subscription access that bypasses OmniRoute. Surfaced alongside the
+    # Omnigent-managed OmniRoute choices so a single picker shows both paths.
+    # Only included when the global auth store has a configured openai-codex
+    # credential (Pi's own OAuth), so we never offer a selection Pi cannot
+    # honor.
+    for model_id in _enumerate_pi_native_codex_models():
+        qualified = f"{_PI_NATIVE_CODEX_PROVIDER_ID}/{model_id}"
+        options[qualified] = {
+            "id": qualified,
+            "model": qualified,
+            "displayName": model_id,
+        }
+
+    if not options:
+        raise ValueError("configured Pi provider returned no launchable models")
+    return [options[model_id] for model_id in sorted(options)]
+
+
+def _enumerate_pi_native_codex_models() -> list[str]:
+    """Discover Pi's built-in ``openai-codex`` models from the installed Pi CLI.
+
+    Returns the model ids Pi itself advertises for the ``openai-codex``
+    provider, by invoking ``pi --provider openai-codex --list-models`` against
+    the user's global Pi agent dir (so the managed ``omnigent`` overlay does
+    not shadow the built-in catalog). Returns ``[]`` when the global Pi agent
+    has no ``openai-codex`` credential, when Pi is not on PATH, or when the
+    list call fails for any reason — the picker falls back to OmniRoute-only
+    selections in that case.
+    """
+    from omnigent.inner.pi_settings import DEFAULT_PI_AGENT_DIR
+    from omnigent.pi_native import resolve_pi_executable
+
+    pi_command = resolve_pi_executable()
+    if not pi_command:
+        return []
+    env = os.environ.copy()
+    # Force the global agent dir so the managed PI_CODING_AGENT_DIR (if set
+    # in the runner environment) does not redirect Pi to a per-session
+    # overlay that lacks the openai-codex model catalog.
+    env.pop(PI_CODING_AGENT_DIR_ENV_VAR, None)
+    env.pop("PI_MODEL", None)
+    env.pop("PI_PROVIDER", None)
+    # Strip the runner-side overrides that pin Pi to the managed ``omnigent``
+    # provider so ``pi --list-models`` returns the native catalog instead.
+    env.pop("OMNIGENT_PI_NATIVE_CONFIG", None)
+    env.pop("OMNIGENT_PI_NATIVE_BRIDGE_DIR", None)
+    env.pop("OMNIGENT_RUNNER_ZYGOTE_HARNESS_FD", None)
+    env[PI_CODING_AGENT_DIR_ENV_VAR] = str(DEFAULT_PI_AGENT_DIR)
+    try:
+        result = subprocess.run(
+            [pi_command, "--provider", _PI_NATIVE_CODEX_PROVIDER_ID, "--list-models"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=env,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _LOGGER.info(
+            "pi-native: failed to enumerate openai-codex models; picker will "
+            "omit direct Codex entries.",
+            exc_info=True,
+        )
+        return []
+    if result.returncode != 0:
+        return []
+    ids: list[str] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        # Header row begins with 'provider'; skip it. Each model row begins
+        # with the provider id (``openai-codex``), so split on whitespace
+        # and take the second column.
+        if not line or line.startswith("provider") or line.startswith("---"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if parts[0] != _PI_NATIVE_CODEX_PROVIDER_ID:
+            continue
+        ids.append(parts[1])
+    return ids
     if not options:
         raise ValueError("configured Pi provider returned no launchable models")
     return [options[model_id] for model_id in sorted(options)]
@@ -900,6 +999,146 @@ def _inline_family_order(model: str | None) -> tuple[str, ...]:
     return ("anthropic", "openai")
 
 
+def _enumerate_inline_family_models(
+    entry: ProviderEntry,
+    family_name: str,
+    family: FamilyConfig,
+) -> list[_PiModelEntry]:
+    """Enumerate chat-mode models a gateway/local provider exposes live.
+
+    The Pi model picker is fed from the per-session ``models.json`` (see
+    :func:`write_pi_models_config`), not from a separate catalog fetch at
+    request time. For an inline-family provider (``key`` / ``gateway`` /
+    ``local``) the configured ``models:`` block is intentionally tiny — the
+    gateway often hosts dozens of routes (``custom/best-coding`` + explicit
+    OpenAI / Claude / DeepSeek / Gemini / Llama ids via the upstream router).
+    Without a live enumeration the picker only shows the explicit pin.
+
+    We hit ``GET <base_url>/v1/models`` with the family's credential (the
+    same call :mod:`omnigent.model_catalog` already uses for the runner's
+    worker model catalog), filter to chat-mode ids Pi can drive, and return
+    :class:`_PiModelEntry` dicts ready to merge into the primary provider's
+    ``models`` list. The selected model is added separately by
+    :meth:`PiProviderConfig.to_models_config`, so it never has to appear here.
+
+    Failures fall back to an empty list — the picker still shows the
+    configured default, the same as before this enumeration existed.
+
+    :param entry: The resolved provider entry.
+    :param family_name: The family name (``"anthropic"`` / ``"openai"``).
+    :param family: The expanded :class:`FamilyConfig` (base_url + credential).
+    :returns: Chat-mode Pi model entries sorted by id, with Pi-compatibility
+        filtering and listing metadata (context window, max output) attached
+        when the endpoint reports it.
+    """
+    # Only gateway / local kinds surface a live /v1/models listing here.
+    # A direct vendor ``key`` (api.openai.com / api.anthropic.com) is the
+    # canonical "no direct OpenAI API access" path — its listing is the
+    # bundled catalog, already served by ``get_chat_models``. The hard rule
+    # of this fix is "don't add direct OpenAI API access to Omnigent", so
+    # explicit canonical-vendor bases are skipped (a gateway / local proxy
+    # routed through a third-party endpoint — OmniRoute, OpenRouter,
+    # LiteLLM, Ollama — is the supported path).
+    if entry.kind not in (GATEWAY_KIND, LOCAL_KIND):
+        return []
+    base_url = family.base_url
+    if not base_url:
+        return []
+    # Hard guard: never enumerate api.openai.com / api.anthropic.com
+    # directly, even if a ``key`` kind somehow lands here.
+    try:
+        from omnigent.model_catalog import ResolvedModelProvider
+        from omnigent.model_catalog import is_direct_openai_provider
+        from omnigent.model_catalog import _fetch_openai_compatible_listing as _fetch_listing
+
+        provider = ResolvedModelProvider(
+            kind=entry.kind,
+            family=family_name,
+            base_url=base_url,
+            api_key=family.api_key,
+            auth_command=family.auth_command,
+            detail=f"provider {entry.name!r}",
+        )
+        if is_direct_openai_provider(provider):
+            return []
+        listing = _fetch_listing(provider, transport=None)
+    except Exception:  # noqa: BLE001 — enumeration must never break launch
+        _LOGGER.info(
+            "pi-native: inline-family model enumeration failed for provider %r; "
+            "Pi will show only the configured default.",
+            entry.name,
+            exc_info=True,
+        )
+        return []
+
+    seen_default = (entry.family_default_model(family_name) or "").strip()
+    selected: _PiModelEntry | None = None
+    out: list[_PiModelEntry] = []
+    for entry_model in listing.models:
+        model_id = entry_model.id
+        lower = model_id.lower()
+        # Filter out the non-chat rows an OpenAI-compatible ``/v1/models``
+        # surfaces: the upstream router exposes embedding / image / audio /
+        # video / rerank models under the same key. Pi's chat provider
+        # cannot drive them — picking them would fail at the first request.
+        # _fetch_openai_compatible_listing only captures ``context_length``
+        # (not the optional ``type`` field), so use distinctive id tokens.
+        if any(
+            token in lower
+            for token in (
+                "embed",
+                "rerank",
+                "whisper",
+                "parakeet",
+                "fastpitch",
+                "tacotron",
+                "speech",
+                "hailuo",
+                "t2v-01",
+                "music",
+                "flux",
+                "lyria",
+                "-image",
+                "image-",
+                "image-preview",
+                "image-2",
+            )
+        ):
+            continue
+        # Pi rejects a few response shapes; keep parity with
+        # ``_fetch_pi_model_lists`` for the Databricks path.
+        if unsupported_in_pi(lower):
+            continue
+        # Restrict to genuinely OpenAI / GPT / Codex ids that the upstream
+        # router actually advertises as OpenAI-routed. OmniRoute's
+        # ``/v1/models`` is a merged catalog of every provider it serves
+        # (Claude, Gemini, Llama, DeepSeek, NVIDIA, Cloudflare, Mistral,
+        # GitHub Models, OpenRouter, etc.); without this filter the pre-launch
+        # picker would dump the entire catalog. Keep only the canonical
+        # Codex / OpenAI surface (``codex/gpt-*`` / ``codex/codex-*`` — these
+        # are what OmniRoute's ``owned_by=codex`` bucket serves). The ``cx/...``
+        # alias and the bare ``gpt-...`` are the same routes under second
+        # names and are intentionally suppressed here so the pre-launch
+        # picker doesn't expose duplicate aliases. GitHub Models (``gh/`` /
+        # ``github/``), DuckDuckGo (``ddgw/``), and other gateway prefixes
+        # are NOT OpenAI routed and are excluded by this filter.
+        if not lower.startswith(("codex/gpt-", "codex/codex-")):
+            continue
+        pi_entry: _PiModelEntry = {"id": model_id, "input": ["text", "image"]}
+        if seen_default and model_id == seen_default:
+            selected = pi_entry
+            continue
+        # DeepSeek streams on reasoning_content; needs reasoning:true so
+        # Pi reads from that channel.
+        if "deepseek" in lower:
+            pi_entry["reasoning"] = True
+        out.append(pi_entry)
+    out.sort(key=lambda item: item["id"])
+    if selected is not None:
+        out.insert(0, selected)
+    return out
+
+
 def _inline_family_pi_provider(
     entry: ProviderEntry, *, model: str | None
 ) -> PiProviderConfig | None:
@@ -910,6 +1149,13 @@ def _inline_family_pi_provider(
     family happens to be configured first. Falls back to the other family, which
     keeps protocol-translating proxies working: a LiteLLM ``/anthropic``
     passthrough is the only configured family and still serves any model.
+
+    When the resolved family is a gateway/local/key whose ``base_url`` exposes
+    an OpenAI-compatible ``/v1/models`` listing (the upstream router does),
+    the live chat-mode models are merged into the rendered ``models.json`` via
+    :func:`_enumerate_inline_family_models`. The picker then shows the gateway
+    route alongside the configured ``models.default``, all routed through the
+    same credential — no per-model direct OpenAI key.
 
     :param entry: The resolved default provider entry.
     :param model: Session model override, or ``None`` to use the family default.
@@ -954,6 +1200,7 @@ def _inline_family_pi_provider(
         # Strip bracket suffixes (e.g. "[1m]") — accepted by the direct
         # Anthropic API but rejected by the Databricks AI Gateway.
         resolved_model = re.sub(r"\[.*?\]$", "", resolved_model)
+        extra_models = _enumerate_inline_family_models(entry, family_name, family)
         return PiProviderConfig(
             provider_id=_PI_PROVIDER_ID,
             base_url=family.base_url,
@@ -961,6 +1208,7 @@ def _inline_family_pi_provider(
             model=resolved_model,
             api_key=api_key,
             auth_header=auth_header,
+            extra_models=extra_models,
         )
     return None
 
@@ -1110,6 +1358,35 @@ def write_pi_models_config(
     return models_path
 
 
+def pi_native_codex_launch(
+    agent_dir: Path,
+    model: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Launch Pi against its built-in ``openai-codex`` provider for *model*.
+
+    Returns ``(env, args)`` for the runner-owned Pi process. No managed
+    ``models.json`` is written: Pi uses its native built-in openai-codex
+    catalog and authenticates via the global auth store (symlinked into
+    *agent_dir* by :func:`prepare_managed_pi_agent_dir`). This path bypasses
+    OmniRoute entirely.
+
+    :param agent_dir: The managed Pi config dir for this session.
+    :param model: The bare openai-codex model id (e.g. ``gpt-5.4-mini``).
+    :returns: ``(env, args)`` — the env vars to merge into the terminal spec
+        (relocating Pi's config dir) and the ``--provider``/``--model`` args to
+        append to the Pi command.
+    """
+    from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir
+
+    agent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(agent_dir, 0o700)
+    prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})
+    return (
+        {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)},
+        ["--provider", _PI_NATIVE_CODEX_PROVIDER_ID, "--model", model],
+    )
+
+
 def pi_native_provider_launch(
     agent_dir: Path,
     provider: PiProviderConfig,
@@ -1123,7 +1400,20 @@ def pi_native_provider_launch(
     :returns: ``(env, args)`` — the env vars to merge into the terminal spec
         (relocating Pi's config dir) and the ``--provider``/``--model`` args to
         append to the Pi command.
+
+    When *selection* targets Pi's built-in ``openai-codex/<model>`` provider
+    (ChatGPT Plus/Pro OAuth), the call delegates to
+    :func:`pi_native_codex_launch` — no managed ``models.json`` is written,
+    Pi authenticates against the global auth store (symlinked into
+    *agent_dir* by :func:`prepare_managed_pi_agent_dir`), and the request
+    bypasses OmniRoute entirely. This gives O1 a direct subscription path
+    alongside the existing Pi → OmniRoute path.
     """
+    # Direct ChatGPT Plus/Pro subscription path — bypass the managed catalog.
+    codex_model = _split_pi_native_codex_selection(selection)
+    if codex_model is not None:
+        return pi_native_codex_launch(agent_dir, codex_model)
+
     # Render once so selection validation and the eventual models.json write
     # operate on the exact same provider/model catalog.
     rendered = provider.to_models_config()

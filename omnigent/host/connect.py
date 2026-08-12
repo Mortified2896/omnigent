@@ -16,7 +16,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, SupportsIndex, SupportsInt, cast
@@ -697,6 +697,86 @@ def _paginate_list_dir(
         entries=page,
         has_more=has_more,
     )
+
+
+def _codex_catalog_model_option(model_id: str, *, is_default: bool = False) -> dict[str, object]:
+    """Build a Codex picker row from an authoritative provider model id."""
+    from omnigent.reasoning_effort import codex_efforts_for_model, format_supported
+
+    bare = model_id.rsplit("/", 1)[-1]
+    if bare.startswith("gpt-5.6-"):
+        display_name = f"GPT-5.6 {bare.removeprefix('gpt-5.6-').title()}"
+    elif bare == "gpt-5.5":
+        display_name = "GPT-5.5"
+    else:
+        display_name = bare
+    option: dict[str, object] = {
+        "id": model_id,
+        "displayName": display_name,
+        **({"isDefault": True} if is_default else {}),
+    }
+    if bare == "gpt-5.5" or bare.startswith("gpt-5.6-"):
+        efforts = codex_efforts_for_model(model_id)
+        option["supportedReasoningEfforts"] = [
+            {"reasoningEffort": effort, "description": effort.title()}
+            for effort in format_supported(efforts).split(", ")
+        ]
+    return option
+
+
+def _codex_catalog_model_options(
+    model_ids: Iterable[str],
+    *,
+    default_id: str | None,
+) -> list[dict[str, object]]:
+    """Build ordered, de-duplicated Codex picker rows."""
+    return [
+        _codex_catalog_model_option(model_id, is_default=model_id == default_id)
+        for model_id in dict.fromkeys(model_ids)
+    ]
+
+
+def _codex_options_for_access_lane(
+    options: Iterable[dict[str, object]],
+    *,
+    access_lane: str,
+    group_label: str,
+    preserve_default: bool = True,
+) -> list[dict[str, object]]:
+    """Normalize native Codex rows and stamp their deterministic transport."""
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    selected_default = False
+    for option in options:
+        raw_id = option.get("model") or option.get("id")
+        if not isinstance(raw_id, str) or not raw_id or raw_id in seen:
+            continue
+        seen.add(raw_id)
+        display_name = option.get("displayName")
+        is_default = (
+            preserve_default and not selected_default and option.get("isDefault") is True
+        )
+        selected_default = selected_default or is_default
+        row: dict[str, object] = {
+            "id": raw_id,
+            "model": raw_id,
+            "displayName": (
+                display_name if isinstance(display_name, str) and display_name else raw_id
+            ),
+            "accessLane": access_lane,
+            "groupLabel": group_label,
+            **({"isDefault": True} if is_default else {}),
+        }
+        for key in ("defaultReasoningEffort", "supportedReasoningEfforts"):
+            if key in option:
+                row[key] = option[key]
+        if access_lane == "codex-direct" and raw_id.startswith("gpt-5.6-"):
+            row["supportedReasoningEfforts"] = [
+                {"reasoningEffort": effort, "description": effort.title()}
+                for effort in ("none", "low", "medium", "high", "xhigh", "max")
+            ]
+        normalized.append(row)
+    return normalized
 
 
 @dataclass
@@ -2113,13 +2193,16 @@ class HostProcess:
                 default_id = (
                     default_model if default_model in {m.id for m in listing.models} else None
                 )
-                provider = (
-                    resolve_model_provider(spec, "codex-native")
-                    if listing.source == "openai-compatible"
-                    else None
-                )
+                provider = resolve_model_provider(spec, "codex-native")
                 models: list[dict[str, object]]
-                if provider is not None and is_direct_openai_provider(provider):
+                if provider.kind == "none" and not listing.models:
+                    codex_options = await discover_codex_model_options()
+                    models = _codex_options_for_access_lane(
+                        codex_options,
+                        access_lane="codex-direct",
+                        group_label="Codex Subscription — Direct",
+                    )
+                elif listing.source == "openai-compatible" and is_direct_openai_provider(provider):
                     available_ids = {model.id for model in listing.models}
                     models = []
                     seen: set[str] = set()
@@ -2157,14 +2240,43 @@ class HostProcess:
                             }
                         )
                 else:
-                    models = [
-                        {
-                            "id": model.id,
-                            "displayName": model.id,
-                            **({"isDefault": True} if model.id == default_id else {}),
-                        }
-                        for model in listing.models
-                    ]
+                    models = _codex_catalog_model_options(
+                        (model.id for model in listing.models),
+                        default_id=default_id,
+                    )
+
+                # O2's configured gateway catalog uses canonical ``codex/*``
+                # ids for its OmniRoute lane. Resolve that catalog through the
+                # normal configured-default path above; do not guess the
+                # provider from a mutable name, URL, or port.
+                omniroute_models = [
+                    {
+                        **model,
+                        "model": model["id"],
+                        "accessLane": "omniroute",
+                        "groupLabel": "OmniRoute",
+                    }
+                    for model in models
+                    if str(model["id"]).startswith("codex/")
+                ]
+                if omniroute_models:
+                    models = omniroute_models
+                    try:
+                        direct_options = await discover_codex_model_options()
+                    except Exception:
+                        _logger.exception(
+                            "Failed to discover direct Codex subscription models; "
+                            "keeping OmniRoute choices"
+                        )
+                    else:
+                        models.extend(
+                            _codex_options_for_access_lane(
+                                direct_options,
+                                access_lane="codex-direct",
+                                group_label="Codex Subscription — Direct",
+                                preserve_default=False,
+                            )
+                        )
             except Exception:
                 _logger.exception("Failed to resolve pre-launch Codex model options")
                 return HostModelOptionsResultFrame(

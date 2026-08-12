@@ -159,8 +159,34 @@ const CLAUDE_MODEL_OPTIONS_RESULT = {
 };
 const CODEX_MODEL_OPTIONS_RESULT = {
   data: [
-    { id: "databricks-gpt-5-5", displayName: "GPT-5.5", isDefault: true },
-    { id: "databricks-gpt-5-6", displayName: "GPT-5.6" },
+    {
+      id: "codex/gpt-5.6-luna",
+      displayName: "GPT-5.6 Luna",
+      accessLane: "omniroute" as const,
+      groupLabel: "OmniRoute",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "none", description: "None" },
+        { reasoningEffort: "low", description: "Low" },
+        { reasoningEffort: "medium", description: "Medium" },
+        { reasoningEffort: "high", description: "High" },
+        { reasoningEffort: "xhigh", description: "Xhigh" },
+        { reasoningEffort: "max", description: "Max" },
+      ],
+      isDefault: true,
+    },
+    {
+      id: "codex/gpt-5.5",
+      displayName: "GPT-5.5",
+      accessLane: "omniroute" as const,
+      groupLabel: "OmniRoute",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "none", description: "None" },
+        { reasoningEffort: "low", description: "Low" },
+        { reasoningEffort: "medium", description: "Medium" },
+        { reasoningEffort: "high", description: "High" },
+        { reasoningEffort: "xhigh", description: "Xhigh" },
+      ],
+    },
   ],
   isLoading: false,
   isError: false,
@@ -1416,6 +1442,155 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByText("Read only")).toBeTruthy();
   });
 
+  it("shows GPT-5.6 Luna's exact effort capabilities plus Default in the inline selector", () => {
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("OmniRoute")).toBeTruthy();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Default",
+      "GPT-5.6 Luna",
+      "GPT-5.5",
+    ]);
+    fireEvent.click(screen.getByText("GPT-5.6 Luna"));
+
+    openSelect("new-chat-landing-inline-effort");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Default",
+      "None",
+      "Low",
+      "Medium",
+      "High",
+      "XHigh",
+      "Max",
+    ]);
+  });
+
+  it("does not offer Max or Minimal for GPT-5.5", () => {
+    renderLanding();
+    selectAgent("a2");
+    openSelect("new-chat-landing-inline-model");
+    fireEvent.click(screen.getByText("GPT-5.5"));
+
+    openSelect("new-chat-landing-inline-effort");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Default",
+      "None",
+      "Low",
+      "Medium",
+      "High",
+      "XHigh",
+    ]);
+    expect(screen.queryByText("Max")).toBeNull();
+    expect(screen.queryByText("Minimal")).toBeNull();
+  });
+
+  it("sends the Luna model and Max effort in the launch payload", async () => {
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+    openSelect("new-chat-landing-inline-model");
+    fireEvent.click(screen.getByText("GPT-5.6 Luna"));
+    openSelect("new-chat-landing-inline-effort");
+    fireEvent.click(screen.getByRole("option", { name: "Max" }));
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("codex/gpt-5.6-luna");
+    expect(body.reasoning_effort).toBe("max");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("omniroute");
+  });
+
+  it("retains lane identity when two Codex groups use the same model id", async () => {
+    const duplicateId = "codex/gpt-5.6-luna";
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                CODEX_MODEL_OPTIONS_RESULT.data[0],
+                {
+                  ...CODEX_MODEL_OPTIONS_RESULT.data[0],
+                  id: duplicateId,
+                  accessLane: "codex-direct" as const,
+                  groupLabel: "Codex Subscription — Direct",
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_duplicate_lane" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("Codex Subscription — Direct")).toBeTruthy();
+    const duplicateOptions = screen.getAllByRole("option", { name: "GPT-5.6 Luna" });
+    const directOption = duplicateOptions.find(
+      (option) => option.getAttribute("data-access-lane") === "codex-direct",
+    );
+    expect(directOption).toBeDefined();
+    fireEvent.click(directOption!);
+
+    openSelect("new-chat-landing-inline-model");
+    const reopened = screen.getAllByRole("option", { name: "GPT-5.6 Luna" });
+    expect(
+      reopened.find((option) => option.getAttribute("data-access-lane") === "codex-direct"),
+    ).toHaveAttribute("data-checked", "true");
+    expect(
+      reopened.find((option) => option.getAttribute("data-access-lane") === "omniroute"),
+    ).toHaveAttribute("data-checked", "false");
+    closeMenu();
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe(duplicateId);
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("codex-direct");
+    expect(JSON.parse(localStorage.getItem(HARNESS_OPTIONS_KEY) ?? "{}")).toMatchObject({
+      "codex-native": { model: duplicateId, accessLane: "codex-direct" },
+    });
+  });
+
+  it("omits model and effort launch overrides when both inline selectors are Default", async () => {
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    expect(screen.getByTestId("new-chat-landing-inline-model").textContent).toContain("Default");
+    expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Default");
+    const { raw, body } = await submitAndReadBody();
+    expect(body.model_override).toBeUndefined();
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(raw).not.toContain("model_override");
+    expect(raw).not.toContain("reasoning_effort");
+  });
+
+  it("resets Luna Max to Default when switching to GPT-5.5", async () => {
+    renderLanding();
+    selectAgent("a2");
+    openSelect("new-chat-landing-inline-model");
+    fireEvent.click(screen.getByText("GPT-5.6 Luna"));
+    openSelect("new-chat-landing-inline-effort");
+    fireEvent.click(screen.getByRole("option", { name: "Max" }));
+    expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Max");
+
+    openSelect("new-chat-landing-inline-model");
+    fireEvent.click(screen.getByText("GPT-5.5"));
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Default"),
+    );
+  });
+
   it("sends the selected Codex launch model without changing Claude's remembered model", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
@@ -1425,9 +1600,9 @@ describe("NewChatLandingScreen", () => {
 
     openAgentConfig("a2");
     openSelect("new-chat-landing-config-model");
-    expect(screen.getAllByText("Default (databricks-gpt-5-5)").length).toBeGreaterThan(0);
-    expect(screen.getByText("databricks-gpt-5-6")).toBeTruthy();
-    fireEvent.click(screen.getByText("databricks-gpt-5-6"));
+    expect(screen.getAllByText("Default (codex/gpt-5.6-luna)").length).toBeGreaterThan(0);
+    expect(screen.getByText("codex/gpt-5.5")).toBeTruthy();
+    fireEvent.click(screen.getByText("codex/gpt-5.5"));
     saveConfig();
 
     // The Codex model is remembered under codex-native only; Claude Code's
@@ -1435,13 +1610,13 @@ describe("NewChatLandingScreen", () => {
     openAgentConfig("a1");
     expect(screen.getByTestId("new-chat-landing-config-model").textContent).toContain("Default");
     expect(screen.getByTestId("new-chat-landing-config-model").textContent).not.toContain(
-      "databricks-gpt-5-6",
+      "codex/gpt-5.5",
     );
     saveConfig();
 
     openAgentConfig("a2");
     expect(screen.getByTestId("new-chat-landing-config-model").textContent).toContain(
-      "databricks-gpt-5-6",
+      "codex/gpt-5.5",
     );
     saveConfig();
     fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
@@ -1451,7 +1626,7 @@ describe("NewChatLandingScreen", () => {
     await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
     const [, init] = authenticatedFetchMock.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
-    expect(body.model_override).toBe("databricks-gpt-5-6");
+    expect(body.model_override).toBe("codex/gpt-5.5");
     expect(body.reasoning_effort).toBeUndefined();
     expect(useHostModelOptionsMock).toHaveBeenCalledWith("host_1", "codex-native", true);
   });

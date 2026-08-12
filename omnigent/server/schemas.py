@@ -182,6 +182,8 @@ class NativeModelOption(BaseModel):
     defaultReasoningEffort: str | None = None
     supportedReasoningEfforts: list[NativeReasoningEffortOption] = Field(default_factory=list)
     isDefault: bool | None = None
+    accessLane: str | None = None
+    groupLabel: str | None = None
 
 
 class PolicySummary(BaseModel):

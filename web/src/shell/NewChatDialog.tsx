@@ -49,6 +49,7 @@ import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -136,6 +137,7 @@ import {
   type SmartRoutingUnavailableCause,
 } from "@/lib/smartRoutingAvailability";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
+import { codexEffortLevelsForModel } from "@/lib/codexNativeModels";
 import { partitionAgentsByKind, sortAgentsForDisplay } from "@/lib/agentGrouping";
 import { cn } from "@/lib/utils";
 import { isCurrentServerLocal } from "@/lib/serverOrigin";
@@ -341,6 +343,35 @@ const CODEX_NATIVE_APPROVAL_MODES: {
 // approval-mode presets above: when bypass is on the runner strips any
 // `--sandbox` / `--ask-for-approval` flags those presets would emit.
 const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
+const CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane";
+type CodexAccessLane = NonNullable<NativeModelOption["accessLane"]>;
+type ModelPickerOption = Pick<
+  NativeModelOption,
+  "id" | "displayName" | "accessLane" | "groupLabel"
+> & { displayName: string };
+
+/** Return the lane-aware UI identity without changing the launch model id. */
+function modelOptionSelectionIdentity(
+  option: Pick<NativeModelOption, "id" | "accessLane">,
+): string {
+  return option.accessLane ? JSON.stringify([option.accessLane, option.id]) : option.id;
+}
+
+function codexSelectionIdentity(model: string, accessLane: CodexAccessLane | null): string {
+  return modelOptionSelectionIdentity({ id: model, accessLane: accessLane ?? undefined });
+}
+
+function findCodexOption(
+  options: readonly ModelPickerOption[],
+  model: string,
+  accessLane: CodexAccessLane | null,
+): ModelPickerOption | undefined {
+  if (!model) return undefined;
+  if (accessLane) {
+    return options.find((option) => option.id === model && option.accessLane === accessLane);
+  }
+  return options.find((option) => option.id === model);
+}
 // Bypass is the most-permissive Codex approval stance — presented as a 4th
 // option in the Codex approval dropdown (Codex only; OpenCode shares the
 // presets above but has no bypass). It rides as a conversation label, not
@@ -1347,7 +1378,7 @@ function SearchableModelPicker({
   searchTestId = "new-chat-landing-config-model-search",
 }: {
   value: string;
-  options: readonly { id: string; displayName: string }[];
+  options: readonly ModelPickerOption[];
   loading: boolean;
   onValueChange: (value: string) => void;
   compact?: boolean;
@@ -1358,7 +1389,8 @@ function SearchableModelPicker({
   const selectedLabel =
     value === MODEL_SELECT_DEFAULT
       ? "Default"
-      : (options.find((option) => option.id === value)?.displayName ?? value);
+      : (options.find((option) => modelOptionSelectionIdentity(option) === value)?.displayName ??
+        value);
   const select = (nextValue: string) => {
     onValueChange(nextValue);
     setOpen(false);
@@ -1375,23 +1407,21 @@ function SearchableModelPicker({
           aria-label="Model"
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
-            compact ? "w-auto max-w-48" : "w-full",
+            compact ? "w-48 max-w-[calc(100vw-2rem)] sm:w-60" : "w-full",
           )}
           data-testid={testId}
         >
-          <span className="min-w-0 truncate">{selectedLabel}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] overflow-hidden p-0"
+        collisionPadding={16}
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <Command className="h-auto min-h-0">
-          <CommandInput
-            placeholder="Search models…"
-            data-testid={searchTestId}
-          />
+          <CommandInput placeholder="Search models…" data-testid={searchTestId} />
           <CommandList
             className="max-h-72 min-h-0 overflow-y-auto overscroll-contain"
             onWheel={(event) => event.stopPropagation()}
@@ -1403,18 +1433,33 @@ function SearchableModelPicker({
             >
               Default
             </CommandItem>
-            {options.map((option) => (
-              <CommandItem
-                key={option.id}
-                value={option.id}
-                keywords={[option.displayName]}
-                title={option.displayName}
-                data-model-id={option.id}
-                data-checked={value === option.id}
-                onSelect={() => select(option.id)}
+            {Array.from(
+              options.reduce((groups, option) => {
+                const label = option.groupLabel ?? "Models";
+                groups.set(label, [...(groups.get(label) ?? []), option]);
+                return groups;
+              }, new Map<string, (typeof options)[number][]>()),
+            ).map(([label, group]) => (
+              <CommandGroup
+                key={label}
+                heading={label}
+                className="mt-1 border-t border-border/70 pt-1 **:[[cmdk-group-heading]]:font-semibold **:[[cmdk-group-heading]]:text-foreground"
               >
-                <span className="min-w-0 truncate">{option.displayName}</span>
-              </CommandItem>
+                {group.map((option) => (
+                  <CommandItem
+                    key={`${option.accessLane ?? "legacy"}:${option.id}`}
+                    value={modelOptionSelectionIdentity(option)}
+                    keywords={[option.displayName, option.id, option.groupLabel ?? ""]}
+                    title={option.displayName}
+                    data-model-id={option.id}
+                    data-access-lane={option.accessLane}
+                    data-checked={value === modelOptionSelectionIdentity(option)}
+                    onSelect={() => select(modelOptionSelectionIdentity(option))}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
             ))}
             {!loading && <CommandEmpty>No models found</CommandEmpty>}
             {loading && (
@@ -1457,6 +1502,7 @@ function HarnessConfigModal({
   cursorExecMode,
   bypassSandbox,
   pickedModel,
+  pickedCodexAccessLane,
   claudeModelOptions,
   claudeModelsLoading,
   codexModelOptions,
@@ -1471,6 +1517,7 @@ function HarnessConfigModal({
   setCursorExecMode,
   setBypassSandbox,
   setPickedModel,
+  setPickedCodexModel,
   setPickedEffort,
   setPickedHarness,
   setCostControlMode,
@@ -1487,9 +1534,10 @@ function HarnessConfigModal({
   cursorExecMode: string;
   bypassSandbox: boolean;
   pickedModel: string;
+  pickedCodexAccessLane: CodexAccessLane | null;
   claudeModelOptions: readonly Pick<NativeModelOption, "id" | "displayName" | "isDefault">[];
   claudeModelsLoading: boolean;
-  codexModelOptions: readonly Pick<NativeModelOption, "id" | "displayName" | "isDefault">[];
+  codexModelOptions: readonly (ModelPickerOption & Pick<NativeModelOption, "isDefault">)[];
   codexModelsLoading: boolean;
   piModelOptions: readonly { id: string; displayName: string }[];
   piModelsLoading: boolean;
@@ -1501,6 +1549,7 @@ function HarnessConfigModal({
   setCursorExecMode: (mode: string) => void;
   setBypassSandbox: (enabled: boolean) => void;
   setPickedModel: (model: string) => void;
+  setPickedCodexModel: (model: string, accessLane: CodexAccessLane | null) => void;
   setPickedEffort: (effort: string) => void;
   setPickedHarness: (harness: string | null, agentId?: string) => void;
   setCostControlMode: (mode: CostControlMode) => void;
@@ -1520,6 +1569,9 @@ function HarnessConfigModal({
   // Local draft — seeded from the live state each time the modal opens so
   // Cancel can discard and re-opening always reflects the committed state.
   const [draftModel, setDraftModel] = useState(pickedModel);
+  const [draftCodexAccessLane, setDraftCodexAccessLane] = useState<CodexAccessLane | null>(
+    pickedCodexAccessLane,
+  );
   const [draftEffort, setDraftEffort] = useState(pickedEffort);
   const [draftPermission, setDraftPermission] = useState(permissionMode);
   const [draftApproval, setDraftApproval] = useState(approvalMode);
@@ -1531,6 +1583,7 @@ function HarnessConfigModal({
   useEffect(() => {
     if (!open) return;
     setDraftModel(pickedModel);
+    setDraftCodexAccessLane(pickedCodexAccessLane);
     setDraftEffort(pickedEffort);
     setDraftPermission(permissionMode);
     setDraftApproval(approvalMode);
@@ -1559,29 +1612,46 @@ function HarnessConfigModal({
   // bundle agent's routed brain is a knob on that agent, so the modal keeps its
   // name: "Configure Debby", not "Configure Smart Routing".
   const configTitleName = autoNative ? SMART_ROUTING_LABEL : agent.display_name;
-  const modelValue = smartRoutingOn ? MODEL_SELECT_SMART : draftModel || MODEL_SELECT_DEFAULT;
+  const modelValue = smartRoutingOn
+    ? MODEL_SELECT_SMART
+    : !draftModel
+      ? MODEL_SELECT_DEFAULT
+      : isCodex
+        ? codexSelectionIdentity(draftModel, draftCodexAccessLane)
+        : draftModel;
   const claudeModelSelectOptions = useMemo(
     () => claudeModelOptions.map((m) => ({ id: m.id, label: displayModelName(m) })),
     [claudeModelOptions],
   );
   const codexModelSelectOptions = useMemo(
-    () => codexModelOptions.map((m) => ({ id: m.id, label: displayModelId(m) })),
+    () =>
+      codexModelOptions.map((option) => ({
+        id: modelOptionSelectionIdentity(option),
+        modelId: option.id,
+        label: displayModelId(option),
+      })),
     [codexModelOptions],
   );
   const onModelChange = (value: string) => {
     if (value === MODEL_SELECT_SMART) {
       setDraftRouting("on");
       setDraftModel("");
+      setDraftCodexAccessLane(null);
       // The router picks the model (and its effort) per turn, so an explicit
       // effort is meaningless — reset it so it doesn't ride along frozen.
       setDraftEffort("");
     } else if (value === MODEL_SELECT_DEFAULT) {
       setDraftModel("");
+      setDraftCodexAccessLane(null);
       // "Default" = no override; defer routing to the spec default (null,
       // omitted from create) — never emit an explicit "on"/"off".
       setDraftRouting(null);
     } else {
-      setDraftModel(value);
+      const codexOption = isCodex
+        ? codexModelOptions.find((option) => modelOptionSelectionIdentity(option) === value)
+        : undefined;
+      setDraftModel(codexOption?.id ?? value);
+      setDraftCodexAccessLane(codexOption?.accessLane ?? null);
       // Picking an explicit model turns routing off (mutually exclusive).
       setDraftRouting(null);
     }
@@ -1613,13 +1683,13 @@ function HarnessConfigModal({
       setPickedModel(draftModel);
       if (entryHarness) writeHarnessOption(entryHarness, { model: draftModel });
     } else if (hasApproval) {
-      if (isCodex) setPickedModel(draftModel);
+      if (isCodex) setPickedCodexModel(draftModel, draftCodexAccessLane);
       setApprovalMode(draftApproval);
       setBypassSandbox(draftBypass);
       if (entryHarness)
         writeHarnessOption(entryHarness, {
           mode: draftApproval,
-          ...(isCodex ? { model: draftModel } : {}),
+          ...(isCodex ? { model: draftModel, accessLane: draftCodexAccessLane ?? "" } : {}),
         });
     } else if (hasCursor) {
       setCursorExecMode(draftCursor);
@@ -1646,7 +1716,7 @@ function HarnessConfigModal({
       if (entryHarness)
         writeHarnessOption(entryHarness, {
           routing: draftRouting === "on" ? "on" : "off",
-          ...(draftRouting === "on" ? { model: "", effort: "" } : {}),
+          ...(draftRouting === "on" ? { model: "", effort: "", accessLane: "" } : {}),
         });
     }
     onOpenChange(false);
@@ -1942,6 +2012,7 @@ interface LandingDraft {
   cursorExecMode: string;
   pickedHarness: string | null;
   pickedModel: string;
+  pickedCodexAccessLane: CodexAccessLane | null;
   pickedEffort: string;
   costControlMode: CostControlMode;
 }
@@ -2138,7 +2209,13 @@ export function NewChatLandingScreen() {
     [hostClaudeModelOptions, sandboxSelected],
   );
   const codexModelOptions = useMemo(
-    () => (sandboxSelected ? [] : (hostCodexModelOptions ?? [])),
+    () =>
+      sandboxSelected
+        ? []
+        : (hostCodexModelOptions ?? []).map((option) => ({
+            ...option,
+            displayName: option.displayName ?? option.id,
+          })),
     [hostCodexModelOptions, sandboxSelected],
   );
   const piModelOptions = useMemo(
@@ -2239,6 +2316,9 @@ export function NewChatLandingScreen() {
   // An explicit pick rides along and is remembered (seeded back on a later visit
   // via the harness-seed effect below).
   const [pickedModel, _setPickedModel] = useState<string>(() => landingDraft?.pickedModel ?? "");
+  const [pickedCodexAccessLane, setPickedCodexAccessLane] = useState<CodexAccessLane | null>(
+    () => landingDraft?.pickedCodexAccessLane ?? null,
+  );
   const [pickedEffort, setPickedEffort] = useState<string>(() => landingDraft?.pickedEffort ?? "");
   // Per-session cost-control switch ("Cost Optimized" pill). Unset
   // (null) defers to the agent spec's default and is omitted from
@@ -2251,11 +2331,20 @@ export function NewChatLandingScreen() {
   // routing off.
   const setPickedModel = useCallback((model: string) => {
     _setPickedModel(model);
+    setPickedCodexAccessLane(null);
+    if (model) _setCostControlMode(null);
+  }, []);
+  const setPickedCodexModel = useCallback((model: string, accessLane: CodexAccessLane | null) => {
+    _setPickedModel(model);
+    setPickedCodexAccessLane(model ? accessLane : null);
     if (model) _setCostControlMode(null);
   }, []);
   const setCostControlMode = useCallback((mode: CostControlMode) => {
     _setCostControlMode(mode);
-    if (mode === "on") _setPickedModel("");
+    if (mode === "on") {
+      _setPickedModel("");
+      setPickedCodexAccessLane(null);
+    }
   }, []);
   // Controls the working-directory popover so picking a directory closes it.
   const [workspacePopoverOpen, setWorkspacePopoverOpen] = useState(false);
@@ -2302,6 +2391,7 @@ export function NewChatLandingScreen() {
     cursorExecMode,
     pickedHarness,
     pickedModel,
+    pickedCodexAccessLane,
     pickedEffort,
     costControlMode,
   };
@@ -2676,6 +2766,26 @@ export function NewChatLandingScreen() {
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
   const supportsModelPicker = nativeAgentHasCapability(selectedAgent, "modelPicker");
+  const selectedCodexOption = useMemo(
+    () => findCodexOption(codexModelOptions, pickedModel, pickedCodexAccessLane),
+    [codexModelOptions, pickedModel, pickedCodexAccessLane],
+  );
+  const codexEffortLevels = useMemo(() => {
+    if (selectedNativeHarness !== "codex-native") return [];
+    return selectedCodexOption
+      ? codexEffortLevelsForModel([selectedCodexOption], selectedCodexOption.id)
+      : codexEffortLevelsForModel(codexModelOptions, null);
+  }, [selectedNativeHarness, selectedCodexOption, codexModelOptions]);
+  useEffect(() => {
+    if (
+      selectedNativeHarness === "codex-native" &&
+      !hostCodexModelsLoading &&
+      pickedEffort &&
+      !codexEffortLevels.includes(pickedEffort)
+    ) {
+      setPickedEffort("");
+    }
+  }, [selectedNativeHarness, hostCodexModelsLoading, codexEffortLevels, pickedEffort]);
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
   // The selected native harness, used to persist/seed its option knobs (mode /
   // model / effort), which are harness-specific. null for non-native agents,
@@ -2791,8 +2901,7 @@ export function NewChatLandingScreen() {
               {
                 label: "Model",
                 value:
-                  codexModelOptions.find((m) => m.id === pickedModel)?.id ??
-                  defaultModelLabel(codexModelOptions, displayModelId),
+                  selectedCodexOption?.id ?? defaultModelLabel(codexModelOptions, displayModelId),
               },
             ];
       return [...modelRows, { label: "Approval", value: approvalValue }];
@@ -2822,6 +2931,7 @@ export function NewChatLandingScreen() {
     pickedModel,
     claudeModelOptions,
     codexModelOptions,
+    selectedCodexOption,
     piModelOptions,
     pickedEffort,
     permissionMode,
@@ -2905,14 +3015,17 @@ export function NewChatLandingScreen() {
       // A remembered routing "on" outranks a remembered concrete model, and
       // also drops any model/effort left in the shared state (e.g. seeded for
       // Claude Code before the harness switch).
-      setPickedModel(
-        !storedRoutingOn &&
-          selectedNativeHarness === "codex-native" &&
-          stored.model != null &&
-          codexModelOptions.some((m) => m.id === stored.model)
-          ? stored.model
-          : "",
-      );
+      const storedCodexOption =
+        !storedRoutingOn && selectedNativeHarness === "codex-native" && stored.model != null
+          ? findCodexOption(
+              codexModelOptions,
+              stored.model,
+              stored.accessLane === "omniroute" || stored.accessLane === "codex-direct"
+                ? stored.accessLane
+                : null,
+            )
+          : undefined;
+      setPickedCodexModel(storedCodexOption?.id ?? "", storedCodexOption?.accessLane ?? null);
       if (storedRoutingOn) setPickedEffort("");
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
@@ -3654,10 +3767,22 @@ export function NewChatLandingScreen() {
       // when the toggle is armed for a codex-native agent) so the runner
       // launches with --dangerously-bypass-approvals-and-sandbox and the choice
       // survives reload.
+      const codexLaneLabel =
+        nativeAgent?.harness === "codex-native" && selectedCodexOption?.accessLane
+          ? { [CODEX_ACCESS_LANE_LABEL_KEY]: selectedCodexOption.accessLane }
+          : {};
       const baseLabels =
         agentSupportsApprovalMode && bypassSandbox
-          ? { ...(nativeLabels ?? {}), [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
-          : nativeLabels;
+          ? {
+              ...(nativeLabels ?? {}),
+              ...codexLaneLabel,
+              [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1",
+            }
+          : nativeLabels
+            ? { ...nativeLabels, ...codexLaneLabel }
+            : Object.keys(codexLaneLabel).length > 0
+              ? codexLaneLabel
+              : undefined;
       // When filing into a project, stamp its legacy `omni_project` label at
       // create so the session is BORN FILED. The sidebar dual-reads project
       // membership from this label OR the first-class `project_id` the follow-up
@@ -3785,7 +3910,7 @@ export function NewChatLandingScreen() {
             reasoning_effort:
               !smartRoutingHarnessSelected &&
               !routingOwnsModel &&
-              agentSupportsPermissionMode &&
+              (agentSupportsPermissionMode || nativeAgent?.harness === "codex-native") &&
               pickedEffort
                 ? pickedEffort
                 : undefined,
@@ -4312,20 +4437,73 @@ export function NewChatLandingScreen() {
                   )}
                 </div>
                 {selectedAgent &&
-                  supportsModelPicker &&
+                  (supportsModelPicker || selectedNativeHarness === "codex-native") &&
                   !sandboxSelected &&
                   selectedHostId !== null && (
                     <SearchableModelPicker
-                      value={pickedModel || MODEL_SELECT_DEFAULT}
-                      options={piModelOptions}
-                      loading={hostPiModelsLoading}
-                      onValueChange={(value) =>
-                        setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value)
+                      value={
+                        !pickedModel
+                          ? MODEL_SELECT_DEFAULT
+                          : selectedNativeHarness === "codex-native"
+                            ? codexSelectionIdentity(pickedModel, pickedCodexAccessLane)
+                            : pickedModel
                       }
+                      options={
+                        selectedNativeHarness === "codex-native"
+                          ? codexModelOptions
+                          : piModelOptions
+                      }
+                      loading={
+                        selectedNativeHarness === "codex-native"
+                          ? hostCodexModelsLoading
+                          : hostPiModelsLoading
+                      }
+                      onValueChange={(value) => {
+                        if (selectedNativeHarness !== "codex-native") {
+                          setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value);
+                          return;
+                        }
+                        const option = codexModelOptions.find(
+                          (candidate) => modelOptionSelectionIdentity(candidate) === value,
+                        );
+                        setPickedCodexModel(option?.id ?? "", option?.accessLane ?? null);
+                        writeHarnessOption("codex-native", {
+                          model: option?.id ?? "",
+                          accessLane: option?.accessLane ?? "",
+                        });
+                      }}
                       compact
                       testId="new-chat-landing-inline-model"
                       searchTestId="new-chat-landing-inline-model-search"
                     />
+                  )}
+                {selectedAgent &&
+                  selectedNativeHarness === "codex-native" &&
+                  codexEffortLevels.length > 0 && (
+                    <Select
+                      value={pickedEffort || EFFORT_SELECT_NONE}
+                      onValueChange={(value) =>
+                        setPickedEffort(value === EFFORT_SELECT_NONE ? "" : value)
+                      }
+                    >
+                      <SelectTrigger
+                        className="h-9 w-auto min-w-24 md:h-8"
+                        data-testid="new-chat-landing-inline-effort"
+                        aria-label="Reasoning effort"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+                        {codexEffortLevels.map((effort) => (
+                          <SelectItem key={effort} value={effort}>
+                            {effort === "xhigh"
+                              ? "XHigh"
+                              : effort.charAt(0).toUpperCase() + effort.slice(1)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   )}
                 {selectedAgent && selectedAgentHasKnobs && (
                   <HarnessConfigModal
@@ -4341,6 +4519,7 @@ export function NewChatLandingScreen() {
                     cursorExecMode={cursorExecMode}
                     bypassSandbox={bypassSandbox}
                     pickedModel={pickedModel}
+                    pickedCodexAccessLane={pickedCodexAccessLane}
                     claudeModelOptions={claudeModelOptions}
                     claudeModelsLoading={
                       !sandboxSelected && selectedHostId !== null && hostClaudeModelsLoading
@@ -4361,6 +4540,7 @@ export function NewChatLandingScreen() {
                     setCursorExecMode={setCursorExecMode}
                     setBypassSandbox={setBypassSandbox}
                     setPickedModel={setPickedModel}
+                    setPickedCodexModel={setPickedCodexModel}
                     setPickedEffort={setPickedEffort}
                     setPickedHarness={handleSetPickedHarness}
                     setCostControlMode={setCostControlMode}

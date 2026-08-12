@@ -77,6 +77,14 @@ SWITCH_PREVIOUS_BUILTIN_LABEL_KEY = "omnigent.switch.previous_builtin_id"
 # normal approval/sandbox stance.
 CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox"
 
+# Native Codex transport selected alongside the lane-specific model override.
+# The label is durable session metadata so a host restart cannot re-resolve the
+# model through a different credential path.
+CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane"
+CODEX_ACCESS_LANE_OMNIROUTE = "omniroute"
+CODEX_ACCESS_LANE_DIRECT = "codex-direct"
+CODEX_ACCESS_LANES = frozenset({CODEX_ACCESS_LANE_OMNIROUTE, CODEX_ACCESS_LANE_DIRECT})
+
 # Reserved label key that stores a session's sidebar "project" membership
 # (implicit collections — a project exists while ≥1 session carries this key).
 # Namespaced so it never collides with the user-facing "project" term or other

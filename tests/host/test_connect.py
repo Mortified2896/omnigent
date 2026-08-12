@@ -188,6 +188,180 @@ async def test_handle_model_options_uses_codex_provider_catalog(
     )
 
 
+async def test_handle_model_options_uses_direct_codex_cli_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct Codex CLI login uses Codex's own catalog for pre-launch choices."""
+    from omnigent import codex_native_app_server
+    from omnigent.model_catalog import ModelListing, ResolvedModelProvider
+
+    monkeypatch.setattr(
+        "omnigent.model_catalog.list_models_for_worker",
+        lambda spec, harness: ModelListing(
+            source="none",
+            verified=False,
+            models=(),
+            note="no model provider configured",
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(
+            kind="none",
+            detail="no model provider configured",
+        ),
+    )
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: codex_native_app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=None,
+            profile=None,
+        ),
+    )
+
+    async def _fake_codex_options() -> list[dict[str, object]]:
+        return [
+            {"model": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True},
+            {"id": "gpt-5.4", "displayName": "GPT-5.4", "isDefault": False},
+            {"model": "gpt-5.5", "displayName": "duplicate", "isDefault": False},
+            {
+                "model": "gpt-5.6-luna",
+                "displayName": "GPT-5.6 Luna",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low", "description": "Low"},
+                    {"reasoningEffort": "ultra", "description": "Ultra"},
+                ],
+            },
+        ]
+
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "discover_codex_model_options",
+        _fake_codex_options,
+    )
+    host = _make_host_process()
+
+    result = await host._handle_model_options(
+        HostModelOptionsFrame(request_id="req_models", harness="codex-native"),
+    )
+
+    assert result.models == [
+        {
+            "id": "gpt-5.5",
+            "model": "gpt-5.5",
+            "displayName": "GPT-5.5",
+            "accessLane": "codex-direct",
+            "groupLabel": "Codex Subscription — Direct",
+            "isDefault": True,
+        },
+        {
+            "id": "gpt-5.4",
+            "model": "gpt-5.4",
+            "displayName": "GPT-5.4",
+            "accessLane": "codex-direct",
+            "groupLabel": "Codex Subscription — Direct",
+        },
+        {
+            "id": "gpt-5.6-luna",
+            "model": "gpt-5.6-luna",
+            "displayName": "GPT-5.6 Luna",
+            "accessLane": "codex-direct",
+            "groupLabel": "Codex Subscription — Direct",
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": effort, "description": effort.title()}
+                for effort in ("none", "low", "medium", "high", "xhigh", "max")
+            ],
+        },
+    ]
+
+
+async def test_handle_model_options_exposes_omniroute_gpt56_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OmniRoute catalog drives both GPT-5.6 ids and effort ladders."""
+    from omnigent import codex_native_app_server
+    from omnigent.model_catalog import ModelEntry, ModelListing, ResolvedModelProvider
+
+    model_ids = (
+        "codex/gpt-5.6-sol",
+        "codex/gpt-5.6-terra",
+        "codex/gpt-5.6-luna",
+        "codex/gpt-5.5",
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.list_models_for_worker",
+        lambda spec, harness: ModelListing(
+            source="openai-compatible",
+            verified=True,
+            models=tuple(ModelEntry(id=model_id, family="openai") for model_id in model_ids),
+            note="OmniRoute catalog",
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(
+            kind="gateway",
+            family="openai",
+            base_url="http://127.0.0.1:20128/v1",
+            detail="OmniRoute",
+        ),
+    )
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: codex_native_app_server.NativeCodexLaunch(
+            config_overrides=[], model="codex/gpt-5.6-luna", profile=None
+        ),
+    )
+
+    async def _direct_codex_options() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "gpt-5.5",
+                "model": "gpt-5.5",
+                "displayName": "GPT-5.5",
+                "isDefault": True,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low", "description": "Low"}
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "discover_codex_model_options",
+        _direct_codex_options,
+    )
+
+    result = await _make_host_process()._handle_model_options(
+        HostModelOptionsFrame(request_id="req_models", harness="codex-native"),
+    )
+
+    assert [row["id"] for row in result.models] == [*model_ids, "gpt-5.5"]
+    assert all(row["accessLane"] == "omniroute" for row in result.models[:4])
+    assert all(row["groupLabel"] == "OmniRoute" for row in result.models[:4])
+    assert result.models[4]["accessLane"] == "codex-direct"
+    assert result.models[4]["groupLabel"] == "Codex Subscription — Direct"
+    assert result.models[4]["supportedReasoningEfforts"] == [
+        {"reasoningEffort": "low", "description": "Low"}
+    ]
+    luna = result.models[2]
+    assert luna["displayName"] == "GPT-5.6 Luna"
+    assert [item["reasoningEffort"] for item in luna["supportedReasoningEfforts"]] == [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert "max" not in {
+        item["reasoningEffort"] for item in result.models[3]["supportedReasoningEfforts"]
+    }
+
+
 async def test_handle_model_options_does_not_invent_codex_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -67,6 +67,8 @@ def test_model_options_frames_round_trip() -> None:
                         "id": "sonnet",
                         "model": "system.ai.claude-sonnet-4-6[1m]",
                         "displayName": "Sonnet 4.6",
+                        "accessLane": "omniroute",
+                        "groupLabel": "OmniRoute",
                     }
                 ],
             )
@@ -78,6 +80,8 @@ def test_model_options_frames_round_trip() -> None:
             "id": "sonnet",
             "model": "system.ai.claude-sonnet-4-6[1m]",
             "displayName": "Sonnet 4.6",
+            "accessLane": "omniroute",
+            "groupLabel": "OmniRoute",
         }
     ]
     # Absent from an older host's payload, and present when it reports the

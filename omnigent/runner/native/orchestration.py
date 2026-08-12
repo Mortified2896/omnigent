@@ -388,6 +388,9 @@ class _CodexNativeLaunchConfig:
         ``["--config", "approval_policy=on-request"]``.
     :param model_override: Persisted model override, e.g.
         ``"gpt-5.4-mini"``.
+    :param access_lane: Persisted deterministic transport for the model,
+        ``"omniroute"`` or ``"codex-direct"``. ``None`` preserves legacy
+        provider resolution for sessions created before access lanes.
     :param external_session_id: Existing Codex thread id to resume, e.g.
         ``"thread_abc123"``.
     :param fork_source_id: SOURCE conversation id stamped on a forked
@@ -432,6 +435,8 @@ class _CodexNativeLaunchConfig:
     policy_server_url: str
     terminal_launch_args: list[str] | None
     model_override: str | None
+    reasoning_effort: str | None
+    access_lane: str | None
     external_session_id: str | None
     fork_source_id: str | None
     fork_source_external_id: str | None
@@ -958,6 +963,20 @@ async def _codex_native_launch_config(
             raise RuntimeError(
                 f"Invalid model_override for Codex session {session_id!r}: {exc}"
             ) from exc
+    reasoning_effort = snapshot.get("reasoning_effort")
+    if reasoning_effort is not None:
+        from omnigent.reasoning_effort import codex_efforts_for_model, validate_effort
+
+        try:
+            reasoning_effort = validate_effort(
+                reasoning_effort,
+                "codex",
+                codex_efforts_for_model(model_override),
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid reasoning_effort for Codex session {session_id!r}: {exc}"
+            ) from exc
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
@@ -977,6 +996,8 @@ async def _codex_native_launch_config(
     # fork-source branch in _auto_create_codex_terminal); inert otherwise.
     from omnigent.runner.subagent_routing import routing_class_from_snapshot
     from omnigent.stores.conversation_store import (
+        CODEX_ACCESS_LANE_LABEL_KEY,
+        CODEX_ACCESS_LANES,
         CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
         FORK_CARRY_HISTORY_LABEL_KEY,
         FORK_SOURCE_EXTERNAL_SESSION_LABEL_KEY,
@@ -992,6 +1013,7 @@ async def _codex_native_launch_config(
     # conversation label ("1" to enable). Read here so the runner applies
     # it at launch; any other value (incl. absent) leaves the normal stance.
     bypass_sandbox = False
+    access_lane: str | None = None
     labels = snapshot.get("labels")
     if isinstance(labels, dict):
         _fsi = labels.get(FORK_SOURCE_LABEL_KEY)
@@ -1002,6 +1024,19 @@ async def _codex_native_launch_config(
             fork_source_external_id = _fse
         fork_carry_history = labels.get(FORK_CARRY_HISTORY_LABEL_KEY) == "1"
         bypass_sandbox = labels.get(CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY) == "1"
+        raw_access_lane = labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
+        if raw_access_lane is not None:
+            if not isinstance(raw_access_lane, str) or raw_access_lane not in CODEX_ACCESS_LANES:
+                raise RuntimeError(
+                    f"Invalid native Codex access lane for session {session_id!r}: "
+                    f"{raw_access_lane!r}."
+                )
+            if model_override is None:
+                raise RuntimeError(
+                    f"Native Codex access lane {raw_access_lane!r} for session "
+                    f"{session_id!r} requires model_override."
+                )
+            access_lane = raw_access_lane
     # One derivation of the session's Smart Routing class, shared with the SDK
     # codex path, so "pinned" and "auto-harness" mean the same on both.
     routing_class = routing_class_from_snapshot(
@@ -1014,6 +1049,8 @@ async def _codex_native_launch_config(
         policy_server_url=_required_runner_env("RUNNER_SERVER_URL"),
         terminal_launch_args=terminal_launch_args,
         model_override=model_override,
+        reasoning_effort=reasoning_effort,
+        access_lane=access_lane,
         external_session_id=external_session_id,
         fork_source_id=fork_source_id,
         fork_source_external_id=fork_source_external_id,
@@ -2127,6 +2164,8 @@ async def _auto_create_pi_terminal(
     credential_warning: str | None = None
     if not _pi_args_have_provider(launch_config.terminal_launch_args or []):
         from omnigent.pi_native_credentials import (
+            _split_pi_native_codex_selection,
+            pi_native_codex_launch,
             pi_native_provider_launch,
             resolve_pi_native_provider,
         )
@@ -2139,19 +2178,38 @@ async def _auto_create_pi_terminal(
         # model_override (set by /model or sys_session_create's model arg)
         # takes precedence over the spec's pinned executor.model.
         spec_model = launch_config.model_override or _pi_native_model_from_spec(agent_spec)
-        provider = resolve_pi_native_provider(model=spec_model)
-        if provider is not None:
-            cred_env, cred_args = pi_native_provider_launch(
-                bridge_dir / "pi-agent",
-                provider,
-                selection=spec_model,
+        # Direct ChatGPT Plus/Pro subscription path (``openai-codex/<model>``):
+        # bypasses OmniRoute entirely — Pi launches against its native built-in
+        # provider and authenticates via the global auth store symlinked into
+        # the managed agent dir. Works even when no Omnigent-managed provider
+        # is configured, giving O1 a subscription fallback independent of
+        # OmniRoute.
+        codex_model = _split_pi_native_codex_selection(spec_model)
+        if codex_model is not None:
+            cred_env, cred_args = pi_native_codex_launch(
+                bridge_dir / "pi-agent", codex_model
             )
             pi_env.update(cred_env)
             pi_args.extend(cred_args)
-            # An unroutable model leaves Pi unable to select it, which looks
-            # like a silent hang; prefer that notice over the credential one
-            # since it names the model the user actually picked.
-            credential_warning = provider.unroutable_model_warning() or provider.credential_warning
+            # The codex path authenticates against Pi's own OAuth, not the
+            # managed provider — suppress any Omnigent credential warning.
+            credential_warning = None
+        else:
+            provider = resolve_pi_native_provider(model=spec_model)
+            if provider is not None:
+                cred_env, cred_args = pi_native_provider_launch(
+                    bridge_dir / "pi-agent",
+                    provider,
+                    selection=spec_model,
+                )
+                pi_env.update(cred_env)
+                pi_args.extend(cred_args)
+                # An unroutable model leaves Pi unable to select it, which looks
+                # like a silent hang; prefer that notice over the credential one
+                # since it names the model the user actually picked.
+                credential_warning = (
+                    provider.unroutable_model_warning() or provider.credential_warning
+                )
     # Inherit the agent's os_env so its sandbox (e.g. ``type: none``),
     # egress_rules and env_passthrough are honoured. Without ``sandbox`` here
     # and ``parent_os_env`` below, launch_required_terminal falls back to
@@ -3741,7 +3799,11 @@ async def _auto_create_codex_terminal(
     # Thread the spec so its executor.auth / legacy profile win over
     # machine-level config, parity with the in-process harness (#2744).
     _launch_spec = agent_spec.spec if isinstance(agent_spec, ResolvedSpec) else agent_spec
-    _codex_launch = resolve_native_codex_launch(model=default_model, spec=_launch_spec)
+    _codex_launch = resolve_native_codex_launch(
+        model=default_model,
+        spec=_launch_spec,
+        access_lane=launch_config.access_lane,
+    )
     _session_meta_provider = codex_session_meta_model_provider(_codex_launch)
     from omnigent.inner.codex_executor import _find_codex_cli
 
@@ -3974,6 +4036,7 @@ async def _auto_create_codex_terminal(
         codex_home=codex_home,
         cwd=Path(workspace),
         model=_codex_launch.model,
+        reasoning_effort=launch_config.reasoning_effort,
         profile=_codex_launch.profile,
         extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
         bridge_dir=bridge_dir,

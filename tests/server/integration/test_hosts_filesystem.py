@@ -250,6 +250,8 @@ async def test_host_model_options_returns_prelaunch_catalog(
                 "id": "sonnet",
                 "model": "system.ai.claude-sonnet-4-6[1m]",
                 "displayName": "Sonnet 4.6",
+                "accessLane": "omniroute",
+                "groupLabel": "OmniRoute",
             }
         ]
     }
@@ -266,6 +268,8 @@ async def test_host_model_options_returns_prelaunch_catalog(
                 "id": "sonnet",
                 "model": "system.ai.claude-sonnet-4-6[1m]",
                 "displayName": "Sonnet 4.6",
+                "accessLane": "omniroute",
+                "groupLabel": "OmniRoute",
             }
         ]
     }

@@ -1622,3 +1622,66 @@ def test_launch_renders_config_once(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     creds.pi_native_provider_launch(tmp_path / "pi-agent", provider)
 
     assert renders == 1
+
+
+def test_enumerate_inline_family_drops_cx_alias_and_other_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-launch picker exposes only canonical codex/gpt-* ids.
+
+    OmniRoute's ``/v1/models`` is a merged catalog that surfaces Claude,
+    Gemini, Llama, DeepSeek, NVIDIA, Cloudflare, Mistral, GitHub Models,
+    OpenRouter, and the ``cx/*`` alias of the Codex bucket. The picker must
+    suppress every non-OpenAI provider and the ``cx/*`` duplicate so the
+    pre-launch dropdown stays minimal and free of duplicate aliases.
+    """
+    import omnigent.model_catalog as catalog_mod
+
+    listing = SimpleNamespace(
+        models=[
+            SimpleNamespace(id="custom/best-coding"),
+            SimpleNamespace(id="codex/gpt-5.5"),
+            SimpleNamespace(id="codex/gpt-5.4"),
+            SimpleNamespace(id="cx/gpt-5.5"),
+            SimpleNamespace(id="cx/gpt-5.4"),
+            SimpleNamespace(id="gpt-5-5"),
+            # Non-OpenAI providers that must NEVER appear in the picker.
+            SimpleNamespace(id="claude-opus-4-7"),
+            SimpleNamespace(id="gemini-3-5-pro"),
+            SimpleNamespace(id="llama-4-maverick"),
+            SimpleNamespace(id="deepseek-r1"),
+            SimpleNamespace(id="nvidia/llama-3.1-70b"),
+            SimpleNamespace(id="cloudflare/@cf/meta/llama-3.1-70b"),
+            SimpleNamespace(id="mistral/mistral-large"),
+            SimpleNamespace(id="github/gpt-4o"),
+            SimpleNamespace(id="openrouter/anthropic/claude-3.5"),
+            SimpleNamespace(id="gh/gpt-4o-mini"),
+            SimpleNamespace(id="ddgw/llama-3-70b"),
+            SimpleNamespace(id="text-embedding-3-small"),
+            SimpleNamespace(id="whisper-1"),
+        ]
+    )
+
+    class _Family:
+        base_url = "https://omniroute.example.com/v1"
+        api_key = ""
+        auth_command = ""
+
+    class _Entry:
+        kind = "gateway"
+        name = "omnigent"
+
+        def family_default_model(self, _family: str) -> str | None:
+            return "custom/best-coding"
+
+    monkeypatch.setattr(catalog_mod, "is_direct_openai_provider", lambda _p: False)
+    monkeypatch.setattr(catalog_mod, "_fetch_openai_compatible_listing", lambda *_a, **_k: listing)
+
+    result = creds._enumerate_inline_family_models(
+        _Entry(),  # type: ignore[arg-type]
+        "openai",
+        _Family(),  # type: ignore[arg-type]
+    )
+
+    ids = sorted(entry["id"] for entry in result)
+    assert ids == ["codex/gpt-5.4", "codex/gpt-5.5"]
