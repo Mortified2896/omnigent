@@ -1546,6 +1546,38 @@ class TestPinCodexConfigModel:
         assert read_codex_config_model(bridge_dir) == "databricks-gpt-5-4-mini"
 
 
+class TestPinCodexConfigReasoningEffort:
+    """Explicit startup effort is written only to the private top-level config."""
+
+    def test_luna_low_replaces_top_level_only(self, tmp_path: Path) -> None:
+        from omnigent.codex_native_app_server import _pin_codex_config_reasoning_effort
+
+        config = tmp_path / "config.toml"
+        config.write_text(
+            'model = "gpt-5.6-luna"\n'
+            'model_reasoning_effort = "high"\n'
+            "[profiles.default]\n"
+            'model_reasoning_effort = "xhigh"\n',
+            encoding="utf-8",
+        )
+        _pin_codex_config_reasoning_effort(tmp_path, "low")
+        lines = config.read_text(encoding="utf-8").splitlines()
+        assert lines[1] == 'model_reasoning_effort = "low"'
+        assert lines[3] == 'model_reasoning_effort = "xhigh"'
+
+    def test_luna_max_is_not_clamped(self, tmp_path: Path) -> None:
+        from omnigent.codex_native_app_server import (
+            _pin_codex_config_model,
+            _pin_codex_config_reasoning_effort,
+        )
+
+        _pin_codex_config_reasoning_effort(tmp_path, "max")
+        _pin_codex_config_model(tmp_path, "gpt-5.6-luna")
+        assert 'model_reasoning_effort = "max"' in (
+            tmp_path / "config.toml"
+        ).read_text(encoding="utf-8")
+
+
 # --- Subagent-routing hook trust ---------------------------------------
 #
 # Empirically (codex-cli 0.145.0) ``--dangerously-bypass-hook-trust`` does

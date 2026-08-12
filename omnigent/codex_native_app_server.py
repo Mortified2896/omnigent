@@ -323,6 +323,32 @@ def _pin_codex_config_model(codex_home: Path, model: str) -> None:
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _pin_codex_config_reasoning_effort(codex_home: Path, effort: str) -> None:
+    """Write an explicit startup effort into the session-private config."""
+    config_path = codex_home / "config.toml"
+    if config_path.is_symlink():
+        target = config_path.resolve()
+        config_path.unlink()
+        if target.is_file():
+            import shutil
+
+            shutil.copy2(target, config_path)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    pin_line = f"model_reasoning_effort = {json.dumps(effort)}"
+    lines = existing.splitlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith("["):
+            break
+        if re.match(r"^model_reasoning_effort\s*=", line):
+            lines[i] = pin_line
+            replaced = True
+            break
+    if not replaced:
+        lines.insert(0, pin_line)
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _sync_codex_developer_instructions(
     codex_home: Path,
     instructions: str | None,
@@ -870,6 +896,7 @@ class CodexNativeAppServer:
     policy_hook_disabled_reason: str | None = None
     policy_notice_pending: bool = False
     pinned_model: str | None = None
+    pinned_reasoning_effort: str | None = None
     process_registry_tag: str | None = None
     process_owner_lock: CodexNativeProcessOwnerLock | None = None
     codex_cli_version: tuple[int, int, int] | None = None
@@ -942,6 +969,11 @@ class CodexNativeAppServer:
             self.python_executable,
             routed_spawns=routed_spawns,
         )
+        if self.pinned_reasoning_effort:
+            _pin_codex_config_reasoning_effort(
+                self.codex_home,
+                self.pinned_reasoning_effort,
+            )
         if self.pinned_model:
             _pin_codex_config_model(self.codex_home, self.pinned_model)
         _sync_codex_developer_instructions(
@@ -1730,6 +1762,7 @@ def build_codex_native_server(
     model: str | None,
     profile: str | None,
     bridge_dir: Path,
+    reasoning_effort: str | None = None,
     ap_server_url: str | None = None,
     ap_auth_headers: dict[str, str] | None = None,
     python_executable: str | None = None,
@@ -1836,6 +1869,7 @@ def build_codex_native_server(
         ap_auth_headers=ap_auth_headers,
         python_executable=python_executable,
         pinned_model=model,
+        pinned_reasoning_effort=reasoning_effort,
         trust_project=trust_project,
     )
 
