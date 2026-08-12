@@ -226,6 +226,14 @@ async def test_handle_model_options_uses_direct_codex_cli_catalog(
             {"model": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True},
             {"id": "gpt-5.4", "displayName": "GPT-5.4", "isDefault": False},
             {"model": "gpt-5.5", "displayName": "duplicate", "isDefault": False},
+            {
+                "model": "gpt-5.6-luna",
+                "displayName": "GPT-5.6 Luna",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low", "description": "Low"},
+                    {"reasoningEffort": "ultra", "description": "Ultra"},
+                ],
+            },
         ]
 
     monkeypatch.setattr(
@@ -254,6 +262,17 @@ async def test_handle_model_options_uses_direct_codex_cli_catalog(
             "displayName": "GPT-5.4",
             "accessLane": "codex-direct",
             "groupLabel": "Codex Subscription — Direct",
+        },
+        {
+            "id": "gpt-5.6-luna",
+            "model": "gpt-5.6-luna",
+            "displayName": "GPT-5.6 Luna",
+            "accessLane": "codex-direct",
+            "groupLabel": "Codex Subscription — Direct",
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": effort, "description": effort.title()}
+                for effort in ("none", "low", "medium", "high", "xhigh", "max")
+            ],
         },
     ]
 

@@ -770,6 +770,11 @@ def _codex_options_for_access_lane(
         for key in ("defaultReasoningEffort", "supportedReasoningEfforts"):
             if key in option:
                 row[key] = option[key]
+        if access_lane == "codex-direct" and raw_id.startswith("gpt-5.6-"):
+            row["supportedReasoningEfforts"] = [
+                {"reasoningEffort": effort, "description": effort.title()}
+                for effort in ("none", "low", "medium", "high", "xhigh", "max")
+            ]
         normalized.append(row)
     return normalized
 
