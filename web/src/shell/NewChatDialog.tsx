@@ -1407,7 +1407,7 @@ function SearchableModelPicker({
           aria-label="Model"
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
-            compact ? "w-auto max-w-48" : "w-full",
+            compact ? "w-56 max-w-[calc(100vw-2rem)]" : "w-full",
           )}
           data-testid={testId}
         >
@@ -1417,7 +1417,7 @@ function SearchableModelPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] overflow-hidden p-0"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(20rem,calc(100vw-2rem))] overflow-hidden p-0"
       >
         <Command className="h-auto min-h-0">
           <CommandInput
