@@ -14,8 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 SCRIPTS_DIR = REPO_ROOT / "deploy" / "scripts"
@@ -23,7 +21,8 @@ SCRIPTS_DIR = REPO_ROOT / "deploy" / "scripts"
 
 def _load_pkg():
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer_main", PKG_ROOT / "__main__.py",
+        "peer_deployer_main",
+        PKG_ROOT / "__main__.py",
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -45,24 +44,26 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
 
 
 def test_cli_preflight_fails_for_target_equal_supervisor() -> None:
-    proc = _run_cli("preflight", "--target", "O1", "--supervisor", "O1")
+    proc = _run_cli(
+        "preflight",
+        "--target",
+        "O1",
+        "--supervisor",
+        "O1",
+        "--mode",
+        "bootstrap-first-peer",
+        "--acceptance-record",
+        "/does/not/exist",
+    )
     assert proc.returncode != 0
-    # The error message must contain the refusal.
     assert "target == supervisor" in proc.stderr
 
 
-def test_cli_preflight_runs_on_real_host() -> None:
+def test_cli_preflight_requires_mode_and_acceptance() -> None:
     proc = _run_cli("preflight", "--target", "O1", "--supervisor", "O2")
-    # On the well-configured host, the preflight either passes (O1
-    # healthy, O2 verified, artifact hashes match) or fails closed
-    # with a structured report. Either way, the output is JSON.
-    blob = json.loads(proc.stdout)
-    assert blob["target"] == "O1"
-    assert blob["supervisor"] == "O2"
-    assert "checks" in blob
-    assert isinstance(blob["checks"], list)
-    # The CLI exit code is 0 iff passed, 1 otherwise.
-    assert proc.returncode == (0 if blob["passed"] else 1)
+    assert proc.returncode != 0
+    assert "--mode" in proc.stderr
+    assert "--acceptance-record" in proc.stderr
 
 
 def test_cli_list_returns_empty_default() -> None:
@@ -82,9 +83,12 @@ def test_cli_load_missing_tx_fails() -> None:
 def test_cli_rollback_requires_target_and_supervisor() -> None:
     proc = _run_cli(
         "rollback",
-        "--tx-id", "promotion-20260808T000000Z-00000000",
-        "--target", "O1",
-        "--supervisor", "O1",  # self-upgrade refused
+        "--tx-id",
+        "promotion-20260808T000000Z-00000000",
+        "--target",
+        "O1",
+        "--supervisor",
+        "O1",  # self-upgrade refused
     )
     assert proc.returncode != 0
     assert "target == supervisor" in proc.stderr
@@ -108,13 +112,12 @@ def test_pythonpath_is_local() -> None:
 
 
 def test_pkg_exposes_subcommands() -> None:
-    """The CLI exposes promote, rollback, load, complete, list, preflight."""
+    """The CLI exposes the explicit promote and maintenance surfaces."""
     pkg = _load_pkg()
     parser = pkg._parser()
     # Inspect the subparsers.
     sub_actions = [
-        action for action in parser._actions
-        if action.__class__.__name__ == "_SubParsersAction"
+        action for action in parser._actions if action.__class__.__name__ == "_SubParsersAction"
     ]
     assert sub_actions
     choices = sub_actions[0].choices

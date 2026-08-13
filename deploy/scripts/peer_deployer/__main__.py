@@ -1,6 +1,6 @@
 """CLI entrypoint for the peer-supervised deployer.
 
-The CLI is the inspection / maintenance surface for the peer-deployer.
+The CLI is the explicit host/inspection surface for the peer-deployer.
 It exposes:
 
   * ``preflight``         — run the strict preflight gate
@@ -15,11 +15,9 @@ It exposes:
                             Preserves the historical transaction
                             record byte-identical.
 
-The CLI does NOT expose a generic ``promote`` subcommand. The
-canonical live promotion entrypoint is
-``deploy/scripts/peer_promote_o1_v3.py``. The CLI exists for
-inspection, automated maintenance, and reconciliation, not as
-an alternate deploy path.
+``promote`` requires target, supervisor, mode, and immutable acceptance
+record explicitly. It delegates to the same host orchestrator as the
+canonical host wrapper; there is no alternate state machine.
 
 The CLI never reinvents the state machine — it delegates to the
 small, focused modules (transaction, preflight, rollback, identity,
@@ -33,25 +31,20 @@ import json
 import shutil
 import sys
 import traceback
+from contextlib import suppress
 from pathlib import Path
 
 from . import (
-    fsm,
+    acceptance,
+    host_promotion,
     identity,
-    path_safety,
     preflight,
     reconcile,
     rollback,
     staging,
     transaction,
 )
-from .preflight import (
-    ACCEPTED_ARTIFACT_SHA,
-    ACCEPTED_ARTIFACT_VERSION,
-    ACCEPTED_MAIN_WHEEL_SHA256,
-    ACCEPTED_SDK_CLIENT_WHEEL_SHA256,
-    ACCEPTED_SDK_UI_WHEEL_SHA256,
-)
+from .mode import DeploymentMode
 
 
 def _log(message: str) -> None:
@@ -76,26 +69,16 @@ def _preflight(target, supervisor) -> None:
 
 
 def cmd_promote(args: argparse.Namespace) -> int:
-    """REFUSED: the CLI does not expose a generic promote subcommand.
-
-    The canonical live promotion entrypoint is the host-level
-    deployer at ``deploy/scripts/peer_promote_o1_v3.py``. That
-    script enforces the brief's hard architectural invariants
-    (TARGET=O1, SUPERVISOR=O2, exact accepted artifact, paired
-    rollback, supervised by O2, never run from inside an Omnigent
-    sandbox). The CLI is for inspection and reconciliation only.
-
-    Operators who want to promote must run the host entrypoint
-    directly:
-
-        sudo -E deploy/scripts/peer_promote_o1_v3.py --preflight-only
-        sudo -E deploy/scripts/peer_promote_o1_v3.py --promote
-    """
-    raise SystemExit(
-        "REFUSED: peer_deployer CLI does not expose a promote subcommand. "
-        "Use deploy/scripts/peer_promote_o1_v3.py as the canonical host "
-        "entrypoint. The CLI exposes preflight, stage, rollback, complete, "
-        "load, list, and reconcile-stale only."
+    target = identity.get(args.target)
+    supervisor = identity.get(args.supervisor)
+    identity.require_distinct(target, supervisor)
+    return host_promotion.run(
+        args.evidence_dir,
+        promote=not args.preflight_only,
+        target=target,
+        supervisor=supervisor,
+        mode=DeploymentMode.parse(args.mode),
+        acceptance_record_path=args.acceptance_record,
     )
 
 
@@ -126,11 +109,13 @@ def cmd_reconcile_stale(args: argparse.Namespace) -> int:
             allowed_supervisor=supervisor,
         )
     except reconcile.ReconciliationError as exc:
-        _emit({
-            "status": "refused",
-            "tx_id": args.tx_id,
-            "reason": str(exc),
-        })
+        _emit(
+            {
+                "status": "refused",
+                "tx_id": args.tx_id,
+                "reason": str(exc),
+            }
+        )
         return 2
     _emit(report.to_dict())
     return 0
@@ -146,7 +131,10 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             f"transaction {args.tx_id} does not match target={target.name} "
             f"supervisor={supervisor.name}"
         )
-    report = rollback.paired_rollback(record)
+    if record.acceptance_record_path:
+        report = host_promotion.recover(record)
+    else:
+        report = rollback.paired_rollback(record)
     _emit(report)
     return 0
 
@@ -177,35 +165,36 @@ def cmd_stage(args: argparse.Namespace) -> int:
         )
     staging_root = staging.transaction_owned_staging_path(target, args.tx_id)
     if staging_root.exists() and (staging_root / ".complete").is_file():
-        _log(f"staging root already complete at {staging_root}; "
-             "running verification gate only")
+        _log(f"staging root already complete at {staging_root}; running verification gate only")
     else:
         if staging_root.exists():
             _log(f"removing previous partial staging at {staging_root}")
             shutil.rmtree(staging_root)
-        supervisor_release = (
-            identity.O2.deployment_root
-            / "releases"
-            / ACCEPTED_ARTIFACT_SHA
+        accepted = acceptance.load(
+            record.acceptance_record_path,
+            expected_hash=record.acceptance_record_sha256,
         )
+        selected_mode = DeploymentMode.parse(record.mode)
+        if selected_mode is DeploymentMode.BOOTSTRAP_FIRST_PEER:
+            raise SystemExit("bootstrap candidate is already complete; stage is peer-copy only")
+        supervisor_release = preflight.source_release_for(selected_mode, accepted, supervisor)
         if not supervisor_release.is_dir():
-            raise SystemExit(
-                f"supervisor release missing: {supervisor_release}"
-            )
-        artifacts = supervisor_release / "artifacts"
-        wheels: dict[str, Path] = {}
-        for pattern, label in (
-            ("omnigent-*.whl", "main"),
-            ("omnigent_client-*.whl", "sdk_client"),
-            ("omnigent_ui_sdk-*.whl", "sdk_ui"),
-        ):
-            matches = sorted(artifacts.glob(pattern))
-            if not matches:
-                raise SystemExit(f"missing {label} wheel under {artifacts}")
-            wheels[label] = matches[0]
+            raise SystemExit(f"supervisor release missing: {supervisor_release}")
+        source_failures = acceptance.verify_release(
+            accepted,
+            supervisor_release,
+            enforce_bound_root=False,
+        )
+        if source_failures:
+            raise SystemExit("supervisor accepted release mismatch: " + "; ".join(source_failures))
+        wheels = accepted.wheel_map(supervisor_release)
         try:
             closure = staging.stage_candidate_runtime(
-                staging_root, supervisor, wheels
+                staging_root,
+                supervisor,
+                wheels,
+                supervisor_release_root=supervisor_release,
+                accepted_frontend_root=Path(accepted.frontend_root),
             )
         except staging.StagingError as exc:
             transaction.fail_record(
@@ -213,7 +202,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 f"staging failed: {exc}",
                 root=transaction.DEFAULT_TX_ROOT,
             )
-            raise SystemExit(f"STAGING FAILED: {exc}")
+            raise SystemExit(f"STAGING FAILED: {exc}") from exc
         manifest_path = staging.write_staging_manifest(staging_root, closure)
         _log(f"wrote staging manifest: {manifest_path}")
         transaction.register_owned(record, str(staging_root))
@@ -225,26 +214,26 @@ def cmd_stage(args: argparse.Namespace) -> int:
             f"candidate verification failed: {' ; '.join(failures)}",
             root=transaction.DEFAULT_TX_ROOT,
         )
-        try:
+        with suppress(OSError):
             shutil.rmtree(staging_root)
-        except OSError:
-            pass
         raise SystemExit(f"VERIFICATION FAILED: {' ; '.join(failures)}")
+    accepted = acceptance.load(
+        record.acceptance_record_path,
+        expected_hash=record.acceptance_record_sha256,
+    )
     if not staging.candidate_identity_matches(
         staging_root,
-        ACCEPTED_ARTIFACT_SHA,
-        ACCEPTED_ARTIFACT_VERSION,
+        accepted.source_sha,
+        accepted.package_version,
     ):
         transaction.fail_record(
             record,
-            f"candidate identity mismatch: expected {ACCEPTED_ARTIFACT_SHA}/"
-            f"{ACCEPTED_ARTIFACT_VERSION}",
+            f"candidate identity mismatch: expected {accepted.source_sha}/"
+            f"{accepted.package_version}",
             root=transaction.DEFAULT_TX_ROOT,
         )
-        try:
+        with suppress(OSError):
             shutil.rmtree(staging_root)
-        except OSError:
-            pass
         raise SystemExit("VERIFICATION FAILED: candidate identity mismatch")
     try:
         candidate_python = staging._candidate_python(staging_root)
@@ -254,35 +243,34 @@ def cmd_stage(args: argparse.Namespace) -> int:
         )
     except staging.StagingError as exc:
         transaction.fail_record(
-            record, f"version probe failed: {exc}",
+            record,
+            f"version probe failed: {exc}",
             root=transaction.DEFAULT_TX_ROOT,
         )
-        try:
+        with suppress(OSError):
             shutil.rmtree(staging_root)
-        except OSError:
-            pass
-        raise SystemExit(f"VERIFICATION FAILED: version probe: {exc}")
+        raise SystemExit(f"VERIFICATION FAILED: version probe: {exc}") from exc
     if mismatches:
         transaction.fail_record(
             record,
             f"version mismatch: {' ; '.join(mismatches)}",
             root=transaction.DEFAULT_TX_ROOT,
         )
-        try:
+        with suppress(OSError):
             shutil.rmtree(staging_root)
-        except OSError:
-            pass
         raise SystemExit(f"VERIFICATION FAILED: {', '.join(mismatches)}")
     transaction.advance(record, "candidate_verified", root=transaction.DEFAULT_TX_ROOT)
     transaction.save(record, root=transaction.DEFAULT_TX_ROOT)
-    _emit({
-        "status": "candidate_verified",
-        "tx_id": args.tx_id,
-        "staging_root": str(staging_root),
-        "expected_sha": ACCEPTED_ARTIFACT_SHA,
-        "expected_version": ACCEPTED_ARTIFACT_VERSION,
-        "record": record.to_dict(),
-    })
+    _emit(
+        {
+            "status": "candidate_verified",
+            "tx_id": args.tx_id,
+            "staging_root": str(staging_root),
+            "expected_sha": accepted.source_sha,
+            "expected_version": accepted.package_version,
+            "record": record.to_dict(),
+        }
+    )
     return 0
 
 
@@ -300,7 +288,7 @@ def cmd_complete(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_list(args: argparse.Namespace) -> int:
+def cmd_list(_args: argparse.Namespace) -> int:
     root = transaction.DEFAULT_TX_ROOT
     if not root.is_dir():
         _emit({"transactions": [], "root": str(root)})
@@ -325,7 +313,12 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     target = identity.get(args.target)
     supervisor = identity.get(args.supervisor)
     identity.require_distinct(target, supervisor)
-    report = preflight.run_preflight(target=target, supervisor=supervisor)
+    report = preflight.run_preflight(
+        target=target,
+        supervisor=supervisor,
+        mode=DeploymentMode.parse(args.mode),
+        acceptance_record_path=args.acceptance_record,
+    )
     _emit(report.to_dict())
     return 0 if report.passed else 1
 
@@ -366,6 +359,10 @@ def _parser() -> argparse.ArgumentParser:
     p_preflight = sub.add_parser("preflight", help="Run preflight only")
     p_preflight.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
     p_preflight.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
+    p_preflight.add_argument(
+        "--mode", required=True, choices=[item.value for item in DeploymentMode]
+    )
+    p_preflight.add_argument("--acceptance-record", required=True, type=Path)
     p_preflight.set_defaults(func=cmd_preflight)
 
     p_reconcile = sub.add_parser(
@@ -384,15 +381,16 @@ def _parser() -> argparse.ArgumentParser:
     p_reconcile.set_defaults(func=cmd_reconcile_stale)
 
     p_promote = sub.add_parser(
-        "promote",
-        help=(
-            "REFUSED: this CLI does not expose a promote subcommand. "
-            "Use deploy/scripts/peer_promote_o1_v3.py as the canonical "
-            "host entrypoint."
-        ),
+        "promote", help="Run the canonical explicit host promotion interface"
     )
     p_promote.add_argument("--target", required=True, choices=sorted(identity.REGISTRY))
     p_promote.add_argument("--supervisor", required=True, choices=sorted(identity.REGISTRY))
+    p_promote.add_argument(
+        "--mode", required=True, choices=[item.value for item in DeploymentMode]
+    )
+    p_promote.add_argument("--acceptance-record", required=True, type=Path)
+    p_promote.add_argument("--evidence-dir", required=True, type=Path)
+    p_promote.add_argument("--preflight-only", action="store_true")
     p_promote.set_defaults(func=cmd_promote)
 
     return parser
@@ -404,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except SystemExit:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI must report fail-closed errors
         sys.stderr.write(f"[peer-deployer] FAILED: {exc}\n")
         sys.stderr.write(traceback.format_exc())
         sys.stderr.flush()

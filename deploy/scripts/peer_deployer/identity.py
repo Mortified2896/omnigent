@@ -44,10 +44,8 @@ venv lives inside the release directory.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -139,23 +137,20 @@ def require_distinct(target: Instance, supervisor: Instance) -> None:
     """
     if target.name == supervisor.name:
         raise IdentityError(
-            f"REFUSED: target == supervisor == {target.name!r}: "
-            "an instance NEVER upgrades itself"
+            f"REFUSED: target == supervisor == {target.name!r}: an instance NEVER upgrades itself"
         )
     if target.deployment_root == supervisor.deployment_root:
         raise IdentityError(
-            f"REFUSED: target and supervisor share deployment_root "
-            f"{target.deployment_root}"
+            f"REFUSED: target and supervisor share deployment_root {target.deployment_root}"
         )
     if target.service_unit == supervisor.service_unit:
         raise IdentityError(
-            f"REFUSED: target and supervisor share service_unit "
-            f"{target.service_unit!r}"
+            f"REFUSED: target and supervisor share service_unit {target.service_unit!r}"
         )
+    if target.host_unit == supervisor.host_unit:
+        raise IdentityError(f"REFUSED: target and supervisor share host_unit {target.host_unit!r}")
     if target.port == supervisor.port:
-        raise IdentityError(
-            f"REFUSED: target and supervisor share port {target.port}"
-        )
+        raise IdentityError(f"REFUSED: target and supervisor share port {target.port}")
 
 
 def read_provenance(deployment_root: Path) -> dict[str, str]:
@@ -201,9 +196,7 @@ def read_current_symlink(deployment_root: Path) -> Path:
     """
     current = Path(deployment_root) / "current"
     if not current.is_symlink():
-        raise IdentityError(
-            f"{current} is not a symlink (deployment root has no current)"
-        )
+        raise IdentityError(f"{current} is not a symlink (deployment root has no current)")
     target = current.resolve()
     if not target.exists():
         raise IdentityError(f"{current} -> {target} does not resolve to a real path")
@@ -332,9 +325,7 @@ def runtime_identity(python: Path, *, cwd: Path | str = "/tmp") -> dict[str, str
             f"runtime identity probe returned non-JSON: {result.stdout[:200]!r}"
         ) from exc
     if not isinstance(payload, dict):
-        raise IdentityError(
-            f"runtime identity probe returned non-dict: {payload!r}"
-        )
+        raise IdentityError(f"runtime identity probe returned non-dict: {payload!r}")
     return payload
 
 
@@ -349,13 +340,9 @@ def installed_sha(deployment_root: Path) -> str:
     payload = runtime_identity(_resolve_active_python(deployment_root))
     sha = payload.get("commit_sha")
     if not isinstance(sha, str):
-        raise IdentityError(
-            f"runtime identity probe did not return a commit_sha: {payload!r}"
-        )
+        raise IdentityError(f"runtime identity probe did not return a commit_sha: {payload!r}")
     if not SHA_RE.fullmatch(sha):
-        raise IdentityError(
-            f"runtime identity commit_sha is not a 40-char SHA: {sha!r}"
-        )
+        raise IdentityError(f"runtime identity commit_sha is not a 40-char SHA: {sha!r}")
     return sha
 
 
@@ -369,9 +356,7 @@ def installed_version(deployment_root: Path) -> str:
     payload = runtime_identity(_resolve_active_python(deployment_root))
     version = payload.get("version")
     if not isinstance(version, str) or not version:
-        raise IdentityError(
-            f"runtime identity probe did not return a version: {payload!r}"
-        )
+        raise IdentityError(f"runtime identity probe did not return a version: {payload!r}")
     return version
 
 
@@ -439,20 +424,20 @@ def snapshots_equal(a: dict, b: dict) -> bool:
 
 
 __all__ = [
-    "Instance",
-    "IdentityError",
+    "HOME_MAPPING",
     "O1",
     "O2",
     "REGISTRY",
-    "HOME_MAPPING",
+    "IdentityError",
+    "Instance",
     "get",
-    "require_distinct",
-    "read_provenance",
-    "read_current_symlink",
-    "runtime_identity",
+    "http_health_ok",
     "installed_sha",
     "installed_version",
-    "http_health_ok",
+    "read_current_symlink",
+    "read_provenance",
+    "require_distinct",
+    "runtime_identity",
     "snapshot",
     "snapshots_equal",
 ]
