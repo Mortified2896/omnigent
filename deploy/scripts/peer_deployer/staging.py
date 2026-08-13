@@ -318,7 +318,7 @@ def _candidate_python(target_release_root: Path) -> Path:
     return candidate
 
 
-def _ensure_target_release_layout(target_release_root: Path) -> None:
+def _ensure_target_release_layout(target_release_root: Path, python: Path | None = None) -> None:
     """Make sure the candidate release directory exists with venv/ structure.
 
     Creates a uv-style venv skeleton (``pyvenv.cfg`` + ``bin/`` + ``lib/``)
@@ -332,8 +332,8 @@ def _ensure_target_release_layout(target_release_root: Path) -> None:
         )
     target_release_root.mkdir(parents=True)
     (target_release_root / "artifacts").mkdir()
-    python = shutil.which("python3") or shutil.which("python")
-    if python is None:
+    python = python or Path(shutil.which("python3") or shutil.which("python") or "")
+    if not python.is_file():
         raise StagingError("python3 / python not available on PATH")
     venv_dir = target_release_root / "venv"
     result = subprocess.run(
@@ -536,7 +536,8 @@ def stage_candidate_runtime(
             supervisor_release_root = identity.read_current_symlink(supervisor.deployment_root)
         except identity.IdentityError:
             supervisor_release_root = supervisor.deployment_root
-    _ensure_target_release_layout(target_release_root)
+    supervisor_python = identity._resolve_active_python(supervisor.deployment_root)
+    _ensure_target_release_layout(target_release_root, supervisor_python)
     try:
         supervisor_site = _locate_site_packages(supervisor)
         candidate_site = _candidate_site_packages(target_release_root)
