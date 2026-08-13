@@ -367,6 +367,8 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         "OMNIGENT_INSTANCE_ID",
         # Filesystem selector for Codex CLI config and direct-login state.
         "CODEX_HOME",
+        # Host-owned, non-secret policy flag consumed by native Codex launch.
+        "OMNIGENT_CODEX_NATIVE_TRUSTED",
         # Auth provider selection. The env-unset default was flipped
         # to "accounts", so the whole CLI → daemon → local-server chain has
         # to agree on the mode. Without this, the daemon strips

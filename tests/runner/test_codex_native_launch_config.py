@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnigent.host.connect import _build_runner_env
 from omnigent.runner.app import _codex_native_launch_config
 
 
@@ -174,6 +175,39 @@ async def test_bypass_sandbox_defaults_off_unless_label_is_one(
     assert cfg.bypass_sandbox is False
     assert cfg.reasoning_effort is None
     assert cfg.access_lane is None
+
+
+@pytest.mark.asyncio
+async def test_host_runner_boundary_preserves_deployment_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The host allowlist carries trusted mode into native launch config."""
+    base_env = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/hermes",
+        "OMNIGENT_CODEX_NATIVE_TRUSTED": "true",
+        "UNLISTED_SECRET": "must-not-cross",
+    }
+    runner_env = _build_runner_env(
+        base_env,
+        server_url="http://runner-server",
+        runner_id="runner_abc",
+        binding_token="binding-token",
+        workspace="/home/hermes/workspace/repos",
+        parent_pid=42,
+    )
+
+    assert runner_env["OMNIGENT_CODEX_NATIVE_TRUSTED"] == "true"
+    assert "UNLISTED_SECRET" not in runner_env
+    monkeypatch.setenv("RUNNER_SERVER_URL", runner_env["RUNNER_SERVER_URL"])
+    monkeypatch.setenv(
+        "OMNIGENT_CODEX_NATIVE_TRUSTED",
+        runner_env["OMNIGENT_CODEX_NATIVE_TRUSTED"],
+    )
+
+    cfg = await _run(_Client(_Resp(200, {"workspace": "/tmp/repo"})))
+
+    assert cfg.bypass_sandbox is True
 
 
 @pytest.mark.asyncio
