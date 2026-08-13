@@ -2727,6 +2727,46 @@ def test_codex_turn_span_records_metadata_without_content(monkeypatch: pytest.Mo
     assert state.telemetry_turn_span is None
 
 
+@pytest.mark.parametrize(
+    ("instance_id", "expected"),
+    [
+        pytest.param(None, None, id="unset"),
+        pytest.param("O1", "O1", id="O1"),
+        pytest.param("O2", "O2", id="O2"),
+        pytest.param("O3", None, id="invalid"),
+    ],
+)
+def test_codex_turn_span_records_only_bounded_instance_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    instance_id: str | None,
+    expected: str | None,
+) -> None:
+    """Only the two supported low-cardinality instance labels reach traces."""
+    if instance_id is None:
+        monkeypatch.delenv("OMNIGENT_INSTANCE_ID", raising=False)
+    else:
+        monkeypatch.setenv("OMNIGENT_INSTANCE_ID", instance_id)
+    captured: dict[str, object] = {}
+
+    class Tracer:
+        def start_span(self, _name: str, *, attributes: dict[str, object]) -> object:
+            captured.update(attributes)
+            return object()
+
+    monkeypatch.setattr("opentelemetry.trace.get_tracer", lambda _name: Tracer())
+
+    fwd._start_codex_turn_span(
+        "session-1",
+        {"turn": {"id": "turn-1"}},
+        fwd._CodexForwarderState(),
+    )
+
+    if expected is None:
+        assert "omnigent.instance" not in captured
+    else:
+        assert captured["omnigent.instance"] == expected
+
+
 def test_note_resume_response_records_proven_effective_effort() -> None:
     """A resume response may prove effective effort independently of the request."""
     state = fwd._CodexForwarderState(requested_effort="low")
