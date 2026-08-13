@@ -492,10 +492,11 @@ def _migrate(target: Instance, final: Path, accepted: CandidateAcceptance) -> No
     _run(
         [
             str(python),
-            "-m",
-            "omnigent.db.migrate",
-            "--database-url",
-            f"sqlite:///{database}",
+            "-c",
+            (
+                "from omnigent.db.utils import get_or_create_engine; "
+                "get_or_create_engine(" + repr(f"sqlite:///{database}") + ").dispose()"
+            ),
         ],
         env=environment,
     )
