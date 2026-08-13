@@ -363,6 +363,10 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # cli._ensure_host_daemon), never to a (possibly hosted) runner.
         "OMNIGENT_CONFIG_HOME",
         "OMNIGENT_DATA_DIR",
+        # Low-cardinality deployment identity used by runner/harness traces.
+        "OMNIGENT_INSTANCE_ID",
+        # Filesystem selector for Codex CLI config and direct-login state.
+        "CODEX_HOME",
         # Auth provider selection. The env-unset default was flipped
         # to "accounts", so the whole CLI → daemon → local-server chain has
         # to agree on the mode. Without this, the daemon strips
@@ -753,9 +757,7 @@ def _codex_options_for_access_lane(
             continue
         seen.add(raw_id)
         display_name = option.get("displayName")
-        is_default = (
-            preserve_default and not selected_default and option.get("isDefault") is True
-        )
+        is_default = preserve_default and not selected_default and option.get("isDefault") is True
         selected_default = selected_default or is_default
         row: dict[str, object] = {
             "id": raw_id,

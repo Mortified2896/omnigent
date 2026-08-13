@@ -8,7 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from deploy.scripts.peer_deployer import acceptance, baseline, identity, preflight, transaction
+from deploy.scripts.peer_deployer import (
+    acceptance,
+    baseline,
+    host_promotion,
+    identity,
+    preflight,
+    staging,
+    transaction,
+)
 from deploy.scripts.peer_deployer.mode import DeploymentMode
 
 
@@ -46,7 +54,7 @@ def _accepted(tmp_path: Path) -> acceptance.CandidateAcceptance:
         health_status="ok",
         info_ok=True,
         info_server_version="1.2.3",
-        info_build_sha=sha,
+        info_build_sha="",
         html_assets_ok=True,
         html_asset_count=3,
         disk_headroom_bytes=3 * 1024**3,
@@ -138,6 +146,14 @@ def test_acceptance_rejects_failed_boot_evidence(tmp_path: Path) -> None:
         replace(record, health_ok=False).validate(validate_digest=False)
 
 
+def test_info_build_sha_is_optional_but_truthful_when_present(tmp_path: Path) -> None:
+    record = _accepted(tmp_path)
+    record.validate()
+    replace(record, info_build_sha=record.source_sha).validate(validate_digest=False)
+    with pytest.raises(acceptance.AcceptanceError, match="/v1/info build SHA"):
+        replace(record, info_build_sha="b" * 40).validate(validate_digest=False)
+
+
 def test_storage_guard_must_be_active_and_unlatched() -> None:
     report = preflight.PreflightReport(target="O1", supervisor="O2")
     assert preflight.check_storage_guard(
@@ -206,6 +222,82 @@ def test_peer_copy_staging_uses_accepted_wheel_map_and_frontend() -> None:
     assert "accepted.wheel_map(supervisor_release)" in cli_source
     assert "accepted_frontend_root=Path(accepted.frontend_root)" in cli_source
     assert "accepted_frontend_root=Path(accepted.frontend_root)" in host_source
+
+
+def test_peer_copy_stages_transaction_owned_then_leaves_final_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_acceptance = _accepted(tmp_path)
+    target = identity.Instance(
+        name="O1",
+        deployment_root=tmp_path / "target",
+        service_unit="o1.service",
+        host_unit="o1-host.service",
+        port=12001,
+        health_url="http://127.0.0.1:12001/health",
+    )
+    supervisor = identity.Instance(
+        name="O2",
+        deployment_root=tmp_path / "supervisor",
+        service_unit="o2.service",
+        host_unit="o2-host.service",
+        port=12002,
+        health_url="http://127.0.0.1:12002/health",
+    )
+    tx_root = tmp_path / "transactions"
+    monkeypatch.setattr(transaction, "DEFAULT_TX_ROOT", tx_root)
+    tx = transaction.create(
+        tx_id="promotion-20260809T101112Z-0123abcd",
+        target="O1",
+        supervisor="O2",
+        target_artifact_sha=record_acceptance.source_sha,
+        target_artifact_version=record_acceptance.package_version,
+        main_wheel_sha256="1" * 64,
+        sdk_client_wheel_sha256="2" * 64,
+        sdk_ui_wheel_sha256="3" * 64,
+        root=tx_root,
+    )
+    tx.new_runtime_path = str(target.deployment_root / "releases" / record_acceptance.source_sha)
+    transaction.save(tx, root=tx_root)
+
+    def fake_stage(path: Path, *_args, **_kwargs) -> None:
+        (path / "venv").mkdir(parents=True)
+        (path / "web-ui").mkdir()
+        (path / "web-ui" / "index.html").write_text("<html></html>")
+
+    monkeypatch.setattr(staging, "stage_candidate_runtime", fake_stage)
+    monkeypatch.setattr(acceptance, "verify_release", lambda *_args, **_kwargs: [])
+    register_referenced = transaction.register_referenced
+    register_owned = transaction.register_owned
+    advance = transaction.advance
+    monkeypatch.setattr(
+        transaction,
+        "register_referenced",
+        lambda record, path: register_referenced(record, path, root=tx_root),
+    )
+    monkeypatch.setattr(
+        transaction,
+        "register_owned",
+        lambda record, path: register_owned(record, path, root=tx_root),
+    )
+    monkeypatch.setattr(
+        transaction,
+        "advance",
+        lambda record, phase: advance(record, phase, root=tx_root),
+    )
+
+    candidate, preexisting = host_promotion._stage_or_reference(
+        tx,
+        target=target,
+        supervisor=supervisor,
+        mode=DeploymentMode.PEER_COPY,
+        accepted=record_acceptance,
+    )
+
+    assert candidate == staging.transaction_owned_staging_path(target, tx.tx_id)
+    assert preexisting is False
+    assert candidate.is_dir()
+    assert not Path(tx.new_runtime_path).exists()
 
 
 def test_current_rollout_modes_are_o1_first_then_o2_peer_copy(tmp_path: Path) -> None:

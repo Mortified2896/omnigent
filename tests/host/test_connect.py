@@ -323,9 +323,7 @@ async def test_handle_model_options_exposes_omniroute_gpt56_capabilities(
                 "model": "gpt-5.5",
                 "displayName": "GPT-5.5",
                 "isDefault": True,
-                "supportedReasoningEfforts": [
-                    {"reasoningEffort": "low", "description": "Low"}
-                ],
+                "supportedReasoningEfforts": [{"reasoningEffort": "low", "description": "Low"}],
             }
         ]
 
@@ -2563,6 +2561,27 @@ def test_build_runner_env_propagates_data_dir_paths_not_db_uri() -> None:
     # The DB URI is NOT propagated — it may carry credentials and a runner
     # (hosted or local) has no business holding the server's DB connection.
     assert "OMNIGENT_DATABASE_URI" not in env
+
+
+def test_build_runner_env_preserves_instance_identity_and_codex_home() -> None:
+    """Zygote runners retain trace identity and direct Codex auth paths."""
+    env = _build_runner_env(
+        {
+            "PATH": "/usr/bin:/bin",
+            "OMNIGENT_INSTANCE_ID": "O2",
+            "CODEX_HOME": "/var/lib/omnigent-production/.codex",
+            "UNRELATED_OPERATOR_VAR": "drop-me",
+        },
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+    )
+
+    assert env["OMNIGENT_INSTANCE_ID"] == "O2"
+    assert env["CODEX_HOME"] == "/var/lib/omnigent-production/.codex"
+    assert "UNRELATED_OPERATOR_VAR" not in env
 
 
 def test_build_runner_env_propagates_disable_keyring() -> None:

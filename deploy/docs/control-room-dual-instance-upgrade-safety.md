@@ -78,7 +78,8 @@ an explicit immutable acceptance record at:
 Schema v1 binds source SHA/package version; exact wheel filenames and hashes;
 the frontend tree hash; immutable release/runtime paths; installed paths and
 versions; successful `uv pip check`; embedded build SHA; isolated temporary-port
-boot, health, `/v1/info`, and HTML/assets evidence; disk headroom; timestamp;
+boot, health, `/v1/info` version (and build SHA when exposed), and HTML/assets
+evidence; disk headroom; timestamp;
 and non-secret builder/operator identities. `acceptance_record_sha256` hashes
 canonical JSON with that field omitted. The complete record is exclusive-created
 and never replaced. Validation rechecks immutable resources, runtime identity,

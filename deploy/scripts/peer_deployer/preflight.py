@@ -16,7 +16,7 @@ from .acceptance import CandidateAcceptance
 from .identity import Instance
 from .mode import DeploymentMode
 
-MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+MIN_FREE_BYTES = 25 * 1024 * 1024 * 1024
 STORAGE_GUARD_UNIT = "mlflow-storage-guard.timer"
 STORAGE_GUARD_LATCH = Path("/var/lib/mlflow-storage-guard/critical.latch")
 
@@ -265,7 +265,7 @@ def check_disk_space(report: PreflightReport, target: Instance) -> bool:
 def check_scripts_present(report: PreflightReport, target: Instance) -> bool:
     del target
     script = Path(__file__).resolve().parents[1] / "peer_promote_o1_v3.py"
-    ok = script.is_file() and os.access(script, os.R_OK | os.X_OK)
+    ok = script.is_file() and os.access(script, os.R_OK)
     return _record(report, "common.host_deployer_available", ok, str(script))
 
 
@@ -298,12 +298,15 @@ def check_no_other_transaction(
             continue
         tx_id = str(blob.get("tx_id", entry.name))
         try:
+            historical_target = identity.get(str(blob.get("target", "")))
+            historical_supervisor = identity.get(str(blob.get("supervisor", "")))
+            identity.require_distinct(historical_target, historical_supervisor)
             result = reconcile.validate_completed_reconciliation(
                 tx_id,
                 tx_root=root,
                 quarantine_root=quarantine,
-                allowed_target=target,
-                allowed_supervisor=supervisor,
+                allowed_target=historical_target,
+                allowed_supervisor=historical_supervisor,
             )
         except Exception as exc:  # noqa: BLE001 - corrupt overlays block safely
             blockers.append(f"{tx_id}:{phase}:validator:{exc}")

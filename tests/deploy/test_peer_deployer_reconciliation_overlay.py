@@ -1439,6 +1439,48 @@ class TestPreflightIntegration:
         assert "validly reconciled" in detail
         assert tx_id in detail
 
+    def test_valid_historical_overlay_is_direction_independent(
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
+        tmp_path: Path,
+    ) -> None:
+        tx_id = "promotion-20260808T201637Z-60ced7ca"
+        candidate = _make_candidate(fake_target)
+        _write_record(
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
+        )
+        qdir = quarantine_root / tx_id
+        qdir.mkdir(parents=True)
+        moved = qdir / candidate.name
+        os.rename(candidate, moved)
+        record_path = transaction.transaction_path(tx_root, tx_id)
+        _write_overlay(
+            quarantine_root,
+            tx_id,
+            historical_tx_path=str(record_path),
+            historical_tx_sha256=_sha256(record_path),
+            quarantine_path=str(moved),
+            candidate_path=str(moved),
+        )
+        report = preflight.PreflightReport(target="O2", supervisor="O1")
+
+        ok = preflight.check_no_other_transaction(
+            report,
+            target=fake_supervisor,
+            supervisor=fake_target,
+            quarantine_root=quarantine_root,
+        )
+
+        assert ok is True
+        assert "validly reconciled" in report.checks[-1].detail
+
     def test_reconciled_stale_plus_genuinely_active_still_blocks(
         self,
         tx_root: Path,

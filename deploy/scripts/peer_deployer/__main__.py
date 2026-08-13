@@ -36,6 +36,7 @@ from pathlib import Path
 
 from . import (
     acceptance,
+    acceptance_builder,
     host_promotion,
     identity,
     preflight,
@@ -66,6 +67,24 @@ def _preflight(target, supervisor) -> None:
         _log(f"  {prefix} {c.name}: {c.detail}")
     if not report.passed:
         raise SystemExit(2)
+
+
+def cmd_create_acceptance(args: argparse.Namespace) -> int:
+    path = acceptance_builder.create_from_candidate(
+        release_root=args.release_root,
+        source_sha=args.source_sha,
+        wheels={
+            "main": args.main_wheel,
+            "sdk_client": args.sdk_client_wheel,
+            "sdk_ui": args.sdk_ui_wheel,
+        },
+        frontend_root=args.frontend_root,
+        target_db_schema=args.target_db_schema,
+        builder_identity=args.builder_identity,
+        operator_identity=args.operator_identity,
+    )
+    _emit({"status": "accepted", "acceptance_record": str(path)})
+    return 0
 
 
 def cmd_promote(args: argparse.Namespace) -> int:
@@ -329,6 +348,21 @@ def _parser() -> argparse.ArgumentParser:
         description="Peer-supervised deployer for the Control Room.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_accept = sub.add_parser(
+        "create-acceptance",
+        help="Probe a candidate and write its immutable acceptance record",
+    )
+    p_accept.add_argument("--release-root", required=True, type=Path)
+    p_accept.add_argument("--source-sha", required=True)
+    p_accept.add_argument("--main-wheel", required=True, type=Path)
+    p_accept.add_argument("--sdk-client-wheel", required=True, type=Path)
+    p_accept.add_argument("--sdk-ui-wheel", required=True, type=Path)
+    p_accept.add_argument("--frontend-root", required=True, type=Path)
+    p_accept.add_argument("--target-db-schema", required=True)
+    p_accept.add_argument("--builder-identity", required=True)
+    p_accept.add_argument("--operator-identity", required=True)
+    p_accept.set_defaults(func=cmd_create_acceptance)
 
     p_rollback = sub.add_parser("rollback", help="Pair-rollback a failed transaction")
     p_rollback.add_argument("--tx-id", required=True)

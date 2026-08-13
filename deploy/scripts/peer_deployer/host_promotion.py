@@ -8,10 +8,13 @@ import os
 import shutil
 import signal
 import sqlite3
+import stat
 import subprocess
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 from . import acceptance, baseline, identity, preflight, reconcile, staging, transaction
 from .acceptance import CandidateAcceptance
@@ -20,6 +23,7 @@ from .mode import DeploymentMode
 
 TERMINAL_PHASES = {"tx_committed", "rolled_back", "failure"}
 DEFAULT_EVIDENCE_ROOT = Path("/var/lib/omnigent-control-room/evidence")
+SYSTEMD_UNIT_ROOT = Path("/etc/systemd/system")
 
 
 class PromotionError(RuntimeError):
@@ -135,7 +139,7 @@ def _target_snapshot(target: Instance) -> dict[str, Any]:
     }
 
 
-def _no_live_transactions(target: Instance, supervisor: Instance) -> None:
+def _no_live_transactions() -> None:
     root = transaction.DEFAULT_TX_ROOT
     if not root.is_dir():
         return
@@ -154,12 +158,15 @@ def _no_live_transactions(target: Instance, supervisor: Instance) -> None:
         if phase in TERMINAL_PHASES:
             continue
         try:
+            historical_target = identity.get(str(blob.get("target", "")))
+            historical_supervisor = identity.get(str(blob.get("supervisor", "")))
+            identity.require_distinct(historical_target, historical_supervisor)
             result = reconcile.validate_completed_reconciliation(
                 tx_id,
                 tx_root=root,
                 quarantine_root=reconcile.DEFAULT_QUARANTINE_ROOT,
-                allowed_target=target,
-                allowed_supervisor=supervisor,
+                allowed_target=historical_target,
+                allowed_supervisor=historical_supervisor,
             )
         except Exception as exc:  # noqa: BLE001 - validator errors must block
             blockers.append(f"{tx_id}:{phase}:validator:{exc}")
@@ -184,22 +191,68 @@ def _backup_db(source: Path, destination: Path) -> str:
     return _sha(destination)
 
 
-def _metadata_snapshot(target: Instance, evidence: Path) -> dict[str, bool]:
-    state: dict[str, bool] = {}
+def _web_ui_conf(target: Instance) -> Path:
+    return SYSTEMD_UNIT_ROOT / f"{target.service_unit}.d" / "web-ui.conf"
+
+
+def _atomic_symlink(destination: Path, link_target: str | Path, suffix: str) -> None:
+    temporary = destination.with_name(f".{destination.name}.{suffix}.{os.getpid()}")
+    if temporary.exists() or temporary.is_symlink():
+        temporary.unlink()
+    os.symlink(link_target, temporary)
+    os.replace(temporary, destination)
+
+
+def _metadata_snapshot(target: Instance, evidence: Path) -> dict[str, Any]:
     root = evidence / "metadata-before"
     root.mkdir()
+    files: dict[str, dict[str, bool]] = {}
     for name in ("PROVENANCE.txt", "DEPLOYED_SHA"):
         source = target.deployment_root / name
-        state[name] = source.is_file()
+        files[name] = {"existed": source.is_file()}
         if source.is_file():
             shutil.copy2(source, root / name)
+    current = target.deployment_root / "current"
+    if not current.is_symlink():
+        raise PromotionError(f"target current symlink missing: {current}")
+    web_ui_conf = _web_ui_conf(target)
+    conf_existed = web_ui_conf.is_file()
+    if conf_existed:
+        shutil.copy2(web_ui_conf, root / "web-ui.conf")
+    state: dict[str, Any] = {
+        "files": files,
+        "current_symlink": {"target": os.readlink(current)},
+        "web_ui_conf": {"existed": conf_existed},
+    }
     _atomic_json(root / "state.json", state)
     return state
 
 
-def _restore_metadata(target: Instance, evidence: Path, state: dict[str, bool]) -> None:
+def _required_bool(blob: object, *, field: str) -> bool:
+    if not isinstance(blob, bool):
+        raise PromotionError(f"rollback metadata {field} must be boolean")
+    return blob
+
+
+def _restore_metadata(target: Instance, evidence: Path, state: dict[str, Any]) -> None:
     root = evidence / "metadata-before"
-    for name, existed in state.items():
+    if set(state) != {"files", "current_symlink", "web_ui_conf"}:
+        raise PromotionError("rollback metadata state has invalid keys")
+    files = state["files"]
+    current_state = state["current_symlink"]
+    conf_state = state["web_ui_conf"]
+    if (
+        not isinstance(files, dict)
+        or not isinstance(current_state, dict)
+        or not isinstance(conf_state, dict)
+    ):
+        raise PromotionError("rollback metadata state has invalid types")
+    if set(files) != {"PROVENANCE.txt", "DEPLOYED_SHA"}:
+        raise PromotionError("rollback metadata file state is invalid")
+    for name, file_state in files.items():
+        if not isinstance(file_state, dict) or set(file_state) != {"existed"}:
+            raise PromotionError(f"rollback metadata file state is invalid: {name}")
+        existed = _required_bool(file_state["existed"], field=f"files.{name}.existed")
         destination = target.deployment_root / name
         if existed:
             source = root / name
@@ -210,6 +263,27 @@ def _restore_metadata(target: Instance, evidence: Path, state: dict[str, bool]) 
             os.replace(temporary, destination)
         elif destination.exists() or destination.is_symlink():
             destination.unlink()
+    if set(current_state) != {"target"} or not isinstance(current_state["target"], str):
+        raise PromotionError("rollback current symlink state is invalid")
+    _atomic_symlink(
+        target.deployment_root / "current",
+        current_state["target"],
+        "rollback",
+    )
+    if set(conf_state) != {"existed"}:
+        raise PromotionError("rollback web-ui.conf state is invalid")
+    conf_existed = _required_bool(conf_state["existed"], field="web_ui_conf.existed")
+    destination = _web_ui_conf(target)
+    if conf_existed:
+        source = root / "web-ui.conf"
+        if not source.is_file():
+            raise PromotionError(f"web UI config backup missing: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.rollback.{os.getpid()}")
+        shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+    elif destination.exists() or destination.is_symlink():
+        destination.unlink()
 
 
 def _stop_target(target: Instance) -> None:
@@ -221,6 +295,7 @@ def _stop_target(target: Instance) -> None:
 
 
 def _start_target(target: Instance) -> None:
+    _run(["systemctl", "daemon-reload"])
     _svc(target.service_unit, "start")
     _wait_health(target.health_url)
     _svc(target.host_unit, "start")
@@ -307,6 +382,7 @@ def _candidate_venv(accepted: CandidateAcceptance, release: Path) -> Path:
 def _stage_or_reference(
     record: transaction.TransactionRecord,
     *,
+    target: Instance,
     supervisor: Instance,
     mode: DeploymentMode,
     accepted: CandidateAcceptance,
@@ -333,20 +409,23 @@ def _stage_or_reference(
     wheels = accepted.wheel_map(source)
     if final.exists() or final.is_symlink():
         raise PromotionError(f"target release unexpectedly exists: {final}")
+    staging_root = staging.transaction_owned_staging_path(target, record.tx_id)
+    if staging_root.exists() or staging_root.is_symlink():
+        raise PromotionError(f"transaction staging path already exists: {staging_root}")
     transaction.advance(record, "candidate_staging")
-    transaction.register_owned(record, str(final))
+    transaction.register_owned(record, str(staging_root))
     staging.stage_candidate_runtime(
-        final,
+        staging_root,
         supervisor,
         wheels,
         supervisor_release_root=source,
         accepted_frontend_root=Path(accepted.frontend_root),
     )
-    failures = acceptance.verify_release(accepted, final, enforce_bound_root=False)
+    failures = acceptance.verify_release(accepted, staging_root, enforce_bound_root=False)
     if failures:
         raise PromotionError("staged candidate mismatch: " + "; ".join(failures))
     transaction.advance(record, "candidate_verified")
-    return final, True
+    return staging_root, False
 
 
 def _switch(
@@ -361,6 +440,11 @@ def _switch(
     old = Path(record.old_runtime_path)
     final = Path(record.new_runtime_path)
     target_venv = target.deployment_root / "venv"
+    candidate_venv = _candidate_venv(accepted, final)
+    web_ui = final / "web-ui"
+    staged_web_ui = (final if candidate_preexisting else candidate) / "web-ui"
+    if not staged_web_ui.is_dir() or not (staged_web_ui / "index.html").is_file():
+        raise PromotionError(f"candidate web UI missing: {staged_web_ui}")
     if layout == "directory":
         if old.exists():
             raise PromotionError(f"transaction old-runtime path exists: {old}")
@@ -376,10 +460,19 @@ def _switch(
         os.rename(candidate, final)
     elif candidate != final:
         raise PromotionError("pre-existing candidate is not the target final release")
-    candidate_venv = _candidate_venv(accepted, final)
-    temporary = target.deployment_root / f".venv.tmp.{record.tx_id}"
-    os.symlink(candidate_venv, temporary)
-    os.replace(temporary, target_venv)
+    _atomic_symlink(target_venv, candidate_venv, record.tx_id)
+    if target.name == "O1":
+        current_target = candidate_venv
+    elif target.name == "O2":
+        current_target = final
+    else:
+        raise PromotionError(f"unknown live target layout: {target.name}")
+    _atomic_symlink(target.deployment_root / "current", current_target, record.tx_id)
+    web_ui_conf = _web_ui_conf(target)
+    web_ui_conf.parent.mkdir(parents=True, exist_ok=True)
+    temporary_conf = web_ui_conf.with_name(f".{web_ui_conf.name}.{record.tx_id}")
+    temporary_conf.write_text(f'[Service]\nEnvironment="OMNIGENT_WEB_UI_DIST={web_ui}"\n')
+    os.replace(temporary_conf, web_ui_conf)
     provenance = final / "PROVENANCE.txt"
     if provenance.is_file():
         shutil.copy2(provenance, target.deployment_root / "PROVENANCE.txt")
@@ -409,6 +502,42 @@ def _migrate(target: Instance, final: Path, accepted: CandidateAcceptance) -> No
     integrity, schema, _ = _db(database)
     if integrity != "ok" or schema != accepted.target_db_schema:
         raise PromotionError(f"migration acceptance failed: {integrity}/{schema}")
+
+
+class _WebAssetParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.assets: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "script" and values.get("src"):
+            self.assets.add(str(values["src"]))
+        elif (
+            tag == "link"
+            and values.get("href")
+            and (
+                values.get("rel") == "stylesheet"
+                or urlsplit(str(values["href"])).path.endswith(".css")
+            )
+        ):
+            self.assets.add(str(values["href"]))
+
+
+def _accept_web_ui(target: Instance) -> int:
+    base_url = f"http://127.0.0.1:{target.port}/"
+    html = _run(["curl", "-fsS", "--max-time", "10", base_url]).stdout
+    parser = _WebAssetParser()
+    parser.feed(html)
+    if not parser.assets:
+        raise PromotionError("target HTML references no JavaScript or CSS assets")
+    for reference in sorted(parser.assets):
+        asset_url = urljoin(base_url, reference)
+        parsed = urlsplit(asset_url)
+        if parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port != target.port:
+            raise PromotionError(f"target HTML references external asset: {reference}")
+        _run(["curl", "-fsS", "--max-time", "10", asset_url])
+    return len(parser.assets)
 
 
 def _accept(
@@ -442,12 +571,15 @@ def _accept(
     )
     if info.get("server_version") != accepted.package_version:
         raise PromotionError(f"target API version mismatch: {info}")
+    web_asset_count = _accept_web_ui(target)
     return {
         "runtime": runtime,
         "integrity": integrity,
         "schema": schema,
         "counts": counts,
         "health": _health(target.health_url),
+        "html_assets_ok": True,
+        "html_asset_count": web_asset_count,
     }
 
 
@@ -497,12 +629,15 @@ def _restore_db(target: Instance, backup: Path, digest: str) -> None:
     database = preflight.target_home_for(target) / "chat.db"
     if not backup.is_file() or _sha(backup) != digest or _db(backup)[0] != "ok":
         raise PromotionError("rollback DB backup failed verification")
+    original = database.stat()
     for suffix in ("-wal", "-shm"):
         sidecar = Path(str(database) + suffix)
         if sidecar.exists():
             sidecar.unlink()
     temporary = database.with_name(database.name + f".rollback.{os.getpid()}")
     shutil.copy2(backup, temporary)
+    os.chown(temporary, original.st_uid, original.st_gid)
+    os.chmod(temporary, stat.S_IMODE(original.st_mode))
     os.replace(temporary, database)
 
 
@@ -515,7 +650,7 @@ def _rollback(
     backup: Path,
     backup_digest: str,
     layout: str,
-    metadata: dict[str, bool],
+    metadata: dict[str, Any],
     evidence: Path,
 ) -> dict[str, Any]:
     _verify_rollback_backup(record, backup, backup_digest)
@@ -590,9 +725,7 @@ def recover(record: transaction.TransactionRecord) -> dict[str, Any]:
     try:
         _restore_runtime(record, target=target, accepted=accepted, layout=layout)
         _restore_db(target, backup, record.db_backup_sha256)
-        _restore_metadata(
-            target, evidence, {str(key): bool(value) for key, value in metadata.items()}
-        )
+        _restore_metadata(target, evidence, metadata)
         _start_target(target)
     except BaseException:
         record.phase = "failure"
@@ -680,7 +813,7 @@ def run(
         )
         return 0
 
-    _no_live_transactions(target, supervisor)
+    _no_live_transactions()
     supervisor_before = baseline.capture(supervisor)
     if selected_mode is DeploymentMode.PEER_COPY and (
         supervisor_before.artifact_sha != accepted.source_sha
@@ -721,6 +854,7 @@ def run(
     try:
         candidate, preexisting = _stage_or_reference(
             record,
+            target=target,
             supervisor=supervisor,
             mode=selected_mode,
             accepted=accepted,

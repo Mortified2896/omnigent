@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from deploy.scripts.peer_deployer import identity, preflight, transaction
 from deploy.scripts.peer_deployer.mode import DeploymentMode
@@ -75,6 +78,48 @@ def test_no_other_transaction_blocks_active_record(tmp_path: Path) -> None:
         assert not preflight.check_no_other_transaction(_report())
     finally:
         transaction.DEFAULT_TX_ROOT = original
+
+
+def test_disk_preflight_requires_25_gib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = identity.Instance(
+        name="O1",
+        deployment_root=tmp_path / "target",
+        service_unit="target.service",
+        host_unit="target-host.service",
+        port=12001,
+        health_url="http://127.0.0.1:12001/health",
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setitem(identity.HOME_MAPPING, str(target.deployment_root), home)
+    assert preflight.MIN_FREE_BYTES == 25 * 1024**3
+
+    monkeypatch.setattr(
+        preflight.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=preflight.MIN_FREE_BYTES - 1),
+    )
+    assert not preflight.check_disk_space(_report(), target)
+    monkeypatch.setattr(
+        preflight.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=preflight.MIN_FREE_BYTES),
+    )
+    assert preflight.check_disk_space(_report(), target)
+
+
+def test_python_host_wrapper_only_needs_to_be_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    modes: list[int] = []
+
+    def readable(_path: Path, mode: int) -> bool:
+        modes.append(mode)
+        return mode == preflight.os.R_OK
+
+    monkeypatch.setattr(preflight.os, "access", readable)
+    assert preflight.check_scripts_present(_report(), identity.O1)
+    assert modes == [preflight.os.R_OK]
 
 
 def test_report_serializes_mode_and_acceptance_reference() -> None:

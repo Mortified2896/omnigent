@@ -194,7 +194,7 @@ class CandidateAcceptance:
             raise AcceptanceError("successful /v1/info evidence is required")
         if self.info_server_version != self.package_version:
             raise AcceptanceError("/v1/info version differs from package_version")
-        if self.info_build_sha != self.source_sha:
+        if self.info_build_sha and self.info_build_sha != self.source_sha:
             raise AcceptanceError("/v1/info build SHA differs from source_sha")
         if not self.html_assets_ok or self.html_asset_count < 1:
             raise AcceptanceError("successful HTML/assets evidence is required")
