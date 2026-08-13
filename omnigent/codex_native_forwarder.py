@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -61,6 +62,8 @@ from omnigent.json_types import JsonObject as _JsonObject
 _logger = logging.getLogger(__name__)
 
 _AGENT_NAME = "codex-native-ui"
+_INSTANCE_ID_ENV = "OMNIGENT_INSTANCE_ID"
+_TRACE_INSTANCE_IDS = frozenset({"O1", "O2"})
 _SUBSCRIBE_RETRY_DELAY_SECONDS = 0.2
 # How long to wait for a freshly launched Codex TUI to create its
 # app-server thread (emit ``thread/started``) before giving up. Generous
@@ -3275,6 +3278,12 @@ async def _handle_terminal_turn_boundary(
     _end_codex_turn_span(method, params, forwarder_state)
 
 
+def _trace_instance_id() -> str | None:
+    """Return the optional bounded instance label used by Codex turn traces."""
+    value = os.environ.get(_INSTANCE_ID_ENV)
+    return value if value in _TRACE_INSTANCE_IDS else None
+
+
 def _start_codex_turn_span(
     session_id: str,
     params: _JsonObject,
@@ -3300,6 +3309,9 @@ def _start_codex_turn_span(
             attributes["omnigent.provider.fallback"] = provenance.provider_fallback
     if turn_id:
         attributes["omnigent.codex.turn_id"] = turn_id
+    instance_id = _trace_instance_id()
+    if instance_id is not None:
+        attributes["omnigent.instance"] = instance_id
     if state.requested_model:
         attributes["omnigent.requested_model"] = state.requested_model
     if state.model:
