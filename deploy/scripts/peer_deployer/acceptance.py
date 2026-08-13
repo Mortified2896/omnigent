@@ -489,13 +489,25 @@ def verify_release(
         metadata = path.lstat()
         if metadata.st_uid != 0:
             failures.append(f"release resource not root-owned:{path}")
-        if metadata.st_mode & 0o022:
+        if not path.is_symlink() and metadata.st_mode & 0o022:
             failures.append(f"release resource group/world writable:{path}")
         if path.is_symlink():
             try:
                 path.resolve().relative_to(resolved_release)
             except ValueError:
-                failures.append(f"release symlink escapes immutable root:{path}")
+                relative = path.relative_to(release_root).as_posix()
+                resolved = path.resolve()
+                # Standard venv launchers may point at a root-owned host Python.
+                trusted_python = relative.startswith("venv/bin/python") and resolved.is_file()
+                if trusted_python:
+                    resolved_metadata = resolved.stat()
+                    trusted_python = (
+                        resolved_metadata.st_uid == 0
+                        and not resolved_metadata.st_mode & 0o022
+                        and os.access(resolved, os.X_OK)
+                    )
+                if not trusted_python:
+                    failures.append(f"release symlink escapes immutable root:{path}")
     for wheel in record.wheels:
         path = release_root / "artifacts" / wheel.filename
         if not path.is_file():
