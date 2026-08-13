@@ -87,6 +87,13 @@ class TransactionRecord:
     sdk_client_wheel_sha256: str
     sdk_ui_wheel_sha256: str
     created_at_unix: float
+    mode: str = "peer-copy"
+    acceptance_record_path: str = ""
+    acceptance_record_sha256: str = ""
+    frontend_tree_sha256: str = ""
+    supervisor_baseline: dict[str, Any] = field(default_factory=dict)
+    exact_wheels: list[dict[str, str]] = field(default_factory=list)
+    referenced_resources: list[str] = field(default_factory=list)
     phase: str = "init"
     mutation_boundary_crossed: bool = False
     old_runtime_path: str = ""
@@ -103,19 +110,50 @@ class TransactionRecord:
     owned_resources: list[str] = field(default_factory=list)
     log_path: str = ""
     rollback_reason: str = ""
+    rollback_started: bool = False
     rollback_completed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, blob: dict[str, Any]) -> "TransactionRecord":
+    def from_dict(cls, blob: dict[str, Any]) -> TransactionRecord:
         if set(blob) - set(cls.__dataclass_fields__):
             raise TransactionError(
                 f"unknown keys in transaction record: "
                 f"{sorted(set(blob) - set(cls.__dataclass_fields__))}"
             )
-        return cls(**blob)
+        # Records created before schema expansion remain loadable. Legacy wheel
+        # hashes are retained and represented in exact_wheels with an empty
+        # filename because old records did not persist wheel filenames.
+        values = dict(blob)
+        values.setdefault("mode", "peer-copy")
+        values.setdefault("acceptance_record_path", "")
+        values.setdefault("acceptance_record_sha256", "")
+        values.setdefault("frontend_tree_sha256", "")
+        values.setdefault("supervisor_baseline", {})
+        values.setdefault("referenced_resources", [])
+        values.setdefault("rollback_started", False)
+        if "exact_wheels" not in values:
+            values["exact_wheels"] = [
+                {"role": role, "filename": "", "sha256": str(values.get(field, ""))}
+                for role, field in (
+                    ("main", "main_wheel_sha256"),
+                    ("sdk_client", "sdk_client_wheel_sha256"),
+                    ("sdk_ui", "sdk_ui_wheel_sha256"),
+                )
+            ]
+        record = cls(**values)
+        if record.mode not in {"bootstrap-first-peer", "peer-copy"}:
+            raise TransactionError(f"unknown deployment mode: {record.mode!r}")
+        overlap = {os.path.realpath(item) for item in record.owned_resources} & {
+            os.path.realpath(item) for item in record.referenced_resources
+        }
+        if overlap:
+            raise TransactionError(
+                f"resources cannot be both owned and referenced: {sorted(overlap)}"
+            )
+        return record
 
 
 def make_tx_id() -> str:
@@ -149,6 +187,13 @@ def create(
     main_wheel_sha256: str,
     sdk_client_wheel_sha256: str,
     sdk_ui_wheel_sha256: str,
+    mode: str = "peer-copy",
+    acceptance_record_path: str = "",
+    acceptance_record_sha256: str = "",
+    frontend_tree_sha256: str = "",
+    supervisor_baseline: dict[str, Any] | None = None,
+    exact_wheels: list[dict[str, str]] | None = None,
+    referenced_resources: list[str] | None = None,
     root: Path = DEFAULT_TX_ROOT,
 ) -> TransactionRecord:
     """Create a new transaction record on disk.
@@ -161,9 +206,12 @@ def create(
     assert_tx_id(tx_id)
     if target == supervisor:
         raise TransactionError(
-            f"REFUSED: target == supervisor == {target!r}: "
-            "an instance NEVER upgrades itself"
+            f"REFUSED: target == supervisor == {target!r}: an instance NEVER upgrades itself"
         )
+    if mode not in {"bootstrap-first-peer", "peer-copy"}:
+        raise TransactionError(f"unknown deployment mode: {mode!r}")
+    if acceptance_record_path and not re.fullmatch(r"[0-9a-f]{64}", acceptance_record_sha256):
+        raise TransactionError("acceptance_record_sha256 is required with acceptance_record_path")
     record = TransactionRecord(
         tx_id=tx_id,
         target=target,
@@ -174,11 +222,18 @@ def create(
         sdk_client_wheel_sha256=sdk_client_wheel_sha256,
         sdk_ui_wheel_sha256=sdk_ui_wheel_sha256,
         created_at_unix=time.time(),
+        mode=mode,
+        acceptance_record_path=acceptance_record_path,
+        acceptance_record_sha256=acceptance_record_sha256,
+        frontend_tree_sha256=frontend_tree_sha256,
+        supervisor_baseline=dict(supervisor_baseline or {}),
+        exact_wheels=list(exact_wheels or []),
+        referenced_resources=list(referenced_resources or []),
     )
     record_path = transaction_path(root, tx_id)
     if record_path.exists():
         raise TransactionError(f"transaction already exists: {record_path}")
-    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _write_atomic(record_path, record.to_dict())
     return record
 
@@ -200,7 +255,7 @@ def load(tx_id: str, root: Path = DEFAULT_TX_ROOT) -> TransactionRecord:
 def save(record: TransactionRecord, root: Path = DEFAULT_TX_ROOT) -> None:
     """Atomically write the transaction record to disk."""
     path = transaction_path(root, record.tx_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _write_atomic(path, record.to_dict())
 
 
@@ -250,10 +305,33 @@ def register_owned(
     """
     if not path:
         raise TransactionError("cannot register an empty owned resource")
+    if is_referenced(record, path):
+        raise TransactionError(f"resource is referenced, not owned: {path}")
     if path in record.owned_resources:
         return
     record.owned_resources.append(path)
     save(record, root)
+
+
+def register_referenced(
+    record: TransactionRecord,
+    path: str,
+    root: Path = DEFAULT_TX_ROOT,
+) -> None:
+    """Record a pre-existing resource without granting rollback ownership."""
+    if not path:
+        raise TransactionError("cannot register an empty referenced resource")
+    if is_owned(record, path):
+        raise TransactionError(f"resource is owned, not referenced: {path}")
+    if path in record.referenced_resources:
+        return
+    record.referenced_resources.append(path)
+    save(record, root)
+
+
+def is_referenced(record: TransactionRecord, path: str) -> bool:
+    target = os.path.realpath(path)
+    return any(os.path.realpath(item) == target for item in record.referenced_resources)
 
 
 def is_owned(record: TransactionRecord, path: str) -> bool:
@@ -263,10 +341,7 @@ def is_owned(record: TransactionRecord, path: str) -> bool:
     detected as touching the symlink target.
     """
     target = os.path.realpath(path)
-    for owned in record.owned_resources:
-        if os.path.realpath(owned) == target:
-            return True
-    return False
+    return any(os.path.realpath(owned) == target for owned in record.owned_resources)
 
 
 def complete(record: TransactionRecord, root: Path = DEFAULT_TX_ROOT) -> None:
@@ -295,25 +370,36 @@ def _write_atomic(path: Path, blob: dict) -> None:
     """
     payload = json.dumps(blob, indent=2, sort_keys=True)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
-    tmp.write_text(payload)
+    with tmp.open("w") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
+    directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 __all__ = [
-    "TransactionRecord",
-    "TransactionError",
-    "PHASE_ORDER",
     "DEFAULT_TX_ROOT",
-    "make_tx_id",
-    "assert_tx_id",
-    "transaction_path",
-    "create",
-    "load",
-    "save",
+    "PHASE_ORDER",
+    "TransactionError",
+    "TransactionRecord",
     "advance",
-    "cross_mutation_boundary",
-    "register_owned",
-    "is_owned",
+    "assert_tx_id",
     "complete",
+    "create",
+    "cross_mutation_boundary",
     "fail_record",
+    "is_owned",
+    "is_referenced",
+    "load",
+    "make_tx_id",
+    "register_owned",
+    "register_referenced",
+    "save",
+    "transaction_path",
 ]

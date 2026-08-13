@@ -29,13 +29,11 @@ test_peer_deployer_*.py files; this file consolidates the
 mandatory-scenarios mapping so a reviewer can grep for a
 scenario number and find the test quickly.
 """
+
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
-import shutil
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -50,7 +48,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -136,7 +135,8 @@ class TestScenario2_PreflightZeroMutation:
     """The preflight module refuses on any failure without mutation."""
 
     def test_scenario_2_preflight_checks_run_before_mutation(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """The preflight module runs all checks before any mutation."""
         preflight_src = (PKG_ROOT / "preflight.py").read_text()
@@ -147,7 +147,7 @@ class TestScenario2_PreflightZeroMutation:
         # The check functions all return bool and don't mutate.
         assert "def check_target_distinct_from_supervisor" in preflight_src
         assert "def check_supervisor_healthy" in preflight_src
-        assert "def check_artifact_hashes" in preflight_src
+        assert "def check_candidate_release" in preflight_src
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +159,8 @@ class TestScenario3_StagingZeroMutation:
     """Staging failures do not touch the active runtime."""
 
     def test_scenario_3_staging_clean_on_failure(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """stage_candidate_runtime cleans up a partial staging on failure."""
         staging_src = (PKG_ROOT / "staging.py").read_text()
@@ -230,7 +231,7 @@ class TestScenario6_PairedRollback:
         assert "except BaseException as exc:" in host_src
         assert "if not crossed:" in host_src
         # The rollback happens before commit.
-        assert "_rollback(r" in host_src
+        assert "_rollback(" in host_src
 
 
 # ---------------------------------------------------------------------------
@@ -350,10 +351,9 @@ class TestScenario11_LegacyEntrypointsRefuse:
         assert "--reconcile-stale" in v3
         # The host entrypoint is the only live promotion path.
         assert "host_promotion" in v3
-        # The hard-coded TARGET/SUPERVISOR lives in host_promotion.py.
         host_src = (PKG_ROOT / "host_promotion.py").read_text()
-        assert "TARGET = identity.O1" in host_src
-        assert "SUPERVISOR = identity.O2" in host_src
+        assert "identity.require_distinct(target, supervisor)" in host_src
+        assert "acceptance_record_path" in host_src
         assert "PromotionError" in host_src
 
 
@@ -384,12 +384,12 @@ class TestScenario12_TargetEqualsSupervisor:
         with pytest.raises(identity.IdentityError, match="target == supervisor"):
             identity.require_distinct(identity.O1, identity.O1)
 
-    def test_scenario_12_v3_hard_codes_target_supervisor(self) -> None:
-        """The v3 entrypoint hard-codes TARGET=O1, SUPERVISOR=O2."""
+    def test_scenario_12_v3_requires_explicit_target_supervisor(self) -> None:
+        """The host orchestrator validates the explicit pair."""
         host_src = (PKG_ROOT / "host_promotion.py").read_text()
-        assert "TARGET = identity.O1" in host_src
-        assert "SUPERVISOR = identity.O2" in host_src
-        assert "identity.require_distinct(TARGET, SUPERVISOR)" in host_src
+        assert "TARGET = identity.O1" not in host_src
+        assert "SUPERVISOR = identity.O2" not in host_src
+        assert "identity.require_distinct(target, supervisor)" in host_src
 
 
 # ---------------------------------------------------------------------------
@@ -412,8 +412,10 @@ class TestScenario13_O2DbRefused:
         db = o2_home / "chat.db"
         with pytest.raises(path_safety.PathSafetyError):
             path_safety.assert_on_allowlist(
-                db, operation="delete",
-                target=identity.O1, supervisor=identity.O2,
+                db,
+                operation="delete",
+                target=identity.O1,
+                supervisor=identity.O2,
             )
 
 
@@ -431,11 +433,13 @@ class TestScenario14_TraversalRefused:
             path_safety.assert_on_allowlist(
                 "/opt/omnigent/staging/tx/../../../etc",
                 operation="delete",
-                target=identity.O1, supervisor=identity.O2,
+                target=identity.O1,
+                supervisor=identity.O2,
             )
 
     def test_scenario_14_symlink_to_protected_refused(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A symlink resolving to a protected path is refused."""
         o1 = identity.O1
@@ -450,8 +454,10 @@ class TestScenario14_TraversalRefused:
             os.symlink(protected, safe_looking)
             with pytest.raises(path_safety.PathSafetyError, match="active runtime"):
                 path_safety.assert_on_allowlist(
-                    safe_looking, operation="delete",
-                    target=o1, supervisor=identity.O2,
+                    safe_looking,
+                    operation="delete",
+                    target=o1,
+                    supervisor=identity.O2,
                 )
         finally:
             object.__setattr__(o1, "deployment_root", original)
@@ -493,16 +499,15 @@ class TestScenario16_ExactArtifactMismatch:
     def test_scenario_16_preflight_checks_artifact_hashes(self) -> None:
         """The preflight checks wheel hashes."""
         preflight_src = (PKG_ROOT / "preflight.py").read_text()
-        assert "ACCEPTED_MAIN_WHEEL_SHA256" in preflight_src
-        assert "ACCEPTED_SDK_CLIENT_WHEEL_SHA256" in preflight_src
-        assert "ACCEPTED_SDK_UI_WHEEL_SHA256" in preflight_src
-        assert "check_artifact_hashes" in preflight_src
+        assert "check_acceptance_record" in preflight_src
+        assert "check_candidate_release" in preflight_src
+        assert "acceptance.verify_release" in preflight_src
 
-    def test_scenario_16_v3_hard_coded_artifact(self) -> None:
-        """The v3 entrypoint hard-codes the exact accepted artifact."""
+    def test_scenario_16_v3_has_no_hard_coded_artifact(self) -> None:
+        """The host reads exact identity from immutable acceptance."""
         host_src = (PKG_ROOT / "host_promotion.py").read_text()
-        assert "541c9a3180b81bfb2fc450b3ef5f8648691b359d" in host_src
-        assert "f49fb3f973c1d98be03eaede76e9c7e86acb91064b06494afdf8f7345524a5e9" in host_src
+        assert "ACCEPTED_SHA" not in host_src
+        assert "acceptance.load(acceptance_record_path)" in host_src
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +519,8 @@ class TestScenario17_AnotherActiveTransaction:
     """Another active transaction refuses preflight."""
 
     def test_scenario_17_check_no_other_transaction(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A non-terminal transaction in the tx_root blocks promotion."""
         # Create a non-terminal transaction.
@@ -553,12 +559,12 @@ class TestScenario18_SupervisorDriftFailsClosed:
         host_src = (PKG_ROOT / "host_promotion.py").read_text()
         assert "supervisor_before" in host_src
         assert "supervisor_after" in host_src
-        assert "supervisor_after != supervisor_before" in host_src
-        assert "O2 supervisor guard changed" in host_src
+        assert "baseline.compare(supervisor_before, supervisor_after)" in host_src
+        assert "supervisor baseline drift" in host_src
 
     def test_scenario_18_preflight_checks_supervisor_identity(self) -> None:
         """The preflight verifies the supervisor is the exact accepted artifact."""
         preflight_src = (PKG_ROOT / "preflight.py").read_text()
         assert "check_supervisor_identity_matches" in preflight_src
-        assert "ACCEPTED_ARTIFACT_SHA" in preflight_src
-        assert "ACCEPTED_ARTIFACT_VERSION" in preflight_src
+        assert "record.source_sha" in preflight_src
+        assert "record.package_version" in preflight_src

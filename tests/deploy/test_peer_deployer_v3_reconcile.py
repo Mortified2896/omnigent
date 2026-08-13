@@ -10,15 +10,13 @@ function. This file proves that:
   * The CLI subcommand is registered and refuses unknown args.
   * The CLI's ``promote`` subcommand refuses and points to v3.
 """
+
 from __future__ import annotations
 
 import importlib.util
 import os
-import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
@@ -30,7 +28,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -81,7 +80,8 @@ class TestV3EntrypointReconcileInterface:
         assert "--promote" in v3
 
     def test_v3_entrypoint_reconcile_safe_writes_audit(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A safe reconciliation writes the audit record to evidence."""
         # Build a properly-shaped candidate and tx.
@@ -93,15 +93,19 @@ class TestV3EntrypointReconcileInterface:
 
         tx_id = "promotion-20260808T201637Z-60ced75a"
         # Use the O1 deployment root override from the reconcile tests.
-        from tests.deploy.test_peer_deployer_reconcile import _set_o1_deployment_root, _set_o2_deployment_root, _restore_o1_deployment_root, _restore_o2_deployment_root  # type: ignore
+        from tests.deploy.test_peer_deployer_reconcile import (  # type: ignore
+            _restore_o1_deployment_root,
+            _restore_o2_deployment_root,
+            _set_o1_deployment_root,
+            _set_o2_deployment_root,
+        )
+
         original_o1 = _set_o1_deployment_root(tmp_path)
         original_o2 = _set_o2_deployment_root(tmp_path / "o2")
         try:
             candidate = identity.O1.deployment_root / "releases" / ("a" * 40)
             candidate.mkdir(parents=True, exist_ok=True)
-            (candidate / "PROVENANCE.txt").write_text(
-                "schema_version=1\nsha=" + "a" * 40 + "\n"
-            )
+            (candidate / "PROVENANCE.txt").write_text("schema_version=1\nsha=" + "a" * 40 + "\n")
             _write_record(
                 tx_id,
                 candidate_path=str(candidate),
@@ -126,13 +130,16 @@ class TestV3EntrypointReconcileInterface:
             _restore_o2_deployment_root(original_o2)
 
 
-class TestCLIRefusesPromote:
-    """The CLI's promote subcommand refuses unconditionally."""
+class TestCLIExplicitPromote:
+    """The CLI delegates promotion through the canonical explicit interface."""
 
-    def test_cli_promote_is_refusal_shim(self) -> None:
-        """The CLI's promote subcommand is a refusal shim."""
+    def test_cli_promote_requires_explicit_inputs(self) -> None:
         cli_src = (PKG_ROOT / "__main__.py").read_text()
-        assert "REFUSED: peer_deployer CLI does not expose a promote" in cli_src
+        assert "host_promotion.run(" in cli_src
+        assert 'p_promote.add_argument("--target", required=True' in cli_src
+        assert 'p_promote.add_argument("--supervisor", required=True' in cli_src
+        assert '"--mode", required=True' in cli_src
+        assert 'p_promote.add_argument("--acceptance-record", required=True' in cli_src
 
     def test_cli_reconcile_stale_subcommand_registered(self) -> None:
         """The CLI's reconcile-stale subcommand is registered."""

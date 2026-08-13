@@ -58,19 +58,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import secrets
 import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import identity, transaction
+from . import identity
 from .identity import Instance
 
 SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -115,16 +114,14 @@ class FrozenClosure:
             "supervisor_python": self.supervisor_python,
             "captured_at_unix": self.captured_at_unix,
             "site_packages": self.site_packages,
-            "distributions": {
-                name: d.to_dict() for name, d in self.distributions.items()
-            },
+            "distributions": {name: d.to_dict() for name, d in self.distributions.items()},
         }
 
     def expected_versions(self) -> dict[str, str]:
         return {name: d.version for name, d in self.distributions.items()}
 
 
-def _read_dist_info(site_packages: Path, dist_info: Path) -> FrozenDistribution:
+def _read_dist_info(_site_packages: Path, dist_info: Path) -> FrozenDistribution:
     """Parse a single ``*.dist-info`` directory into a FrozenDistribution."""
     metadata_path = dist_info / "METADATA"
     if not metadata_path.is_file():
@@ -151,9 +148,7 @@ def _read_dist_info(site_packages: Path, dist_info: Path) -> FrozenDistribution:
         elif sha256_meta is None and line.startswith("Hash:"):
             sha256_meta = line.split(":", 1)[1].strip()
     if not name or not version:
-        raise StagingError(
-            f"dist-info {dist_info} missing Name/Version in METADATA header"
-        )
+        raise StagingError(f"dist-info {dist_info} missing Name/Version in METADATA header")
     record = dist_info / "RECORD"
     record_hashes: dict[str, str] = {}
     if record.is_file():
@@ -181,11 +176,11 @@ def _locate_site_packages(supervisor: Instance) -> Path:
         candidates = sorted((current / "venv" / "lib").glob("python*/site-packages"))
         if candidates:
             return candidates[0]
-    candidates = sorted((supervisor.deployment_root / "venv" / "lib").glob("python*/site-packages"))
+    candidates = sorted(
+        (supervisor.deployment_root / "venv" / "lib").glob("python*/site-packages")
+    )
     if not candidates:
-        raise StagingError(
-            f"no site-packages under {supervisor.deployment_root}/venv/lib/"
-        )
+        raise StagingError(f"no site-packages under {supervisor.deployment_root}/venv/lib/")
     if len(candidates) != 1:
         raise StagingError(
             f"expected exactly one python site-packages under "
@@ -207,9 +202,7 @@ def _locate_supervisor_python(supervisor: Instance) -> Path:
     fallback = supervisor.deployment_root / "venv" / "bin" / "python"
     if fallback.is_file():
         return fallback
-    raise StagingError(
-        f"no python interpreter found under {supervisor.deployment_root}/venv/bin/"
-    )
+    raise StagingError(f"no python interpreter found under {supervisor.deployment_root}/venv/bin/")
 
 
 def capture_supervisor_closure(supervisor: Instance) -> FrozenClosure:
@@ -290,9 +283,7 @@ def verify_candidate_versions(
         },
     )
     if result.returncode != 0:
-        raise StagingError(
-            f"failed to enumerate candidate distributions: {result.stderr.strip()}"
-        )
+        raise StagingError(f"failed to enumerate candidate distributions: {result.stderr.strip()}")
     try:
         actual = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -316,9 +307,7 @@ def verify_candidate_versions(
 def _candidate_site_packages(target_release_root: Path) -> Path:
     candidates = sorted((target_release_root / "venv" / "lib").glob("python*/site-packages"))
     if not candidates:
-        raise StagingError(
-            f"no site-packages under {target_release_root}/venv/lib/"
-        )
+        raise StagingError(f"no site-packages under {target_release_root}/venv/lib/")
     return candidates[0]
 
 
@@ -401,6 +390,7 @@ def _copy_supervisor_site_packages(
 def _install_wheels_no_deps(
     candidate_python: Path,
     wheels: Iterable[Path],
+    supervisor: Instance,
 ) -> None:
     """Install the SDK wheels into the candidate venv with ``--no-deps``.
 
@@ -432,13 +422,14 @@ def _install_wheels_no_deps(
         # site-packages. The supervisor's pip is itself a known-good
         # distribution; copying it is part of the deterministic
         # closure (it has the same SHA-256 as on the supervisor).
-        supervisor_pip_dist = _locate_supervisor_python(_resolve_supervisor_for_fallback())
-        # Find pip's dist-info dir on the supervisor.
-        supervisor_site = _locate_site_packages(_resolve_supervisor_for_fallback())
-        candidate_site = candidate_python.parent.parent / "lib" / (
-            "python" + str(sys.version_info.major) + "."
-            + str(sys.version_info.minor)
-        ) / "site-packages"
+        # Find pip's dist-info dir on the explicitly declared supervisor.
+        supervisor_site = _locate_site_packages(supervisor)
+        candidate_site = (
+            candidate_python.parent.parent
+            / "lib"
+            / ("python" + str(sys.version_info.major) + "." + str(sys.version_info.minor))
+            / "site-packages"
+        )
         if candidate_site.exists():
             for child in supervisor_site.glob("pip*.dist-info"):
                 target = candidate_site / child.name
@@ -453,7 +444,9 @@ def _install_wheels_no_deps(
         # Verify pip is now importable.
         verify = subprocess.run(
             [str(candidate_python), "-c", "import pip"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if verify.returncode != 0:
             raise StagingError(
@@ -490,14 +483,6 @@ def _install_wheels_no_deps(
             )
 
 
-def _resolve_supervisor_for_fallback() -> Instance:
-    """Return the supervisor instance used for the pip-copy fallback.
-
-    Centralized so the staging logic never has to special-case O2.
-    """
-    return identity.O2
-
-
 def stage_candidate_runtime(
     target_release_root: Path,
     supervisor: Instance,
@@ -505,6 +490,7 @@ def stage_candidate_runtime(
     *,
     dry_run: bool = False,
     supervisor_release_root: Path | None = None,
+    accepted_frontend_root: Path | None = None,
 ) -> FrozenClosure:
     """Stage a complete, transaction-owned candidate runtime at ``target_release_root``.
 
@@ -543,9 +529,7 @@ def stage_candidate_runtime(
         # the closure that *would* be applied.
         return capture_supervisor_closure(supervisor)
     if "main" not in wheels or "sdk_client" not in wheels or "sdk_ui" not in wheels:
-        raise StagingError(
-            "stage_candidate_runtime requires main, sdk_client, and sdk_ui wheels"
-        )
+        raise StagingError("stage_candidate_runtime requires main, sdk_client, and sdk_ui wheels")
     if supervisor_release_root is None:
         # Default to the supervisor's current symlink target.
         try:
@@ -565,7 +549,15 @@ def stage_candidate_runtime(
             wheels["sdk_ui"],
             wheels["main"],
         ]
-        _install_wheels_no_deps(candidate_python, ordered)
+        _install_wheels_no_deps(candidate_python, ordered, supervisor)
+        if accepted_frontend_root is not None:
+            source_frontend = supervisor_release_root / accepted_frontend_root
+            target_frontend = target_release_root / accepted_frontend_root
+            if not target_frontend.exists():
+                if not source_frontend.is_dir():
+                    raise StagingError(f"accepted frontend tree missing: {source_frontend}")
+                target_frontend.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source_frontend, target_frontend, symlinks=True)
         # Copy the three SDK wheels into artifacts/ and the PROVENANCE.txt
         # so the staged candidate is self-describing and the host-level
         # deployer does not need to do another copy step.
@@ -577,20 +569,16 @@ def stage_candidate_runtime(
         identity_blob = identity.runtime_identity(candidate_python)
         if "commit_sha" not in identity_blob:
             raise StagingError(
-                f"candidate runtime identity probe returned no commit_sha: "
-                f"{identity_blob!r}"
+                f"candidate runtime identity probe returned no commit_sha: {identity_blob!r}"
             )
         if "version" not in identity_blob:
             raise StagingError(
-                f"candidate runtime identity probe returned no version: "
-                f"{identity_blob!r}"
+                f"candidate runtime identity probe returned no version: {identity_blob!r}"
             )
         # Verify: every pinned distribution from the supervisor must
         # be present at the same version.
         closure = capture_supervisor_closure(supervisor)
-        mismatches = verify_candidate_versions(
-            candidate_python, closure.expected_versions()
-        )
+        mismatches = verify_candidate_versions(candidate_python, closure.expected_versions())
         if mismatches:
             raise StagingError(
                 f"candidate runtime versions do not match supervisor closure: "
@@ -603,10 +591,8 @@ def stage_candidate_runtime(
         return closure
     except Exception:
         # Best-effort cleanup so a half-built candidate does not leak.
-        try:
+        with suppress(OSError):
             shutil.rmtree(target_release_root)
-        except OSError:
-            pass
         raise
 
 
@@ -628,8 +614,7 @@ def transaction_owned_staging_path(
     """
     if not tx_id.startswith("promotion-"):
         raise StagingError(f"refusing non-canonical tx_id: {tx_id!r}")
-    base = target.deployment_root / "staging" / tx_id
-    return base
+    return target.deployment_root / "staging" / tx_id
 
 
 def is_transaction_owned(target: Instance, path: Path, tx_id: str) -> bool:
@@ -674,9 +659,7 @@ def safe_cleanup_staging(target: Instance, tx_id: str) -> bool:
         ) from exc
     expected_name = tx_id
     if real.name != expected_name:
-        raise StagingError(
-            f"REFUSED: {real} name {real.name!r} != tx_id {expected_name!r}"
-        )
+        raise StagingError(f"REFUSED: {real} name {real.name!r} != tx_id {expected_name!r}")
     if not real.exists():
         return False
     shutil.rmtree(real)
@@ -728,10 +711,7 @@ def candidate_identity_matches(
         blob = identity.runtime_identity(python)
     except identity.IdentityError:
         return False
-    return (
-        blob.get("commit_sha") == expected_sha
-        and blob.get("version") == expected_version
-    )
+    return blob.get("commit_sha") == expected_sha and blob.get("version") == expected_version
 
 
 def verify_candidate_complete(staging_root: Path) -> list[str]:
@@ -815,18 +795,18 @@ def write_staging_manifest(staging_root: Path, closure: FrozenClosure) -> Path:
 
 
 __all__ = [
-    "FrozenDistribution",
     "FrozenClosure",
+    "FrozenDistribution",
     "StagingError",
+    "candidate_identity_matches",
     "capture_supervisor_closure",
-    "verify_candidate_versions",
-    "stage_candidate_runtime",
-    "transaction_owned_staging_path",
     "is_transaction_owned",
     "safe_cleanup_staging",
-    "write_staging_provenance",
-    "write_artifacts",
-    "candidate_identity_matches",
+    "stage_candidate_runtime",
+    "transaction_owned_staging_path",
     "verify_candidate_complete",
+    "verify_candidate_versions",
+    "write_artifacts",
     "write_staging_manifest",
+    "write_staging_provenance",
 ]

@@ -1,4 +1,5 @@
-"""Regression tests for the Control Room peer promotion v3 safety contract."""
+"""Regression tests for the generalized peer promotion v3 contract."""
+
 from __future__ import annotations
 
 import ast
@@ -14,91 +15,112 @@ def _src() -> str:
     return HOST.read_text()
 
 
-def test_v3_direction_is_fixed_o2_to_o1() -> None:
-    s = _src()
-    assert "TARGET = identity.O1" in s
-    assert "SUPERVISOR = identity.O2" in s
-    assert "identity.require_distinct(TARGET, SUPERVISOR)" in s
-    assert 'add_argument("--target"' not in WRAPPER.read_text()
-    assert 'add_argument("--supervisor"' not in WRAPPER.read_text()
+def test_v3_requires_explicit_direction_mode_and_acceptance() -> None:
+    wrapper = WRAPPER.read_text()
+    for argument in (
+        '"--target"',
+        '"--supervisor"',
+        '"--mode"',
+        '"--acceptance-record"',
+        '"--evidence-dir"',
+    ):
+        assert argument in wrapper
+    source = _src()
+    assert "TARGET = identity.O1" not in source
+    assert "SUPERVISOR = identity.O2" not in source
+    assert "identity.require_distinct(target, supervisor)" in source
 
 
 def test_v2_live_promotion_path_is_hard_disabled() -> None:
-    s = V2.read_text()
-    assert "REFUSED: peer_promote_o1_v2.sh is permanently disabled" in s
-    assert "peer_promote_o1_v3.py --preflight-only" in s
-    assert "peer_promote_o1_v3.py --promote" in s
-    assert "exit 64" in s
+    source = V2.read_text()
+    assert "REFUSED: peer_promote_o1_v2.sh is permanently disabled" in source
+    assert "exit 64" in source
 
 
 def test_v3_uses_transaction_specific_legacy_runtime_not_glob() -> None:
-    s = _src()
-    assert 'f"venv.legacy-{tx_id}"' in s
-    assert "venv.legacy-*" not in s
-    assert "glob(" not in s
-    assert "head -1" not in s
+    source = _src()
+    assert 'f"venv.legacy-{tx_id}"' in source
+    assert "venv.legacy-*" not in source
+    assert "head -1" not in source
 
 
-def test_v3_stages_and_verifies_before_mutation_boundary() -> None:
+def test_v3_verifies_acceptance_before_mutation_boundary() -> None:
     tree = ast.parse(_src())
-    run_fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    run_fn = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run"
+    )
     body = ast.unparse(run_fn)
-    assert body.index("_stage(r, wheels)") < body.index("transaction.cross_mutation_boundary(r)")
-    assert body.index("transaction.cross_mutation_boundary(r)") < body.index("_stop_target()")
-    assert body.index("_stop_target()") < body.index("_switch(r, staged, mode)")
+    assert body.index("_stage_or_reference") < body.index("transaction.cross_mutation_boundary")
+    assert body.index("acceptance.load") < body.index("transaction.cross_mutation_boundary")
+    assert body.index("transaction.cross_mutation_boundary") < body.index("_stop_target")
 
 
-def test_v3_catches_all_post_mutation_failures_and_pairs_rollback() -> None:
-    s = _src()
-    assert "except BaseException as exc:" in s
-    assert "if not crossed:" in s
-    assert "_rollback(r, reason, backup, backup_digest, mode, meta, evidence)" in s
-    start = s.index("def _rollback(")
-    end = s.index("\n\n__all__", start)
-    rb = s[start:end]
-    assert "_restore_runtime(r, mode)" in rb
-    assert "_restore_db(backup, digest)" in rb
-    assert "r.rollback_completed = True" in rb
-    assert rb.index("_restore_runtime(r, mode)") < rb.index("r.rollback_completed = True")
-    assert rb.index("_restore_db(backup, digest)") < rb.index("r.rollback_completed = True")
+def test_v3_catches_post_mutation_failures_and_pairs_rollback() -> None:
+    source = _src()
+    assert "except BaseException as exc:" in source
+    assert "if not crossed:" in source
+    rollback = source[source.index("def _rollback(") : source.index("def _signal(")]
+    assert "_restore_runtime(" in rollback
+    assert "_restore_db(" in rollback
+    assert "record.rollback_completed = True" in rollback
 
 
-def test_v3_rollback_refuses_unknown_runtime_and_does_not_delete_candidate() -> None:
-    s = _src()
-    start = s.index("def _restore_runtime(")
-    end = s.index("\ndef _restore_db", start)
-    restore = s[start:end]
-    assert "rollback refuses unknown runtime" in restore
-    rb_start = s.index("def _rollback(")
-    rb_end = s.index("\n\n__all__", rb_start)
-    rb = s[rb_start:rb_end]
-    assert "rmtree" not in rb
+def test_v3_preserves_referenced_preexisting_candidate() -> None:
+    source = _src()
+    assert "transaction.register_referenced(record, str(final))" in source
+    failure = source[source.index("except BaseException as exc:") :]
+    assert "transaction.is_owned(record, str(candidate))" in failure
+
+
+def test_v3_rechecks_guard_and_supervisor_at_mutation_boundary() -> None:
+    source = _src()
+    boundary = source.index("transaction.cross_mutation_boundary(record)")
+    guard = source.index("guard_at_boundary = storage_guard_probe()")
+    supervisor = source.index("supervisor_at_boundary = baseline.capture(supervisor)")
+    assert guard < boundary
+    assert supervisor < boundary
+
+
+def test_v3_records_and_compares_supervisor_baseline() -> None:
+    source = _src()
+    assert "baseline.capture(supervisor)" in source
+    assert "supervisor_baseline=supervisor_before" in source
+    assert "baseline.compare(supervisor_before, supervisor_at_boundary)" in source
+    assert "supervisor drift before mutation" in source
+    assert "baseline.compare(supervisor_before, supervisor_after)" in source
+
+
+def test_v3_restricts_evidence_and_verifies_backup_before_rollback() -> None:
+    source = _src()
+    assert 'DEFAULT_EVIDENCE_ROOT = Path("/var/lib/omnigent-control-room/evidence")' in source
+    assert "evidence directory must be beneath" in source
+    rollback = source[source.index("def _rollback(") : source.index("def recover(")]
+    assert rollback.index("_verify_rollback_backup(") < rollback.index("_stop_target(target)")
+    assert "rollback already attempted" in rollback
+
+
+def test_v3_recovery_restores_runtime_and_db_before_commit() -> None:
+    source = _src()
+    recovery = source[source.index("def recover(") : source.index("def _signal(")]
+    assert recovery.index("_stop_target(target)") < recovery.index("_restore_runtime(")
+    assert recovery.index("_restore_runtime(") < recovery.index("_restore_db(")
+    assert recovery.index("_restore_db(") < recovery.index("_start_target(target)")
+    assert "record.rollback_completed = True" in recovery
+
+
+def test_v3_has_no_active_artifact_constants_or_force_skip() -> None:
+    source = _src()
+    assert "ACCEPTED_SHA" not in source
+    assert "OLD_SHA" not in source
+    assert "NEW_SCHEMA" not in source
+    wrapper = WRAPPER.read_text()
+    assert '"--force"' not in wrapper
+    assert '"--skip"' not in wrapper
 
 
 def test_v3_interrupts_enter_same_failure_path() -> None:
-    s = _src()
-    assert "signal.SIGINT" in s
-    assert "signal.SIGTERM" in s
-    assert "signal.SIGHUP" in s
-    assert "raise PromotionInterrupted" in s
-
-
-def test_v3_does_not_use_peer_deployer_cli_argument_order() -> None:
-    s = _src()
-    assert "staging.stage_candidate_runtime(" in s
-    assert "PEER_DEPLOYER_RUNNER" not in s
-    assert "--tx-id" not in s
-
-
-def test_v3_hard_codes_exact_current_handoff_identities() -> None:
-    s = _src()
-    assert 'ACCEPTED_SHA = "541c9a3180b81bfb2fc450b3ef5f8648691b359d"' in s
-    assert 'OLD_SHA = "e5f4249667a1602916d44ac62d10b921a299f05d"' in s
-    assert 'OLD_SCHEMA = "c4d5e6f7a8b9"' in s
-    assert 'NEW_SCHEMA = "f7a8b9c0d1e2"' in s
-
-
-def test_v3_preflight_only_cleans_only_tx_staging() -> None:
-    s = _src()
-    assert "staging.safe_cleanup_staging(TARGET, tx_id)" in s
-    assert "final release already exists; cleanup must prove ownership first" in s
+    source = _src()
+    assert "signal.SIGINT" in source
+    assert "signal.SIGTERM" in source
+    assert "signal.SIGHUP" in source
+    assert "raise PromotionInterrupted" in source

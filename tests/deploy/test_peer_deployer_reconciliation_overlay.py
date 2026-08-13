@@ -62,7 +62,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -77,7 +76,8 @@ def _load_pkg():
         return sys.modules["Peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "Peer_deployer", init,
+        "Peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -274,9 +274,7 @@ def _write_overlay(
     return overlay_path
 
 
-def _make_candidate(
-    target: identity.Instance, sha: str = "a" * 40
-) -> Path:
+def _make_candidate(target: identity.Instance, sha: str = "a" * 40) -> Path:
     candidate = target.deployment_root / "releases" / sha
     candidate.mkdir(parents=True, exist_ok=True)
     (candidate / "PROVENANCE.txt").write_text(
@@ -309,92 +307,124 @@ class TestValidatorClassifications:
     """
 
     def test_committed_tx_does_not_block_via_validator(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
     ) -> None:
         """Committed transaction -> not in flight; preflight ignores it."""
         tx_id = "promotion-20260808T201637Z-60ced7aa"
-        record = _write_record(
-            tx_id, candidate_path="", phase="tx_committed", tx_root=tx_root,
+        _write_record(
+            tx_id,
+            candidate_path="",
+            phase="tx_committed",
+            tx_root=tx_root,
         )
         # No overlay needed. The preflight treats tx_committed as terminal.
         report = preflight.PreflightReport(
             target="O1",
             supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-            report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is True
-        assert any(
-            c.name == "no_other_transaction" and c.ok for c in report.checks
-        )
+        assert any(c.name == "common.no_other_transaction" and c.ok for c in report.checks)
 
     def test_rolled_back_tx_does_not_block(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7ab"
         _write_record(
-            tx_id, candidate_path="", phase="rolled_back", tx_root=tx_root,
+            tx_id,
+            candidate_path="",
+            phase="rolled_back",
+            tx_root=tx_root,
         )
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-            report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is True
 
     def test_failure_tx_does_not_block(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7ac"
         _write_record(
-            tx_id, candidate_path="", phase="failure", tx_root=tx_root,
+            tx_id,
+            candidate_path="",
+            phase="failure",
+            tx_root=tx_root,
         )
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-            report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is True
 
     def test_ordinary_non_terminal_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7ad"
         _write_record(
-            tx_id, candidate_path="/some/non/quarantined/path",
-            phase="candidate_staging", tx_root=tx_root,
+            tx_id,
+            candidate_path="/some/non/quarantined/path",
+            phase="candidate_staging",
+            tx_root=tx_root,
         )
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-            report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is False
-        failed = next(c for c in report.checks if c.name == "no_other_transaction")
+        failed = next(c for c in report.checks if c.name == "common.no_other_transaction")
         assert tx_id in failed.detail
         assert "/candidate_staging" in failed.detail
 
@@ -403,13 +433,18 @@ class TestOverlayValidatesHistorical:
     """The validator's classification is exhaustive and fail-closed."""
 
     def test_historical_candidate_staging_without_reconciliation_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7ae"
         _write_record(
-            tx_id, candidate_path="/some/half/staged/path",
-            phase="candidate_staging", tx_root=tx_root,
+            tx_id,
+            candidate_path="/some/half/staged/path",
+            phase="candidate_staging",
+            tx_root=tx_root,
         )
         validation = reconcile.validate_completed_reconciliation(
             tx_id,
@@ -423,13 +458,16 @@ class TestOverlayValidatesHistorical:
         assert not validation.is_invalid
 
     def test_valid_completed_reconciliation_unblocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7af"
         candidate = _make_candidate(fake_target)
-        record = _write_record(
+        _write_record(
             tx_id,
             candidate_path=str(candidate),
             phase="candidate_staging",
@@ -446,7 +484,8 @@ class TestOverlayValidatesHistorical:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -471,15 +510,21 @@ class TestOverlayValidatesHistorical:
 
 class TestHistoricalTransactionPreserved:
     def test_historical_json_byte_identical_after_validation(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b0"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         record_path = transaction.transaction_path(tx_root, tx_id)
         original_bytes = record_path.read_bytes()
@@ -490,15 +535,19 @@ class TestHistoricalTransactionPreserved:
         moved = qdir / candidate.name
         os.rename(candidate, moved)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=original_sha,
             quarantine_path=str(moved),
             candidate_path=str(moved),
         )
         reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         # Byte-identical.
         assert _sha256(record_path) == original_sha
@@ -512,15 +561,21 @@ class TestHistoricalTransactionPreserved:
 
 class TestBindingMismatches:
     def test_historical_sha_mismatch_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b1"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -530,15 +585,19 @@ class TestBindingMismatches:
         record_path = transaction.transaction_path(tx_root, tx_id)
         # Overlay claims a wrong SHA.
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256="0" * 64,
             quarantine_path=str(moved),
             candidate_path=str(moved),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
         assert any(
@@ -547,15 +606,21 @@ class TestBindingMismatches:
         )
 
     def test_tx_id_mismatch_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b2"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -565,7 +630,8 @@ class TestBindingMismatches:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -573,22 +639,32 @@ class TestBindingMismatches:
             tx_id_field="promotion-99999999T999999Z-deadbeef",
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_target_mismatch_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b3"
         candidate = _make_candidate(fake_target)
         # Historical target=O2 (mismatched).
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target="O2", supervisor="O1",
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target="O2",
+            supervisor="O1",
             target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
@@ -599,29 +675,40 @@ class TestBindingMismatches:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
             candidate_path=str(moved),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
         assert any("target" in r for r in validation.reasons)
 
     def test_supervisor_mismatch_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b4"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target="O1", supervisor="O1",
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target="O1",
+            supervisor="O1",
             target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
@@ -632,7 +719,8 @@ class TestBindingMismatches:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -640,14 +728,20 @@ class TestBindingMismatches:
         )
         # target==supervisor must refuse.
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_target_equals_supervisor_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Historical transaction with target==supervisor must refuse,
@@ -656,8 +750,12 @@ class TestBindingMismatches:
         tx_id = "promotion-20260808T201637Z-60ced7b5"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target="O1", supervisor="O1",
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target="O1",
+            supervisor="O1",
             target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
@@ -668,15 +766,19 @@ class TestBindingMismatches:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
             candidate_path=str(moved),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
@@ -688,15 +790,21 @@ class TestBindingMismatches:
 
 class TestOverlayStateBlocks:
     def test_safe_false_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b6"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -706,7 +814,8 @@ class TestOverlayStateBlocks:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -714,21 +823,30 @@ class TestOverlayStateBlocks:
             safe=False,
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_wrong_classification_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b7"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -739,7 +857,8 @@ class TestOverlayStateBlocks:
         historical_sha = _sha256(record_path)
         for bad in ("pending", "refused_unsafe", "failed", "stuck", "completed", ""):
             _write_overlay(
-                quarantine_root, tx_id,
+                quarantine_root,
+                tx_id,
                 historical_tx_path=str(record_path),
                 historical_tx_sha256=historical_sha,
                 quarantine_path=str(moved),
@@ -747,7 +866,9 @@ class TestOverlayStateBlocks:
                 classification=bad,
             )
             validation = reconcile.validate_completed_reconciliation(
-                tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
+                tx_id,
+                tx_root=tx_root,
+                quarantine_root=quarantine_root,
                 allowed_target=fake_target,
                 allowed_supervisor=fake_supervisor,
             )
@@ -756,15 +877,21 @@ class TestOverlayStateBlocks:
             )
 
     def test_non_success_disposition_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b8"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -775,7 +902,8 @@ class TestOverlayStateBlocks:
         historical_sha = _sha256(record_path)
         for bad in ("pending", "refused_*", "failed", "no_candidate"):
             _write_overlay(
-                quarantine_root, tx_id,
+                quarantine_root,
+                tx_id,
                 historical_tx_path=str(record_path),
                 historical_tx_sha256=historical_sha,
                 quarantine_path=str(moved),
@@ -783,7 +911,9 @@ class TestOverlayStateBlocks:
                 disposition=bad,
             )
             validation = reconcile.validate_completed_reconciliation(
-                tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
+                tx_id,
+                tx_root=tx_root,
+                quarantine_root=quarantine_root,
                 allowed_target=fake_target,
                 allowed_supervisor=fake_supervisor,
             )
@@ -799,15 +929,21 @@ class TestOverlayStateBlocks:
 
 class TestQuarantinePathVerification:
     def test_missing_quarantine_path_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7b9"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
@@ -816,28 +952,38 @@ class TestQuarantinePathVerification:
         qdir = quarantine_root / tx_id
         qdir.mkdir(parents=True, exist_ok=True)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(tmp_path / "nonexistent_quarantine"),
             candidate_path=str(tmp_path / "nonexistent_quarantine"),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_quarantine_outside_approved_root_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7ba"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
@@ -846,29 +992,39 @@ class TestQuarantinePathVerification:
         outside.mkdir(parents=True, exist_ok=True)
         quarantine_root.mkdir(parents=True, exist_ok=True)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(outside),
             candidate_path=str(outside),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_symlink_escape_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """A symlink inside the quarantine root that escapes must block."""
         tx_id = "promotion-20260808T201637Z-60ced7bb"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
@@ -885,28 +1041,38 @@ class TestQuarantinePathVerification:
         link = qdir / "escaped-link"
         link.symlink_to(escape)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(link),
             candidate_path=str(link),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_original_candidate_still_present_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7bc"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         # Move the candidate to a "quarantine" location too, but
         # leave the original in place. Validator must reject because
@@ -923,7 +1089,8 @@ class TestQuarantinePathVerification:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -932,16 +1099,23 @@ class TestQuarantinePathVerification:
         # candidate still exists at original location.
         assert candidate.exists()
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
-        assert any("original_candidate" in r or "candidate_absent" in r
-                   for r in validation.reasons)
+        assert any(
+            "original_candidate" in r or "candidate_absent" in r for r in validation.reasons
+        )
 
     def test_o1_venv_resolving_to_quarantine_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """If the O1 venv symlink resolves INTO the quarantine path,
@@ -949,8 +1123,11 @@ class TestQuarantinePathVerification:
         tx_id = "promotion-20260808T201637Z-60ced7bd"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -965,15 +1142,19 @@ class TestQuarantinePathVerification:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
             candidate_path=str(moved),
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
         # Restore O1 venv for downstream tests.
@@ -981,8 +1162,11 @@ class TestQuarantinePathVerification:
         venv.mkdir(parents=True, exist_ok=True)
 
     def test_o2_overlap_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """If the candidate WAS under O2's deployment root, the
@@ -999,15 +1183,19 @@ class TestQuarantinePathVerification:
         o2_overlap = fake_supervisor.deployment_root / "releases" / ("b" * 40)
         o2_overlap.mkdir(parents=True, exist_ok=True)
         _write_record(
-            tx_id, candidate_path=str(o2_overlap), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="b" * 40,
+            tx_id,
+            candidate_path=str(o2_overlap),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="b" * 40,
         )
-        with pytest.raises(
-            reconcile.ReconciliationError, match="O2"
-        ):
+        with pytest.raises(reconcile.ReconciliationError, match="O2"):
             reconcile.reconcile_stale_transaction(
-                tx_id, quarantine_root=quarantine_root, tx_root=tx_root,
-                allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+                tx_id,
+                quarantine_root=quarantine_root,
+                tx_root=tx_root,
+                allowed_target=fake_target,
+                allowed_supervisor=fake_supervisor,
             )
         # O2 release STILL exists.
         assert o2_overlap.exists()
@@ -1020,15 +1208,21 @@ class TestQuarantinePathVerification:
 
 class TestOverlayIntegrity:
     def test_malformed_json_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7bf"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1038,21 +1232,30 @@ class TestOverlayIntegrity:
         # Write garbage.
         (qdir / "reconciliation.json").write_text("{this is : not, valid JSON")
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
     def test_partial_truncated_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7c0"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1068,20 +1271,24 @@ class TestOverlayIntegrity:
             "historical_tx_path": str(record_path),
             # intentionally no other fields
         }
-        (qdir / "reconciliation.json").write_text(
-            json.dumps(overlay, indent=2, sort_keys=True)
-        )
+        (qdir / "reconciliation.json").write_text(json.dumps(overlay, indent=2, sort_keys=True))
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
 
 
 class TestHistoricalMutationBlocks:
     def test_historical_transaction_changed_after_reconciliation_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """If the historical transaction.json is modified after the
@@ -1089,8 +1296,11 @@ class TestHistoricalMutationBlocks:
         tx_id = "promotion-20260808T201637Z-60ced7c1"
         candidate = _make_candidate(fake_target)
         record = _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1100,7 +1310,8 @@ class TestHistoricalMutationBlocks:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -1113,15 +1324,21 @@ class TestHistoricalMutationBlocks:
         record.phase = "preflight"
         transaction.save(record, root=tx_root)
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
         assert any("sha256" in r for r in validation.reasons)
 
     def test_mutation_boundary_crossed_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """A transaction that crossed the mutation boundary must NOT
@@ -1130,11 +1347,14 @@ class TestHistoricalMutationBlocks:
         tx_id = "promotion-20260808T201637Z-60ced7c2"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
             tx_root=tx_root,
             target_artifact_sha="a" * 40,
             mutation_boundary_crossed=True,
-            db_backup_path="/some/backup", db_backup_integrity="ok",
+            db_backup_path="/some/backup",
+            db_backup_integrity="ok",
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1144,7 +1364,8 @@ class TestHistoricalMutationBlocks:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -1152,8 +1373,11 @@ class TestHistoricalMutationBlocks:
             historical_tx_mutation_boundary_crossed=True,
         )
         validation = reconcile.validate_completed_reconciliation(
-            tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            tx_root=tx_root,
+            quarantine_root=quarantine_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert validation.is_invalid
         assert any("mutation" in r for r in validation.reasons)
@@ -1166,15 +1390,21 @@ class TestHistoricalMutationBlocks:
 
 class TestPreflightIntegration:
     def test_valid_unchanged_transaction_and_reconciliation_makes_preflight_pass(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7c3"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1184,30 +1414,79 @@ class TestPreflightIntegration:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
             candidate_path=str(moved),
         )
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-            report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is True
-        detail = next(c.detail for c in report.checks if c.name == "no_other_transaction")
+        detail = next(c.detail for c in report.checks if c.name == "common.no_other_transaction")
         assert "validly reconciled" in detail
         assert tx_id in detail
 
+    def test_valid_historical_overlay_is_direction_independent(
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
+        tmp_path: Path,
+    ) -> None:
+        tx_id = "promotion-20260808T201637Z-60ced7ca"
+        candidate = _make_candidate(fake_target)
+        _write_record(
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
+        )
+        qdir = quarantine_root / tx_id
+        qdir.mkdir(parents=True)
+        moved = qdir / candidate.name
+        os.rename(candidate, moved)
+        record_path = transaction.transaction_path(tx_root, tx_id)
+        _write_overlay(
+            quarantine_root,
+            tx_id,
+            historical_tx_path=str(record_path),
+            historical_tx_sha256=_sha256(record_path),
+            quarantine_path=str(moved),
+            candidate_path=str(moved),
+        )
+        report = preflight.PreflightReport(target="O2", supervisor="O1")
+
+        ok = preflight.check_no_other_transaction(
+            report,
+            target=fake_supervisor,
+            supervisor=fake_target,
+            quarantine_root=quarantine_root,
+        )
+
+        assert ok is True
+        assert "validly reconciled" in report.checks[-1].detail
+
     def test_reconciled_stale_plus_genuinely_active_still_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """One validly-reconciled historical tx must NOT mask a
@@ -1216,8 +1495,11 @@ class TestPreflightIntegration:
         ok_id = "promotion-20260808T201637Z-60ced7c4"
         c1 = _make_candidate(fake_target)
         _write_record(
-            ok_id, candidate_path=str(c1), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            ok_id,
+            candidate_path=str(c1),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / ok_id
@@ -1227,7 +1509,8 @@ class TestPreflightIntegration:
         rec1 = transaction.transaction_path(tx_root, ok_id)
         sha1 = _sha256(rec1)
         _write_overlay(
-            quarantine_root, ok_id,
+            quarantine_root,
+            ok_id,
             historical_tx_path=str(rec1),
             historical_tx_sha256=sha1,
             quarantine_path=str(moved1),
@@ -1237,21 +1520,27 @@ class TestPreflightIntegration:
         active_id = "promotion-20260808T201637Z-60ced7c5"
         c2 = _make_candidate(fake_target, sha="c" * 40)
         _write_record(
-            active_id, candidate_path=str(c2), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="c" * 40,
+            active_id,
+            candidate_path=str(c2),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="c" * 40,
         )
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-                report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is False
-        failed = next(c for c in report.checks if c.name == "no_other_transaction")
+        failed = next(c for c in report.checks if c.name == "common.no_other_transaction")
         assert active_id in failed.detail
         # The reconciled tx must still appear as a valid reconciliation
         # in the detail (or at least not be cited as in-flight).
@@ -1265,34 +1554,45 @@ class TestPreflightIntegration:
 
 class TestCrashConsistencyAndIdempotency:
     def test_crash_before_move_remains_blocking(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """A crash before any filesystem mutation leaves no overlay,
         so the preflight must continue to block the transaction."""
         tx_id = "promotion-20260808T201637Z-60ced7c6"
         _write_record(
-            tx_id, candidate_path="/nonexistent/candidate",
-            phase="candidate_staging", tx_root=tx_root,
+            tx_id,
+            candidate_path="/nonexistent/candidate",
+            phase="candidate_staging",
+            tx_root=tx_root,
             target_artifact_sha="a" * 40,
         )
         # No overlay written, no candidate to move.
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-                report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is False
 
     def test_crash_after_move_before_audit_remains_blocking(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """A crash between the candidate move and the audit write
@@ -1300,8 +1600,11 @@ class TestCrashConsistencyAndIdempotency:
         tx_id = "promotion-20260808T201637Z-60ced7c7"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1310,27 +1613,36 @@ class TestCrashConsistencyAndIdempotency:
         os.rename(candidate, moved)
         # Deliberately no overlay written.
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-                report, target=fake_target, supervisor=fake_supervisor,
+            report,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is False
 
     def test_repeated_reconciliation_is_idempotent(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced7c8"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         # First run.
         report1 = reconcile.reconcile_stale_transaction(
@@ -1371,8 +1683,11 @@ class TestCrashConsistencyAndIdempotency:
 
 class TestServiceAndExecutorRevalidation:
     def test_running_service_references_quarantine_blocks(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """If a live O1/O2 service unit references the quarantine
@@ -1382,8 +1697,11 @@ class TestServiceAndExecutorRevalidation:
         tx_id = "promotion-20260808T201637Z-60ced7c9"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         quarantine_root.mkdir(parents=True, exist_ok=True)
         qdir = quarantine_root / tx_id
@@ -1393,7 +1711,8 @@ class TestServiceAndExecutorRevalidation:
         record_path = transaction.transaction_path(tx_root, tx_id)
         historical_sha = _sha256(record_path)
         _write_overlay(
-            quarantine_root, tx_id,
+            quarantine_root,
+            tx_id,
             historical_tx_path=str(record_path),
             historical_tx_sha256=historical_sha,
             quarantine_path=str(moved),
@@ -1410,8 +1729,11 @@ class TestServiceAndExecutorRevalidation:
         reconcile._service_exe_references_unit_path = _fake
         try:
             validation = reconcile.validate_completed_reconciliation(
-                tx_id, tx_root=tx_root, quarantine_root=quarantine_root,
-                allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+                tx_id,
+                tx_root=tx_root,
+                quarantine_root=quarantine_root,
+                allowed_target=fake_target,
+                allowed_supervisor=fake_supervisor,
             )
         finally:
             reconcile._service_exe_references_unit_path = original
@@ -1445,34 +1767,49 @@ class Test20260808FullReplay:
     """
 
     def test_full_replay(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         tx_id = "promotion-20260808T201637Z-60ced75e"
         candidate = _make_candidate(fake_target)
         _write_record(
-            tx_id, candidate_path=str(candidate), phase="candidate_staging",
-            tx_root=tx_root, target_artifact_sha="a" * 40,
+            tx_id,
+            candidate_path=str(candidate),
+            phase="candidate_staging",
+            tx_root=tx_root,
+            target_artifact_sha="a" * 40,
         )
         record_path = transaction.transaction_path(tx_root, tx_id)
         original_bytes = record_path.read_bytes()
         original_sha = _sha256(record_path)
         # Step 2: preflight fails on no_other_transaction.
         report = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
-        assert preflight.check_no_other_transaction(
-                report, target=fake_target, supervisor=fake_supervisor,
-            quarantine_root=quarantine_root,
-        ) is False
+        assert (
+            preflight.check_no_other_transaction(
+                report,
+                target=fake_target,
+                supervisor=fake_supervisor,
+                quarantine_root=quarantine_root,
+            )
+            is False
+        )
         # Step 3: reconciler.
         reconcile_report = reconcile.reconcile_stale_transaction(
-            tx_id, quarantine_root=quarantine_root, tx_root=tx_root,
-            allowed_target=fake_target, allowed_supervisor=fake_supervisor,
+            tx_id,
+            quarantine_root=quarantine_root,
+            tx_root=tx_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
         )
         assert reconcile_report.safe is True
         assert reconcile_report.classification == "stale_incomplete"
@@ -1489,18 +1826,19 @@ class Test20260808FullReplay:
         assert (quarantine_root / tx_id / "PROVENANCE.txt").exists()
         # Step 5: preflight passes.
         report2 = preflight.PreflightReport(
-            target="O1", supervisor="O2",
-            target_artifact_sha=preflight.ACCEPTED_ARTIFACT_SHA,
-            target_artifact_version=preflight.ACCEPTED_ARTIFACT_VERSION,
+            target="O1",
+            supervisor="O2",
+            target_artifact_sha="a" * 40,
+            target_artifact_version="test-version",
             passed=False,
         )
         ok = preflight.check_no_other_transaction(
-            report2, target=fake_target, supervisor=fake_supervisor,
+            report2,
+            target=fake_target,
+            supervisor=fake_supervisor,
             quarantine_root=quarantine_root,
         )
         assert ok is True
-        detail = next(
-            c.detail for c in report2.checks if c.name == "no_other_transaction"
-        )
+        detail = next(c.detail for c in report2.checks if c.name == "common.no_other_transaction")
         assert "validly reconciled" in detail
         assert tx_id in detail

@@ -66,6 +66,38 @@ O2 = Instance(
 The roots, ports, service units, and host units MUST be distinct.
 The `peer_deployer` library refuses to run if any of these collide.
 
+## Immutable candidate acceptance
+
+Artifact identity is never compiled into active deployer source. Promotion takes
+an explicit immutable acceptance record at:
+
+```text
+/var/lib/omnigent-control-room/accepted-artifacts/<source-sha>/acceptance.json
+```
+
+Schema v1 binds source SHA/package version; exact wheel filenames and hashes;
+the frontend tree hash; immutable release/runtime paths; installed paths and
+versions; successful `uv pip check`; embedded build SHA; isolated temporary-port
+boot, health, `/v1/info` version (and build SHA when exposed), and HTML/assets
+evidence; disk headroom; timestamp;
+and non-secret builder/operator identities. `acceptance_record_sha256` hashes
+canonical JSON with that field omitted. The complete record is exclusive-created
+and never replaced. Validation rechecks immutable resources, runtime identity,
+imports, package locations/versions, `uv pip check`, and boot evidence.
+
+## Deployment modes
+
+Every promotion declares one mode:
+
+* `bootstrap-first-peer` activates the already booted, complete candidate at
+  the target immutable `releases/<sha>` path. The healthy supervisor need not
+  run the candidate yet. Bootstrap never copies the old supervisor closure.
+* `peer-copy` proves the supervisor runs the exact accepted SHA/version and
+  copies that accepted release to the other peer.
+
+Common, bootstrap, and peer-copy preflight checks are distinct and named. No
+mode has a force or skip-check interface.
+
 ## Transaction identity
 
 Every mutable phase of a deployment is preceded by a transaction
@@ -83,20 +115,24 @@ The transaction record is a JSON file at:
 
 The record captures:
 
-  * target and supervisor identity
-  * the accepted artifact SHA, version, and wheel SHA-256 hashes
+  * target/supervisor identity and explicit deployment mode
+  * acceptance-record path and canonical payload SHA-256
+  * artifact SHA/version, frontend tree hash, and exact wheel filenames/hashes
+  * supervisor SHA/version, server/host PIDs, and active-entry timestamps
   * the old runtime path, SHA, and version
   * the new (accepted) runtime path, SHA, and version
   * the DB backup path, SHA-256, and integrity status
   * the old and target DB schema
   * the current phase
-  * the list of resources created by this transaction
+  * resources created and rollback-owned by this transaction
+  * separately, pre-existing referenced resources that rollback must preserve
   * whether the transaction has crossed a mutation boundary
 
-The mutation boundary is the moment the deployment tool first writes
-to a target-owned path. The flag is set ONCE and never cleared. The
-rollback subsystem refuses to operate on any transaction that has not
-crossed the mutation boundary.
+The active-state mutation boundary is the first write that can change the
+active target runtime, DB, metadata, or services. Transaction-owned staging
+may be created before it; a pre-boundary failure may remove only that exact
+owned staging path. The flag is set ONCE and never cleared. Paired rollback
+refuses any transaction that has not crossed the boundary.
 
 ## Preflight gate
 
@@ -109,12 +145,17 @@ preflight that verifies:
   * supervisor service unit is known to systemd
   * supervisor host unit is known to systemd
   * supervisor is healthy (server active, host active, /health OK)
-  * supervisor is running the EXACT accepted artifact (SHA + version)
-  * the accepted artifact exists at the supervisor's release root
+  * `mlflow-storage-guard.timer` is active and its critical latch is absent
+  * the immutable acceptance record and embedded digest are valid
+  * for peer-copy, supervisor runs the exact accepted SHA/version and has it at
+    the supervisor release root
+  * for bootstrap, the accepted candidate is complete at the target immutable
+    release root and is not supervisor-owned
   * the main wheel SHA-256 matches the accepted value
   * the SDK client wheel SHA-256 matches the accepted value
   * the SDK UI wheel SHA-256 matches the accepted value
-  * the artifact's runtime identity matches the accepted SHA + version
+  * runtime identity, installed paths/versions, frontend tree, `uv pip check`,
+    and boot evidence match acceptance
   * the target DB exists and passes integrity check
   * the rollback location is writable
   * disk space is sufficient
@@ -192,10 +233,9 @@ In addition, the rollback subsystem enforces:
 
 ## Privileged host deployer
 
-The O2 runtime is sandboxed with `NoNewPrivs=1`, `CapEff=0`, read-only
-host paths, and no SSH to host. To upgrade the O1 instance, O2 must
-invoke a narrowly scoped host-level deployer that runs OUTSIDE the
-sandbox.
+Service runtimes are sandboxed with `NoNewPrivs=1`, `CapEff=0`, read-only
+host paths, and no SSH to host. A peer-supervised upgrade invokes a narrowly
+scoped host-level deployer that runs OUTSIDE both sandboxes.
 
 The deployer requirements are:
 
@@ -204,32 +244,38 @@ The deployer requirements are:
   * inputs are validated (target, supervisor, exact artifact SHA)
   * deployer cannot target the supervising instance
   * operation logs are durable
-  * O2 can observe progress/result via the transaction record
+  * the supervisor can observe progress/result via the transaction record
   * no arbitrary shell / root command passthrough
   * does not weaken NoNewPrivs
 
 The deployer signature is one of:
 
-  * `peer_deployer promote --target O1 --supervisor O2`
-  * `peer_deployer rollback --tx-id <tx> --target O1 --supervisor O2`
+  * `peer_deployer promote --target O1 --supervisor O2 --mode <mode> --acceptance-record <path> --evidence-dir <path>`
+  * `peer_deployer promote --target O2 --supervisor O1 --mode <mode> --acceptance-record <path> --evidence-dir <path>`
+  * `peer_deployer rollback --tx-id <tx> --target <target> --supervisor <peer>`
+
+The canonical host wrapper accepts the same explicit identities, mode,
+acceptance record, and evidence path. Evidence must live below the root-owned
+`/var/lib/omnigent-control-room/evidence/` tree. There is no force/skip interface.
 
 The deployer REFUSES to run if:
 
   * target == supervisor
-  * supervisor is not verified to be the exact accepted artifact
+  * peer-copy supervisor is not verified as the exact accepted artifact
+  * bootstrap candidate is not the already booted immutable accepted release
   * the preflight fails
   * the exact artifact SHA does not match the expected value
 
 ## Host deployer roles
 
-The host-level deployer is responsible for the following O1 mutations
+The host-level deployer is responsible for the following target mutations
 during a promotion:
 
   1. snapshot the target's current state
-  2. create a verified DB backup
-  3. create a transaction record
-  4. stage the exact accepted artifact
-  5. verify the staged runtime
+  2. create a transaction record
+  3. create a verified DB backup
+  4. reference the accepted bootstrap candidate or stage the peer-copy artifact
+  5. verify the exact candidate runtime and immutable acceptance again
   6. stop the target's services
   7. migrate the target's DB
   8. switch the target's runtime symlink
@@ -242,11 +288,14 @@ during a promotion:
 
 The host-level deployer is NOT responsible for:
 
-  * upgrading the supervisor (O2)
-  * replacing the supervisor's runtime
+  * upgrading or replacing the declared supervisor
   * touching the supervisor's DB
-  * disabling the supervisor's sandbox
-  * granting the O2 runtime broad root privileges
+  * disabling either sandbox
+  * granting either runtime broad root privileges
+
+Before target mutation it records supervisor runtime SHA/version, both
+MainPIDs, and both active-entry monotonic timestamps. It captures the same
+fields after acceptance and rollback; drift prevents commit and is reported.
 
 ## Required regression coverage
 
