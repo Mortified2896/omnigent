@@ -22,6 +22,32 @@ The authoritative safety contract is in
 document overrides any less-specific deployment wording in this
 repository. Read it before any deployment work.
 
+## Control Room trusted root access
+
+O1 and O2 are intentionally trusted administrative agents on the private
+Control Room host. They have unrestricted passwordless root access through
+`sudo -n <command>`. For authorized, in-scope Control Room work, use `sudo -n`
+autonomously whenever root is useful or required. Root required is a capability,
+not a blocker: do not stop, ask the user to SSH into the server, or ask the user
+to run privileged commands manually merely because root is required.
+
+Normal in-scope uses include systemd/service administration; deployment and
+rollback; diagnostics and journals; filesystem ownership and permissions;
+package/runtime installation; Control Room configuration; authorized database
+backup or migration; and recovery of broken O1/O2 states.
+
+Root access does not remove the dual-instance safety invariant:
+
+- Never let an Omnigent instance upgrade itself.
+- O1 upgrades O2; O2 upgrades O1.
+- Target and supervisor must differ.
+- Keep the healthy supervisor available throughout an upgrade or recovery.
+
+For destructive actions outside the requested scope—including deleting user
+data, destroying VMs or storage, removing credentials, disabling recovery or
+rollback, or materially widening external access—obtain explicit user
+authorization first.
+
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
+import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from omnigent.entities import (
@@ -15,6 +20,81 @@ from omnigent.entities import (
     NativeToolData,
 )
 from omnigent.spec import AgentSpec
+
+_logger = logging.getLogger(__name__)
+
+TRUSTED_ROOT_ACCESS_ENV = "OMNIGENT_TRUSTED_ROOT_ACCESS"
+TRUSTED_ROOT_INSTRUCTION = (
+    "TRUSTED ROOT ACCESS\n"
+    "This Control Room instance is authorized for unrestricted passwordless root "
+    "access via `sudo -n <command>`. Use it autonomously for authorized, in-scope "
+    "administration (including services, deployments/recovery, permissions, "
+    "packages/runtime, diagnostics, databases, and Control Room configuration); "
+    "do not ask the user to SSH in or run privileged commands merely because root "
+    "is required. Never self-upgrade: O1 upgrades O2, O2 upgrades O1, and the "
+    "healthy supervisor must remain available. Do not treat required root access "
+    "as a blocker."
+)
+
+
+@dataclass(frozen=True)
+class FrameworkCapabilities:
+    """Framework capabilities proven once for this runtime process."""
+
+    trusted_root_access: bool = False
+
+
+@lru_cache(maxsize=1)
+def framework_capabilities() -> FrameworkCapabilities:
+    """Resolve configured framework capabilities with side-effect-free probes.
+
+    Trusted-root mode is deliberately opt-in. The capability is only advertised
+    after a bounded, noninteractive sudo probe succeeds; the cached result makes
+    this a process/runner lifecycle check rather than per-turn work.
+    """
+    configured = os.environ.get(TRUSTED_ROOT_ACCESS_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not configured:
+        return FrameworkCapabilities()
+
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "true"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _logger.error(
+            "%s is enabled but the noninteractive root capability probe failed: %s",
+            TRUSTED_ROOT_ACCESS_ENV,
+            exc,
+        )
+        return FrameworkCapabilities()
+
+    if result.returncode != 0:
+        _logger.error(
+            "%s is enabled but `sudo -n true` exited with status %d; "
+            "trusted-root instructions will not be injected",
+            TRUSTED_ROOT_ACCESS_ENV,
+            result.returncode,
+        )
+        return FrameworkCapabilities()
+    return FrameworkCapabilities(trusted_root_access=True)
+
+
+def canonical_framework_instructions() -> tuple[str, ...]:
+    """Return framework-owned instructions enabled for this runtime."""
+    capabilities = framework_capabilities()
+    if capabilities.trusted_root_access:
+        return (TRUSTED_ROOT_INSTRUCTION,)
+    return ()
 
 
 def append_framework_instructions(
@@ -45,7 +125,7 @@ def build_instructions(
     per_request_instructions: str | None,
     tool_schemas: list[dict[str, Any]],
     *,
-    framework_instructions: Sequence[str] = (),
+    framework_instructions: Sequence[str] | None = None,
 ) -> str:
     """
     Build the system instructions string from the agent's
@@ -63,6 +143,7 @@ def build_instructions(
         not included in the instructions body).
     :param framework_instructions: Framework-owned additive instructions
         for this turn, appended after user-authored agent/request instructions.
+        ``None`` selects the canonical runtime-owned instruction set.
     :returns: The assembled instructions string.
     """
     parts: list[str] = []
@@ -87,8 +168,13 @@ def build_instructions(
         parts.append("\n".join(skill_lines))
 
     base_instructions = "\n\n".join(parts) if parts else "You are a helpful assistant."
+    effective_framework_instructions = (
+        canonical_framework_instructions()
+        if framework_instructions is None
+        else framework_instructions
+    )
     return (
-        append_framework_instructions(base_instructions, framework_instructions)
+        append_framework_instructions(base_instructions, effective_framework_instructions)
         or base_instructions
     )
 

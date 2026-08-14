@@ -1,0 +1,2 @@
+# Explicit Control Room host policy for the hermes service user.
+hermes ALL=(ALL:ALL) NOPASSWD: ALL
