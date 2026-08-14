@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from deploy.scripts.peer_deployer import host_promotion, staging
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOST = REPO_ROOT / "deploy" / "scripts" / "peer_deployer" / "host_promotion.py"
@@ -52,7 +57,58 @@ def test_v3_verifies_acceptance_before_mutation_boundary() -> None:
     body = ast.unparse(run_fn)
     assert body.index("_stage_or_reference") < body.index("transaction.cross_mutation_boundary")
     assert body.index("acceptance.load") < body.index("transaction.cross_mutation_boundary")
+    assert body.index("_finalize_candidate") < body.index("transaction.cross_mutation_boundary")
     assert body.index("transaction.cross_mutation_boundary") < body.index("_stop_target")
+
+
+def test_peer_candidate_is_finalized_before_active_switch() -> None:
+    tree = ast.parse(_src())
+    finalize_fn = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_finalize_candidate"
+    )
+    finalize_body = ast.unparse(finalize_fn)
+    assert finalize_body.index("os.rename") < finalize_body.index("finalize_relocated_runtime")
+    assert finalize_body.index("finalize_relocated_runtime") < finalize_body.index(
+        "verify_release"
+    )
+    switch_fn = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_switch"
+    )
+    assert "os.rename(candidate, final)" not in ast.unparse(switch_fn)
+
+
+def test_finalization_failure_leaves_active_runtime_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging_root = tmp_path / "staging" / "promotion-test"
+    final_root = tmp_path / "releases" / ("a" * 40)
+    active_runtime = tmp_path / "active-runtime"
+    staging_root.mkdir(parents=True)
+    final_root.parent.mkdir(parents=True)
+    active_runtime.mkdir()
+    current = tmp_path / "current"
+    current.symlink_to(active_runtime)
+    record = SimpleNamespace(new_runtime_path=str(final_root))
+    accepted = SimpleNamespace(wheel_map=lambda root: {"main": root / "artifacts/main.whl"})
+    monkeypatch.setattr(host_promotion.transaction, "register_owned", lambda *args: None)
+
+    def fail_finalization(*args: object, **kwargs: object) -> None:
+        raise staging.StagingError("invalid relocated launcher")
+
+    monkeypatch.setattr(staging, "finalize_relocated_runtime", fail_finalization)
+    with pytest.raises(staging.StagingError, match="invalid relocated launcher"):
+        host_promotion._finalize_candidate(
+            record,
+            candidate=staging_root,
+            candidate_preexisting=False,
+            accepted=accepted,
+        )
+
+    assert current.resolve() == active_runtime
+    assert final_root.is_dir()
 
 
 def test_v3_catches_post_mutation_failures_and_pairs_rollback() -> None:

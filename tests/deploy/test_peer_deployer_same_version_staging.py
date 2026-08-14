@@ -57,7 +57,7 @@ def _write_test_wheel(
         files[f"{module}/cli.py"] = b"def main():\n    print('synthetic omnigent help')\n"
         if include_omnigent_entry_point:
             files[f"{dist_info}/entry_points.txt"] = (
-                b"[console_scripts]\nomnigent = omnigent.cli:main\n"
+                b"[console_scripts]\nomnigent = omnigent.cli:main\nomni = omnigent.cli:main\n"
             )
     record_lines = [
         f"{name},sha256={_record_hash(payload)},{len(payload)}" for name, payload in files.items()
@@ -194,3 +194,60 @@ def test_missing_candidate_console_script_fails_staging_closed(tmp_path: Path) -
         )
 
     assert not target_release.exists()
+
+
+def test_relocated_candidate_launchers_are_rebound_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real pip launcher is broken by rename, then rebound at the final path."""
+    supervisor, supervisor_release, wheels = _make_installed_supervisor(tmp_path)
+    staging_root = tmp_path / "target" / "staging" / "promotion-relocation-test"
+    final_root = tmp_path / "target" / "releases" / RUNTIME_SHA
+    staging.stage_candidate_runtime(
+        staging_root,
+        supervisor,
+        wheels,
+        supervisor_release_root=supervisor_release,
+    )
+    staged_python = staging_root / "venv" / "bin" / "python"
+    staged_launcher = staging_root / "venv" / "bin" / "omnigent"
+    assert str(staged_python).encode() in staged_launcher.read_bytes()[:4096]
+
+    final_root.parent.mkdir(parents=True)
+    os.rename(staging_root, final_root)
+    final_launcher = final_root / "venv" / "bin" / "omnigent"
+    with pytest.raises(FileNotFoundError):
+        subprocess.run([str(final_launcher), "--help"], check=False)
+
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def record_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(staging.subprocess, "run", record_run)
+    staging.finalize_relocated_runtime(
+        final_root,
+        final_root / "artifacts" / wheels["main"].name,
+        staging_root=staging_root,
+    )
+
+    install = next(argv for argv in commands if "install" in argv and "pip" in argv)
+    assert "--force-reinstall" in install
+    assert "--no-deps" in install
+    assert "--no-index" in install
+    assert [argument for argument in install if argument.endswith(".whl")] == [
+        str(final_root / "artifacts" / wheels["main"].name)
+    ]
+
+    final_python = final_root / "venv" / "bin" / "python"
+    for name in ("omnigent", "omni"):
+        launcher = final_root / "venv" / "bin" / name
+        payload = launcher.read_bytes()[:4096]
+        assert str(final_python).encode() in payload
+        assert str(staging_root).encode() not in payload
+        assert subprocess.run([str(launcher), "--help"], check=False).returncode == 0
+    identity_blob = identity.runtime_identity(final_python)
+    assert identity_blob == {"commit_sha": RUNTIME_SHA, "version": VERSION}
