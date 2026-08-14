@@ -22,6 +22,13 @@ The authoritative safety contract is in
 document overrides any less-specific deployment wording in this
 repository. Read it before any deployment work.
 
+## Control Room trusted root
+
+O1 and O2 are intentionally root-capable administrative agents. For authorized,
+in-scope work, use `sudo -n` autonomously; do not ask the user to run commands
+merely because root is required. The no-self-upgrade rule remains mandatory:
+O1 upgrades O2, O2 upgrades O1, and the healthy peer stays available.
+
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or

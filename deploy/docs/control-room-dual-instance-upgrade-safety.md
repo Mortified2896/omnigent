@@ -231,11 +231,24 @@ In addition, the rollback subsystem enforces:
     dirs, transaction record) after rollback
   * the rollback runs at most once per failed transaction
 
-## Privileged host deployer
+## Trusted administrative agents and privileged host deployer
 
-Service runtimes are sandboxed with `NoNewPrivs=1`, `CapEff=0`, read-only
-host paths, and no SSH to host. A peer-supervised upgrade invokes a narrowly
-scoped host-level deployer that runs OUTSIDE both sandboxes.
+The O1 and O2 agent hosts are intentionally authorized for unrestricted,
+passwordless root through `sudo -n`. Agents should use it autonomously for
+authorized Control Room administration rather than asking the user to SSH in
+or run privileged commands. Root access does not relax the hard invariant:
+an agent must never upgrade its own instance, and the healthy peer must remain
+available as supervisor.
+
+Set `OMNIGENT_TRUSTED_ROOT_ACCESS=true` in both O1 and O2 host-service
+environments. At runtime Omnigent performs a bounded `sudo -n true` probe once
+per process and only adds the trusted-root framework instruction when both the
+flag and capability are present. A configured-but-failing probe is reported as
+a capability mismatch and does not advertise root to the model. Generic
+deployments remain unaffected because the flag defaults off.
+
+A peer-supervised upgrade continues to use the narrowly scoped host-level
+deployer and its explicit target/supervisor validation.
 
 The deployer requirements are:
 
@@ -245,8 +258,7 @@ The deployer requirements are:
   * deployer cannot target the supervising instance
   * operation logs are durable
   * the supervisor can observe progress/result via the transaction record
-  * no arbitrary shell / root command passthrough
-  * does not weaken NoNewPrivs
+  * no arbitrary shell / root command passthrough through the deployer interface
 
 The deployer signature is one of:
 
@@ -290,8 +302,8 @@ The host-level deployer is NOT responsible for:
 
   * upgrading or replacing the declared supervisor
   * touching the supervisor's DB
-  * disabling either sandbox
-  * granting either runtime broad root privileges
+  * granting agent root privileges (that is host configuration, independently
+    gated by the runtime capability probe)
 
 Before target mutation it records supervisor runtime SHA/version, both
 MainPIDs, and both active-entry monotonic timestamps. It captures the same

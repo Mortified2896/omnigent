@@ -123,6 +123,7 @@ from omnigent.runner.transports.ws_tunnel.limits import (
     TUNNEL_KEEPALIVE_PING_INTERVAL_S,
     TUNNEL_KEEPALIVE_PING_TIMEOUT_S,
 )
+from omnigent.runtime.prompt import TRUSTED_ROOT_ACCESS_ENV
 from omnigent.tls import client_ssl_context
 from omnigent.version import VERSION
 
@@ -365,6 +366,9 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         "OMNIGENT_DATA_DIR",
         # Low-cardinality deployment identity used by runner/harness traces.
         "OMNIGENT_INSTANCE_ID",
+        # Non-secret Control Room opt-in. The runner performs its own bounded
+        # sudo probe before advertising the capability to any model.
+        TRUSTED_ROOT_ACCESS_ENV,
         # Filesystem selector for Codex CLI config and direct-login state.
         "CODEX_HOME",
         # Auth provider selection. The env-unset default was flipped

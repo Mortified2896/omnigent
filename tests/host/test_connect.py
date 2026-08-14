@@ -62,6 +62,7 @@ from omnigent.runner.identity import (
     RUNNER_WORKSPACE_ENV_VAR,
     token_bound_runner_id,
 )
+from omnigent.runtime.prompt import TRUSTED_ROOT_ACCESS_ENV
 
 pytestmark = pytest.mark.asyncio
 
@@ -2269,6 +2270,7 @@ def test_build_runner_env_allowlists_host_env_and_strips_secrets() -> None:
         "OMNIGENT_LOG_LEVEL": "DEBUG",
         "OMNIGENT_LOG_TO_STDERR": "1",
         "OMNIGENT_LOG_TTY_FD": "9",
+        TRUSTED_ROOT_ACCESS_ENV: "true",
     }
 
     env = _build_runner_env(
@@ -2328,6 +2330,8 @@ def test_build_runner_env_allowlists_host_env_and_strips_secrets() -> None:
     assert env["OMNIGENT_LOG_LEVEL"] == "DEBUG"
     assert env["OMNIGENT_LOG_TO_STDERR"] == "1"
     assert env["OMNIGENT_LOG_TTY_FD"] == "9"
+    # The non-secret opt-in reaches the runner, which independently probes sudo.
+    assert env[TRUSTED_ROOT_ACCESS_ENV] == "true"
     # Non-harness secrets are stripped — the point of the allowlist.
     assert "DATABRICKS_TOKEN" not in env
     assert "AWS_SECRET_ACCESS_KEY" not in env
