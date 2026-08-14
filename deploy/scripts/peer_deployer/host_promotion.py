@@ -453,13 +453,8 @@ def _switch(
         if target_venv.resolve() != old:
             raise PromotionError("target venv changed after preflight")
         target_venv.unlink()
-    if not candidate_preexisting:
-        if final.exists() or final.is_symlink():
-            raise PromotionError("final release appeared after staging")
-        transaction.register_owned(record, str(final))
-        os.rename(candidate, final)
-    elif candidate != final:
-        raise PromotionError("pre-existing candidate is not the target final release")
+    if candidate != final:
+        raise PromotionError("candidate was not finalized at the target release path")
     _atomic_symlink(target_venv, candidate_venv, record.tx_id)
     if target.name == "O1":
         current_target = candidate_venv
@@ -477,6 +472,35 @@ def _switch(
     if provenance.is_file():
         shutil.copy2(provenance, target.deployment_root / "PROVENANCE.txt")
     (target.deployment_root / "DEPLOYED_SHA").write_text(accepted.source_sha + "\n")
+    return final
+
+
+def _finalize_candidate(
+    record: transaction.TransactionRecord,
+    *,
+    candidate: Path,
+    candidate_preexisting: bool,
+    accepted: CandidateAcceptance,
+) -> Path:
+    """Relocate and verify a transaction-owned peer candidate before activation."""
+    final = Path(record.new_runtime_path)
+    if candidate_preexisting:
+        if candidate != final:
+            raise PromotionError("pre-existing candidate is not the target final release")
+        return final
+    if final.exists() or final.is_symlink():
+        raise PromotionError("final release appeared after staging")
+    transaction.register_owned(record, str(final))
+    os.rename(candidate, final)
+    wheels = accepted.wheel_map(final)
+    staging.finalize_relocated_runtime(
+        final,
+        wheels["main"],
+        staging_root=candidate,
+    )
+    failures = acceptance.verify_release(accepted, final, enforce_bound_root=False)
+    if failures:
+        raise PromotionError("finalized candidate mismatch: " + "; ".join(failures))
     return final
 
 
@@ -874,6 +898,12 @@ def run(
         )
         if failures:
             raise PromotionError("candidate drift before mutation: " + "; ".join(failures))
+        candidate = _finalize_candidate(
+            record,
+            candidate=candidate,
+            candidate_preexisting=preexisting,
+            accepted=accepted,
+        )
         guard_at_boundary = storage_guard_probe()
         if not guard_at_boundary.active or guard_at_boundary.latched:
             raise PromotionError(
@@ -892,7 +922,7 @@ def run(
             record,
             target=target,
             candidate=candidate,
-            candidate_preexisting=preexisting,
+            candidate_preexisting=True,
             layout=layout,
             accepted=accepted,
         )
@@ -924,10 +954,11 @@ def run(
         reason = f"{type(exc).__name__}: {exc}"
         if not crossed:
             transaction.fail_record(record, reason)
+            final_candidate = Path(record.new_runtime_path)
+            if transaction.is_owned(record, str(final_candidate)) and final_candidate.is_dir():
+                shutil.rmtree(final_candidate)
             if candidate is not None and transaction.is_owned(record, str(candidate)):
-                if candidate == Path(record.new_runtime_path) and candidate.is_dir():
-                    shutil.rmtree(candidate)
-                else:
+                if candidate != final_candidate:
                     staging.safe_cleanup_staging(target, tx_id)
             result = {
                 "verdict": "STOP — PRE-MUTATION FAILURE; ACTIVE TARGET UNTOUCHED",

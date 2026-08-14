@@ -486,28 +486,50 @@ def _install_wheels_no_deps(
             )
 
 
-def verify_omnigent_console_entry_point(candidate_python: Path) -> None:
-    """Require a working ``omnigent`` launcher bound to the candidate venv."""
-    entry_point = candidate_python.parent / "omnigent"
+def verify_omnigent_console_entry_points(
+    candidate_python: Path,
+    *,
+    forbidden_path: Path | None = None,
+) -> None:
+    """Require both Omnigent launchers to be bound to the candidate venv."""
+    for name in ("omnigent", "omni"):
+        _verify_omnigent_console_entry_point(
+            candidate_python,
+            name=name,
+            forbidden_path=forbidden_path,
+        )
+
+
+def _verify_omnigent_console_entry_point(
+    candidate_python: Path,
+    *,
+    name: str,
+    forbidden_path: Path | None,
+) -> None:
+    entry_point = candidate_python.parent / name
     try:
         metadata = entry_point.lstat()
     except OSError as exc:
-        raise StagingError(f"omnigent console entry point missing: {entry_point}") from exc
+        raise StagingError(f"{name} console entry point missing: {entry_point}") from exc
     if not stat.S_ISREG(metadata.st_mode) or entry_point.is_symlink():
         raise StagingError(
-            f"omnigent console entry point is not a regular non-symlink file: {entry_point}"
+            f"{name} console entry point is not a regular non-symlink file: {entry_point}"
         )
     if not os.access(entry_point, os.X_OK):
-        raise StagingError(f"omnigent console entry point is not executable: {entry_point}")
+        raise StagingError(f"{name} console entry point is not executable: {entry_point}")
     try:
         launcher = entry_point.read_bytes()[:4096]
     except OSError as exc:
-        raise StagingError(f"cannot read omnigent console entry point: {entry_point}") from exc
+        raise StagingError(f"cannot read {name} console entry point: {entry_point}") from exc
     expected_interpreter = str(candidate_python.absolute()).encode()
     if expected_interpreter not in launcher:
         raise StagingError(
-            "omnigent console entry point is not bound to candidate interpreter "
+            f"{name} console entry point is not bound to candidate interpreter "
             f"{candidate_python.absolute()}: {entry_point}"
+        )
+    if forbidden_path is not None and str(forbidden_path.absolute()).encode() in launcher:
+        raise StagingError(
+            f"{name} console entry point retains forbidden path {forbidden_path.absolute()}"
         )
     environment = {
         "PATH": (
@@ -525,7 +547,7 @@ def verify_omnigent_console_entry_point(candidate_python: Path) -> None:
             (
                 "import json, importlib.metadata as md; "
                 "print(json.dumps([ep.value for ep in md.distribution('omnigent').entry_points "
-                "if ep.group == 'console_scripts' and ep.name == 'omnigent']))"
+                f"if ep.group == 'console_scripts' and ep.name == {name!r}]))"
             ),
         ],
         capture_output=True,
@@ -540,7 +562,7 @@ def verify_omnigent_console_entry_point(candidate_python: Path) -> None:
         declared = []
     if metadata_probe.returncode != 0 or declared != ["omnigent.cli:main"]:
         raise StagingError(
-            "omnigent console entry point metadata is invalid: "
+            f"{name} console entry point metadata is invalid: "
             f"rc={metadata_probe.returncode} stderr={metadata_probe.stderr.strip()[:500]}"
         )
     try:
@@ -554,12 +576,54 @@ def verify_omnigent_console_entry_point(candidate_python: Path) -> None:
             timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
-        raise StagingError("omnigent console entry point --help timed out") from exc
+        raise StagingError(f"{name} console entry point --help timed out") from exc
     if help_probe.returncode != 0:
         raise StagingError(
-            "omnigent console entry point --help failed: "
+            f"{name} console entry point --help failed: "
             f"rc={help_probe.returncode} stderr={help_probe.stderr.strip()[:500]}"
         )
+
+
+def finalize_relocated_runtime(
+    final_release_root: Path,
+    main_wheel: Path,
+    *,
+    staging_root: Path,
+) -> None:
+    """Regenerate console scripts after a staged runtime is moved to its final path."""
+    final_python = _candidate_python(final_release_root)
+    artifacts = (final_release_root / "artifacts").absolute()
+    wheel = main_wheel.absolute()
+    try:
+        wheel.relative_to(artifacts)
+    except ValueError as exc:
+        raise StagingError(f"finalization wheel is outside final artifacts: {wheel}") from exc
+    if not wheel.is_file() or wheel.is_symlink():
+        raise StagingError(f"finalization wheel is not a regular local artifact: {wheel}")
+    result = subprocess.run(
+        [
+            str(final_python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-index",
+            "--disable-pip-version-check",
+            "--no-build-isolation",
+            "--force-reinstall",
+            str(wheel),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/tmp",
+    )
+    if result.returncode != 0:
+        raise StagingError(
+            f"final-path main wheel reinstall failed: rc={result.returncode} "
+            f"stderr={result.stderr.strip()[:500]}"
+        )
+    verify_omnigent_console_entry_points(final_python, forbidden_path=staging_root)
 
 
 def stage_candidate_runtime(
@@ -664,7 +728,7 @@ def stage_candidate_runtime(
                 f"candidate runtime versions do not match supervisor closure: "
                 f"{', '.join(mismatches)}"
             )
-        verify_omnigent_console_entry_point(candidate_python)
+        verify_omnigent_console_entry_points(candidate_python)
         (target_release_root / ".complete").touch()
         # Persist the staging manifest alongside the candidate so
         # operators can later audit what was installed.
@@ -832,7 +896,7 @@ def verify_candidate_complete(staging_root: Path) -> list[str]:
         failures.append(f"missing-python:{exc}")
         return failures
     try:
-        verify_omnigent_console_entry_point(python)
+        verify_omnigent_console_entry_points(python)
     except StagingError as exc:
         failures.append(f"entry-point-check-failed:{exc}")
     import_check = subprocess.run(
@@ -891,7 +955,7 @@ __all__ = [
     "transaction_owned_staging_path",
     "verify_candidate_complete",
     "verify_candidate_versions",
-    "verify_omnigent_console_entry_point",
+    "verify_omnigent_console_entry_points",
     "write_artifacts",
     "write_staging_manifest",
     "write_staging_provenance",
