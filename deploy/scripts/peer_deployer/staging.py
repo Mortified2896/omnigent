@@ -58,8 +58,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -392,7 +394,7 @@ def _install_wheels_no_deps(
     wheels: Iterable[Path],
     supervisor: Instance,
 ) -> None:
-    """Install the SDK wheels into the candidate venv with ``--no-deps``.
+    """Force-install the SDK wheels into the candidate venv with ``--no-deps``.
 
     We use ``pip`` because it is the lowest-common-denominator installer
     that ships with every Python. ``--no-deps`` is the whole point: the
@@ -470,6 +472,7 @@ def _install_wheels_no_deps(
                 "--no-index",
                 "--disable-pip-version-check",
                 "--no-build-isolation",
+                "--force-reinstall",
                 str(wheel),
             ],
             capture_output=True,
@@ -481,6 +484,82 @@ def _install_wheels_no_deps(
                 f"--no-deps install failed for {wheel.name}: "
                 f"rc={result.returncode} stderr={result.stderr.strip()}"
             )
+
+
+def verify_omnigent_console_entry_point(candidate_python: Path) -> None:
+    """Require a working ``omnigent`` launcher bound to the candidate venv."""
+    entry_point = candidate_python.parent / "omnigent"
+    try:
+        metadata = entry_point.lstat()
+    except OSError as exc:
+        raise StagingError(f"omnigent console entry point missing: {entry_point}") from exc
+    if not stat.S_ISREG(metadata.st_mode) or entry_point.is_symlink():
+        raise StagingError(
+            f"omnigent console entry point is not a regular non-symlink file: {entry_point}"
+        )
+    if not os.access(entry_point, os.X_OK):
+        raise StagingError(f"omnigent console entry point is not executable: {entry_point}")
+    try:
+        launcher = entry_point.read_bytes()[:4096]
+    except OSError as exc:
+        raise StagingError(f"cannot read omnigent console entry point: {entry_point}") from exc
+    expected_interpreter = str(candidate_python.absolute()).encode()
+    if expected_interpreter not in launcher:
+        raise StagingError(
+            "omnigent console entry point is not bound to candidate interpreter "
+            f"{candidate_python.absolute()}: {entry_point}"
+        )
+    environment = {
+        "PATH": (
+            f"{candidate_python.parent}:"
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        ),
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "HOME": "/tmp",
+    }
+    metadata_probe = subprocess.run(
+        [
+            str(candidate_python),
+            "-c",
+            (
+                "import json, importlib.metadata as md; "
+                "print(json.dumps([ep.value for ep in md.distribution('omnigent').entry_points "
+                "if ep.group == 'console_scripts' and ep.name == 'omnigent']))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/tmp",
+        env=environment,
+    )
+    try:
+        declared = json.loads(metadata_probe.stdout)
+    except json.JSONDecodeError:
+        declared = []
+    if metadata_probe.returncode != 0 or declared != ["omnigent.cli:main"]:
+        raise StagingError(
+            "omnigent console entry point metadata is invalid: "
+            f"rc={metadata_probe.returncode} stderr={metadata_probe.stderr.strip()[:500]}"
+        )
+    try:
+        help_probe = subprocess.run(
+            [str(entry_point), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd="/tmp",
+            env=environment,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StagingError("omnigent console entry point --help timed out") from exc
+    if help_probe.returncode != 0:
+        raise StagingError(
+            "omnigent console entry point --help failed: "
+            f"rc={help_probe.returncode} stderr={help_probe.stderr.strip()[:500]}"
+        )
 
 
 def stage_candidate_runtime(
@@ -504,9 +583,9 @@ def stage_candidate_runtime(
       1. Create the candidate venv layout under ``target_release_root``.
       2. Copy the supervisor's site-packages wholesale into the
          candidate (including ``*.dist-info`` directories).
-      3. Install each of the three SDK wheels with ``pip install --no-deps
-         --no-index``, overwriting the supervisor's dist-info for those
-         three packages.
+      3. Force-reinstall each of the three SDK wheels with ``pip install
+         --no-deps --no-index``, overwriting the supervisor's same-version
+         distributions and recreating their entry points.
       4. Copy the three SDK wheels into ``target_release_root/artifacts/``
          and copy PROVENANCE.txt from the supervisor's release so the
          candidate is self-describing.
@@ -585,6 +664,7 @@ def stage_candidate_runtime(
                 f"candidate runtime versions do not match supervisor closure: "
                 f"{', '.join(mismatches)}"
             )
+        verify_omnigent_console_entry_point(candidate_python)
         (target_release_root / ".complete").touch()
         # Persist the staging manifest alongside the candidate so
         # operators can later audit what was installed.
@@ -751,6 +831,10 @@ def verify_candidate_complete(staging_root: Path) -> list[str]:
     except StagingError as exc:
         failures.append(f"missing-python:{exc}")
         return failures
+    try:
+        verify_omnigent_console_entry_point(python)
+    except StagingError as exc:
+        failures.append(f"entry-point-check-failed:{exc}")
     import_check = subprocess.run(
         [
             str(python),
@@ -807,6 +891,7 @@ __all__ = [
     "transaction_owned_staging_path",
     "verify_candidate_complete",
     "verify_candidate_versions",
+    "verify_omnigent_console_entry_point",
     "write_artifacts",
     "write_staging_manifest",
     "write_staging_provenance",
