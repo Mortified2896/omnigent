@@ -217,8 +217,21 @@ def test_relocated_candidate_launchers_are_rebound_offline(
     final_root.parent.mkdir(parents=True)
     os.rename(staging_root, final_root)
     final_launcher = final_root / "venv" / "bin" / "omnigent"
-    with pytest.raises(FileNotFoundError):
-        subprocess.run([str(final_launcher), "--help"], check=False)
+    assert not staged_python.exists()
+    try:
+        broken_result = subprocess.run(
+            [str(final_launcher), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        # distlib emits a /bin/sh wrapper for long interpreter paths. In that
+        # form exec succeeds at the shell boundary but the stale interpreter
+        # still makes the launcher fail non-zero instead of raising ENOENT.
+        assert broken_result.returncode != 0
 
     commands: list[list[str]] = []
     real_run = subprocess.run
