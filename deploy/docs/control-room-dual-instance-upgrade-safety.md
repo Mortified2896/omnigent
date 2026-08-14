@@ -240,11 +240,19 @@ or run privileged commands. Root access does not relax the hard invariant:
 an agent must never upgrade its own instance, and the healthy peer must remain
 available as supervisor.
 
-Set `OMNIGENT_TRUSTED_ROOT_ACCESS=true` in both O1 and O2 host-service
-environments. At runtime Omnigent performs a bounded `sudo -n true` probe once
-per process and only adds the trusted-root framework instruction when both the
-flag and capability are present. A configured-but-failing probe is reported as
-a capability mismatch and does not advertise root to the model. Generic
+The repository-managed Control Room source of truth for this policy is
+`deploy/control-room/trusted-root/`. Its two host drop-ins, dedicated
+non-secret env fragments, and sudoers fragment are installed by its explicit
+`install.sh --install` path; generic Omnigent installation does not run it.
+Both host environments therefore set `OMNIGENT_TRUSTED_ROOT_ACCESS=true`. The
+installer validates the generated sudoers fragment with `visudo -cf` before
+committing it and clears inherited syscall/capability restrictions, including
+O2's `SystemCallArchitectures=native` setting.
+
+At runtime Omnigent performs a bounded `sudo -n true` probe once per process
+and only adds the trusted-root framework instruction when both the flag and
+capability are present. A configured-but-failing probe is reported as a
+capability mismatch and does not advertise root to the model. Generic
 deployments remain unaffected because the flag defaults off.
 
 A peer-supervised upgrade continues to use the narrowly scoped host-level
