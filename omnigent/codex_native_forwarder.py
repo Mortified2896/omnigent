@@ -3292,7 +3292,7 @@ def _start_codex_turn_span(
     """Start one metadata-only span for a native Codex turn."""
     if state.telemetry_turn_span is not None:
         _end_codex_turn_span("turn/failed", {}, state)
-    from opentelemetry import trace
+    from opentelemetry import context, trace
 
     turn_id = _turn_id_from_payload(params.get("turn")) or _turn_id_from_payload(params)
     attributes: dict[str, str | bool] = {
@@ -3320,10 +3320,20 @@ def _start_codex_turn_span(
         attributes["omnigent.requested_reasoning_effort"] = state.requested_effort
     if state.effort:
         attributes["omnigent.effective_reasoning_effort"] = state.effort
-    span = trace.get_tracer("omnigent").start_span(
-        "agent:codex-native-ui",
-        attributes=attributes,
-    )
+    # The native forwarder is long-lived and inherits the trace context from
+    # the terminal/session launch.  A Codex turn is a separate execution
+    # unit, however.  If turns reuse that inherited trace ID, MLflow's trace
+    # state is finalized by the first root span and later turn failures cannot
+    # change an already-terminal aggregate.  Root each turn explicitly; the
+    # session.id and turn-id attributes retain the operational correlation.
+    token = context.attach(context.Context())
+    try:
+        span = trace.get_tracer("omnigent").start_span(
+            "agent:codex-native-ui",
+            attributes=attributes,
+        )
+    finally:
+        context.detach(token)
     state.telemetry_turn_span = span
     state.telemetry_turn_id = turn_id
 
