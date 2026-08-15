@@ -2798,6 +2798,41 @@ def test_codex_turn_span_omits_unobserved_effective_values(
     assert "omnigent.provider.fallback" not in captured
 
 
+def test_codex_turn_spans_are_independent_trace_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later failed turn cannot inherit an earlier turn's MLflow trace."""
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(trace, "get_tracer", provider.get_tracer)
+
+    parent_tracer = provider.get_tracer("test")
+    with parent_tracer.start_as_current_span("session-launch"):
+        state = fwd._CodexForwarderState()
+        fwd._start_codex_turn_span("session-1", {"turn": {"id": "turn-ok"}}, state)
+        fwd._end_codex_turn_span("turn/completed", {}, state)
+        fwd._start_codex_turn_span("session-1", {"turn": {"id": "turn-error"}}, state)
+        fwd._end_codex_turn_span("turn/failed", {}, state)
+
+    spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "agent:codex-native-ui"
+    ]
+    assert len(spans) == 2
+    assert spans[0].context.trace_id != spans[1].context.trace_id
+    assert spans[0].status.status_code is trace.StatusCode.OK
+    assert spans[1].status.status_code is trace.StatusCode.ERROR
+
+
 def test_codex_turn_span_closes_on_terminal_boundary() -> None:
     """A terminal boundary always closes the active span to avoid stale traces."""
 
