@@ -577,6 +577,8 @@ def _validate_unit_start_paths(unit_text: str) -> None:
     for required in (
         f"WorkingDirectory={current}",
         f"ExecStart={current}/venv/bin/python -m peer_deployer.service",
+        "RuntimeDirectory=control-room-peer-deployer",
+        "RuntimeDirectoryMode=0750",
     ):
         if required not in unit_text:
             raise BootstrapError(f"systemd unit missing canonical start path: {required}")

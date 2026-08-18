@@ -201,6 +201,14 @@ def test_unit_has_bounded_start_limit() -> None:
     assert "StartLimitBurst=5" in text
 
 
+def test_unit_creates_volatile_runtime_directory() -> None:
+    text = (REPO_ROOT / "deploy" / "systemd" / "control-room-peer-deployer.service").read_text()
+    assert "RuntimeDirectory=control-room-peer-deployer" in text
+    assert "RuntimeDirectoryMode=0750" in text
+    assert "ReadWritePaths=" in text
+    assert "/run/control-room-peer-deployer" in text
+
+
 def test_post_install_socket_failure_includes_journal_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bootstrap = _load_bootstrap()
     sock = tmp_path / "missing.sock"

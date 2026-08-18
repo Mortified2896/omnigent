@@ -235,6 +235,8 @@ def test_bootstrap_refuses_stale_systemd_releases_current_path() -> None:
         "WorkingDirectory=/opt/control-room-peer-deployer/current\n"
         "ExecStart=/opt/control-room-peer-deployer/current/venv/bin/python "
         "-m peer_deployer.service --socket /run/control-room-peer-deployer/control.sock\n"
+        "RuntimeDirectory=control-room-peer-deployer\n"
+        "RuntimeDirectoryMode=0750\n"
     )
     bootstrap._validate_unit_start_paths(good)
     bad = good.replace(
@@ -243,6 +245,10 @@ def test_bootstrap_refuses_stale_systemd_releases_current_path() -> None:
     )
     with pytest.raises(bootstrap.BootstrapError, match="stale releases/current"):
         bootstrap._validate_unit_start_paths(bad)
+
+    missing_runtime = good.replace("RuntimeDirectory=control-room-peer-deployer\n", "")
+    with pytest.raises(bootstrap.BootstrapError, match="RuntimeDirectory"):
+        bootstrap._validate_unit_start_paths(missing_runtime)
 
 
 # ---------------------------------------------------------------------------
