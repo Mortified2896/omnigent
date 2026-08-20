@@ -938,6 +938,32 @@ describe("NewChatLandingScreen", () => {
     expect(footer.parentElement).toHaveClass("gap-1");
   });
 
+  it("wraps every launch control inside the phone composer", () => {
+    renderLanding();
+
+    expect(screen.getByTestId("new-chat-landing-actions")).toHaveClass(
+      "grid",
+      "grid-cols-[auto_minmax(0,1fr)]",
+    );
+
+    const primaryActions = screen.getByTestId("new-chat-landing-primary-actions");
+    expect(primaryActions).toHaveClass("min-w-0", "flex-wrap", "justify-end");
+    expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveClass(
+      "min-w-0",
+      "max-w-full",
+      "shrink",
+      "md:shrink-0",
+    );
+
+    selectAgent("a2");
+
+    const model = screen.getByTestId("new-chat-landing-inline-model");
+    expect(model).toHaveClass("w-40", "max-w-full", "sm:w-60");
+    expect(primaryActions).toContainElement(model);
+    expect(primaryActions).toContainElement(screen.getByTestId("new-chat-landing-inline-effort"));
+    expect(primaryActions).toContainElement(screen.getByTestId("new-chat-landing-submit"));
+  });
+
   it("preserves the typed message and attachments when the landing screen unmounts and remounts", () => {
     // Navigating into an existing session and back unmounts the landing
     // screen; the draft is stashed at module scope so the half-composed
