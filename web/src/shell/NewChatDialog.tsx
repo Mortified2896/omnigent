@@ -1407,7 +1407,7 @@ function SearchableModelPicker({
           aria-label="Model"
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
-            compact ? "w-48 max-w-[calc(100vw-2rem)] sm:w-60" : "w-full",
+            compact ? "w-40 max-w-full sm:w-60" : "w-full",
           )}
           data-testid={testId}
         >
@@ -4329,11 +4329,11 @@ export function NewChatLandingScreen() {
                 here would also catch the .dark .bg-card glass rule (border +
                 shadow) and visually split the pill in half. */}
             <div
-              className="flex items-center justify-between px-2 pb-2"
+              className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-2 pb-2"
               data-testid="new-chat-landing-actions"
             >
               {/* Attach + dictate — left side, mirroring the in-session composer. */}
-              <div className="flex items-center gap-0.5">
+              <div className="flex shrink-0 items-center gap-0.5">
                 <Button
                   type="button"
                   size="icon"
@@ -4358,8 +4358,11 @@ export function NewChatLandingScreen() {
                   onInterim={dictation.replaceInterim}
                 />
               </div>
-              <div className="flex items-center gap-0.5 md:gap-2">
-                <div className="flex items-center rounded-lg transition-colors has-[button:not(:disabled)]:hover:bg-muted dark:has-[button:not(:disabled)]:hover:bg-muted/50 has-aria-expanded:bg-muted dark:has-aria-expanded:bg-muted/50 [&>button]:bg-transparent!">
+              <div
+                className="flex min-w-0 flex-wrap items-center justify-end gap-0.5 md:gap-2"
+                data-testid="new-chat-landing-primary-actions"
+              >
+                <div className="flex min-w-0 max-w-full items-center rounded-lg transition-colors has-[button:not(:disabled)]:hover:bg-muted dark:has-[button:not(:disabled)]:hover:bg-muted/50 has-aria-expanded:bg-muted dark:has-aria-expanded:bg-muted/50 [&>button]:bg-transparent!">
                   {/* Agent / harness picker — selects the agent or harness only.
                     Its run-config knobs (model / effort / permission mode for
                     Claude Code, approval mode for Codex/OpenCode, exec mode for
@@ -4387,7 +4390,8 @@ export function NewChatLandingScreen() {
                     // Match the gear's touch-target height so both halves fill
                     // the shared pill; pr-2 equals the gear icon's own centering
                     // inset (8px) so the divider sits evenly between them.
-                    triggerClassName="h-9 pr-2 md:h-8"
+                    triggerClassName="h-9 min-w-0 max-w-full shrink pr-2 md:h-8 md:max-w-none md:shrink-0"
+                    triggerLabelClassName="max-w-20 sm:max-w-[12rem]"
                   />
                   {/* Gear — opens the selected agent's run-config modal, behind
                     a hairline divider. Both are hidden when the selected agent
