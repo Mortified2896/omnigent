@@ -1317,6 +1317,59 @@ class HostProcess:
                 error_code=WORKSPACE_MISSING_ERROR_CODE,
             )
 
+        # A mutable runner may use a genuinely non-repository directory, but
+        # an existing checkout is never trusted merely because it exists.
+        repository_provenance: dict[str, str | int] | None = None
+        repository_workspace = any(
+            (candidate / ".git").exists() for candidate in workspace.parents
+        )
+        repository_workspace = repository_workspace or (workspace / ".git").exists()
+        if repository_workspace:
+            try:
+                from omnigent.host.repository_identity import (
+                    ArchivalOverrideReason,
+                    RepositoryIdentityError,
+                    RepositoryRole,
+                    verify_repository_identity,
+                )
+
+                if frame.resolved_repository_id is None or frame.objective_role is None:
+                    raise RepositoryIdentityError(
+                        "mutable repository launch requires canonical repository identity"
+                    )
+                role = RepositoryRole(frame.objective_role)
+                override = (
+                    ArchivalOverrideReason(frame.archival_override_reason)
+                    if frame.archival_override_reason is not None
+                    else None
+                )
+                verified = await asyncio.to_thread(
+                    verify_repository_identity,
+                    repo_path=str(workspace),
+                    resolved_repository_id=frame.resolved_repository_id,
+                    objective_role=role,
+                    archival_override_reason=override,
+                )
+                repository_provenance = {
+                    "repository_id": verified.repository_id,
+                    "full_name": verified.full_name,
+                    "role": verified.role.value,
+                    "default_branch": verified.default_branch,
+                    "head_sha": verified.head_sha,
+                }
+            except (ValueError, RepositoryIdentityError) as exc:
+                return HostLaunchRunnerResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error=f"repository identity verification failed: {exc}",
+                )
+        elif frame.resolved_repository_id is not None or frame.objective_role is not None:
+            return HostLaunchRunnerResultFrame(
+                request_id=frame.request_id,
+                status="failed",
+                error="repository identity was supplied for a non-repository workspace",
+            )
+
         runner_id = token_bound_runner_id(frame.binding_token)
         initial_auth_token = await asyncio.to_thread(
             self._current_auth_token,
@@ -1398,6 +1451,7 @@ class HostProcess:
             request_id=frame.request_id,
             status="launched",
             runner_id=runner_id,
+            repository_provenance=repository_provenance,
         )
 
     def _spawn_runner_proc(
@@ -2400,6 +2454,33 @@ class HostProcess:
             success, or ``status: "failed"`` with an error message.
         """
         try:
+            from omnigent.host.repository_identity import (
+                ArchivalOverrideReason,
+                RepositoryIdentityError,
+                RepositoryRole,
+                verify_repository_identity,
+            )
+
+            try:
+                role = RepositoryRole(frame.objective_role)
+                override = (
+                    ArchivalOverrideReason(frame.archival_override_reason)
+                    if frame.archival_override_reason is not None
+                    else None
+                )
+                verified = await asyncio.to_thread(
+                    verify_repository_identity,
+                    repo_path=frame.repo_path,
+                    resolved_repository_id=frame.resolved_repository_id,
+                    objective_role=role,
+                    archival_override_reason=override,
+                )
+            except (ValueError, RepositoryIdentityError) as exc:
+                return HostCreateWorktreeResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error=f"repository identity verification failed: {exc}",
+                )
             # Pause the orphan reaper: create_worktree runs git via
             # subprocess.run, whose children are direct children of this host
             # but not tracked runners — the reaper must not wait() them out
@@ -2428,6 +2509,13 @@ class HostProcess:
             status="ok",
             worktree_path=created.worktree_path,
             branch=created.branch,
+            repository_provenance={
+                "repository_id": verified.repository_id,
+                "full_name": verified.full_name,
+                "role": verified.role.value,
+                "default_branch": verified.default_branch,
+                "head_sha": verified.head_sha,
+            },
         )
 
     async def _handle_remove_worktree(

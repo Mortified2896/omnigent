@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import cast
 
 from omnigent.harness_availability import HarnessAvailability, is_harness_availability
 from omnigent.json_types import JsonObject as _JsonObject
@@ -162,6 +163,9 @@ class HostLaunchRunnerFrame:
     workspace: str
     session_id: str | None = None
     harness: str | None = None
+    resolved_repository_id: int | None = None
+    objective_role: str | None = None
+    archival_override_reason: str | None = None
 
 
 @dataclass
@@ -189,6 +193,7 @@ class HostLaunchRunnerResultFrame:
     runner_id: str | None = None
     error: str | None = None
     error_code: str | None = None
+    repository_provenance: dict[str, str | int] | None = None
 
 
 @dataclass
@@ -458,6 +463,9 @@ class HostCreateWorktreeFrame:
     repo_path: str
     branch_name: str
     base_branch: str | None = None
+    resolved_repository_id: int = 0
+    objective_role: str = ""
+    archival_override_reason: str | None = None
 
 
 @dataclass
@@ -482,6 +490,7 @@ class HostCreateWorktreeResultFrame:
     worktree_path: str | None = None
     branch: str | None = None
     error: str | None = None
+    repository_provenance: dict[str, str | int] | None = None
 
 
 @dataclass
@@ -951,6 +960,9 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "workspace": frame.workspace,
                 "session_id": frame.session_id,
                 "harness": frame.harness,
+                "resolved_repository_id": frame.resolved_repository_id,
+                "objective_role": frame.objective_role,
+                "archival_override_reason": frame.archival_override_reason,
             }
         )
     if isinstance(frame, HostLaunchRunnerResultFrame):
@@ -962,6 +974,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "runner_id": frame.runner_id,
                 "error": frame.error,
                 "error_code": frame.error_code,
+                "repository_provenance": frame.repository_provenance,
             }
         )
     if isinstance(frame, HostStopRunnerFrame):
@@ -1064,6 +1077,9 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "repo_path": frame.repo_path,
                 "branch_name": frame.branch_name,
                 "base_branch": frame.base_branch,
+                "resolved_repository_id": frame.resolved_repository_id,
+                "objective_role": frame.objective_role,
+                "archival_override_reason": frame.archival_override_reason,
             }
         )
     if isinstance(frame, HostCreateWorktreeResultFrame):
@@ -1075,6 +1091,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "worktree_path": frame.worktree_path,
                 "branch": frame.branch,
                 "error": frame.error,
+                "repository_provenance": frame.repository_provenance,
             }
         )
     if isinstance(frame, HostRemoveWorktreeFrame):
@@ -1406,6 +1423,9 @@ def _decode_launch_runner(msg: _JsonObject) -> HostLaunchRunnerFrame:
         workspace=_required_str(msg, "workspace"),
         session_id=_optional_nullable_str(msg, "session_id"),
         harness=_optional_nullable_str(msg, "harness"),
+        resolved_repository_id=_optional_nullable_int(msg, "resolved_repository_id"),
+        objective_role=_optional_nullable_str(msg, "objective_role"),
+        archival_override_reason=_optional_nullable_str(msg, "archival_override_reason"),
     )
 
 
@@ -1423,6 +1443,9 @@ def _decode_launch_runner_result(
         runner_id=_optional_nullable_str(msg, "runner_id"),
         error=_optional_nullable_str(msg, "error"),
         error_code=_optional_nullable_str(msg, "error_code"),
+        repository_provenance=cast(
+            "dict[str, str | int] | None", msg.get("repository_provenance")
+        ),
     )
 
 
@@ -1597,6 +1620,9 @@ def _decode_create_worktree(msg: _JsonObject) -> HostCreateWorktreeFrame:
         repo_path=_required_str(msg, "repo_path"),
         branch_name=_required_str(msg, "branch_name"),
         base_branch=_optional_nullable_str(msg, "base_branch"),
+        resolved_repository_id=_required_int(msg, "resolved_repository_id"),
+        objective_role=_required_str(msg, "objective_role"),
+        archival_override_reason=_optional_nullable_str(msg, "archival_override_reason"),
     )
 
 
@@ -1614,6 +1640,9 @@ def _decode_create_worktree_result(
         worktree_path=_optional_nullable_str(msg, "worktree_path"),
         branch=_optional_nullable_str(msg, "branch"),
         error=_optional_nullable_str(msg, "error"),
+        repository_provenance=cast(
+            "dict[str, str | int] | None", msg.get("repository_provenance")
+        ),
     )
 
 
@@ -1901,6 +1930,16 @@ def _required_int(msg: _JsonObject, key: str) -> int:
     val = msg.get(key)
     if not isinstance(val, int) or isinstance(val, bool):
         raise ValueError(f"frame missing required int field: {key!r}")
+    return val
+
+
+def _optional_nullable_int(msg: _JsonObject, key: str) -> int | None:
+    """Return an optional integer field, rejecting booleans and other types."""
+    val = msg.get(key)
+    if val is None:
+        return None
+    if not isinstance(val, int) or isinstance(val, bool):
+        raise ValueError(f"frame field must be an int or null: {key!r}")
     return val
 
 
