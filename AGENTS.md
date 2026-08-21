@@ -58,21 +58,22 @@ The authoritative safety contract is in
 document overrides any less-specific deployment wording in this
 repository. Read it before any deployment work.
 
-## HomeLab Omnigent trusted root access
+## HomeLab Omnigent privileged access
 
-O1 and O2 are intentionally trusted administrative agents on the private
-HomeLab host. They have unrestricted passwordless root access through
-`sudo -n <command>`. For authorized, in-scope Omnigent work, use `sudo -n`
-autonomously whenever root is useful or required. Root required is a capability,
-not a blocker: do not stop, ask the user to SSH into the server, or ask the user
-to run privileged commands manually merely because root is required.
+O1 and O2 HomeLab service children are not general-purpose root agents. The
+current deployment enforces `NoNewPrivileges=yes` and does not provide
+unrestricted `sudo` to ordinary agent children.
 
-Normal in-scope uses include systemd/service administration; deployment and
-rollback; diagnostics and journals; filesystem ownership and permissions;
-package/runtime installation; HomeLab configuration; authorized database
-backup or migration; and recovery of broken O1/O2 states.
+Privileged live mutation is handled through the separately owned deployment and
+recovery boundary. Human emergency root access also remains separate from
+ordinary O1/O2 execution.
 
-Root access does not remove the dual-instance safety invariant:
+Do not infer root capability from historical variables such as
+`OMNIGENT_CODEX_NATIVE_TRUSTED`. The current capability must be derived from the
+effective deployment policy and the canonical trusted-root contract tracked by
+the Control Room convergence work.
+
+Root restrictions do not change the dual-instance safety invariant:
 
 - Never let an Omnigent instance upgrade itself.
 - O1 upgrades O2; O2 upgrades O1.
