@@ -13,12 +13,12 @@ import os
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class PublicationState(StrEnum):
@@ -696,10 +696,27 @@ class GitHubCliPublicationReadback:
             ),
             self.repository,
         )
-        raw: Mapping[str, Any] = json.loads(output)
+        loaded: object = json.loads(output)
+        if not isinstance(loaded, dict):
+            raise PublicationCheckpointError("GitHub PR read-back was not an object")
+        url = loaded.get("url")
+        head = loaded.get("headRefOid")
+        base = loaded.get("baseRefName")
+        draft = loaded.get("isDraft")
+        if (
+            not isinstance(url, str)
+            or not url
+            or not isinstance(head, str)
+            or not head
+            or not isinstance(base, str)
+            or not base
+        ):
+            raise PublicationCheckpointError("GitHub PR read-back is missing identity fields")
+        if not isinstance(draft, bool):
+            raise PublicationCheckpointError("GitHub PR read-back is missing draft state")
         return PullRequestReadback(
-            url=str(raw["url"]),
-            head=str(raw["headRefOid"]),
-            base=str(raw["baseRefName"]),
-            draft=bool(raw["isDraft"]),
+            url=url,
+            head=head,
+            base=base,
+            draft=draft,
         )
