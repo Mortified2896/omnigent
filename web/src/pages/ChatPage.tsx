@@ -1820,7 +1820,11 @@ function MainAgentSurface({
   // tool runs, and reasoning gaps — including after a reload that hydrates
   // `running` before any bubbles exist locally. Only a trailing compaction
   // spinner suppresses it (that bubble owns the slot with its own animation).
-  const showWorkingIndicator = shouldShowWorkingIndicator(showsWorking, bubbles);
+  const streamConnectionStatus = useChatStore((s) => s.streamConnectionStatus);
+  const streamRecovering =
+    streamConnectionStatus === "reconnecting" || streamConnectionStatus === "stale";
+  const showWorkingIndicator =
+    shouldShowWorkingIndicator(showsWorking, bubbles) || streamRecovering;
 
   if (showTerminal && conversationId) {
     return (
@@ -2148,6 +2152,7 @@ function WorkingStatusPin({ show, suppress = false }: { show: boolean; suppress?
   const { isAtBottom } = useStickToBottomContext();
   const bgCount = useChatStore((s) => s.backgroundTaskCount);
   const blockedOn = useChatStore((s) => s.blockedOn);
+  const streamConnectionStatus = useChatStore((s) => s.streamConnectionStatus);
   const tick = useWorkingLabelTick();
   const visible = show && !isAtBottom && !suppress;
   return (
@@ -2188,7 +2193,7 @@ function WorkingStatusPin({ show, suppress = false }: { show: boolean; suppress?
           >
             <OttoIcon className="otto-working h-4 w-auto shrink-0" />
             <Shimmer className="text-sm font-mono" duration={1.5}>
-              {workingIndicatorLabel(bgCount, tick, blockedOn)}
+              {workingIndicatorLabel(bgCount, tick, blockedOn, streamConnectionStatus)}
             </Shimmer>
           </div>
         )}
@@ -2868,7 +2873,11 @@ export function workingIndicatorLabel(
   bgCount: number,
   tick = 0,
   blockedOn: string | null = null,
+  streamConnectionStatus:
+    "connecting" | "connected" | "reconnecting" | "stale" | "closed" = "connected",
 ): string {
+  if (streamConnectionStatus === "stale") return "Connection stale — reconnecting…";
+  if (streamConnectionStatus === "reconnecting") return "Reconnecting…";
   if (blockedOn) {
     return `Blocked on: ${blockedOn}`;
   }
@@ -2883,8 +2892,9 @@ export function workingIndicatorLabel(
 function WorkingIndicator() {
   const bgCount = useChatStore((s) => s.backgroundTaskCount);
   const blockedOn = useChatStore((s) => s.blockedOn);
+  const streamConnectionStatus = useChatStore((s) => s.streamConnectionStatus);
   const tick = useWorkingLabelTick();
-  const label = workingIndicatorLabel(bgCount, tick, blockedOn);
+  const label = workingIndicatorLabel(bgCount, tick, blockedOn, streamConnectionStatus);
   return (
     <Message from="assistant" data-testid="working-indicator" aria-hidden="true">
       <MessageContent>

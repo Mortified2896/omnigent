@@ -1,8 +1,42 @@
 // Vitest cases for `parseEvent` — the raw-SSE-JSON → typed-event mapping.
 
 import { describe, expect, it } from "vitest";
-import { parseEvent } from "./sse";
+import { parseEvent, parseSseStream } from "./sse";
 import type { SessionStatusEvent, SessionSupersededEvent, TextDelta } from "./events";
+
+describe("parseSseStream — delivery metadata", () => {
+  it("reports heartbeat metadata even though heartbeats do not enter the reducer", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'event: session.heartbeat\ndata: {"type":"session.heartbeat","connection_id":"conn_1","sequence_number":7,"published_at":1234}\n\n',
+          ),
+        );
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const frames: object[] = [];
+
+    const events = [];
+    for await (const event of parseSseStream(body, undefined, {
+      onFrame: (metadata) => frames.push(metadata),
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([]);
+    expect(frames).toEqual([
+      {
+        connectionId: "conn_1",
+        sequenceNumber: 7,
+        publishedAt: 1234,
+        eventType: "session.heartbeat",
+      },
+    ]);
+  });
+});
 
 describe("parseEvent — response.output_text.delta", () => {
   it("parses a plain delta with no streaming identifiers", () => {

@@ -50,6 +50,7 @@ from omnigent.entities import (
     ErrorData,
     MessageData,
     NewConversationItem,
+    ResponseTerminalData,
     SlashCommandData,
     StoredFile,
     synthesize_conversation_title,
@@ -159,6 +160,8 @@ from omnigent.server.routes._sessions.common import (  # noqa: F401
     _LABEL_VALUE_MAX_LEN,
     _LAST_TASK_ERROR_CODE_LABEL_KEY,
     _LAST_TASK_ERROR_MESSAGE_LABEL_KEY,
+    _LAST_TERMINAL_RESPONSE_ID_LABEL_KEY,
+    _LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY,
     _MAX_TERMINAL_LAUNCH_ARG_LEN,
     _MAX_TERMINAL_LAUNCH_ARGS,
     _MODEL_OPTIONS_ENDPOINT_BY_WRAPPER,
@@ -248,6 +251,7 @@ from omnigent.server.schemas import (
     SessionTerminalPendingEvent,
     SessionTodosEvent,
     SkillSummary,
+    TerminalResponse,
     ToolOutputDeltaEvent,
 )
 from omnigent.session_lifecycle import (
@@ -3718,6 +3722,144 @@ async def _persist_session_status_error_labels(
         )
 
 
+_TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+_TERMINAL_RESPONSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_DELIVERY_OBSERVABILITY_EVENT_TYPES = frozenset(
+    {
+        "response.completed",
+        "response.failed",
+        "response.cancelled",
+        "response.incomplete",
+        "response.output_item.done",
+        "session.status",
+        "session.interrupted",
+    }
+)
+
+
+async def _persist_terminal_response(
+    session_id: str,
+    response_id: str | None,
+    status: str,
+    conversation_store: ConversationStore,
+    *,
+    authoritative: bool,
+) -> None:
+    """Persist one response-scoped terminal outcome without response payloads."""
+    if (
+        not response_id
+        or _TERMINAL_RESPONSE_ID_RE.fullmatch(response_id) is None
+        or status not in _TERMINAL_RESPONSE_STATUSES
+    ):
+        return
+
+    def _write() -> None:
+        conv = conversation_store.get_conversation(session_id)
+        if conv is None:
+            return
+        existing_page = conversation_store.list_items(
+            session_id,
+            limit=100,
+            order="desc",
+            type="response_terminal",
+        )
+        existing = next(
+            (item for item in existing_page.data if item.response_id == response_id),
+            None,
+        )
+        prior_status = (
+            existing.data.status
+            if existing is not None and isinstance(existing.data, ResponseTerminalData)
+            else None
+        )
+        if prior_status is not None and prior_status != status:
+            _logger.warning(
+                "Terminal response conflict session=%s response=%s stored=%s "
+                "incoming=%s authoritative=%s",
+                session_id,
+                response_id,
+                prior_status,
+                status,
+                authoritative,
+            )
+            if not authoritative:
+                return
+        if prior_status == status:
+            return
+        conversation_store.append(
+            session_id,
+            [
+                NewConversationItem(
+                    type="response_terminal",
+                    response_id=response_id,
+                    data=ResponseTerminalData(status=cast(Any, status)),
+                )
+            ],
+        )
+
+        # Compatibility projection for older clients. Only advance it when
+        # this response owns the newest durable non-terminal item; a delayed
+        # terminal edge from an older response must not replace a newer turn.
+        recent = conversation_store.list_items(session_id, limit=100, order="desc")
+        newest_response_id = next(
+            (item.response_id for item in recent.data if item.type != "response_terminal"),
+            response_id,
+        )
+        if newest_response_id != response_id:
+            return
+        conversation_store.set_labels(
+            session_id,
+            {
+                _LAST_TERMINAL_RESPONSE_ID_LABEL_KEY: response_id,
+                _LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY: status,
+            },
+        )
+
+    try:
+        await asyncio.to_thread(_write)
+    except Exception:  # noqa: BLE001
+        _logger.exception("Failed to persist terminal response for %s", session_id)
+
+
+def _terminal_response_from_labels(labels: Mapping[str, str]) -> TerminalResponse | None:
+    """Project the durable terminal labels into the public snapshot shape."""
+    response_id = labels.get(_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY)
+    status = labels.get(_LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY)
+    if not response_id or status not in _TERMINAL_RESPONSE_STATUSES:
+        return None
+    return TerminalResponse(response_id=response_id, status=status)  # type: ignore[arg-type]
+
+
+def _terminal_response_from_items(
+    items: Sequence[ConversationItem], labels: Mapping[str, str]
+) -> TerminalResponse | None:
+    """Return the newest response-scoped outcome, with legacy-label fallback."""
+    label_response_id = labels.get(_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY)
+    terminals = [
+        (item.response_id, item.data.status)
+        for item in reversed(items)
+        if item.type == "response_terminal" and isinstance(item.data, ResponseTerminalData)
+    ]
+    terminal_by_response = dict(terminals)
+    for item in reversed(items):
+        if item.type in {"response_terminal", "resource_event"}:
+            continue
+        terminal_status = terminal_by_response.get(item.response_id)
+        if terminal_status is not None:
+            return TerminalResponse(
+                response_id=item.response_id,
+                status=terminal_status,
+            )
+    if label_response_id is not None:
+        for response_id, terminal_status in terminals:
+            if response_id == label_response_id:
+                return TerminalResponse(response_id=response_id, status=terminal_status)
+    if terminals:
+        response_id, terminal_status = terminals[0]
+        return TerminalResponse(response_id=response_id, status=terminal_status)
+    return _terminal_response_from_labels(labels)
+
+
 def _last_task_error_from_labels(labels: Mapping[str, str]) -> dict[str, str] | None:
     """
     Project runner-owned failure labels into the typed API error shape.
@@ -7001,7 +7143,12 @@ def _publish_policy_deny(session_id: str, reason: str) -> None:
     )
 
 
-def _publish_input_deny_terminal(session_id: str, conv: Conversation, reason: str) -> None:
+def _publish_input_deny_terminal(
+    session_id: str,
+    conv: Conversation,
+    reason: str,
+    response_id: str | None = None,
+) -> str:
     """
     Publish a terminal ``response.completed`` for an INPUT-phase DENY.
 
@@ -7016,10 +7163,12 @@ def _publish_input_deny_terminal(session_id: str, conv: Conversation, reason: st
     :param session_id: Session/conversation identifier.
     :param conv: Conversation whose agent/model name tags the response.
     :param reason: Human-readable deny reason from the policy verdict.
+    :param response_id: Durable response id already assigned to the deny item.
+    :returns: The response id published on the terminal event.
     """
     sentinel = f"{_DENY_SENTINEL_PREFIX}{reason}]"
     response = ResponseObject(
-        id=f"deny_{secrets.token_hex(8)}",
+        id=response_id or f"deny_{secrets.token_hex(8)}",
         status="completed",
         model=conv.agent_id or "policy",
         created_at=int(time.time()),
@@ -7036,6 +7185,7 @@ def _publish_input_deny_terminal(session_id: str, conv: Conversation, reason: st
         session_id,
         CompletedEvent(type="response.completed", response=response).model_dump(exclude_none=True),
     )
+    return response.id
 
 
 async def _persist_policy_deny_sentinel(
@@ -7044,7 +7194,8 @@ async def _persist_policy_deny_sentinel(
     reason: str,
     conversation_store: ConversationStore,
     agent_store: AgentStore,
-) -> None:
+    response_id: str | None = None,
+) -> str:
     """
     Persist the ``[Denied by policy: ...]`` sentinel as assistant history.
 
@@ -7069,15 +7220,18 @@ async def _persist_policy_deny_sentinel(
     :param reason: Human-readable deny reason from the policy verdict.
     :param conversation_store: Store for item persistence.
     :param agent_store: Store used to resolve the agent's display name.
+    :param response_id: Optional preassigned id shared with the terminal edge.
+    :returns: The durable response id assigned to the persisted item.
     """
     import uuid
 
     sentinel = f"{_DENY_SENTINEL_PREFIX}{reason}]"
     agent = agent_store.get(conv.agent_id) if conv.agent_id else None
     agent_name = agent.name if agent is not None else conv.agent_id or "policy"
+    durable_response_id = response_id or f"deny_{uuid.uuid4().hex}"
     item = NewConversationItem(
         type="message",
-        response_id=f"deny_{uuid.uuid4().hex}",
+        response_id=durable_response_id,
         data=parse_item_data(
             "message",
             {
@@ -7095,6 +7249,7 @@ async def _persist_policy_deny_sentinel(
             item=persisted[0].to_api_dict(),
         )
         session_stream.publish(session_id, done_event.model_dump())
+    return durable_response_id
 
 
 def _extract_assistant_text_from_event(body: SessionEventInput) -> str:
@@ -7314,6 +7469,8 @@ async def _stream_live_events(
     # learns the full list (self included) from the snapshot-on-connect
     # presence event — full-state events make that ordering race benign.
     presence_token: str | None = None
+    connection_id = secrets.token_hex(8)
+    sequence_number = 0
     if viewer_user_id is not None:
         if presence_root_id is None:
             raise ValueError("presence_root_id is required when viewer_user_id is set")
@@ -7345,7 +7502,33 @@ async def _stream_live_events(
                     raise ValueError(
                         f"session stream event missing string ``type`` field: {event!r}",
                     )
-                validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(event)
+                published_at = int(time.time() * 1000)
+                wire_event = {
+                    **event,
+                    "connection_id": connection_id,
+                    "published_at": published_at,
+                    "sequence_number": sequence_number,
+                }
+                validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(wire_event)
+                if event_type in _DELIVERY_OBSERVABILITY_EVENT_TYPES:
+                    raw_response = event.get("response")
+                    raw_item = event.get("item")
+                    response_id = event.get("response_id")
+                    if not isinstance(response_id, str) and isinstance(raw_response, dict):
+                        response_id = raw_response.get("id")
+                    if not isinstance(response_id, str) and isinstance(raw_item, dict):
+                        response_id = raw_item.get("response_id")
+                    _logger.info(
+                        "SSE delivery publish session=%s connection=%s sequence=%s "
+                        "event=%s response=%s published_at=%s",
+                        session_id,
+                        connection_id,
+                        sequence_number,
+                        event_type,
+                        response_id if isinstance(response_id, str) else None,
+                        published_at,
+                    )
+                sequence_number += 1
                 yield _format_sse(event_type, validated.model_dump())
     except session_stream.SubscriberOverflowError:
         _logger.warning(
@@ -7980,6 +8163,17 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
     """
     if not labels:
         return
+    terminal_keys = {
+        _LAST_TERMINAL_RESPONSE_ID_LABEL_KEY,
+        _LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY,
+    }
+    forged_terminal_keys = sorted(terminal_keys.intersection(labels))
+    if forged_terminal_keys:
+        raise OmnigentError(
+            f"labels {', '.join(repr(key) for key in forged_terminal_keys)} "
+            "are server-internal terminal lifecycle state and cannot be set by clients",
+            code=ErrorCode.INVALID_INPUT,
+        )
     if _TURN_ACTOR_LABEL in labels:
         raise OmnigentError(
             f"label {_TURN_ACTOR_LABEL!r} is server-internal and cannot be set by clients",
@@ -9317,6 +9511,7 @@ __all__ = [
     "_persist_policy_deny_sentinel",
     "_persist_session_status_error_labels",
     "_persist_stored_session_bundle",
+    "_persist_terminal_response",
     "_policy_notice_from_ensure_response",
     "_poll_request_disconnect",
     "_presentation_labels_for_agent",
@@ -9397,6 +9592,8 @@ __all__ = [
     "_stream_live_events",
     "_structured_ask_user_question",
     "_targeted_elicitation_event",
+    "_terminal_response_from_items",
+    "_terminal_response_from_labels",
     "_title_content_from_item",
     "_truncate_label",
     "_usage_by_model_for_display",
