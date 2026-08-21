@@ -8,6 +8,7 @@ normal stream completion — never during ``aclose`` / ``GeneratorExit``.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -112,3 +113,36 @@ async def test_normal_completion_emits_done_and_cleans_up(
             break
         await asyncio.sleep(0.02)
     assert presence.snapshot(SESSION_ID, SESSION_ID)["viewers"] == []
+
+
+async def test_frames_carry_connection_sequence_and_publish_metadata() -> None:
+    """Every frame has a stable connection id and monotonic local sequence."""
+    gen = _stream_live_events(
+        _ConnectedRequest(),  # type: ignore[arg-type]
+        SESSION_ID,
+    )
+    first = await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+    session_stream.publish(
+        SESSION_ID,
+        {"type": "session.heartbeat"},
+    )
+    second = await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+
+    def payload(chunk: str) -> dict[str, Any]:
+        data_line = next(line for line in chunk.splitlines() if line.startswith("data: "))
+        return json.loads(data_line.removeprefix("data: "))
+
+    first_payload = payload(first)
+    second_payload = payload(second)
+    assert first_payload["connection_id"] == second_payload["connection_id"]
+    assert first_payload["sequence_number"] == 0
+    assert second_payload["sequence_number"] == 1
+    assert isinstance(first_payload["published_at"], int)
+    assert {
+        "type",
+        "connection_id",
+        "published_at",
+        "sequence_number",
+    } <= set(first_payload)
+    assert not ({"prompt", "assistant_text", "tool_arguments", "tool_result"} & set(first_payload))
+    await gen.aclose()

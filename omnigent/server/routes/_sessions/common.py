@@ -196,6 +196,12 @@ _LAST_TASK_ERROR_CODE_LABEL_KEY: str = "omnigent.last_task_error_code"
 _LAST_TASK_ERROR_MESSAGE_LABEL_KEY: str = "omnigent.last_task_error_message"
 
 
+_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY: str = "omnigent.last_terminal_response_id"
+
+
+_LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY: str = "omnigent.last_terminal_response_status"
+
+
 _LABEL_VALUE_MAX_LEN: int = LABEL_VALUE_MAX_LEN
 
 
@@ -806,6 +812,8 @@ __all__ = [
     "_LAST_CONTEXT_WINDOW_LABEL_KEY",
     "_LAST_TASK_ERROR_CODE_LABEL_KEY",
     "_LAST_TASK_ERROR_MESSAGE_LABEL_KEY",
+    "_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY",
+    "_LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY",
     "_MANAGED_RESUMABLE_TUNNEL_STALE_S",
     "_MAX_TERMINAL_LAUNCH_ARGS",
     "_MAX_TERMINAL_LAUNCH_ARG_LEN",

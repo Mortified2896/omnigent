@@ -189,6 +189,11 @@ let sessionCostControlOverrides: Map<string, "on" | "off">;
 let sessionSubagentRoutingOverrides: Map<string, "on" | "off">;
 // Per-session labels the snapshot/PATCH handlers serve.
 let sessionLabels: Map<string, Record<string, string>>;
+let sessionStatuses: Map<string, "idle" | "running" | "waiting" | "failed">;
+let sessionTerminalResponses: Map<
+  string,
+  { response_id: string; status: "completed" | "failed" | "cancelled" | "incomplete" }
+>;
 
 /** Default fetch router: dispatch by URL. Tests override per-call as needed. */
 function defaultFetchHandler(input: RequestInfo | URL, init?: RequestInit): Response {
@@ -286,7 +291,7 @@ function defaultFetchHandler(input: RequestInfo | URL, init?: RequestInit): Resp
       id: sessionId,
       agent_id: "agent_xyz",
       runner_id: body.runner_id ?? null,
-      status: "idle",
+      status: sessionStatuses.get(sessionId) ?? "idle",
       created_at: 0,
       items: sessionSnapshots.get(sessionId) ?? [],
       labels,
@@ -299,10 +304,11 @@ function defaultFetchHandler(input: RequestInfo | URL, init?: RequestInit): Resp
     return mockResponse({
       id: sessionId,
       agent_id: "agent_xyz",
-      status: "idle",
+      status: sessionStatuses.get(sessionId) ?? "idle",
       created_at: 0,
       items: sessionSnapshots.get(sessionId) ?? [],
       labels: sessionLabels.get(sessionId) ?? {},
+      terminal_response: sessionTerminalResponses.get(sessionId) ?? null,
       pending_elicitations: sessionPendingElicitations.get(sessionId) ?? [],
       pending_inputs: sessionPendingInputs.get(sessionId) ?? [],
       cost_control_mode_override: sessionCostControlOverrides.get(sessionId) ?? null,
@@ -368,6 +374,8 @@ beforeEach(() => {
   sessionCostControlOverrides = new Map();
   sessionSubagentRoutingOverrides = new Map();
   sessionLabels = new Map();
+  sessionStatuses = new Map();
+  sessionTerminalResponses = new Map();
   initChatStore(client);
   useChatStore.setState({
     conversationId: null,
@@ -381,6 +389,7 @@ beforeEach(() => {
     activeResponse: null,
     status: "idle",
     sessionStatus: "idle",
+    streamConnectionStatus: "closed",
     isNativeTerminalSession: false,
     loadingConversation: false,
     conversationLoadError: null,
@@ -423,6 +432,19 @@ function seedSessionSnapshot(id: string, items: ConversationItem[] = []): void {
 
 function seedSessionItems(id: string, items: ConversationItem[] = []): void {
   sessionItems.set(id, items);
+}
+
+function seedSessionLifecycle(
+  id: string,
+  status: "idle" | "running" | "waiting" | "failed",
+  terminalResponse?: {
+    response_id: string;
+    status: "completed" | "failed" | "cancelled" | "incomplete";
+  },
+): void {
+  sessionStatuses.set(id, status);
+  if (terminalResponse) sessionTerminalResponses.set(id, terminalResponse);
+  else sessionTerminalResponses.delete(id);
 }
 
 function seedPendingElicitations(id: string, events: Record<string, unknown>[]): void {
@@ -6883,6 +6905,115 @@ describe("chatStore — startStreamPump reconnect loop", () => {
     expect(sinks.length).toBe(afterDone);
 
     controller.abort();
+    await loop;
+  });
+
+  it("times out a half-open stream and reconciles a durable terminal result exactly once", async () => {
+    const id = "conv_half_open";
+    const finalItem = assistantMessage("resp_terminal", "Durable final result");
+    seedSession(id, []);
+    seedSessionLifecycle(id, "running");
+    const sinks: StreamSink[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (/\/v1\/sessions\/[^/]+\/stream$/.test(url)) {
+        const sink = pushableStream();
+        sinks.push(sink);
+        init?.signal?.addEventListener(
+          "abort",
+          () => sink.error(new DOMException("stale stream", "AbortError")),
+          { once: true },
+        );
+        return mockResponse(null, { bodyStream: sink.stream });
+      }
+      return defaultFetchHandler(input, init);
+    });
+    const controller = new AbortController();
+    useChatStore.setState({
+      conversationId: id,
+      abortController: controller,
+      activeResponse: { responseId: "resp_terminal", state: "streaming", error: null },
+      status: "streaming",
+      sessionStatus: "running",
+    });
+
+    const loop = startStreamPump(id, controller, setState, getState, { staleAfterMs: 100 });
+    await drainAsync(2);
+    expect(sinks).toHaveLength(1);
+    expect(useChatStore.getState().streamConnectionStatus).toBe("connected");
+
+    // The backend commits while the browser's byte stream remains half-open:
+    // neither the item nor terminal SSE frame reaches the reducer.
+    seedSession(id, [finalItem]);
+    seedSessionLifecycle(id, "idle", {
+      response_id: "resp_terminal",
+      status: "completed",
+    });
+    await vi.advanceTimersByTimeAsync(101);
+    await drainAsync();
+
+    const state = useChatStore.getState();
+    expect(sinks).toHaveLength(2);
+    expect(state.streamConnectionStatus).toBe("connected");
+    expect(state.sessionStatus).toBe("idle");
+    expect(state.status).toBe("idle");
+    expect(state.activeResponse).toMatchObject({
+      responseId: "resp_terminal",
+      state: "completed",
+    });
+    expect(state.blocks.filter((block) => block.ctx.itemId === finalItem.id)).toHaveLength(1);
+
+    // Repeating the same recovery snapshot remains stable-ID idempotent.
+    sinks[1]!.error();
+    await drainAsync();
+    expect(sinks).toHaveLength(3);
+    expect(
+      useChatStore.getState().blocks.filter((block) => block.ctx.itemId === finalItem.id),
+    ).toHaveLength(1);
+
+    sinks[2]!.push("data: [DONE]\n\n");
+    sinks[2]!.close();
+    await drainAsync(2);
+    await loop;
+  });
+
+  it("keeps a genuinely running task connected while heartbeats stay fresh", async () => {
+    const id = "conv_fresh_running";
+    seedSession(id, []);
+    seedSessionLifecycle(id, "running");
+    const sinks = routeStreamOpens();
+    const controller = new AbortController();
+    useChatStore.setState({
+      conversationId: id,
+      abortController: controller,
+      activeResponse: { responseId: "resp_running", state: "streaming", error: null },
+      status: "streaming",
+      sessionStatus: "running",
+    });
+
+    const loop = startStreamPump(id, controller, setState, getState, { staleAfterMs: 100 });
+    await drainAsync(2);
+    for (let sequence = 0; sequence < 3; sequence += 1) {
+      await vi.advanceTimersByTimeAsync(80);
+      sinks[0]!.push(
+        sse("session.heartbeat", {
+          type: "session.heartbeat",
+          connection_id: "conn_fresh",
+          sequence_number: sequence,
+          published_at: sequence,
+        }),
+      );
+      await drainAsync(2);
+    }
+
+    expect(sinks).toHaveLength(1);
+    expect(useChatStore.getState().streamConnectionStatus).toBe("connected");
+    expect(useChatStore.getState().sessionStatus).toBe("running");
+    expect(useChatStore.getState().activeResponse?.state).toBe("streaming");
+
+    sinks[0]!.push("data: [DONE]\n\n");
+    sinks[0]!.close();
+    await drainAsync(2);
     await loop;
   });
 

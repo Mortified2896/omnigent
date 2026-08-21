@@ -249,6 +249,7 @@ from omnigent.server.routes._sessions.helpers import (
     _persist_native_policy_notice,
     _persist_session_status_error_labels,
     _persist_stored_session_bundle,
+    _persist_terminal_response,
     _policy_notice_from_ensure_response,
     _poll_request_disconnect,
     _priced_cost_for_display,
@@ -287,6 +288,7 @@ from omnigent.server.routes._sessions.helpers import (
     _signal_terminal_resolved_harness_elicitation,
     _spec_harness,
     _stop_session_via_runner,
+    _terminal_response_from_labels,
     _usage_by_model_for_display,
     _validate_session_workspace,
     _validate_terminal_launch_args,
@@ -1136,6 +1138,7 @@ def _build_session_response(
         # ``activeResponse`` (the turn-start ``running`` edge that carried it
         # is not replayed on the SSE stream). Populated for native-terminal
         # sessions whose forwarder stamps a turn id; ``None`` otherwise.
+        terminal_response=_terminal_response_from_labels(labels),
         active_response_id=_session_active_response_cache.get(conv.id),
         project_id=conv.project_id,
     )
@@ -5690,6 +5693,18 @@ async def _relay_runner_stream(
                             text_acc,
                             current_response_id,
                             _final_model,
+                        )
+                        _terminal_response_id = (
+                            _resp_obj.get("id") if isinstance(_resp_obj, dict) else None
+                        )
+                        if not isinstance(_terminal_response_id, str):
+                            _terminal_response_id = current_response_id
+                        await _persist_terminal_response(
+                            session_id,
+                            _terminal_response_id,
+                            evt_type.removeprefix("response."),
+                            conversation_store,
+                            authoritative=True,
                         )
 
                     error_item = _error_item_from_sse(

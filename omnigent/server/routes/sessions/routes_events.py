@@ -137,6 +137,7 @@ from omnigent.server.routes._sessions.helpers import (
     _persist_external_subagent_start,
     _persist_policy_deny_sentinel,
     _persist_session_status_error_labels,
+    _persist_terminal_response,
     _prune_session_read_state,
     _publish_compaction_completed,
     _publish_compaction_failed,
@@ -807,6 +808,13 @@ def register_events_routes(
                     code=ErrorCode.INVALID_INPUT,
                 )
             _publish_interrupted(session_id, response_id=response_id)
+            await _persist_terminal_response(
+                session_id,
+                response_id,
+                "cancelled",
+                conversation_store,
+                authoritative=True,
+            )
             return {"queued": False}
         if body.type == _EXTERNAL_SESSION_SUPERSEDED_TYPE:
             target_conversation_id = body.data.get("target_conversation_id")
@@ -888,6 +896,14 @@ def register_events_routes(
             if effective_status != status:
                 status = effective_status
                 body.data["status"] = status
+            if status in {"idle", "failed"}:
+                await _persist_terminal_response(
+                    session_id,
+                    response_id,
+                    "failed" if status == "failed" else "completed",
+                    conversation_store,
+                    authoritative=status == "failed",
+                )
             _publish_status(
                 session_id,
                 status,

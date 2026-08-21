@@ -159,6 +159,8 @@ from omnigent.server.routes._sessions.common import (  # noqa: F401
     _LABEL_VALUE_MAX_LEN,
     _LAST_TASK_ERROR_CODE_LABEL_KEY,
     _LAST_TASK_ERROR_MESSAGE_LABEL_KEY,
+    _LAST_TERMINAL_RESPONSE_ID_LABEL_KEY,
+    _LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY,
     _MAX_TERMINAL_LAUNCH_ARG_LEN,
     _MAX_TERMINAL_LAUNCH_ARGS,
     _MODEL_OPTIONS_ENDPOINT_BY_WRAPPER,
@@ -248,6 +250,7 @@ from omnigent.server.schemas import (
     SessionTerminalPendingEvent,
     SessionTodosEvent,
     SkillSummary,
+    TerminalResponse,
     ToolOutputDeltaEvent,
 )
 from omnigent.session_lifecycle import (
@@ -3716,6 +3719,62 @@ async def _persist_session_status_error_labels(
             "Failed to persist session status error labels for %s",
             session_id,
         )
+
+
+_TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+async def _persist_terminal_response(
+    session_id: str,
+    response_id: str | None,
+    status: str,
+    conversation_store: ConversationStore,
+    *,
+    authoritative: bool,
+) -> None:
+    """Persist the latest turn outcome without storing response payloads."""
+    if not response_id or status not in _TERMINAL_RESPONSE_STATUSES:
+        return
+
+    def _write() -> None:
+        conv = conversation_store.get_conversation(session_id)
+        if conv is None:
+            return
+        prior_id = conv.labels.get(_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY)
+        prior_status = conv.labels.get(_LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY)
+        if prior_id == response_id and prior_status and prior_status != status:
+            _logger.warning(
+                "Terminal response conflict session=%s response=%s stored=%s "
+                "incoming=%s authoritative=%s",
+                session_id,
+                response_id,
+                prior_status,
+                status,
+                authoritative,
+            )
+            if not authoritative:
+                return
+        conversation_store.set_labels(
+            session_id,
+            {
+                _LAST_TERMINAL_RESPONSE_ID_LABEL_KEY: response_id,
+                _LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY: status,
+            },
+        )
+
+    try:
+        await asyncio.to_thread(_write)
+    except Exception:  # noqa: BLE001
+        _logger.exception("Failed to persist terminal response for %s", session_id)
+
+
+def _terminal_response_from_labels(labels: Mapping[str, str]) -> TerminalResponse | None:
+    """Project the durable terminal labels into the public snapshot shape."""
+    response_id = labels.get(_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY)
+    status = labels.get(_LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY)
+    if not response_id or status not in _TERMINAL_RESPONSE_STATUSES:
+        return None
+    return TerminalResponse(response_id=response_id, status=status)  # type: ignore[arg-type]
 
 
 def _last_task_error_from_labels(labels: Mapping[str, str]) -> dict[str, str] | None:
@@ -7314,6 +7373,8 @@ async def _stream_live_events(
     # learns the full list (self included) from the snapshot-on-connect
     # presence event — full-state events make that ordering race benign.
     presence_token: str | None = None
+    connection_id = secrets.token_hex(8)
+    sequence_number = 0
     if viewer_user_id is not None:
         if presence_root_id is None:
             raise ValueError("presence_root_id is required when viewer_user_id is set")
@@ -7345,7 +7406,14 @@ async def _stream_live_events(
                     raise ValueError(
                         f"session stream event missing string ``type`` field: {event!r}",
                     )
-                validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(event)
+                wire_event = {
+                    **event,
+                    "connection_id": connection_id,
+                    "published_at": int(time.time() * 1000),
+                    "sequence_number": sequence_number,
+                }
+                sequence_number += 1
+                validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(wire_event)
                 yield _format_sse(event_type, validated.model_dump())
     except session_stream.SubscriberOverflowError:
         _logger.warning(
@@ -9317,6 +9385,7 @@ __all__ = [
     "_persist_policy_deny_sentinel",
     "_persist_session_status_error_labels",
     "_persist_stored_session_bundle",
+    "_persist_terminal_response",
     "_policy_notice_from_ensure_response",
     "_poll_request_disconnect",
     "_presentation_labels_for_agent",
@@ -9397,6 +9466,7 @@ __all__ = [
     "_stream_live_events",
     "_structured_ask_user_question",
     "_targeted_elicitation_event",
+    "_terminal_response_from_labels",
     "_title_content_from_item",
     "_truncate_label",
     "_usage_by_model_for_display",

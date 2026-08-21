@@ -859,6 +859,13 @@ describe("workingIndicatorLabel — parked on a dialog", () => {
 });
 
 describe("workingIndicatorLabel", () => {
+  it("surfaces stale and reconnecting browser streams ahead of work labels", () => {
+    expect(workingIndicatorLabel(0, 0, null, "stale")).toBe(
+      "Connection stale — reconnecting…",
+    );
+    expect(workingIndicatorLabel(4, 2, null, "reconnecting")).toBe("Reconnecting…");
+  });
+
   it("shows the plain Working label when no background tasks remain", () => {
     expect(workingIndicatorLabel(0)).toBe("Working…");
   });

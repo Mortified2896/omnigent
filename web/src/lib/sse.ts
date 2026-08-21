@@ -79,6 +79,13 @@ export interface SseStreamResult {
   sawDone: boolean;
 }
 
+export interface SseFrameMetadata {
+  connectionId: string | null;
+  sequenceNumber: number | null;
+  publishedAt: number | null;
+  eventType: string;
+}
+
 /**
  * Parse an SSE byte stream into typed events.
  *
@@ -107,6 +114,7 @@ export interface SseStreamResult {
 export async function* parseSseStream(
   byteStream: ReadableStream<Uint8Array>,
   result?: SseStreamResult,
+  options?: { onFrame?: (metadata: SseFrameMetadata) => void },
 ): AsyncIterable<StreamEvent> {
   const decoder = new TextDecoder("utf-8");
   let buf = "";
@@ -150,6 +158,13 @@ export async function* parseSseStream(
               currentEvent = null;
               continue;
             }
+            options?.onFrame?.({
+              connectionId: typeof data.connection_id === "string" ? data.connection_id : null,
+              sequenceNumber:
+                typeof data.sequence_number === "number" ? data.sequence_number : null,
+              publishedAt: typeof data.published_at === "number" ? data.published_at : null,
+              eventType: currentEvent,
+            });
             const event = parseEvent(currentEvent, data);
             if (event !== null) yield event;
             currentEvent = null;

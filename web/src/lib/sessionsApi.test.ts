@@ -89,6 +89,7 @@ describe("createSession", () => {
       harness: null,
       modelOverride: undefined,
       costControlModeOverride: undefined,
+      subagentRoutingOverride: undefined,
       reasoningEffort: undefined,
       pendingElicitations: [],
       pendingInputs: [],
@@ -103,6 +104,7 @@ describe("createSession", () => {
       terminalPending: false,
       sandboxStatus: null,
       mcpStartup: null,
+      terminalResponse: null,
       activeResponseId: null,
       workspace: null,
       gitBranch: null,
@@ -244,6 +246,29 @@ describe("createSession", () => {
 
     const session = await createSession("agent_xyz");
     expect(session.activeResponseId).toBe("resp_turn_1");
+  });
+
+  it("maps the durable terminal response used by refresh reconciliation", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        id: "conv_terminal",
+        agent_id: "agent_1",
+        status: "idle",
+        created_at: 1,
+        items: [],
+        terminal_response: {
+          response_id: "resp_terminal",
+          status: "completed",
+        },
+      }),
+    );
+
+    await expect(getSession("conv_terminal")).resolves.toMatchObject({
+      terminalResponse: {
+        responseId: "resp_terminal",
+        status: "completed",
+      },
+    });
   });
 
   it("defaults activeResponseId to null when the snapshot omits it", async () => {

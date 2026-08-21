@@ -11,6 +11,11 @@ from sqlalchemy.exc import StatementError
 
 from omnigent.entities import Conversation, ConversationItem, MessageData, PagedList
 from omnigent.server.routes import sessions as _sessions_mod
+from omnigent.server.routes._sessions.helpers import (
+    _persist_terminal_response,
+    _terminal_response_from_labels,
+)
+from omnigent.server.routes._sessions.orchestration import _build_session_response
 from omnigent.server.routes.sessions import (
     _LABEL_VALUE_MAX_LEN,
     SessionLiveness,
@@ -2287,6 +2292,92 @@ def test_truncate_label_empty_string() -> None:
 
 
 # ── _persist_session_status_error_labels ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_terminal_response_is_durable_idempotent_and_snapshot_projected() -> None:
+    """A missed SSE terminal can be reconstructed from conversation labels."""
+    conversation = Conversation(
+        id="conv_terminal",
+        created_at=1,
+        updated_at=1,
+        root_conversation_id="conv_terminal",
+        agent_id="087b7cb7ac30abf4debfaa578d052ec6",
+    )
+
+    class _TerminalStore:
+        def get_conversation(self, conversation_id: str) -> Conversation | None:
+            return conversation if conversation_id == conversation.id else None
+
+        def set_labels(self, conversation_id: str, updates: dict[str, str]) -> None:
+            assert conversation_id == conversation.id
+            conversation.labels.update(updates)
+
+    store = _TerminalStore()
+    await _persist_terminal_response(
+        conversation.id,
+        "resp_terminal",
+        "completed",
+        store,  # type: ignore[arg-type]
+        authoritative=True,
+    )
+    # Duplicate delivery is a no-op at the semantic level.
+    await _persist_terminal_response(
+        conversation.id,
+        "resp_terminal",
+        "completed",
+        store,  # type: ignore[arg-type]
+        authoritative=True,
+    )
+    # A later coarse idle inference cannot silently rewrite an explicit result.
+    await _persist_terminal_response(
+        conversation.id,
+        "resp_terminal",
+        "failed",
+        store,  # type: ignore[arg-type]
+        authoritative=False,
+    )
+
+    terminal = _terminal_response_from_labels(conversation.labels)
+    assert terminal is not None
+    assert terminal.model_dump() == {
+        "response_id": "resp_terminal",
+        "status": "completed",
+    }
+    snapshot = _build_session_response(conversation, [], "idle")
+    assert snapshot.terminal_response == terminal
+    assert set(conversation.labels) == {
+        "omnigent.last_terminal_response_id",
+        "omnigent.last_terminal_response_status",
+    }
+
+
+@pytest.mark.asyncio
+async def test_invalid_terminal_response_is_not_persisted() -> None:
+    """Prompt/tool payloads and unknown vocabulary never enter terminal labels."""
+    conversation = Conversation(
+        id="conv_terminal_invalid",
+        created_at=1,
+        updated_at=1,
+        root_conversation_id="conv_terminal_invalid",
+        agent_id="087b7cb7ac30abf4debfaa578d052ec6",
+    )
+
+    class _TerminalStore:
+        def get_conversation(self, conversation_id: str) -> Conversation | None:
+            return conversation
+
+        def set_labels(self, conversation_id: str, updates: dict[str, str]) -> None:
+            conversation.labels.update(updates)
+
+    await _persist_terminal_response(
+        conversation.id,
+        "secret prompt and credential-bearing URL",
+        "tool result payload",
+        _TerminalStore(),  # type: ignore[arg-type]
+        authoritative=True,
+    )
+    assert conversation.labels == {}
 
 
 @pytest.mark.asyncio
