@@ -605,7 +605,11 @@ def test_session_create_git_requires_host_id() -> None:
     with pytest.raises(ValidationError, match="git worktree creation requires host_id"):
         SessionCreateRequest(
             agent_id="ag_x",
-            git=SessionGitOptions(branch_name="feature/x"),
+            git=SessionGitOptions(
+                branch_name="feature/x",
+                resolved_repository_id=1293694128,
+                objective_role="omnigent_product_runtime",
+            ),
         )
 
 
@@ -617,10 +621,22 @@ def test_session_create_git_with_host_id_ok() -> None:
         agent_id="ag_x",
         host_id="host_abc",
         workspace="/repo",
-        git=SessionGitOptions(branch_name="feature/x"),
+        git=SessionGitOptions(
+            branch_name="feature/x",
+            resolved_repository_id=1293694128,
+            objective_role="omnigent_product_runtime",
+        ),
     )
     assert req.git is not None
     assert req.git.branch_name == "feature/x"
+
+
+def test_session_git_create_rejects_missing_repository_contract() -> None:
+    """Older create payloads fail closed before contacting a host."""
+    from omnigent.server.schemas import SessionGitOptions
+
+    with pytest.raises(ValidationError, match="resolved_repository_id and objective_role"):
+        SessionGitOptions(branch_name="feature/x")
 
 
 def test_session_git_existing_worktree_still_requires_host_id() -> None:

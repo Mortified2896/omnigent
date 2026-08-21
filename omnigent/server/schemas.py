@@ -1219,6 +1219,9 @@ class SessionGitOptions(BaseModel):
     branch_name: str
     base_branch: str | None = None
     existing_worktree: bool = False
+    resolved_repository_id: int | None = None
+    objective_role: str | None = None
+    archival_override_reason: str | None = None
 
     @model_validator(mode="after")
     def _check_existing_worktree(self) -> SessionGitOptions:
@@ -1233,6 +1236,12 @@ class SessionGitOptions(BaseModel):
         """
         if self.existing_worktree and self.base_branch is not None:
             raise ValueError("base_branch cannot be set when existing_worktree is true")
+        if not self.existing_worktree and (
+            self.resolved_repository_id is None or self.objective_role is None
+        ):
+            raise ValueError(
+                "worktree creation requires resolved_repository_id and objective_role"
+            )
         return self
 
 

@@ -133,6 +133,13 @@ async def register_worktree_host(
                                     "worktree_path": f"{frame.repo_path}-worktrees/{dirname}",
                                     "branch": frame.branch_name,
                                     "error": None,
+                                    "repository_provenance": {
+                                        "repository_id": frame.resolved_repository_id,
+                                        "full_name": "Mortified2896/omnigent",
+                                        "role": frame.objective_role,
+                                        "default_branch": "main",
+                                        "head_sha": "a" * 40,
+                                    },
                                 }
                             )
                         else:
@@ -179,6 +186,11 @@ async def _create_git_session(
         ``{"branch_name": "feature/x", "base_branch": "main"}``.
     :returns: The raw create response.
     """
+    git = {
+        "resolved_repository_id": 1293694128,
+        "objective_role": "omnigent_product_runtime",
+        **git,
+    }
     return await client.post(
         "/v1/sessions",
         json={
@@ -217,12 +229,17 @@ async def test_create_passes_branch_and_base_branch_to_host(
     assert frame.repo_path == _SOURCE_REPO
     assert frame.branch_name == "feature/login"
     assert frame.base_branch == "main"
+    assert frame.resolved_repository_id == 1293694128
+    assert frame.objective_role == "omnigent_product_runtime"
 
     # The returned worktree path becomes the session workspace, and the
     # branch is persisted (drives sidebar display + delete cleanup).
     body = resp.json()
     assert body["git_branch"] == "feature/login"
     assert body["workspace"] == f"{_SOURCE_REPO}-worktrees/feature-login"
+    assert body["labels"]["omnigent.repository.repository_id"] == "1293694128"
+    assert body["labels"]["omnigent.repository.full_name"] == "Mortified2896/omnigent"
+    assert body["labels"]["omnigent.repository.role"] == "omnigent_product_runtime"
 
 
 async def test_create_without_base_branch_sends_none(

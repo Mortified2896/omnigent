@@ -2400,6 +2400,33 @@ class HostProcess:
             success, or ``status: "failed"`` with an error message.
         """
         try:
+            from omnigent.host.repository_identity import (
+                ArchivalOverrideReason,
+                RepositoryIdentityError,
+                RepositoryRole,
+                verify_repository_identity,
+            )
+
+            try:
+                role = RepositoryRole(frame.objective_role)
+                override = (
+                    ArchivalOverrideReason(frame.archival_override_reason)
+                    if frame.archival_override_reason is not None
+                    else None
+                )
+                verified = await asyncio.to_thread(
+                    verify_repository_identity,
+                    repo_path=frame.repo_path,
+                    resolved_repository_id=frame.resolved_repository_id,
+                    objective_role=role,
+                    archival_override_reason=override,
+                )
+            except (ValueError, RepositoryIdentityError) as exc:
+                return HostCreateWorktreeResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error=f"repository identity verification failed: {exc}",
+                )
             # Pause the orphan reaper: create_worktree runs git via
             # subprocess.run, whose children are direct children of this host
             # but not tracked runners — the reaper must not wait() them out
@@ -2428,6 +2455,13 @@ class HostProcess:
             status="ok",
             worktree_path=created.worktree_path,
             branch=created.branch,
+            repository_provenance={
+                "repository_id": verified.repository_id,
+                "full_name": verified.full_name,
+                "role": verified.role.value,
+                "default_branch": verified.default_branch,
+                "head_sha": verified.head_sha,
+            },
         )
 
     async def _handle_remove_worktree(

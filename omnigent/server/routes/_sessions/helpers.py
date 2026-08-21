@@ -7574,6 +7574,9 @@ async def _create_session_worktree(
             repo_path=source_repo,
             branch_name=git.branch_name,
             base_branch=git.base_branch,
+            resolved_repository_id=git.resolved_repository_id or 0,
+            objective_role=git.objective_role or "",
+            archival_override_reason=git.archival_override_reason,
         )
     except WorktreeHostUnavailableError as exc:
         # Host offline / unresponsive — infra, not user input.
