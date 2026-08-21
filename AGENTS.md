@@ -8,26 +8,19 @@ repository. See `CONTRIBUTING.md` for the full contributor workflow.
 This section applies to the `Mortified2896/omnigent` HomeLab deployment. Other
 upstream contributors may use their normal development environments.
 
-For HomeLab work, implementation, validation, and deployment are server-first
-on `ai-control-hub`. Read
-`/home/hermes/workspace/repos/HomeLab/docs/codex-server-workflow.md` before
-resolving a branch or changing live state.
-
-Before the first mutation, fetch, commit, push, merge, build, or deployment,
-verify all of these identities:
-
-- remote hostname: `ai-control-hub`;
-- canonical source: `/home/hermes/workspace/repos/omnigent`;
-- origin fetch and push target: `Mortified2896/omnigent`;
-- worktree status and current branch; and
-- the exact remote ref when the user names an existing branch.
+Before HomeLab work, read the authorized private HomeLab workflow available to
+the executing operator. Before the first mutation, fetch, commit, push, merge,
+build, or deployment, verify the execution host, exact repository root, fetch
+and push owner/repository, worktree status and branch, and any user-named remote
+ref.
 
 Stop on any mismatch. Do not silently repair a branch typo, substitute a
 similarly named branch from another repository, or treat a branch name or
 commit message as proof of product identity.
 
-Use an isolated Omnigent task worktree on `ai-control-hub`. A local Mac clone
-is read-only orientation, not the implementation or deployment source.
+Use an isolated Omnigent task worktree on the authorized execution system. The
+local Mac Codex application is a separate boundary and is not evidence of the
+O1/O2 execution target or capability state.
 
 The default branch, commit, pull-request, and merge target is the customized
 fork `Mortified2896/omnigent`. The official `omnigent-ai/omnigent` repository
@@ -35,9 +28,11 @@ and the `upstream` remote are read-only unless the owner explicitly requests an
 upstream contribution. Inspect the resolved push URL before every push.
 
 The standalone Control Room repository is retired and is never an Omnigent
-source checkout. Historical names such as `control-room-deploy` and
-`/var/lib/omnigent-control-room` are deployment labels, not repository
-identity.
+source checkout. Historical deployment labels are not repository identity.
+
+Live/private HomeLab topology, service state, credentials, and capabilities are
+`INACCESSIBLE` unless verified through an authorized HomeLab authority. Do not
+guess them from public repository prose, branch names, or chat history.
 
 ## HomeLab Omnigent dual-instance safety
 
@@ -58,31 +53,24 @@ The authoritative safety contract is in
 document overrides any less-specific deployment wording in this
 repository. Read it before any deployment work.
 
-## HomeLab Omnigent trusted root access
+## HomeLab capability boundary
 
-O1 and O2 are intentionally trusted administrative agents on the private
-HomeLab host. They have unrestricted passwordless root access through
-`sudo -n <command>`. For authorized, in-scope Omnigent work, use `sudo -n`
-autonomously whenever root is useful or required. Root required is a capability,
-not a blocker: do not stop, ask the user to SSH into the server, or ask the user
-to run privileged commands manually merely because root is required.
+Ordinary O1/O2 agent and harness children must not infer root access from this
+file. Machine-enforced capability configuration owns desired policy, and
+authorized timestamped live evidence owns observed capability. If those
+authorities are unavailable or disagree, report `INACCESSIBLE`, `UNKNOWN`, or
+drift and stop before the privileged action.
 
-Normal in-scope uses include systemd/service administration; deployment and
-rollback; diagnostics and journals; filesystem ownership and permissions;
-package/runtime installation; HomeLab configuration; authorized database
-backup or migration; and recovery of broken O1/O2 states.
+Human emergency root access and controlled privileged deployment are separate
+boundaries from ordinary child capability. A deployment interface may perform
+only its machine-validated operations after its independent authorization and
+peer-supervision gates; that does not grant a general-purpose root shell to an
+ordinary coding child. The local Mac Codex application is separate again.
 
-Root access does not remove the dual-instance safety invariant:
-
-- Never let an Omnigent instance upgrade itself.
-- O1 upgrades O2; O2 upgrades O1.
-- Target and supervisor must differ.
-- Keep the healthy supervisor available throughout an upgrade or recovery.
-
-For destructive actions outside the requested scope—including deleting user
-data, destroying VMs or storage, removing credentials, disabling recovery or
-rollback, or materially widening external access—obtain explicit user
-authorization first.
+Never restore or assume unrestricted sudo for O1/O2 children. Root-required
+work needs an authorized capability path; prose is never a bypass. The
+target/supervisor inequality and destructive-action authorization gates still
+apply.
 
 ## Committing
 
