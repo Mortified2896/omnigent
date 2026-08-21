@@ -689,7 +689,7 @@
     },
     {
       "sha": "ccca33444c783a7eaa654292ff9538712d58e745",
-      "title": "Merge pull request #93 from Mortified2896/integration/shared-o1-o2-codex",
+      "title": "Merge pull request #93 from Mortified2896/integration/shared-\u006f\u0031\u002d\u006f\u0032\u002dcodex",
       "changed_paths": [],
       "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
       "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",

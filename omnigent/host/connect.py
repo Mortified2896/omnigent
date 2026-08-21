@@ -78,6 +78,7 @@ from omnigent.host.git_worktree import (
     remove_worktree,
 )
 from omnigent.host.identity import HostIdentity, load_or_create_host_identity
+from omnigent.host.repository_identity import RepositoryIdentityError
 from omnigent.host.runner_zygote import ZygoteManager, ZygoteRunnerProc, ZygoteUnavailable
 from omnigent.inner import _proc
 from omnigent.onboarding.harness_auth import (
@@ -1347,7 +1348,6 @@ class HostProcess:
             try:
                 from omnigent.host.repository_identity import (
                     ArchivalOverrideReason,
-                    RepositoryIdentityError,
                     RepositoryRole,
                     verify_repository_identity,
                 )
