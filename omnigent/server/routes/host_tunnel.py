@@ -56,6 +56,7 @@ from omnigent.runner.transports.ws_tunnel.frames import (
     encode_frame,
 )
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.host_identity import find_live_host_name_collision
 from omnigent.server.host_registry import (
     HostConnection,
     HostRegistry,
@@ -140,10 +141,11 @@ def create_host_tunnel_router(
         2. Accept the WS upgrade.
         3. Receive the ``host.hello`` frame.
         4. Validate ``frame_protocol_version`` (strict-major).
-        5. Upsert in the ``hosts`` DB table.
-        6. Register in the :class:`HostRegistry`.
-        7. Start sender, receiver, and ping loops.
-        8. On disconnect: deregister, set offline in DB.
+        5. Reject a different live host already using this owner/name.
+        6. Upsert in the ``hosts`` DB table.
+        7. Register in the :class:`HostRegistry`.
+        8. Start sender, receiver, and ping loops.
+        9. On disconnect: deregister, set offline in DB.
         """
         # Legacy hosts dial in with ``host_<hex>`` — normalise to the stored
         # bare form. Malformed ids are refused here because WebSocket routes
@@ -251,6 +253,32 @@ def create_host_tunnel_router(
                 )
                 await _send_connection_error(ws, stage="protocol", error=error)
                 await ws.close(code=4002, reason=error)
+                return
+
+            collision = await asyncio.to_thread(
+                find_live_host_name_collision,
+                host_store,
+                host_id=host_id,
+                user_id=tunnel_owner,
+                name=frame.name,
+            )
+            if collision is not None:
+                _logger.warning(
+                    "Refusing host identity collision: connecting host %s "
+                    "advertised owner=%r name=%r while live host %s already "
+                    "uses that identity",
+                    host_id,
+                    tunnel_owner,
+                    frame.name,
+                    collision.host_id,
+                )
+                error = (
+                    "Another live host with this account and name is already "
+                    "connected. Stop the duplicate host process or configure "
+                    "a distinct host name before reconnecting."
+                )
+                await _send_connection_error(ws, stage="identity", error=error)
+                await ws.close(code=4009, reason=error)
                 return
 
             stage = "registration"
