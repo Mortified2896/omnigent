@@ -93,6 +93,8 @@ class PublicationEvidence:
     pr_head: str | None = None
     pr_base: str | None = None
     pr_draft: bool | None = None
+    expected_pr_url: str | None = None
+    expected_pr_base: str | None = None
     worktree_clean: bool = False
     task_changes_exist: bool = False
     publication_error: str | None = None
@@ -260,6 +262,7 @@ def read_publication_evidence(
     publication_error: str | None = None,
     task_changes_exist: bool = False,
     capabilities: PublicationCapabilities | None = None,
+    expected_pr_base: str | None = None,
 ) -> PublicationEvidence:
     """Perform independent local, remote, and PR reads; never trust a worker summary."""
     capabilities = capabilities or readback.capability_preflight()
@@ -273,6 +276,8 @@ def read_publication_evidence(
         pr_head=pull.head if pull else None,
         pr_base=pull.base if pull else None,
         pr_draft=pull.draft if pull else None,
+        expected_pr_url=pr_url,
+        expected_pr_base=expected_pr_base,
         worktree_clean=worktree_clean,
         task_changes_exist=task_changes_exist,
         publication_error=publication_error,
@@ -306,6 +311,10 @@ def _validate_checkpoint_evidence(evidence: PublicationEvidence) -> None:
         raise PublicationCheckpointError("local, remote, and PR heads do not match")
     if evidence.pr_draft is False:
         raise PublicationCheckpointError("publication checkpoint requires a draft PR")
+    if evidence.expected_pr_url and evidence.pr_url != evidence.expected_pr_url:
+        raise PublicationCheckpointError("PR read-back URL does not match the requested PR")
+    if evidence.expected_pr_base and evidence.pr_base != evidence.expected_pr_base:
+        raise PublicationCheckpointError("PR base does not match the task branch contract")
 
 
 def finalize_publication(
@@ -367,6 +376,7 @@ def reconcile_publication(
             publication_error=publication_error,
             task_changes_exist=run.has_task_owned_changes,
             capabilities=capabilities,
+            expected_pr_base=run.base_branch,
         )
         finalize_publication(PublicationState.CHECKPOINTED, evidence)
     except (OSError, subprocess.SubprocessError, PublicationCheckpointError) as exc:
@@ -420,6 +430,7 @@ def complete_run(run: PublicationRun, readback: PublicationReadback) -> Publicat
         pr_url=run.pr_url,
         worktree_clean=_read_task_dirty_state(run, readback).task_worktree_clean,
         task_changes_exist=run.has_task_owned_changes,
+        expected_pr_base=run.base_branch,
     )
     finalize_publication(PublicationState.COMPLETED, evidence)
     return replace(

@@ -170,6 +170,39 @@ def test_non_draft_pr_is_not_a_checkpoint() -> None:
         )
 
 
+def test_wrong_pr_identity_or_base_is_rejected() -> None:
+    with pytest.raises(PublicationCheckpointError, match="URL does not match"):
+        finalize_publication(
+            PublicationState.CHECKPOINTED,
+            PublicationEvidence(
+                local_commit=SHA,
+                remote_commit=SHA,
+                pr_url="https://github.com/example/repo/pull/2",
+                pr_head=SHA,
+                pr_base="main",
+                pr_draft=True,
+                expected_pr_url=PR_URL,
+                expected_pr_base="main",
+                worktree_clean=True,
+            ),
+        )
+    with pytest.raises(PublicationCheckpointError, match="PR base"):
+        finalize_publication(
+            PublicationState.CHECKPOINTED,
+            PublicationEvidence(
+                local_commit=SHA,
+                remote_commit=SHA,
+                pr_url=PR_URL,
+                pr_head=SHA,
+                pr_base="main",
+                pr_draft=True,
+                expected_pr_url=PR_URL,
+                expected_pr_base="codex/parent-issue",
+                worktree_clean=True,
+            ),
+        )
+
+
 def test_exact_eight_hour_dirty_budget_pattern_requires_checkpoint() -> None:
     run = record_progress(
         _run(),
@@ -285,6 +318,26 @@ def test_sequential_issue_allowed_after_verified_checkpoint() -> None:
         pr_base="main",
     )
     guard_issue_transition(run, "example/repo#119")
+
+
+def test_stacked_branch_requires_matching_parent_pr_base() -> None:
+    stacked_run = _run(base_branch="codex/parent-issue", local_commit=SHA)
+    matching = PullRequestReadback(PR_URL, SHA, "codex/parent-issue", True)
+    result = reconcile_publication(
+        stacked_run,
+        FakeReadback(pr=matching),
+        pr_url=PR_URL,
+    )
+    assert result.status is PublicationState.CHECKPOINTED
+
+    mismatch = reconcile_publication(
+        stacked_run,
+        FakeReadback(),
+        pr_url=PR_URL,
+    )
+    assert mismatch.status is PublicationState.BLOCKED_PUBLICATION
+    assert mismatch.publication_error is not None
+    assert "PR base" in mismatch.publication_error
 
 
 def test_readback_is_independent_and_complete() -> None:
