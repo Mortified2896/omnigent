@@ -1,8 +1,9 @@
 name: CI
 
-# Unit-test pytest matrix on every non-draft PR and on push to main. Tests are
-# split across directory-based matrix groups (runtime-*, server-*, inner-rest,
-# tools, repl-sdk, spec-llms, runner-app, stores, misc) so slow files don't
+# Unit-test pytest matrix on every non-draft, non-documentation PR and on
+# executable pushes to main. Tests are split across directory-based matrix
+# groups (runtime-*, server-*, inner-rest, tools, repl-sdk, spec-llms,
+# runner-app, stores, misc) so slow files don't
 # bottleneck one runner; the slowest groups use `--dist=worksteal` to fan tests
 # out within a file. The `misc` group is a catch-all so new top-level
 # tests/<dir>/ are picked up automatically (it ignores the dirs that have their
@@ -12,14 +13,14 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ['web/**', 'tests/e2e_ui/**', 'CHANGELOG.md']
+    paths-ignore: ['web/**', 'tests/e2e_ui/**', '*.md', '**/*.md']
   push:
     branches:
       - main
       # Release branches: release.yml's green-CI gate reads check runs off the
       # branch head, so cherry-picks and release-bump commits must run CI.
       - 'release/v[0-9]*'
-    paths-ignore: ['web/**', 'tests/e2e_ui/**', 'CHANGELOG.md']
+    paths-ignore: ['web/**', 'tests/e2e_ui/**', '*.md', '**/*.md']
 
 permissions:
   contents: read
