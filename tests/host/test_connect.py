@@ -29,6 +29,7 @@ from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE,
     HostCreateDirFrame,
     HostCreateDirResultFrame,
+    HostCreateWorktreeFrame,
     HostDetectCredentialsFrame,
     HostDetectCredentialsResultFrame,
     HostHarnessReadinessFrame,
@@ -65,6 +66,40 @@ from omnigent.runner.identity import (
 from omnigent.runtime.prompt import TRUSTED_ROOT_ACCESS_ENV
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_create_worktree_rejects_identity_before_git_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The host identity gate runs before branch/fetch/worktree mutations."""
+    import omnigent.host.connect as connect_mod
+    import omnigent.host.repository_identity as identity_mod
+
+    mutated = False
+
+    def _reject(**_kwargs: object) -> object:
+        raise identity_mod.RepositoryIdentityError("dormant repository is forbidden")
+
+    def _mutate(**_kwargs: object) -> object:
+        nonlocal mutated
+        mutated = True
+        raise AssertionError("git mutation must not run")
+
+    monkeypatch.setattr(identity_mod, "verify_repository_identity", _reject)
+    monkeypatch.setattr(connect_mod, "create_worktree", _mutate)
+    result = await _make_host_process()._handle_create_worktree(
+        HostCreateWorktreeFrame(
+            request_id="req_wrong_hatchet",
+            repo_path="/repo",
+            branch_name="hatchet-agent-orchestration-pilot",
+            resolved_repository_id=1271340882,
+            objective_role="omnigent_product_runtime",
+        )
+    )
+
+    assert result.status == "failed"
+    assert "repository identity verification failed" in (result.error or "")
+    assert mutated is False
 
 
 async def test_handle_model_options_uses_host_claude_configuration(
