@@ -3300,6 +3300,7 @@ async function reconcileOnReconnect(id: string, set: Setter, get: Getter): Promi
   recordDeliveryTelemetry({
     phase: "reconcile",
     timestamp: Date.now(),
+    publishedAt: null,
     connectionId: null,
     conversationId: id,
     responseId: session.terminalResponse?.responseId ?? session.activeResponseId ?? null,
@@ -3469,6 +3470,7 @@ export async function startStreamPump(
             recordDeliveryTelemetry({
               phase: "disconnect",
               timestamp: Date.now(),
+              publishedAt: null,
               connectionId,
               conversationId: id,
               responseId: get().activeResponse?.responseId ?? null,
@@ -3487,6 +3489,7 @@ export async function startStreamPump(
           recordDeliveryTelemetry({
             phase: "receive",
             timestamp: Date.now(),
+            publishedAt: metadata.publishedAt,
             connectionId,
             conversationId: id,
             responseId: get().activeResponse?.responseId ?? null,
@@ -3535,6 +3538,7 @@ export async function startStreamPump(
         recordDeliveryTelemetry({
           phase: "reconnect",
           timestamp: Date.now(),
+          publishedAt: null,
           connectionId,
           conversationId: id,
           responseId: get().activeResponse?.responseId ?? null,
@@ -3950,7 +3954,13 @@ export async function pumpStreamEvents(
 ): Promise<StreamEndReason> {
   const stream = new BlockStream();
   const sseResult: SseStreamResult = { sawDone: false };
-  const rawEvents = parseSseStream(body, sseResult, { onFrame: options?.onFrame });
+  let latestFrameMetadata: SseFrameMetadata | null = null;
+  const rawEvents = parseSseStream(body, sseResult, {
+    onFrame: (metadata) => {
+      latestFrameMetadata = metadata;
+      options?.onFrame?.(metadata);
+    },
+  });
   // Tap the raw event stream for `session.*` side effects (sessionStatus,
   // pending-message promotion, interrupted decoration) before handing it
   // to the BlockStream reducer. The reducer is intentionally pure
@@ -3964,7 +3974,7 @@ export async function pumpStreamEvents(
   // Per-message high-water chunk index, for delta duplicate suppression.
   const liveLastIndex = new Map<string, number>();
   const events = tapLiveDeltas(
-    tapSessionEvents(rawEvents, id),
+    tapSessionEvents(rawEvents, id, () => latestFrameMetadata),
     id,
     retiredLiveMessages,
     liveLastIndex,
@@ -5302,12 +5312,20 @@ function applyChildSessionUpdated(
 async function* tapSessionEvents(
   events: AsyncIterable<StreamEvent>,
   sessionId?: string,
+  frameMetadata?: () => SseFrameMetadata | null,
 ): AsyncIterable<StreamEvent> {
   for await (const event of events) {
     handleSessionEvent(event);
     if (sessionId !== undefined) {
       pushSseEvent(sessionId, event);
+    }
+    yield event;
+    if (sessionId !== undefined) {
+      // Record application only after the downstream BlockStream has consumed
+      // this event and committed its blocks. The watermark then answers
+      // "client apply?", rather than merely "parser yielded?".
       const state = useChatStore.getState();
+      const metadata = frameMetadata?.() ?? null;
       const appliedWatermark = state.blocks
         .map((block) => block.ctx.itemId)
         .filter((itemId): itemId is string => Boolean(itemId))
@@ -5315,17 +5333,17 @@ async function* tapSessionEvents(
       recordDeliveryTelemetry({
         phase: "apply",
         timestamp: Date.now(),
-        connectionId: null,
+        publishedAt: metadata?.publishedAt ?? null,
+        connectionId: metadata?.connectionId ?? null,
         conversationId: sessionId,
         responseId: state.activeResponse?.responseId ?? null,
-        eventSequence: null,
+        eventSequence: metadata?.sequenceNumber ?? null,
         eventType: event.type,
         snapshotWatermark: null,
         clientAppliedWatermark: appliedWatermark ?? null,
         classification: null,
       });
     }
-    yield event;
   }
 }
 

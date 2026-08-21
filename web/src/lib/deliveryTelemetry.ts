@@ -3,6 +3,7 @@ export type DeliveryPhase = "receive" | "apply" | "disconnect" | "reconnect" | "
 export interface DeliveryTelemetryEntry {
   phase: DeliveryPhase;
   timestamp: number;
+  publishedAt: number | null;
   connectionId: string | null;
   conversationId: string;
   responseId: string | null;

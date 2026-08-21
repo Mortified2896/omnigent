@@ -12,6 +12,7 @@ describe("delivery telemetry privacy boundary", () => {
     recordDeliveryTelemetry({
       phase: "reconcile",
       timestamp: 1234,
+      publishedAt: 1200,
       connectionId: "conn_safe",
       conversationId: "conv_safe",
       responseId: "resp_safe",
@@ -27,6 +28,7 @@ describe("delivery telemetry privacy boundary", () => {
       [
         "phase",
         "timestamp",
+        "publishedAt",
         "connectionId",
         "conversationId",
         "responseId",
@@ -46,6 +48,7 @@ describe("delivery telemetry privacy boundary", () => {
       recordDeliveryTelemetry({
         phase: "reconnect",
         timestamp: index,
+        publishedAt: null,
         connectionId: `conn_${index}`,
         conversationId: "conv_safe",
         responseId: null,

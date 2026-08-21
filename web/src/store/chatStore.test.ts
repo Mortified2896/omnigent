@@ -31,6 +31,10 @@ import type {
 } from "@/lib/blocks";
 import type { ConversationItem } from "@/lib/conversationItems";
 import { itemsToBlocks } from "@/lib/itemsToBlocks";
+import {
+  clearDeliveryTelemetry,
+  snapshotDeliveryTelemetry,
+} from "@/lib/deliveryTelemetry";
 import { buildBubbles } from "@/lib/renderItems";
 import { INITIAL_WINDOW_ITEMS, SESSION_HISTORY_PAGE_SIZE } from "@/lib/sessionsApi";
 import { getCurrentAuthorId } from "@/lib/identity";
@@ -194,6 +198,7 @@ let sessionTerminalResponses: Map<
   string,
   { response_id: string; status: "completed" | "failed" | "cancelled" | "incomplete" }
 >;
+let sessionActiveResponseIds: Map<string, string>;
 
 /** Default fetch router: dispatch by URL. Tests override per-call as needed. */
 function defaultFetchHandler(input: RequestInfo | URL, init?: RequestInit): Response {
@@ -309,6 +314,7 @@ function defaultFetchHandler(input: RequestInfo | URL, init?: RequestInit): Resp
       items: sessionSnapshots.get(sessionId) ?? [],
       labels: sessionLabels.get(sessionId) ?? {},
       terminal_response: sessionTerminalResponses.get(sessionId) ?? null,
+      active_response_id: sessionActiveResponseIds.get(sessionId) ?? null,
       pending_elicitations: sessionPendingElicitations.get(sessionId) ?? [],
       pending_inputs: sessionPendingInputs.get(sessionId) ?? [],
       cost_control_mode_override: sessionCostControlOverrides.get(sessionId) ?? null,
@@ -376,6 +382,8 @@ beforeEach(() => {
   sessionLabels = new Map();
   sessionStatuses = new Map();
   sessionTerminalResponses = new Map();
+  sessionActiveResponseIds = new Map();
+  clearDeliveryTelemetry();
   initChatStore(client);
   useChatStore.setState({
     conversationId: null,
@@ -447,6 +455,10 @@ function seedSessionLifecycle(
   else sessionTerminalResponses.delete(id);
 }
 
+function seedSessionActiveResponse(id: string, responseId: string): void {
+  sessionActiveResponseIds.set(id, responseId);
+}
+
 function seedPendingElicitations(id: string, events: Record<string, unknown>[]): void {
   sessionPendingElicitations.set(id, events);
 }
@@ -478,6 +490,70 @@ describe("chatStore — switchTo", () => {
     expect(state.loadingConversation).toBe(false);
     expect(state.conversationLoadError).toBeNull();
   });
+
+  it("reconstructs a genuinely blocked running turn from its snapshot", async () => {
+    const id = "conv_blocked_snapshot";
+    seedSession(id, [userMessage("resp_blocked", "need approval")]);
+    seedSessionLifecycle(id, "running");
+    seedSessionActiveResponse(id, "resp_blocked");
+    seedPendingElicitations(id, [
+      {
+        type: "response.elicitation_request",
+        elicitation_id: "elic_blocked",
+        params: {
+          mode: "form",
+          message: "Approve this action?",
+          phase: "tool_call",
+          policy_name: "ask",
+          content_preview: "",
+        },
+      },
+    ]);
+
+    await useChatStore.getState().switchTo(id);
+
+    const state = useChatStore.getState();
+    expect(state.sessionStatus).toBe("running");
+    expect(state.status).toBe("streaming");
+    expect(state.activeResponse).toMatchObject({
+      responseId: "resp_blocked",
+      state: "streaming",
+    });
+    expect(state.blockedOn).toBe("approval");
+    expect(
+      state.blocks.filter(
+        (block) => block.type === "elicitation" && block.elicitationId === "elic_blocked",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    { sessionStatus: "failed" as const, terminalStatus: "failed" as const },
+    { sessionStatus: "idle" as const, terminalStatus: "cancelled" as const },
+    { sessionStatus: "idle" as const, terminalStatus: "incomplete" as const },
+  ])(
+    "reconstructs a $terminalStatus terminal after a web/server restart",
+    async ({ sessionStatus, terminalStatus }) => {
+      const id = `conv_terminal_${terminalStatus}`;
+      const item = assistantMessage("resp_terminal", "persisted partial or result");
+      seedSession(id, [item]);
+      seedSessionLifecycle(id, sessionStatus, {
+        response_id: "resp_terminal",
+        status: terminalStatus,
+      });
+
+      await useChatStore.getState().switchTo(id);
+
+      const state = useChatStore.getState();
+      expect(state.sessionStatus).toBe(sessionStatus);
+      expect(state.status).toBe("idle");
+      expect(state.activeResponse).toMatchObject({
+        responseId: "resp_terminal",
+        state: terminalStatus,
+      });
+      expect(state.blocks.filter((block) => block.ctx.itemId === item.id)).toHaveLength(1);
+    },
+  );
 
   it("hydrates pendingUserMessages from the snapshot's pending_inputs (native rebind)", async () => {
     // The core fix: a native web message that hasn't round-tripped
@@ -7813,6 +7889,92 @@ describe("chatStore — live delta streaming (claude-native)", () => {
     expect(dones[0]!.ctx.itemId).toBe("ci_1");
     expect(dones[0]!.fullText).toBe("Hello world");
 
+    controller.abort();
+  });
+
+  it("converges when the terminal event arrives before the durable assistant item", async () => {
+    useChatStore.setState({
+      conversationId: "conv_terminal_first",
+      blocks: [],
+      activeResponse: { responseId: "resp_order", state: "streaming", error: null },
+      status: "streaming",
+      sessionStatus: "running",
+    });
+    const { sink, controller } = startPump("conv_terminal_first");
+
+    sink.push(
+      sse("response.completed", {
+        id: "resp_order",
+        status: "completed",
+        output: [],
+      }),
+    );
+    sink.push(messageDone("ci_order", "resp_order", "ordered result"));
+    await tick();
+
+    const state = useChatStore.getState();
+    expect(state.activeResponse?.state).toBe("completed");
+    expect(state.status).toBe("idle");
+    expect(state.blocks.filter((block) => block.ctx.itemId === "ci_order")).toHaveLength(1);
+    controller.abort();
+  });
+
+  it("converges when the durable assistant item arrives before duplicate terminals", async () => {
+    useChatStore.setState({
+      conversationId: "conv_item_first",
+      blocks: [],
+      activeResponse: { responseId: "resp_order", state: "streaming", error: null },
+      status: "streaming",
+      sessionStatus: "running",
+    });
+    const { sink, controller } = startPump("conv_item_first");
+
+    sink.push(messageDone("ci_order", "resp_order", "ordered result"));
+    const terminal = sse("response.completed", {
+      id: "resp_order",
+      status: "completed",
+      output: [],
+    });
+    sink.push(terminal);
+    sink.push(terminal);
+    sink.push(messageDone("ci_order", "resp_order", "ordered result"));
+    await tick();
+
+    const state = useChatStore.getState();
+    expect(state.activeResponse?.state).toBe("completed");
+    expect(state.status).toBe("idle");
+    expect(state.blocks.filter((block) => block.ctx.itemId === "ci_order")).toHaveLength(1);
+    controller.abort();
+  });
+
+  it("records exact frame metadata after reducer item application", async () => {
+    useChatStore.setState({ conversationId: "conv_telemetry_apply", blocks: [] });
+    const { sink, controller } = startPump("conv_telemetry_apply");
+    sink.push(
+      sse("response.output_item.done", {
+        connection_id: "conn_apply",
+        sequence_number: 12,
+        published_at: 1234,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "ci_apply",
+          response_id: "resp_apply",
+          content: [{ type: "output_text", text: "applied" }],
+        },
+      }),
+    );
+    await tick();
+
+    const apply = snapshotDeliveryTelemetry().find(
+      (entry) => entry.phase === "apply" && entry.eventSequence === 12,
+    );
+    expect(apply).toMatchObject({
+      connectionId: "conn_apply",
+      publishedAt: 1234,
+      eventType: "message_done",
+      clientAppliedWatermark: "ci_apply",
+    });
     controller.abort();
   });
 

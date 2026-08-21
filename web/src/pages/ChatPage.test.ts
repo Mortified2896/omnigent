@@ -722,6 +722,10 @@ describe("computeShowsWorking", () => {
     expect(computeShowsWorking("idle", opts())).toBe(false);
   });
 
+  it("a retained idle runner heartbeat is not active work", () => {
+    expect(computeShowsWorking("idle", opts({ runnerOnline: true }))).toBe(false);
+  });
+
   it("parent running → working", () => {
     expect(computeShowsWorking("running", opts())).toBe(true);
   });

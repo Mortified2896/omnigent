@@ -136,3 +136,9 @@ def test_input_policy_deny_persists_item_readable_from_items_api(
             "text": "[Denied by policy: Request contains BLOCK_THIS_TOKEN]",
         }
     ]
+    snapshot_resp = client.get(f"/v1/sessions/{session_id}")
+    assert snapshot_resp.status_code == 200
+    assert snapshot_resp.json()["terminal_response"] == {
+        "response_id": persisted["response_id"],
+        "status": "completed",
+    }

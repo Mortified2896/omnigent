@@ -3722,6 +3722,17 @@ async def _persist_session_status_error_labels(
 
 
 _TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+_DELIVERY_OBSERVABILITY_EVENT_TYPES = frozenset(
+    {
+        "response.completed",
+        "response.failed",
+        "response.cancelled",
+        "response.incomplete",
+        "response.output_item.done",
+        "session.status",
+        "session.interrupted",
+    }
+)
 
 
 async def _persist_terminal_response(
@@ -7060,7 +7071,12 @@ def _publish_policy_deny(session_id: str, reason: str) -> None:
     )
 
 
-def _publish_input_deny_terminal(session_id: str, conv: Conversation, reason: str) -> None:
+def _publish_input_deny_terminal(
+    session_id: str,
+    conv: Conversation,
+    reason: str,
+    response_id: str | None = None,
+) -> str:
     """
     Publish a terminal ``response.completed`` for an INPUT-phase DENY.
 
@@ -7075,10 +7091,12 @@ def _publish_input_deny_terminal(session_id: str, conv: Conversation, reason: st
     :param session_id: Session/conversation identifier.
     :param conv: Conversation whose agent/model name tags the response.
     :param reason: Human-readable deny reason from the policy verdict.
+    :param response_id: Durable response id already assigned to the deny item.
+    :returns: The response id published on the terminal event.
     """
     sentinel = f"{_DENY_SENTINEL_PREFIX}{reason}]"
     response = ResponseObject(
-        id=f"deny_{secrets.token_hex(8)}",
+        id=response_id or f"deny_{secrets.token_hex(8)}",
         status="completed",
         model=conv.agent_id or "policy",
         created_at=int(time.time()),
@@ -7095,6 +7113,7 @@ def _publish_input_deny_terminal(session_id: str, conv: Conversation, reason: st
         session_id,
         CompletedEvent(type="response.completed", response=response).model_dump(exclude_none=True),
     )
+    return response.id
 
 
 async def _persist_policy_deny_sentinel(
@@ -7103,7 +7122,8 @@ async def _persist_policy_deny_sentinel(
     reason: str,
     conversation_store: ConversationStore,
     agent_store: AgentStore,
-) -> None:
+    response_id: str | None = None,
+) -> str:
     """
     Persist the ``[Denied by policy: ...]`` sentinel as assistant history.
 
@@ -7128,15 +7148,18 @@ async def _persist_policy_deny_sentinel(
     :param reason: Human-readable deny reason from the policy verdict.
     :param conversation_store: Store for item persistence.
     :param agent_store: Store used to resolve the agent's display name.
+    :param response_id: Optional preassigned id shared with the terminal edge.
+    :returns: The durable response id assigned to the persisted item.
     """
     import uuid
 
     sentinel = f"{_DENY_SENTINEL_PREFIX}{reason}]"
     agent = agent_store.get(conv.agent_id) if conv.agent_id else None
     agent_name = agent.name if agent is not None else conv.agent_id or "policy"
+    durable_response_id = response_id or f"deny_{uuid.uuid4().hex}"
     item = NewConversationItem(
         type="message",
-        response_id=f"deny_{uuid.uuid4().hex}",
+        response_id=durable_response_id,
         data=parse_item_data(
             "message",
             {
@@ -7154,6 +7177,7 @@ async def _persist_policy_deny_sentinel(
             item=persisted[0].to_api_dict(),
         )
         session_stream.publish(session_id, done_event.model_dump())
+    return durable_response_id
 
 
 def _extract_assistant_text_from_event(body: SessionEventInput) -> str:
@@ -7406,14 +7430,33 @@ async def _stream_live_events(
                     raise ValueError(
                         f"session stream event missing string ``type`` field: {event!r}",
                     )
+                published_at = int(time.time() * 1000)
                 wire_event = {
                     **event,
                     "connection_id": connection_id,
-                    "published_at": int(time.time() * 1000),
+                    "published_at": published_at,
                     "sequence_number": sequence_number,
                 }
-                sequence_number += 1
                 validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(wire_event)
+                if event_type in _DELIVERY_OBSERVABILITY_EVENT_TYPES:
+                    raw_response = event.get("response")
+                    raw_item = event.get("item")
+                    response_id = event.get("response_id")
+                    if not isinstance(response_id, str) and isinstance(raw_response, dict):
+                        response_id = raw_response.get("id")
+                    if not isinstance(response_id, str) and isinstance(raw_item, dict):
+                        response_id = raw_item.get("response_id")
+                    _logger.info(
+                        "SSE delivery publish session=%s connection=%s sequence=%s "
+                        "event=%s response=%s published_at=%s",
+                        session_id,
+                        connection_id,
+                        sequence_number,
+                        event_type,
+                        response_id if isinstance(response_id, str) else None,
+                        published_at,
+                    )
+                sequence_number += 1
                 yield _format_sse(event_type, validated.model_dump())
     except session_stream.SubscriberOverflowError:
         _logger.warning(
@@ -8048,6 +8091,17 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
     """
     if not labels:
         return
+    terminal_keys = {
+        _LAST_TERMINAL_RESPONSE_ID_LABEL_KEY,
+        _LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY,
+    }
+    forged_terminal_keys = sorted(terminal_keys.intersection(labels))
+    if forged_terminal_keys:
+        raise OmnigentError(
+            f"labels {', '.join(repr(key) for key in forged_terminal_keys)} "
+            "are server-internal terminal lifecycle state and cannot be set by clients",
+            code=ErrorCode.INVALID_INPUT,
+        )
     if _TURN_ACTOR_LABEL in labels:
         raise OmnigentError(
             f"label {_TURN_ACTOR_LABEL!r} is server-internal and cannot be set by clients",

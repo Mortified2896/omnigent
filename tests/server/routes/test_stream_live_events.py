@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -145,4 +146,37 @@ async def test_frames_carry_connection_sequence_and_publish_metadata() -> None:
         "sequence_number",
     } <= set(first_payload)
     assert not ({"prompt", "assistant_text", "tool_arguments", "tool_result"} & set(first_payload))
+    await gen.aclose()
+
+
+async def test_delivery_publish_log_excludes_event_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Lifecycle publish evidence contains identifiers, never error/content bodies."""
+    secret = "RAW_PROMPT TOOL_RESULT https://credential.example/token=secret"
+    caplog.set_level(logging.INFO)
+    gen = _stream_live_events(
+        _ConnectedRequest(),  # type: ignore[arg-type]
+        SESSION_ID,
+    )
+    await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+    session_stream.publish(
+        SESSION_ID,
+        {
+            "type": "session.status",
+            "conversation_id": SESSION_ID,
+            "status": "failed",
+            "response_id": "resp_safe",
+            "error": {"code": "runner_error", "message": secret},
+        },
+    )
+    await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+
+    delivery_logs = [
+        record.getMessage() for record in caplog.records if "SSE delivery" in record.getMessage()
+    ]
+    assert len(delivery_logs) == 1
+    assert SESSION_ID in delivery_logs[0]
+    assert "resp_safe" in delivery_logs[0]
+    assert secret not in delivery_logs[0]
     await gen.aclose()
