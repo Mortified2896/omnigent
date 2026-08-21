@@ -31,17 +31,6 @@ describe("modePreferences (per-harness options)", () => {
     });
   });
 
-  it("round-trips a Codex model's access lane", () => {
-    writeHarnessOption("codex-native", {
-      model: "gpt-5.5",
-      accessLane: "codex-direct",
-    });
-    expect(readHarnessOptions("codex-native")).toEqual({
-      model: "gpt-5.5",
-      accessLane: "codex-direct",
-    });
-  });
-
   it("merges a partial patch, preserving the other knobs", () => {
     // The whole point of remembering independently: setting the model later
     // must not clobber an already-stored mode/effort.

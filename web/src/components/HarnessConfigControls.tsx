@@ -25,11 +25,8 @@ export const EFFORT_UNAVAILABLE_PLACEHOLDER = "—";
 
 /** One entry in the Model row's harness-model list. */
 export interface RoutingModelOption {
-  /** Opaque UI selection identity. */
   id: string;
   label: string;
-  /** Provider-facing model id when it differs from the UI identity. */
-  modelId?: string;
 }
 
 /**
@@ -95,8 +92,8 @@ export function RoutingModelSelect({
           <SelectItem
             key={m.id}
             value={m.id}
-            data-model-id={m.modelId ?? m.id}
-            data-active={activeModelId === (m.modelId ?? m.id) ? "true" : undefined}
+            data-model-id={m.id}
+            data-active={activeModelId === m.id ? "true" : undefined}
           >
             {m.label}
           </SelectItem>

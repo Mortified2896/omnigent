@@ -839,37 +839,6 @@ def test_web_model_pick_applied_via_thread_settings_update(
     ]
 
 
-def test_gpt56_max_settings_update_stays_max(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """GPT-5.6 Max reaches Codex unchanged rather than aliasing to xhigh."""
-    _FakeCodexNativeClient.requests = []
-    monkeypatch.setattr(
-        "omnigent.codex_native_app_server.CodexAppServerClient",
-        _FakeCodexNativeClient,
-    )
-    _start_state(tmp_path)
-
-    _run_turn_with_config(
-        CodexNativeExecutor(bridge_dir=tmp_path),
-        "hello",
-        ExecutorConfig(
-            model="codex/gpt-5.6-luna",
-            extra={"reasoning_effort": "max"},
-        ),
-    )
-
-    assert _FakeCodexNativeClient.requests[0] == (
-        "thread/settings/update",
-        {
-            "threadId": "thread_123",
-            "model": "codex/gpt-5.6-luna",
-            "effort": "max",
-        },
-    )
-
-
 def test_model_settings_update_mirrors_model_into_config_toml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

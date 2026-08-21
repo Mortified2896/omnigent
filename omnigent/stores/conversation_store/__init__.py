@@ -77,14 +77,6 @@ SWITCH_PREVIOUS_BUILTIN_LABEL_KEY = "omnigent.switch.previous_builtin_id"
 # normal approval/sandbox stance.
 CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox"
 
-# Native Codex transport selected alongside the lane-specific model override.
-# The label is durable session metadata so a host restart cannot re-resolve the
-# model through a different credential path.
-CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane"
-CODEX_ACCESS_LANE_OMNIROUTE = "omniroute"
-CODEX_ACCESS_LANE_DIRECT = "codex-direct"
-CODEX_ACCESS_LANES = frozenset({CODEX_ACCESS_LANE_OMNIROUTE, CODEX_ACCESS_LANE_DIRECT})
-
 # Reserved label key that stores a session's sidebar "project" membership
 # (implicit collections — a project exists while ≥1 session carries this key).
 # Namespaced so it never collides with the user-facing "project" term or other
@@ -850,6 +842,22 @@ class ConversationStore(ABC):
         ...
 
     @abstractmethod
+    def set_task_summary(
+        self,
+        conversation_id: str,
+        task_summary: str,
+    ) -> Conversation | None:
+        """Set a human-readable task summary on a sub-agent conversation.
+
+        :param conversation_id: Conversation to update.
+        :param task_summary: Short task-derived label, e.g.
+            ``"Investigate auth token refresh"``.
+        :returns: The updated conversation, or ``None`` when the row
+            does not exist.
+        """
+        ...
+
+    @abstractmethod
     def set_labels(
         self,
         conversation_id: str,
@@ -1101,6 +1109,18 @@ class ConversationStore(ABC):
             string ``"YYYY-MM-DD"``, e.g. ``"2026-06-05"``.
         :returns: The summed ``cost_usd`` across matching days, or ``0.0``
             when no rows fall in the range.
+        """
+        ...
+
+    @abstractmethod
+    def list_daily_costs(self, user_id: str, since_day_utc: str) -> list[tuple[str, float]]:
+        """
+        Return per-day cost rows for a user from ``since_day_utc`` onward.
+
+        :param user_id: The user to read, e.g. ``"alice@example.com"``.
+        :param since_day_utc: Inclusive lower-bound UTC day as ``"YYYY-MM-DD"``.
+        :returns: List of ``(day_utc, cost_usd)`` tuples, ascending by day.
+            Days with no spend are omitted.
         """
         ...
 

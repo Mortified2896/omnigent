@@ -1271,6 +1271,129 @@ def test_fetch_pi_model_lists_falls_back_on_http_error() -> None:
     assert gemini == []
 
 
+def test_fetch_pi_model_lists_carries_catalog_token_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The interactive path advertises the catalog's context and output limits.
+
+    Pi defaults an entry with no ``contextWindow``/``maxTokens`` to 128000 /
+    16384, so a 1M-context gateway model registered bare is silently capped —
+    the harness path already carries the real limits, and both surfaces must
+    agree. Regression guard for the two fields going missing again.
+    """
+    import json
+    import unittest.mock
+
+    import httpx
+
+    from omnigent import model_catalog
+    from omnigent.model_metadata import ModelMetadata
+
+    payload = {
+        "model_services": [
+            {
+                "name": "model-services/system.ai.claude-opus-4-8",
+                "supported_api_types": ["mlflow/v1/chat/completions"],
+            }
+        ]
+    }
+
+    def _catalog(provider_name: str) -> tuple[model_catalog.ModelEntry, ...]:
+        """Stand in for the MLflow catalog, which reports the limits.
+
+        :param provider_name: The catalog provider being queried.
+        :returns: One entry, keyed by the ``databricks-`` alias spelling so the
+            alias match is exercised too.
+        """
+        assert provider_name == "databricks"
+        return (
+            model_catalog.ModelEntry(
+                id="databricks-claude-opus-4-8",
+                family="claude",
+                metadata=ModelMetadata(context_window=1000000, max_output_tokens=128000),
+            ),
+        )
+
+    monkeypatch.setattr(model_catalog, "catalog_model_entries", _catalog)
+
+    class _MockTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            """Serve the model-services page.
+
+            :param request: The outgoing request.
+            :returns: The canned response.
+            """
+            return httpx.Response(200, content=json.dumps(payload).encode())
+
+    _real_client = httpx.Client
+    with unittest.mock.patch(
+        "httpx.Client",
+        lambda **kw: _real_client(transport=_MockTransport()),
+    ):
+        claude, _gpt, _completions, _gemini = creds._fetch_pi_model_lists(
+            "https://wkspc.example.com", "tok"
+        )
+
+    assert [m["id"] for m in claude] == ["system.ai.claude-opus-4-8"]
+    assert claude[0]["contextWindow"] == 1000000
+    assert claude[0]["maxTokens"] == 128000
+
+
+def test_fetch_pi_model_lists_survives_catalog_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An MLflow catalog outage drops the limits, never the models.
+
+    Live availability is authoritative: losing the metadata lookup must leave
+    the picker fully populated (Pi then applies its own defaults) rather than
+    failing the launch.
+    """
+    import json
+    import unittest.mock
+
+    import httpx
+
+    from omnigent import model_catalog
+
+    payload = {
+        "model_services": [
+            {
+                "name": "model-services/system.ai.claude-opus-4-8",
+                "supported_api_types": ["mlflow/v1/chat/completions"],
+            }
+        ]
+    }
+
+    def _boom(provider_name: str) -> tuple[model_catalog.ModelEntry, ...]:
+        """Fail the metadata lookup.
+
+        :param provider_name: The catalog provider being queried.
+        :returns: Never returns.
+        """
+        raise RuntimeError("catalog unavailable")
+
+    monkeypatch.setattr(model_catalog, "catalog_model_entries", _boom)
+
+    class _MockTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            """Serve the model-services page.
+
+            :param request: The outgoing request.
+            :returns: The canned response.
+            """
+            return httpx.Response(200, content=json.dumps(payload).encode())
+
+    _real_client = httpx.Client
+    with unittest.mock.patch(
+        "httpx.Client",
+        lambda **kw: _real_client(transport=_MockTransport()),
+    ):
+        claude, _gpt, _completions, _gemini = creds._fetch_pi_model_lists(
+            "https://wkspc.example.com", "tok"
+        )
+
+    assert [m["id"] for m in claude] == ["system.ai.claude-opus-4-8"]
+    assert "contextWindow" not in claude[0]
+
+
 def _mock_databricks_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the Databricks profile path at a fake workspace with fake creds."""
     from omnigent.inner import databricks_executor
@@ -1624,64 +1747,16 @@ def test_launch_renders_config_once(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert renders == 1
 
 
-def test_enumerate_inline_family_drops_cx_alias_and_other_providers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The pre-launch picker exposes only canonical codex/gpt-* ids.
+def test_default_claude_model_from_picks_by_tier_then_newest() -> None:
+    """Pi's launch default follows the ``opus > sonnet > …`` precedence, newest first."""
+    from omnigent.pi_native_credentials import _default_claude_model_from
 
-    OmniRoute's ``/v1/models`` is a merged catalog that surfaces Claude,
-    Gemini, Llama, DeepSeek, NVIDIA, Cloudflare, Mistral, GitHub Models,
-    OpenRouter, and the ``cx/*`` alias of the Codex bucket. The picker must
-    suppress every non-OpenAI provider and the ``cx/*`` duplicate so the
-    pre-launch dropdown stays minimal and free of duplicate aliases.
-    """
-    import omnigent.model_catalog as catalog_mod
-
-    listing = SimpleNamespace(
-        models=[
-            SimpleNamespace(id="custom/best-coding"),
-            SimpleNamespace(id="codex/gpt-5.5"),
-            SimpleNamespace(id="codex/gpt-5.4"),
-            SimpleNamespace(id="cx/gpt-5.5"),
-            SimpleNamespace(id="cx/gpt-5.4"),
-            SimpleNamespace(id="gpt-5-5"),
-            # Non-OpenAI providers that must NEVER appear in the picker.
-            SimpleNamespace(id="claude-opus-4-7"),
-            SimpleNamespace(id="gemini-3-5-pro"),
-            SimpleNamespace(id="llama-4-maverick"),
-            SimpleNamespace(id="deepseek-r1"),
-            SimpleNamespace(id="nvidia/llama-3.1-70b"),
-            SimpleNamespace(id="cloudflare/@cf/meta/llama-3.1-70b"),
-            SimpleNamespace(id="mistral/mistral-large"),
-            SimpleNamespace(id="github/gpt-4o"),
-            SimpleNamespace(id="openrouter/anthropic/claude-3.5"),
-            SimpleNamespace(id="gh/gpt-4o-mini"),
-            SimpleNamespace(id="ddgw/llama-3-70b"),
-            SimpleNamespace(id="text-embedding-3-small"),
-            SimpleNamespace(id="whisper-1"),
-        ]
-    )
-
-    class _Family:
-        base_url = "https://omniroute.example.com/v1"
-        api_key = ""
-        auth_command = ""
-
-    class _Entry:
-        kind = "gateway"
-        name = "omnigent"
-
-        def family_default_model(self, _family: str) -> str | None:
-            return "custom/best-coding"
-
-    monkeypatch.setattr(catalog_mod, "is_direct_openai_provider", lambda _p: False)
-    monkeypatch.setattr(catalog_mod, "_fetch_openai_compatible_listing", lambda *_a, **_k: listing)
-
-    result = creds._enumerate_inline_family_models(
-        _Entry(),  # type: ignore[arg-type]
-        "openai",
-        _Family(),  # type: ignore[arg-type]
-    )
-
-    ids = sorted(entry["id"] for entry in result)
-    assert ids == ["codex/gpt-5.4", "codex/gpt-5.5"]
+    entries = [
+        {"id": "system.ai.claude-sonnet-5"},
+        {"id": "system.ai.claude-opus-4-8"},
+        {"id": "system.ai.claude-opus-5"},
+    ]
+    # opus outranks sonnet, and opus-5 is the newest opus.
+    assert _default_claude_model_from(entries) == "system.ai.claude-opus-5"
+    # An empty live listing lets the caller fall through to the bundled catalog.
+    assert _default_claude_model_from([]) is None

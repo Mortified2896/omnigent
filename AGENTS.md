@@ -3,87 +3,6 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
-## HomeLab server-first boundary
-
-This section applies to the `Mortified2896/omnigent` HomeLab deployment. Other
-upstream contributors may use their normal development environments.
-
-For HomeLab work, implementation, validation, and deployment are server-first
-on `ai-control-hub`. Read
-`/home/hermes/workspace/repos/HomeLab/docs/codex-server-workflow.md` before
-resolving a branch or changing live state.
-
-Before the first mutation, fetch, commit, push, merge, build, or deployment,
-verify all of these identities:
-
-- remote hostname: `ai-control-hub`;
-- canonical source: `/home/hermes/workspace/repos/omnigent`;
-- origin fetch and push target: `Mortified2896/omnigent`;
-- worktree status and current branch; and
-- the exact remote ref when the user names an existing branch.
-
-Stop on any mismatch. Do not silently repair a branch typo, substitute a
-similarly named branch from another repository, or treat a branch name or
-commit message as proof of product identity.
-
-Use an isolated Omnigent task worktree on `ai-control-hub`. A local Mac clone
-is read-only orientation, not the implementation or deployment source.
-
-The default branch, commit, pull-request, and merge target is the customized
-fork `Mortified2896/omnigent`. The official `omnigent-ai/omnigent` repository
-and the `upstream` remote are read-only unless the owner explicitly requests an
-upstream contribution. Inspect the resolved push URL before every push.
-
-The standalone Control Room repository is retired and is never an Omnigent
-source checkout. Historical names such as `control-room-deploy` and
-`/var/lib/omnigent-control-room` are deployment labels, not repository
-identity.
-
-## HomeLab Omnigent dual-instance safety
-
-This repository maintains the HomeLab Omnigent dual-instance deployment
-(O1 maintenance + O2 production). The hard invariant is:
-
-> Never let an Omnigent instance upgrade itself. O1 upgrades O2;
-> O2 upgrades O1. The healthy peer stays alive and supervises the
-> entire operation.
-
-Any deployment action MUST explicitly declare a target and supervisor
-identity, and the two must be different instances. The deployment
-tooling (`deploy/scripts/peer_deployer/`) refuses to run if target
-and supervisor resolve to the same instance.
-
-The authoritative safety contract is in
-`deploy/docs/control-room-dual-instance-upgrade-safety.md`. That
-document overrides any less-specific deployment wording in this
-repository. Read it before any deployment work.
-
-## HomeLab Omnigent trusted root access
-
-O1 and O2 are intentionally trusted administrative agents on the private
-HomeLab host. They have unrestricted passwordless root access through
-`sudo -n <command>`. For authorized, in-scope Omnigent work, use `sudo -n`
-autonomously whenever root is useful or required. Root required is a capability,
-not a blocker: do not stop, ask the user to SSH into the server, or ask the user
-to run privileged commands manually merely because root is required.
-
-Normal in-scope uses include systemd/service administration; deployment and
-rollback; diagnostics and journals; filesystem ownership and permissions;
-package/runtime installation; HomeLab configuration; authorized database
-backup or migration; and recovery of broken O1/O2 states.
-
-Root access does not remove the dual-instance safety invariant:
-
-- Never let an Omnigent instance upgrade itself.
-- O1 upgrades O2; O2 upgrades O1.
-- Target and supervisor must differ.
-- Keep the healthy supervisor available throughout an upgrade or recovery.
-
-For destructive actions outside the requested scope—including deleting user
-data, destroying VMs or storage, removing credentials, disabling recovery or
-rollback, or materially widening external access—obtain explicit user
-authorization first.
-
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or
@@ -126,8 +45,10 @@ sections.
 
 When you finish a task, print instructions to the user on how to test it: the
 commands to run, the inputs to provide, or the steps to reproduce so they can
-verify the result themselves. Don't leave the user guessing how to confirm the
-work — tell them exactly what to do.
+verify the result themselves. Prefer verification that is best performed by a
+human, such as concrete manual behavior checks, rather than only listing unit
+test commands. Don't leave the user guessing how to confirm the work — tell
+them exactly what to do.
 
 ## Deprecating features
 

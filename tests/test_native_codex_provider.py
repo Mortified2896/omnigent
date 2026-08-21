@@ -56,109 +56,6 @@ def _write_codex_login(home: Path, *, logged_in: bool) -> None:
     (codex_dir / "auth.json").write_text(content, encoding="utf-8")
 
 
-def test_explicit_omniroute_lane_uses_configured_default_and_model(_isolated: Path) -> None:
-    """The lane selects the known configured default without URL/name heuristics."""
-    _seed(
-        _isolated,
-        {
-            "production-gateway": {
-                "kind": "gateway",
-                "default": True,
-                "openai": {
-                    "base_url": "https://gateway.example.test/v1",
-                    "api_key": "test-placeholder",
-                },
-            },
-            "codex-sub": {"kind": "subscription", "cli": "codex"},
-        },
-    )
-
-    launch = resolve_native_codex_launch(
-        model="codex/gpt-5.6-luna",
-        access_lane="omniroute",
-    )
-
-    joined = "\n".join(launch.config_overrides)
-    assert launch.model == "codex/gpt-5.6-luna"
-    assert 'model_provider="omnigent_provider"' in joined
-    assert "gateway.example.test" in joined
-    assert "production-gateway" in launch.summary
-    assert launch.trace_provenance is not None
-    assert launch.trace_provenance.access_lane == "omniroute"
-    assert launch.trace_provenance.provider == "production-gateway"
-    assert launch.trace_provenance.provider_fallback is None
-
-
-def test_explicit_codex_direct_lane_forces_subscription_transport(
-    _isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Direct Codex always pins the built-in OpenAI subscription provider."""
-    monkeypatch.setattr(
-        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: True
-    )
-    _seed(
-        _isolated,
-        {
-            "omniroute": {
-                "kind": "gateway",
-                "default": True,
-                "openai": {
-                    "base_url": "http://127.0.0.1:20128/v1",
-                    "api_key": "test-placeholder",
-                },
-            }
-        },
-    )
-
-    launch = resolve_native_codex_launch(model="gpt-5.5", access_lane="codex-direct")
-
-    assert launch.config_overrides == ['model_provider="openai"']
-    assert launch.model == "gpt-5.5"
-    assert launch.profile is None
-    assert launch.trace_provenance is not None
-    assert launch.trace_provenance.access_lane == "codex-direct"
-    assert launch.trace_provenance.provider == "openai-codex-subscription"
-    assert launch.trace_provenance.provider_fallback is False
-
-
-def test_explicit_codex_direct_lane_fails_without_login(
-    _isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: False
-    )
-
-    with pytest.raises(OmnigentError, match=r"^Codex Subscription — Direct is not authenticated$"):
-        resolve_native_codex_launch(model="gpt-5.5", access_lane="codex-direct")
-
-
-def test_explicit_lane_rejects_missing_model(_isolated: Path) -> None:
-    with pytest.raises(OmnigentError, match="requires an explicit model"):
-        resolve_native_codex_launch(model=None, access_lane="omniroute")
-
-
-def test_direct_lane_accepts_model_id_also_used_by_omniroute(
-    _isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Lane identity, not model spelling, selects the subscription transport."""
-    monkeypatch.setattr(
-        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: True
-    )
-
-    launch = resolve_native_codex_launch(
-        model="codex/gpt-5.5",
-        access_lane="codex-direct",
-    )
-
-    assert launch.model == "codex/gpt-5.5"
-    assert launch.config_overrides == ['model_provider="openai"']
-
-
-def test_omniroute_lane_fails_clearly_without_configured_default(_isolated: Path) -> None:
-    with pytest.raises(OmnigentError, match=r"^OmniRoute lane unavailable$"):
-        resolve_native_codex_launch(model="gpt-5.5", access_lane="omniroute")
-
-
 def test_provider_codex_overrides_coerce_chat_wire_to_responses() -> None:
     """A ``chat`` provider wire is coerced to ``responses`` in the override.
 
@@ -536,6 +433,74 @@ def test_resolve_native_codex_launch_undismissed_config_provider_routes_via_pin(
     codex_dir = _isolated / ".codex"
     codex_dir.mkdir()
     (codex_dir / "config.toml").write_text(_DISMISSIBLE_CODEX_CONFIG)
+
+    launch = resolve_native_codex_launch(model=None)
+
+    assert launch.config_overrides == ['model_provider="Databricks"']
+    assert launch.profile is None
+
+
+def test_config_provider_shadowed_by_nondefault_explicit_entry_still_pins(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nondefault adopted entry cannot hide Codex's active config provider.
+
+    The explicit entry shadows ambient synthesis by name, but Codex itself
+    still selects the provider from config.toml. An empty launch would make a
+    synthesized resume rollout record OpenAI and lose this provider's auth.
+    """
+    monkeypatch.setattr("omnigent.onboarding.ambient._ollama_reachable", lambda: False)
+    codex_dir = _isolated / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text(_DISMISSIBLE_CODEX_CONFIG)
+    _seed(
+        _isolated,
+        {
+            "codex-databricks": {
+                "kind": "cli-config",
+                "cli": "codex",
+                "model_provider": "Databricks",
+                "display_name": "Databricks AI Gateway",
+            }
+        },
+    )
+
+    launch = resolve_native_codex_launch(model="test-model")
+
+    assert launch.config_overrides == ['model_provider="Databricks"']
+    assert launch.model == "test-model"
+    assert launch.profile is None
+
+
+def test_shadowed_config_detection_uses_active_profile_provider(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback pins the provider selected by Codex's active profile."""
+    monkeypatch.setattr("omnigent.onboarding.ambient._ollama_reachable", lambda: False)
+    codex_dir = _isolated / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text(
+        'profile = "work"\n'
+        'model_provider = "UnusedTopLevel"\n'
+        "[profiles.work]\n"
+        'model_provider = "Databricks"\n'
+        "[model_providers.Databricks]\n"
+        'name = "Databricks AI Gateway"\n'
+        'base_url = "https://example.ai-gateway.cloud.databricks.com/codex/v1"\n'
+        "[model_providers.Databricks.auth]\n"
+        'command = "jq"\n'
+    )
+    _seed(
+        _isolated,
+        {
+            "codex-databricks": {
+                "kind": "cli-config",
+                "cli": "codex",
+                "model_provider": "Databricks",
+                "display_name": "Databricks AI Gateway",
+            }
+        },
+    )
 
     launch = resolve_native_codex_launch(model=None)
 

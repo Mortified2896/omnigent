@@ -75,42 +75,6 @@ def _symlink_agent_resource_dirs(
             )
 
 
-def _link_global_auth_file(
-    managed_dir: Path,
-    global_agent_dir: Path,
-) -> None:
-    """Expose the global Pi ``auth.json`` inside the managed agent dir.
-
-    Pi resolves its credential store from ``PI_CODING_AGENT_DIR/auth.json``
-    (see Pi's :func:`getAgentDir`). A managed session therefore needs a
-    copy of the user's global ``auth.json`` to authenticate Pi's built-in
-    providers — most importantly ``openai-codex`` for ChatGPT Plus/Pro
-    OAuth — without copying tokens into a divergent refresh state.
-
-    Symlinking (rather than copying) keeps Pi's lock-protected refresh
-    writers pointed at the single global file, so refreshes and logouts
-    issued from the managed session update the same auth store the user's
-    other Pi sessions see. A pre-existing per-session ``auth.json`` is
-    left untouched so a managed session with its own credentials is not
-    hijacked.
-    """
-    source = global_agent_dir / "auth.json"
-    if not source.is_file():
-        return
-    target = managed_dir / "auth.json"
-    if target.exists() or target.is_symlink():
-        return
-    try:
-        target.symlink_to(source)
-    except OSError as exc:
-        _logger.warning(
-            "Could not symlink Pi auth.json %s -> %s: %s",
-            target,
-            source,
-            exc,
-        )
-
-
 def prepare_managed_pi_agent_dir(
     managed_dir: Path,
     *,
@@ -150,4 +114,3 @@ def prepare_managed_pi_agent_dir(
         return
 
     _symlink_agent_resource_dirs(managed_dir, agent_root)
-    _link_global_auth_file(managed_dir, agent_root)

@@ -21,7 +21,6 @@ from omnigent.reasoning_effort import (
     EFFORT_VALUES,
     ModelEffortCaps,
     clamp_effort_for_model,
-    codex_efforts_for_model,
     effort_for_model_switch,
     model_effort_caps,
     validate_effort,
@@ -36,24 +35,6 @@ def test_ultra_coerces_to_xhigh_for_codex() -> None:
 def test_max_coerces_to_xhigh_for_codex() -> None:
     """The retired ``max`` wire value maps to ``xhigh`` on the codex ladder."""
     assert validate_effort("max", "codex", CODEX_EFFORTS) == "xhigh"
-
-
-def test_gpt_56_codex_efforts_include_real_max_without_minimal() -> None:
-    """GPT-5.6 advertises and preserves its model-specific maximum effort."""
-    efforts = codex_efforts_for_model("codex/gpt-5.6-luna")
-    assert efforts == {"none", "low", "medium", "high", "xhigh", "max"}
-    assert validate_effort("max", "codex", efforts) == "max"
-
-
-def test_gpt_55_codex_efforts_exclude_max_and_minimal() -> None:
-    """GPT-5.5 keeps its narrower provider-supported ladder."""
-    assert codex_efforts_for_model("codex/gpt-5.5") == {
-        "none",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    }
 
 
 def test_ultra_coerces_for_session_metadata_vocabulary() -> None:

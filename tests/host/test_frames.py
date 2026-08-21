@@ -8,6 +8,7 @@ import pytest
 
 from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE,
+    HostConnectionErrorFrame,
     HostCreateDirFrame,
     HostCreateDirResultFrame,
     HostCreateWorktreeFrame,
@@ -67,8 +68,6 @@ def test_model_options_frames_round_trip() -> None:
                         "id": "sonnet",
                         "model": "system.ai.claude-sonnet-4-6[1m]",
                         "displayName": "Sonnet 4.6",
-                        "accessLane": "omniroute",
-                        "groupLabel": "OmniRoute",
                     }
                 ],
             )
@@ -80,8 +79,6 @@ def test_model_options_frames_round_trip() -> None:
             "id": "sonnet",
             "model": "system.ai.claude-sonnet-4-6[1m]",
             "displayName": "Sonnet 4.6",
-            "accessLane": "omniroute",
-            "groupLabel": "OmniRoute",
         }
     ]
     # Absent from an older host's payload, and present when it reports the
@@ -261,6 +258,17 @@ def test_hello_frame_configured_harnesses_round_trip() -> None:
     # Exact map equality: both the True and the False must survive —
     # False is the actionable "warn the user" value.
     assert decoded.configured_harnesses == {"claude-sdk": True, "codex": "needs-auth"}
+
+
+def test_connection_error_frame_round_trip() -> None:
+    """Connection errors preserve the server stage and exception message."""
+    original = HostConnectionErrorFrame(
+        stage="registration",
+        error="[Errno 13] Permission denied",
+        retryable=False,
+    )
+    decoded = decode_host_frame(encode_host_frame(original))
+    assert decoded == original
 
 
 def test_harness_readiness_frame_round_trip() -> None:
@@ -995,6 +1003,15 @@ def test_create_worktree_frame_optional_base_defaults_none() -> None:
     decoded = decode_host_frame(encode_host_frame(original))
     assert isinstance(decoded, HostCreateWorktreeFrame)
     assert decoded.base_branch is None
+
+
+def test_create_worktree_frame_rejects_legacy_missing_repository_contract() -> None:
+    """An older frame cannot reach the host mutation handler."""
+    with pytest.raises(ValueError, match="resolved_repository_id"):
+        decode_host_frame(
+            '{"kind":"host.create_worktree","request_id":"r","repo_path":"/repo",'
+            '"branch_name":"feature/x","base_branch":null}'
+        )
 
 
 def test_create_worktree_result_frame_round_trip() -> None:

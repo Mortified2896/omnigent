@@ -323,32 +323,6 @@ def _pin_codex_config_model(codex_home: Path, model: str) -> None:
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _pin_codex_config_reasoning_effort(codex_home: Path, effort: str) -> None:
-    """Write an explicit startup effort into the session-private config."""
-    config_path = codex_home / "config.toml"
-    if config_path.is_symlink():
-        target = config_path.resolve()
-        config_path.unlink()
-        if target.is_file():
-            import shutil
-
-            shutil.copy2(target, config_path)
-    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    pin_line = f"model_reasoning_effort = {json.dumps(effort)}"
-    lines = existing.splitlines()
-    replaced = False
-    for i, line in enumerate(lines):
-        if line.startswith("["):
-            break
-        if re.match(r"^model_reasoning_effort\s*=", line):
-            lines[i] = pin_line
-            replaced = True
-            break
-    if not replaced:
-        lines.insert(0, pin_line)
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def _sync_codex_developer_instructions(
     codex_home: Path,
     instructions: str | None,
@@ -896,7 +870,6 @@ class CodexNativeAppServer:
     policy_hook_disabled_reason: str | None = None
     policy_notice_pending: bool = False
     pinned_model: str | None = None
-    pinned_reasoning_effort: str | None = None
     process_registry_tag: str | None = None
     process_owner_lock: CodexNativeProcessOwnerLock | None = None
     codex_cli_version: tuple[int, int, int] | None = None
@@ -969,11 +942,6 @@ class CodexNativeAppServer:
             self.python_executable,
             routed_spawns=routed_spawns,
         )
-        if self.pinned_reasoning_effort:
-            _pin_codex_config_reasoning_effort(
-                self.codex_home,
-                self.pinned_reasoning_effort,
-            )
         if self.pinned_model:
             _pin_codex_config_model(self.codex_home, self.pinned_model)
         _sync_codex_developer_instructions(
@@ -1754,6 +1722,73 @@ def _trust_codex_project(codex_home: Path, cwd: Path) -> None:
     config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
+# DATABRICKS-PATCH(codex-live-model-discovery)
+def _resolve_databricks_codex_model(host: str, profile: str, requested: str | None) -> str:
+    """Resolve the codex launch model against what the workspace serves.
+
+    Codex used to take its model from the bundled MLflow catalog — a
+    third-party listing whose Databricks ids carry the legacy
+    ``databricks-`` spelling the gateway now answers with ``501
+    NOT_IMPLEMENTED ... Use Unity Catalog model services (v3)`` — so a launch
+    could pin a model the workspace will not serve. Resolve from the workspace
+    instead, as claude-native already does: the live Unity Catalog listing,
+    then ucode's cached copy of it, then the bundled catalog as the documented
+    last resort.
+
+    An explicit model is matched against the servable ids, so a legacy
+    ``model_override`` persisted before this change still launches; one the
+    workspace does not serve passes through untouched, because the gateway's
+    error beats a silent substitution.
+
+    :param host: Workspace origin, e.g. ``"https://example.com"``.
+    :param profile: Databricks CLI profile backing the launch.
+    :param requested: Explicit model id, or ``None`` to take the newest
+        servable one.
+    :returns: The model id to pin on the codex launch.
+    """
+    from omnigent.databricks_model_discovery import (
+        discover_databricks_codex_models,
+        select_servable_model,
+    )
+
+    servable: tuple[str, ...] = ()
+    try:
+        from omnigent.runtime.credentials.databricks import resolve_databricks_workspace
+
+        creds = resolve_databricks_workspace(profile)
+        # Discover against the host the launch actually posts to. This resolver
+        # honors ``DATABRICKS_HOST`` while the launch host comes from the
+        # profile section alone (``_databricks_gateway_host``), so using
+        # ``creds.host`` here can pin a model discovered on workspace A onto a
+        # launch targeting workspace B. A token that does not match ``host``
+        # simply fails the listing and drops to the ucode-state fallback below,
+        # which is already keyed by ``host``.
+        servable = discover_databricks_codex_models(host, creds.token)
+    except Exception:  # noqa: BLE001 — cached ucode state is the launch fallback
+        _logger.warning(
+            "native-codex: live Databricks model discovery failed for profile %r; "
+            "falling back to ucode state",
+            profile,
+            exc_info=True,
+        )
+        try:
+            from omnigent.onboarding.ucode_state import read_ucode_state
+
+            workspace_state = read_ucode_state(host)
+            if workspace_state is not None:
+                servable = tuple(workspace_state.codex_models)
+        except Exception:  # noqa: BLE001 — the bundled catalog is the last resort
+            _logger.warning(
+                "native-codex: could not read ucode state for %r", profile, exc_info=True
+            )
+
+    if requested:
+        return select_servable_model(requested, servable) or requested
+    if servable:
+        return servable[0]
+    return model_catalog.resolve_catalog_model("databricks", family="openai").model_id
+
+
 def build_codex_native_server(
     *,
     socket_path: Path,
@@ -1762,7 +1797,6 @@ def build_codex_native_server(
     model: str | None,
     profile: str | None,
     bridge_dir: Path,
-    reasoning_effort: str | None = None,
     ap_server_url: str | None = None,
     ap_auth_headers: dict[str, str] | None = None,
     python_executable: str | None = None,
@@ -1836,8 +1870,7 @@ def build_codex_native_server(
         host = host.rstrip("/")
         config_overrides.extend(
             _databricks_codex_config_overrides(
-                model=model
-                or model_catalog.resolve_catalog_model("databricks", family="openai").model_id,
+                model=_resolve_databricks_codex_model(host, profile, model),
                 base_url=_databricks_codex_base_url(host),
                 auth_command=_databricks_codex_auth_command(host, profile),
             )
@@ -1869,18 +1902,8 @@ def build_codex_native_server(
         ap_auth_headers=ap_auth_headers,
         python_executable=python_executable,
         pinned_model=model,
-        pinned_reasoning_effort=reasoning_effort,
         trust_project=trust_project,
     )
-
-
-@dataclass(frozen=True)
-class CodexTraceLaunchProvenance:
-    """Immutable routing facts proven while resolving a Codex launch."""
-
-    access_lane: str
-    provider: str
-    provider_fallback: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -1907,7 +1930,6 @@ class NativeCodexLaunch:
     model: str | None
     profile: str | None
     summary: str = ""
-    trace_provenance: CodexTraceLaunchProvenance | None = None
 
 
 def codex_session_meta_model_provider(launch: NativeCodexLaunch) -> str:
@@ -1980,9 +2002,94 @@ def native_codex_launch_base_url(launch: NativeCodexLaunch) -> str | None:
             continue
         if isinstance(base_url, str):
             return base_url
-    # A cli-config entry pins only a provider *name*; its table lives in the
-    # user's ~/.codex/config.toml, which this process does not read.
-    return None
+    # A cli-config entry pins only a provider *name*; its table (with the
+    # base_url) lives in the user's shared ~/.codex/config.toml. Read that
+    # file to resolve the base URL a cli-config launch actually routes through.
+    if _launch_pins_model_provider(launch):
+        return _cli_config_provider_base_url(codex_session_meta_model_provider(launch))
+    # No provider pinned at all: the deliberate config-default path leaves
+    # overrides empty so Codex uses its own config.toml top-level
+    # ``model_provider`` default (a Databricks-wide setup). Resolve that.
+    return _config_default_provider_base_url()
+
+
+def _launch_pins_model_provider(launch: NativeCodexLaunch) -> bool:
+    """Whether a launch carries an explicit ``model_provider=`` override.
+
+    Distinguishes a launch that pins a provider name (cli-config, or the
+    literal ``model_provider="openai"`` the subscription / dismissed paths
+    set) from the empty-override config-default launch, which pins none.
+    """
+    return any(override.startswith("model_provider=") for override in launch.config_overrides)
+
+
+def _config_default_provider_base_url() -> str | None:
+    """Base URL Codex's config.toml top-level ``model_provider`` default routes to.
+
+    When omnigent pins no provider, Codex falls back to the top-level
+    ``model_provider`` in the user's shared ``config.toml`` — unless the user
+    dismissed that default, which pins Codex's built-in ``openai`` instead.
+
+    :returns: The default provider table's ``base_url``, or ``None`` when the
+        default is dismissed, absent, or unreadable.
+    """
+    import tomllib
+
+    from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+    from omnigent.onboarding.detected import codex_config_provider_dismissed
+    from omnigent.onboarding.provider_config import load_config
+
+    if codex_config_provider_dismissed(load_config()):
+        return None
+    config_path = _codex_home_config_source_from_env() / "config.toml"
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        provider_name = data["model_provider"]
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
+        return None
+    if not isinstance(provider_name, str):
+        return None
+    return _config_toml_provider_base_url(provider_name)
+
+
+def _cli_config_provider_base_url(provider_name: str) -> str | None:
+    """Base URL a cli-config provider name resolves to in the user's codex config.
+
+    A ``cli-config`` launch pins only a ``model_provider`` name; the provider
+    table lives in the user's shared ``config.toml``, which the launch never
+    inlines. Read it here so the gateway-inference probe can see the URL.
+
+    Only genuine cli-config provider names are looked up: ``"openai"`` is
+    Codex's own login (no pinned AIGW) and ``"omnigent_databricks"`` is the
+    profile branch's generated id, so both return ``None``.
+
+    :param provider_name: Provider id from
+        :func:`codex_session_meta_model_provider`.
+    :returns: The provider table's ``base_url``, or ``None`` when it cannot be
+        read.
+    """
+    if provider_name in ("openai", "omnigent_databricks"):
+        return None
+    return _config_toml_provider_base_url(provider_name)
+
+
+def _config_toml_provider_base_url(provider_name: str) -> str | None:
+    """Read ``[model_providers.<provider_name>].base_url`` from the shared config.toml.
+
+    :param provider_name: A provider table key in the user's ``config.toml``.
+    :returns: That table's ``base_url``, or ``None`` when it cannot be read.
+    """
+    import tomllib
+
+    from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+
+    config_path = _codex_home_config_source_from_env() / "config.toml"
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        base_url = data["model_providers"][provider_name]["base_url"]
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
+        return None
+    return base_url if isinstance(base_url, str) else None
 
 
 def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCodexLaunch | None:
@@ -2196,85 +2303,8 @@ def _resolve_subscription_launch(
     )
 
 
-def _resolve_native_codex_access_lane(
-    *,
-    access_lane: str,
-    model: str | None,
-) -> NativeCodexLaunch:
-    """Resolve an explicit native-Codex lane without provider fallback."""
-    from omnigent.errors import ErrorCode, OmnigentError
-    from omnigent.onboarding.ambient import codex_auth_has_credential
-    from omnigent.onboarding.provider_config import default_provider_for_harness, load_config
-    from omnigent.stores.conversation_store import (
-        CODEX_ACCESS_LANE_DIRECT,
-        CODEX_ACCESS_LANE_OMNIROUTE,
-    )
-
-    if model is None:
-        raise OmnigentError(
-            f"Native Codex access lane {access_lane!r} requires an explicit model.",
-            code=ErrorCode.INVALID_INPUT,
-        )
-    if access_lane == CODEX_ACCESS_LANE_DIRECT:
-        auth_path = _codex_home_config_source_from_env() / "auth.json"
-        if not codex_auth_has_credential(auth_path):
-            raise OmnigentError(
-                "Codex Subscription — Direct is not authenticated",
-                code=ErrorCode.HARNESS_NOT_CONFIGURED,
-            )
-        # The direct lane must override a custom default from config.toml. This
-        # matches the existing subscription resolver and keeps OAuth on Codex's
-        # built-in provider rather than silently routing through a gateway.
-        return NativeCodexLaunch(
-            config_overrides=['model_provider="openai"'],
-            model=model,
-            profile=None,
-            summary=f"Codex Subscription — Direct (model={model!r})",
-            trace_provenance=CodexTraceLaunchProvenance(
-                access_lane=CODEX_ACCESS_LANE_DIRECT,
-                provider="openai-codex-subscription",
-                provider_fallback=False,
-            ),
-        )
-
-    if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:
-        # The pre-launch catalog comes from this same configured default. Select
-        # that resolved entry directly; provider names and endpoint ports are
-        # deployment details, not stable OmniRoute identity.
-        entry = default_provider_for_harness(load_config(), "codex")
-        if entry is None:
-            raise OmnigentError(
-                "OmniRoute lane unavailable",
-                code=ErrorCode.HARNESS_NOT_CONFIGURED,
-            )
-        launch = _codex_provider_launch(entry, model)
-        if launch is None:
-            raise OmnigentError(
-                "OmniRoute lane unavailable",
-                code=ErrorCode.HARNESS_NOT_CONFIGURED,
-            )
-        return NativeCodexLaunch(
-            config_overrides=launch.config_overrides,
-            model=launch.model,
-            profile=launch.profile,
-            summary=f"OmniRoute lane via provider {entry.name!r} (model={model!r})",
-            trace_provenance=CodexTraceLaunchProvenance(
-                access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
-                provider=entry.name,
-            ),
-        )
-
-    raise OmnigentError(
-        f"Unsupported native Codex access lane {access_lane!r}.",
-        code=ErrorCode.INVALID_INPUT,
-    )
-
-
 def resolve_native_codex_launch(
-    *,
-    model: str | None,
-    spec: AgentSpec | None = None,
-    access_lane: str | None = None,
+    *, model: str | None, spec: AgentSpec | None = None
 ) -> NativeCodexLaunch:
     """Resolve the native Codex launch config across all offerings.
 
@@ -2317,15 +2347,11 @@ def resolve_native_codex_launch(
     :param spec: The custom agent spec launching this session, when there is
         one, so its ``executor.auth`` / legacy profile win over machine-level
         config (issue #2744 — parity with the in-process codex harness).
-    :param access_lane: Persisted explicit transport lane. ``"omniroute"``
-        forces the configured OmniRoute provider; ``"codex-direct"`` forces
-        Codex's built-in subscription transport. Neither lane falls back.
     :returns: The resolved :class:`NativeCodexLaunch`.
     """
-    if access_lane is not None:
-        return _resolve_native_codex_access_lane(access_lane=access_lane, model=model)
+    from omnigent.onboarding.ambient import codex_config_detection
     from omnigent.onboarding.detected import (
-        codex_config_provider_dismissed,
+        dismissed_detection_names,
         effective_config_with_detected,
     )
     from omnigent.onboarding.provider_config import (
@@ -2337,14 +2363,17 @@ def resolve_native_codex_launch(
     from omnigent.spec.types import DatabricksAuth
 
     explicit = load_config()
+    config_detection = codex_config_detection()
+    config_provider_dismissed = (
+        config_detection is not None
+        and config_detection.name in dismissed_detection_names(explicit)
+    )
     # When the launch ends up on codex's own login with NO provider routing,
     # the bridged config.toml's custom default model_provider would still
     # apply — including one the user explicitly Removed (dismissed). Pin
     # codex's built-in provider in that case so the dismissal holds at run
     # time. An undetectable/undismissed custom provider keeps its routing.
-    no_provider_overrides = (
-        ['model_provider="openai"'] if codex_config_provider_dismissed(explicit) else []
-    )
+    no_provider_overrides = ['model_provider="openai"'] if config_provider_dismissed else []
     if spec is not None and (
         spec.executor.auth is not None
         or spec.executor.profile
@@ -2424,6 +2453,31 @@ def resolve_native_codex_launch(
                 summary="Codex CLI login (global auth block, non-Databricks; no provider routing)",
             )
         entry = default_provider_for_harness(effective_config_with_detected(explicit), "codex")
+
+    if (
+        entry is None
+        and config_detection is not None
+        and config_detection.model_provider is not None
+        and not config_provider_dismissed
+    ):
+        # An adopted cli-config entry can explicitly shadow the same ambient
+        # detection without being marked the Omnigent default. Codex still
+        # selects that provider from config.toml, so pin the already-resolved
+        # detection instead of describing this as an OpenAI-login launch.
+        # This keeps rollout metadata, app-server, and remote TUI routing on
+        # one immutable provider selection during cold resume.
+        provider_id = config_detection.model_provider
+        _logger.info(
+            "native-codex routing: config.toml provider %r (ambient fallback, model=%s)",
+            provider_id,
+            model,
+        )
+        return NativeCodexLaunch(
+            config_overrides=[f"model_provider={json.dumps(provider_id)}"],
+            model=model,
+            profile=None,
+            summary=f"Codex config.toml provider {provider_id!r} (ambient fallback)",
+        )
 
     if entry is None:
         _logger.info(

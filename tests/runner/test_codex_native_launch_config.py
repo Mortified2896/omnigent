@@ -96,8 +96,6 @@ async def test_non_dict_snapshot_raises() -> None:
         ("terminal_launch_args", [1, 2], "terminal_launch_args"),
         ("model_override", "", "model_override"),
         ("model_override", 5, "model_override"),
-        ("reasoning_effort", "bogus", "reasoning_effort"),
-        ("reasoning_effort", 5, "reasoning_effort"),
         ("external_session_id", "", "external_session_id"),
         ("workspace", "", "workspace"),
     ],
@@ -117,22 +115,18 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
         "workspace": "/tmp/repo",
         "terminal_launch_args": ["--config", "approval_policy=on-request"],
         "model_override": "gpt-5.4-mini",
-        "reasoning_effort": "low",
         "external_session_id": "thread_abc",
         "labels": {
             "omnigent.fork.source_id": "conv_source",
             "omnigent.fork.source_external_session_id": "thread_src",
             "omnigent.fork.carry_history": "1",
             "omnigent.codex_native.bypass_sandbox": "1",
-            "omnigent.access_lane": "codex-direct",
         },
     }
     cfg = await _run(_Client(_Resp(200, snapshot)))
     assert cfg.policy_server_url == "http://127.0.0.1:8123"
     assert cfg.terminal_launch_args == ["--config", "approval_policy=on-request"]
     assert cfg.model_override == "gpt-5.4-mini"
-    assert cfg.reasoning_effort == "low"
-    assert cfg.access_lane == "codex-direct"
     assert cfg.external_session_id == "thread_abc"
     assert cfg.fork_source_id == "conv_source", "Fork source id should be read from labels."
     assert cfg.fork_source_external_id == "thread_src"
@@ -166,78 +160,8 @@ async def test_bypass_sandbox_defaults_off_unless_label_is_one(
     canonical ``"1"`` (set by the guarded web toggle) arms it.
     """
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
-    monkeypatch.delenv("OMNIGENT_CODEX_NATIVE_TRUSTED", raising=False)
     snapshot: dict[str, Any] = {"workspace": "/tmp/repo"}
     if labels is not None:
         snapshot["labels"] = labels
     cfg = await _run(_Client(_Resp(200, snapshot)))
     assert cfg.bypass_sandbox is False
-    assert cfg.reasoning_effort is None
-    assert cfg.access_lane is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("deployment_value", "label_value", "expected"),
-    [
-        ("false", None, False),
-        ("0", None, False),
-        ("unexpected", None, False),
-        ("true", None, True),
-        (" YES ", None, True),
-        ("on", "0", True),
-        ("false", "1", True),
-        ("true", "1", True),
-    ],
-)
-async def test_deployment_trust_composes_with_session_label(
-    monkeypatch: pytest.MonkeyPatch,
-    deployment_value: str,
-    label_value: str | None,
-    expected: bool,
-) -> None:
-    """Deployment trust is explicit, fail-closed, and ORed with the label."""
-    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
-    monkeypatch.setenv("OMNIGENT_CODEX_NATIVE_TRUSTED", deployment_value)
-    labels = {"omnigent.access_lane": "codex-direct"}
-    if label_value is not None:
-        labels["omnigent.codex_native.bypass_sandbox"] = label_value
-    snapshot: dict[str, Any] = {
-        "workspace": "/tmp/repo",
-        "model_override": "gpt-5.5",
-        "reasoning_effort": "low",
-        "labels": labels,
-    }
-
-    cfg = await _run(_Client(_Resp(200, snapshot)))
-
-    assert cfg.bypass_sandbox is expected
-    assert cfg.access_lane == "codex-direct"
-    assert cfg.model_override == "gpt-5.5"
-    assert cfg.reasoning_effort == "low"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("access_lane", ["unknown", "", 42])
-async def test_invalid_access_lane_fails_loud(
-    monkeypatch: pytest.MonkeyPatch, access_lane: Any
-) -> None:
-    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
-    snapshot = {
-        "workspace": "/tmp/repo",
-        "model_override": "gpt-5.5",
-        "labels": {"omnigent.access_lane": access_lane},
-    }
-    with pytest.raises(RuntimeError, match="Invalid native Codex access lane"):
-        await _run(_Client(_Resp(200, snapshot)))
-
-
-@pytest.mark.asyncio
-async def test_access_lane_requires_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
-    snapshot = {
-        "workspace": "/tmp/repo",
-        "labels": {"omnigent.access_lane": "omniroute"},
-    }
-    with pytest.raises(RuntimeError, match="requires model_override"):
-        await _run(_Client(_Resp(200, snapshot)))
