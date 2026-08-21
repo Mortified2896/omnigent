@@ -25,10 +25,10 @@ name: UI Snapshot
 #                      fine. The render job is gated on the `detect` job (below):
 #                      a PR that touches none of the render inputs (web, the
 #                      visual tests + fixtures, the pinned toolchain) SKIPS the
-#                      render. We gate at the job (not via `on: paths:`) on
-#                      purpose -- a job skipped by `if` reports SUCCESS, so this
-#                      stays safe to register as a required check, whereas a
-#                      path-filtered *workflow* would sit "pending" and block.
+#                      render. An always-run final gate owns the required check
+#                      name and fails if detection or a required render fails.
+#                      We gate at jobs (not via `on: paths:`) because a
+#                      path-filtered required workflow can remain pending.
 #   workflow_dispatch  regenerate the baselines with --update-snapshots in the
 #                      same pinned image; the regenerated PNGs are in the
 #                      `ui-snapshot-<run_id>` artifact to download and commit.
@@ -73,43 +73,49 @@ jobs:
   # change the render? The heavy job below is `if`-gated on it, so non-UI PRs
   # skip the render (no wasted CI, no flaking against unrelated changes). The
   # render is a pure function of the web bundle + the visual tests + their
-  # shared fixtures + the pinned toolchain (npm pin, the image digest in THIS
-  # file, and the playwright/plugin versions in the lock), so watch exactly
-  # those. Fails open: if the file list can't be fetched, render rather than
-  # risk a false pass.
+  # shared fixtures + the pinned toolchain. The shared change_scope.py policy
+  # owns that list and the documentation-only rule. Fails open: if the file
+  # list can't be fetched, render rather than risk a false pass.
   detect:
     name: Detect render-affecting changes
     runs-on: ubuntu-latest
     outputs:
       ui: ${{ steps.changes.outputs.ui }}
     steps:
+      - name: Check out the shared change-scope classifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          sparse-checkout: .github/scripts/ci
+          persist-credentials: false
       - id: changes
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
         run: |
           if [ -z "${PR:-}" ]; then
             echo "ui=true" >> "$GITHUB_OUTPUT"; echo "no PR (dispatch) -> render"; exit 0
           fi
-          if ! files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename'); then
+          if ! files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+            --jq '.[] | {filename, previous_filename} | @json'); then
             echo "ui=true" >> "$GITHUB_OUTPUT"; echo "file list unavailable -> render"; exit 0
           fi
-          pattern='^(web/|tests/e2e_ui/visual/|tests/e2e_ui/conftest\.py|\.github/actions/setup-pnpm/|\.github/workflows/ui-snapshot\.yml|pnpm-lock\.yaml|pnpm-workspace\.yaml|pyproject\.toml|uv\.lock)'
-          if printf '%s\n' "$files" | grep -qE "$pattern"; then
+          ui=$(printf '%s\n' "$files" | python3 .github/scripts/ci/change_scope.py \
+            ui-snapshot-pr-files --expected-count "$CHANGED_FILES")
+          if [ "$ui" = "true" ]; then
             echo "ui=true" >> "$GITHUB_OUTPUT"
-            echo "render-affecting files changed:"
-            printf '%s\n' "$files" | grep -E "$pattern" | sed 's/^/  /'
+            echo "render-affecting changes detected"
           else
             echo "ui=false" >> "$GITHUB_OUTPUT"
-            echo "no render-affecting files changed -> skip the render"
+            echo "documentation-only or no render-affecting files changed -> skip the render"
           fi
 
-  ui-snapshot:
-    name: UI Snapshot (visual baselines)
+  render:
+    name: Render UI snapshots
     needs: detect
-    # Skipped (not failed) when no render input changed -> reports SUCCESS, so a
-    # non-UI PR neither runs the render nor blocks a required check.
+    # Intentionally skipped when no render input changed. The always-run gate
+    # below distinguishes that safe skip from a detector or renderer failure.
     if: ${{ needs.detect.outputs.ui == 'true' }}
     runs-on: ubuntu-24.04
     # Render in the digest-pinned Playwright image (browsers + fonts baked in),
@@ -241,3 +247,34 @@ jobs:
             echo "Full instructions, incl. the fork artifact fallback: \`tests/e2e_ui/visual/README.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Screenshots artifact: ${SCREENS_URL:-not uploaded}"
+
+  ui-snapshot:
+    name: UI Snapshot (visual baselines)
+    needs: [detect, render]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      DETECT_RESULT: ${{ needs.detect.result }}
+      UI_REQUIRED: ${{ needs.detect.outputs.ui }}
+      RENDER_RESULT: ${{ needs.render.result }}
+    steps:
+      - name: Enforce render decision
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::Render-input detection did not succeed ($DETECT_RESULT)"
+            exit 1
+          fi
+          if [ "$UI_REQUIRED" = "false" ]; then
+            echo "No render-affecting files changed; render was safely skipped"
+            exit 0
+          fi
+          if [ "$UI_REQUIRED" != "true" ]; then
+            echo "::error::Render-input detection returned an invalid decision ($UI_REQUIRED)"
+            exit 1
+          fi
+          if [ "$RENDER_RESULT" != "success" ]; then
+            echo "::error::Required UI render did not succeed ($RENDER_RESULT)"
+            exit 1
+          fi
+          echo "Required UI render succeeded"
