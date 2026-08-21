@@ -68,10 +68,11 @@ def _parse_github_output(text: str) -> dict[str, str]:
 
 
 def test_green_gate_is_success(tmp_path: Path) -> None:
-    """A green CI eval yields state=success and the merging-now message."""
+    """A green eval conditionally permits exact-head automerge intent."""
     out = _run(tmp_path, eval_outcome="success")
     assert out["state"] == "success"
-    assert "merging now" in out["long_desc"]
+    assert "may now queue exact-head auto-merge" in out["long_desc"]
+    assert "merging now" not in out["long_desc"]
 
 
 def test_red_gate_is_failure(tmp_path: Path) -> None:
@@ -79,6 +80,8 @@ def test_red_gate_is_failure(tmp_path: Path) -> None:
     out = _run(tmp_path, eval_outcome="failure")
     assert out["state"] == "failure"
     assert "gate not green yet" in out["long_desc"]
+    assert "auto-merge remains disabled" in out["long_desc"]
+    assert "will fire" not in out["long_desc"]
 
 
 def test_short_desc_never_exceeds_140_chars(tmp_path: Path) -> None:

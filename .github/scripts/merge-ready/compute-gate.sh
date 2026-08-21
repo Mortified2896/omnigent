@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# Single source of truth for the Merge Ready outcome. Downstream steps
-# just consume `state`, `short_desc`, and `long_desc`.
+# Single source of truth for the Merge Ready outcome. It emits `state`,
+# `short_desc`, and compatibility `long_desc` outputs.
 #
-# The gate is green iff every required check is green on its own merits. There is
-# no CI bypass: to land despite red required checks, fix or delete the failing
-# test, or have a repo admin use GitHub's native "merge without waiting for
-# requirements" affordance. (Fork PRs still need a maintainer's approving review
-# to merge -- that is enforced by the separate `Maintainer Approval` check, not
-# here. No CI suite needs secrets on a fork PR anymore, so there is no
-# e2e-specific approval gate.)
+# The gate is green iff every required check is green. There is no CI bypass;
+# `Maintainer Approval` remains a separate branch-protection check.
 #
 #   CI eval  | state    | meaning
 #   ---------+----------+----------------------------
@@ -23,11 +18,11 @@ set -euo pipefail
 if [[ "$EVAL" == "success" ]]; then
   STATE=success
   SHORT="All required checks green"
-  LONG=":white_check_mark: gate is green, merging now."
+  LONG=":white_check_mark: gate is green. A current open PR with \`automerge\` intent may now queue exact-head auto-merge."
 else
   STATE=failure
   SHORT="Required checks not all green"
-  LONG=$':hourglass: gate not green yet. Required checks not satisfied:\n\n'"$FAILED"$'\nThe merge will fire once these turn green.'
+  LONG=$':hourglass: gate not green yet. Required checks not satisfied:\n\n'"$FAILED"$'\nExact-head auto-merge remains disabled until a later lifecycle evaluation is green.'
 fi
 
 # GitHub commit-status descriptions max out at 140 chars.
@@ -35,9 +30,9 @@ if [[ ${#SHORT} -gt 140 ]]; then
   SHORT="${SHORT:0:137}..."
 fi
 
-echo "state=$STATE" >> "$GITHUB_OUTPUT"
-echo "short_desc=$SHORT" >> "$GITHUB_OUTPUT"
 {
+  echo "state=$STATE"
+  echo "short_desc=$SHORT"
   echo "long_desc<<_LONG_EOF_"
   printf '%s' "$LONG"
   echo

@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Authorizes a `/merge` slash command by the commenter's repo access.
 #
-# `/merge` only enables auto-merge / direct-merges an already-mergeable
-# PR -- branch protection still blocks red or unreviewed PRs -- so the
-# bar is repo write access, not the stricter MAINTAINER set that gates
-# the maintainer-only waivers. This keeps `/merge` usable by the whole
-# team while blocking outside contributors and drive-by accounts.
+# `/merge` records one-way intent; a separately dispatched, fail-closed gate
+# may enable auto-merge only for the exact green head. The authorization bar is
+# repo write access, not the stricter MAINTAINER set used for waivers.
 #
 # The job-level `if` already pre-filters on author_association as a
 # cheap first pass; this is the authoritative check, because an org

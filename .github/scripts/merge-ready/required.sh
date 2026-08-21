@@ -1,31 +1,38 @@
-# Sourced by evaluate-checks.sh. These checks gate every PR. e2e, e2e-ui, and
-# integration are mock-LLM (no secrets) and run on ALL PRs -- same-repo and fork
-# -- directly, like CI. They are in ALLOW_SKIP too because they are legitimately
-# absent in some runs: draft PRs (empty matrix) and path-ignored PRs (the
-# workflow doesn't run). The real-gateway e2e-ui tests run nightly only and are
-# NOT PR checks, so they are not listed here.
-# Generated file -- do not hand-edit; it is replaced wholesale on every sync.
+# Sourced by evaluate-checks.sh. This is the fork's authoritative Merge Ready
+# contract. Keep it synchronized with the workflow job names; the offline
+# contract test derives those names from the workflow definitions.
+#
+# Matrix, path-filtered, and draft-gated jobs are in ALLOW_SKIP because they can
+# be legitimately absent. Security Scan and both lint jobs must report success.
+# E2E UI Required remains advisory until the fork configures its judge model and
+# gateway credentials. The mock E2E UI suite and deterministic UI Snapshot gate
+# remain authoritative and require no secrets.
 
 REQUIRED=(
-  "DCO"
   "Pre-commit checks"
+  "Version lockstep check"
+  "Security Scan"
   "Docker build"
+  "web test"
   "Pytest (runtime-harnesses)"
   "Pytest (runtime-policies)"
   "Pytest (runtime-core)"
-  "Pytest (inner-terminal)"
-  "Pytest (inner-env)"
-  "Pytest (inner-tracing)"
   "Pytest (inner-rest)"
   "Pytest (tools)"
   "Pytest (repl-sdk)"
-  "Pytest (server-responses)"
+  "Pytest (server-approvals)"
+  "Pytest (server-integration)"
   "Pytest (server-rest)"
   "Pytest (spec-llms)"
+  "Pytest (integration-mock)"
   "Pytest (runner-app)"
   "Pytest (stores)"
   "Pytest (misc)"
   "Pytest (databricks)"
+  "Pytest (slack)"
+  "Pytest (stores-postgres)"
+  "Pytest (stores-mysql)"
+  "Pytest (codex-parity)"
   "E2E Tests (shard 0/4)"
   "E2E Tests (shard 1/4)"
   "E2E Tests (shard 2/4)"
@@ -34,29 +41,31 @@ REQUIRED=(
   "E2E UI Tests (shard 1/3)"
   "E2E UI Tests (shard 2/3)"
   "UI Snapshot (visual baselines)"
-  "Integration (claude-sdk)"
   "Integration (openai-agents)"
-  "Integration (codex)"
 )
 
 ALLOW_SKIP=(
   "Docker build"
+  "web test"
   "Pytest (runtime-harnesses)"
   "Pytest (runtime-policies)"
   "Pytest (runtime-core)"
-  "Pytest (inner-terminal)"
-  "Pytest (inner-env)"
-  "Pytest (inner-tracing)"
   "Pytest (inner-rest)"
   "Pytest (tools)"
   "Pytest (repl-sdk)"
-  "Pytest (server-responses)"
+  "Pytest (server-approvals)"
+  "Pytest (server-integration)"
   "Pytest (server-rest)"
   "Pytest (spec-llms)"
+  "Pytest (integration-mock)"
   "Pytest (runner-app)"
   "Pytest (stores)"
   "Pytest (misc)"
   "Pytest (databricks)"
+  "Pytest (slack)"
+  "Pytest (stores-postgres)"
+  "Pytest (stores-mysql)"
+  "Pytest (codex-parity)"
   "E2E Tests (shard 0/4)"
   "E2E Tests (shard 1/4)"
   "E2E Tests (shard 2/4)"
@@ -64,21 +73,23 @@ ALLOW_SKIP=(
   "E2E UI Tests (shard 0/3)"
   "E2E UI Tests (shard 1/3)"
   "E2E UI Tests (shard 2/3)"
+  # Standalone main conditionally skips this job. The docs-routing aggregate
+  # always emits it, and ALLOW_SKIP never masks an emitted failure.
   "UI Snapshot (visual baselines)"
-  "Integration (claude-sdk)"
   "Integration (openai-agents)"
-  "Integration (codex)"
 )
 
 is_allow_skip() { printf '%s\n' "${ALLOW_SKIP[@]}" | grep -qxF "$1"; }
 
-# Maps an ALLOW_SKIP check to the workflow that produces it, so
-# evaluate-checks.sh can tell a genuine skip (a CI Pytest shard path-skip, or a
-# draft/path-ignored run) from a check that is merely absent because its
-# workflow is still queued or re-running.
+# Maps every required check to its producer. evaluate-checks.sh uses producer
+# pull-request runs, exact-attempt check IDs, and suite IDs so active or failed
+# empty runs block while successful empty label-only suites may fall back.
 workflow_for() {
   case "$1" in
+    "Pre-commit checks" | "Version lockstep check") echo "Lint" ;;
+    "Security Scan")        echo "Security Scan" ;;
     "Docker build")          echo "Docker build" ;;
+    "web test")             echo "web Tests" ;;
     "Pytest ("*)             echo "CI" ;;
     "E2E Tests (shard "*)    echo "E2E Tests" ;;
     "E2E UI Tests (shard "*) echo "E2E UI Tests" ;;
