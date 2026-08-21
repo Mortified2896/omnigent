@@ -94,6 +94,7 @@ class PublicationEvidence:
     pr_base: str | None = None
     pr_draft: bool | None = None
     worktree_clean: bool = False
+    task_changes_exist: bool = False
     publication_error: str | None = None
     capabilities: PublicationCapabilities | None = None
 
@@ -117,8 +118,12 @@ class PublicationRun:
     elapsed_seconds: int | None = 0
     tool_calls: int | None = 0
     context_tokens: int | None = None
+    checkpoint_elapsed_seconds: int = 0
+    checkpoint_tool_calls: int = 0
+    checkpoint_context_tokens: int = 0
     checkpoint_reasons: tuple[str, ...] = ()
     baseline_dirty_paths: tuple[str, ...] = ()
+    task_owned_paths: tuple[str, ...] = ()
     task_owned_dirty_paths: tuple[str, ...] = ()
     coherent_slice_ready: bool = False
     schema_version: int = field(default=1, init=False)
@@ -148,6 +153,8 @@ class PublicationReadback(Protocol):
 
     def read_pull_request(self, pr_url: str) -> PullRequestReadback | None: ...
 
+    def read_dirty_paths(self) -> tuple[str, ...]: ...
+
 
 def _paths(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted({value.strip() for value in values if value.strip()}))
@@ -175,6 +182,8 @@ def classify_dirty_paths(
 def checkpoint_reasons(
     measurements: PublicationMeasurements,
     thresholds: PublicationThresholds,
+    *,
+    since: PublicationMeasurements | None = None,
 ) -> tuple[str, ...]:
     """Return crossed thresholds, failing closed when a configured metric is absent."""
     reasons: list[str] = []
@@ -185,7 +194,7 @@ def checkpoint_reasons(
         value = getattr(measurements, name)
         if value is None:
             reasons.append(f"{name}_unavailable")
-        elif value >= threshold:
+        elif value - (getattr(since, name) or 0 if since else 0) >= threshold:
             reasons.append(f"{name}_threshold")
     return tuple(reasons)
 
@@ -199,11 +208,21 @@ def record_progress(
     coherent_slice_ready: bool | None = None,
 ) -> PublicationRun:
     """Update counters and require preservation before more work when needed."""
-    reasons = checkpoint_reasons(measurements, thresholds)
+    reasons = checkpoint_reasons(
+        measurements,
+        thresholds,
+        since=PublicationMeasurements(
+            run.checkpoint_elapsed_seconds,
+            run.checkpoint_tool_calls,
+            run.checkpoint_context_tokens,
+        ),
+    )
     owns_changes = bool(dirty_paths.task_owned) or bool(coherent_slice_ready)
     status = run.status
-    if reasons and owns_changes and not run.remotely_checkpointed:
+    if reasons and owns_changes:
         status = PublicationState.CHECKPOINT_REQUIRED
+    elif owns_changes and run.status is PublicationState.CHECKPOINTED:
+        status = PublicationState.ACTIVE
     return replace(
         run,
         status=status,
@@ -211,6 +230,7 @@ def record_progress(
         tool_calls=measurements.tool_calls,
         context_tokens=measurements.context_tokens,
         checkpoint_reasons=reasons if owns_changes else (),
+        task_owned_paths=_paths((*run.task_owned_paths, *dirty_paths.task_owned)),
         task_owned_dirty_paths=dirty_paths.task_owned,
         coherent_slice_ready=(
             run.coherent_slice_ready if coherent_slice_ready is None else coherent_slice_ready
@@ -238,9 +258,11 @@ def read_publication_evidence(
     pr_url: str,
     worktree_clean: bool,
     publication_error: str | None = None,
+    task_changes_exist: bool = False,
+    capabilities: PublicationCapabilities | None = None,
 ) -> PublicationEvidence:
     """Perform independent local, remote, and PR reads; never trust a worker summary."""
-    capabilities = readback.capability_preflight()
+    capabilities = capabilities or readback.capability_preflight()
     local_commit = readback.read_local_head()
     remote_commit = readback.read_remote_head(branch)
     pull = readback.read_pull_request(pr_url)
@@ -252,8 +274,17 @@ def read_publication_evidence(
         pr_base=pull.base if pull else None,
         pr_draft=pull.draft if pull else None,
         worktree_clean=worktree_clean,
+        task_changes_exist=task_changes_exist,
         publication_error=publication_error,
         capabilities=capabilities,
+    )
+
+
+def _read_task_dirty_state(run: PublicationRun, readback: PublicationReadback) -> DirtyPathState:
+    return classify_dirty_paths(
+        run.baseline_dirty_paths,
+        readback.read_dirty_paths(),
+        explicitly_task_owned=run.task_owned_paths,
     )
 
 
@@ -289,9 +320,17 @@ def finalize_publication(
             )
         if evidence.capabilities is None:
             raise PublicationCheckpointError("blocked_publication requires capability preflight")
+        if not evidence.worktree_clean:
+            raise PublicationCheckpointError(
+                "blocked_publication requires all task changes in the local commit"
+            )
         return claimed_state
     if claimed_state in {PublicationState.FAILED, PublicationState.CANCELLED}:
-        if not evidence.worktree_clean and evidence.local_commit is None:
+        if not evidence.worktree_clean:
+            raise PublicationCheckpointError(
+                f"{claimed_state.value} cannot leave uncommitted task changes"
+            )
+        if evidence.task_changes_exist and evidence.local_commit is None:
             raise PublicationCheckpointError(
                 f"{claimed_state.value} with task changes requires a preserved local commit"
             )
@@ -315,14 +354,19 @@ def reconcile_publication(
     publication_error: str | None = None,
 ) -> PublicationRun:
     """Resolve successful publication even when its command acknowledgement was lost."""
-    capabilities = readback.capability_preflight()
+    capabilities = PublicationCapabilities(False, False, False)
+    dirty = DirtyPathState(task_owned=run.task_owned_dirty_paths)
     try:
+        capabilities = readback.capability_preflight()
+        dirty = _read_task_dirty_state(run, readback)
         evidence = read_publication_evidence(
             readback,
             branch=run.branch,
             pr_url=pr_url,
-            worktree_clean=not run.task_owned_dirty_paths,
+            worktree_clean=dirty.task_worktree_clean,
             publication_error=publication_error,
+            task_changes_exist=run.has_task_owned_changes,
+            capabilities=capabilities,
         )
         finalize_publication(PublicationState.CHECKPOINTED, evidence)
     except (OSError, subprocess.SubprocessError, PublicationCheckpointError) as exc:
@@ -330,6 +374,15 @@ def reconcile_publication(
         with suppress(OSError, subprocess.SubprocessError):
             local_commit = readback.read_local_head()
         exact_error = publication_error or f"readback failed: {exc}"
+        if local_commit is None or not dirty.task_worktree_clean:
+            return replace(
+                run,
+                status=PublicationState.CHECKPOINT_REQUIRED,
+                local_commit=local_commit,
+                publication_error=exact_error,
+                capability_preflight=capabilities,
+                task_owned_dirty_paths=dirty.task_owned,
+            )
         return replace(
             run,
             status=PublicationState.BLOCKED_PUBLICATION,
@@ -349,6 +402,10 @@ def reconcile_publication(
         publication_error=None,
         capability_preflight=capabilities,
         checkpoint_reasons=(),
+        checkpoint_elapsed_seconds=run.elapsed_seconds or 0,
+        checkpoint_tool_calls=run.tool_calls or 0,
+        checkpoint_context_tokens=run.context_tokens or 0,
+        task_owned_dirty_paths=(),
         coherent_slice_ready=False,
     )
 
@@ -361,7 +418,8 @@ def complete_run(run: PublicationRun, readback: PublicationReadback) -> Publicat
         readback,
         branch=run.branch,
         pr_url=run.pr_url,
-        worktree_clean=not run.task_owned_dirty_paths,
+        worktree_clean=_read_task_dirty_state(run, readback).task_worktree_clean,
+        task_changes_exist=run.has_task_owned_changes,
     )
     finalize_publication(PublicationState.COMPLETED, evidence)
     return replace(
@@ -372,6 +430,32 @@ def complete_run(run: PublicationRun, readback: PublicationReadback) -> Publicat
         pr_head=evidence.pr_head,
         pr_base=evidence.pr_base,
         capability_preflight=evidence.capabilities,
+    )
+
+
+def terminate_run(
+    run: PublicationRun,
+    claimed_state: PublicationState,
+    readback: PublicationReadback,
+) -> PublicationRun:
+    """Record a truthful failure/cancellation without discarding useful work."""
+    if claimed_state not in {PublicationState.FAILED, PublicationState.CANCELLED}:
+        raise PublicationCheckpointError("terminate_run only accepts failed or cancelled")
+    dirty = _read_task_dirty_state(run, readback)
+    local_commit = readback.read_local_head() if run.has_task_owned_changes else run.local_commit
+    finalize_publication(
+        claimed_state,
+        PublicationEvidence(
+            local_commit=local_commit,
+            worktree_clean=dirty.task_worktree_clean,
+            task_changes_exist=run.has_task_owned_changes,
+        ),
+    )
+    return replace(
+        run,
+        status=claimed_state,
+        local_commit=local_commit,
+        task_owned_dirty_paths=dirty.task_owned,
     )
 
 
@@ -396,6 +480,7 @@ class PublicationRunStore:
         for name in (
             "checkpoint_reasons",
             "baseline_dirty_paths",
+            "task_owned_paths",
             "task_owned_dirty_paths",
         ):
             raw[name] = tuple(raw.get(name, ()))
@@ -418,9 +503,110 @@ class PublicationRunStore:
 
     def start(self, run: PublicationRun) -> None:
         existing = self.load()
-        if existing and existing.issue_key != run.issue_key:
-            guard_issue_transition(existing, run.issue_key)
+        if existing:
+            if existing.run_id == run.run_id:
+                return
+            if existing.issue_key != run.issue_key:
+                guard_issue_transition(existing, run.issue_key)
+            elif existing.has_task_owned_changes and not existing.remotely_checkpointed:
+                raise PublicationCheckpointError(
+                    f"existing run {existing.run_id} has unpublished task work"
+                )
         self.save(run)
+
+    def require(self) -> PublicationRun:
+        run = self.load()
+        if run is None:
+            raise PublicationCheckpointError("publication run has not been started")
+        return run
+
+
+class PublicationCheckpointController:
+    """Persist every enforcement decision without owning publication credentials."""
+
+    def __init__(
+        self,
+        store: PublicationRunStore,
+        readback: PublicationReadback,
+        *,
+        thresholds: PublicationThresholds | None = None,
+    ) -> None:
+        self.store = store
+        self.readback = readback
+        self.thresholds = thresholds or PublicationThresholds()
+
+    def begin(
+        self,
+        *,
+        run_id: str,
+        issue_key: str,
+        branch: str,
+        base_branch: str,
+        started_at: float | None = None,
+    ) -> PublicationRun:
+        run = PublicationRun(
+            run_id=run_id,
+            issue_key=issue_key,
+            branch=branch,
+            base_branch=base_branch,
+            started_at=time.time() if started_at is None else started_at,
+            baseline_dirty_paths=_paths(self.readback.read_dirty_paths()),
+        )
+        self.store.start(run)
+        return run
+
+    def observe(
+        self,
+        measurements: PublicationMeasurements,
+        *,
+        coherent_slice_ready: bool = False,
+        explicitly_task_owned: Iterable[str] = (),
+    ) -> PublicationRun:
+        run = self.store.require()
+        dirty = classify_dirty_paths(
+            run.baseline_dirty_paths,
+            self.readback.read_dirty_paths(),
+            explicitly_task_owned=(*run.task_owned_paths, *explicitly_task_owned),
+        )
+        updated = record_progress(
+            run,
+            measurements,
+            self.thresholds,
+            dirty,
+            coherent_slice_ready=coherent_slice_ready,
+        )
+        self.store.save(updated)
+        return updated
+
+    def enter_phase(self, phase: GuardedPhase) -> None:
+        guard_phase_transition(self.store.require(), phase)
+
+    def checkpoint(
+        self,
+        *,
+        pr_url: str,
+        now: float | None = None,
+        publication_error: str | None = None,
+    ) -> PublicationRun:
+        updated = reconcile_publication(
+            self.store.require(),
+            self.readback,
+            pr_url=pr_url,
+            now=now,
+            publication_error=publication_error,
+        )
+        self.store.save(updated)
+        return updated
+
+    def complete(self) -> PublicationRun:
+        updated = complete_run(self.store.require(), self.readback)
+        self.store.save(updated)
+        return updated
+
+    def terminate(self, state: PublicationState) -> PublicationRun:
+        updated = terminate_run(self.store.require(), state, self.readback)
+        self.store.save(updated)
+        return updated
 
 
 CommandRunner = Callable[[tuple[str, ...], Path], str]
@@ -475,6 +661,28 @@ class GitHubCliPublicationReadback:
             self.repository,
         )
         return output.split()[0] if output else None
+
+    def read_dirty_paths(self) -> tuple[str, ...]:
+        output = self._run(
+            ("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+            self.repository,
+        )
+        records = output.split("\0")
+        paths: list[str] = []
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if not record:
+                continue
+            status, path = record[:2], record[3:]
+            paths.append(path)
+            if ("R" in status or "C" in status) and index < len(records):
+                prior_path = records[index]
+                index += 1
+                if prior_path:
+                    paths.append(prior_path)
+        return _paths(paths)
 
     def read_pull_request(self, pr_url: str) -> PullRequestReadback | None:
         output = self._run(

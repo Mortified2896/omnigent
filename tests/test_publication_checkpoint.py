@@ -13,6 +13,7 @@ from omnigent.publication_checkpoint import (
     GitHubCliPublicationReadback,
     GuardedPhase,
     PublicationCapabilities,
+    PublicationCheckpointController,
     PublicationCheckpointError,
     PublicationEvidence,
     PublicationMeasurements,
@@ -30,6 +31,7 @@ from omnigent.publication_checkpoint import (
     read_publication_evidence,
     reconcile_publication,
     record_progress,
+    terminate_run,
 )
 
 SHA = "a" * 40
@@ -57,11 +59,13 @@ class FakeReadback:
         remote: str | None = SHA,
         pr: PullRequestReadback | None = None,
         capabilities: PublicationCapabilities = CAPABILITIES,
+        dirty_paths: tuple[str, ...] = (),
     ) -> None:
         self.local = local
         self.remote = remote
         self.pr = pr or PullRequestReadback(PR_URL, SHA, "main", True)
         self.capabilities = capabilities
+        self.dirty_paths = dirty_paths
         self.calls: list[str] = []
 
     def capability_preflight(self) -> PublicationCapabilities:
@@ -79,6 +83,10 @@ class FakeReadback:
     def read_pull_request(self, pr_url: str) -> PullRequestReadback | None:
         self.calls.append(f"pr:{pr_url}")
         return self.pr
+
+    def read_dirty_paths(self) -> tuple[str, ...]:
+        self.calls.append("dirty")
+        return self.dirty_paths
 
 
 def test_false_completion_without_remote_evidence_is_rejected() -> None:
@@ -113,6 +121,7 @@ def test_push_failure_preserves_blocked_publication() -> None:
                 local_commit=SHA,
                 publication_error="git push: rejected",
                 capabilities=PublicationCapabilities(True, False, True),
+                worktree_clean=True,
             ),
         )
         is PublicationState.BLOCKED_PUBLICATION
@@ -202,6 +211,50 @@ def test_no_changes_do_not_trigger_checkpoint_hard_stop() -> None:
     assert run.checkpoint_reasons == ()
 
 
+def test_threshold_budget_resets_after_checkpoint() -> None:
+    checkpointed = _run(
+        status=PublicationState.CHECKPOINTED,
+        local_commit=SHA,
+        remote_commit=SHA,
+        pr_url=PR_URL,
+        pr_head=SHA,
+        pr_base="main",
+        checkpoint_elapsed_seconds=1800,
+        checkpoint_tool_calls=100,
+        checkpoint_context_tokens=50_000,
+    )
+    progressed = record_progress(
+        checkpointed,
+        PublicationMeasurements(1810, 101, 50_100),
+        PublicationThresholds(1800, 100, 50_000),
+        DirtyPathState(task_owned=("new.py",)),
+        coherent_slice_ready=True,
+    )
+    assert progressed.status is PublicationState.ACTIVE
+    assert progressed.checkpoint_reasons == ()
+
+
+def test_new_slice_crossing_post_checkpoint_budget_requires_another_checkpoint() -> None:
+    checkpointed = _run(
+        status=PublicationState.CHECKPOINTED,
+        local_commit=SHA,
+        remote_commit=SHA,
+        pr_url=PR_URL,
+        pr_head=SHA,
+        pr_base="main",
+        checkpoint_elapsed_seconds=1800,
+        checkpoint_tool_calls=100,
+    )
+    progressed = record_progress(
+        checkpointed,
+        PublicationMeasurements(3600, 200, None),
+        PublicationThresholds(1800, 100, None),
+        DirtyPathState(task_owned=("second-slice.py",)),
+        coherent_slice_ready=True,
+    )
+    assert progressed.status is PublicationState.CHECKPOINT_REQUIRED
+
+
 def test_preexisting_dirty_paths_are_not_claimed_by_task() -> None:
     state = classify_dirty_paths(
         ["user-notes.md", "shared.py"],
@@ -262,6 +315,64 @@ def test_pr_acknowledgement_loss_reconciles_from_readback() -> None:
     assert result.local_commit == result.remote_commit == result.pr_head == SHA
 
 
+def test_reconciliation_reads_dirty_state_instead_of_trusting_worker() -> None:
+    run = _run(
+        local_commit=SHA,
+        baseline_dirty_paths=("unrelated.md",),
+        task_owned_paths=("owned.py",),
+        task_owned_dirty_paths=(),  # A false worker claim must not bypass read-back.
+    )
+    result = reconcile_publication(
+        run,
+        FakeReadback(dirty_paths=("unrelated.md", "owned.py")),
+        pr_url=PR_URL,
+    )
+    assert result.status is PublicationState.CHECKPOINT_REQUIRED
+    assert result.local_commit == SHA
+    assert result.publication_error is not None
+    assert "clean task-owned worktree" in result.publication_error
+
+
+def test_capability_preflight_failure_preserves_exact_narrow_blocker() -> None:
+    class PreflightFailure(FakeReadback):
+        def capability_preflight(self) -> PublicationCapabilities:
+            raise OSError("gh auth unavailable")
+
+    result = reconcile_publication(
+        _run(local_commit=SHA),
+        PreflightFailure(),
+        pr_url=PR_URL,
+    )
+    assert result.status is PublicationState.BLOCKED_PUBLICATION
+    assert result.local_commit == SHA
+    assert result.publication_error == "readback failed: gh auth unavailable"
+    assert result.capability_preflight == PublicationCapabilities(False, False, False)
+
+
+def test_publication_failure_without_local_commit_remains_checkpoint_required() -> None:
+    class NoLocalCommit(FakeReadback):
+        def capability_preflight(self) -> PublicationCapabilities:
+            raise OSError("publication preflight failed")
+
+        def read_local_head(self) -> str:
+            raise OSError("no local head")
+
+    result = reconcile_publication(_run(), NoLocalCommit(), pr_url=PR_URL)
+    assert result.status is PublicationState.CHECKPOINT_REQUIRED
+    assert result.local_commit is None
+    assert result.publication_error == "readback failed: publication preflight failed"
+
+
+def test_unrelated_preexisting_dirt_does_not_block_checkpoint() -> None:
+    run = _run(local_commit=SHA, baseline_dirty_paths=("unrelated.md",))
+    result = reconcile_publication(
+        run,
+        FakeReadback(dirty_paths=("unrelated.md",)),
+        pr_url=PR_URL,
+    )
+    assert result.status is PublicationState.CHECKPOINTED
+
+
 def test_push_rejection_becomes_narrow_recoverable_blocker() -> None:
     result = reconcile_publication(
         _run(local_commit=SHA),
@@ -298,12 +409,39 @@ def test_complete_run_rejects_branch_move_after_checkpoint() -> None:
 def test_truthful_non_success_terminal_state_preserves_dirty_work(
     state: PublicationState,
 ) -> None:
-    with pytest.raises(PublicationCheckpointError, match="preserved local commit"):
+    with pytest.raises(PublicationCheckpointError, match="uncommitted task changes"):
         finalize_publication(state, PublicationEvidence(worktree_clean=False))
     assert (
-        finalize_publication(state, PublicationEvidence(local_commit=SHA, worktree_clean=False))
+        finalize_publication(
+            state,
+            PublicationEvidence(
+                local_commit=SHA,
+                worktree_clean=True,
+                task_changes_exist=True,
+            ),
+        )
         is state
     )
+
+
+@pytest.mark.parametrize("state", [PublicationState.FAILED, PublicationState.CANCELLED])
+def test_terminal_transition_independently_rejects_dirty_task_files(
+    state: PublicationState,
+) -> None:
+    run = _run(coherent_slice_ready=True, task_owned_paths=("owned.py",))
+    with pytest.raises(PublicationCheckpointError, match="uncommitted task changes"):
+        terminate_run(run, state, FakeReadback(dirty_paths=("owned.py",)))
+
+
+def test_cancelled_after_local_preservation_is_truthful() -> None:
+    run = _run(
+        coherent_slice_ready=True,
+        local_commit=SHA,
+        task_owned_paths=("owned.py",),
+    )
+    result = terminate_run(run, PublicationState.CANCELLED, FakeReadback())
+    assert result.status is PublicationState.CANCELLED
+    assert result.local_commit == SHA
 
 
 def test_durable_run_round_trip_and_atomic_replacement(tmp_path: Path) -> None:
@@ -325,6 +463,57 @@ def test_durable_store_blocks_second_issue_with_unpublished_work(tmp_path: Path)
     store.start(_run(coherent_slice_ready=True))
     with pytest.raises(PublicationCheckpointError, match="second_issue"):
         store.start(replace(_run(), run_id="run-2", issue_key="example/repo#119"))
+
+
+def test_durable_store_does_not_overwrite_same_issue_unpublished_run(tmp_path: Path) -> None:
+    store = PublicationRunStore(tmp_path / "publication-run.json")
+    store.start(_run(coherent_slice_ready=True))
+    with pytest.raises(PublicationCheckpointError, match="existing run run-1"):
+        store.start(replace(_run(), run_id="run-2"))
+
+
+def test_controller_enforcement_survives_restart_and_allows_sequential_issue(
+    tmp_path: Path,
+) -> None:
+    store = PublicationRunStore(tmp_path / "publication-run.json")
+    reader = FakeReadback(dirty_paths=("unrelated.md",))
+    controller = PublicationCheckpointController(
+        store,
+        reader,
+        thresholds=PublicationThresholds(60, 5, None),
+    )
+    controller.begin(
+        run_id="run-1",
+        issue_key="example/repo#118",
+        branch="codex/issue-118",
+        base_branch="main",
+        started_at=1.0,
+    )
+
+    reader.dirty_paths = ("unrelated.md", "omnigent/coherent.py")
+    observed = controller.observe(PublicationMeasurements(61, 5, None), coherent_slice_ready=True)
+    assert observed.status is PublicationState.CHECKPOINT_REQUIRED
+    assert observed.task_owned_paths == ("omnigent/coherent.py",)
+
+    restarted = PublicationCheckpointController(store, reader)
+    with pytest.raises(PublicationCheckpointError, match="broad_validation"):
+        restarted.enter_phase(GuardedPhase.BROAD_VALIDATION)
+
+    # The task file is now committed; unrelated baseline dirt remains untouched.
+    reader.dirty_paths = ("unrelated.md",)
+    checkpointed = restarted.checkpoint(pr_url=PR_URL, now=100.0)
+    assert checkpointed.status is PublicationState.CHECKPOINTED
+    assert checkpointed.checkpoint_elapsed_seconds == 61
+
+    next_run = restarted.begin(
+        run_id="run-2",
+        issue_key="example/repo#119",
+        branch="codex/issue-119",
+        base_branch="codex/issue-118",
+        started_at=101.0,
+    )
+    assert next_run.issue_key == "example/repo#119"
+    assert next_run.baseline_dirty_paths == ("unrelated.md",)
 
 
 def test_corrupt_or_unknown_durable_state_fails_closed(tmp_path: Path) -> None:
@@ -356,3 +545,18 @@ def test_git_github_adapter_uses_only_read_only_commands(tmp_path: Path) -> None
     )
     assert evidence.local_commit == evidence.remote_commit == evidence.pr_head == SHA
     assert all(command[0:2] not in {("git", "push"), ("gh", "pr-create")} for command in calls)
+
+
+def test_git_adapter_parses_spaces_and_renames_from_porcelain_z(tmp_path: Path) -> None:
+    def command_runner(command: tuple[str, ...], cwd: Path) -> str:
+        del cwd
+        assert command[:3] == ("git", "status", "--porcelain=v1")
+        return " M file with spaces.py\0R  new.py\0old.py\0?? added.py\0"
+
+    adapter = GitHubCliPublicationReadback(tmp_path, command_runner=command_runner)
+    assert adapter.read_dirty_paths() == (
+        "added.py",
+        "file with spaces.py",
+        "new.py",
+        "old.py",
+    )
