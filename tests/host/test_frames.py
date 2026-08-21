@@ -1005,6 +1005,15 @@ def test_create_worktree_frame_optional_base_defaults_none() -> None:
     assert decoded.base_branch is None
 
 
+def test_create_worktree_frame_rejects_legacy_missing_repository_contract() -> None:
+    """An older frame cannot reach the host mutation handler."""
+    with pytest.raises(ValueError, match="resolved_repository_id"):
+        decode_host_frame(
+            '{"kind":"host.create_worktree","request_id":"r","repo_path":"/repo",'
+            '"branch_name":"feature/x","base_branch":null}'
+        )
+
+
 def test_create_worktree_result_frame_round_trip() -> None:
     """Verify HostCreateWorktreeResultFrame survives encode → decode.
 

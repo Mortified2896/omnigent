@@ -63,10 +63,10 @@
     {
       "id": "legacy-host-session-wiring",
       "category": "old fork patch whose owning upstream architecture materially changed",
-      "status": "unresolved conflict requiring focused work",
+      "status": "semantic port required",
       "source": "origin/main host, runner, session, and worktree call-chain edits",
       "destination": "v0.10 host/session boundaries",
-      "reason": "Upstream changed these subsystems across 183 commits; mechanical replay is prohibited."
+      "reason": "The repository-identity contract was applied through v0.10 frames and the current host/session/worktree mutation boundaries; unrelated old wiring was not carried."
     },
     {
       "id": "chat-stream-self-heal",
@@ -117,15 +117,15 @@
       "number": 131,
       "head": "4295b7528eaee7dc2ab158a5ed8c8d4a99a5dbf0",
       "disposition": "PORT SEMANTICALLY",
-      "destination": "issue #117 v0.10 session/worktree boundary",
-      "evidence": "Canonical identity remains mandatory, but upstream host/session/worktree wiring materially changed."
+      "destination": "this candidate's v0.10 session/worktree boundary",
+      "evidence": "The verifier, sentinel, frame contract, provenance projection, and pre-mutation gates were mapped onto current v0.10 host/session/worktree paths; 331 focused tests passed after installing the declared tracing extra."
     },
     {
       "number": 132,
       "head": "15985b467333442feea3b1c37f1551af56ffcf3d",
-      "disposition": "PORT SEMANTICALLY",
-      "destination": "issue #118 v0.10 durable task/run ownership",
-      "evidence": "Publication guarantees remain mandatory; duplicate 0.9 lifecycle ownership must not be transplanted."
+      "disposition": "RETAIN/REPLAY",
+      "destination": "this candidate's controller-neutral publication checkpoint module",
+      "evidence": "The isolated durable checkpoint facade has no conflicting v0.10 owner and its complete 40-test failure/reconciliation matrix passes unchanged."
     },
     {
       "number": 134,

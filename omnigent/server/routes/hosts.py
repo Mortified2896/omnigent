@@ -828,6 +828,9 @@ def create_hosts_router(
                         repo_path=workspace,
                         branch_name=body.git.branch_name,
                         base_branch=body.git.base_branch,
+                        resolved_repository_id=body.git.resolved_repository_id or 0,
+                        objective_role=body.git.objective_role or "",
+                        archival_override_reason=body.git.archival_override_reason,
                     )
                 except WorktreeHostUnavailableError as exc:
                     # Host offline / unresponsive — infra, not user input.
@@ -942,6 +945,13 @@ def create_hosts_router(
                 workspace=workspace,
                 session_id=body.session_id,
                 harness=harness,
+                resolved_repository_id=(
+                    body.git.resolved_repository_id if body.git is not None else None
+                ),
+                objective_role=(body.git.objective_role if body.git is not None else None),
+                archival_override_reason=(
+                    body.git.archival_override_reason if body.git is not None else None
+                ),
             )
         )
         try:
@@ -981,6 +991,14 @@ def create_hosts_router(
             raise HTTPException(
                 status_code=502,
                 detail=f"host failed to launch runner: {result.get('error')}",
+            )
+
+        provenance = result.get("repository_provenance")
+        if isinstance(provenance, dict):
+            await asyncio.to_thread(
+                conversation_store.set_labels,
+                body.session_id,
+                {f"omnigent.repository.{key}": str(value) for key, value in provenance.items()},
             )
 
         return {

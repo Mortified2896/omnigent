@@ -7871,6 +7871,7 @@ async def _create_session_from_existing_agent(
     # existing_worktree must never be force-removed on failure — it is
     # the user's, not an Omnigent orphan.
     created_worktree_path: str | None = None
+    repository_provenance: dict[str, str | int] | None = None
     if body.git is not None:
         if body.git.existing_worktree:
             # Starting in a pre-existing worktree: no worktree is created, but
@@ -7894,6 +7895,7 @@ async def _create_session_from_existing_agent(
             canonical_workspace = created_worktree.worktree_path
             git_branch = created_worktree.branch
             created_worktree_path = created_worktree.worktree_path
+            repository_provenance = created_worktree.repository_provenance
 
     # Native-terminal pass-through args.
     #
@@ -8057,6 +8059,23 @@ async def _create_session_from_existing_agent(
     elif body.labels:
         await asyncio.to_thread(conversation_store.set_labels, conv.id, body.labels)
 
+    if repository_provenance is not None:
+        await asyncio.to_thread(
+            conversation_store.set_labels,
+            conv.id,
+            {
+                f"omnigent.repository.{key}": str(value)
+                for key, value in repository_provenance.items()
+            },
+        )
+        updated_conv = await asyncio.to_thread(conversation_store.get_conversation, conv.id)
+        if updated_conv is None:
+            raise OmnigentError(
+                f"Session {conv.id!r} disappeared while persisting repository provenance",
+                code=ErrorCode.INTERNAL_ERROR,
+            )
+        conv = updated_conv
+
     if harness_override == "auto" or _native_smart_routing:
         # Routing replaces the "auto" sentinel (at the first message for a
         # bundle agent, at create time for a native one), so record the auto
@@ -8187,6 +8206,26 @@ async def _create_session_from_existing_agent(
                     is_sub_agent=body.sub_agent_name is not None,
                     agent_name=_tel_agent_name,
                     routing_enabled=_tel_routing_on,
+                    repository_id=(
+                        int(repository_provenance["repository_id"])
+                        if repository_provenance is not None
+                        else None
+                    ),
+                    repository_name=(
+                        str(repository_provenance["full_name"])
+                        if repository_provenance is not None
+                        else None
+                    ),
+                    repository_role=(
+                        str(repository_provenance["role"])
+                        if repository_provenance is not None
+                        else None
+                    ),
+                    repository_head=(
+                        str(repository_provenance["head_sha"])
+                        if repository_provenance is not None
+                        else None
+                    ),
                 )
             )
     except Exception:  # noqa: BLE001

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "repositories": [
+    {
+      "repository_id": 1293694128,
+      "owner": "Mortified2896",
+      "name": "omnigent",
+      "default_branch": "main",
+      "role": "omnigent_product_runtime",
+      "state": "active",
+      "aliases": []
+    },
+    {
+      "repository_id": 1250037948,
+      "owner": "Mortified2896",
+      "name": "HomeLab",
+      "default_branch": "main",
+      "role": "homelab_infrastructure",
+      "state": "active",
+      "aliases": []
+    },
+    {
+      "repository_id": 1299423415,
+      "owner": "Mortified2896",
+      "name": "omniroute-customizations",
+      "default_branch": "main",
+      "role": "omniroute_overlays",
+      "state": "active",
+      "aliases": []
+    },
+    {
+      "repository_id": 1271340882,
+      "owner": "Mortified2896",
+      "name": "control-room-standalone",
+      "default_branch": "main",
+      "role": "dormant_standalone_archive",
+      "state": "dormant",
+      "aliases": [
+        "Mortified2896/control-room"
+      ]
+    }
+  ]
+}
