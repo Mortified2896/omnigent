@@ -315,7 +315,12 @@ async def test_create_with_existing_worktree_persists_without_creating(
             "agent_id": agent["id"],
             "host_id": _HOST_ID,
             "workspace": _SOURCE_REPO,
-            "git": {"branch_name": "feature/existing", "existing_worktree": True},
+            "git": {
+                "branch_name": "feature/existing",
+                "existing_worktree": True,
+                "resolved_repository_id": 1293694128,
+                "objective_role": "omnigent_product_runtime",
+            },
         },
     )
     assert resp.status_code == 201, resp.text
@@ -349,7 +354,12 @@ async def test_create_with_invalid_existing_worktree_branch_fails_400(
             "agent_id": agent["id"],
             "host_id": _HOST_ID,
             "workspace": _SOURCE_REPO,
-            "git": {"branch_name": "bad..branch", "existing_worktree": True},
+            "git": {
+                "branch_name": "bad..branch",
+                "existing_worktree": True,
+                "resolved_repository_id": 1293694128,
+                "objective_role": "omnigent_product_runtime",
+            },
         },
     )
 
@@ -402,7 +412,12 @@ async def test_create_failure_never_removes_existing_worktree(
                 "agent_id": agent["id"],
                 "host_id": _HOST_ID,
                 "workspace": _SOURCE_REPO,
-                "git": {"branch_name": "feature/existing", "existing_worktree": True},
+                "git": {
+                    "branch_name": "feature/existing",
+                    "existing_worktree": True,
+                    "resolved_repository_id": 1293694128,
+                    "objective_role": "omnigent_product_runtime",
+                },
             },
         )
 
