@@ -5,7 +5,7 @@
     "canonical": "Mortified2896/omnigent",
     "upstream": "omnigent-ai/omnigent"
   },
-  "lineage": {
+    "lineage": {
     "fork_start": "a512c01f952662d7baa95a5810a3c249f7d2ff80",
     "upstream_release": {
       "tag": "v0.10.0",
@@ -16,11 +16,18 @@
     "fork_only_commits": 57,
     "upstream_only_commits": 183,
     "candidate_base": "40755dd8dddb07e1eb6e4055d1d9936e184ceb9b",
-    "upstream_main": {
+        "upstream_main": {
       "purpose": "observation-only",
       "integration_allowed": false
-    }
-  },
+        }
+    },
+    "capability_audit": {
+        "report": "docs/control-room-v0.10-capability-audit.json",
+        "generator": "scripts/generate_control_room_capability_audit.py",
+        "contract": "tests/test_control_room_capability_manifest.py",
+        "fork_only_commit_records": 57,
+        "merge_ready": false
+    },
   "classifications": [
     {
       "id": "canonical-upstream-v0.10-base",
@@ -52,14 +59,22 @@
       "destination": "v0.10 runtime telemetry ownership",
       "reason": "Upstream materially changed runtime/session code; preserve only privacy-safe instance and terminal provenance."
     },
-    {
-      "id": "model-selector-and-routing-product-work",
-      "category": "obsolete/superseded",
-      "status": "not ported",
-      "source": "origin/main model picker, OmniRoute lanes, and reasoning-effort product commits",
-      "destination": "none in issue #135",
-      "reason": "Explicitly out of scope; issue #124 remains parked."
-    },
+        {
+            "id": "model-selector-and-routing-product-work",
+            "category": "mixed current-operation and future-product behavior",
+            "status": "blocked pending live-dependence inventory",
+            "source": "origin/main model picker, OmniRoute lanes, and reasoning-effort product commits",
+            "destination": "HomeLab #21 read-only inventory, then focused #135 port if required",
+            "reason": "New #124 selector product work remains parked, but current Codex/Pi routes, exact model spellings, no-silent-fallback behavior, and reasoning-effort dependence require separate capability-level decisions."
+        },
+        {
+            "id": "live-host-owner-name-collision",
+            "category": "Control Room intentional deviation",
+            "status": "retained",
+            "source": "1d94ba2db9f574b5f22666d8cdb960ad8d4cd68f",
+            "destination": "v0.10 host tunnel admission",
+            "reason": "The v0.10 host/store architecture still exists and otherwise permits two live daemons with the same owner/name to rotate the persistent registration."
+        },
     {
       "id": "legacy-host-session-wiring",
       "category": "old fork patch whose owning upstream architecture materially changed",

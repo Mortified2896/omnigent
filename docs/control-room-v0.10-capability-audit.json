@@ -1,0 +1,3243 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "merge_base": "43762a989235599f2ec63f270f1f0b32ae7d3e7a",
+    "fork_main": "a512c01f952662d7baa95a5810a3c249f7d2ff80",
+    "candidate_head": "be56d7cedcf439cc47728cfb4f4ee8a917cfccba",
+    "upstream_v0_10": "40755dd8dddb07e1eb6e4055d1d9936e184ceb9b"
+  },
+  "allowed_dispositions": [
+    "BLOCKED \u2014 OWNER DECISION REQUIRED",
+    "PORT SEMANTICALLY",
+    "RETAIN/REPLAY",
+    "SOLVED UPSTREAM",
+    "SUPERSEDED/OBSOLETE"
+  ],
+  "fork_only_commits": [
+    {
+      "sha": "64216aa3b08192fa1c83df99d787aef3cb3d5ef4",
+      "title": "docs: refresh Control Room reconciliation to upstream 43762a9",
+      "changed_paths": [
+        "deploy/docs/control-room-upstream-reconciliation.md"
+      ],
+      "capability": "Upstream reconciliation operator record",
+      "current_consumer": "Source reviewers",
+      "upstream_v0_10_implementation": "Replaced by the v0.10 lineage and capability audit manifests",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 64216aa3b08192fa1c83df99d787aef3cb3d5ef4",
+        "deploy/docs/control-room-upstream-reconciliation.md"
+      ],
+      "destination": "docs/control-room-v0.10-lineage.json and capability audit",
+      "validation_required": "Completeness contract",
+      "risk_if_omitted": "Keeping the 0.9 reconciliation document active would misstate the source baseline"
+    },
+    {
+      "sha": "1d94ba2db9f574b5f22666d8cdb960ad8d4cd68f",
+      "title": "fix(host): reject live owner-name collisions before rotation",
+      "changed_paths": [
+        "omnigent/server/host_identity.py",
+        "omnigent/server/routes/host_tunnel.py",
+        "tests/server/integration/test_host_identity_collision_route.py",
+        "tests/server/test_host_identity_collision.py"
+      ],
+      "capability": "Reject simultaneous live host owner/name collisions before ID rotation",
+      "current_consumer": "v0.10 host WebSocket admission and persistent HostStore",
+      "upstream_v0_10_implementation": "v0.10 retains the host tunnel/store architecture but lacked this collision check",
+      "owning_architecture_exists": true,
+      "disposition": "RETAIN/REPLAY",
+      "evidence": [
+        "fork commit 1d94ba2db9f574b5f22666d8cdb960ad8d4cd68f",
+        "omnigent/server/host_identity.py",
+        "omnigent/server/routes/host_tunnel.py",
+        "tests/server/integration/test_host_identity_collision_route.py",
+        "tests/server/test_host_identity_collision.py",
+        "omnigent/server/host_identity.py",
+        "tests/server/test_host_identity_collision.py"
+      ],
+      "destination": "PR #137 v0.10-native host admission port",
+      "validation_required": "Unit cases plus tunnel-level refusal and registration preservation",
+      "risk_if_omitted": "Two live O1/O2 daemons can replace one another and misroute control traffic"
+    },
+    {
+      "sha": "3863cc69b8d28c5d8f7991495e05ef3e65b33512",
+      "title": "feat(pi): forward-port inline model picker onto upstream-0.9 reconcile",
+      "changed_paths": [
+        "omnigent/host/connect.py",
+        "omnigent/pi_native_credentials.py",
+        "omnigent/resources/pi_native/omnigent_pi_native_extension.js",
+        "omnigent/runner/native/orchestration.py",
+        "tests/host/test_connect.py",
+        "tests/runner/test_app_sessions_native_terminals_autocreate.py",
+        "tests/test_pi_native_credentials.py",
+        "tests/test_pi_native_extension.py",
+        "web/src/components/HarnessConfigControls.tsx",
+        "web/src/lib/nativeCodingAgents.ts",
+        "web/src/shell/NewChatDialog.flow.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 3863cc69b8d28c5d8f7991495e05ef3e65b33512",
+        "omnigent/host/connect.py",
+        "omnigent/pi_native_credentials.py",
+        "omnigent/resources/pi_native/omnigent_pi_native_extension.js",
+        "omnigent/runner/native/orchestration.py",
+        "tests/host/test_connect.py",
+        "tests/runner/test_app_sessions_native_terminals_autocreate.py",
+        "tests/test_pi_native_credentials.py",
+        "tests/test_pi_native_extension.py",
+        "web/src/components/HarnessConfigControls.tsx",
+        "web/src/lib/nativeCodingAgents.ts",
+        "web/src/shell/NewChatDialog.flow.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "34978a97a0e77c72c397ebbf64c1f07d5bba92d0",
+      "title": "feat(deploy): immutable Control Room release preflight and O2->O1 promotion",
+      "changed_paths": [
+        "deploy/scripts/omnigent_release_preflight.py",
+        "deploy/scripts/promote-omnigent-maintenance.sh",
+        "tests/deploy/test_control_room_release_preflight.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 34978a97a0e77c72c397ebbf64c1f07d5bba92d0",
+        "deploy/scripts/omnigent_release_preflight.py",
+        "deploy/scripts/promote-omnigent-maintenance.sh",
+        "tests/deploy/test_control_room_release_preflight.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "541c9a3180b81bfb2fc450b3ef5f8648691b359d",
+      "title": "fix(telemetry): privacy/MLflow/OTLP adaptations for upstream-0.9",
+      "changed_paths": [
+        "omnigent/runtime/telemetry.py",
+        "tests/runtime/test_telemetry.py",
+        "tests/runtime/test_telemetry_logs.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 provides opt-in OTel/OTLP; MLflow-specific export is not equivalent",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 541c9a3180b81bfb2fc450b3ef5f8648691b359d",
+        "omnigent/runtime/telemetry.py",
+        "tests/runtime/test_telemetry.py",
+        "tests/runtime/test_telemetry_logs.py"
+      ],
+      "destination": "HomeLab #5 KEEP-OPTIONAL versus RETIRE decision; required before PR #137 merge",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "c5cd1c63283917778ec45f47a8fa8aa6f0d2fca9",
+      "title": "fix(deploy): preflight validates SDK wheels and runs from neutral cwd",
+      "changed_paths": [
+        "deploy/scripts/omnigent_release_preflight.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit c5cd1c63283917778ec45f47a8fa8aa6f0d2fca9",
+        "deploy/scripts/omnigent_release_preflight.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "3dfb382ee6c6069c61fe6249f4554c8876b10f8a",
+      "title": "docs: make Control Room peer-upgrade invariant explicit",
+      "changed_paths": [
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md"
+      ],
+      "capability": "docs: make Control Room peer-upgrade invariant explicit",
+      "current_consumer": "Unknown; read-only HomeLab #21 inventory is required",
+      "upstream_v0_10_implementation": "No conclusive v0.10 equivalent recorded",
+      "owning_architecture_exists": "unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 3dfb382ee6c6069c61fe6249f4554c8876b10f8a",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md"
+      ],
+      "destination": "#135 owner review; PR #137 remains blocked",
+      "validation_required": "Confirm current O1/O2 source/config dependence without runtime mutation",
+      "risk_if_omitted": "A relied-upon Control Room behavior could disappear silently"
+    },
+    {
+      "sha": "a012b8834d9ce6c5eb743218dc9f25c797d58aa5",
+      "title": "docs: harden Control Room peer-supervised upgrades",
+      "changed_paths": [
+        "AGENTS.md"
+      ],
+      "capability": "docs: harden Control Room peer-supervised upgrades",
+      "current_consumer": "Unknown; read-only HomeLab #21 inventory is required",
+      "upstream_v0_10_implementation": "No conclusive v0.10 equivalent recorded",
+      "owning_architecture_exists": "unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit a012b8834d9ce6c5eb743218dc9f25c797d58aa5",
+        "AGENTS.md"
+      ],
+      "destination": "#135 owner review; PR #137 remains blocked",
+      "validation_required": "Confirm current O1/O2 source/config dependence without runtime mutation",
+      "risk_if_omitted": "A relied-upon Control Room behavior could disappear silently"
+    },
+    {
+      "sha": "df02486384f1866a99f69e86b53a6d4b063970e7",
+      "title": "Merge harden/peer-deployer-final: peer-supervised O2\u2192O1 promotion with transaction-safe rollback (#90)",
+      "changed_paths": [
+        "AGENTS.md",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "deploy/docs/control-room-peer-deployer-v3.md",
+        "deploy/scripts/peer_deployer/__init__.py",
+        "deploy/scripts/peer_deployer/__main__.py",
+        "deploy/scripts/peer_deployer/fsm.py",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/identity.py",
+        "deploy/scripts/peer_deployer/path_safety.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "deploy/scripts/peer_deployer/reconcile.py",
+        "deploy/scripts/peer_deployer/rollback.py",
+        "deploy/scripts/peer_deployer/service_state.py",
+        "deploy/scripts/peer_deployer/staging.py",
+        "deploy/scripts/peer_deployer/transaction.py",
+        "deploy/scripts/peer_deployer_lib.sh",
+        "deploy/scripts/peer_promote_o1.sh",
+        "deploy/scripts/peer_promote_o1_v2.sh",
+        "deploy/scripts/peer_promote_o1_v3.py",
+        "deploy/scripts/promote-omnigent-maintenance.sh",
+        "tests/deploy/test_peer_deployer_cli.py",
+        "tests/deploy/test_peer_deployer_fsm.py",
+        "tests/deploy/test_peer_deployer_identity.py",
+        "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "tests/deploy/test_peer_deployer_path_safety.py",
+        "tests/deploy/test_peer_deployer_power_loss.py",
+        "tests/deploy/test_peer_deployer_preflight.py",
+        "tests/deploy/test_peer_deployer_reconcile.py",
+        "tests/deploy/test_peer_deployer_rollback.py",
+        "tests/deploy/test_peer_deployer_service_state.py",
+        "tests/deploy/test_peer_deployer_staging.py",
+        "tests/deploy/test_peer_deployer_transaction.py",
+        "tests/deploy/test_peer_deployer_v3_reconcile.py",
+        "tests/deploy/test_peer_promote_o1_v3.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit df02486384f1866a99f69e86b53a6d4b063970e7",
+        "AGENTS.md",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "deploy/docs/control-room-peer-deployer-v3.md",
+        "deploy/scripts/peer_deployer/__init__.py",
+        "deploy/scripts/peer_deployer/__main__.py",
+        "deploy/scripts/peer_deployer/fsm.py",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/identity.py",
+        "deploy/scripts/peer_deployer/path_safety.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "deploy/scripts/peer_deployer/reconcile.py",
+        "deploy/scripts/peer_deployer/rollback.py",
+        "deploy/scripts/peer_deployer/service_state.py",
+        "deploy/scripts/peer_deployer/staging.py",
+        "deploy/scripts/peer_deployer/transaction.py",
+        "deploy/scripts/peer_deployer_lib.sh",
+        "deploy/scripts/peer_promote_o1.sh",
+        "deploy/scripts/peer_promote_o1_v2.sh",
+        "deploy/scripts/peer_promote_o1_v3.py",
+        "deploy/scripts/promote-omnigent-maintenance.sh",
+        "tests/deploy/test_peer_deployer_cli.py",
+        "tests/deploy/test_peer_deployer_fsm.py",
+        "tests/deploy/test_peer_deployer_identity.py",
+        "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "tests/deploy/test_peer_deployer_path_safety.py",
+        "tests/deploy/test_peer_deployer_power_loss.py",
+        "tests/deploy/test_peer_deployer_preflight.py",
+        "tests/deploy/test_peer_deployer_reconcile.py",
+        "tests/deploy/test_peer_deployer_rollback.py",
+        "tests/deploy/test_peer_deployer_service_state.py",
+        "tests/deploy/test_peer_deployer_staging.py",
+        "tests/deploy/test_peer_deployer_transaction.py",
+        "tests/deploy/test_peer_deployer_v3_reconcile.py",
+        "tests/deploy/test_peer_promote_o1_v3.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "9f8558bfd49a7c45c46d3ae04ccaa96d495e3b20",
+      "title": "fix(deploy): validate reconciliation overlay in preflight (#91)",
+      "changed_paths": [
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "deploy/scripts/peer_deployer/reconcile.py",
+        "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "tests/deploy/test_peer_deployer_reconciliation_overlay.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 9f8558bfd49a7c45c46d3ae04ccaa96d495e3b20",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "deploy/scripts/peer_deployer/reconcile.py",
+        "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "tests/deploy/test_peer_deployer_reconciliation_overlay.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "b23f9659f53ba5240767dfbf4636605c765463f0",
+      "title": "fix(pi): enumerate OmniRoute models for prelaunch picker",
+      "changed_paths": [
+        "omnigent/pi_native_credentials.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit b23f9659f53ba5240767dfbf4636605c765463f0",
+        "omnigent/pi_native_credentials.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "e91fde9a2b0e7dd1b67d655b3add55e49c8f1d62",
+      "title": "fix(pi): restrict prelaunch picker to OmniRoute OpenAI/Codex ids",
+      "changed_paths": [
+        "deploy/scripts/omnigent_release_preflight.py",
+        "omnigent/pi_native_credentials.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit e91fde9a2b0e7dd1b67d655b3add55e49c8f1d62",
+        "deploy/scripts/omnigent_release_preflight.py",
+        "omnigent/pi_native_credentials.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "93b0982c059d9c282b5b1b8afa24b3708924fb88",
+      "title": "fix(pi): drop cx/* and bare gpt-* from pre-launch model picker",
+      "changed_paths": [
+        "omnigent/pi_native_credentials.py",
+        "tests/test_pi_native_credentials.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 93b0982c059d9c282b5b1b8afa24b3708924fb88",
+        "omnigent/pi_native_credentials.py",
+        "tests/test_pi_native_credentials.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "6eb4630b03ebb6597c4650197c7349a073101745",
+      "title": "feat(pi): expose direct openai-codex subscription in pre-launch picker",
+      "changed_paths": [
+        "omnigent/inner/pi_settings.py",
+        "omnigent/pi_native_credentials.py",
+        "omnigent/runner/native/orchestration.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 6eb4630b03ebb6597c4650197c7349a073101745",
+        "omnigent/inner/pi_settings.py",
+        "omnigent/pi_native_credentials.py",
+        "omnigent/runner/native/orchestration.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "047b8f5af5b5fde8e14d1e48a67c6614be6c92a6",
+      "title": "fix(host): enumerate direct codex-native CLI login models pre-launch",
+      "changed_paths": [
+        "omnigent/host/connect.py",
+        "tests/host/test_connect.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 047b8f5af5b5fde8e14d1e48a67c6614be6c92a6",
+        "omnigent/host/connect.py",
+        "tests/host/test_connect.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "61bf166df7fdea3c003469f2749aa8faf79686be",
+      "title": "fix(o2): route Codex model efforts through OmniRoute",
+      "changed_paths": [
+        "omnigent/host/connect.py",
+        "omnigent/inner/codex_native_executor.py",
+        "omnigent/reasoning_effort.py",
+        "tests/host/test_connect.py",
+        "tests/inner/test_codex_native_executor.py",
+        "tests/test_reasoning_effort.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 61bf166df7fdea3c003469f2749aa8faf79686be",
+        "omnigent/host/connect.py",
+        "omnigent/inner/codex_native_executor.py",
+        "omnigent/reasoning_effort.py",
+        "tests/host/test_connect.py",
+        "tests/inner/test_codex_native_executor.py",
+        "tests/test_reasoning_effort.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "6c592851c05770af0dea414581894a9d85dd232f",
+      "title": "fix(o2): expose Codex effort in new sessions",
+      "changed_paths": [
+        "web/src/shell/NewChatDialog.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 6c592851c05770af0dea414581894a9d85dd232f",
+        "web/src/shell/NewChatDialog.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "7c65670a14dc8bebe9861f8a200bb2125824e16e",
+      "title": "fix(o2): sync Codex startup reasoning effort",
+      "changed_paths": [
+        "omnigent/codex_native_app_server.py",
+        "omnigent/runner/native/orchestration.py",
+        "tests/runner/test_codex_native_launch_config.py",
+        "tests/test_codex_native_app_server.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 7c65670a14dc8bebe9861f8a200bb2125824e16e",
+        "omnigent/codex_native_app_server.py",
+        "omnigent/runner/native/orchestration.py",
+        "tests/runner/test_codex_native_launch_config.py",
+        "tests/test_codex_native_app_server.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "3867c7b7d994850dfbe11aeccb9b2c536583ab76",
+      "title": "Merge remote-tracking branch 'origin/main' into feat/o2-codex-access-lanes",
+      "changed_paths": [],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 3867c7b7d994850dfbe11aeccb9b2c536583ab76"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "1cf84e1725425a2918619aec0c170f4466586142",
+      "title": "add explicit Codex access lanes",
+      "changed_paths": [
+        "omnigent/codex_native_app_server.py",
+        "omnigent/host/connect.py",
+        "omnigent/runner/native/orchestration.py",
+        "omnigent/server/schemas.py",
+        "omnigent/stores/conversation_store/__init__.py",
+        "omnigent/stores/conversation_store/sqlalchemy_store.py",
+        "tests/host/test_connect.py",
+        "tests/host/test_frames.py",
+        "tests/runner/test_codex_native_launch_config.py",
+        "tests/server/integration/test_hosts_filesystem.py",
+        "tests/test_native_codex_provider.py",
+        "web/src/components/HarnessConfigControls.tsx",
+        "web/src/lib/modePreferences.test.ts",
+        "web/src/lib/types.ts",
+        "web/src/shell/NewChatDialog.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 1cf84e1725425a2918619aec0c170f4466586142",
+        "omnigent/codex_native_app_server.py",
+        "omnigent/host/connect.py",
+        "omnigent/runner/native/orchestration.py",
+        "omnigent/server/schemas.py",
+        "omnigent/stores/conversation_store/__init__.py",
+        "omnigent/stores/conversation_store/sqlalchemy_store.py",
+        "tests/host/test_connect.py",
+        "tests/host/test_frames.py",
+        "tests/runner/test_codex_native_launch_config.py",
+        "tests/server/integration/test_hosts_filesystem.py",
+        "tests/test_native_codex_provider.py",
+        "web/src/components/HarnessConfigControls.tsx",
+        "web/src/lib/modePreferences.test.ts",
+        "web/src/lib/types.ts",
+        "web/src/shell/NewChatDialog.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "702bde0a614d6dc2d6dd51300cbfd269a2ec114e",
+      "title": "fix(web): widen model selector",
+      "changed_paths": [
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "fix(web): widen model selector",
+      "current_consumer": "Unknown; read-only HomeLab #21 inventory is required",
+      "upstream_v0_10_implementation": "No conclusive v0.10 equivalent recorded",
+      "owning_architecture_exists": "unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 702bde0a614d6dc2d6dd51300cbfd269a2ec114e",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "#135 owner review; PR #137 remains blocked",
+      "validation_required": "Confirm current O1/O2 source/config dependence without runtime mutation",
+      "risk_if_omitted": "A relied-upon Control Room behavior could disappear silently"
+    },
+    {
+      "sha": "8ea44b803729c6e37bc2084aac79db8e4c488832",
+      "title": "fix(web): make model picker labels readable",
+      "changed_paths": [
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 8ea44b803729c6e37bc2084aac79db8e4c488832",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "v0.10 current UI architecture; new #124 product work remains parked",
+      "validation_required": "No port; review current responsive session controls",
+      "risk_if_omitted": "Low: obsolete UI presentation may otherwise conflict with v0.10"
+    },
+    {
+      "sha": "768a72f34de1a2a219eda4d58eef72ed3ae14566",
+      "title": "fix(web): share readable Codex lane picker",
+      "changed_paths": [
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 768a72f34de1a2a219eda4d58eef72ed3ae14566",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "af386bbb4e0ffc293e8e56086d419cdb6c8787a2",
+      "title": "fix(codex): normalize GPT-5.6 effort ladder",
+      "changed_paths": [
+        "omnigent/host/connect.py",
+        "tests/host/test_connect.py"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit af386bbb4e0ffc293e8e56086d419cdb6c8787a2",
+        "omnigent/host/connect.py",
+        "tests/host/test_connect.py"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "4298039ca21a99c30812c374c7d4a74072fa2a4a",
+      "title": "test(web): align shared picker baselines",
+      "changed_paths": [
+        "tests/e2e_ui/visual/snapshots/test_landing_snapshot/test_empty_landing_matches_baseline/test_empty_landing_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_flyout_snapshot/test_pinned_project_flyout_matches_baseline/test_pinned_project_flyout_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_snapshot/test_populated_sidebar_matches_baseline/test_populated_sidebar_matches_baseline[chromium][linux].png",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 4298039ca21a99c30812c374c7d4a74072fa2a4a",
+        "tests/e2e_ui/visual/snapshots/test_landing_snapshot/test_empty_landing_matches_baseline/test_empty_landing_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_flyout_snapshot/test_pinned_project_flyout_matches_baseline/test_pinned_project_flyout_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_snapshot/test_populated_sidebar_matches_baseline/test_populated_sidebar_matches_baseline[chromium][linux].png",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "v0.10 current UI architecture; new #124 product work remains parked",
+      "validation_required": "No port; review current responsive session controls",
+      "risk_if_omitted": "Low: obsolete UI presentation may otherwise conflict with v0.10"
+    },
+    {
+      "sha": "8f48f73eff266e47ee953f85eec19534d19ff7fa",
+      "title": "test(e2e-ui): regenerate visual baselines",
+      "changed_paths": [
+        "tests/e2e_ui/visual/snapshots/test_landing_snapshot/test_empty_landing_matches_baseline/test_empty_landing_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_flyout_snapshot/test_pinned_project_flyout_matches_baseline/test_pinned_project_flyout_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_snapshot/test_populated_sidebar_matches_baseline/test_populated_sidebar_matches_baseline[chromium][linux].png"
+      ],
+      "capability": "test(e2e-ui): regenerate visual baselines",
+      "current_consumer": "Unknown; read-only HomeLab #21 inventory is required",
+      "upstream_v0_10_implementation": "No conclusive v0.10 equivalent recorded",
+      "owning_architecture_exists": "unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 8f48f73eff266e47ee953f85eec19534d19ff7fa",
+        "tests/e2e_ui/visual/snapshots/test_landing_snapshot/test_empty_landing_matches_baseline/test_empty_landing_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_flyout_snapshot/test_pinned_project_flyout_matches_baseline/test_pinned_project_flyout_matches_baseline[chromium][linux].png",
+        "tests/e2e_ui/visual/snapshots/test_sidebar_snapshot/test_populated_sidebar_matches_baseline/test_populated_sidebar_matches_baseline[chromium][linux].png"
+      ],
+      "destination": "#135 owner review; PR #137 remains blocked",
+      "validation_required": "Confirm current O1/O2 source/config dependence without runtime mutation",
+      "risk_if_omitted": "A relied-upon Control Room behavior could disappear silently"
+    },
+    {
+      "sha": "ccca33444c783a7eaa654292ff9538712d58e745",
+      "title": "Merge pull request #93 from Mortified2896/integration/shared-o1-o2-codex",
+      "changed_paths": [],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit ccca33444c783a7eaa654292ff9538712d58e745"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "2320911f2afd7e834c0f70eb95dae8c89c918fcc",
+      "title": "fix(telemetry): restore bounded MLflow export (#96)",
+      "changed_paths": [
+        "deploy/docs/mlflow-tracing.md",
+        "omnigent/runtime/telemetry.py",
+        "tests/runtime/test_telemetry_mlflow_fix.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 provides opt-in OTel/OTLP; MLflow-specific export is not equivalent",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 2320911f2afd7e834c0f70eb95dae8c89c918fcc",
+        "deploy/docs/mlflow-tracing.md",
+        "omnigent/runtime/telemetry.py",
+        "tests/runtime/test_telemetry_mlflow_fix.py"
+      ],
+      "destination": "HomeLab #5 KEEP-OPTIONAL versus RETIRE decision; required before PR #137 merge",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "90a84e63d206aabc1494b73cd1442677b178c49f",
+      "title": "fix(codex): trace native turns with safe metadata (#97)",
+      "changed_paths": [
+        "omnigent/codex_native_forwarder.py",
+        "tests/test_codex_native_forwarder.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 has general OTel spans but no proven equivalent for every fork native-turn provenance field",
+      "owning_architecture_exists": true,
+      "disposition": "PORT SEMANTICALLY",
+      "evidence": [
+        "fork commit 90a84e63d206aabc1494b73cd1442677b178c49f",
+        "omnigent/codex_native_forwarder.py",
+        "tests/test_codex_native_forwarder.py"
+      ],
+      "destination": "Focused telemetry/provenance stack under #135 after HomeLab #5 decision",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "d40a544de8353d3981192e9d79e9dadca6398d87",
+      "title": "fix(codex): always finalize native turn traces (#98)",
+      "changed_paths": [
+        "omnigent/codex_native_forwarder.py",
+        "tests/test_codex_native_forwarder.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 has general OTel spans but no proven equivalent for every fork native-turn provenance field",
+      "owning_architecture_exists": true,
+      "disposition": "PORT SEMANTICALLY",
+      "evidence": [
+        "fork commit d40a544de8353d3981192e9d79e9dadca6398d87",
+        "omnigent/codex_native_forwarder.py",
+        "tests/test_codex_native_forwarder.py"
+      ],
+      "destination": "Focused telemetry/provenance stack under #135 after HomeLab #5 decision",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "6c109847b36e8394b2e5c3f72bd9aad19ec77371",
+      "title": "fix(codex): trace recovered terminal boundaries (#99)",
+      "changed_paths": [
+        "omnigent/codex_native_forwarder.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 has general OTel spans but no proven equivalent for every fork native-turn provenance field",
+      "owning_architecture_exists": true,
+      "disposition": "PORT SEMANTICALLY",
+      "evidence": [
+        "fork commit 6c109847b36e8394b2e5c3f72bd9aad19ec77371",
+        "omnigent/codex_native_forwarder.py"
+      ],
+      "destination": "Focused telemetry/provenance stack under #135 after HomeLab #5 decision",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "c1fcc9b407a39208c83be7de42b940eaba4d3838",
+      "title": "feat(codex): allow deployment trusted mode (#101)",
+      "changed_paths": [
+        "omnigent/runner/native/orchestration.py",
+        "tests/runner/test_codex_native_launch_config.py"
+      ],
+      "capability": "Legacy unrestricted agent-root policy and model-visible trusted-root claim",
+      "current_consumer": "No valid O1/O2 consumer; human emergency root and privileged promotion are separate boundaries",
+      "upstream_v0_10_implementation": "Replaced by HomeLab privilege-boundary source and #115 truthful capability reconciliation",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit c1fcc9b407a39208c83be7de42b940eaba4d3838",
+        "omnigent/runner/native/orchestration.py",
+        "tests/runner/test_codex_native_launch_config.py"
+      ],
+      "destination": "HomeLab #25 evidence and Omnigent #115; never restore unrestricted agent sudo",
+      "validation_required": "#115 false/missing/malformed/conflict tests across host, runner, Codex, and prompt",
+      "risk_if_omitted": "A stale true flag could misrepresent privileges; replaying policy would weaken isolation"
+    },
+    {
+      "sha": "5eb7b039f45e4b9b819cc9d839b83b3d81fed483",
+      "title": "fix(codex): trace truthful launch provenance (#100)",
+      "changed_paths": [
+        "omnigent/codex_native_app_server.py",
+        "omnigent/codex_native_forwarder.py",
+        "omnigent/runner/native/orchestration.py",
+        "tests/runner/test_app_sessions_native_terminals_runtime.py",
+        "tests/runner/test_codex_native_launch_config.py",
+        "tests/test_codex_native_forwarder.py",
+        "tests/test_native_codex_provider.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 has general OTel spans but no proven equivalent for every fork native-turn provenance field",
+      "owning_architecture_exists": true,
+      "disposition": "PORT SEMANTICALLY",
+      "evidence": [
+        "fork commit 5eb7b039f45e4b9b819cc9d839b83b3d81fed483",
+        "omnigent/codex_native_app_server.py",
+        "omnigent/codex_native_forwarder.py",
+        "omnigent/runner/native/orchestration.py",
+        "tests/runner/test_app_sessions_native_terminals_runtime.py",
+        "tests/runner/test_codex_native_launch_config.py",
+        "tests/test_codex_native_forwarder.py",
+        "tests/test_native_codex_provider.py"
+      ],
+      "destination": "Focused telemetry/provenance stack under #135 after HomeLab #5 decision",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "acac967063847883f89d25f159041576f2692eaa",
+      "title": "fix(codex): tag turn traces with instance identity (#102)",
+      "changed_paths": [
+        "omnigent/codex_native_forwarder.py",
+        "tests/test_codex_native_forwarder.py"
+      ],
+      "capability": "Privacy-bounded telemetry and native model/provider/instance provenance",
+      "current_consumer": "Server-side O1/O2 observability; MLflow dependence unresolved",
+      "upstream_v0_10_implementation": "v0.10 has general OTel spans but no proven equivalent for every fork native-turn provenance field",
+      "owning_architecture_exists": true,
+      "disposition": "PORT SEMANTICALLY",
+      "evidence": [
+        "fork commit acac967063847883f89d25f159041576f2692eaa",
+        "omnigent/codex_native_forwarder.py",
+        "tests/test_codex_native_forwarder.py"
+      ],
+      "destination": "Focused telemetry/provenance stack under #135 after HomeLab #5 decision",
+      "validation_required": "Assert no prompt/tool/repository/token content and verify requested/effective model, provider, harness, instance, and terminal status",
+      "risk_if_omitted": "Operators lose safe attribution or accidentally export sensitive content"
+    },
+    {
+      "sha": "a09ee3edd8a61162976937efaecfe1c964ff43fc",
+      "title": "fix(deploy): bootstrap first peer safely",
+      "changed_paths": [
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "deploy/docs/control-room-peer-deployer-v3.md",
+        "deploy/scripts/peer_deployer/__main__.py",
+        "deploy/scripts/peer_deployer/acceptance.py",
+        "deploy/scripts/peer_deployer/baseline.py",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/identity.py",
+        "deploy/scripts/peer_deployer/mode.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "deploy/scripts/peer_deployer/staging.py",
+        "deploy/scripts/peer_deployer/transaction.py",
+        "deploy/scripts/peer_promote_o1_v3.py",
+        "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "tests/deploy/test_peer_deployer_cli.py",
+        "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "tests/deploy/test_peer_deployer_preflight.py",
+        "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "tests/deploy/test_peer_deployer_v3_reconcile.py",
+        "tests/deploy/test_peer_promote_o1_v3.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit a09ee3edd8a61162976937efaecfe1c964ff43fc",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "deploy/docs/control-room-peer-deployer-v3.md",
+        "deploy/scripts/peer_deployer/__main__.py",
+        "deploy/scripts/peer_deployer/acceptance.py",
+        "deploy/scripts/peer_deployer/baseline.py",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/identity.py",
+        "deploy/scripts/peer_deployer/mode.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "deploy/scripts/peer_deployer/staging.py",
+        "deploy/scripts/peer_deployer/transaction.py",
+        "deploy/scripts/peer_promote_o1_v3.py",
+        "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "tests/deploy/test_peer_deployer_cli.py",
+        "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "tests/deploy/test_peer_deployer_preflight.py",
+        "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "tests/deploy/test_peer_deployer_v3_reconcile.py",
+        "tests/deploy/test_peer_promote_o1_v3.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "9fe25a4042e7ade5e38eea0ca8c3fbaad400e093",
+      "title": "fix(deploy): make peer promotion live-safe",
+      "changed_paths": [
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "deploy/scripts/peer_deployer/__main__.py",
+        "deploy/scripts/peer_deployer/acceptance.py",
+        "deploy/scripts/peer_deployer/acceptance_builder.py",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "omnigent/host/connect.py",
+        "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "tests/deploy/test_peer_deployer_live_readiness.py",
+        "tests/deploy/test_peer_deployer_preflight.py",
+        "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "tests/host/test_connect.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 9fe25a4042e7ade5e38eea0ca8c3fbaad400e093",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "deploy/scripts/peer_deployer/__main__.py",
+        "deploy/scripts/peer_deployer/acceptance.py",
+        "deploy/scripts/peer_deployer/acceptance_builder.py",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/preflight.py",
+        "omnigent/host/connect.py",
+        "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "tests/deploy/test_peer_deployer_live_readiness.py",
+        "tests/deploy/test_peer_deployer_preflight.py",
+        "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "tests/host/test_connect.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "bcc51f7cdeb1a8411821d6135e998e0151813694",
+      "title": "Merge pull request #104 from Mortified2896/fix/103-bootstrap-first-peer",
+      "changed_paths": [],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit bcc51f7cdeb1a8411821d6135e998e0151813694"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    },
+    {
+      "sha": "6a8b6dd95a9a29a7383dbc6bb657b7e78e57b883",
+      "title": "fix(deploy): trust root-owned venv interpreters",
+      "changed_paths": [
+        "deploy/scripts/peer_deployer/acceptance.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 6a8b6dd95a9a29a7383dbc6bb657b7e78e57b883",
+        "deploy/scripts/peer_deployer/acceptance.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "c372a158aa1884be533eee3393caaf012bfa0218",
+      "title": "fix(deploy): invoke packaged database migration",
+      "changed_paths": [
+        "deploy/scripts/peer_deployer/host_promotion.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit c372a158aa1884be533eee3393caaf012bfa0218",
+        "deploy/scripts/peer_deployer/host_promotion.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "4da1d5ff1f908833a44e28f22ca8ae9c4de61735",
+      "title": "fix(deploy): stage with supervisor Python",
+      "changed_paths": [
+        "deploy/scripts/peer_deployer/staging.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 4da1d5ff1f908833a44e28f22ca8ae9c4de61735",
+        "deploy/scripts/peer_deployer/staging.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "5785e275229416970bc4476a2cd848bfff256a7f",
+      "title": "fix peer staging same-version artifacts",
+      "changed_paths": [
+        "deploy/scripts/peer_deployer/staging.py",
+        "tests/deploy/test_peer_deployer_same_version_staging.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 5785e275229416970bc4476a2cd848bfff256a7f",
+        "deploy/scripts/peer_deployer/staging.py",
+        "tests/deploy/test_peer_deployer_same_version_staging.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "acdc81a16cc68b2e08f6380d9012cb75270cb7f4",
+      "title": "Merge pull request #106 from Mortified2896/fix/peer-staging-same-version",
+      "changed_paths": [],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit acdc81a16cc68b2e08f6380d9012cb75270cb7f4"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    },
+    {
+      "sha": "86112b79561878ebbc985be7fa8ef70b5a84ff19",
+      "title": "fix peer-copy launcher relocation",
+      "changed_paths": [
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/staging.py",
+        "tests/deploy/test_peer_deployer_same_version_staging.py",
+        "tests/deploy/test_peer_promote_o1_v3.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 86112b79561878ebbc985be7fa8ef70b5a84ff19",
+        "deploy/scripts/peer_deployer/host_promotion.py",
+        "deploy/scripts/peer_deployer/staging.py",
+        "tests/deploy/test_peer_deployer_same_version_staging.py",
+        "tests/deploy/test_peer_promote_o1_v3.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "2eec3c67faa9ea2f6730ec7e501f5d18797dee35",
+      "title": "add trusted root runtime instructions",
+      "changed_paths": [
+        "AGENTS.md",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "omnigent/host/connect.py",
+        "omnigent/runtime/prompt.py",
+        "tests/host/test_connect.py",
+        "tests/runtime/test_prompt.py"
+      ],
+      "capability": "Legacy unrestricted agent-root policy and model-visible trusted-root claim",
+      "current_consumer": "No valid O1/O2 consumer; human emergency root and privileged promotion are separate boundaries",
+      "upstream_v0_10_implementation": "Replaced by HomeLab privilege-boundary source and #115 truthful capability reconciliation",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 2eec3c67faa9ea2f6730ec7e501f5d18797dee35",
+        "AGENTS.md",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "omnigent/host/connect.py",
+        "omnigent/runtime/prompt.py",
+        "tests/host/test_connect.py",
+        "tests/runtime/test_prompt.py"
+      ],
+      "destination": "HomeLab #25 evidence and Omnigent #115; never restore unrestricted agent sudo",
+      "validation_required": "#115 false/missing/malformed/conflict tests across host, runner, Codex, and prompt",
+      "risk_if_omitted": "A stale true flag could misrepresent privileges; replaying policy would weaken isolation"
+    },
+    {
+      "sha": "a5529b257615222e2c71b260d47248f3e2620fa2",
+      "title": "Add Control Room trusted-root policy source",
+      "changed_paths": [
+        "deploy/control-room/trusted-root/README.md",
+        "deploy/control-room/trusted-root/env/omnigent-production-trusted-root.env",
+        "deploy/control-room/trusted-root/env/omnigent-trusted-root.env",
+        "deploy/control-room/trusted-root/install.sh",
+        "deploy/control-room/trusted-root/sudoers/99-omnigent-agent-root",
+        "deploy/control-room/trusted-root/systemd/omnigent-host.service.d/99-trusted-root.conf",
+        "deploy/control-room/trusted-root/systemd/omnigent-production-host.service.d/99-trusted-root.conf",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "tests/deploy/test_control_room_trusted_root_policy.py"
+      ],
+      "capability": "Legacy unrestricted agent-root policy and model-visible trusted-root claim",
+      "current_consumer": "No valid O1/O2 consumer; human emergency root and privileged promotion are separate boundaries",
+      "upstream_v0_10_implementation": "Replaced by HomeLab privilege-boundary source and #115 truthful capability reconciliation",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit a5529b257615222e2c71b260d47248f3e2620fa2",
+        "deploy/control-room/trusted-root/README.md",
+        "deploy/control-room/trusted-root/env/omnigent-production-trusted-root.env",
+        "deploy/control-room/trusted-root/env/omnigent-trusted-root.env",
+        "deploy/control-room/trusted-root/install.sh",
+        "deploy/control-room/trusted-root/sudoers/99-omnigent-agent-root",
+        "deploy/control-room/trusted-root/systemd/omnigent-host.service.d/99-trusted-root.conf",
+        "deploy/control-room/trusted-root/systemd/omnigent-production-host.service.d/99-trusted-root.conf",
+        "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "tests/deploy/test_control_room_trusted_root_policy.py"
+      ],
+      "destination": "HomeLab #25 evidence and Omnigent #115; never restore unrestricted agent sudo",
+      "validation_required": "#115 false/missing/malformed/conflict tests across host, runner, Codex, and prompt",
+      "risk_if_omitted": "A stale true flag could misrepresent privileges; replaying policy would weaken isolation"
+    },
+    {
+      "sha": "7ebab01c1698bf6597c5177da86d78caf21eb07d",
+      "title": "Document Control Room trusted root access",
+      "changed_paths": [
+        "AGENTS.md"
+      ],
+      "capability": "Legacy unrestricted agent-root policy and model-visible trusted-root claim",
+      "current_consumer": "No valid O1/O2 consumer; human emergency root and privileged promotion are separate boundaries",
+      "upstream_v0_10_implementation": "Replaced by HomeLab privilege-boundary source and #115 truthful capability reconciliation",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 7ebab01c1698bf6597c5177da86d78caf21eb07d",
+        "AGENTS.md"
+      ],
+      "destination": "HomeLab #25 evidence and Omnigent #115; never restore unrestricted agent sudo",
+      "validation_required": "#115 false/missing/malformed/conflict tests across host, runner, Codex, and prompt",
+      "risk_if_omitted": "A stale true flag could misrepresent privileges; replaying policy would weaken isolation"
+    },
+    {
+      "sha": "950476f4dda72b95459aa4389b1c0bf44659d1a4",
+      "title": "test(deploy): handle long-shebang relocation failures",
+      "changed_paths": [
+        "tests/deploy/test_peer_deployer_same_version_staging.py"
+      ],
+      "capability": "Peer-supervised immutable release promotion, transaction recovery, and rollback",
+      "current_consumer": "Live authority is disputed between installed peer-deployer and newer source tooling",
+      "upstream_v0_10_implementation": "Upstream v0.10 has no Control Room O1/O2 promotion authority",
+      "owning_architecture_exists": "source exists; authoritative live generation unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 950476f4dda72b95459aa4389b1c0bf44659d1a4",
+        "tests/deploy/test_peer_deployer_same_version_staging.py"
+      ],
+      "destination": "#122 after HomeLab #21/#23 inventory; required before PR #137 merge",
+      "validation_required": "#122 authority matrix: target != supervisor, SHA/provenance, backup/migration, health cutover, bounded rollback, reconciliation",
+      "risk_if_omitted": "Unsafe self-upgrade, wrong artifact, split transaction ownership, or unrecoverable cutover"
+    },
+    {
+      "sha": "8136d332a326651a937a09161a285cf673bf2095",
+      "title": "Merge pull request #107 from Mortified2896/fix/peer-copy-relocated-console-launcher",
+      "changed_paths": [],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 8136d332a326651a937a09161a285cf673bf2095"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    },
+    {
+      "sha": "49a38ecb74dabca4973870d60eaf0e8aef128e16",
+      "title": "Merge pull request #108 from Mortified2896/feat/trusted-root-agent-instructions",
+      "changed_paths": [],
+      "capability": "Legacy unrestricted agent-root policy and model-visible trusted-root claim",
+      "current_consumer": "No valid O1/O2 consumer; human emergency root and privileged promotion are separate boundaries",
+      "upstream_v0_10_implementation": "Replaced by HomeLab privilege-boundary source and #115 truthful capability reconciliation",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 49a38ecb74dabca4973870d60eaf0e8aef128e16"
+      ],
+      "destination": "HomeLab #25 evidence and Omnigent #115; never restore unrestricted agent sudo",
+      "validation_required": "#115 false/missing/malformed/conflict tests across host, runner, Codex, and prompt",
+      "risk_if_omitted": "A stale true flag could misrepresent privileges; replaying policy would weaken isolation"
+    },
+    {
+      "sha": "fc17beca6f3fde171da484a9ccc969c880a56df0",
+      "title": "fix(web): keep landing controls inside mobile composer",
+      "changed_paths": [
+        "web/src/shell/NewChatDialog.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "capability": "Responsive new-chat controls",
+      "current_consumer": "Web/mobile session creation",
+      "upstream_v0_10_implementation": "v0.10 replaced the old dialog/layout and carries current responsive coverage",
+      "owning_architecture_exists": true,
+      "disposition": "SOLVED UPSTREAM",
+      "evidence": [
+        "fork commit fc17beca6f3fde171da484a9ccc969c880a56df0",
+        "web/src/shell/NewChatDialog.test.tsx",
+        "web/src/shell/NewChatDialog.tsx"
+      ],
+      "destination": "v0.10 web session-creation UI",
+      "validation_required": "Existing v0.10 responsive UI tests",
+      "risk_if_omitted": "Replaying the old component patch would conflict with the replacement UI"
+    },
+    {
+      "sha": "ba50146e9bd4512ec345feb7e9bc483421a04104",
+      "title": "Merge pull request #112 from Mortified2896/codex/mobile-omnigent-layout",
+      "changed_paths": [],
+      "capability": "Current Codex/Pi model, credential, routing, access-lane, and reasoning-effort behavior",
+      "current_consumer": "Potential O1/O2 session launch configuration; live dependence unverified",
+      "upstream_v0_10_implementation": "v0.10 materially expands native Codex/Pi config, model overrides, eligibility, and effort handling",
+      "owning_architecture_exists": true,
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit ba50146e9bd4512ec345feb7e9bc483421a04104"
+      ],
+      "destination": "HomeLab #21 read-only live config inventory, then focused #135 port if required; #124 only for enhancements",
+      "validation_required": "Exact approved GPT-5.6 spellings, requested/effective model, no silent fallback, harness eligibility, Pi config/credentials",
+      "risk_if_omitted": "A live route can vanish, silently fall back, or launch with the wrong effort/provider"
+    },
+    {
+      "sha": "b878d0c1c3ec5cdd3d0568ad83a699bd192ae41c",
+      "title": "docs: enforce HomeLab repository boundary",
+      "changed_paths": [
+        "AGENTS.md"
+      ],
+      "capability": "Prevent Control Room work from mutating the HomeLab repository implicitly",
+      "current_consumer": "Repository-aware agent mutation gates",
+      "upstream_v0_10_implementation": "#117 v0.10 repository verifier/sentinel and pre-mutation gates enforce the boundary",
+      "owning_architecture_exists": true,
+      "disposition": "SOLVED UPSTREAM",
+      "evidence": [
+        "fork commit b878d0c1c3ec5cdd3d0568ad83a699bd192ae41c",
+        "AGENTS.md"
+      ],
+      "destination": "PR #137 repository-boundary suite",
+      "validation_required": "#117 focused repository/host/session/worktree tests",
+      "risk_if_omitted": "Cross-repository mutation without explicit authorization"
+    },
+    {
+      "sha": "9cfecb8028b3bc2c754f07d65568790b6611c074",
+      "title": "docs: correct O1/O2 privilege guidance",
+      "changed_paths": [
+        "AGENTS.md"
+      ],
+      "capability": "docs: correct O1/O2 privilege guidance",
+      "current_consumer": "Unknown; read-only HomeLab #21 inventory is required",
+      "upstream_v0_10_implementation": "No conclusive v0.10 equivalent recorded",
+      "owning_architecture_exists": "unknown",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "evidence": [
+        "fork commit 9cfecb8028b3bc2c754f07d65568790b6611c074",
+        "AGENTS.md"
+      ],
+      "destination": "#135 owner review; PR #137 remains blocked",
+      "validation_required": "Confirm current O1/O2 source/config dependence without runtime mutation",
+      "risk_if_omitted": "A relied-upon Control Room behavior could disappear silently"
+    },
+    {
+      "sha": "5e9ba05ed2210469736dfdee5a686a587d369732",
+      "title": "Revert \"docs: correct O1/O2 privilege guidance\"",
+      "changed_paths": [
+        "AGENTS.md"
+      ],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 5e9ba05ed2210469736dfdee5a686a587d369732",
+        "AGENTS.md"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    },
+    {
+      "sha": "895d7c2c5fcbbae982a71623ced2fef8b1b4a518",
+      "title": "Revert \"docs: correct O1/O2 privilege guidance\"",
+      "changed_paths": [],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit 895d7c2c5fcbbae982a71623ced2fef8b1b4a518"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    },
+    {
+      "sha": "bfdf27afc9e9dd89f73e75c4f99b52509eb8e0af",
+      "title": "Revert \"docs: correct O1/O2 privilege guidance\"",
+      "changed_paths": [],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit bfdf27afc9e9dd89f73e75c4f99b52509eb8e0af"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    },
+    {
+      "sha": "a512c01f952662d7baa95a5810a3c249f7d2ff80",
+      "title": "Revert \"docs: correct O1/O2 privilege guidance\"",
+      "changed_paths": [],
+      "capability": "Merge/revert bookkeeping with no surviving independent tree capability",
+      "current_consumer": "None",
+      "upstream_v0_10_implementation": "No source behavior to port after the net revert/merge result",
+      "owning_architecture_exists": false,
+      "disposition": "SUPERSEDED/OBSOLETE",
+      "evidence": [
+        "fork commit a512c01f952662d7baa95a5810a3c249f7d2ff80"
+      ],
+      "destination": "Reachable lineage only",
+      "validation_required": "Verify empty or net-neutral diff and retain commit reachability",
+      "risk_if_omitted": "None beyond losing historical evidence, which the second parent preserves"
+    }
+  ],
+  "tree_completeness": {
+    "fork_files_absent_from_candidate": [
+      {
+        "path": ".github/workflows/electron-build.yml",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream c8c4f8182 removed the redundant manual Electron workflow",
+        "destination": "v0.10 workflow graph",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/README.md",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/env/omnigent-production-trusted-root.env",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/env/omnigent-trusted-root.env",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/install.sh",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/sudoers/99-omnigent-agent-root",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/systemd/omnigent-host.service.d/99-trusted-root.conf",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/systemd/omnigent-production-host.service.d/99-trusted-root.conf",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122; keep operator contract available on fork main until replacement is reviewed",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/control-room-peer-deployer-v3.md",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122; keep operator contract available on fork main until replacement is reviewed",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/control-room-upstream-reconciliation.md",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "docs/control-room-v0.10-lineage.json and docs/control-room-v0.10-capability-audit.json",
+        "destination": "PR #137",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/mlflow-tracing.md",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "HomeLab #5 KEEP-OPTIONAL versus RETIRE",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/omnigent_release_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__init__.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__main__.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance_builder.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/baseline.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/fsm.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/host_promotion.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/identity.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/mode.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/path_safety.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/rollback.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/service_state.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/transaction.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer_lib.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1_v2.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1_v3.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/promote-omnigent-maintenance.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_control_room_release_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_control_room_trusted_root_policy.py",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_cli.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_fsm.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_identity.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_live_readiness.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_path_safety.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_power_loss.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_rollback.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_same_version_staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_service_state.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_transaction.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_v3_reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_promote_o1_v3.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/e2e_ui/test_pwa_build.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#135 owner review",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/e2e_ui/test_pwa_e2e.py",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/runtime/test_telemetry_mlflow_fix.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "HomeLab #5 KEEP-OPTIONAL versus RETIRE",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/public/pwa-192.png",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/public/pwa-512.png",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/public/pwa-maskable-512.png",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/components/pwa/PWAUpdateBanner.test.tsx",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/components/pwa/PWAUpdateBanner.tsx",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/components/pwa/useServiceWorkerUpdate.test.tsx",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/components/pwa/useServiceWorkerUpdate.ts",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/lib/buildVersion.test.ts",
+        "disposition": "SOLVED UPSTREAM",
+        "replacement": "upstream 6ac1c6045 moved server selection to the sidebar and added the current version manifest",
+        "destination": "v0.10 desktop/sidebar architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/lib/buildVersion.ts",
+        "disposition": "SOLVED UPSTREAM",
+        "replacement": "upstream 6ac1c6045 moved server selection to the sidebar and added the current version manifest",
+        "destination": "v0.10 desktop/sidebar architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "web/src/shell/TitleBarServerPicker.tsx",
+        "disposition": "SOLVED UPSTREAM",
+        "replacement": "upstream 6ac1c6045 moved server selection to the sidebar and added the current version manifest",
+        "destination": "v0.10 desktop/sidebar architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      }
+    ],
+    "substantial_semantic_divergence_threshold_lines": 200,
+    "substantially_divergent_files": [
+      {
+        "path": ".github/actions/compat-smoke-ui-run/action.yml",
+        "fork_lines": 0,
+        "candidate_lines": 227
+      },
+      {
+        "path": "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "fork_lines": 344,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/omnigent_release_preflight.py",
+        "fork_lines": 309,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__main__.py",
+        "fork_lines": 447,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance.py",
+        "fork_lines": 610,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/fsm.py",
+        "fork_lines": 293,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/host_promotion.py",
+        "fork_lines": 1019,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/identity.py",
+        "fork_lines": 443,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/path_safety.py",
+        "fork_lines": 309,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/preflight.py",
+        "fork_lines": 562,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/reconcile.py",
+        "fork_lines": 1615,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/rollback.py",
+        "fork_lines": 310,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/service_state.py",
+        "fork_lines": 215,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/staging.py",
+        "fork_lines": 962,
+        "candidate_lines": 0
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/transaction.py",
+        "fork_lines": 405,
+        "candidate_lines": 0
+      },
+      {
+        "path": "dev/benchmarks/omnigent/journeys.py",
+        "fork_lines": 9,
+        "candidate_lines": 205
+      },
+      {
+        "path": "omnigent/__init__.py",
+        "fork_lines": 66,
+        "candidate_lines": 205
+      },
+      {
+        "path": "omnigent/antigravity_native_reader.py",
+        "fork_lines": 75,
+        "candidate_lines": 608
+      },
+      {
+        "path": "omnigent/antigravity_native_steps.py",
+        "fork_lines": 255,
+        "candidate_lines": 285
+      },
+      {
+        "path": "omnigent/chat.py",
+        "fork_lines": 76,
+        "candidate_lines": 306
+      },
+      {
+        "path": "omnigent/claude_native.py",
+        "fork_lines": 159,
+        "candidate_lines": 389
+      },
+      {
+        "path": "omnigent/claude_native_bridge.py",
+        "fork_lines": 55,
+        "candidate_lines": 394
+      },
+      {
+        "path": "omnigent/claude_native_forwarder.py",
+        "fork_lines": 487,
+        "candidate_lines": 370
+      },
+      {
+        "path": "omnigent/cli.py",
+        "fork_lines": 55,
+        "candidate_lines": 322
+      },
+      {
+        "path": "omnigent/codex_native_app_server.py",
+        "fork_lines": 136,
+        "candidate_lines": 190
+      },
+      {
+        "path": "omnigent/host/connect.py",
+        "fork_lines": 241,
+        "candidate_lines": 567
+      },
+      {
+        "path": "omnigent/host/repository_identity.py",
+        "fork_lines": 0,
+        "candidate_lines": 247
+      },
+      {
+        "path": "omnigent/inner/acp_executor.py",
+        "fork_lines": 23,
+        "candidate_lines": 215
+      },
+      {
+        "path": "omnigent/onboarding/sandboxes/blaxel.py",
+        "fork_lines": 0,
+        "candidate_lines": 1232
+      },
+      {
+        "path": "omnigent/onboarding/sandboxes/kubernetes.py",
+        "fork_lines": 211,
+        "candidate_lines": 337
+      },
+      {
+        "path": "omnigent/pi_native_credentials.py",
+        "fork_lines": 364,
+        "candidate_lines": 87
+      },
+      {
+        "path": "omnigent/publication_checkpoint.py",
+        "fork_lines": 0,
+        "candidate_lines": 733
+      },
+      {
+        "path": "omnigent/runner/app.py",
+        "fork_lines": 168,
+        "candidate_lines": 928
+      },
+      {
+        "path": "omnigent/runner/direct_attach.py",
+        "fork_lines": 0,
+        "candidate_lines": 258
+      },
+      {
+        "path": "omnigent/runner/environment_filesystem.py",
+        "fork_lines": 54,
+        "candidate_lines": 348
+      },
+      {
+        "path": "omnigent/runner/launch_failure.py",
+        "fork_lines": 0,
+        "candidate_lines": 211
+      },
+      {
+        "path": "omnigent/runner/native/orchestration.py",
+        "fork_lines": 122,
+        "candidate_lines": 253
+      },
+      {
+        "path": "omnigent/runner/resource_registry.py",
+        "fork_lines": 57,
+        "candidate_lines": 161
+      },
+      {
+        "path": "omnigent/runtime/harnesses/_executor_adapter.py",
+        "fork_lines": 1020,
+        "candidate_lines": 284
+      },
+      {
+        "path": "omnigent/runtime/inflight_text.py",
+        "fork_lines": 377,
+        "candidate_lines": 165
+      },
+      {
+        "path": "omnigent/runtime/telemetry.py",
+        "fork_lines": 209,
+        "candidate_lines": 29
+      },
+      {
+        "path": "omnigent/runtime/tool_result_replay.py",
+        "fork_lines": 0,
+        "candidate_lines": 514
+      },
+      {
+        "path": "omnigent/server/app.py",
+        "fork_lines": 71,
+        "candidate_lines": 425
+      },
+      {
+        "path": "omnigent/server/managed_hosts.py",
+        "fork_lines": 35,
+        "candidate_lines": 368
+      },
+      {
+        "path": "omnigent/server/routes/_sessions/helpers.py",
+        "fork_lines": 21,
+        "candidate_lines": 245
+      },
+      {
+        "path": "omnigent/server/routes/_sessions/orchestration.py",
+        "fork_lines": 89,
+        "candidate_lines": 364
+      },
+      {
+        "path": "omnigent/server/routes/sessions/routes_events.py",
+        "fork_lines": 7,
+        "candidate_lines": 237
+      },
+      {
+        "path": "omnigent/server/routes/sessions/routes_resources.py",
+        "fork_lines": 57,
+        "candidate_lines": 447
+      },
+      {
+        "path": "omnigent/server/server_config.py",
+        "fork_lines": 0,
+        "candidate_lines": 442
+      },
+      {
+        "path": "openapi.json",
+        "fork_lines": 37,
+        "candidate_lines": 558
+      },
+      {
+        "path": "pyproject.toml",
+        "fork_lines": 278,
+        "candidate_lines": 102
+      },
+      {
+        "path": "tests/cli/test_chat.py",
+        "fork_lines": 8,
+        "candidate_lines": 206
+      },
+      {
+        "path": "tests/cli/test_cli.py",
+        "fork_lines": 0,
+        "candidate_lines": 467
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "fork_lines": 363,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_fsm.py",
+        "fork_lines": 215,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_identity.py",
+        "fork_lines": 213,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "fork_lines": 570,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_path_safety.py",
+        "fork_lines": 304,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_power_loss.py",
+        "fork_lines": 255,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_reconcile.py",
+        "fork_lines": 643,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "fork_lines": 1844,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_rollback.py",
+        "fork_lines": 448,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_same_version_staging.py",
+        "fork_lines": 266,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_service_state.py",
+        "fork_lines": 364,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_staging.py",
+        "fork_lines": 590,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_transaction.py",
+        "fork_lines": 363,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/e2e/test_managed_runner_http_auth.py",
+        "fork_lines": 27,
+        "candidate_lines": 217
+      },
+      {
+        "path": "tests/e2e_ui/approvals/test_ask_user_question.py",
+        "fork_lines": 14,
+        "candidate_lines": 232
+      },
+      {
+        "path": "tests/e2e_ui/chat/test_composer_growth_transcript_stability.py",
+        "fork_lines": 54,
+        "candidate_lines": 478
+      },
+      {
+        "path": "tests/e2e_ui/collaboration/test_browse_outside_workspace.py",
+        "fork_lines": 0,
+        "candidate_lines": 353
+      },
+      {
+        "path": "tests/e2e_ui/conftest.py",
+        "fork_lines": 71,
+        "candidate_lines": 194
+      },
+      {
+        "path": "tests/e2e_ui/files/test_files_panel_header.py",
+        "fork_lines": 15,
+        "candidate_lines": 329
+      },
+      {
+        "path": "tests/e2e_ui/messages/test_message_timestamps.py",
+        "fork_lines": 0,
+        "candidate_lines": 202
+      },
+      {
+        "path": "tests/e2e_ui/sessions/test_sidebar_archive.py",
+        "fork_lines": 0,
+        "candidate_lines": 238
+      },
+      {
+        "path": "tests/e2e_ui/sessions/test_sidebar_session_filter_persistence.py",
+        "fork_lines": 0,
+        "candidate_lines": 241
+      },
+      {
+        "path": "tests/e2e_ui/start_session/test_start_session.py",
+        "fork_lines": 14,
+        "candidate_lines": 564
+      },
+      {
+        "path": "tests/e2e_ui/test_pwa_e2e.py",
+        "fork_lines": 226,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/host/test_connect.py",
+        "fork_lines": 227,
+        "candidate_lines": 925
+      },
+      {
+        "path": "tests/host/test_repository_identity.py",
+        "fork_lines": 0,
+        "candidate_lines": 238
+      },
+      {
+        "path": "tests/inner/test_acp_executor.py",
+        "fork_lines": 1,
+        "candidate_lines": 432
+      },
+      {
+        "path": "tests/inner/test_claude_sdk_executor.py",
+        "fork_lines": 31,
+        "candidate_lines": 256
+      },
+      {
+        "path": "tests/inner/test_os_env_grant_reach.py",
+        "fork_lines": 2,
+        "candidate_lines": 276
+      },
+      {
+        "path": "tests/llms/test_content_helpers.py",
+        "fork_lines": 8,
+        "candidate_lines": 256
+      },
+      {
+        "path": "tests/onboarding/sandboxes/test_blaxel.py",
+        "fork_lines": 0,
+        "candidate_lines": 1258
+      },
+      {
+        "path": "tests/onboarding/sandboxes/test_kubernetes.py",
+        "fork_lines": 209,
+        "candidate_lines": 441
+      },
+      {
+        "path": "tests/runner/test_app_sessions_native_terminals_runtime.py",
+        "fork_lines": 15,
+        "candidate_lines": 299
+      },
+      {
+        "path": "tests/runner/test_comment_relay.py",
+        "fork_lines": 1,
+        "candidate_lines": 454
+      },
+      {
+        "path": "tests/runner/test_resource_registry.py",
+        "fork_lines": 51,
+        "candidate_lines": 227
+      },
+      {
+        "path": "tests/runner/test_runner_dispatch.py",
+        "fork_lines": 24,
+        "candidate_lines": 2012
+      },
+      {
+        "path": "tests/runner/test_sub_agent_bundle_isolation.py",
+        "fork_lines": 0,
+        "candidate_lines": 676
+      },
+      {
+        "path": "tests/runner/test_sub_agent_workdir_resolution.py",
+        "fork_lines": 0,
+        "candidate_lines": 211
+      },
+      {
+        "path": "tests/runner/test_subagent_spec_swap_warning.py",
+        "fork_lines": 0,
+        "candidate_lines": 354
+      },
+      {
+        "path": "tests/runtime/harnesses/test_executor_adapter_recovery.py",
+        "fork_lines": 0,
+        "candidate_lines": 571
+      },
+      {
+        "path": "tests/runtime/test_inflight_text.py",
+        "fork_lines": 335,
+        "candidate_lines": 133
+      },
+      {
+        "path": "tests/runtime/test_telemetry.py",
+        "fork_lines": 212,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/runtime/test_telemetry_mlflow_fix.py",
+        "fork_lines": 735,
+        "candidate_lines": 0
+      },
+      {
+        "path": "tests/runtime/test_tool_result_replay.py",
+        "fork_lines": 0,
+        "candidate_lines": 288
+      },
+      {
+        "path": "tests/server/integration/test_session_host_launch.py",
+        "fork_lines": 5,
+        "candidate_lines": 234
+      },
+      {
+        "path": "tests/server/integration/test_sessions_endpoints.py",
+        "fork_lines": 1,
+        "candidate_lines": 275
+      },
+      {
+        "path": "tests/server/integration/test_sessions_permissions.py",
+        "fork_lines": 22,
+        "candidate_lines": 287
+      },
+      {
+        "path": "tests/server/integration/test_sessions_subagent_context.py",
+        "fork_lines": 2,
+        "candidate_lines": 319
+      },
+      {
+        "path": "tests/server/routes/test_session_resources.py",
+        "fork_lines": 2,
+        "candidate_lines": 238
+      },
+      {
+        "path": "tests/server/routes/test_shell_permission_gate.py",
+        "fork_lines": 2,
+        "candidate_lines": 281
+      },
+      {
+        "path": "tests/server/test_app.py",
+        "fork_lines": 0,
+        "candidate_lines": 495
+      },
+      {
+        "path": "tests/server/test_managed_hosts.py",
+        "fork_lines": 16,
+        "candidate_lines": 533
+      },
+      {
+        "path": "tests/server/test_server_config.py",
+        "fork_lines": 0,
+        "candidate_lines": 500
+      },
+      {
+        "path": "tests/spec/test_skill_sources.py",
+        "fork_lines": 0,
+        "candidate_lines": 205
+      },
+      {
+        "path": "tests/stores/test_conversation_store.py",
+        "fork_lines": 1,
+        "candidate_lines": 216
+      },
+      {
+        "path": "tests/test_antigravity_native_reader.py",
+        "fork_lines": 14,
+        "candidate_lines": 1113
+      },
+      {
+        "path": "tests/test_antigravity_native_steps.py",
+        "fork_lines": 319,
+        "candidate_lines": 325
+      },
+      {
+        "path": "tests/test_claude_native.py",
+        "fork_lines": 523,
+        "candidate_lines": 2260
+      },
+      {
+        "path": "tests/test_claude_native_bridge.py",
+        "fork_lines": 19,
+        "candidate_lines": 918
+      },
+      {
+        "path": "tests/test_claude_native_forwarder.py",
+        "fork_lines": 627,
+        "candidate_lines": 600
+      },
+      {
+        "path": "tests/test_gateway_inference.py",
+        "fork_lines": 4,
+        "candidate_lines": 267
+      },
+      {
+        "path": "tests/test_publication_checkpoint.py",
+        "fork_lines": 0,
+        "candidate_lines": 615
+      },
+      {
+        "path": "uv.lock",
+        "fork_lines": 386,
+        "candidate_lines": 438
+      },
+      {
+        "path": "web/src/components/BrandLogo.test.tsx",
+        "fork_lines": 0,
+        "candidate_lines": 208
+      },
+      {
+        "path": "web/src/components/blocks/BlockRenderer.tsx",
+        "fork_lines": 267,
+        "candidate_lines": 28
+      },
+      {
+        "path": "web/src/components/blocks/ChatMarkdown.tsx",
+        "fork_lines": 0,
+        "candidate_lines": 390
+      },
+      {
+        "path": "web/src/components/blocks/StatusBlocks.test.tsx",
+        "fork_lines": 3,
+        "candidate_lines": 493
+      },
+      {
+        "path": "web/src/components/blocks/StatusBlocks.tsx",
+        "fork_lines": 22,
+        "candidate_lines": 452
+      },
+      {
+        "path": "web/src/hooks/useConversations.test.ts",
+        "fork_lines": 5,
+        "candidate_lines": 202
+      },
+      {
+        "path": "web/src/hooks/useConversations.ts",
+        "fork_lines": 98,
+        "candidate_lines": 377
+      },
+      {
+        "path": "web/src/hooks/useWorkspaceChangedFiles.ts",
+        "fork_lines": 26,
+        "candidate_lines": 196
+      },
+      {
+        "path": "web/src/index.css.test.ts",
+        "fork_lines": 1,
+        "candidate_lines": 207
+      },
+      {
+        "path": "web/src/lib/identity.ts",
+        "fork_lines": 2,
+        "candidate_lines": 323
+      },
+      {
+        "path": "web/src/lib/renderItems.test.ts",
+        "fork_lines": 2,
+        "candidate_lines": 330
+      },
+      {
+        "path": "web/src/lib/terminals.ts",
+        "fork_lines": 0,
+        "candidate_lines": 214
+      },
+      {
+        "path": "web/src/pages/ChatPage.test.ts",
+        "fork_lines": 31,
+        "candidate_lines": 218
+      },
+      {
+        "path": "web/src/pages/ChatPage.tsx",
+        "fork_lines": 516,
+        "candidate_lines": 747
+      },
+      {
+        "path": "web/src/shell/AppShell.test.tsx",
+        "fork_lines": 271,
+        "candidate_lines": 481
+      },
+      {
+        "path": "web/src/shell/AppShell.tsx",
+        "fork_lines": 165,
+        "candidate_lines": 399
+      },
+      {
+        "path": "web/src/shell/FilesPanel.test.tsx",
+        "fork_lines": 146,
+        "candidate_lines": 370
+      },
+      {
+        "path": "web/src/shell/FolderTree.tsx",
+        "fork_lines": 60,
+        "candidate_lines": 143
+      },
+      {
+        "path": "web/src/shell/NewChatDialog.test.tsx",
+        "fork_lines": 233,
+        "candidate_lines": 237
+      },
+      {
+        "path": "web/src/shell/NewChatDialog.tsx",
+        "fork_lines": 340,
+        "candidate_lines": 335
+      },
+      {
+        "path": "web/src/shell/Sidebar.bulkDeleteBranch.test.tsx",
+        "fork_lines": 0,
+        "candidate_lines": 259
+      },
+      {
+        "path": "web/src/shell/Sidebar.tsx",
+        "fork_lines": 294,
+        "candidate_lines": 550
+      },
+      {
+        "path": "web/src/shell/SwitchHostDialog.tsx",
+        "fork_lines": 0,
+        "candidate_lines": 327
+      },
+      {
+        "path": "web/src/shell/WorkspacePicker.tsx",
+        "fork_lines": 69,
+        "candidate_lines": 144
+      },
+      {
+        "path": "web/src/store/chatStore.test.ts",
+        "fork_lines": 809,
+        "candidate_lines": 2329
+      },
+      {
+        "path": "web/src/store/chatStore.ts",
+        "fork_lines": 749,
+        "candidate_lines": 1549
+      },
+      {
+        "path": "web/src/store/conversationRegistry.test.ts",
+        "fork_lines": 0,
+        "candidate_lines": 279
+      },
+      {
+        "path": "web/src/store/conversationRegistry.ts",
+        "fork_lines": 0,
+        "candidate_lines": 304
+      }
+    ],
+    "executable_entrypoints_removed": [
+      {
+        "path": "deploy/scripts/omnigent_release_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__init__.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__main__.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance_builder.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/baseline.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/fsm.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/host_promotion.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/identity.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/mode.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/path_safety.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/rollback.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/service_state.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/transaction.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer_lib.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1_v2.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1_v3.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/promote-omnigent-maintenance.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      }
+    ],
+    "systemd_deployment_paths_removed": [
+      {
+        "path": "deploy/control-room/trusted-root/systemd/omnigent-host.service.d/99-trusted-root.conf",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/systemd/omnigent-production-host.service.d/99-trusted-root.conf",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/omnigent_release_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__init__.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/__main__.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/acceptance_builder.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/baseline.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/fsm.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/host_promotion.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/identity.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/mode.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/path_safety.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/rollback.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/service_state.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer/transaction.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_deployer_lib.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1_v2.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/peer_promote_o1_v3.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/scripts/promote-omnigent-maintenance.sh",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      }
+    ],
+    "migrations_removed_or_replaced": [],
+    "tests_removed": [
+      {
+        "path": "tests/deploy/test_control_room_release_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_control_room_trusted_root_policy.py",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_bootstrap_acceptance.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_cli.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_fsm.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_identity.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_live_readiness.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_mandatory_scenarios.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_path_safety.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_power_loss.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_preflight.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_reconciliation_overlay.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_rollback.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_same_version_staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_service_state.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_staging.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_transaction.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_deployer_v3_reconcile.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/deploy/test_peer_promote_o1_v3.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122 after HomeLab #21/#23; required before PR #137 merge",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/e2e_ui/test_pwa_build.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#135 owner review",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/e2e_ui/test_pwa_e2e.py",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "upstream ef8aba3af retired the PWA service worker/update prompt",
+        "destination": "v0.10 web architecture",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "tests/runtime/test_telemetry_mlflow_fix.py",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "HomeLab #5 KEEP-OPTIONAL versus RETIRE",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      }
+    ],
+    "runtime_configuration_removed": [
+      {
+        "path": "deploy/control-room/trusted-root/env/omnigent-production-trusted-root.env",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/env/omnigent-trusted-root.env",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/sudoers/99-omnigent-agent-root",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/systemd/omnigent-host.service.d/99-trusted-root.conf",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/control-room/trusted-root/systemd/omnigent-production-host.service.d/99-trusted-root.conf",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      }
+    ],
+    "documentation_runbooks_removed": [
+      {
+        "path": "deploy/control-room/trusted-root/README.md",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "HomeLab #25 privilege boundary plus Omnigent #115 truthful capability contract",
+        "destination": "#115",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/control-room-dual-instance-upgrade-safety.md",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122; keep operator contract available on fork main until replacement is reviewed",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/control-room-peer-deployer-v3.md",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "#122; keep operator contract available on fork main until replacement is reviewed",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/control-room-upstream-reconciliation.md",
+        "disposition": "SUPERSEDED/OBSOLETE",
+        "replacement": "docs/control-room-v0.10-lineage.json and docs/control-room-v0.10-capability-audit.json",
+        "destination": "PR #137",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      },
+      {
+        "path": "deploy/docs/mlflow-tracing.md",
+        "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+        "replacement": null,
+        "destination": "HomeLab #5 KEEP-OPTIONAL versus RETIRE",
+        "evidence": "present at fork main a512c01f952662d7baa95a5810a3c249f7d2ff80; absent from candidate tree"
+      }
+    ],
+    "feature_ownership_changes": [
+      {
+        "feature": "peer deployment/recovery",
+        "from": "fork deploy/scripts/peer_deployer",
+        "to": "#122 decision after HomeLab inventory",
+        "status": "blocked"
+      },
+      {
+        "feature": "root privilege policy",
+        "from": "fork unrestricted-agent-root bundle",
+        "to": "HomeLab privilege boundary + #115 truthful flag",
+        "status": "old source obsolete; flag port required"
+      },
+      {
+        "feature": "PWA update",
+        "from": "fork service worker banner",
+        "to": "retired upstream",
+        "status": "obsolete"
+      },
+      {
+        "feature": "desktop server picker",
+        "from": "title bar",
+        "to": "v0.10 sidebar/version manifest",
+        "status": "solved upstream"
+      },
+      {
+        "feature": "MLflow tracing",
+        "from": "fork exporter",
+        "to": "HomeLab #5 decision; v0.10 OTel remains",
+        "status": "blocked"
+      }
+    ]
+  },
+  "required_capabilities": [
+    {
+      "id": "repository-identity",
+      "disposition": "RETAIN/REPLAY",
+      "required_paths": [
+        "omnigent/host/repository_identity.py"
+      ],
+      "owner": "#117"
+    },
+    {
+      "id": "publication-checkpoints",
+      "disposition": "RETAIN/REPLAY",
+      "required_paths": [
+        "omnigent/publication_checkpoint.py"
+      ],
+      "owner": "#118"
+    },
+    {
+      "id": "host-name-collision",
+      "disposition": "RETAIN/REPLAY",
+      "required_paths": [
+        "omnigent/server/host_identity.py"
+      ],
+      "owner": "#135"
+    },
+    {
+      "id": "stale-stream-recovery",
+      "disposition": "SOLVED UPSTREAM",
+      "required_paths": [
+        "web/src/store/conversationRegistry.ts",
+        "web/src/store/chatStore.ts"
+      ],
+      "owner": "#133"
+    },
+    {
+      "id": "peer-deployment-recovery",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "required_paths": [],
+      "owner": "#122 + HomeLab #21/#23",
+      "merge_blocker": true
+    },
+    {
+      "id": "truthful-root-capability",
+      "disposition": "PORT SEMANTICALLY",
+      "required_paths": [],
+      "owner": "#115",
+      "merge_blocker": true
+    },
+    {
+      "id": "codex-pi-live-routing",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "required_paths": [],
+      "owner": "HomeLab #21 then #135",
+      "merge_blocker": true
+    },
+    {
+      "id": "server-telemetry-provenance",
+      "disposition": "PORT SEMANTICALLY",
+      "required_paths": [],
+      "owner": "HomeLab #5 then #135",
+      "merge_blocker": true
+    },
+    {
+      "id": "conversation-upgrade-continuity",
+      "disposition": "BLOCKED \u2014 OWNER DECISION REQUIRED",
+      "required_paths": [],
+      "owner": "#126 + HomeLab #21",
+      "merge_blocker": true
+    }
+  ],
+  "merge_readiness": {
+    "ready": false,
+    "reason": "Explicit required capabilities remain blocked or need semantic ports; PR #137 must stay draft and unmerged."
+  },
+  "safety": {
+    "source_only": true,
+    "deployment_performed": false,
+    "service_restart_performed": false,
+    "production_database_mutated": false
+  }
+}
