@@ -163,6 +163,9 @@ class HostLaunchRunnerFrame:
     workspace: str
     session_id: str | None = None
     harness: str | None = None
+    resolved_repository_id: int | None = None
+    objective_role: str | None = None
+    archival_override_reason: str | None = None
 
 
 @dataclass
@@ -190,6 +193,7 @@ class HostLaunchRunnerResultFrame:
     runner_id: str | None = None
     error: str | None = None
     error_code: str | None = None
+    repository_provenance: dict[str, str | int] | None = None
 
 
 @dataclass
@@ -956,6 +960,9 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "workspace": frame.workspace,
                 "session_id": frame.session_id,
                 "harness": frame.harness,
+                "resolved_repository_id": frame.resolved_repository_id,
+                "objective_role": frame.objective_role,
+                "archival_override_reason": frame.archival_override_reason,
             }
         )
     if isinstance(frame, HostLaunchRunnerResultFrame):
@@ -967,6 +974,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "runner_id": frame.runner_id,
                 "error": frame.error,
                 "error_code": frame.error_code,
+                "repository_provenance": frame.repository_provenance,
             }
         )
     if isinstance(frame, HostStopRunnerFrame):
@@ -1415,6 +1423,9 @@ def _decode_launch_runner(msg: _JsonObject) -> HostLaunchRunnerFrame:
         workspace=_required_str(msg, "workspace"),
         session_id=_optional_nullable_str(msg, "session_id"),
         harness=_optional_nullable_str(msg, "harness"),
+        resolved_repository_id=_optional_nullable_int(msg, "resolved_repository_id"),
+        objective_role=_optional_nullable_str(msg, "objective_role"),
+        archival_override_reason=_optional_nullable_str(msg, "archival_override_reason"),
     )
 
 
@@ -1432,6 +1443,9 @@ def _decode_launch_runner_result(
         runner_id=_optional_nullable_str(msg, "runner_id"),
         error=_optional_nullable_str(msg, "error"),
         error_code=_optional_nullable_str(msg, "error_code"),
+        repository_provenance=cast(
+            "dict[str, str | int] | None", msg.get("repository_provenance")
+        ),
     )
 
 
@@ -1916,6 +1930,16 @@ def _required_int(msg: _JsonObject, key: str) -> int:
     val = msg.get(key)
     if not isinstance(val, int) or isinstance(val, bool):
         raise ValueError(f"frame missing required int field: {key!r}")
+    return val
+
+
+def _optional_nullable_int(msg: _JsonObject, key: str) -> int | None:
+    """Return an optional integer field, rejecting booleans and other types."""
+    val = msg.get(key)
+    if val is None:
+        return None
+    if not isinstance(val, int) or isinstance(val, bool):
+        raise ValueError(f"frame field must be an int or null: {key!r}")
     return val
 
 

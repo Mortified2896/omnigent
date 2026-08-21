@@ -1236,12 +1236,8 @@ class SessionGitOptions(BaseModel):
         """
         if self.existing_worktree and self.base_branch is not None:
             raise ValueError("base_branch cannot be set when existing_worktree is true")
-        if not self.existing_worktree and (
-            self.resolved_repository_id is None or self.objective_role is None
-        ):
-            raise ValueError(
-                "worktree creation requires resolved_repository_id and objective_role"
-            )
+        if self.resolved_repository_id is None or self.objective_role is None:
+            raise ValueError("git workspace requires resolved_repository_id and objective_role")
         return self
 
 

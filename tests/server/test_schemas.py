@@ -652,7 +652,12 @@ def test_session_git_existing_worktree_still_requires_host_id() -> None:
         SessionCreateRequest(
             agent_id="ag_x",
             workspace="/repo/worktrees/feature-x",
-            git=SessionGitOptions(branch_name="feature/x", existing_worktree=True),
+            git=SessionGitOptions(
+                branch_name="feature/x",
+                existing_worktree=True,
+                resolved_repository_id=1293694128,
+                objective_role="omnigent_product_runtime",
+            ),
         )
 
 
@@ -678,7 +683,12 @@ def test_session_git_existing_worktree_with_host_id_ok() -> None:
         agent_id="ag_x",
         host_id="host_abc",
         workspace="/repo/worktrees/feature-x",
-        git=SessionGitOptions(branch_name="feature/x", existing_worktree=True),
+        git=SessionGitOptions(
+            branch_name="feature/x",
+            existing_worktree=True,
+            resolved_repository_id=1293694128,
+            objective_role="omnigent_product_runtime",
+        ),
     )
     assert req.git is not None
     assert req.git.existing_worktree is True

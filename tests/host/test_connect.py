@@ -102,6 +102,74 @@ async def test_create_worktree_rejects_identity_before_git_mutation(
     assert mutated is False
 
 
+async def test_launch_git_workspace_without_identity_fails_before_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-git request cannot launch a mutable runner inside a checkout."""
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q", workspace], check=True)
+    spawned = False
+
+    def _spawn(*_args: object, **_kwargs: object) -> object:
+        nonlocal spawned
+        spawned = True
+        raise AssertionError("runner spawn must not happen before repository verification")
+
+    host = _make_host_process()
+    monkeypatch.setattr(host, "_spawn_runner_proc", _spawn)
+    result = await host._handle_launch(
+        HostLaunchRunnerFrame(
+            request_id="req_no_identity",
+            binding_token="token_no_identity",
+            workspace=str(workspace),
+        )
+    )
+
+    assert result.status == "failed"
+    assert "requires canonical repository identity" in (result.error or "")
+    assert spawned is False
+
+
+async def test_launch_wrong_repository_identity_fails_before_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An existing checkout with a conflicting role is rejected pre-spawn."""
+    import omnigent.host.repository_identity as identity_mod
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q", workspace], check=True)
+    spawned = False
+
+    def _reject(**_kwargs: object) -> object:
+        raise identity_mod.RepositoryIdentityError("objective role conflicts with repository role")
+
+    def _spawn(*_args: object, **_kwargs: object) -> object:
+        nonlocal spawned
+        spawned = True
+        raise AssertionError("runner spawn must not happen before repository verification")
+
+    host = _make_host_process()
+    monkeypatch.setattr(identity_mod, "verify_repository_identity", _reject)
+    monkeypatch.setattr(host, "_spawn_runner_proc", _spawn)
+    result = await host._handle_launch(
+        HostLaunchRunnerFrame(
+            request_id="req_wrong_role",
+            binding_token="token_wrong_role",
+            workspace=str(workspace),
+            resolved_repository_id=1250037948,
+            objective_role="omnigent_product_runtime",
+        )
+    )
+
+    assert result.status == "failed"
+    assert "objective role conflicts" in (result.error or "")
+    assert spawned is False
+
+
 async def test_handle_model_options_uses_host_claude_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

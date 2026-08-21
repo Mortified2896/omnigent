@@ -4376,6 +4376,12 @@ async def _launch_runner_on_host_impl(
             # same configuration check it does at create-time launch. None
             # (agent not resolvable) skips the host-side check — fail open.
             harness=_resolve_harness(conv),
+            resolved_repository_id=(
+                int(conv.labels["omnigent.repository.repository_id"])
+                if "omnigent.repository.repository_id" in conv.labels
+                else None
+            ),
+            objective_role=conv.labels.get("omnigent.repository.role"),
         )
     )
     try:
