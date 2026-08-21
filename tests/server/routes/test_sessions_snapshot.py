@@ -9,10 +9,17 @@ from typing import Any
 import pytest
 from sqlalchemy.exc import StatementError
 
-from omnigent.entities import Conversation, ConversationItem, MessageData, PagedList
+from omnigent.entities import (
+    Conversation,
+    ConversationItem,
+    MessageData,
+    PagedList,
+    ResponseTerminalData,
+)
 from omnigent.server.routes import sessions as _sessions_mod
 from omnigent.server.routes._sessions.helpers import (
     _persist_terminal_response,
+    _terminal_response_from_items,
     _terminal_response_from_labels,
 )
 from omnigent.server.routes._sessions.orchestration import _build_session_response
@@ -2306,8 +2313,33 @@ async def test_terminal_response_is_durable_idempotent_and_snapshot_projected() 
     )
 
     class _TerminalStore:
+        items: list[ConversationItem] = []
+
         def get_conversation(self, conversation_id: str) -> Conversation | None:
             return conversation if conversation_id == conversation.id else None
+
+        def list_items(
+            self, conversation_id: str, *, limit: int, order: str, type: str | None = None
+        ) -> PagedList[ConversationItem]:
+            selected = [item for item in self.items if type is None or item.type == type]
+            if order == "desc":
+                selected.reverse()
+            return PagedList(data=selected[:limit], has_more=False)
+
+        def append(self, conversation_id: str, items: list[Any]) -> list[ConversationItem]:
+            persisted = [
+                ConversationItem(
+                    id=f"item_{len(self.items) + index}",
+                    type=item.type,
+                    status="completed",
+                    response_id=item.response_id,
+                    created_at=len(self.items) + index,
+                    data=item.data,
+                )
+                for index, item in enumerate(items)
+            ]
+            self.items.extend(persisted)
+            return persisted
 
         def set_labels(self, conversation_id: str, updates: dict[str, str]) -> None:
             assert conversation_id == conversation.id
@@ -2350,6 +2382,49 @@ async def test_terminal_response_is_durable_idempotent_and_snapshot_projected() 
         "omnigent.last_terminal_response_id",
         "omnigent.last_terminal_response_status",
     }
+    assert len(store.items) == 1
+    assert isinstance(store.items[0].data, ResponseTerminalData)
+
+    # A newer response commits content and terminal state. A delayed,
+    # authoritative correction for the older response remains durable without
+    # replacing the snapshot projection for the newer turn.
+    store.items.append(
+        ConversationItem(
+            id="item_new_message",
+            type="message",
+            status="completed",
+            response_id="resp_new",
+            created_at=2,
+            data=MessageData(
+                role="assistant",
+                content=[{"type": "output_text", "text": "new"}],
+                agent="test",
+            ),
+        )
+    )
+    await _persist_terminal_response(
+        conversation.id,
+        "resp_new",
+        "completed",
+        store,  # type: ignore[arg-type]
+        authoritative=True,
+    )
+    await _persist_terminal_response(
+        conversation.id,
+        "resp_terminal",
+        "failed",
+        store,  # type: ignore[arg-type]
+        authoritative=True,
+    )
+    conversation.labels.clear()
+    projected = _terminal_response_from_items(store.items, conversation.labels)
+    assert projected is not None
+    assert projected.model_dump() == {"response_id": "resp_new", "status": "completed"}
+    assert [item.response_id for item in store.items if item.type == "response_terminal"] == [
+        "resp_terminal",
+        "resp_new",
+        "resp_terminal",
+    ]
 
 
 @pytest.mark.asyncio
@@ -2374,6 +2449,13 @@ async def test_invalid_terminal_response_is_not_persisted() -> None:
         conversation.id,
         "secret prompt and credential-bearing URL",
         "tool result payload",
+        _TerminalStore(),  # type: ignore[arg-type]
+        authoritative=True,
+    )
+    await _persist_terminal_response(
+        conversation.id,
+        "https://credential.example/?token=secret",
+        "completed",
         _TerminalStore(),  # type: ignore[arg-type]
         authoritative=True,
     )

@@ -31,10 +31,7 @@ import type {
 } from "@/lib/blocks";
 import type { ConversationItem } from "@/lib/conversationItems";
 import { itemsToBlocks } from "@/lib/itemsToBlocks";
-import {
-  clearDeliveryTelemetry,
-  snapshotDeliveryTelemetry,
-} from "@/lib/deliveryTelemetry";
+import { clearDeliveryTelemetry, snapshotDeliveryTelemetry } from "@/lib/deliveryTelemetry";
 import { buildBubbles } from "@/lib/renderItems";
 import { INITIAL_WINDOW_ITEMS, SESSION_HISTORY_PAGE_SIZE } from "@/lib/sessionsApi";
 import { getCurrentAuthorId } from "@/lib/identity";
@@ -7070,6 +7067,8 @@ describe("chatStore — startStreamPump reconnect loop", () => {
     const loop = startStreamPump(id, controller, setState, getState, { staleAfterMs: 100 });
     await drainAsync(2);
     for (let sequence = 0; sequence < 3; sequence += 1) {
+      // Heartbeats must be advanced and observed serially to model one live connection.
+      // eslint-disable-next-line no-await-in-loop
       await vi.advanceTimersByTimeAsync(80);
       sinks[0]!.push(
         sse("session.heartbeat", {
@@ -7079,6 +7078,7 @@ describe("chatStore — startStreamPump reconnect loop", () => {
           published_at: sequence,
         }),
       );
+      // eslint-disable-next-line no-await-in-loop
       await drainAsync(2);
     }
 

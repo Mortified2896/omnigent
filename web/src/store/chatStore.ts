@@ -78,12 +78,7 @@ import type {
   StreamEvent,
 } from "@/lib/events";
 import { createPresenceIdleTracker } from "@/lib/presenceIdle";
-import {
-  parseEvent,
-  parseSseStream,
-  type SseFrameMetadata,
-  type SseStreamResult,
-} from "@/lib/sse";
+import { parseEvent, parseSseStream, type SseFrameMetadata, type SseStreamResult } from "@/lib/sse";
 import { recordDeliveryTelemetry } from "@/lib/deliveryTelemetry";
 import { clearSseLog, pushSseEvent } from "@/lib/sseEventLog";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
@@ -2802,7 +2797,10 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function createStreamFreshnessMonitor(staleAfterMs: number, onStale: () => void): {
+function createStreamFreshnessMonitor(
+  staleAfterMs: number,
+  onStale: () => void,
+): {
   stale: Promise<void>;
   noteActivity: () => void;
   stop: () => void;
@@ -3500,15 +3498,9 @@ export async function startStreamPump(
             classification: null,
           });
         };
-        const pumpPromise = pumpStreamEvents(
-          id,
-          streamRes.body,
-          controller,
-          set,
-          get,
-          undefined,
-          { onFrame },
-        );
+        const pumpPromise = pumpStreamEvents(id, streamRes.body, controller, set, get, undefined, {
+          onFrame,
+        });
         if (reconnecting) {
           await reconcileOnReconnect(id, set, get);
         }

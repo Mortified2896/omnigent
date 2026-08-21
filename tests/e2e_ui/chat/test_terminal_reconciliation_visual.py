@@ -37,9 +37,11 @@ def _wait_for_stream_routes(page: Page, routes: list[Route], count: int) -> None
     assert len(routes) >= count
 
 
-def test_running_drop_reconnect_and_terminal_snapshot_render_once(page: Page) -> None:
+def test_running_drop_reconnect_and_terminal_snapshot_render_once(
+    page: Page, live_server: str
+) -> None:
     """A dropped live terminal converges through the next durable snapshot."""
-    base_url = os.environ["OMNIGENT_ISSUE_133_UI_BASE_URL"]
+    base_url = live_server
     evidence_dir = Path(os.environ.get("OMNIGENT_E2E_EVIDENCE_DIR", "test-results/issue-133"))
     evidence_dir.mkdir(parents=True, exist_ok=True)
 

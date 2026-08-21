@@ -660,6 +660,7 @@ _ITEM_TYPES: frozenset[str] = frozenset(
         "compaction",
         "native_tool",
         "resource_event",
+        "response_terminal",
         "slash_command",
         "terminal_command",
         "routing_decision",
@@ -912,7 +913,7 @@ def extract_search_text(item: NewConversationItem) -> str:
         ``type`` is one of ``"message"``, ``"function_call"``,
         ``"function_call_output"``, ``"reasoning"``,
         ``"compaction"``, ``"native_tool"``, ``"resource_event"``,
-        ``"slash_command"``, ``"terminal_command"``, or
+        ``"slash_command"``, ``"terminal_command"``, ``"response_terminal"``, or
         ``"routing_decision"``.
     :returns: A single plain-text string suitable for FTS indexing.
     :raises ValueError: If *item.type* is not a recognised type.
@@ -954,6 +955,9 @@ def extract_search_text(item: NewConversationItem) -> str:
             for part in (data["event_type"], data["resource_id"], data["resource_type"])
             if part
         )
+    if item.type == "response_terminal":
+        # Lifecycle metadata is intentionally absent from full-text search.
+        return ""
     if item.type == "slash_command":
         # Index command name + args + stdout so FTS can find a
         # historical Skill invocation by what the operator typed

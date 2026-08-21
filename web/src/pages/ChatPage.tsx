@@ -2873,8 +2873,8 @@ export function workingIndicatorLabel(
   bgCount: number,
   tick = 0,
   blockedOn: string | null = null,
-  streamConnectionStatus: "connecting" | "connected" | "reconnecting" | "stale" | "closed" =
-    "connected",
+  streamConnectionStatus:
+    "connecting" | "connected" | "reconnecting" | "stale" | "closed" = "connected",
 ): string {
   if (streamConnectionStatus === "stale") return "Connection stale — reconnecting…";
   if (streamConnectionStatus === "reconnecting") return "Reconnecting…";

@@ -50,6 +50,7 @@ from omnigent.entities import (
     ErrorData,
     MessageData,
     NewConversationItem,
+    ResponseTerminalData,
     SlashCommandData,
     StoredFile,
     synthesize_conversation_title,
@@ -3722,6 +3723,7 @@ async def _persist_session_status_error_labels(
 
 
 _TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+_TERMINAL_RESPONSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DELIVERY_OBSERVABILITY_EVENT_TYPES = frozenset(
     {
         "response.completed",
@@ -3743,17 +3745,34 @@ async def _persist_terminal_response(
     *,
     authoritative: bool,
 ) -> None:
-    """Persist the latest turn outcome without storing response payloads."""
-    if not response_id or status not in _TERMINAL_RESPONSE_STATUSES:
+    """Persist one response-scoped terminal outcome without response payloads."""
+    if (
+        not response_id
+        or _TERMINAL_RESPONSE_ID_RE.fullmatch(response_id) is None
+        or status not in _TERMINAL_RESPONSE_STATUSES
+    ):
         return
 
     def _write() -> None:
         conv = conversation_store.get_conversation(session_id)
         if conv is None:
             return
-        prior_id = conv.labels.get(_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY)
-        prior_status = conv.labels.get(_LAST_TERMINAL_RESPONSE_STATUS_LABEL_KEY)
-        if prior_id == response_id and prior_status and prior_status != status:
+        existing_page = conversation_store.list_items(
+            session_id,
+            limit=100,
+            order="desc",
+            type="response_terminal",
+        )
+        existing = next(
+            (item for item in existing_page.data if item.response_id == response_id),
+            None,
+        )
+        prior_status = (
+            existing.data.status
+            if existing is not None and isinstance(existing.data, ResponseTerminalData)
+            else None
+        )
+        if prior_status is not None and prior_status != status:
             _logger.warning(
                 "Terminal response conflict session=%s response=%s stored=%s "
                 "incoming=%s authoritative=%s",
@@ -3765,6 +3784,29 @@ async def _persist_terminal_response(
             )
             if not authoritative:
                 return
+        if prior_status == status:
+            return
+        conversation_store.append(
+            session_id,
+            [
+                NewConversationItem(
+                    type="response_terminal",
+                    response_id=response_id,
+                    data=ResponseTerminalData(status=cast(Any, status)),
+                )
+            ],
+        )
+
+        # Compatibility projection for older clients. Only advance it when
+        # this response owns the newest durable non-terminal item; a delayed
+        # terminal edge from an older response must not replace a newer turn.
+        recent = conversation_store.list_items(session_id, limit=100, order="desc")
+        newest_response_id = next(
+            (item.response_id for item in recent.data if item.type != "response_terminal"),
+            response_id,
+        )
+        if newest_response_id != response_id:
+            return
         conversation_store.set_labels(
             session_id,
             {
@@ -3786,6 +3828,36 @@ def _terminal_response_from_labels(labels: Mapping[str, str]) -> TerminalRespons
     if not response_id or status not in _TERMINAL_RESPONSE_STATUSES:
         return None
     return TerminalResponse(response_id=response_id, status=status)  # type: ignore[arg-type]
+
+
+def _terminal_response_from_items(
+    items: Sequence[ConversationItem], labels: Mapping[str, str]
+) -> TerminalResponse | None:
+    """Return the newest response-scoped outcome, with legacy-label fallback."""
+    label_response_id = labels.get(_LAST_TERMINAL_RESPONSE_ID_LABEL_KEY)
+    terminals = [
+        (item.response_id, item.data.status)
+        for item in reversed(items)
+        if item.type == "response_terminal" and isinstance(item.data, ResponseTerminalData)
+    ]
+    terminal_by_response = dict(terminals)
+    for item in reversed(items):
+        if item.type in {"response_terminal", "resource_event"}:
+            continue
+        terminal_status = terminal_by_response.get(item.response_id)
+        if terminal_status is not None:
+            return TerminalResponse(
+                response_id=item.response_id,
+                status=terminal_status,
+            )
+    if label_response_id is not None:
+        for response_id, terminal_status in terminals:
+            if response_id == label_response_id:
+                return TerminalResponse(response_id=response_id, status=terminal_status)
+    if terminals:
+        response_id, terminal_status = terminals[0]
+        return TerminalResponse(response_id=response_id, status=terminal_status)
+    return _terminal_response_from_labels(labels)
 
 
 def _last_task_error_from_labels(labels: Mapping[str, str]) -> dict[str, str] | None:
@@ -9520,6 +9592,7 @@ __all__ = [
     "_stream_live_events",
     "_structured_ask_user_question",
     "_targeted_elicitation_event",
+    "_terminal_response_from_items",
     "_terminal_response_from_labels",
     "_title_content_from_item",
     "_truncate_label",

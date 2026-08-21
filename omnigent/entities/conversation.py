@@ -488,6 +488,12 @@ class ResourceEventData(BaseModel):
     resource: dict[str, Any] | None = None
 
 
+class ResponseTerminalData(BaseModel):
+    """Durable, payload-free terminal outcome for one response."""
+
+    status: Literal["completed", "failed", "cancelled", "incomplete"]
+
+
 class TerminalCommandData(BaseModel):
     """
     Data payload for a runner-side terminal command (``!cmd``) observed
@@ -644,6 +650,7 @@ ItemData = (
     | CompactionData
     | NativeToolData
     | ResourceEventData
+    | ResponseTerminalData
     | RoutingDecisionData
     | SlashCommandData
     | TerminalCommandData
@@ -658,6 +665,7 @@ ITEM_TYPE_TO_DATA_CLS: dict[str, type[BaseModel]] = {
     "compaction": CompactionData,
     "native_tool": NativeToolData,
     "resource_event": ResourceEventData,
+    "response_terminal": ResponseTerminalData,
     "routing_decision": RoutingDecisionData,
     "slash_command": SlashCommandData,
     "terminal_command": TerminalCommandData,
@@ -671,6 +679,7 @@ NON_CONTENT_ITEM_TYPES: frozenset[str] = frozenset(
         "compaction",
         "error",
         "resource_event",
+        "response_terminal",
         "routing_decision",
         "slash_command",
         "terminal_command",

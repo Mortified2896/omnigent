@@ -288,7 +288,7 @@ from omnigent.server.routes._sessions.helpers import (
     _signal_terminal_resolved_harness_elicitation,
     _spec_harness,
     _stop_session_via_runner,
-    _terminal_response_from_labels,
+    _terminal_response_from_items,
     _usage_by_model_for_display,
     _validate_session_workspace,
     _validate_terminal_launch_args,
@@ -1138,7 +1138,7 @@ def _build_session_response(
         # ``activeResponse`` (the turn-start ``running`` edge that carried it
         # is not replayed on the SSE stream). Populated for native-terminal
         # sessions whose forwarder stamps a turn id; ``None`` otherwise.
-        terminal_response=_terminal_response_from_labels(labels),
+        terminal_response=_terminal_response_from_items(items, labels),
         active_response_id=_session_active_response_cache.get(conv.id),
         project_id=conv.project_id,
     )
