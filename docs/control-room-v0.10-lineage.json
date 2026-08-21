@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-21T17:28:30Z",
+  "repository": {
+    "canonical": "Mortified2896/omnigent",
+    "upstream": "omnigent-ai/omnigent"
+  },
+  "lineage": {
+    "fork_start": "a512c01f952662d7baa95a5810a3c249f7d2ff80",
+    "upstream_release": {
+      "tag": "v0.10.0",
+      "commit": "40755dd8dddb07e1eb6e4055d1d9936e184ceb9b",
+      "version": "0.10.0"
+    },
+    "merge_base": "43762a989235599f2ec63f270f1f0b32ae7d3e7a",
+    "fork_only_commits": 57,
+    "upstream_only_commits": 183,
+    "candidate_base": "40755dd8dddb07e1eb6e4055d1d9936e184ceb9b",
+    "upstream_main": {
+      "purpose": "observation-only",
+      "integration_allowed": false
+    }
+  },
+  "classifications": [
+    {
+      "id": "canonical-upstream-v0.10-base",
+      "category": "canonical upstream v0.10 base",
+      "status": "retained",
+      "source": "40755dd8dddb07e1eb6e4055d1d9936e184ceb9b",
+      "destination": "candidate root"
+    },
+    {
+      "id": "control-room-peer-deployment",
+      "category": "Control Room intentional deviation",
+      "status": "semantic port required",
+      "source": "origin/main:deploy/scripts/peer_deployer and safety documentation",
+      "destination": "focused v0.10-native follow-up on this branch",
+      "reason": "The source-only candidate must retain the distinct target/supervisor safety contract, but issue #122 still owns selection of the authoritative live state owner."
+    },
+    {
+      "id": "trusted-root-runtime-policy",
+      "category": "preserved old patch awaiting classification",
+      "status": "semantic port required",
+      "source": "origin/main trusted-root policy and runtime prompt changes",
+      "destination": "issue #115 after v0.10 prompt/capability boundary review"
+    },
+    {
+      "id": "bounded-telemetry-and-instance-provenance",
+      "category": "Control Room intentional deviation",
+      "status": "semantic port required",
+      "source": "origin/main commits for MLflow/OTLP and native-turn provenance",
+      "destination": "v0.10 runtime telemetry ownership",
+      "reason": "Upstream materially changed runtime/session code; preserve only privacy-safe instance and terminal provenance."
+    },
+    {
+      "id": "model-selector-and-routing-product-work",
+      "category": "obsolete/superseded",
+      "status": "not ported",
+      "source": "origin/main model picker, OmniRoute lanes, and reasoning-effort product commits",
+      "destination": "none in issue #135",
+      "reason": "Explicitly out of scope; issue #124 remains parked."
+    },
+    {
+      "id": "legacy-host-session-wiring",
+      "category": "old fork patch whose owning upstream architecture materially changed",
+      "status": "unresolved conflict requiring focused work",
+      "source": "origin/main host, runner, session, and worktree call-chain edits",
+      "destination": "v0.10 host/session boundaries",
+      "reason": "Upstream changed these subsystems across 183 commits; mechanical replay is prohibited."
+    },
+    {
+      "id": "chat-stream-self-heal",
+      "category": "solved upstream",
+      "status": "use upstream",
+      "source": "35689fc2a6f2ef1e07821404d161e7f404c70f9f",
+      "destination": "v0.10 web chat stream"
+    },
+    {
+      "id": "chat-lost-terminal-recovery",
+      "category": "solved upstream",
+      "status": "use upstream",
+      "source": "9dab48b460f37d8a0ed294d1309cd2f843c5cafc",
+      "destination": "v0.10 durable transcript reconciliation"
+    },
+    {
+      "id": "chat-conversation-stream-registry",
+      "category": "solved upstream",
+      "status": "use upstream",
+      "source": "f55001af0f08b9e944ef72a6fcb8202c3743ea90",
+      "destination": "v0.10 per-conversation stream registry"
+    },
+    {
+      "id": "custom-response-terminal-item-type-12",
+      "category": "obsolete/superseded",
+      "status": "not ported",
+      "source": "PR #134 migration a8c1d4e7f2b9",
+      "destination": "none",
+      "reason": "No deterministic v0.10 evidence currently demonstrates a requirement that cannot be represented by upstream durable transcript/session state."
+    }
+  ],
+  "pull_requests": [
+    {
+      "number": 129,
+      "head": "a3ab89dc1f5ecfe9e82279911e8eed1d374fa66f",
+      "disposition": "PORT SEMANTICALLY",
+      "destination": "issue #50 on v0.10 workflows",
+      "evidence": "The routing requirement remains, while v0.10 materially changed the affected workflows."
+    },
+    {
+      "number": 130,
+      "head": "d5673c9106c541619d2591654ae756518935401b",
+      "disposition": "PORT SEMANTICALLY",
+      "destination": "issue #94 on the v0.10 required-check graph",
+      "evidence": "Exact-head/run-attempt semantics remain; the stacked workflow implementation targets the old check graph."
+    },
+    {
+      "number": 131,
+      "head": "4295b7528eaee7dc2ab158a5ed8c8d4a99a5dbf0",
+      "disposition": "PORT SEMANTICALLY",
+      "destination": "issue #117 v0.10 session/worktree boundary",
+      "evidence": "Canonical identity remains mandatory, but upstream host/session/worktree wiring materially changed."
+    },
+    {
+      "number": 132,
+      "head": "15985b467333442feea3b1c37f1551af56ffcf3d",
+      "disposition": "PORT SEMANTICALLY",
+      "destination": "issue #118 v0.10 durable task/run ownership",
+      "evidence": "Publication guarantees remain mandatory; duplicate 0.9 lifecycle ownership must not be transplanted."
+    },
+    {
+      "number": 134,
+      "head": "b458b956cfe2e93da5d9184a1cf4c40bb6aa04dd",
+      "disposition": "SOLVED UPSTREAM",
+      "destination": "v0.10 stream watchdog and durable transcript reconciliation",
+      "evidence": "v0.10 contains the half-open watchdog, bounded lost-terminal recovery, refresh reconciliation, and item deduplication architecture; the custom type-12 migration is not justified."
+    }
+  ],
+  "cleanup_issues": [
+    {"issue": 115, "status": "semantic port required", "destination": "v0.10 capability and framework-instruction boundary"},
+    {"issue": 29, "status": "preserved old patch awaiting classification", "destination": "v0.10 tool-result replay and compaction architecture"},
+    {"issue": 119, "status": "semantic port required", "destination": "v0.10 Git/live reconciliation"},
+    {"issue": 120, "status": "baseline created", "destination": "this manifest and future stale-branch policy"},
+    {"issue": 121, "status": "unresolved conflict requiring focused work", "destination": "v0.10 static-analysis baseline"},
+    {"issue": 50, "status": "semantic port required", "destination": "v0.10 workflows"},
+    {"issue": 127, "status": "semantic port required", "destination": "v0.10 nightly/E2E graph"},
+    {"issue": 86, "status": "semantic port required", "destination": "v0.10 nightly/E2E graph"},
+    {"issue": 94, "status": "semantic port required", "destination": "v0.10 exact-head check contract"}
+  ],
+  "safety": {
+    "source_only": true,
+    "live_o1_o2_mutated": false,
+    "production_database_mutated": false,
+    "deployment_performed": false,
+    "upstream_main_integrated": false
+  }
+}
