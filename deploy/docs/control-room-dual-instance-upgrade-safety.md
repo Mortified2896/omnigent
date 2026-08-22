@@ -231,32 +231,44 @@ In addition, the rollback subsystem enforces:
     dirs, transaction record) after rollback
   * the rollback runs at most once per failed transaction
 
-## Trusted administrative agents and privileged host deployer
+## Capability and privilege boundaries
 
-The O1 and O2 agent hosts are intentionally authorized for unrestricted,
-passwordless root through `sudo -n`. Agents should use it autonomously for
-authorized Control Room administration rather than asking the user to SSH in
-or run privileged commands. Root access does not relax the hard invariant:
-an agent must never upgrade its own instance, and the healthy peer must remain
-available as supervisor.
+Ordinary O1/O2 coding agents and harness children cannot elevate and must not
+attempt autonomous `sudo`. Unrestricted child sudo must not be restored.
+Repository prose, environment-variable names, historical installation files,
+and access to a host do not grant or prove executable capability.
 
-The repository-managed Control Room source of truth for this policy is
-`deploy/control-room/trusted-root/`. Its two host drop-ins, dedicated
-non-secret env fragments, and sudoers fragment are installed by its explicit
-`install.sh --install` path; generic Omnigent installation does not run it.
-Both host environments therefore set `OMNIGENT_TRUSTED_ROOT_ACCESS=true`. The
-installer validates the generated sudoers fragment with `visudo -cf` before
-committing it and clears inherited syscall/capability restrictions, including
-O2's `SystemCallArchitectures=native` setting.
+Machine-enforced configuration owns desired ordinary-child capability policy.
+Authorized, timestamped observation owns observed capability. If either is
+unavailable, or if desired and observed state disagree, report `INACCESSIBLE`,
+`UNKNOWN`, or drift and stop before a privileged action. Issue #115 owns any
+future host-to-runner capability vocabulary; this runbook does not define or
+implement it.
 
-At runtime Omnigent performs a bounded `sudo -n true` probe once per process
-and only adds the trusted-root framework instruction when both the flag and
-capability are present. A configured-but-failing probe is reported as a
-capability mismatch and does not advertise root to the model. Generic
-deployments remain unaffected because the flag defaults off.
+Human emergency root access is a separate operator-controlled recovery path.
+The root-owned host deployer is another separate boundary: it exposes only a
+narrowly scoped, machine-validated deployment interface. Neither boundary
+grants a general-purpose root shell to an ordinary child.
 
-A peer-supervised upgrade continues to use the narrowly scoped host-level
-deployer and its explicit target/supervisor validation.
+`deploy/control-room/trusted-root/` is retained only as visibly historical
+evidence of a superseded broad-privilege design. It is not active policy, its
+installer cannot install the bundle, and operators and agents must not restore
+it. Current desired and observed capability must be obtained from their
+authorized machine policy and observation authorities.
+
+## Destructive-action authorization boundary
+
+Before any destructive action, the user must explicitly authorize the exact
+operation and target. The operator or agent must first resolve the target and
+scope with read-only checks and refuse an ambiguous, broad, or unverified
+target. Host access, tool availability, a prior deployment, or prose is not
+authorization.
+
+For deployment or recovery, explicit authorization is necessary but not
+sufficient. The root-owned interface must also validate distinct target and
+supervisor identities, the immutable accepted artifact, preflight, transaction
+ownership, and the requested operation. It must not expose arbitrary shell or
+root-command passthrough. Ordinary O1/O2 children cannot bypass these gates.
 
 The deployer requirements are:
 
@@ -310,8 +322,7 @@ The host-level deployer is NOT responsible for:
 
   * upgrading or replacing the declared supervisor
   * touching the supervisor's DB
-  * granting agent root privileges (that is host configuration, independently
-    gated by the runtime capability probe)
+  * granting or implying root privileges for an ordinary agent or harness child
 
 Before target mutation it records supervisor runtime SHA/version, both
 MainPIDs, and both active-entry monotonic timestamps. It captures the same
