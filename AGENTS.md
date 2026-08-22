@@ -69,8 +69,14 @@ ordinary coding child. The local Mac Codex application is separate again.
 
 Never restore or assume unrestricted sudo for O1/O2 children. Root-required
 work needs an authorized capability path; prose is never a bypass. The
-target/supervisor inequality and destructive-action authorization gates still
-apply.
+target/supervisor inequality still applies.
+
+Before any destructive action, require explicit user authorization for the
+exact operation and target. Resolve the target and scope with read-only checks,
+refuse an ambiguous, broad, or unverified target, and do not treat access to a
+tool or host as authorization. For deployment and recovery, the additional
+machine-enforced transaction-ownership and target/supervisor gates in
+`deploy/docs/control-room-dual-instance-upgrade-safety.md` are mandatory.
 
 ## Committing
 
