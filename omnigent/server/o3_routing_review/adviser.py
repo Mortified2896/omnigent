@@ -42,6 +42,8 @@ def _json_payload(
     candidates: list[CandidateSnapshot],
     decomposition_context: dict[str, object] | None = None,
 ) -> str:
+    """Return requirement-only context; candidate evidence stays out of model context."""
+    del candidates
     slices = [
         {
             "benchmark_id": item.benchmark_id,
@@ -49,62 +51,15 @@ def _json_payload(
             "slice_id": item.slice_id,
             "label": item.label,
             "interpretation": item.interpretation,
-            "manifest_task_count": len(item.task_ids),
+            "official": item.official,
         }
         for item in registry.slices
-    ]
-    evidence = [
-        {
-            "benchmark_id": item.benchmark_id,
-            "version": item.benchmark_version,
-            "slice_id": item.slice_id,
-            "harness": item.harness,
-            "model": item.model,
-            "provider_path": item.provider_path,
-            "reasoning_effort": item.reasoning_effort,
-            "point_score": item.point_score,
-            "admission_score": item.admission_score,
-            "evidence_class": item.evidence_class,
-            "source_reference": item.source_reference,
-        }
-        for item in registry.evidence
-    ]
-    live_candidates = [
-        {
-            "candidate_id": item.candidate_id,
-            "capabilities": {
-                "terminal": item.terminal,
-                "tools": item.tools,
-                "vision": item.vision,
-                "context_tokens": item.context_tokens,
-                "responses_api": item.responses_api,
-                "supported_reasoning_efforts": item.supported_reasoning_efforts,
-            },
-            "live": {
-                "provider_usable": item.provider_usable,
-                "model_present": item.model_present,
-                "quota_available": item.quota_available,
-                "quota_remaining_percent": item.quota_remaining_percent,
-                "quota_reset_at": item.quota_reset_at,
-                "success_rate": item.recent_success_rate,
-                "retry_rate": item.recent_retry_rate,
-                "latency_ms": item.latency_ms,
-            },
-            "resource": {
-                "monetary_cost_usd": item.monetary_cost_usd,
-                "cost_source": item.cost_source,
-                "quota_source": item.quota_source,
-            },
-        }
-        for item in candidates
     ]
     return json.dumps(
         {
             "unchanged_user_task": prompt,
             "workspace_summary": workspace_summary,
             "allowed_benchmark_slices": slices,
-            "benchmark_evidence": evidence,
-            "live_source_pool": live_candidates,
             "decomposition_context": decomposition_context,
         },
         separators=(",", ":"),
@@ -162,15 +117,16 @@ class OmniRouteRoutingAdviser:
         instruction = (
             "You are the O3 routing requirements adviser. Interpret the task and return only "
             "the supplied JSON schema. You may choose only a benchmark ID/version/slice that "
-            "appears in allowed_benchmark_slices. Never select, recommend, or name a provider "
-            "or model. Never invent benchmark scores, availability, context, price, or quota. "
-            "Keep risk separate from technical difficulty. Use minimum_context_tokens=0 when "
-            "the task does not establish a defensible numeric need. Proxy/advisory/unknown "
-            "evidence requires evidence_policy=provisional and must never be called an exact "
-            "benchmark pass. Use only these exact categorical values: difficulty is low, "
-            "medium, high, or frontier; risk is low, medium, or high; reasoning effort is "
-            "low, medium, high, or xhigh; disposition is route, borderline, decompose, or "
-            "defer."
+            "appears in allowed_benchmark_slices. Candidate identities, model scores, provider "
+            "availability, cost, quota, and whether evidence is measured or estimated are "
+            "deliberately withheld. Set the competence floor independently; never infer or "
+            "recommend a provider or model. Keep risk separate from technical difficulty. Use "
+            "minimum_context_tokens=0 when the task does not establish a defensible numeric "
+            "need. Use evidence_policy=strict only when the task genuinely requires exact "
+            "execution-configuration evidence; otherwise use provisional. Use only these exact "
+            "categorical values: difficulty is low, medium, high, or frontier; risk is low, "
+            "medium, or high; reasoning effort is low, medium, high, or xhigh; disposition is "
+            "route, borderline, decompose, or defer."
         )
         if decomposition:
             instruction += (
