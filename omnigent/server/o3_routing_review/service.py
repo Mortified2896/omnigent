@@ -31,7 +31,7 @@ from .models import (
     RoutingProposal,
 )
 from .omniroute import OmniRouteClient, OmniRouteError
-from .registry import BenchmarkRegistry
+from .registry import BENCHMARK_REGISTRY_ENV, BenchmarkRegistry
 from .store import ProposalStore
 
 O3_ROUTING_REVIEW_ENV = "OMNIGENT_O3_ROUTING_REVIEW"
@@ -79,6 +79,10 @@ class O3RoutingReviewService:
     @classmethod
     def from_env(cls) -> O3RoutingReviewService:
         client = OmniRouteClient.from_env()
+        if not os.environ.get(BENCHMARK_REGISTRY_ENV):
+            raise ValueError(
+                f"{BENCHMARK_REGISTRY_ENV} is required while O3 routing review is enabled"
+            )
         raw_ttl = os.environ.get(PROPOSAL_TTL_ENV)
         ttl = int(raw_ttl) if raw_ttl is not None else DEFAULT_PROPOSAL_TTL_SECONDS
         registry = BenchmarkRegistry()

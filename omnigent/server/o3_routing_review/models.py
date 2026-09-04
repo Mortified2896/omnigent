@@ -128,7 +128,7 @@ class AdviserAnalysis(StrictModel):
     difficulty: Difficulty
     risk: Risk
     requirements: RoutingRequirements
-    benchmark_requirements: list[BenchmarkRequirement] = Field(min_length=1)
+    benchmark_requirements: list[BenchmarkRequirement] = Field(min_length=1, max_length=1)
     proposed_reasoning_effort: ReasoningEffort
     evidence_policy: EvidencePolicy
     disposition: Disposition

@@ -6,6 +6,7 @@ import json
 
 from omnigent.server.o3_routing_review.adviser import _json_payload
 from omnigent.server.o3_routing_review.models import (
+    AdviserAnalysis,
     BenchmarkEvidence,
     CandidateSnapshot,
     EvidenceClass,
@@ -67,8 +68,7 @@ def _evidence(
     slice_def = next(
         item
         for item in default_slices()
-        if (item.benchmark_id, item.version, item.slice_id)
-        == (benchmark_id, version, slice_id)
+        if (item.benchmark_id, item.version, item.slice_id) == (benchmark_id, version, slice_id)
     )
     return BenchmarkEvidence(
         benchmark_id=benchmark_id,
@@ -95,14 +95,20 @@ def _evidence(
 def test_default_slices_register_all_three_official_benchmarks() -> None:
     slices = default_slices()
     official = {
-        (item.benchmark_id, item.version, item.slice_id)
-        for item in slices
-        if item.official
+        (item.benchmark_id, item.version, item.slice_id) for item in slices if item.official
     }
 
     assert official == _OFFICIAL_KEYS
     assert all(item.task_ids for item in slices if item.official)
     assert all(item.task_manifest_digest.startswith("sha256:") for item in slices)
+
+
+def test_adviser_schema_requires_exactly_one_benchmark_requirement() -> None:
+    schema = AdviserAnalysis.model_json_schema()
+    requirement = schema["properties"]["benchmark_requirements"]
+
+    assert requirement["minItems"] == 1
+    assert requirement["maxItems"] == 1
 
 
 def test_adviser_receives_only_measured_benchmark_definitions() -> None:
@@ -195,14 +201,12 @@ def test_placeholder_control_room_slices_stay_out_of_measured_allowlist() -> Non
         )
     )
 
-    assert [
-        item["slice_id"] for item in payload["allowed_benchmark_slices"]
-    ] == ["drbench.full.harmonic-mean"]
+    assert [item["slice_id"] for item in payload["allowed_benchmark_slices"]] == [
+        "drbench.full.harmonic-mean"
+    ]
 
 
-def test_registry_manifest_loads_all_evidence_files(
-    tmp_path, monkeypatch
-) -> None:
+def test_registry_manifest_loads_all_evidence_files(tmp_path, monkeypatch) -> None:
     slices = {
         (item.benchmark_id, item.version, item.slice_id): item
         for item in default_slices()
@@ -242,8 +246,7 @@ def test_registry_manifest_loads_all_evidence_files(
 
     assert len(registry.evidence) == 3
     assert {
-        (item.benchmark_id, item.benchmark_version, item.slice_id)
-        for item in registry.evidence
+        (item.benchmark_id, item.benchmark_version, item.slice_id) for item in registry.evidence
     } == set(slices)
 
 
@@ -269,13 +272,9 @@ def test_registry_manifest_rejects_path_traversal(tmp_path, monkeypatch) -> None
         raise AssertionError("path traversal must be rejected")
 
 
-def test_compact_evidence_table_expands_to_model_records(
-    tmp_path, monkeypatch
-) -> None:
+def test_compact_evidence_table_expands_to_model_records(tmp_path, monkeypatch) -> None:
     slice_def = next(
-        item
-        for item in default_slices()
-        if item.slice_id == "swe-bench-pro.public.resolve-rate"
+        item for item in default_slices() if item.slice_id == "swe-bench-pro.public.resolve-rate"
     )
     compact = tmp_path / "swe.json"
     compact.write_text(

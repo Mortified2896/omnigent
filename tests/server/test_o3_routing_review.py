@@ -41,7 +41,11 @@ from omnigent.server.o3_routing_review.omniroute import (
     OmniRouteError,
     OmniRouteResponse,
 )
-from omnigent.server.o3_routing_review.registry import BenchmarkRegistry, default_slices
+from omnigent.server.o3_routing_review.registry import (
+    BENCHMARK_REGISTRY_ENV,
+    BenchmarkRegistry,
+    default_slices,
+)
 from omnigent.server.o3_routing_review.routes import create_o3_routing_review_router
 from omnigent.server.o3_routing_review.service import (
     O3RoutingReviewService,
@@ -50,6 +54,16 @@ from omnigent.server.o3_routing_review.service import (
 from omnigent.server.o3_routing_review.store import ProposalStore
 
 _SLICE = default_slices()[0]
+
+
+def test_enabled_service_requires_configured_benchmark_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "test-key")
+    monkeypatch.delenv(BENCHMARK_REGISTRY_ENV, raising=False)
+
+    with pytest.raises(ValueError, match=BENCHMARK_REGISTRY_ENV):
+        O3RoutingReviewService.from_env()
 
 
 def _requirement(*, minimum: float = 0.5) -> BenchmarkRequirement:
