@@ -493,7 +493,11 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding([], O3_SERVER_INFO);
     await waitForWorkspaceSeed();
+    expect(screen.getByTestId("new-chat-landing-omniroute-connection")).toHaveTextContent(
+      "OmniRoute O3Local",
+    );
     typeMessage("inspect the repo without changing it");
+    expect(screen.getByTestId("new-chat-landing-submit")).toHaveTextContent("Review route");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
     await screen.findByTestId("o3-routing-proposal-card");

@@ -4640,7 +4640,19 @@ export function NewChatLandingScreen() {
                 {selectedAgent &&
                   (supportsModelPicker || selectedNativeHarness === "codex-native") &&
                   !sandboxSelected &&
-                  selectedHostId !== null && (
+                  selectedHostId !== null &&
+                  (o3RoutingReviewEnabled && selectedNativeHarness === "codex-native" ? (
+                    <div
+                      className="flex h-9 items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 text-sm font-medium text-emerald-700 dark:text-emerald-300 md:h-8"
+                      data-testid="new-chat-landing-omniroute-connection"
+                      aria-label="Connection: OmniRoute O3, local"
+                      title="Connected to the Mac-local OmniRoute O3 routing review"
+                    >
+                      <ShuffleIcon className="size-4" aria-hidden />
+                      <span>OmniRoute O3</span>
+                      <span className="text-xs font-normal opacity-75">Local</span>
+                    </div>
+                  ) : (
                     <SearchableModelPicker
                       value={
                         !pickedModel
@@ -4677,7 +4689,7 @@ export function NewChatLandingScreen() {
                       testId="new-chat-landing-inline-model"
                       searchTestId="new-chat-landing-inline-model-search"
                     />
-                  )}
+                  ))}
                 {selectedAgent &&
                   selectedNativeHarness === "codex-native" &&
                   codexEffortLevels.length > 0 && (
@@ -4756,7 +4768,7 @@ export function NewChatLandingScreen() {
                       <span className="inline-flex">
                         <Button
                           type="submit"
-                          size="icon"
+                          size={o3RoutingReviewEnabled ? "sm" : "icon"}
                           disabled={!canSubmit}
                           aria-label={
                             creating
@@ -4769,10 +4781,22 @@ export function NewChatLandingScreen() {
                           }
                           aria-busy={creating || o3ReviewLoading}
                           data-testid="new-chat-landing-submit"
-                          className="size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100 "
+                          className={
+                            o3RoutingReviewEnabled
+                              ? "h-8 gap-1.5 rounded-lg bg-foreground px-3 disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                              : "size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                          }
                         >
                           {creating || o3ReviewLoading ? (
-                            <Loader2Icon className="size-4 animate-spin" />
+                            <>
+                              <Loader2Icon className="size-4 animate-spin" />
+                              {o3RoutingReviewEnabled && <span>Reviewing route</span>}
+                            </>
+                          ) : o3RoutingReviewEnabled ? (
+                            <>
+                              <ShuffleIcon className="size-4" aria-hidden />
+                              <span>Review route</span>
+                            </>
                           ) : (
                             <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
                           )}
