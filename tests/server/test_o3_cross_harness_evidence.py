@@ -182,7 +182,7 @@ def test_unknown_model_remains_unknown_instead_of_cross_model_estimation() -> No
 def test_adviser_payload_excludes_candidates_scores_and_provenance() -> None:
     candidate = _candidate("claude-opus-5")
     registry = BenchmarkRegistry(
-        slices=[_SLICE],
+        slices=default_slices(),
         evidence=[_evidence("anthropic/claude-opus-5", harness="claude-code", lower=0.48)],
         candidates=[],
     )
@@ -203,6 +203,9 @@ def test_adviser_payload_excludes_candidates_scores_and_provenance() -> None:
         "allowed_benchmark_slices",
         "decomposition_context",
     }
+    assert [item["slice_id"] for item in payload["allowed_benchmark_slices"]] == [
+        "tb4.overall"
+    ]
     assert "claude-opus-5" not in serialized
     assert "claude-code" not in serialized
     assert "point_score" not in serialized
