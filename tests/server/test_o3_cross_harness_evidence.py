@@ -120,7 +120,7 @@ def _evaluate(candidate: CandidateSnapshot, evidence: list[BenchmarkEvidence]):
     return evaluate_candidates(registry, analysis, [candidate], constraints).evaluations[0]
 
 
-def test_cross_harness_results_estimate_codex_with_unmodified_median() -> None:
+def test_cross_harness_results_apply_three_point_margin_after_median() -> None:
     candidate = _candidate("claude-opus-5")
     evaluation = _evaluate(
         candidate,
@@ -132,12 +132,31 @@ def test_cross_harness_results_estimate_codex_with_unmodified_median() -> None:
 
     assert evaluation.status is CandidateStatus.PROVISIONAL
     assert evaluation.evidence_class is EvidenceClass.PROXY
-    assert evaluation.admission_score == 0.43
-    assert any("identity-transfer estimate" in caveat for caveat in evaluation.caveats)
-    assert any("no harness penalty or bonus" in caveat for caveat in evaluation.caveats)
+    assert evaluation.admission_score == 0.40
+    assert any("routing-policy buffer" in caveat for caveat in evaluation.caveats)
+    assert any("0.430" in caveat and "0.030" in caveat for caveat in evaluation.caveats)
+    assert any("not measured degradation" in caveat for caveat in evaluation.caveats)
 
 
-def test_published_codex_result_takes_priority_over_other_harnesses() -> None:
+def test_cross_harness_margin_clamps_at_zero_without_mutating_source() -> None:
+    candidate = _candidate("claude-opus-5")
+    source = _evidence(
+        "anthropic/claude-opus-5",
+        harness="claude-code",
+        lower=0.02,
+        point=0.04,
+    )
+    before = source.model_dump(mode="json")
+
+    evaluation = _evaluate(candidate, [source])
+
+    assert evaluation.admission_score == 0.0
+    assert source.model_dump(mode="json") == before
+    assert evaluation.evidence[0].confidence_lower == 0.02
+    assert evaluation.evidence[0].point_score == 0.04
+
+
+def test_published_codex_result_takes_priority_without_cross_harness_margin() -> None:
     candidate = _candidate("gpt-5.6-sol", provider="codex")
     evaluation = _evaluate(
         candidate,
@@ -150,6 +169,7 @@ def test_published_codex_result_takes_priority_over_other_harnesses() -> None:
     assert evaluation.status is CandidateStatus.PROVISIONAL
     assert evaluation.admission_score == 0.33
     assert any("same-model Codex-harness" in caveat for caveat in evaluation.caveats)
+    assert not any("routing-policy buffer" in caveat for caveat in evaluation.caveats)
 
 
 def test_provider_prefix_is_not_part_of_model_identity() -> None:
@@ -223,3 +243,4 @@ def test_adviser_payload_excludes_candidates_scores_and_provenance() -> None:
     assert "point_score" not in serialized
     assert "provider_usable" not in serialized
     assert "monetary_cost_usd" not in serialized
+    assert "cross_harness" not in serialized
