@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import median
 
 from .models import (
     AdviserAnalysis,
     ApprovedConstraints,
+    BenchmarkEvidence,
     CandidateEvaluation,
     CandidateSnapshot,
     CandidateStatus,
@@ -16,7 +18,7 @@ from .models import (
     FrontierSnapshot,
     RankingInputs,
 )
-from .registry import BenchmarkRegistry
+from .registry import BenchmarkRegistry, is_codex_harness
 
 _RISK_MARGIN = {"low": 0.0, "medium": 0.02, "high": 0.05}
 
@@ -26,6 +28,74 @@ class EvaluationResult:
     evaluations: list[CandidateEvaluation]
     frontier: FrontierSnapshot
     disposition: Disposition
+
+
+@dataclass(frozen=True)
+class _EvidenceAggregate:
+    evidence_class: EvidenceClass
+    admission_score: float | None
+    exact: bool
+    caveats: list[str]
+
+
+def _aggregate_evidence(evidence: list[BenchmarkEvidence]) -> _EvidenceAggregate:
+    """Build one expected Codex score without exposing estimates to the adviser."""
+    exact = [item for item in evidence if item.evidence_class is EvidenceClass.EXACT]
+    if exact:
+        return _EvidenceAggregate(
+            evidence_class=EvidenceClass.EXACT,
+            admission_score=median(item.admission_score for item in exact),
+            exact=True,
+            caveats=[],
+        )
+
+    usable = [
+        item
+        for item in evidence
+        if item.evidence_class in {EvidenceClass.PROXY, EvidenceClass.ADVISORY}
+    ]
+    direct_codex = [item for item in usable if is_codex_harness(item.harness)]
+    if direct_codex:
+        count = len(direct_codex)
+        return _EvidenceAggregate(
+            evidence_class=(
+                EvidenceClass.PROXY
+                if any(item.evidence_class is EvidenceClass.PROXY for item in direct_codex)
+                else EvidenceClass.ADVISORY
+            ),
+            admission_score=median(item.admission_score for item in direct_codex),
+            exact=False,
+            caveats=[
+                "expected Codex score uses the median of "
+                f"{count} published same-model Codex-harness result(s); differing execution "
+                "configuration keeps the estimate provisional"
+            ],
+        )
+
+    if usable:
+        harnesses = ", ".join(sorted({item.harness for item in usable}))
+        count = len(usable)
+        return _EvidenceAggregate(
+            evidence_class=(
+                EvidenceClass.PROXY
+                if any(item.evidence_class is EvidenceClass.PROXY for item in usable)
+                else EvidenceClass.ADVISORY
+            ),
+            admission_score=median(item.admission_score for item in usable),
+            exact=False,
+            caveats=[
+                "expected Codex score is an identity-transfer estimate: median of "
+                f"{count} published same-model result(s) from {harnesses}; no harness "
+                "penalty or bonus was applied"
+            ],
+        )
+
+    return _EvidenceAggregate(
+        evidence_class=EvidenceClass.UNKNOWN,
+        admission_score=None,
+        exact=False,
+        caveats=["benchmark evidence is unknown, not zero"],
+    )
 
 
 def _quota_scarcity(candidate: CandidateSnapshot) -> float:
@@ -155,42 +225,28 @@ def evaluate_candidates(
             ),
         )
         evidence = registry.evidence_for(requirement, candidate, constraints.reasoning_effort)
-        exact = [item for item in evidence if item.evidence_class is EvidenceClass.EXACT]
-        non_exact = [item for item in evidence if item.evidence_class is not EvidenceClass.EXACT]
-        caveats: list[str] = []
-        evidence_class = EvidenceClass.UNKNOWN
-        admission_score: float | None = None
+        aggregate = _aggregate_evidence(evidence)
+        caveats = list(aggregate.caveats)
+        evidence_class = aggregate.evidence_class
+        admission_score = aggregate.admission_score
 
-        if exact:
-            evidence_class = EvidenceClass.EXACT
-            admission_score = max(item.admission_score for item in exact)
-            if admission_score < required_score:
-                exclusions.append(
-                    f"conservative exact score {admission_score:.3f} is below the "
-                    f"risk-adjusted floor {required_score:.3f}"
-                )
-        elif non_exact:
-            evidence_class = non_exact[0].evidence_class
-            strongest_class = [item for item in non_exact if item.evidence_class is evidence_class]
-            admission_score = max(item.admission_score for item in strongest_class)
-            caveats.append("no exact benchmark evidence exists for this execution configuration")
-            if admission_score < required_score:
-                exclusions.append(
-                    f"provisional evidence score {admission_score:.3f} is below the "
-                    f"risk-adjusted floor {required_score:.3f}"
-                )
-        else:
-            caveats.append("benchmark evidence is unknown, not zero")
+        if admission_score is None:
             exclusions.append("unknown benchmark evidence cannot qualify a provisional route")
+        elif admission_score < required_score:
+            prefix = "conservative exact" if aggregate.exact else "provisional evidence"
+            exclusions.append(
+                f"{prefix} score {admission_score:.3f} is below the "
+                f"risk-adjusted floor {required_score:.3f}"
+            )
 
-        if not exact and constraints.evidence_policy is EvidencePolicy.STRICT:
+        if not aggregate.exact and constraints.evidence_policy is EvidencePolicy.STRICT:
             exclusions.append("strict evidence policy requires an exact benchmark record")
 
         if exclusions:
             status = CandidateStatus.EXCLUDED
             ranking = None
         else:
-            status = CandidateStatus.PASS if exact else CandidateStatus.PROVISIONAL
+            status = CandidateStatus.PASS if aggregate.exact else CandidateStatus.PROVISIONAL
             ranking = _ranking(
                 candidate,
                 evidence_class=evidence_class,
