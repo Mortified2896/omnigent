@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from omnigent.server.o3_routing_review.adviser import _json_payload
 from omnigent.server.o3_routing_review.models import (
     AdviserAnalysis,
@@ -270,6 +272,24 @@ def test_registry_manifest_rejects_path_traversal(tmp_path, monkeypatch) -> None
         assert "stay beside the manifest" in str(exc)
     else:
         raise AssertionError("path traversal must be rejected")
+
+
+def test_registry_manifest_rejects_calibration_path_traversal(tmp_path, monkeypatch) -> None:
+    (tmp_path / "evidence.json").write_text("[]")
+    manifest = tmp_path / "registry.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "evidence_files": ["evidence.json"],
+                "difficulty_calibration_file": "../calibration.json",
+            }
+        )
+    )
+    monkeypatch.setenv(BENCHMARK_REGISTRY_ENV, str(manifest))
+
+    with pytest.raises(ValueError, match="calibration file must stay beside"):
+        BenchmarkRegistry(candidates=[])
 
 
 def test_compact_evidence_table_expands_to_model_records(tmp_path, monkeypatch) -> None:

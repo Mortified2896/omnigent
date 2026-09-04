@@ -44,6 +44,7 @@ from omnigent.server.o3_routing_review.omniroute import (
 from omnigent.server.o3_routing_review.registry import (
     BENCHMARK_REGISTRY_ENV,
     BenchmarkRegistry,
+    DifficultyCalibration,
     default_slices,
 )
 from omnigent.server.o3_routing_review.routes import create_o3_routing_review_router
@@ -155,7 +156,7 @@ def _analysis(
     return AdviserAnalysis(
         task_summary="Inspect a harmless repository state",
         task_classification="systems",
-        difficulty="medium",
+        difficulty="normal",
         risk="low",
         requirements=requirements or RoutingRequirements(),
         benchmark_requirements=[_requirement(minimum=minimum)],
@@ -203,11 +204,57 @@ def _evaluated_proposal(
     )
 
 
+def test_schema_v1_numeric_floor_remains_readable_without_rewriting_history(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate()
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[_evidence(candidate)],
+        candidates=[
+            CandidateProfile.model_validate(
+                candidate.model_dump(
+                    exclude={
+                        "provider_usable",
+                        "model_present",
+                        "quota_available",
+                        "quota_remaining_percent",
+                        "quota_reset_at",
+                        "recent_success_rate",
+                        "recent_retry_rate",
+                        "latency_ms",
+                    }
+                )
+            )
+        ],
+    )
+    proposal = _evaluated_proposal(registry, _analysis(minimum=0.42), [candidate])
+    legacy = proposal.model_dump(mode="json")
+    legacy["schema_version"] = 1
+    legacy["adviser"]["difficulty"] = "medium"
+    legacy["adviser"]["benchmark_requirements"][0]["minimum_score"] = 0.42
+    legacy["approved_constraints"].pop("difficulty", None)
+    legacy["approved_constraints"].pop("calibration_version", None)
+    path = tmp_path / "o3-state.json"
+    path.write_text(json.dumps({"version": 1, "proposals": {proposal.proposal_id: legacy}}))
+
+    loaded = ProposalStore(path).get(proposal.proposal_id)
+
+    assert loaded is not None
+    assert loaded.schema_version == 2
+    assert loaded.adviser.difficulty == "normal"
+    assert loaded.approved_constraints.benchmark.minimum_score == 0.42
+    assert loaded.approved_constraints.calibration_version == "legacy-adviser-numeric-floor"
+    persisted = json.loads(path.read_text())["proposals"][proposal.proposal_id]
+    assert persisted["schema_version"] == 1
+    assert persisted["adviser"]["benchmark_requirements"][0]["minimum_score"] == 0.42
+
+
 def test_adviser_schema_exposes_exact_categorical_vocabularies() -> None:
     schema = AdviserAnalysis.model_json_schema()
     properties = schema["properties"]
 
-    assert properties["difficulty"]["enum"] == ["low", "medium", "high", "frontier"]
+    assert properties["difficulty"]["enum"] == ["easy", "normal", "moderate", "hard", "frontier"]
     assert properties["risk"]["enum"] == ["low", "medium", "high"]
     assert properties["proposed_reasoning_effort"]["enum"] == [
         "low",
@@ -215,6 +262,7 @@ def test_adviser_schema_exposes_exact_categorical_vocabularies() -> None:
         "high",
         "xhigh",
     ]
+    assert "minimum_score" not in schema["$defs"]["BenchmarkSelection"]["properties"]
 
 
 @pytest.mark.asyncio
@@ -243,7 +291,7 @@ async def test_adviser_repairs_schema_invalid_provider_output_once() -> None:
         candidates=[_candidate()],
     )
 
-    assert result.difficulty == "medium"
+    assert result.difficulty == "normal"
     assert len(client.bodies) == 2
     repair_input = cast(list[dict[str, str]], client.bodies[1]["input"])
     assert "matching this schema exactly" in repair_input[0]["content"]
@@ -290,6 +338,42 @@ def test_missing_evidence_is_unknown_not_zero() -> None:
     assert evaluation.status is CandidateStatus.EXCLUDED
     assert result.disposition is Disposition.DECOMPOSE
     assert "unknown benchmark evidence cannot qualify a provisional route" in evaluation.exclusions
+
+
+def test_forecast_uses_plausible_lower_and_cannot_satisfy_strict_policy() -> None:
+    candidate = _candidate()
+    forecast = _evidence(
+        candidate, evidence_class=EvidenceClass.FORECAST, point=0.72, lower=0.58
+    ).model_copy(update={"source_type": "llm_forecast", "harness": "forecast-advisory"})
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[forecast], candidates=[])
+    provisional = _analysis(minimum=0.55, evidence_policy=EvidencePolicy.PROVISIONAL)
+    strict = _analysis(minimum=0.55, evidence_policy=EvidencePolicy.STRICT)
+
+    admitted = evaluate_candidates(registry, provisional, [candidate], _constraints(provisional))
+    rejected = evaluate_candidates(registry, strict, [candidate], _constraints(strict))
+
+    assert admitted.evaluations[0].status is CandidateStatus.PROVISIONAL
+    assert admitted.evaluations[0].admission_score == 0.58
+    assert rejected.evaluations[0].status is CandidateStatus.EXCLUDED
+
+
+def test_published_exact_evidence_supersedes_forecast() -> None:
+    candidate = _candidate()
+    exact = _evidence(candidate, point=0.66, lower=0.61)
+    forecast = exact.model_copy(
+        update={
+            "evidence_class": EvidenceClass.FORECAST,
+            "point_score": 0.9,
+            "confidence_lower": 0.8,
+            "source_type": "llm_forecast",
+            "source_reference": "local-forecast-cache:test",
+        }
+    )
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[forecast, exact], candidates=[])
+    analysis = _analysis(minimum=0.6)
+    result = evaluate_candidates(registry, analysis, [candidate], _constraints(analysis))
+    assert result.evaluations[0].evidence_class is EvidenceClass.EXACT
+    assert result.evaluations[0].admission_score == 0.61
 
 
 def test_provisional_evidence_must_still_meet_the_approved_floor() -> None:
@@ -503,6 +587,25 @@ async def test_decomposition_revalidates_subtasks_and_retains_blocked_integratio
         slices=[_SLICE],
         evidence=[_evidence(candidate, point=0.7, lower=0.6)],
         candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.5,
+                            "normal": 0.8,
+                            "moderate": 0.85,
+                            "hard": 0.9,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
     )
     initial = _analysis(minimum=0.8)
     decomposed = _analysis(
@@ -514,7 +617,7 @@ async def test_decomposition_revalidates_subtasks_and_retains_blocked_integratio
                 benchmark_id=_SLICE.benchmark_id,
                 version=_SLICE.version,
                 slice_id=_SLICE.slice_id,
-                minimum_score=0.5,
+                difficulty="easy",
                 reasoning_effort="low",
                 risk="low",
                 competence_reduction="The scope no longer requires global integration reasoning.",
@@ -525,7 +628,7 @@ async def test_decomposition_revalidates_subtasks_and_retains_blocked_integratio
                 benchmark_id=_SLICE.benchmark_id,
                 version=_SLICE.version,
                 slice_id=_SLICE.slice_id,
-                minimum_score=0.8,
+                difficulty="normal",
                 reasoning_effort="low",
                 risk="high",
                 competence_reduction="Global integration competence is still required.",

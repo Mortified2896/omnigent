@@ -50,6 +50,7 @@ def _aggregate_evidence(evidence: list[BenchmarkEvidence]) -> _EvidenceAggregate
             caveats=[],
         )
 
+    forecasts = [item for item in evidence if item.evidence_class is EvidenceClass.FORECAST]
     usable = [
         item
         for item in evidence
@@ -77,9 +78,7 @@ def _aggregate_evidence(evidence: list[BenchmarkEvidence]) -> _EvidenceAggregate
         harnesses = ", ".join(sorted({item.harness for item in usable}))
         count = len(usable)
         source_score = median(item.admission_score for item in usable)
-        admission_score = round(
-            max(0.0, source_score - _CROSS_HARNESS_ADMISSION_MARGIN), 12
-        )
+        admission_score = round(max(0.0, source_score - _CROSS_HARNESS_ADMISSION_MARGIN), 12)
         return _EvidenceAggregate(
             evidence_class=(
                 EvidenceClass.PROXY
@@ -95,6 +94,18 @@ def _aggregate_evidence(evidence: list[BenchmarkEvidence]) -> _EvidenceAggregate
                 f"{_CROSS_HARNESS_ADMISSION_MARGIN:.3f} absolute = "
                 f"{admission_score:.3f}; the buffer is a policy assumption, not measured "
                 "degradation"
+            ],
+        )
+
+    if forecasts:
+        conservative = min(item.admission_score for item in forecasts)
+        return _EvidenceAggregate(
+            evidence_class=EvidenceClass.FORECAST,
+            admission_score=conservative,
+            exact=False,
+            caveats=[
+                "admission uses the conservative lower value from an auditable LLM forecast; "
+                "this is advisory derived evidence, not a published or measured benchmark result"
             ],
         )
 
@@ -135,6 +146,7 @@ def _ranking(
         EvidenceClass.EXACT: 0.9,
         EvidenceClass.PROXY: 0.55,
         EvidenceClass.ADVISORY: 0.35,
+        EvidenceClass.FORECAST: 0.25,
         EvidenceClass.UNKNOWN: 0.15,
     }[evidence_class]
     health = candidate.recent_success_rate if candidate.recent_success_rate is not None else 0.75

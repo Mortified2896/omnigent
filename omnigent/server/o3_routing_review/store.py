@@ -67,21 +67,44 @@ class ProposalStore:
             proposals[proposal.proposal_id] = proposal.model_dump(mode="json")
             self._write(state)
 
+    @staticmethod
+    def _parse(raw: dict[str, object]) -> RoutingProposal:
+        """Read schema-v1 numeric-floor proposals without destructive migration."""
+        if raw.get("schema_version", 1) != 1:
+            return RoutingProposal.model_validate(raw)
+        adapted = json.loads(json.dumps(raw))
+        adviser = adapted.get("adviser")
+        constraints = adapted.get("approved_constraints")
+        if isinstance(adviser, dict):
+            legacy = {"low": "easy", "medium": "normal", "high": "hard"}
+            original_difficulty = adviser.get("difficulty")
+            if isinstance(original_difficulty, str):
+                adviser["difficulty"] = legacy.get(original_difficulty, original_difficulty)
+            requirements = adviser.get("benchmark_requirements")
+            if isinstance(requirements, list):
+                for requirement in requirements:
+                    if isinstance(requirement, dict):
+                        requirement.pop("minimum_score", None)
+        if isinstance(constraints, dict):
+            constraints.setdefault(
+                "difficulty",
+                adviser.get("difficulty", "normal") if isinstance(adviser, dict) else "normal",
+            )
+            constraints.setdefault("calibration_version", "legacy-adviser-numeric-floor")
+        adapted["schema_version"] = 2
+        return RoutingProposal.model_validate(adapted)
+
     def get(self, proposal_id: str) -> RoutingProposal | None:
         with self._lock:
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
             raw = proposals.get(proposal_id)
-            return RoutingProposal.model_validate(raw) if isinstance(raw, dict) else None
+            return self._parse(raw) if isinstance(raw, dict) else None
 
     def list(self) -> list[RoutingProposal]:
         with self._lock:
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
-            return [
-                RoutingProposal.model_validate(raw)
-                for raw in proposals.values()
-                if isinstance(raw, dict)
-            ]
+            return [self._parse(raw) for raw in proposals.values() if isinstance(raw, dict)]

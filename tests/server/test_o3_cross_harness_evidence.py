@@ -95,7 +95,7 @@ def _analysis(*, minimum: float = 0.2, effort: str = "low") -> AdviserAnalysis:
     return AdviserAnalysis(
         task_summary="Inspect a repository",
         task_classification="systems",
-        difficulty="medium",
+        difficulty="normal",
         risk="low",
         requirements=RoutingRequirements(),
         benchmark_requirements=[requirement],
@@ -235,9 +235,7 @@ def test_adviser_payload_excludes_candidates_scores_and_provenance() -> None:
         "allowed_benchmark_slices",
         "decomposition_context",
     }
-    assert [item["slice_id"] for item in payload["allowed_benchmark_slices"]] == [
-        "tb4.overall"
-    ]
+    assert [item["slice_id"] for item in payload["allowed_benchmark_slices"]] == ["tb4.overall"]
     assert "claude-opus-5" not in serialized
     assert "claude-code" not in serialized
     assert "point_score" not in serialized

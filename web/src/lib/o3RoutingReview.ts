@@ -1,6 +1,7 @@
 import { authenticatedFetch } from "./identity";
 
-export type O3EvidenceClass = "exact" | "proxy" | "advisory" | "unknown";
+export type O3EvidenceClass = "exact" | "proxy" | "advisory" | "forecast" | "unknown";
+export type O3Difficulty = "easy" | "normal" | "moderate" | "hard" | "frontier";
 export type O3EvidencePolicy = "strict" | "provisional";
 export type O3Disposition = "route" | "borderline" | "decompose" | "defer";
 export type O3DecisionAction = "approve" | "decline" | "defer" | "run_anyway";
@@ -23,7 +24,14 @@ export interface O3BenchmarkRequirement {
   slice_id: string;
   minimum_score: number;
   reason: string;
+  difficulty: O3Difficulty | null;
+  calibration_version: string | null;
 }
+
+export type O3BenchmarkSelection = Omit<
+  O3BenchmarkRequirement,
+  "minimum_score" | "difficulty" | "calibration_version"
+>;
 
 export interface O3BenchmarkEvidence {
   benchmark_id: string;
@@ -103,7 +111,7 @@ export interface O3DecompositionItem {
   benchmark_id: string;
   version: string;
   slice_id: string;
-  minimum_score: number;
+  difficulty: O3Difficulty;
   reasoning_effort: string;
   risk: string;
   passing_candidates: string[];
@@ -147,7 +155,7 @@ export interface O3RoutingProposal {
   adviser: {
     task_summary: string;
     task_classification: string;
-    difficulty: string;
+    difficulty: O3Difficulty;
     risk: string;
     requirements: {
       terminal: boolean;
@@ -155,7 +163,7 @@ export interface O3RoutingProposal {
       minimum_context_tokens: number;
       vision: boolean;
     };
-    benchmark_requirements: O3BenchmarkRequirement[];
+    benchmark_requirements: O3BenchmarkSelection[];
     proposed_reasoning_effort: string;
     evidence_policy: O3EvidencePolicy;
     disposition: O3Disposition;
@@ -165,6 +173,8 @@ export interface O3RoutingProposal {
   };
   approved_constraints: {
     benchmark: O3BenchmarkRequirement;
+    difficulty: O3Difficulty;
+    calibration_version: string;
     reasoning_effort: string;
     risk: string;
     evidence_policy: O3EvidencePolicy;
@@ -201,6 +211,7 @@ export interface O3ProposalAdjustment {
   version?: string;
   slice_id?: string;
   minimum_score?: number;
+  difficulty?: O3Difficulty;
   reasoning_effort?: string;
   risk?: string;
   evidence_policy?: O3EvidencePolicy;

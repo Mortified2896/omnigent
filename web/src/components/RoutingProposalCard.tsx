@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type {
   O3BenchmarkSlice,
+  O3Difficulty,
   O3ProposalAdjustment,
   O3ProposalDecision,
   O3RoutingProposal,
@@ -85,7 +86,7 @@ export function RoutingProposalCard({
   const [sliceKey, setSliceKey] = useState(
     `${benchmark.benchmark_id}|${benchmark.version}|${benchmark.slice_id}`,
   );
-  const [minimumScore, setMinimumScore] = useState(String(benchmark.minimum_score));
+  const [difficulty, setDifficulty] = useState<O3Difficulty>(constraints.difficulty);
   const [effort, setEffort] = useState(constraints.reasoning_effort);
   const [risk, setRisk] = useState(constraints.risk);
   const [evidencePolicy, setEvidencePolicy] = useState(constraints.evidence_policy);
@@ -93,7 +94,7 @@ export function RoutingProposalCard({
 
   useEffect(() => {
     setSliceKey(`${benchmark.benchmark_id}|${benchmark.version}|${benchmark.slice_id}`);
-    setMinimumScore(String(benchmark.minimum_score));
+    setDifficulty(constraints.difficulty);
     setEffort(constraints.reasoning_effort);
     setRisk(constraints.risk);
     setEvidencePolicy(constraints.evidence_policy);
@@ -104,6 +105,7 @@ export function RoutingProposalCard({
     benchmark.slice_id,
     benchmark.version,
     constraints.cost_quota_preference,
+    constraints.difficulty,
     constraints.evidence_policy,
     constraints.reasoning_effort,
     constraints.risk,
@@ -138,9 +140,8 @@ export function RoutingProposalCard({
     const chosen = slices.find(
       (slice) => `${slice.benchmark_id}|${slice.version}|${slice.slice_id}` === sliceKey,
     );
-    const parsedMinimum = Number(minimumScore);
-    if (!chosen || !Number.isFinite(parsedMinimum) || parsedMinimum < 0 || parsedMinimum > 1) {
-      setError("Choose a valid benchmark slice and a minimum score from 0 to 1.");
+    if (!chosen) {
+      setError("Choose a valid benchmark slice.");
       return;
     }
     setBusy("adjust");
@@ -150,7 +151,7 @@ export function RoutingProposalCard({
         benchmark_id: chosen.benchmark_id,
         version: chosen.version,
         slice_id: chosen.slice_id,
-        minimum_score: parsedMinimum,
+        difficulty,
         reasoning_effort: effort,
         risk,
         evidence_policy: evidencePolicy,
@@ -252,8 +253,8 @@ export function RoutingProposalCard({
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-muted-foreground">Conservative floor</dt>
-            <dd className="mt-0.5 font-medium">{percent(benchmark.minimum_score)}</dd>
+            <dt className="text-xs text-muted-foreground">Difficulty</dt>
+            <dd className="mt-0.5 font-medium">{titleCase(constraints.difficulty)}</dd>
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Evidence</dt>
@@ -309,7 +310,7 @@ export function RoutingProposalCard({
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">{item.competence_reduction}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {item.slice_id} · {percent(item.minimum_score)} · {item.reasoning_effort} ·{" "}
+                  {item.slice_id} · {titleCase(item.difficulty)} · {item.reasoning_effort} ·{" "}
                   {item.passing_candidates.length} passing
                 </p>
               </div>
@@ -319,6 +320,10 @@ export function RoutingProposalCard({
 
         {expanded && (
           <div className="space-y-3 border-t border-border pt-3" data-testid="o3-routing-details">
+            <p className="text-xs text-muted-foreground" data-testid="o3-calibration-detail">
+              {titleCase(constraints.difficulty)} → O3 admission floor{" "}
+              {benchmark.minimum_score.toFixed(6)} via {constraints.calibration_version}
+            </p>
             <div className="grid gap-2 text-xs sm:grid-cols-3">
               <p>
                 Global frontier:{" "}
@@ -401,17 +406,17 @@ export function RoutingProposalCard({
               </select>
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              Minimum score (0–1)
-              <input
+              Difficulty
+              <select
                 className={fieldClass}
-                type="number"
-                min="0"
-                max="1"
-                step="0.01"
-                value={minimumScore}
-                onChange={(event) => setMinimumScore(event.target.value)}
-                data-testid="o3-adjust-minimum"
-              />
+                value={difficulty}
+                onChange={(event) => setDifficulty(event.target.value as O3Difficulty)}
+                data-testid="o3-adjust-difficulty"
+              >
+                {(["easy", "normal", "moderate", "hard", "frontier"] as const).map((value) => (
+                  <option key={value} value={value}>{titleCase(value)}</option>
+                ))}
+              </select>
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               Reasoning effort

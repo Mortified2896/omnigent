@@ -185,7 +185,7 @@ const O3_SERVER_INFO: ServerInfo = {
 function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingProposal {
   const routeCreated = decision === "approve" || decision === "run_anyway";
   return {
-    schema_version: 1,
+    schema_version: 2,
     proposal_id: "01234567-89ab-cdef-0123-456789abcdef",
     created_at: "2026-09-04T00:00:00Z",
     updated_at: "2026-09-04T00:00:00Z",
@@ -195,7 +195,7 @@ function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingPr
     adviser: {
       task_summary: "Inspect the repository",
       task_classification: "systems",
-      difficulty: "medium",
+      difficulty: "normal",
       risk: "low",
       requirements: {
         terminal: true,
@@ -208,7 +208,6 @@ function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingPr
           benchmark_id: "terminal-bench",
           version: "4.0.0",
           slice_id: "tb4.cr-systems-db-v1",
-          minimum_score: 0.5,
           reason: "Terminal competence",
         },
       ],
@@ -226,7 +225,11 @@ function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingPr
         slice_id: "tb4.cr-systems-db-v1",
         minimum_score: 0.5,
         reason: "Terminal competence",
+        difficulty: "normal",
+        calibration_version: "o3-benchmark-difficulty-calibration-v1",
       },
+      difficulty: "normal",
+      calibration_version: "o3-benchmark-difficulty-calibration-v1",
       reasoning_effort: "low",
       risk: "low",
       evidence_policy: "strict",

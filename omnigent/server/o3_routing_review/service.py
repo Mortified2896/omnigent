@@ -12,6 +12,7 @@ from omnigent.process_logging import env_truthy
 
 from .adviser import OmniRouteRoutingAdviser, RoutingAdviser
 from .evaluator import evaluate_candidates, hard_capable_candidates
+from .forecaster import ModelScoreForecaster
 from .models import (
     AdviserAnalysis,
     ApprovedConstraints,
@@ -67,6 +68,7 @@ class O3RoutingReviewService:
         adviser: RoutingAdviser,
         store: ProposalStore,
         ttl_seconds: int = DEFAULT_PROPOSAL_TTL_SECONDS,
+        forecaster: ModelScoreForecaster | None = None,
     ) -> None:
         if ttl_seconds < 60 or ttl_seconds > 30 * 24 * 60 * 60:
             raise ValueError("O3 proposal TTL must be between 60 seconds and 30 days")
@@ -75,6 +77,7 @@ class O3RoutingReviewService:
         self.adviser = adviser
         self.store = store
         self.ttl_seconds = ttl_seconds
+        self.forecaster = forecaster
 
     @classmethod
     def from_env(cls) -> O3RoutingReviewService:
@@ -92,6 +95,7 @@ class O3RoutingReviewService:
             adviser=OmniRouteRoutingAdviser(client),
             store=ProposalStore(),
             ttl_seconds=ttl,
+            forecaster=ModelScoreForecaster(client),
         )
 
     def _require(self, proposal_id: str) -> RoutingProposal:
@@ -136,13 +140,38 @@ class O3RoutingReviewService:
             candidates=candidates,
         )
         self._validate_analysis(analysis)
+        selection = analysis.benchmark_requirements[0]
+        try:
+            requirement = self.registry.calibrated_requirement(selection, analysis.difficulty)
+        except ValueError as exc:
+            raise RoutingReviewError(
+                str(exc), status_code=502, code="invalid_calibration"
+            ) from exc
+        calibration_version = (
+            self.registry.calibration.version
+            if self.registry.calibration is not None
+            else requirement.calibration_version or "legacy-test-or-schema-v1-floor"
+        )
         constraints = ApprovedConstraints(
-            benchmark=analysis.benchmark_requirements[0],
+            benchmark=requirement,
+            difficulty=analysis.difficulty,
+            calibration_version=calibration_version,
             reasoning_effort=analysis.proposed_reasoning_effort,
             risk=analysis.risk,
             evidence_policy=analysis.evidence_policy,
             cost_quota_preference="preserve_subscription",
         )
+        if self.forecaster is not None:
+            forecasts = []
+            for candidate in candidates:
+                if self.registry.evidence_for(
+                    requirement, candidate, constraints.reasoning_effort
+                ):
+                    continue
+                forecast = await self.forecaster.forecast(self.registry, requirement, candidate)
+                if forecast is not None:
+                    forecasts.append(forecast)
+            self.registry.add_runtime_evidence(forecasts)
         result = evaluate_candidates(self.registry, analysis, candidates, constraints)
         final_disposition = result.disposition
         if result.disposition is Disposition.DECOMPOSE:
@@ -204,7 +233,15 @@ class O3RoutingReviewService:
                 benchmark_id=item.benchmark_id,
                 version=item.version,
                 slice_id=item.slice_id,
-                minimum_score=item.minimum_score,
+                minimum_score=self.registry.calibration.threshold(item, item.difficulty)
+                if self.registry.calibration is not None
+                else 0,
+                difficulty=item.difficulty,
+                calibration_version=(
+                    self.registry.calibration.version
+                    if self.registry.calibration is not None
+                    else None
+                ),
                 reason=item.competence_reduction,
             )
             try:
@@ -222,6 +259,8 @@ class O3RoutingReviewService:
             )
             constraints = ApprovedConstraints(
                 benchmark=requirement,
+                difficulty=item.difficulty,
+                calibration_version=requirement.calibration_version or "legacy-manual-floor",
                 reasoning_effort=item.reasoning_effort,
                 risk=item.risk,
                 evidence_policy=analysis.evidence_policy,
@@ -250,25 +289,40 @@ class O3RoutingReviewService:
         if proposal.decision is not None:
             raise RoutingReviewError("a decided proposal cannot be adjusted", status_code=409)
         current = proposal.approved_constraints
-        benchmark = current.benchmark.model_copy(
+        selection = current.benchmark.model_copy(
             update={
                 key: value
                 for key, value in {
                     "benchmark_id": request.benchmark_id,
                     "version": request.version,
                     "slice_id": request.slice_id,
-                    "minimum_score": request.minimum_score,
                 }.items()
                 if value is not None
             }
         )
         try:
-            self.registry.require_slice(benchmark)
+            self.registry.require_slice(selection)
         except ValueError as exc:
             raise RoutingReviewError(str(exc)) from exc
+        difficulty = request.difficulty or current.difficulty
+        if request.minimum_score is not None:
+            benchmark = selection.model_copy(
+                update={
+                    "minimum_score": request.minimum_score,
+                    "difficulty": None,
+                    "calibration_version": "manual-raw-score-override",
+                }
+            )
+            calibration_version = "manual-raw-score-override"
+        else:
+            benchmark = self.registry.calibrated_requirement(selection, difficulty)
+            assert self.registry.calibration is not None
+            calibration_version = self.registry.calibration.version
         constraints = current.model_copy(
             update={
                 "benchmark": benchmark,
+                "difficulty": difficulty,
+                "calibration_version": calibration_version,
                 **(
                     {"reasoning_effort": request.reasoning_effort}
                     if request.reasoning_effort
@@ -288,7 +342,15 @@ class O3RoutingReviewService:
         candidates = await self.omniroute.live_candidates(self.registry.candidates)
         analysis = proposal.adviser.model_copy(
             update={
-                "benchmark_requirements": [benchmark],
+                "benchmark_requirements": [
+                    {
+                        "benchmark_id": benchmark.benchmark_id,
+                        "version": benchmark.version,
+                        "slice_id": benchmark.slice_id,
+                        "reason": benchmark.reason,
+                    }
+                ],
+                "difficulty": difficulty,
                 "proposed_reasoning_effort": constraints.reasoning_effort,
                 "risk": constraints.risk,
                 "evidence_policy": constraints.evidence_policy,

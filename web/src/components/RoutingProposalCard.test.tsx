@@ -6,7 +6,7 @@ import { RoutingProposalCard } from "./RoutingProposalCard";
 
 function proposal(overrides: Partial<O3RoutingProposal> = {}): O3RoutingProposal {
   const base: O3RoutingProposal = {
-    schema_version: 1,
+    schema_version: 2,
     proposal_id: "01234567-89ab-cdef-0123-456789abcdef",
     created_at: "2026-09-04T00:00:00Z",
     updated_at: "2026-09-04T00:00:00Z",
@@ -16,7 +16,7 @@ function proposal(overrides: Partial<O3RoutingProposal> = {}): O3RoutingProposal
     adviser: {
       task_summary: "Inspect a harmless repository state",
       task_classification: "systems",
-      difficulty: "medium",
+      difficulty: "normal",
       risk: "low",
       requirements: {
         terminal: true,
@@ -29,7 +29,6 @@ function proposal(overrides: Partial<O3RoutingProposal> = {}): O3RoutingProposal
           benchmark_id: "terminal-bench",
           version: "4.0.0",
           slice_id: "tb4.cr-systems-db-v1",
-          minimum_score: 0.5,
           reason: "Terminal competence is relevant",
         },
       ],
@@ -47,7 +46,11 @@ function proposal(overrides: Partial<O3RoutingProposal> = {}): O3RoutingProposal
         slice_id: "tb4.cr-systems-db-v1",
         minimum_score: 0.5,
         reason: "Terminal competence is relevant",
+        difficulty: "normal",
+        calibration_version: "o3-benchmark-difficulty-calibration-v1",
       },
+      difficulty: "normal",
+      calibration_version: "o3-benchmark-difficulty-calibration-v1",
       reasoning_effort: "low",
       risk: "low",
       evidence_policy: "provisional",
@@ -218,13 +221,13 @@ describe("RoutingProposalCard", () => {
     );
   });
 
-  it("adjusts the slice and minimum before deterministic revalidation", async () => {
+  it("adjusts the slice and difficulty before deterministic revalidation", async () => {
     const { onAdjust } = renderCard();
     fireEvent.click(screen.getByTestId("o3-adjust"));
     fireEvent.change(screen.getByTestId("o3-adjust-slice"), {
       target: { value: "terminal-bench|4.0.0|tb4.cr-ai-v1" },
     });
-    fireEvent.change(screen.getByTestId("o3-adjust-minimum"), { target: { value: "0.62" } });
+    fireEvent.change(screen.getByTestId("o3-adjust-difficulty"), { target: { value: "hard" } });
     fireEvent.change(screen.getByTestId("o3-adjust-effort"), { target: { value: "high" } });
     fireEvent.click(screen.getByTestId("o3-adjust-save"));
 
@@ -232,7 +235,7 @@ describe("RoutingProposalCard", () => {
       expect(onAdjust).toHaveBeenCalledWith(
         expect.objectContaining({
           slice_id: "tb4.cr-ai-v1",
-          minimum_score: 0.62,
+          difficulty: "hard",
           reasoning_effort: "high",
         }),
       ),
@@ -254,7 +257,7 @@ describe("RoutingProposalCard", () => {
               benchmark_id: "terminal-bench",
               version: "4.0.0",
               slice_id: "tb4.cr-systems-db-v1",
-              minimum_score: 0.4,
+              difficulty: "easy",
               reasoning_effort: "low",
               risk: "low",
               passing_candidates: ["opencode-big-pickle-low"],

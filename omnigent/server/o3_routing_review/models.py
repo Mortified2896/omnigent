@@ -8,7 +8,7 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Difficulty: TypeAlias = Literal["low", "medium", "high", "frontier"]
+Difficulty: TypeAlias = Literal["easy", "normal", "moderate", "hard", "frontier"]
 Risk: TypeAlias = Literal["low", "medium", "high"]
 ReasoningEffort: TypeAlias = Literal["low", "medium", "high", "xhigh"]
 CostQuotaPreference: TypeAlias = Literal[
@@ -26,6 +26,7 @@ class EvidenceClass(StrEnum):
     EXACT = "exact"
     PROXY = "proxy"
     ADVISORY = "advisory"
+    FORECAST = "forecast"
     UNKNOWN = "unknown"
 
 
@@ -65,12 +66,17 @@ class BenchmarkSlice(StrictModel):
     official: bool = False
 
 
-class BenchmarkRequirement(StrictModel):
+class BenchmarkSelection(StrictModel):
     benchmark_id: str
     version: str
     slice_id: str
-    minimum_score: float = Field(ge=0, le=1)
     reason: str
+
+
+class BenchmarkRequirement(BenchmarkSelection):
+    minimum_score: float = Field(ge=0, le=1)
+    difficulty: Difficulty | None = None
+    calibration_version: str | None = None
 
 
 class BenchmarkEvidence(StrictModel):
@@ -92,6 +98,12 @@ class BenchmarkEvidence(StrictModel):
     source_type: str
     source_reference: str
     evaluation_date: str
+    plausible_lower: float | None = Field(default=None, ge=0, le=1)
+    plausible_upper: float | None = Field(default=None, ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    forecaster_version: str | None = None
+    created_at: str | None = None
+    rationale: str | None = None
 
     @property
     def admission_score(self) -> float:
@@ -112,7 +124,7 @@ class DecompositionItem(StrictModel):
     benchmark_id: str
     version: str
     slice_id: str
-    minimum_score: float = Field(ge=0, le=1)
+    difficulty: Difficulty
     reasoning_effort: ReasoningEffort
     risk: Risk
     passing_candidates: list[str] = Field(default_factory=list)
@@ -128,7 +140,7 @@ class AdviserAnalysis(StrictModel):
     difficulty: Difficulty
     risk: Risk
     requirements: RoutingRequirements
-    benchmark_requirements: list[BenchmarkRequirement] = Field(min_length=1, max_length=1)
+    benchmark_requirements: list[BenchmarkSelection] = Field(min_length=1, max_length=1)
     proposed_reasoning_effort: ReasoningEffort
     evidence_policy: EvidencePolicy
     disposition: Disposition
@@ -204,6 +216,8 @@ class FrontierSnapshot(StrictModel):
 
 class ApprovedConstraints(StrictModel):
     benchmark: BenchmarkRequirement
+    difficulty: Difficulty = "normal"
+    calibration_version: str = "legacy-manual-floor"
     reasoning_effort: ReasoningEffort
     risk: Risk
     evidence_policy: EvidencePolicy
@@ -242,7 +256,7 @@ class ExecutionProvenance(StrictModel):
 
 
 class RoutingProposal(StrictModel):
-    schema_version: int = 1
+    schema_version: int = 2
     proposal_id: str
     created_at: datetime
     updated_at: datetime
@@ -278,6 +292,7 @@ class ProposalAdjustmentRequest(StrictModel):
     benchmark_id: str | None = None
     version: str | None = None
     slice_id: str | None = None
+    difficulty: Difficulty | None = None
     minimum_score: float | None = Field(default=None, ge=0, le=1)
     reasoning_effort: ReasoningEffort | None = None
     risk: Risk | None = None

@@ -45,8 +45,7 @@ def _json_payload(
     """Return requirement-only context; candidate evidence stays out of model context."""
     del candidates
     measured_keys = {
-        (item.benchmark_id, item.benchmark_version, item.slice_id)
-        for item in registry.evidence
+        (item.benchmark_id, item.benchmark_version, item.slice_id) for item in registry.evidence
     }
     available = [
         item
@@ -131,15 +130,20 @@ class OmniRouteRoutingAdviser:
             "You are the O3 routing requirements adviser. Interpret the task and return only "
             "the supplied JSON schema. You may choose only a benchmark ID/version/slice that "
             "appears in allowed_benchmark_slices. Candidate identities, model scores, provider "
-            "availability, cost, quota, and whether evidence is measured or estimated are "
-            "deliberately withheld. Set the competence floor independently; never infer or "
+            "availability, cost, quota, and benchmark scores are deliberately withheld. Choose "
+            "one applicable benchmark and a categorical task difficulty; never infer or "
             "recommend a provider or model. Keep risk separate from technical difficulty. Use "
             "minimum_context_tokens=0 when the task does not establish a defensible numeric "
             "need. Use evidence_policy=strict only when the task genuinely requires exact "
             "execution-configuration evidence; otherwise use provisional. Use only these exact "
-            "categorical values: difficulty is low, medium, high, or frontier; risk is low, "
+            "categorical values: difficulty is easy, normal, moderate, hard, or frontier; "
+            "risk is low, "
             "medium, or high; reasoning effort is low, medium, high, or xhigh; disposition is "
-            "route, borderline, decompose, or defer."
+            "route, borderline, decompose, or defer. Difficulty definitions: easy means a routine "
+            "task weaker competent models should handle; normal means ordinary professional work; "
+            "moderate means meaningful reasoning or multi-step work; hard means a strong model is "
+            "required; frontier means near the capability boundary of current leading models. "
+            "Never emit or forecast a numeric benchmark floor."
         )
         if decomposition:
             instruction += (
