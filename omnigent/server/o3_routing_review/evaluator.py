@@ -21,6 +21,7 @@ from .models import (
 from .registry import BenchmarkRegistry, is_codex_harness
 
 _RISK_MARGIN = {"low": 0.0, "medium": 0.02, "high": 0.05}
+_CROSS_HARNESS_ADMISSION_MARGIN = 0.03
 
 
 @dataclass(frozen=True)
@@ -75,18 +76,25 @@ def _aggregate_evidence(evidence: list[BenchmarkEvidence]) -> _EvidenceAggregate
     if usable:
         harnesses = ", ".join(sorted({item.harness for item in usable}))
         count = len(usable)
+        source_score = median(item.admission_score for item in usable)
+        admission_score = round(
+            max(0.0, source_score - _CROSS_HARNESS_ADMISSION_MARGIN), 12
+        )
         return _EvidenceAggregate(
             evidence_class=(
                 EvidenceClass.PROXY
                 if any(item.evidence_class is EvidenceClass.PROXY for item in usable)
                 else EvidenceClass.ADVISORY
             ),
-            admission_score=median(item.admission_score for item in usable),
+            admission_score=admission_score,
             exact=False,
             caveats=[
-                "expected Codex score is an identity-transfer estimate: median of "
-                f"{count} published same-model result(s) from {harnesses}; no harness "
-                "penalty or bonus was applied"
+                "expected Codex score uses an explicit cross-harness routing-policy buffer: "
+                f"median conservative same-model score {source_score:.3f} from {count} "
+                f"published result(s) ({harnesses}) minus "
+                f"{_CROSS_HARNESS_ADMISSION_MARGIN:.3f} absolute = "
+                f"{admission_score:.3f}; the buffer is a policy assumption, not measured "
+                "degradation"
             ],
         )
 
