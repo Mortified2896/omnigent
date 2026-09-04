@@ -21,12 +21,24 @@ BENCHMARK_REGISTRY_ENV = "OMNIGENT_O3_BENCHMARK_REGISTRY"
 SOURCE_POOL_NAME = "custom/o3-codex-pool"
 ADVISER_COMBO_NAME = "custom/o3-routing-adviser"
 DEFAULT_CANDIDATE_PROBE_REFERENCE = "Mac O3 full Responses/tool-continuation probe, 2026-09-03"
+OFFICIAL_TB4_DATASET_REF = "dataset:terminal-bench/terminal-bench@v4.0.0"
 
 
 def manifest_digest(task_ids: Iterable[str]) -> str:
-    """Hash a canonical ordered task-id manifest without inventing data."""
+    """Hash canonical ordered manifest entries without inventing measurements."""
     payload = json.dumps(sorted(task_ids), separators=(",", ":"), ensure_ascii=True)
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
+
+
+def canonical_model_name(value: str) -> str:
+    """Return the provider-independent model identity used for public evidence."""
+    return value.rsplit("/", 1)[-1].strip().casefold()
+
+
+def is_codex_harness(value: str) -> bool:
+    """Return whether a published result was produced by a Codex CLI family harness."""
+    normalized = value.strip().casefold().replace("_", "-")
+    return normalized in {"codex", "codex-cli", "codex-native", "openai-codex"}
 
 
 # These are Control Room views, not official Terminal-Bench sub-benchmarks.
@@ -55,7 +67,7 @@ _SLICE_SPECS: tuple[tuple[str, str, str], ...] = (
 def default_slices() -> list[BenchmarkSlice]:
     task_ids: list[str] = []
     digest = manifest_digest(task_ids)
-    return [
+    slices = [
         BenchmarkSlice(
             benchmark_id="terminal-bench",
             version="4.0.0",
@@ -68,6 +80,23 @@ def default_slices() -> list[BenchmarkSlice]:
         )
         for slice_id, label, interpretation in _SLICE_SPECS
     ]
+    # Official leaderboard submissions identify the full dataset by this pinned
+    # Harbor dataset reference. The anchor is not presented as a fabricated list
+    # of the 66 task IDs; source records retain the published 330-trial count.
+    overall_manifest = [OFFICIAL_TB4_DATASET_REF]
+    slices.append(
+        BenchmarkSlice(
+            benchmark_id="terminal-bench",
+            version="4.0.0",
+            slice_id="tb4.overall",
+            label="Terminal-Bench 4 overall",
+            interpretation="Official full Terminal-Bench 4.0.0 leaderboard result.",
+            task_ids=overall_manifest,
+            task_manifest_digest=manifest_digest(overall_manifest),
+            official=True,
+        )
+    )
+    return slices
 
 
 # Admission records the exact configurations that completed the Mac O3
@@ -178,36 +207,31 @@ class BenchmarkRegistry:
         candidate: CandidateSnapshot,
         reasoning_effort: str,
     ) -> list[BenchmarkEvidence]:
-        """Return relevant records ordered exact, proxy, advisory."""
+        """Return same-model records, downgrading execution mismatches to proxy."""
         slice_def = self.require_slice(requirement)
+        candidate_model = canonical_model_name(candidate.model)
         relevant: list[BenchmarkEvidence] = []
         for record in self.evidence:
             if record.benchmark_id != requirement.benchmark_id:
                 continue
+            if record.benchmark_version != requirement.version:
+                continue
             if record.slice_id != requirement.slice_id:
                 continue
-            same_version = record.benchmark_version == requirement.version
+            if canonical_model_name(record.model) != candidate_model:
+                continue
             same_manifest = record.task_manifest_digest == slice_def.task_manifest_digest
             same_harness = record.harness == candidate.harness
-            same_model = record.model in {candidate.model, candidate.catalogue_model_id}
             same_effort = record.reasoning_effort == reasoning_effort
             same_path = record.provider_path in {
-                None,
                 candidate.provider_id,
                 candidate.catalogue_model_id,
             }
             if record.evidence_class is EvidenceClass.EXACT and not all(
-                (same_version, same_manifest, same_harness, same_model, same_effort, same_path)
+                (same_manifest, same_harness, same_effort, same_path)
             ):
-                # An artifact cannot self-declare exactness for a different
-                # execution configuration; keep it as proxy evidence only when
-                # the underlying model is still related.
-                if same_model:
-                    relevant.append(
-                        record.model_copy(update={"evidence_class": EvidenceClass.PROXY})
-                    )
-                continue
-            if same_model or record.evidence_class is EvidenceClass.ADVISORY:
+                relevant.append(record.model_copy(update={"evidence_class": EvidenceClass.PROXY}))
+            else:
                 relevant.append(record)
         order = {
             EvidenceClass.EXACT: 0,
