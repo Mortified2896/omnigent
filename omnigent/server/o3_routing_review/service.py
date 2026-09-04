@@ -32,7 +32,7 @@ from .models import (
     RoutingProposal,
 )
 from .omniroute import OmniRouteClient, OmniRouteError
-from .registry import BENCHMARK_REGISTRY_ENV, BenchmarkRegistry
+from .registry import ADVISER_COMBO_NAME, BENCHMARK_REGISTRY_ENV, BenchmarkRegistry
 from .store import ProposalStore
 
 O3_ROUTING_REVIEW_ENV = "OMNIGENT_O3_ROUTING_REVIEW"
@@ -128,6 +128,7 @@ class O3RoutingReviewService:
                 ) from exc
 
     async def create_proposal(self, request: ProposalCreateRequest) -> RoutingProposal:
+        review_started_at = datetime.now(timezone.utc)
         prompt = request.prompt
         if not prompt.strip():
             raise RoutingReviewError("prompt must not be blank")
@@ -197,6 +198,10 @@ class O3RoutingReviewService:
         else:
             analysis = analysis.model_copy(update={"disposition": result.disposition})
 
+        review_provenance = await self.omniroute.execution_provenance_for_session(
+            derived_combo_name=ADVISER_COMBO_NAME,
+            proposal_created_at=review_started_at,
+        )
         now = datetime.now(timezone.utc)
         proposal = RoutingProposal(
             proposal_id=str(uuid.uuid4()),
@@ -210,6 +215,8 @@ class O3RoutingReviewService:
             evaluations=result.evaluations,
             frontier=result.frontier,
             disposition=final_disposition,
+            review_provenance=review_provenance,
+            review_duration_ms=(now - review_started_at).total_seconds() * 1_000,
         )
         self.store.put(proposal)
         return proposal

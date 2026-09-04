@@ -65,6 +65,11 @@ function costSummary(proposal: O3RoutingProposal): string {
   return quota == null ? costText : `${costText}, ${Math.round(quota)}% quota left`;
 }
 
+function sumKnown(values: Array<number | null>): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0);
+}
+
 export function RoutingProposalCard({
   proposal,
   slices,
@@ -121,6 +126,21 @@ export function RoutingProposalCard({
   const canApprove = eligible.length > 0 && proposal.decision === null;
   const canResumeLaunch = approved && proposal.derived_combo_name !== null;
   const hasProvisional = eligible.some((item) => item.status === "provisional");
+  const reviewCalls = proposal.review_provenance ?? [];
+  const reviewerModels = Array.from(
+    new Set(
+      reviewCalls
+        .filter((item) => item.provider !== item.requested_model)
+        .map((item) => `${item.provider}/${item.model}`),
+    ),
+  );
+  const reviewInputTokens = sumKnown(reviewCalls.map((item) => item.token_usage.input_tokens));
+  const reviewOutputTokens = sumKnown(reviewCalls.map((item) => item.token_usage.output_tokens));
+  const reviewReasoningTokens = sumKnown(
+    reviewCalls.map((item) => item.token_usage.reasoning_tokens),
+  );
+  const reviewDuration = proposal.review_duration_ms ?? null;
+  const reviewCost = sumKnown(reviewCalls.map((item) => item.estimated_cost_usd));
 
   async function decide(decision: O3ProposalDecision, launch: boolean): Promise<void> {
     setBusy(decision.action);
@@ -246,6 +266,36 @@ export function RoutingProposalCard({
         </div>
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm md:grid-cols-4">
+          <div className="col-span-2 md:col-span-1">
+            <dt className="text-xs text-muted-foreground">Reviewer model</dt>
+            <dd className="mt-0.5 truncate font-medium" title={reviewerModels.join(", ")}>
+              {reviewerModels.join(", ") || "Unavailable"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Review tokens</dt>
+            <dd className="mt-0.5 font-medium">
+              {reviewInputTokens == null && reviewOutputTokens == null
+                ? "Unavailable"
+                : `${reviewInputTokens ?? 0} in · ${reviewOutputTokens ?? 0} out${reviewReasoningTokens == null ? "" : ` · ${reviewReasoningTokens} reasoning`}`}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Review time</dt>
+            <dd className="mt-0.5 font-medium">
+              {reviewDuration == null ? "Unavailable" : `${(reviewDuration / 1000).toFixed(2)} s`}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Review cost</dt>
+            <dd className="mt-0.5 font-medium">
+              {reviewCost == null
+                ? "Not reported"
+                : reviewCost === 0
+                  ? "Free ($0.00)"
+                  : `$${reviewCost.toFixed(6)}`}
+            </dd>
+          </div>
           <div>
             <dt className="text-xs text-muted-foreground">Benchmark</dt>
             <dd className="mt-0.5 font-medium" data-testid="o3-benchmark-requirement">
@@ -273,7 +323,7 @@ export function RoutingProposalCard({
             </dd>
           </div>
           <div className="col-span-2 md:col-span-1">
-            <dt className="text-xs text-muted-foreground">Best available</dt>
+            <dt className="text-xs text-muted-foreground">Recommended execution model</dt>
             <dd className="mt-0.5 truncate font-medium" title={best?.candidate.catalogue_model_id}>
               {best?.candidate.catalogue_model_id ?? "None"}
             </dd>
@@ -414,7 +464,9 @@ export function RoutingProposalCard({
                 data-testid="o3-adjust-difficulty"
               >
                 {(["easy", "normal", "moderate", "hard", "frontier"] as const).map((value) => (
-                  <option key={value} value={value}>{titleCase(value)}</option>
+                  <option key={value} value={value}>
+                    {titleCase(value)}
+                  </option>
                 ))}
               </select>
             </label>

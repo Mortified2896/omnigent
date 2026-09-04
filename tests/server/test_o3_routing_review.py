@@ -492,6 +492,9 @@ class _FakeOmniRoute:
     async def live_candidates(self, _profiles: object) -> list[CandidateSnapshot]:
         return self.candidates
 
+    async def execution_provenance_for_session(self, **_kwargs: object) -> list[object]:
+        return []
+
     async def create_derived_combo(
         self,
         proposal_id: str,

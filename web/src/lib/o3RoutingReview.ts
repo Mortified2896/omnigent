@@ -200,6 +200,8 @@ export interface O3RoutingProposal {
   actual_model: string | null;
   actual_reasoning_effort: string | null;
   execution_provenance: O3ExecutionProvenance[];
+  review_provenance?: O3ExecutionProvenance[];
+  review_duration_ms?: number | null;
   execution_status: string | null;
   provenance_synced_at: string | null;
   task_outcome: string | null;

@@ -277,6 +277,8 @@ class RoutingProposal(StrictModel):
     actual_model: str | None = None
     actual_reasoning_effort: str | None = None
     execution_provenance: list[ExecutionProvenance] = Field(default_factory=list)
+    review_provenance: list[ExecutionProvenance] = Field(default_factory=list)
+    review_duration_ms: float | None = Field(default=None, ge=0)
     execution_status: str | None = None
     provenance_synced_at: datetime | None = None
     task_outcome: str | None = None
