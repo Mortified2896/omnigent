@@ -786,6 +786,7 @@ function renderLanding(infoOverrides: Partial<ServerInfo> = {}, route = "/") {
     // routing). Cases that exercise the built-in judge pass the field
     // explicitly.
     smart_routing_sources: { external: infoOverrides.smart_routing_enabled === true, oss: false },
+    o3_routing_review_enabled: false,
     harness_install_enabled: false,
     installable_harnesses: [],
     dictation_available: false,
@@ -2333,19 +2334,16 @@ describe("NewChatLandingScreen", () => {
     // The sandbox option is pinned FIRST in the menu, above the host list —
     // DOCUMENT_POSITION_FOLLOWING means the host item comes after it.
     const sandboxOption = screen.getByTestId("new-chat-landing-sandbox-option");
-    const hostItem = screen
-      .getAllByText("This machine")
-      .find((el) => el.closest('[role="menuitem"]') !== null);
-    expect(hostItem).toBeTruthy();
+    const hostItem = screen.getByTestId("new-chat-landing-host-host_1");
     expect(
-      sandboxOption.compareDocumentPosition(hostItem!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      sandboxOption.compareDocumentPosition(hostItem) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     // Picking the host restores the workspace flow (file-browser chip,
     // worktree chip) — the sandbox default doesn't wedge the normal path.
-    fireEvent.click(hostItem!);
+    fireEvent.click(hostItem);
     await waitFor(() =>
       expect(screen.getByTestId("new-chat-landing-host-chip").textContent).toContain(
-        "This machine",
+        displayNameForHost(host("online"), "host_1", navigator.userAgent),
       ),
     );
     expect(screen.getByTestId("new-chat-landing-workspace-chip")).toBeTruthy();
@@ -3270,14 +3268,11 @@ describe("NewChatLandingScreen custom-agent sandbox gating", () => {
       expect(screen.getByTestId("new-chat-landing-host-chip").textContent).toContain("Sandbox"),
     );
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
-    const hostItem = screen
-      .getAllByText("This machine")
-      .find((el) => el.closest('[role="menuitem"]') !== null);
-    expect(hostItem).toBeTruthy();
-    fireEvent.click(hostItem!);
+    const hostItem = screen.getByTestId("new-chat-landing-host-host_1");
+    fireEvent.click(hostItem);
     await waitFor(() =>
       expect(screen.getByTestId("new-chat-landing-host-chip").textContent).toContain(
-        "This machine",
+        displayNameForHost(host("online"), "host_1", navigator.userAgent),
       ),
     );
     // With no custom agents yet, the create item is a top-level row (no
@@ -3297,13 +3292,11 @@ describe("NewChatLandingScreen custom-agent sandbox gating", () => {
       expect(screen.getByTestId("new-chat-landing-host-chip").textContent).toContain("Sandbox"),
     );
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
-    const hostItem = screen
-      .getAllByText("This machine")
-      .find((el) => el.closest('[role="menuitem"]') !== null);
-    fireEvent.click(hostItem!);
+    const hostItem = screen.getByTestId("new-chat-landing-host-host_1");
+    fireEvent.click(hostItem);
     await waitFor(() =>
       expect(screen.getByTestId("new-chat-landing-host-chip").textContent).toContain(
-        "This machine",
+        displayNameForHost(host("online"), "host_1", navigator.userAgent),
       ),
     );
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
@@ -3470,7 +3463,7 @@ describe("NewChatLandingScreen smart routing", () => {
   it.each([
     ["Claude Code", "a1", true, "Smart Routing", "Opus 4.8"],
     ["Claude Code", "a1", false, null, "Default"],
-    ["Codex", "a2", true, "Smart Routing", "Default (databricks-gpt-5-5)"],
+    ["Codex", "a2", true, "Smart Routing", "Default (codex/gpt-5.6-luna)"],
   ] as const)(
     "%s Model dropdown with the flag %s offers %s alongside %s",
     (_label, agentId, flag, routingOption, siblingOption) => {
@@ -3537,7 +3530,7 @@ describe("NewChatLandingScreen smart routing", () => {
         expect(screen.queryByRole("option", { name: "Smart Routing" })).toBeNull();
         expect(
           screen.getByRole("option", {
-            name: agentId === "a2" ? "databricks-gpt-5-6" : "Opus 4.8",
+            name: agentId === "a2" ? "codex/gpt-5.6-luna" : "Opus 4.8",
           }),
         ).toBeTruthy();
       }

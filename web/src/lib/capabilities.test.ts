@@ -75,3 +75,17 @@ describe("resolveServerInfo smart_routing_sources", () => {
     expect(info.smart_routing_sources).toEqual({ external: false, oss: false });
   });
 });
+
+describe("resolveServerInfo o3_routing_review_enabled", () => {
+  it("enables the O3 review only for an explicit true", async () => {
+    expect((await probe({ o3_routing_review_enabled: true })).o3_routing_review_enabled).toBe(true);
+
+    vi.resetModules();
+    expect((await probe({ o3_routing_review_enabled: false })).o3_routing_review_enabled).toBe(
+      false,
+    );
+
+    vi.resetModules();
+    expect((await probe({})).o3_routing_review_enabled).toBe(false);
+  });
+});

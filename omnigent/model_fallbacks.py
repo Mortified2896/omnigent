@@ -52,6 +52,9 @@ _STATIC_MODEL_FALLBACKS = {
     ),
 }
 
+#: Normalized catalog id for the owned Codex 5.5 fallback record.
+CODEX_GPT_55_MODEL_ID = _STATIC_MODEL_FALLBACKS[(SUBSCRIPTION_KIND, "codex")].model_ids[-1]
+
 
 def static_model_fallback(provider_kind: str, cli: str) -> StaticModelFallback | None:
     """Return the owned fallback for a provider kind and CLI, if registered."""

@@ -143,6 +143,7 @@ class TestModelFamilyMismatch:
             ("codex", "chatgpt-4o-latest"),
             ("codex-native", "gpt4o"),
             ("codex", "databricks-chatgpt-4o-latest"),
+            ("codex-native", "custom/o3-route-0123456789ab"),
             # GLM and Kimi serve on the same OpenResponses wire codex speaks,
             # so those ids are codex-runnable. One row per distinct thing the
             # segment matcher has to get right: bare id, dot-separated gateway
@@ -208,6 +209,13 @@ class TestModelFamilyMismatch:
             ),
             # A segment merely containing the letters is not the GLM family.
             ("codex", "glmqlfit-eval", "only runs codex-compatible models"),
+            ("codex-native", "custom/o3-route-not-hex", "only runs codex-compatible models"),
+            ("codex-native", "custom/o3-route-0123456", "only runs codex-compatible models"),
+            (
+                "codex-native",
+                "custom/o3-route-0123456789abcdef01234",
+                "only runs codex-compatible models",
+            ),
             # antigravity is Gemini-native: syntactically valid non-Gemini ids
             # must fail loud at the dispatch gate rather than be persisted as
             # model_override and land in HARNESS_ANTIGRAVITY_MODEL only to fail

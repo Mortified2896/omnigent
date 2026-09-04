@@ -519,6 +519,20 @@ def _thread_started_event(thread_id: str) -> dict[str, Any]:
     return {"method": "thread/started", "params": {"thread": {"id": thread_id}}}
 
 
+def _system_thread_started_event(thread_id: str) -> dict[str, Any]:
+    """Build the empty background thread emitted by current Codex TUIs."""
+    return {
+        "method": "thread/started",
+        "params": {
+            "thread": {
+                "id": thread_id,
+                "ephemeral": True,
+                "threadSource": "system",
+            }
+        },
+    }
+
+
 def _completed_event(turn_id: str | None, *, thread_id: str | None = None) -> dict[str, Any]:
     """
     Build a Codex ``turn/completed`` notification.
@@ -1294,6 +1308,23 @@ def test_wait_for_thread_started_uses_tui_created_thread() -> None:
     assert fake_client.requests == []
 
 
+def test_wait_for_thread_started_skips_auxiliary_system_thread() -> None:
+    """Fresh-session adoption ignores Codex's empty background thread."""
+    fake_client = _FakeCodexAppServerClient(
+        events=[
+            _system_thread_started_event("thread_system"),
+            _thread_started_event("thread_user"),
+        ]
+    )
+
+    thread_id = asyncio.run(
+        codex_native_forwarder.wait_for_thread_started(fake_client)  # type: ignore[arg-type]
+    )
+
+    assert thread_id == "thread_user"
+    assert fake_client.requests == []
+
+
 def test_wait_for_thread_started_fails_when_stream_ends() -> None:
     """
     A Codex TUI that exits before creating a thread fails loudly instead
@@ -1793,6 +1824,48 @@ def test_forwarder_ignores_thread_started_for_current_codex_thread(tmp_path: Pat
     assert state.thread_id == "thread_old"
 
 
+def test_forwarder_ignores_auxiliary_system_thread_started(tmp_path: Path) -> None:
+    """An ephemeral system thread cannot rotate the active user session."""
+    write_bridge_state(
+        tmp_path,
+        CodexNativeBridgeState(
+            session_id="conv_old",
+            socket_path=str(tmp_path / "app-server.sock"),
+            thread_id="thread_user",
+            codex_home=str(tmp_path / "codex-home"),
+        ),
+    )
+
+    async def run() -> bool:
+        async with httpx.AsyncClient(base_url="http://127.0.0.1:8000") as client:
+            target = codex_native_forwarder._ForwarderTarget(
+                session_id="conv_old",
+                thread_id="thread_user",
+                delta_coalescer=codex_native_forwarder._OutputTextDeltaCoalescer(
+                    client,
+                    "conv_old",
+                ),
+                usage_coalescer=codex_native_forwarder._SessionUsageCoalescer(
+                    client,
+                    "conv_old",
+                ),
+                elicitation_tracker=_elicitation_tracker(),
+            )
+            return await codex_native_forwarder._maybe_rotate_session_on_thread_started(
+                ap_client=client,
+                target=target,
+                bridge_dir=tmp_path,
+                app_server_url=str(tmp_path / "app-server.sock"),
+                event=_system_thread_started_event("thread_system"),
+            )
+
+    assert asyncio.run(run()) is False
+    state = read_bridge_state(tmp_path)
+    assert state is not None
+    assert state.session_id == "conv_old"
+    assert state.thread_id == "thread_user"
+
+
 def test_forwarder_rotates_session_on_new_codex_thread_and_posts_to_new_session(
     tmp_path: Path,
 ) -> None:
@@ -1834,9 +1907,16 @@ def test_forwarder_rotates_session_on_new_codex_thread_and_posts_to_new_session(
                     "id": "conv_old",
                     "agent_id": "ag_codex",
                     "runner_id": "runner_123",
+                    "workspace": "/repo/o3",
+                    "terminal_launch_args": ["--ask-for-approval", "never"],
+                    "model_override": "custom/o3-route-deadbeef",
+                    "reasoning_effort": "low",
+                    "cost_control_mode_override": "off",
+                    "subagent_routing_override": "off",
                     "labels": {
                         "omnigent.wrapper": "codex-native-ui",
                         "omnigent.codex_native.bridge_id": "bridge_shared",
+                        "o3.routing.proposal_id": "proposal-deadbeef",
                     },
                 },
             )
@@ -1958,7 +2038,14 @@ def test_forwarder_rotates_session_on_new_codex_thread_and_posts_to_new_session(
             "labels": {
                 "omnigent.wrapper": "codex-native-ui",
                 "omnigent.codex_native.bridge_id": "bridge_shared",
+                "o3.routing.proposal_id": "proposal-deadbeef",
             },
+            "workspace": "/repo/o3",
+            "terminal_launch_args": ["--ask-for-approval", "never"],
+            "model_override": "custom/o3-route-deadbeef",
+            "reasoning_effort": "low",
+            "cost_control_mode_override": "off",
+            "subagent_routing_override": "off",
         },
     ) in requests
     assert (

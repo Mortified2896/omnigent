@@ -496,6 +496,32 @@ def test_build_codex_native_server_without_bypass_emits_no_bypass_config(
     assert "sandbox_mode" not in overrides
 
 
+def test_build_codex_native_server_preserves_only_declared_provider_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolved env-key credential reaches Codex only when explicitly declared."""
+    monkeypatch.setattr(
+        "omnigent.codex_native_app_server._find_codex_cli",
+        lambda: sys.executable,
+    )
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "sentinel-bearer")
+    monkeypatch.setenv("UNRELATED_PROVIDER_SECRET", "must-be-filtered")
+
+    app_server = build_codex_native_server(
+        socket_path=tmp_path / "codex.sock",
+        codex_home=tmp_path / "codex-home",
+        cwd=tmp_path,
+        model=None,
+        profile=None,
+        bridge_dir=tmp_path / "bridge",
+        env_passthrough=("OMNIROUTE_O3_KEY",),
+    )
+
+    assert app_server.env["OMNIROUTE_O3_KEY"] == "sentinel-bearer"
+    assert "UNRELATED_PROVIDER_SECRET" not in app_server.env
+
+
 def test_build_codex_native_server_bypass_emits_full_access_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1573,9 +1599,9 @@ class TestPinCodexConfigReasoningEffort:
 
         _pin_codex_config_reasoning_effort(tmp_path, "max")
         _pin_codex_config_model(tmp_path, "gpt-5.6-luna")
-        assert 'model_reasoning_effort = "max"' in (
-            tmp_path / "config.toml"
-        ).read_text(encoding="utf-8")
+        assert 'model_reasoning_effort = "max"' in (tmp_path / "config.toml").read_text(
+            encoding="utf-8"
+        )
 
 
 # --- Subagent-routing hook trust ---------------------------------------

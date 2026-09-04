@@ -49,6 +49,9 @@ from omnigent.server.background_session_titles import (
 )
 from omnigent.server.managed_hosts import ManagedSandboxConfig
 from omnigent.server.mcp_pool import ServerMcpPool
+from omnigent.server.o3_routing_review import o3_routing_review_enabled
+from omnigent.server.o3_routing_review.routes import create_o3_routing_review_router
+from omnigent.server.o3_routing_review.service import RoutingReviewError
 from omnigent.server.performance_metrics import (
     ServerMetricsOtelPublisher,
     ServerPerformanceMetrics,
@@ -1348,6 +1351,17 @@ def create_app(
             content={"error": {"code": exc.code, "message": exc.message}},
         )
 
+    @app.exception_handler(RoutingReviewError)
+    async def _handle_o3_routing_review_error(
+        request: Request,  # noqa: ARG001
+        exc: RoutingReviewError,
+    ) -> JSONResponse:
+        """Return O3 proposal and lifecycle failures in the standard error shape."""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": str(exc)}},
+        )
+
     @app.exception_handler(StatementError)
     async def _handle_statement_error(
         request: Request,  # noqa: ARG001 — FastAPI exception-handler signature requires (request, exc); we only use exc
@@ -1839,6 +1853,7 @@ def create_app(
             "server_version": _server_version(),
             "smart_routing_enabled": smart_routing_enabled,
             "smart_routing_sources": smart_routing_sources,
+            "o3_routing_review_enabled": o3_routing_review_enabled(),
             "harness_install_enabled": harness_install_enabled,
             "installable_harnesses": installable_harnesses,
             "dictation_available": dictation_available,
@@ -1962,6 +1977,12 @@ def create_app(
         prefix="/v1",
         tags=["harnesses"],
     )
+    if o3_routing_review_enabled():
+        app.include_router(
+            create_o3_routing_review_router(auth_provider=auth_provider),
+            prefix="/v1",
+            tags=["o3_routing_review"],
+        )
     # Server-side speech-to-text behind the composer mic button
     # (designs/server-dictation.md). Availability is probed lazily, so
     # registering unconditionally is free for servers without the extra.

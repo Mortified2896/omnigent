@@ -4048,6 +4048,7 @@ async def _auto_create_codex_terminal(
         reasoning_effort=launch_config.reasoning_effort,
         profile=_codex_launch.profile,
         extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
+        env_passthrough=_codex_launch.env_passthrough,
         bridge_dir=bridge_dir,
         ap_server_url=launch_config.policy_server_url,
         ap_auth_headers=policy_headers,

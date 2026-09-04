@@ -22,6 +22,41 @@ from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissi
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_info_and_routes_follow_o3_routing_review_flag(
+    enabled: bool,
+    runtime_init: None,
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The opt-in capability and API mount move together without requiring secrets."""
+    if enabled:
+        monkeypatch.setenv("OMNIGENT_O3_ROUTING_REVIEW", "1")
+    else:
+        monkeypatch.delenv("OMNIGENT_O3_ROUTING_REVIEW", raising=False)
+    monkeypatch.setattr(app_module, "_WEB_UI_DIST", tmp_path / "missing-web-ui")
+    artifact_store = LocalArtifactStore(str(tmp_path / "artifacts"))
+    app = app_module.create_app(
+        agent_store=SqlAlchemyAgentStore(db_uri),
+        file_store=SqlAlchemyFileStore(db_uri),
+        conversation_store=SqlAlchemyConversationStore(db_uri),
+        artifact_store=artifact_store,
+        agent_cache=AgentCache(
+            artifact_store=artifact_store,
+            cache_dir=tmp_path / "cache",
+        ),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        info = await client.get("/v1/info")
+
+    assert info.status_code == 200
+    assert info.json()["o3_routing_review_enabled"] is enabled
+    route_paths = {getattr(route, "path", None) for route in app.routes}
+    assert ("/v1/o3/routing-review/registry" in route_paths) is enabled
+
+
 async def test_root_serves_html_landing_without_web_ui(
     runtime_init: None,
     db_uri: str,

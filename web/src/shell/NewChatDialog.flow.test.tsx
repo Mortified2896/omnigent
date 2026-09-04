@@ -12,6 +12,13 @@ import type { Host } from "@/hooks/useHosts";
 import { useHostModelOptions, useHosts } from "@/hooks/useHosts";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
+import type { ServerInfo } from "@/lib/capabilities";
+import {
+  routingDraftForProposal,
+  writeO3RoutingDraft,
+  type O3RoutingProposal,
+} from "@/lib/o3RoutingReview";
 import { NewChatLandingScreen, resetLandingDraft, sanitizeInitialPrompt } from "./NewChatDialog";
 import { writeDefaultBaseBranch } from "@/lib/baseBranchPreferences";
 
@@ -156,6 +163,163 @@ function agent(overrides: Partial<AvailableAgent> = {}): AvailableAgent {
   };
 }
 
+const O3_SERVER_INFO: ServerInfo = {
+  accounts_enabled: false,
+  single_user: true,
+  login_url: null,
+  needs_setup: false,
+  databricks_features: false,
+  managed_sandboxes_enabled: false,
+  sandbox_provider: null,
+  sharing_mode: "on",
+  public_sharing_enabled: true,
+  server_version: "test",
+  smart_routing_enabled: false,
+  smart_routing_sources: { external: false, oss: false },
+  o3_routing_review_enabled: true,
+  harness_install_enabled: false,
+  installable_harnesses: [],
+  dictation_available: false,
+};
+
+function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingProposal {
+  const routeCreated = decision === "approve" || decision === "run_anyway";
+  return {
+    schema_version: 1,
+    proposal_id: "01234567-89ab-cdef-0123-456789abcdef",
+    created_at: "2026-09-04T00:00:00Z",
+    updated_at: "2026-09-04T00:00:00Z",
+    expires_at: "2026-09-04T01:00:00Z",
+    prompt_fingerprint: `sha256:${"0".repeat(64)}`,
+    workspace_summary: `Workspace: ${SEEDED_WORKSPACE}`,
+    adviser: {
+      task_summary: "Inspect the repository",
+      task_classification: "systems",
+      difficulty: "medium",
+      risk: "low",
+      requirements: {
+        terminal: true,
+        tools: true,
+        minimum_context_tokens: 0,
+        vision: false,
+      },
+      benchmark_requirements: [
+        {
+          benchmark_id: "terminal-bench",
+          version: "4.0.0",
+          slice_id: "tb4.cr-systems-db-v1",
+          minimum_score: 0.5,
+          reason: "Terminal competence",
+        },
+      ],
+      proposed_reasoning_effort: "low",
+      evidence_policy: "strict",
+      disposition: "route",
+      confidence: 0.9,
+      rationale: "A qualified terminal route is available.",
+      decomposition: [],
+    },
+    approved_constraints: {
+      benchmark: {
+        benchmark_id: "terminal-bench",
+        version: "4.0.0",
+        slice_id: "tb4.cr-systems-db-v1",
+        minimum_score: 0.5,
+        reason: "Terminal competence",
+      },
+      reasoning_effort: "low",
+      risk: "low",
+      evidence_policy: "strict",
+      cost_quota_preference: "preserve_subscription",
+    },
+    evaluations: [
+      {
+        candidate: {
+          candidate_id: "codex-gpt-5.5-low",
+          provider_id: "codex",
+          model: "gpt-5.5",
+          catalogue_model_id: "codex/gpt-5.5",
+          harness: "codex-native",
+          supported_reasoning_efforts: ["low"],
+          context_tokens: 128_000,
+          terminal: true,
+          tools: true,
+          vision: false,
+          responses_api: true,
+          monetary_cost_usd: null,
+          cost_source: "ChatGPT subscription",
+          quota_source: "Codex quota",
+          last_full_probe_at: "2026-09-03T00:00:00+08:00",
+          probe_reference: "live probe",
+          provider_usable: true,
+          model_present: true,
+          quota_available: true,
+          quota_remaining_percent: 80,
+          quota_reset_at: null,
+          recent_success_rate: 0.99,
+          recent_retry_rate: 0.01,
+          latency_ms: 100,
+        },
+        status: "pass",
+        evidence_class: "exact",
+        admission_score: 0.61,
+        evidence: [],
+        exclusions: [],
+        caveats: [],
+        ranking: {
+          evidence_confidence: 0.9,
+          competence_margin: 0.11,
+          health: 0.99,
+          estimated_monetary_cost_usd: null,
+          quota_remaining_percent: 80,
+          quota_reset_at: null,
+          quota_scarcity_penalty: 0.15,
+          recent_failure_rate: 0.01,
+          recent_retry_rate: 0.01,
+          latency_ms: 100,
+          deterministic_score: 0.9,
+        },
+      },
+    ],
+    frontier: {
+      requested_minimum: 0.5,
+      global_measured_frontier: 0.61,
+      accessible_configured_frontier: 0.61,
+      healthy_available_frontier: 0.61,
+      passing_exact_candidates: ["codex-gpt-5.5-low"],
+      provisional_candidates: [],
+      capability_gap: null,
+    },
+    disposition: "route",
+    decision,
+    decision_reason: null,
+    derived_combo_name: routeCreated ? "custom/o3-route-0123456789ab" : null,
+    derived_combo_definition: routeCreated ? { name: "custom/o3-route-0123456789ab" } : null,
+    session_id: null,
+    actual_provider: null,
+    actual_model: null,
+    actual_reasoning_effort: null,
+    execution_provenance: [],
+    execution_status: null,
+    provenance_synced_at: null,
+    task_outcome: null,
+    terminal_disposition: null,
+  };
+}
+
+function jsonResponse(body: unknown): Response {
+  return { ok: true, status: 200, statusText: "OK", json: async () => body } as Response;
+}
+
+function errorResponse(message: string): Response {
+  return {
+    ok: false,
+    status: 503,
+    statusText: "Unavailable",
+    json: async () => ({ error: { message } }),
+  } as Response;
+}
+
 function setHosts(hosts: Host[]): void {
   vi.mocked(useHosts).mockReturnValue({ data: hosts } as ReturnType<typeof useHosts>);
 }
@@ -166,7 +330,7 @@ function setAgents(agents: AvailableAgent[]): void {
   >);
 }
 
-function renderLanding(cachedSessionIds: string[] = []): void {
+function renderLanding(cachedSessionIds: string[] = [], info?: ServerInfo): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -187,7 +351,11 @@ function renderLanding(cachedSessionIds: string[] = []): void {
     });
   }
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={client}>
+        {info ? <CapabilitiesProvider info={info}>{children}</CapabilitiesProvider> : children}
+      </QueryClientProvider>
+    );
   }
   render(<NewChatLandingScreen />, { wrapper: Wrapper });
 }
@@ -286,6 +454,200 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
+  it("holds an O3 task until approval, then launches the derived Codex route once", async () => {
+    const pending = o3Proposal();
+    const approved = o3Proposal("approve");
+    vi.mocked(authenticatedFetch)
+      .mockResolvedValueOnce(jsonResponse(pending))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          source_pool: "custom/o3-codex-pool",
+          slices: [
+            {
+              benchmark_id: "terminal-bench",
+              version: "4.0.0",
+              slice_id: "tb4.cr-systems-db-v1",
+              label: "Systems and databases",
+              interpretation: "Systems tasks",
+              task_ids: [],
+              task_manifest_digest: "sha256:test",
+              official: false,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(approved))
+      .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
+      .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
+    setAgents([
+      agent({
+        id: "ag_codex",
+        name: "codex-native-ui",
+        display_name: "Codex",
+        harness: "codex-native",
+      }),
+    ]);
+
+    renderLanding([], O3_SERVER_INFO);
+    await waitForWorkspaceSeed();
+    typeMessage("inspect the repo without changing it");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await screen.findByTestId("o3-routing-proposal-card");
+    const callsBeforeApproval = vi.mocked(authenticatedFetch).mock.calls;
+    expect(callsBeforeApproval.some(([url]) => url === "/v1/sessions")).toBe(false);
+    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    const proposalCall = callsBeforeApproval.find(
+      ([url]) => url === "/v1/o3/routing-review/proposals",
+    );
+    expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
+      "inspect the repo without changing it",
+    );
+
+    fireEvent.click(screen.getByTestId("o3-approve"));
+
+    await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
+    const sessionCall = vi
+      .mocked(authenticatedFetch)
+      .mock.calls.find(([url]) => url === "/v1/sessions");
+    expect(sessionCall).toBeDefined();
+    const sessionBody = JSON.parse(sessionCall?.[1]?.body as string);
+    expect(sessionBody).toMatchObject({
+      agent_id: "ag_codex",
+      harness_override: "codex-native",
+      model_override: "custom/o3-route-0123456789ab",
+      reasoning_effort: "low",
+      cost_control_mode_override: "off",
+      labels: {
+        "omnigent.access_lane": "omniroute",
+        "o3.routing.proposal_id": pending.proposal_id,
+      },
+    });
+    expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
+      text: "inspect the repo without changing it",
+      skill: null,
+      files: [],
+    });
+    const linkCall = vi
+      .mocked(authenticatedFetch)
+      .mock.calls.find(([url]) => String(url).endsWith("/session"));
+    expect(JSON.parse(linkCall?.[1]?.body as string)).toEqual({ session_id: "conv_o3" });
+    expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
+    expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3");
+  });
+
+  it("restores the unsent O3 prompt and proposal across a page reload", async () => {
+    const pending = o3Proposal();
+    writeO3RoutingDraft(
+      routingDraftForProposal(
+        pending,
+        "inspect the repo after reload",
+        "inspect the repo after reload",
+        `Workspace: ${SEEDED_WORKSPACE}`,
+      ),
+    );
+    vi.mocked(authenticatedFetch)
+      .mockResolvedValueOnce(jsonResponse(pending))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          source_pool: "custom/o3-codex-pool",
+          slices: [
+            {
+              benchmark_id: "terminal-bench",
+              version: "4.0.0",
+              slice_id: "tb4.cr-systems-db-v1",
+              label: "Systems and databases",
+              interpretation: "Systems tasks",
+              task_ids: [],
+              task_manifest_digest: "sha256:test",
+              official: false,
+            },
+          ],
+        }),
+      );
+    setAgents([
+      agent({
+        id: "ag_codex",
+        name: "codex-native-ui",
+        display_name: "Codex",
+        harness: "codex-native",
+      }),
+    ]);
+
+    renderLanding([], O3_SERVER_INFO);
+
+    await screen.findByTestId("o3-routing-proposal-card");
+    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(
+      "inspect the repo after reload",
+    );
+    expect(vi.mocked(authenticatedFetch).mock.calls.some(([url]) => url === "/v1/sessions")).toBe(
+      false,
+    );
+    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
+  });
+
+  it("retains the created session id until proposal linking succeeds", async () => {
+    const pending = o3Proposal();
+    const approved = o3Proposal("approve");
+    vi.mocked(authenticatedFetch)
+      .mockResolvedValueOnce(jsonResponse(pending))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          source_pool: "custom/o3-codex-pool",
+          slices: [
+            {
+              benchmark_id: "terminal-bench",
+              version: "4.0.0",
+              slice_id: "tb4.cr-systems-db-v1",
+              label: "Systems and databases",
+              interpretation: "Systems tasks",
+              task_ids: [],
+              task_manifest_digest: "sha256:test",
+              official: false,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(approved))
+      .mockResolvedValueOnce(jsonResponse({ id: "conv_o3_retry" }))
+      .mockResolvedValueOnce(errorResponse("Proposal link temporarily failed"))
+      // The saved session id takes the link-only recovery path instead of
+      // creating a duplicate session.
+      .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3_retry" }));
+    setAgents([
+      agent({
+        id: "ag_codex",
+        name: "codex-native-ui",
+        display_name: "Codex",
+        harness: "codex-native",
+      }),
+    ]);
+
+    renderLanding([], O3_SERVER_INFO);
+    await waitForWorkspaceSeed();
+    typeMessage("inspect the retry handoff");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await screen.findByTestId("o3-routing-proposal-card");
+    fireEvent.click(screen.getByTestId("o3-approve"));
+
+    await screen.findByText("Proposal link temporarily failed");
+    const retained = JSON.parse(
+      localStorage.getItem("omnigent:o3-routing-review:draft:v1") ?? "null",
+    );
+    expect(retained.sessionId).toBe("conv_o3_retry");
+    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("o3-approve"));
+
+    await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
+    expect(
+      vi.mocked(authenticatedFetch).mock.calls.filter(([url]) => url === "/v1/sessions"),
+    ).toHaveLength(1);
+    expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
+    expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3_retry");
+  });
+
   it("posts host_id, workspace and agent_id to /v1/sessions and navigates", async () => {
     vi.mocked(authenticatedFetch).mockResolvedValueOnce({
       ok: true,

@@ -366,7 +366,7 @@ def test_provider_launch_rejects_unavailable_qualified_selection(tmp_path: Path)
 def test_pi_native_model_options_lists_only_managed_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pre-launch choices come only from the provider built by ``omni setup``."""
+    """Managed choices remain deterministic without installed Codex discovery."""
     provider = creds.PiProviderConfig(
         provider_id="omnigent",
         base_url="https://api.anthropic.com",
@@ -384,6 +384,7 @@ def test_pi_native_model_options_lists_only_managed_models(
         },
     )
     monkeypatch.setattr(creds, "resolve_pi_native_provider", lambda: provider)
+    monkeypatch.setattr(creds, "_enumerate_pi_native_codex_models", list)
 
     assert creds.pi_native_model_options() == [
         {

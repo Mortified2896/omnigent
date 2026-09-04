@@ -937,6 +937,12 @@ def register_events_routes(
                     status,
                     runner_result,
                 )
+            if status in {"idle", "failed"}:
+                from omnigent.server.o3_routing_review.service import (
+                    sync_o3_execution_best_effort,
+                )
+
+                await sync_o3_execution_best_effort(session_id, status)
             return {"queued": False}
         if body.type == _EXTERNAL_COMPACTION_STATUS_TYPE:
             # Terminal-observed compaction edge (claude-native forwarder):
@@ -1805,6 +1811,9 @@ def register_events_routes(
         deleted = await conversation_store.delete_conversation(session_id)
         if not deleted:
             raise _session_not_found()
+        from omnigent.server.o3_routing_review.service import cleanup_o3_session_best_effort
+
+        await cleanup_o3_session_best_effort(session_id)
         # The session is gone, so is its launch-progress state. Failed
         # launches are retained in the cache for reload visibility while
         # the session exists; without this eviction every deleted

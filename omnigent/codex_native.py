@@ -1154,6 +1154,7 @@ async def _prepare_codex_terminal(
             profile=_codex_launch.profile,
             codex_path=command,
             extra_config_overrides=_codex_launch.config_overrides,
+            env_passthrough=_codex_launch.env_passthrough,
             bridge_dir=bridge_dir,
             ap_server_url=base_url,
             ap_auth_headers=headers,

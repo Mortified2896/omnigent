@@ -126,6 +126,7 @@ _CODEX_SUBSTRING_TOKENS: tuple[str, ...] = ("gpt", "codex")
 _CODEX_COMPATIBLE_SEGMENT_TOKENS: tuple[str, ...] = ("glm", "kimi")
 
 _ID_SEGMENT_SPLIT = re.compile(r"[^a-z0-9]+")
+_O3_DERIVED_CODEX_ROUTE_RE = re.compile(r"custom/o3-route-[a-f0-9]{8,20}")
 
 
 def is_codex_compatible_model(model: str) -> bool:
@@ -138,6 +139,8 @@ def is_codex_compatible_model(model: str) -> bool:
     :returns: ``True`` for the GPT/codex, GLM, and Kimi families.
     """
     lower = model.lower()
+    if _O3_DERIVED_CODEX_ROUTE_RE.fullmatch(lower):
+        return True
     if any(token in lower for token in _CODEX_SUBSTRING_TOKENS):
         return True
     segments = _ID_SEGMENT_SPLIT.split(lower)
