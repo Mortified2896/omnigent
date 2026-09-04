@@ -16,6 +16,7 @@ from omnigent.errors import OmnigentError
 from omnigent.server.auth import UnifiedAuthProvider
 from omnigent.server.o3_routing_review.adviser import OmniRouteRoutingAdviser, RoutingAdviser
 from omnigent.server.o3_routing_review.evaluator import evaluate_candidates
+from omnigent.server.o3_routing_review.forecaster import _decode_forecast_output
 from omnigent.server.o3_routing_review.models import (
     AdviserAnalysis,
     ApprovedConstraints,
@@ -55,6 +56,23 @@ from omnigent.server.o3_routing_review.service import (
 from omnigent.server.o3_routing_review.store import ProposalStore
 
 _SLICE = default_slices()[0]
+
+
+def test_forecast_output_accepts_single_json_markdown_fence() -> None:
+    decoded = _decode_forecast_output(
+        """```json
+{
+  "point_estimate": 0.62,
+  "plausible_lower": 0.48,
+  "plausible_upper": 0.74,
+  "confidence": 0.6,
+  "rationale": "Conservative estimate."
+}
+```"""
+    )
+
+    assert decoded.point_estimate == 0.62
+    assert decoded.plausible_lower == 0.48
 
 
 def test_enabled_service_requires_configured_benchmark_registry(

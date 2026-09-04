@@ -28,6 +28,16 @@ class ForecastOutput(BaseModel):
     rationale: str
 
 
+def _decode_forecast_output(text: str) -> ForecastOutput:
+    """Accept an exact JSON object, optionally wrapped in one Markdown fence."""
+    payload = text.strip()
+    lines = payload.splitlines()
+    if len(lines) >= 3 and lines[0].strip().casefold() in {"```", "```json"}:
+        if lines[-1].strip() == "```":
+            payload = "\n".join(lines[1:-1]).strip()
+    return ForecastOutput.model_validate_json(payload)
+
+
 class ForecastCache:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or data_dir() / "o3-routing-review" / "forecast-cache-v1.json"
@@ -132,7 +142,7 @@ class ModelScoreForecaster:
         }
         response = await self.client.create_response(body)
         try:
-            decoded = ForecastOutput.model_validate_json(_extract_text(response.body))
+            decoded = _decode_forecast_output(_extract_text(response.body))
         except Exception as exc:
             raise OmniRouteError("model score forecaster returned invalid JSON") from exc
         if not decoded.plausible_lower <= decoded.point_estimate <= decoded.plausible_upper:
