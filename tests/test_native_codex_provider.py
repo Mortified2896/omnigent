@@ -246,6 +246,37 @@ def test_resolve_env_ref_launch_preserves_only_variable_name(
     assert "sentinel-bearer-must-not-persist" not in joined
 
 
+def test_explicit_o3_lane_uses_loopback_env_when_global_provider_is_absent(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "sentinel-bearer-must-not-persist")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    launch = resolve_native_codex_launch(
+        model="custom/o3-route-deadbeef",
+        access_lane="omniroute",
+    )
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.env_passthrough == ("OMNIROUTE_O3_KEY",)
+    assert 'base_url="http://127.0.0.1:20128/v1"' in joined
+    assert 'env_key="OMNIROUTE_O3_KEY"' in joined
+    assert "sentinel-bearer-must-not-persist" not in joined
+
+
+def test_explicit_o3_lane_rejects_non_loopback_fallback(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "test-key")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "https://example.invalid")
+
+    with pytest.raises(OmnigentError, match="OmniRoute lane unavailable"):
+        resolve_native_codex_launch(
+            model="custom/o3-route-deadbeef",
+            access_lane="omniroute",
+        )
+
+
 def test_provider_codex_overrides_omit_model_line_when_none() -> None:
     """``model=None`` omits the ``model="..."`` line but still routes."""
     overrides = _provider_codex_config_overrides(

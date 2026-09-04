@@ -2260,9 +2260,30 @@ def _resolve_native_codex_access_lane(
         # deployment details, not stable OmniRoute identity.
         entry = default_provider_for_harness(load_config(), "codex")
         if entry is None:
-            raise OmnigentError(
-                "OmniRoute lane unavailable",
-                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            o3_key = os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+            o3_base = os.environ.get(
+                "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+            ).rstrip("/")
+            if not o3_key or not o3_base.startswith(("http://127.0.0.1:", "http://localhost:")):
+                raise OmnigentError(
+                    "OmniRoute lane unavailable",
+                    code=ErrorCode.HARNESS_NOT_CONFIGURED,
+                )
+            return NativeCodexLaunch(
+                config_overrides=_provider_codex_config_overrides(
+                    model=model,
+                    base_url=f"{o3_base}/v1",
+                    env_key="OMNIROUTE_O3_KEY",
+                    wire_api="responses",
+                ),
+                model=model,
+                profile=None,
+                summary=f"O3 OmniRoute lane (model={model!r})",
+                trace_provenance=CodexTraceLaunchProvenance(
+                    access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
+                    provider="o3-omniroute-loopback",
+                ),
+                env_passthrough=("OMNIROUTE_O3_KEY",),
             )
         launch = _codex_provider_launch(entry, model)
         if launch is None:
