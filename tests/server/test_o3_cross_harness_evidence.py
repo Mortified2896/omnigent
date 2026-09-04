@@ -166,6 +166,18 @@ def test_provider_prefix_is_not_part_of_model_identity() -> None:
     assert [item.model for item in evaluation.evidence] == ["openai/gpt-5.6-sol"]
 
 
+def test_opaque_alias_does_not_inherit_another_provider_identity() -> None:
+    candidate = _candidate("big-pickle", provider="opencode")
+    evaluation = _evaluate(
+        candidate,
+        [_evidence("other-provider/big-pickle", harness="codex", lower=0.99)],
+    )
+
+    assert evaluation.status is CandidateStatus.EXCLUDED
+    assert evaluation.admission_score is None
+    assert evaluation.evidence == []
+
+
 def test_unknown_model_remains_unknown_instead_of_cross_model_estimation() -> None:
     candidate = _candidate("mistral-small-latest", provider="mistral", effort="high")
     evaluation = _evaluate(
