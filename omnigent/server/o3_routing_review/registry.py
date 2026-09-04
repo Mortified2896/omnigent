@@ -21,7 +21,14 @@ BENCHMARK_REGISTRY_ENV = "OMNIGENT_O3_BENCHMARK_REGISTRY"
 SOURCE_POOL_NAME = "custom/o3-codex-pool"
 ADVISER_COMBO_NAME = "custom/o3-routing-adviser"
 DEFAULT_CANDIDATE_PROBE_REFERENCE = "Mac O3 full Responses/tool-continuation probe, 2026-09-03"
+
 OFFICIAL_TB4_DATASET_REF = "dataset:terminal-bench/terminal-bench@v4.0.0"
+OFFICIAL_SWE_BENCH_PRO_PUBLIC_REF = "dataset:ScaleAI/SWE-bench_Pro/public@731"
+OFFICIAL_DRBENCH_FULL_REF = (
+    "dataset:ServiceNow/drbench@"
+    "0d699ecf6aa96b1de378595b432e9b16a82f0ed9#FullBenchmark-100"
+)
+
 _OPAQUE_MODEL_ALIASES = frozenset({"big-pickle"})
 
 
@@ -69,6 +76,28 @@ _SLICE_SPECS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _official_slice(
+    *,
+    benchmark_id: str,
+    version: str,
+    slice_id: str,
+    label: str,
+    interpretation: str,
+    dataset_ref: str,
+) -> BenchmarkSlice:
+    manifest = [dataset_ref]
+    return BenchmarkSlice(
+        benchmark_id=benchmark_id,
+        version=version,
+        slice_id=slice_id,
+        label=label,
+        interpretation=interpretation,
+        task_ids=manifest,
+        task_manifest_digest=manifest_digest(manifest),
+        official=True,
+    )
+
+
 def default_slices() -> list[BenchmarkSlice]:
     task_ids: list[str] = []
     digest = manifest_digest(task_ids)
@@ -85,28 +114,52 @@ def default_slices() -> list[BenchmarkSlice]:
         )
         for slice_id, label, interpretation in _SLICE_SPECS
     ]
-    # Official leaderboard submissions identify the full dataset by this pinned
-    # Harbor dataset reference. The anchor is not presented as a fabricated list
-    # of the 66 task IDs; source records retain the published 330-trial count.
-    overall_manifest = [OFFICIAL_TB4_DATASET_REF]
-    slices.append(
-        BenchmarkSlice(
-            benchmark_id="terminal-bench",
-            version="4.0.0",
-            slice_id="tb4.overall",
-            label="Terminal-Bench 4 overall",
-            interpretation="Official full Terminal-Bench 4.0.0 leaderboard result.",
-            task_ids=overall_manifest,
-            task_manifest_digest=manifest_digest(overall_manifest),
-            official=True,
-        )
+    # Official aggregate rows use pinned dataset anchors rather than fabricated
+    # task-ID lists. Every source record retains its published task/trial scope.
+    slices.extend(
+        [
+            _official_slice(
+                benchmark_id="terminal-bench",
+                version="4.0.0",
+                slice_id="tb4.overall",
+                label="Terminal-Bench 4 overall",
+                interpretation=(
+                    "Terminal and agentic execution across the official full "
+                    "Terminal-Bench 4.0.0 result."
+                ),
+                dataset_ref=OFFICIAL_TB4_DATASET_REF,
+            ),
+            _official_slice(
+                benchmark_id="swe-bench-pro",
+                version="public-leaderboard-2026-09-04",
+                slice_id="swe-bench-pro.public.resolve-rate",
+                label="SWE-Bench Pro public resolve rate",
+                interpretation=(
+                    "Long-horizon repository software-engineering capability on "
+                    "the 731-instance public leaderboard snapshot."
+                ),
+                dataset_ref=OFFICIAL_SWE_BENCH_PRO_PUBLIC_REF,
+            ),
+            _official_slice(
+                benchmark_id="drbench",
+                version="arxiv-2510.00172v2",
+                slice_id="drbench.full.harmonic-mean",
+                label="DRBench FullBenchmark harmonic mean",
+                interpretation=(
+                    "Enterprise deep-research capability across all 100 tasks, "
+                    "using the paper's harmonic mean of recall, factuality, "
+                    "distractor avoidance, and report quality."
+                ),
+                dataset_ref=OFFICIAL_DRBENCH_FULL_REF,
+            ),
+        ]
     )
     return slices
 
 
 # Admission records the exact configurations that completed the Mac O3
 # Responses + forced-tool + continuation probes. This is compatibility evidence,
-# not benchmark evidence, so it never silently clears a strict TB4 threshold.
+# not benchmark evidence, so it never silently clears a benchmark threshold.
 def default_candidate_profiles() -> list[CandidateProfile]:
     return [
         CandidateProfile(
@@ -186,15 +239,87 @@ class BenchmarkRegistry:
             raise ValueError("candidate ids must be unique")
 
     @staticmethod
-    def _load_evidence() -> list[BenchmarkEvidence]:
+    def _load_evidence_file(path: Path) -> list[BenchmarkEvidence]:
+        raw = json.loads(path.read_text())
+        if isinstance(raw, list):
+            return [BenchmarkEvidence.model_validate(item) for item in raw]
+        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+            raise ValueError(
+                f"benchmark evidence file must contain a JSON list or compact v1 table: {path}"
+            )
+        defaults = raw.get("defaults")
+        columns = raw.get("columns")
+        rows = raw.get("rows")
+        if not isinstance(defaults, dict):
+            raise ValueError(f"compact benchmark evidence defaults must be an object: {path}")
+        if not isinstance(columns, list) or not all(
+            isinstance(item, str) and item for item in columns
+        ):
+            raise ValueError(f"compact benchmark evidence columns are invalid: {path}")
+        if len(columns) != len(set(columns)) or any(item in defaults for item in columns):
+            raise ValueError(f"compact benchmark evidence fields overlap or repeat: {path}")
+        if not isinstance(rows, list):
+            raise ValueError(f"compact benchmark evidence rows must be a list: {path}")
+
+        evidence: list[BenchmarkEvidence] = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, list) or len(row) != len(columns):
+                raise ValueError(
+                    f"compact benchmark evidence row {index} has the wrong width: {path}"
+                )
+            evidence.append(
+                BenchmarkEvidence.model_validate(
+                    {**defaults, **dict(zip(columns, row, strict=True))}
+                )
+            )
+        return evidence
+
+    @classmethod
+    def _load_evidence(cls) -> list[BenchmarkEvidence]:
         configured = os.environ.get(BENCHMARK_REGISTRY_ENV)
         if not configured:
             return []
-        path = Path(configured).expanduser()
+        path = Path(configured).expanduser().resolve()
         raw = json.loads(path.read_text())
-        if not isinstance(raw, list):
-            raise ValueError(f"{BENCHMARK_REGISTRY_ENV} must name a JSON list")
-        return [BenchmarkEvidence.model_validate(item) for item in raw]
+        if isinstance(raw, list):
+            return [BenchmarkEvidence.model_validate(item) for item in raw]
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"{BENCHMARK_REGISTRY_ENV} must name a JSON list, compact v1 table, "
+                "or registry manifest"
+            )
+        if raw.get("schema_version") == 1:
+            return cls._load_evidence_file(path)
+        if raw.get("schema_version") != 2:
+            raise ValueError("benchmark registry manifest schema_version must be 2")
+        evidence_files = raw.get("evidence_files")
+        if not isinstance(evidence_files, list) or not evidence_files:
+            raise ValueError("benchmark registry manifest requires evidence_files")
+
+        root = path.parent
+        evidence: list[BenchmarkEvidence] = []
+        for relative in evidence_files:
+            if not isinstance(relative, str) or not relative.strip():
+                raise ValueError("benchmark registry evidence paths must be non-empty strings")
+            source = (root / relative).resolve()
+            if source.parent != root:
+                raise ValueError("benchmark registry evidence files must stay beside the manifest")
+            evidence.extend(cls._load_evidence_file(source))
+
+        seen: set[tuple[str, ...]] = set()
+        for item in evidence:
+            key = (
+                item.benchmark_id,
+                item.benchmark_version,
+                item.slice_id,
+                item.model,
+                item.harness,
+                item.source_reference,
+            )
+            if key in seen:
+                raise ValueError(f"duplicate benchmark evidence record: {key}")
+            seen.add(key)
+        return evidence
 
     def require_slice(self, requirement: BenchmarkRequirement) -> BenchmarkSlice:
         key = (requirement.benchmark_id, requirement.version, requirement.slice_id)
