@@ -44,6 +44,19 @@ def _json_payload(
 ) -> str:
     """Return requirement-only context; candidate evidence stays out of model context."""
     del candidates
+    measured_keys = {
+        (item.benchmark_id, item.benchmark_version, item.slice_id)
+        for item in registry.evidence
+    }
+    available = [
+        item
+        for item in registry.slices
+        if (item.benchmark_id, item.version, item.slice_id) in measured_keys
+    ]
+    # Development/test registries can deliberately omit evidence. Preserve their
+    # declared slice universe rather than sending the adviser an empty allowlist.
+    if not available:
+        available = registry.slices
     slices = [
         {
             "benchmark_id": item.benchmark_id,
@@ -53,7 +66,7 @@ def _json_payload(
             "interpretation": item.interpretation,
             "official": item.official,
         }
-        for item in registry.slices
+        for item in available
     ]
     return json.dumps(
         {
