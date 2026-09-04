@@ -22,6 +22,7 @@ SOURCE_POOL_NAME = "custom/o3-codex-pool"
 ADVISER_COMBO_NAME = "custom/o3-routing-adviser"
 DEFAULT_CANDIDATE_PROBE_REFERENCE = "Mac O3 full Responses/tool-continuation probe, 2026-09-03"
 OFFICIAL_TB4_DATASET_REF = "dataset:terminal-bench/terminal-bench@v4.0.0"
+_OPAQUE_MODEL_ALIASES = frozenset({"big-pickle"})
 
 
 def manifest_digest(task_ids: Iterable[str]) -> str:
@@ -31,8 +32,12 @@ def manifest_digest(task_ids: Iterable[str]) -> str:
 
 
 def canonical_model_name(value: str) -> str:
-    """Return the provider-independent model identity used for public evidence."""
-    return value.rsplit("/", 1)[-1].strip().casefold()
+    """Return the public-evidence identity, preserving unresolved opaque aliases."""
+    normalized = value.strip().casefold()
+    bare = normalized.rsplit("/", 1)[-1]
+    if bare in _OPAQUE_MODEL_ALIASES:
+        return normalized
+    return bare
 
 
 def is_codex_harness(value: str) -> bool:
