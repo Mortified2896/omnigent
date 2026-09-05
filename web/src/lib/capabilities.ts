@@ -126,6 +126,11 @@ export interface ServerInfo {
    */
   smart_routing_sources: SmartRoutingSources;
   /**
+   * True only for the opt-in Mac-local O3 benchmark-aware pre-session review.
+   * Older and non-O3 servers omit it, which fails closed to false.
+   */
+  o3_routing_review_enabled: boolean;
+  /**
    * True when the server accepts UI-driven harness installs
    * (``OMNIGENT_HARNESS_INSTALL_ENABLED=1``). Gates the New Chat dialog's
    * one-click "Install" action for a missing harness. Fails to ``false`` so a
@@ -167,6 +172,7 @@ const FALLBACK_SERVER_INFO: ServerInfo = {
   server_version: null,
   smart_routing_enabled: false,
   smart_routing_sources: { external: false, oss: false },
+  o3_routing_review_enabled: false,
   harness_install_enabled: false,
   installable_harnesses: [],
   dictation_available: false,
@@ -230,6 +236,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
             data.smart_routing_sources,
             smartRoutingEnabled,
           ),
+          o3_routing_review_enabled: data.o3_routing_review_enabled === true,
           harness_install_enabled: data.harness_install_enabled === true,
           installable_harnesses: Array.isArray(data.installable_harnesses)
             ? data.installable_harnesses.filter((h): h is string => typeof h === "string")

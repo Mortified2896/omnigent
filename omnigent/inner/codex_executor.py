@@ -1664,24 +1664,29 @@ def _provider_codex_config_overrides(
     *,
     model: str | None,
     base_url: str,
-    auth_command: str,
     wire_api: str,
+    auth_command: str | None = None,
+    env_key: str | None = None,
 ) -> list[str]:
     """Return Codex config overrides routing through a generic provider.
 
     The OSS counterpart to :func:`_databricks_codex_config_overrides`: it
     points Codex at a ``configure harnesses`` provider (key / gateway / local
     serving the ``openai`` surface) by registering an ``omnigent_provider``
-    ``model_provider`` with the provider's base URL, a bearer-token auth
-    command (``printf`` for a static key, or the provider's ``auth_command``),
-    and the provider's wire protocol — so a native Codex terminal routes
-    exactly like the in-process codex harness.
+    ``model_provider`` with the provider's base URL, exactly one credential
+    source (an environment-variable name or a bearer-token auth command), and
+    the provider's wire protocol — so a native Codex terminal routes exactly
+    like the in-process codex harness.
 
     :param model: Model id to pin, e.g. ``"qwen/qwen3.7-plus"``. ``None``
         omits the ``model`` override (Codex keeps its own default model name
         while still routing through the provider).
     :param base_url: The provider's openai-family base URL, e.g.
         ``"https://openrouter.ai/api/v1"``.
+    :param auth_command: Shell command that prints a bearer token. Mutually
+        exclusive with *env_key*.
+    :param env_key: Name of the environment variable Codex should read for the
+        bearer token. Mutually exclusive with *auth_command*.
     :param wire_api: The provider's configured wire protocol —
         ``"responses"`` (OpenAI / LiteLLM) or ``"chat"`` (OpenRouter and
         most OSS-model gateways). codex >= 0.137 no longer accepts ``"chat"``
@@ -1691,8 +1696,9 @@ def _provider_codex_config_overrides(
         emitted. See the inline note for the OpenRouter caveat.
     :returns: Codex TOML-fragment override strings.
     """
+    if (auth_command is None) == (env_key is None):
+        raise ValueError("exactly one of auth_command or env_key is required")
     provider_name = "omnigent_provider"
-    auth_command_json = json.dumps(auth_command)
     # codex >= 0.137 removed the chat/completions wire from its config schema:
     # any provider block carrying wire_api="chat" makes codex hard-fail config
     # load ("wire_api = \"chat\" is no longer supported"), which broke OSS /
@@ -1707,15 +1713,27 @@ def _provider_codex_config_overrides(
     if model:
         overrides.append(f"model={json.dumps(model)}")
     overrides.append(f'model_provider="{provider_name}"')
+    if env_key is not None:
+        credential_config = (
+            f"env_key={json.dumps(env_key)},"
+            "request_max_retries=4,"
+            "stream_max_retries=5,"
+            "stream_idle_timeout_ms=300000,"
+        )
+    else:
+        auth_command_json = json.dumps(auth_command)
+        credential_config = (
+            'auth={command="sh",'
+            f'args=["-c",{auth_command_json}],'
+            "timeout_ms=5000,"
+            f"refresh_interval_ms={_GATEWAY_AUTH_REFRESH_MS}"
+            "},"
+        )
     overrides.append(
         f"model_providers.{provider_name}="
         '{name="Omnigent Provider",'
         f"base_url={json.dumps(base_url)},"
-        'auth={command="sh",'
-        f'args=["-c",{auth_command_json}],'
-        "timeout_ms=5000,"
-        f"refresh_interval_ms={_GATEWAY_AUTH_REFRESH_MS}"
-        "},"
+        f"{credential_config}"
         f'wire_api="{effective_wire_api}"}}'
     )
     return overrides

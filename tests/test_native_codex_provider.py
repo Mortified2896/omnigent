@@ -197,6 +197,86 @@ def test_provider_codex_overrides_preserve_responses_wire() -> None:
     assert 'wire_api="responses"' in "\n".join(overrides)
 
 
+def test_provider_codex_overrides_use_env_key_without_secret() -> None:
+    """An env-backed provider names the variable and never embeds its value."""
+    overrides = _provider_codex_config_overrides(
+        model="custom/o3-route-deadbeef",
+        base_url="http://127.0.0.1:20128/v1",
+        env_key="OMNIROUTE_O3_KEY",
+        wire_api="responses",
+    )
+
+    joined = "\n".join(overrides)
+    assert 'env_key="OMNIROUTE_O3_KEY"' in joined
+    assert "request_max_retries=4" in joined
+    assert "stream_max_retries=5" in joined
+    assert "stream_idle_timeout_ms=300000" in joined
+    assert "auth=" not in joined
+    assert "sentinel-bearer" not in joined
+
+
+def test_resolve_env_ref_launch_preserves_only_variable_name(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native routing keeps an env reference instead of materializing its bearer."""
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "sentinel-bearer-must-not-persist")
+    _seed(
+        _isolated,
+        {
+            "o3-omniroute": {
+                "kind": "gateway",
+                "default": True,
+                "openai": {
+                    "base_url": "http://127.0.0.1:20128/v1",
+                    "api_key_ref": "env:OMNIROUTE_O3_KEY",
+                    "wire_api": "responses",
+                },
+            }
+        },
+    )
+
+    launch = resolve_native_codex_launch(
+        model="custom/o3-route-deadbeef",
+        access_lane="omniroute",
+    )
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.env_passthrough == ("OMNIROUTE_O3_KEY",)
+    assert 'env_key="OMNIROUTE_O3_KEY"' in joined
+    assert "sentinel-bearer-must-not-persist" not in joined
+
+
+def test_explicit_o3_lane_uses_loopback_env_when_global_provider_is_absent(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "sentinel-bearer-must-not-persist")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    launch = resolve_native_codex_launch(
+        model="custom/o3-route-deadbeef",
+        access_lane="omniroute",
+    )
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.env_passthrough == ("OMNIROUTE_O3_KEY",)
+    assert 'base_url="http://127.0.0.1:20128/v1"' in joined
+    assert 'env_key="OMNIROUTE_O3_KEY"' in joined
+    assert "sentinel-bearer-must-not-persist" not in joined
+
+
+def test_explicit_o3_lane_rejects_non_loopback_fallback(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "test-key")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "https://example.invalid")
+
+    with pytest.raises(OmnigentError, match="OmniRoute lane unavailable"):
+        resolve_native_codex_launch(
+            model="custom/o3-route-deadbeef",
+            access_lane="omniroute",
+        )
+
+
 def test_provider_codex_overrides_omit_model_line_when_none() -> None:
     """``model=None`` omits the ``model="..."`` line but still routes."""
     overrides = _provider_codex_config_overrides(
@@ -448,7 +528,9 @@ def test_resolve_native_codex_launch_ambient_key_routes(
     assert launch.profile is None
     joined = "\n".join(launch.config_overrides)
     assert 'base_url="https://api.openai.com/v1"' in joined
-    assert "printf %s sk-oai-ambient" in joined
+    assert 'env_key="OPENAI_API_KEY"' in joined
+    assert "sk-oai-ambient" not in joined
+    assert launch.env_passthrough == ("OPENAI_API_KEY",)
 
 
 def test_resolve_native_codex_launch_cli_config_default_pins_provider(

@@ -199,12 +199,30 @@ import {
 import { OttoEyes } from "@/components/OttoEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
+import { RoutingProposalCard } from "@/components/RoutingProposalCard";
 import type { CostControlMode } from "@/components/CostRoutingControl";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentRowTooltip } from "@/components/AgentHoverCard";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { buildAgentBundle, type AgentBundleInput } from "@/lib/agentBundle";
 import { createBundledSession, launchRunner } from "@/lib/sessionsApi";
+import {
+  adjustO3RoutingProposal,
+  clearO3RoutingDraft,
+  createO3RoutingProposal,
+  decideO3RoutingProposal,
+  getO3RoutingProposal,
+  getO3RoutingRegistry,
+  linkO3RoutingProposalSession,
+  readO3RoutingDraft,
+  routingDraftForProposal,
+  writeO3RoutingDraft,
+  type O3BenchmarkSlice,
+  type O3ProposalAdjustment,
+  type O3ProposalDecision,
+  type O3RoutingDraft,
+  type O3RoutingProposal,
+} from "@/lib/o3RoutingReview";
 
 // Hidden from the new-session picker only. `nessie` is superseded by polly.
 // `kimi` / `kimi-code` are the headless SDK harness (kept for sub-agent / `run
@@ -344,6 +362,7 @@ const CODEX_NATIVE_APPROVAL_MODES: {
 // `--sandbox` / `--ask-for-approval` flags those presets would emit.
 const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
 const CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane";
+const O3_ROUTING_PROPOSAL_LABEL_KEY = "o3.routing.proposal_id";
 type CodexAccessLane = NonNullable<NativeModelOption["accessLane"]>;
 type ModelPickerOption = Pick<
   NativeModelOption,
@@ -2052,6 +2071,13 @@ export function NewChatLandingScreen() {
     [agentList],
   );
   const agentEntries = useMemo(() => agentList.filter((a) => !isNativeCodingAgent(a)), [agentList]);
+  const o3CodexAgent = useMemo(
+    () =>
+      agentList.find(
+        (agent) => nativeCodingAgentForAvailableAgent(agent)?.harness === "codex-native",
+      ) ?? null,
+    [agentList],
+  );
 
   // "Create custom agent" dialog state and pending bundle. When the user
   // creates a custom agent via the dialog, the bundle input is stored
@@ -2128,6 +2154,7 @@ export function NewChatLandingScreen() {
   const info = useServerInfo();
   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
+  const o3RoutingReviewEnabled = info !== "loading" && info.o3_routing_review_enabled;
   // Which router can answer a pick. The external AI-Gateway router only covers
   // a family the host runs through the gateway; the built-in judge covers any
   // family. Read once here and reused by every routing gate below. "loading"
@@ -2352,6 +2379,12 @@ export function NewChatLandingScreen() {
   const [worktreePopoverOpen, setWorktreePopoverOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [o3Proposal, setO3Proposal] = useState<O3RoutingProposal | null>(null);
+  const [o3Slices, setO3Slices] = useState<O3BenchmarkSlice[]>([]);
+  const [o3ReviewLoading, setO3ReviewLoading] = useState(false);
+  const [o3ReviewError, setO3ReviewError] = useState<string | null>(null);
+  const [o3Draft, setO3Draft] = useState<O3RoutingDraft | null>(() => readO3RoutingDraft());
+  const o3RestoreAttemptedRef = useRef(false);
   // "Connect a host" instructions modal, opened from the host dropdown.
   const [connectOpen, setConnectOpen] = useState(false);
   // Harness "Set up" dialog target, opened from the composer notice or a picker
@@ -2404,6 +2437,27 @@ export function NewChatLandingScreen() {
       landingDraft = submittedRef.current ? null : draftRef.current;
     };
   }, []);
+
+  useEffect(() => {
+    if (!o3RoutingReviewEnabled || o3Draft === null || o3RestoreAttemptedRef.current) return;
+    o3RestoreAttemptedRef.current = true;
+    setMessage(o3Draft.composerMessage);
+    setO3ReviewLoading(true);
+    setO3ReviewError(null);
+    void Promise.all([getO3RoutingProposal(o3Draft.proposalId), getO3RoutingRegistry()])
+      .then(([proposal, registry]) => {
+        setO3Proposal(proposal);
+        setO3Slices(registry.slices);
+      })
+      .catch((cause: unknown) => {
+        setO3ReviewError(
+          cause instanceof Error
+            ? cause.message
+            : "The saved O3 route review could not be restored.",
+        );
+      })
+      .finally(() => setO3ReviewLoading(false));
+  }, [o3Draft, o3RoutingReviewEnabled]);
 
   const { recent, addRecent } = useRecentWorkspaces(selectedHostId);
   const { addRecentHarness } = useRecentHarnesses();
@@ -3519,7 +3573,8 @@ export function NewChatLandingScreen() {
     message.trim().length > 0 &&
     selectedAgent != null &&
     (sandboxSelected ? sandboxRepoValid : !!selectedHostId && workspaceValid) &&
-    !creating;
+    !creating &&
+    !o3ReviewLoading;
 
   // Why submit is disabled, surfaced as the button's tooltip. Checked in the
   // order a user fills the form — location first, then message — so the
@@ -3695,11 +3750,103 @@ export function NewChatLandingScreen() {
     if (!onScreenRef.current) landingDraft = draftRef.current;
   }
 
-  async function handleCreate() {
+  function o3WorkspaceSummary(): string {
+    return [
+      `Workspace: ${sandboxSelected ? "managed sandbox" : workspaceTrimmed}`,
+      selectedProject ? `Project: ${selectedProject}` : null,
+      selectedHost ? `Host: ${selectedHost.name}` : null,
+      branchName.trim() ? `Requested branch: ${branchName.trim()}` : null,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
+
+  function rememberUpdatedO3Proposal(proposal: O3RoutingProposal): void {
+    setO3Proposal(proposal);
+    const current = readO3RoutingDraft() ?? o3Draft;
+    if (current?.proposalId !== proposal.proposal_id) return;
+    const updated = { ...current, proposalUpdatedAt: proposal.updated_at };
+    writeO3RoutingDraft(updated);
+    setO3Draft(updated);
+  }
+
+  function resetO3Review(): void {
+    clearO3RoutingDraft();
+    setO3Draft(null);
+    setO3Proposal(null);
+    setO3ReviewError(null);
+  }
+
+  function changeComposerMessage(value: string): void {
+    if (value !== message && (o3Proposal !== null || o3Draft !== null)) resetO3Review();
+    setMessage(value);
+  }
+
+  async function adjustO3Proposal(adjustment: O3ProposalAdjustment): Promise<O3RoutingProposal> {
+    if (o3Proposal === null) throw new Error("No O3 routing proposal is active.");
+    return adjustO3RoutingProposal(o3Proposal.proposal_id, adjustment);
+  }
+
+  async function decideO3Proposal(decision: O3ProposalDecision): Promise<O3RoutingProposal> {
+    if (o3Proposal === null) throw new Error("No O3 routing proposal is active.");
+    return decideO3RoutingProposal(o3Proposal.proposal_id, decision);
+  }
+
+  async function handleCreate(approvedProposal?: O3RoutingProposal) {
     // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
     // and form-submit paths that call this directly can't create a session with
     // a blank message, host, agent, or workspace.
     if (!canSubmit) return;
+    const o3Approved = approvedProposal !== undefined;
+    const storedDraft = readO3RoutingDraft() ?? o3Draft;
+    const computedInitialPrompt =
+      buildMentionPreamble(
+        mentionedItems,
+        o3RoutingReviewEnabled ? "codex-native" : (selectedAgent?.harness ?? null),
+      ) + sanitizeInitialPrompt(message);
+    const initialPrompt =
+      o3Approved && storedDraft?.proposalId === approvedProposal.proposal_id
+        ? storedDraft.initialPrompt
+        : computedInitialPrompt;
+
+    if (o3RoutingReviewEnabled && !o3Approved) {
+      if (o3Proposal !== null) return;
+      if (o3CodexAgent === null) {
+        setO3ReviewError("The local O3 server is enabled, but no Codex harness is available.");
+        return;
+      }
+      setO3ReviewLoading(true);
+      setO3ReviewError(null);
+      o3RestoreAttemptedRef.current = true;
+      try {
+        const workspaceSummary = o3WorkspaceSummary();
+        const [proposal, registry] = await Promise.all([
+          createO3RoutingProposal(initialPrompt, workspaceSummary),
+          getO3RoutingRegistry(),
+        ]);
+        const draft = routingDraftForProposal(proposal, initialPrompt, message, workspaceSummary);
+        writeO3RoutingDraft(draft);
+        setO3Draft(draft);
+        setO3Slices(registry.slices);
+        setO3Proposal(proposal);
+      } catch (cause) {
+        setO3ReviewError(
+          cause instanceof Error ? cause.message : "The O3 route review could not be created.",
+        );
+      } finally {
+        setO3ReviewLoading(false);
+      }
+      return;
+    }
+
+    if (
+      o3Approved &&
+      (approvedProposal.derived_combo_name === null ||
+        (approvedProposal.decision !== "approve" && approvedProposal.decision !== "run_anyway"))
+    ) {
+      setO3ReviewError("The proposal must create an approved derived route before launch.");
+      return;
+    }
     setCreating(true);
     setCreateError(null);
     // The draft is spent from the moment it is submitted: it belongs to the
@@ -3709,13 +3856,34 @@ export function NewChatLandingScreen() {
     // draft back via returnDraftToUser.
     submittedRef.current = true;
     try {
+      if (
+        o3Approved &&
+        storedDraft?.proposalId === approvedProposal.proposal_id &&
+        storedDraft.sessionId !== null
+      ) {
+        await linkO3RoutingProposalSession(approvedProposal.proposal_id, storedDraft.sessionId);
+        setPendingInitialPrompt(storedDraft.sessionId, {
+          text: initialPrompt,
+          skill: null,
+          files,
+        });
+        appendPromptHistoryEntry(initialPrompt, storedDraft.sessionId);
+        clearO3RoutingDraft();
+        setO3Draft(null);
+        setO3Proposal(null);
+        landingDraft = null;
+        if (onScreenRef.current) navigate(`/c/${storedDraft.sessionId}`);
+        return;
+      }
       const trimmedBranch = branchName.trim();
       // `shouldCreateWorktree` (component scope): true only when a branch is
       // named and the workspace isn't already an existing worktree. Starting
       // in an existing worktree sends no git opts — the workspace is bound
       // straight to that dir, which also sidesteps the "branch already
       // exists" guard.
-      const agent = agentList.find((a) => a.id === effectiveAgentId);
+      const launchAgentId = o3Approved ? o3CodexAgent?.id : effectiveAgentId;
+      if (!launchAgentId) throw new Error("The Codex harness is unavailable for this O3 route.");
+      const agent = agentList.find((a) => a.id === launchAgentId);
       const nativeAgent = nativeCodingAgentForAvailableAgent(agent);
       const nativeLabels = nativeWrapperLabelsForAgent(agent);
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
@@ -3727,8 +3895,9 @@ export function NewChatLandingScreen() {
       // with the lit routing icon. Otherwise only send it when routing is
       // eligible for the effective harness, so a stale "on" can't ride along
       // invisibly with no control to clear it.
-      const costControlOverride =
-        pickedHarness === AUTO_HARNESS_ID || smartRoutingHarnessSelected
+      const costControlOverride = o3Approved
+        ? "off"
+        : pickedHarness === AUTO_HARNESS_ID || smartRoutingHarnessSelected
           ? "on"
           : smartRoutingEligible
             ? (costControlMode ?? undefined)
@@ -3737,7 +3906,7 @@ export function NewChatLandingScreen() {
       // pinned model ("on" plus no `model_override` is what makes it route), so
       // sending both would silently disable routing for the whole session. Never
       // pin a model or an effort alongside routing, whatever the UI state says.
-      const routingOwnsModel = costControlOverride === "on";
+      const routingOwnsModel = !o3Approved && costControlOverride === "on";
       // A pinned native pane routes its MODEL at create too: the terminal
       // launches with the session row and its turns start in the TUI, so
       // routing after the fact means blocking the first prompt and replaying
@@ -3749,16 +3918,6 @@ export function NewChatLandingScreen() {
         !smartRoutingHarnessSelected &&
         SMART_ROUTING_ARMS.some((harness) => harness === nativeAgent?.harness);
 
-      // Prepend each "@"-tagged path as an attachment marker on its own line —
-      // the same wording the native executors emit and that title-seeding
-      // strips. The runner, rooted at this workspace, reads the on-disk file
-      // from the marker; no upload happens. Folders carry a trailing "/".
-      // Computed BEFORE the create so `smart_routing_message` classifies the
-      // prompt the agent actually receives, not the raw textarea value.
-      const initialPrompt =
-        buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
-        sanitizeInitialPrompt(message);
-
       // Native terminal agents open terminal-first: `omnigent.ui: terminal`
       // tells the UI to render the terminal wrapper, and `omnigent.wrapper`
       // selects which CLI bridge the runner launches — the values are the
@@ -3767,8 +3926,12 @@ export function NewChatLandingScreen() {
       // when the toggle is armed for a codex-native agent) so the runner
       // launches with --dangerously-bypass-approvals-and-sandbox and the choice
       // survives reload.
-      const codexLaneLabel =
-        nativeAgent?.harness === "codex-native" && selectedCodexOption?.accessLane
+      const codexLaneLabel = o3Approved
+        ? {
+            [CODEX_ACCESS_LANE_LABEL_KEY]: "omniroute",
+            [O3_ROUTING_PROPOSAL_LABEL_KEY]: approvedProposal.proposal_id,
+          }
+        : nativeAgent?.harness === "codex-native" && selectedCodexOption?.accessLane
           ? { [CODEX_ACCESS_LANE_LABEL_KEY]: selectedCodexOption.accessLane }
           : {};
       const baseLabels =
@@ -3795,7 +3958,7 @@ export function NewChatLandingScreen() {
 
       let data: { id: string };
 
-      if (effectiveAgentId === PENDING_AGENT_ID && pendingAgent) {
+      if (!o3Approved && effectiveAgentId === PENDING_AGENT_ID && pendingAgent) {
         // Custom agent path: build bundle client-side and use multipart POST.
         // The multipart create only stores the agent + session rows — it does
         // NOT launch a runner on the host. We must follow up with launchRunner
@@ -3853,13 +4016,13 @@ export function NewChatLandingScreen() {
             : (item: SessionListWireItem) =>
                 !knownSessionIds.has(item.id) &&
                 item.parent_session_id == null &&
-                item.agent_id === effectiveAgentId &&
+                item.agent_id === launchAgentId &&
                 item.host_id === selectedHostId;
         const createRequest = authenticatedFetch("/v1/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            agent_id: effectiveAgentId,
+            agent_id: launchAgentId,
             ...(sandboxSelected
               ? {
                   host_type: "managed",
@@ -3883,35 +4046,40 @@ export function NewChatLandingScreen() {
             // placeholder, so the placeholder's wrapper labels, launch args and
             // model would all describe a CLI the router may not pick. The
             // server stamps the routed wrapper's labels once it has rebound.
-            labels: smartRoutingHarnessSelected ? undefined : createLabels,
+            labels: smartRoutingHarnessSelected && !o3Approved ? undefined : createLabels,
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
-            terminal_launch_args: smartRoutingHarnessSelected
-              ? undefined
-              : agentSupportsPermissionMode &&
-                  permissionMode !== CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
-                ? ["--permission-mode", permissionMode]
-                : agentSupportsApprovalMode && approvalMode !== CODEX_NATIVE_DEFAULT_APPROVAL_MODE
-                  ? (CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === approvalMode)?.args ?? [])
-                  : agentSupportsCursorMode && cursorExecMode !== CURSOR_NATIVE_DEFAULT_EXEC_MODE
-                    ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ?? [])
-                    : undefined,
+            terminal_launch_args:
+              smartRoutingHarnessSelected && !o3Approved
+                ? undefined
+                : agentSupportsPermissionMode &&
+                    permissionMode !== CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
+                  ? ["--permission-mode", permissionMode]
+                  : agentSupportsApprovalMode && approvalMode !== CODEX_NATIVE_DEFAULT_APPROVAL_MODE
+                    ? (CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === approvalMode)?.args ??
+                      [])
+                    : agentSupportsCursorMode && cursorExecMode !== CURSOR_NATIVE_DEFAULT_EXEC_MODE
+                      ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ??
+                        [])
+                      : undefined,
             // Model + reasoning effort, persisted on the session row before
             // the runner launches. Claude, Codex, and Pi read model_override at
             // terminal launch; an unselected ("") knob is omitted so the
             // harness keeps its own configured/default model.
-            model_override:
-              !smartRoutingHarnessSelected &&
-              !routingOwnsModel &&
-              (agentSupportsModelPicker || nativeAgent?.harness === "codex-native") &&
-              pickedModel
+            model_override: o3Approved
+              ? approvedProposal.derived_combo_name
+              : !smartRoutingHarnessSelected &&
+                  !routingOwnsModel &&
+                  (agentSupportsModelPicker || nativeAgent?.harness === "codex-native") &&
+                  pickedModel
                 ? pickedModel
                 : undefined,
-            reasoning_effort:
-              !smartRoutingHarnessSelected &&
-              !routingOwnsModel &&
-              (agentSupportsPermissionMode || nativeAgent?.harness === "codex-native") &&
-              pickedEffort
+            reasoning_effort: o3Approved
+              ? approvedProposal.approved_constraints.reasoning_effort
+              : !smartRoutingHarnessSelected &&
+                  !routingOwnsModel &&
+                  (agentSupportsPermissionMode || nativeAgent?.harness === "codex-native") &&
+                  pickedEffort
                 ? pickedEffort
                 : undefined,
             cost_control_mode_override: costControlOverride,
@@ -3921,11 +4089,16 @@ export function NewChatLandingScreen() {
             // with the row, so there is no first message to wait for). The
             // message text rides along for routing only — the client still
             // delivers the real message after navigation.
-            harness_override: smartRoutingHarnessSelected
-              ? AUTO_HARNESS_ID
-              : (pickedHarness ?? undefined),
-            smart_routing_message:
-              smartRoutingHarnessSelected || pinnedNativeRoutes ? initialPrompt : undefined,
+            harness_override: o3Approved
+              ? "codex-native"
+              : smartRoutingHarnessSelected
+                ? AUTO_HARNESS_ID
+                : (pickedHarness ?? undefined),
+            smart_routing_message: o3Approved
+              ? undefined
+              : smartRoutingHarnessSelected || pinnedNativeRoutes
+                ? initialPrompt
+                : undefined,
           }),
         });
         // The create doesn't answer until the host has spawned a runner — a
@@ -3964,6 +4137,18 @@ export function NewChatLandingScreen() {
         }
         data = { id: created.id };
       }
+      if (o3Approved) {
+        const draftWithSession = routingDraftForProposal(
+          approvedProposal,
+          initialPrompt,
+          message,
+          storedDraft?.workspaceSummary ?? o3WorkspaceSummary(),
+          data.id,
+        );
+        writeO3RoutingDraft(draftWithSession);
+        setO3Draft(draftWithSession);
+        await linkO3RoutingProposalSession(approvedProposal.proposal_id, data.id);
+      }
       // Promote the born-filed session to first-class project membership. The
       // create above already stamped the `omni_project` label (so the row
       // groups under its project immediately); this move sets the first-class
@@ -3993,7 +4178,8 @@ export function NewChatLandingScreen() {
       // Remember the launched harness so the picker promotes it out of "More"
       // next time. Recorded only on a successful create, so a harness the user
       // merely browsed past never earns a primary slot.
-      if (selectedNativeHarness !== null) addRecentHarness(selectedNativeHarness);
+      if (o3Approved) addRecentHarness("codex-native");
+      else if (selectedNativeHarness !== null) addRecentHarness(selectedNativeHarness);
       // Fire-and-forget: don't block navigation on the sidebar list refresh.
       // The background refetch (or the WS session_added push) backfills the
       // new session's row within ~1s of landing in the chat; the chat itself
@@ -4007,15 +4193,21 @@ export function NewChatLandingScreen() {
       // terminal agents keep plain text — their CLI owns slash commands.
       setPendingInitialPrompt(data.id, {
         text: initialPrompt,
-        skill: isNativeTerminalAgent
-          ? null
-          : matchSkillInvocation(initialPrompt, agent?.skills ?? []),
+        skill:
+          o3Approved || isNativeTerminalAgent
+            ? null
+            : matchSkillInvocation(initialPrompt, agent?.skills ?? []),
         files,
       });
       // Scope the recall entry to the new session id so ArrowUp surfaces it in
       // the freshly-opened chat (whose composer reads the same per-conversation
       // key). Sanitized text so recall reproduces exactly what was sent.
       appendPromptHistoryEntry(initialPrompt, data.id);
+      if (o3Approved) {
+        clearO3RoutingDraft();
+        setO3Draft(null);
+        setO3Proposal(null);
+      }
       // The session was created — drop any draft a detour back to this
       // screen stashed, so the next visit starts clean.
       landingDraft = null;
@@ -4025,9 +4217,13 @@ export function NewChatLandingScreen() {
       // session is created either way and its first message stays held
       // for whenever they open it.
       if (onScreenRef.current) navigate(`/c/${data.id}`);
-    } catch {
+    } catch (cause) {
       returnDraftToUser();
-      setCreateError("Couldn't reach the server. Check your connection and try again.");
+      setCreateError(
+        o3Approved && cause instanceof Error
+          ? cause.message
+          : "Couldn't reach the server. Check your connection and try again.",
+      );
     } finally {
       setCreating(false);
     }
@@ -4133,8 +4329,9 @@ export function NewChatLandingScreen() {
             <textarea
               ref={textareaRef}
               value={message}
+              disabled={creating || o3ReviewLoading}
               onChange={(e) => {
-                setMessage(e.target.value);
+                changeComposerMessage(e.target.value);
                 // Recompute the active "@"-mention from the caret each keystroke
                 // (native terminal agents with a workspace — ``mentionEnabled``).
                 setMention(
@@ -4561,12 +4758,20 @@ export function NewChatLandingScreen() {
                           type="submit"
                           size="icon"
                           disabled={!canSubmit}
-                          aria-label={creating ? "Starting session" : "Start session"}
-                          aria-busy={creating}
+                          aria-label={
+                            creating
+                              ? "Starting session"
+                              : o3ReviewLoading
+                                ? "Reviewing route"
+                                : o3RoutingReviewEnabled
+                                  ? "Review route"
+                                  : "Start session"
+                          }
+                          aria-busy={creating || o3ReviewLoading}
                           data-testid="new-chat-landing-submit"
                           className="size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100 "
                         >
-                          {creating ? (
+                          {creating || o3ReviewLoading ? (
                             <Loader2Icon className="size-4 animate-spin" />
                           ) : (
                             <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
@@ -5053,6 +5258,35 @@ export function NewChatLandingScreen() {
                 AgentHarnessPicker above. The tray now holds only the
                 host / working-directory / worktree / project chips. */}
           </div>
+
+          {o3ReviewLoading && (
+            <div
+              className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
+              role="status"
+              data-testid="o3-routing-loading"
+            >
+              <Loader2Icon className="size-4 animate-spin" /> Analysing the task and evaluating
+              every O3 source-pool candidate…
+            </div>
+          )}
+
+          {o3Proposal && !o3ReviewLoading && (
+            <RoutingProposalCard
+              proposal={o3Proposal}
+              slices={o3Slices}
+              onAdjust={adjustO3Proposal}
+              onDecision={decideO3Proposal}
+              onProposalChange={rememberUpdatedO3Proposal}
+              onApproved={(proposal) => handleCreate(proposal)}
+              onReset={resetO3Review}
+            />
+          )}
+
+          {o3ReviewError && (
+            <p className="text-sm text-destructive" role="alert" data-testid="o3-review-error">
+              {o3ReviewError}
+            </p>
+          )}
 
           {/* Warn (don't block) when the selected agent's harness isn't
               configured on the selected host — the host re-checks at

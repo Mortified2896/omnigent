@@ -148,6 +148,48 @@ def test_scan_flags_fallback_shape_outside_central_module(tmp_path: Path) -> Non
     assert [(hit.line, hit.model) for hit in scan(dirty)] == [(1, "gpt-5.5")]
 
 
+def test_scan_allows_complete_audited_candidate_record(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.py"
+    registry.write_text(
+        'PROBE = "Mac full tool-continuation probe"\n'
+        'CandidateProfile(candidate_id="codex-gpt-5.5-low", provider_id="codex", '
+        'model="gpt-5.5", catalogue_model_id="codex/gpt-5.5", '
+        'supported_reasoning_efforts=["low"], terminal=True, tools=True, '
+        'responses_api=True, cost_source="subscription", quota_source="account", '
+        'last_full_probe_at="2026-09-03T00:00:00+08:00", probe_reference=PROBE)\n'
+    )
+
+    assert scan(registry) == []
+
+
+def test_scan_flags_incomplete_audited_candidate_record(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.py"
+    registry.write_text(
+        'CandidateProfile(candidate_id="codex-gpt-5.5-low", provider_id="codex", '
+        'model="gpt-5.5", catalogue_model_id="codex/gpt-5.5", '
+        'supported_reasoning_efforts=["low"], terminal=True, tools=True, '
+        'responses_api=True, cost_source="subscription", quota_source="account", '
+        'last_full_probe_at="2026-09-03T00:00:00+08:00")\n'
+    )
+
+    assert [hit.model for hit in scan(registry)] == [
+        "gpt-5.5-low",
+        "gpt-5.5",
+        "gpt-5.5",
+    ]
+
+
+def test_scan_allows_named_non_model_identifiers(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.py"
+    registry.write_text(
+        'SOURCE_POOL_NAME = "custom/o3-codex-pool"\n'
+        'ADVISER_COMBO_NAME = "custom/o3-routing-adviser"\n'
+        'STATE_DIRECTORY_NAME = "o3-routing-review"\n'
+    )
+
+    assert scan(registry) == []
+
+
 def test_scan_flags_yaml_model_key(tmp_path: Path) -> None:
     dirty = tmp_path / "agent.yaml"
     dirty.write_text(

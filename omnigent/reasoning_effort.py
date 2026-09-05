@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from omnigent.llms.errors import PermanentLLMError
+from omnigent.model_fallbacks import CODEX_GPT_55_MODEL_ID
 
 EFFORT_VALUES = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 EFFORT_CLEAR_VALUES = frozenset({"default", "off", "reset"})
@@ -175,7 +176,7 @@ def codex_efforts_for_model(model: str | None) -> frozenset[str]:
     bare = _bare_model(model) if model else ""
     if bare.startswith("gpt-5-6-"):
         return CODEX_GPT_56_EFFORTS
-    if bare == "gpt-5-5":
+    if bare == CODEX_GPT_55_MODEL_ID:
         return CODEX_GPT_55_EFFORTS
     return CODEX_EFFORTS
 

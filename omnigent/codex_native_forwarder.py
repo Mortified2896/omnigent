@@ -1975,7 +1975,7 @@ async def _maybe_rotate_session_on_thread_started(
     # begins. That event must not rotate the parent Omnigent session — the child
     # is discovered later via a ``collabAgentToolCall`` item and routed to
     # its own Omnigent child session by ``_handle_event``.
-    if _thread_started_is_subagent(event):
+    if _thread_started_is_subagent(event) or _thread_started_is_auxiliary(event):
         return False
     old_delta_coalescer = target.delta_coalescer
     await old_delta_coalescer.flush()
@@ -2050,13 +2050,29 @@ async def _create_thread_replacement_session(
     if CODEX_NATIVE_BRIDGE_ID_LABEL_KEY not in labels:
         labels[CODEX_NATIVE_BRIDGE_ID_LABEL_KEY] = old_session_id
 
-    create_resp = await client.post(
-        "/v1/sessions",
-        json={
-            "agent_id": agent_id,
-            "labels": labels,
-        },
-    )
+    create_body: _JsonObject = {
+        "agent_id": agent_id,
+        "labels": labels,
+    }
+    # A native ``/clear`` changes only the Codex thread. Preserve the
+    # session-scoped launch contract on the replacement conversation so an O3
+    # approved route (or any ordinary model/effort selection) cannot silently
+    # fall back after rotation. ``host_id`` is deliberately not copied: the
+    # existing runner and terminal are rebound below, and sending the host on a
+    # create would launch a second runner.
+    for field_name in (
+        "workspace",
+        "terminal_launch_args",
+        "model_override",
+        "reasoning_effort",
+        "cost_control_mode_override",
+        "subagent_routing_override",
+    ):
+        value = old.get(field_name)
+        if value is not None:
+            create_body[field_name] = value
+
+    create_resp = await client.post("/v1/sessions", json=create_body)
     create_resp.raise_for_status()
     created = create_resp.json()
     new_session_id = created.get("id")
@@ -6929,6 +6945,28 @@ def _thread_started_is_subagent(event: CodexMessage) -> bool:
     return _thread_spawn_source(thread) is not None
 
 
+def _thread_started_is_auxiliary(event: CodexMessage) -> bool:
+    """
+    Return whether a started thread is Codex-owned background work.
+
+    Current Codex TUI builds can emit an empty ephemeral system thread while
+    the user's real thread is active. It is not a user ``/clear`` boundary and
+    must never take ownership of the Omnigent session.
+
+    :param event: Codex app-server notification envelope.
+    :returns: ``True`` for an ephemeral or system-owned thread.
+    """
+    if event.get("method") != "thread/started":
+        return False
+    params = event.get("params")
+    if not isinstance(params, dict):
+        return False
+    thread = params.get("thread")
+    if not isinstance(thread, dict):
+        return False
+    return thread.get("ephemeral") is True or thread.get("threadSource") == "system"
+
+
 async def wait_for_thread_started(
     client: CodexAppServerClient,
     *,
@@ -6957,7 +6995,11 @@ async def wait_for_thread_started(
     async with asyncio.timeout(timeout):
         async for event in client.iter_events():
             thread_id = _thread_id_from_started_event(event)
-            if thread_id is not None:
+            if (
+                thread_id is not None
+                and not _thread_started_is_subagent(event)
+                and not _thread_started_is_auxiliary(event)
+            ):
                 return thread_id
     raise RuntimeError("Codex app-server event stream ended before thread startup.")
 

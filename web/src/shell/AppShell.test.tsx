@@ -337,6 +337,7 @@ function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
     server_version: null,
     smart_routing_enabled: false,
     smart_routing_sources: { external: false, oss: false },
+    o3_routing_review_enabled: false,
     harness_install_enabled: false,
     installable_harnesses: [],
     dictation_available: false,

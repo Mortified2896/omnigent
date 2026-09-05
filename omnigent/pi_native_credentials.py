@@ -42,11 +42,11 @@ from omnigent.onboarding.provider_config import (
     CHAT_WIRE_API,
     CLI_CONFIG_KIND,
     DATABRICKS_KIND,
-    FamilyConfig,
     GATEWAY_KIND,
     KEY_KIND,
     LOCAL_KIND,
     PI_SURFACE,
+    FamilyConfig,
     ProviderEntry,
     default_provider_for_harness,
     load_config,
@@ -485,7 +485,7 @@ def _enumerate_pi_native_codex_models() -> list[str]:
         # Header row begins with 'provider'; skip it. Each model row begins
         # with the provider id (``openai-codex``), so split on whitespace
         # and take the second column.
-        if not line or line.startswith("provider") or line.startswith("---"):
+        if not line or line.startswith(("provider", "---")):
             continue
         parts = line.split()
         if len(parts) < 2:
@@ -494,9 +494,6 @@ def _enumerate_pi_native_codex_models() -> list[str]:
             continue
         ids.append(parts[1])
     return ids
-    if not options:
-        raise ValueError("configured Pi provider returned no launchable models")
-    return [options[model_id] for model_id in sorted(options)]
 
 
 def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiProviderConfig | None:
@@ -1047,8 +1044,7 @@ def _enumerate_inline_family_models(
     # Hard guard: never enumerate api.openai.com / api.anthropic.com
     # directly, even if a ``key`` kind somehow lands here.
     try:
-        from omnigent.model_catalog import ResolvedModelProvider
-        from omnigent.model_catalog import is_direct_openai_provider
+        from omnigent.model_catalog import ResolvedModelProvider, is_direct_openai_provider
         from omnigent.model_catalog import _fetch_openai_compatible_listing as _fetch_listing
 
         provider = ResolvedModelProvider(

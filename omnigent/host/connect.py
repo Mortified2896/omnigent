@@ -25,6 +25,7 @@ import websockets.asyncio.client
 from websockets.exceptions import InvalidStatus, InvalidURI
 
 from omnigent._platform import IS_POSIX, WINDOWS_ENV_PASSTHROUGH
+from omnigent.codex_model_vocabulary import codex_spawn_model
 from omnigent.env_credentials import env_names_with_omnigent_prefix
 from omnigent.gateway_inference import gateway_inference_map
 from omnigent.harness_aliases import canonicalize_harness
@@ -77,6 +78,7 @@ from omnigent.host.git_worktree import (
 from omnigent.host.identity import HostIdentity, load_or_create_host_identity
 from omnigent.host.runner_zygote import ZygoteManager, ZygoteRunnerProc, ZygoteUnavailable
 from omnigent.inner import _proc
+from omnigent.model_fallbacks import CODEX_GPT_55_MODEL_ID
 from omnigent.onboarding.harness_auth import (
     adopt_env_credential,
     detect_adoptable_credentials,
@@ -127,6 +129,7 @@ from omnigent.runtime.prompt import TRUSTED_ROOT_ACCESS_ENV
 from omnigent.tls import client_ssl_context
 from omnigent.version import VERSION
 
+_CODEX_GPT_55_SLUG = cast(str, codex_spawn_model(CODEX_GPT_55_MODEL_ID))
 _logger = logging.getLogger(__name__)
 
 
@@ -714,8 +717,8 @@ def _codex_catalog_model_option(model_id: str, *, is_default: bool = False) -> d
     bare = model_id.rsplit("/", 1)[-1]
     if bare.startswith("gpt-5.6-"):
         display_name = f"GPT-5.6 {bare.removeprefix('gpt-5.6-').title()}"
-    elif bare == "gpt-5.5":
-        display_name = "GPT-5.5"
+    elif bare == _CODEX_GPT_55_SLUG:
+        display_name = bare.upper()
     else:
         display_name = bare
     option: dict[str, object] = {
@@ -723,7 +726,7 @@ def _codex_catalog_model_option(model_id: str, *, is_default: bool = False) -> d
         "displayName": display_name,
         **({"isDefault": True} if is_default else {}),
     }
-    if bare == "gpt-5.5" or bare.startswith("gpt-5.6-"):
+    if bare == _CODEX_GPT_55_SLUG or bare.startswith("gpt-5.6-"):
         efforts = codex_efforts_for_model(model_id)
         option["supportedReasoningEfforts"] = [
             {"reasoningEffort": effort, "description": effort.title()}

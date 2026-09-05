@@ -1771,6 +1771,7 @@ def build_codex_native_server(
     developer_instructions: str | None = None,
     bypass_sandbox: bool = False,
     trust_project: bool = False,
+    env_passthrough: Sequence[str] = (),
 ) -> CodexNativeAppServer:
     """
     Build a configured native Codex app-server process wrapper.
@@ -1808,6 +1809,8 @@ def build_codex_native_server(
     :param trust_project: Whether to trust ``cwd`` in the private session
         config before app-server startup. Intended for runner-owned headless
         sessions whose hidden TUI cannot answer Codex's project-trust prompt.
+    :param env_passthrough: Explicit credential variable names to preserve in
+        the otherwise filtered Codex subprocess environment.
     :returns: Configured app-server process wrapper.
     :raises ImportError: If no Codex CLI is available.
     :raises OSError: If Databricks routing was requested but no
@@ -1820,7 +1823,7 @@ def build_codex_native_server(
             "installed on a PATH the host daemon didn't inherit (e.g. an "
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
-    env = _clean_codex_env()
+    env = _clean_codex_env(env_passthrough)
     config_overrides: list[str] = []
     if profile is not None:
         # Use the profile's own host so the gateway base URL matches the token
@@ -1901,6 +1904,8 @@ class NativeCodexLaunch:
         outcome (provider / profile / model, or the login-fallback state),
         set at resolution time and surfaced in the startup-timeout error so
         hosted users can diagnose without runner-log access (see #2745).
+    :param env_passthrough: Credential variable names the resolved provider
+        explicitly permits in the filtered Codex subprocess environment.
     """
 
     config_overrides: list[str]
@@ -1908,6 +1913,7 @@ class NativeCodexLaunch:
     profile: str | None
     summary: str = ""
     trace_provenance: CodexTraceLaunchProvenance | None = None
+    env_passthrough: tuple[str, ...] = ()
 
 
 def codex_session_meta_model_provider(launch: NativeCodexLaunch) -> str:
@@ -2047,6 +2053,7 @@ def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCod
         )
     if entry.kind not in (KEY_KIND, GATEWAY_KIND, LOCAL_KIND):
         return None
+    raw_family = entry.families.get(OPENAI_FAMILY)
     try:
         family = entry.family(OPENAI_FAMILY)
     except OmnigentError:
@@ -2056,11 +2063,19 @@ def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCod
         return None
     if family is None:
         return None
+    env_key: str | None = None
+    if (
+        raw_family is not None
+        and raw_family.api_key_ref is not None
+        and raw_family.api_key_ref.startswith("env:")
+    ):
+        env_key = raw_family.api_key_ref.removeprefix("env:")
+    auth_command: str | None = None
     if family.auth_command:
         auth_command = family.auth_command
-    elif family.api_key:
+    elif env_key is None and family.api_key:
         auth_command = f"printf %s {shlex.quote(family.api_key)}"
-    else:
+    elif env_key is None:
         # Serves openai but carries no usable credential.
         return None
     pinned = model or family.default_model
@@ -2068,6 +2083,7 @@ def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCod
         model=pinned,
         base_url=family.base_url,
         auth_command=auth_command,
+        env_key=env_key,
         wire_api=family.wire_api or "responses",
     )
     return NativeCodexLaunch(
@@ -2075,6 +2091,7 @@ def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCod
         model=pinned,
         profile=None,
         summary=f"provider {entry.name!r} (model={pinned})",
+        env_passthrough=(env_key,) if env_key is not None else (),
     )
 
 
@@ -2243,9 +2260,30 @@ def _resolve_native_codex_access_lane(
         # deployment details, not stable OmniRoute identity.
         entry = default_provider_for_harness(load_config(), "codex")
         if entry is None:
-            raise OmnigentError(
-                "OmniRoute lane unavailable",
-                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            o3_key = os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+            o3_base = os.environ.get(
+                "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+            ).rstrip("/")
+            if not o3_key or not o3_base.startswith(("http://127.0.0.1:", "http://localhost:")):
+                raise OmnigentError(
+                    "OmniRoute lane unavailable",
+                    code=ErrorCode.HARNESS_NOT_CONFIGURED,
+                )
+            return NativeCodexLaunch(
+                config_overrides=_provider_codex_config_overrides(
+                    model=model,
+                    base_url=f"{o3_base}/v1",
+                    env_key="OMNIROUTE_O3_KEY",
+                    wire_api="responses",
+                ),
+                model=model,
+                profile=None,
+                summary=f"O3 OmniRoute lane (model={model!r})",
+                trace_provenance=CodexTraceLaunchProvenance(
+                    access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
+                    provider="o3-omniroute-loopback",
+                ),
+                env_passthrough=("OMNIROUTE_O3_KEY",),
             )
         launch = _codex_provider_launch(entry, model)
         if launch is None:
@@ -2262,6 +2300,7 @@ def _resolve_native_codex_access_lane(
                 access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
                 provider=entry.name,
             ),
+            env_passthrough=launch.env_passthrough,
         )
 
     raise OmnigentError(

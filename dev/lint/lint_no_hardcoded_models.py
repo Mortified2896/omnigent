@@ -1,7 +1,8 @@
-"""Flag hardcoded LLM model ids outside tests and owned fallbacks.
+"""Flag hardcoded LLM model ids outside tests and owned static records.
 
 Unavoidable static aliases are accepted only inside complete
-``StaticModelFallback`` records in the central fallback module.
+``StaticModelFallback`` records in the central fallback module. Audited routing
+candidates are accepted only inside complete ``CandidateProfile`` records.
 """
 
 from __future__ import annotations
@@ -53,6 +54,23 @@ SKIP_PARTS = {
 }
 OWNED_FALLBACK_PATH = Path("omnigent/model_fallbacks.py")
 FALLBACK_METADATA_FIELDS = frozenset({"owner", "provenance", "discovery_gap"})
+AUDITED_CANDIDATE_MODEL_FIELDS = frozenset({"candidate_id", "model", "catalogue_model_id"})
+AUDITED_CANDIDATE_STRING_FIELDS = frozenset(
+    {
+        "candidate_id",
+        "provider_id",
+        "model",
+        "catalogue_model_id",
+        "cost_source",
+        "quota_source",
+        "last_full_probe_at",
+        "probe_reference",
+    }
+)
+AUDITED_CANDIDATE_TRUE_FIELDS = frozenset({"terminal", "tools", "responses_api"})
+NON_MODEL_IDENTIFIER_NAMES = frozenset(
+    {"SOURCE_POOL_NAME", "ADVISER_COMBO_NAME", "STATE_DIRECTORY_NAME"}
+)
 
 
 @dataclass(frozen=True)
@@ -153,6 +171,84 @@ def _owned_fallback_model_literals(tree: ast.Module) -> set[ast.Constant]:
     return exempt
 
 
+def _module_string_assignments(tree: ast.Module) -> dict[str, ast.Constant]:
+    """Return unambiguous module-level string constants by name."""
+    assignments: dict[str, ast.Constant | None] = {}
+    for statement in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target = statement.targets[0]
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            target = statement.target
+            value = statement.value
+        if not isinstance(target, ast.Name):
+            continue
+        literal = (
+            value
+            if isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+            and value.value.strip()
+            else None
+        )
+        assignments[target.id] = literal if target.id not in assignments else None
+    return {name: literal for name, literal in assignments.items() if literal is not None}
+
+
+def _resolved_string_literal(
+    node: ast.expr,
+    assignments: dict[str, ast.Constant],
+) -> ast.Constant | None:
+    """Resolve one non-empty direct or module-level string literal."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.strip():
+        return node
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        return assignments.get(node.id)
+    return None
+
+
+def _audited_candidate_model_literals(tree: ast.Module) -> set[ast.Constant]:
+    """Return model literals held by complete audited candidate records."""
+    assignments = _module_string_assignments(tree)
+    exempt: set[ast.Constant] = set()
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Name)
+            or node.func.id != "CandidateProfile"
+        ):
+            continue
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        if not keywords.keys() >= AUDITED_CANDIDATE_STRING_FIELDS:
+            continue
+        if not all(
+            _resolved_string_literal(keywords[field], assignments) is not None
+            for field in AUDITED_CANDIDATE_STRING_FIELDS
+        ):
+            continue
+        efforts = _literal_string_nodes(keywords.get("supported_reasoning_efforts"))
+        if not efforts:
+            continue
+        if not all(
+            isinstance(keywords.get(field), ast.Constant) and keywords[field].value is True
+            for field in AUDITED_CANDIDATE_TRUE_FIELDS
+        ):
+            continue
+        exempt.update(
+            literal
+            for field in AUDITED_CANDIDATE_MODEL_FIELDS
+            if (literal := _resolved_string_literal(keywords[field], assignments)) is not None
+        )
+    return exempt
+
+
+def _non_model_identifier_literals(tree: ast.Module) -> set[ast.Constant]:
+    """Return explicitly named Combo and state-directory identifiers."""
+    assignments = _module_string_assignments(tree)
+    return {literal for name, literal in assignments.items() if name in NON_MODEL_IDENTIFIER_NAMES}
+
+
 def _docstring_nodes(tree: ast.Module) -> set[ast.Constant]:
     """Return literal nodes used as module, class, or function docstrings."""
     owners = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -182,6 +278,8 @@ def _scan_python(path: Path) -> list[Hit]:
         if _repo_relative(path) == OWNED_FALLBACK_PATH.as_posix()
         else set()
     )
+    exempt.update(_audited_candidate_model_literals(tree))
+    exempt.update(_non_model_identifier_literals(tree))
     exempt.update(_docstring_nodes(tree))
     hits: list[Hit] = []
     for node in ast.walk(tree):
@@ -251,7 +349,8 @@ def main() -> int:
         )
     sys.stdout.write(
         "\nAvoid adding hardcoded model names outside tests. Unavoidable static aliases "
-        "belong in complete StaticModelFallback records in omnigent/model_fallbacks.py.\n"
+        "belong in complete StaticModelFallback records in omnigent/model_fallbacks.py; "
+        "audited routing candidates require complete CandidateProfile metadata.\n"
     )
     return 1
 

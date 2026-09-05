@@ -1467,6 +1467,7 @@ describe("routing eligibility gates", () => {
       server_version: null,
       smart_routing_enabled: smartRouting,
       smart_routing_sources: { external: smartRouting, oss: smartRouting },
+      o3_routing_review_enabled: false,
       harness_install_enabled: false,
       installable_harnesses: [],
       dictation_available: false,
