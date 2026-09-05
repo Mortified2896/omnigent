@@ -143,7 +143,8 @@ class O3RoutingReviewService:
         prompt = request.prompt
         if not prompt.strip():
             raise RoutingReviewError("prompt must not be blank")
-        await self.cleanup_expired()
+        if self.recommendation_catalogue is None:
+            await self.cleanup_expired()
         analysis = await self.adviser.analyse(
             prompt=prompt,
             workspace_summary=request.workspace_summary,
@@ -187,22 +188,25 @@ class O3RoutingReviewService:
             if self.recommendation_catalogue is not None
             else None
         )
-        try:
-            candidates = await self.omniroute.live_candidates(self.registry.candidates)
-        except OmniRouteError:
-            _logger.info("O3 execution pool unavailable; recommendation remains usable")
-            candidates = []
-        if self.forecaster is not None:
-            forecasts = []
-            for candidate in candidates:
-                if self.registry.evidence_for(
-                    requirement, candidate, constraints.reasoning_effort
-                ):
-                    continue
-                forecast = await self.forecaster.forecast(self.registry, requirement, candidate)
-                if forecast is not None:
-                    forecasts.append(forecast)
-            self.registry.add_runtime_evidence(forecasts)
+        candidates: list[CandidateSnapshot] = []
+        if self.recommendation_catalogue is None:
+            try:
+                candidates = await self.omniroute.live_candidates(self.registry.candidates)
+            except OmniRouteError:
+                _logger.info("O3 execution pool unavailable; recommendation remains usable")
+            if self.forecaster is not None:
+                forecasts = []
+                for candidate in candidates:
+                    if self.registry.evidence_for(
+                        requirement, candidate, constraints.reasoning_effort
+                    ):
+                        continue
+                    forecast = await self.forecaster.forecast(
+                        self.registry, requirement, candidate
+                    )
+                    if forecast is not None:
+                        forecasts.append(forecast)
+                self.registry.add_runtime_evidence(forecasts)
         result = evaluate_candidates(self.registry, analysis, candidates, constraints)
         has_catalogue_match = bool(
             recommendation
@@ -382,11 +386,12 @@ class O3RoutingReviewService:
                 ),
             }
         )
-        try:
-            candidates = await self.omniroute.live_candidates(self.registry.candidates)
-        except OmniRouteError:
-            _logger.info("O3 execution pool unavailable during recommendation adjustment")
-            candidates = []
+        candidates: list[CandidateSnapshot] = []
+        if self.recommendation_catalogue is None:
+            try:
+                candidates = await self.omniroute.live_candidates(self.registry.candidates)
+            except OmniRouteError:
+                _logger.info("O3 execution pool unavailable during recommendation adjustment")
         analysis = proposal.adviser.model_copy(
             update={
                 "benchmark_requirements": [

@@ -14,9 +14,16 @@ from fastapi.responses import JSONResponse
 
 from omnigent.errors import OmnigentError
 from omnigent.server.auth import UnifiedAuthProvider
-from omnigent.server.o3_routing_review.adviser import OmniRouteRoutingAdviser, RoutingAdviser
+from omnigent.server.o3_routing_review.adviser import (
+    ADVISER_MODEL_ENV,
+    OmniRouteRoutingAdviser,
+    RoutingAdviser,
+)
 from omnigent.server.o3_routing_review.evaluator import evaluate_candidates
-from omnigent.server.o3_routing_review.forecaster import _decode_forecast_output
+from omnigent.server.o3_routing_review.forecaster import (
+    ModelScoreForecaster,
+    _decode_forecast_output,
+)
 from omnigent.server.o3_routing_review.models import (
     AdviserAnalysis,
     ApprovedConstraints,
@@ -31,6 +38,7 @@ from omnigent.server.o3_routing_review.models import (
     Disposition,
     EvidenceClass,
     EvidencePolicy,
+    ProposalAdjustmentRequest,
     ProposalCreateRequest,
     ProposalDecisionRequest,
     ProposalOutcomeRequest,
@@ -42,6 +50,7 @@ from omnigent.server.o3_routing_review.omniroute import (
     OmniRouteError,
     OmniRouteResponse,
 )
+from omnigent.server.o3_routing_review.recommendation import RecommendationCatalogue
 from omnigent.server.o3_routing_review.registry import (
     BENCHMARK_REGISTRY_ENV,
     BenchmarkRegistry,
@@ -83,6 +92,16 @@ def test_enabled_service_requires_configured_benchmark_registry(
 
     with pytest.raises(ValueError, match=BENCHMARK_REGISTRY_ENV):
         O3RoutingReviewService.from_env()
+
+
+def test_adviser_model_can_use_an_explicit_direct_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(ADVISER_MODEL_ENV, "opencode/big-pickle")
+
+    adviser = OmniRouteRoutingAdviser(OmniRouteClient("http://127.0.0.1:20128", "test"))
+
+    assert adviser.model == "opencode/big-pickle"
 
 
 def _requirement(*, minimum: float = 0.5) -> BenchmarkRequirement:
@@ -492,6 +511,9 @@ class _FakeOmniRoute:
     async def live_candidates(self, _profiles: object) -> list[CandidateSnapshot]:
         return self.candidates
 
+    async def model_ids(self) -> set[str]:
+        return {candidate.catalogue_model_id for candidate in self.candidates}
+
     async def create_derived_combo(
         self,
         proposal_id: str,
@@ -524,6 +546,62 @@ class _FakeAdviser:
         return self.decomposed
 
 
+class _ForbiddenForecaster:
+    async def forecast(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("recommendation-only mode invoked runtime forecasting")
+
+
+class _RecommendationOnlyOmniRoute(_FakeOmniRoute):
+    async def model_ids(self) -> set[str]:
+        return {"free/model-a"}
+
+    async def live_candidates(self, _profiles: object) -> list[CandidateSnapshot]:
+        raise AssertionError("recommendation-only mode evaluated the execution pool")
+
+
+def _recommendation_catalogue() -> RecommendationCatalogue:
+    return RecommendationCatalogue(
+        policy={
+            "schema_version": 1,
+            "policy_version": "test-policy-v1",
+            "normalization": {
+                "anchors": {
+                    "easy": 20,
+                    "normal": 40,
+                    "moderate": 60,
+                    "hard": 80,
+                    "frontier": 95,
+                }
+            },
+        },
+        forecasts=(
+            {
+                "provider_model_route_id": "free/model-a",
+                "provider": "free",
+                "display_model_alias": "Model A",
+                "reasoning_mode": "high",
+                "capability_score_central": 90,
+                "capability_score_lower": 81,
+                "adviser_applicable": True,
+                "confidence": "high",
+                "source_snapshot_timestamp": "2026-09-05T00:00:00Z",
+            },
+        ),
+        readiness={
+            "free/model-a": {
+                "route_id": "free/model-a",
+                "responses_callability": "callable_now",
+                "operator_resource_policy": "non_codex_zero_marginal_cost",
+            }
+        },
+        manifest={"scanner_version": "test", "live_catalogue_timestamp": "2026-09-05"},
+        hashes={
+            "model-capability-forecasts-v1.json": "forecast-hash",
+            "o3-route-readiness-v1.json": "readiness-hash",
+        },
+    )
+
+
 def _service(
     tmp_path: Path,
     registry: BenchmarkRegistry,
@@ -540,6 +618,60 @@ def _service(
         store=ProposalStore(tmp_path / "o3-state.json"),
     )
     return service, omni
+
+
+async def test_recommendation_only_create_and_adjust_skip_execution_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[],
+        candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.2,
+                            "normal": 0.4,
+                            "moderate": 0.6,
+                            "hard": 0.8,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    omni = _RecommendationOnlyOmniRoute([])
+    service = O3RoutingReviewService(
+        registry=registry,
+        omniroute=cast(OmniRouteClient, omni),
+        adviser=cast(RoutingAdviser, _FakeAdviser(_analysis())),
+        store=ProposalStore(tmp_path / "o3-state.json"),
+        forecaster=cast(ModelScoreForecaster, _ForbiddenForecaster()),
+        recommendation_catalogue=_recommendation_catalogue(),
+    )
+
+    async def forbidden_cleanup(**_kwargs: object) -> None:
+        raise AssertionError("recommendation-only mode invoked Combo cleanup")
+
+    monkeypatch.setattr(service, "cleanup_expired", forbidden_cleanup)
+
+    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Review this task"))
+    adjusted = await service.adjust_proposal(
+        proposal.proposal_id, ProposalAdjustmentRequest(difficulty="hard")
+    )
+
+    assert proposal.recommendation is not None
+    assert adjusted.recommendation is not None
+    assert adjusted.recommendation.common_capability_floor == 80
+    assert omni.created == []
+    assert omni.deleted == []
 
 
 async def test_provisional_candidate_requires_deliberate_acknowledgement(tmp_path: Path) -> None:

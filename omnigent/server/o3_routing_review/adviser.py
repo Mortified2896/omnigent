@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Protocol
 
 from pydantic import ValidationError
@@ -10,6 +11,8 @@ from pydantic import ValidationError
 from .models import AdviserAnalysis, CandidateSnapshot
 from .omniroute import OmniRouteClient, OmniRouteError
 from .registry import ADVISER_COMBO_NAME, BenchmarkRegistry
+
+ADVISER_MODEL_ENV = "OMNIGENT_O3_ADVISER_MODEL"
 
 
 class RoutingAdviser(Protocol):
@@ -124,6 +127,9 @@ class OmniRouteRoutingAdviser:
 
     def __init__(self, client: OmniRouteClient) -> None:
         self.client = client
+        self.model = os.environ.get(ADVISER_MODEL_ENV, ADVISER_COMBO_NAME).strip()
+        if not self.model:
+            raise ValueError(f"{ADVISER_MODEL_ENV} must not be blank")
 
     async def _call(self, payload: str, *, decomposition: bool) -> AdviserAnalysis:
         instruction = (
@@ -153,7 +159,7 @@ class OmniRouteRoutingAdviser:
             )
         schema = AdviserAnalysis.model_json_schema()
         base_body: dict[str, object] = {
-            "model": ADVISER_COMBO_NAME,
+            "model": self.model,
             "input": [
                 {"role": "system", "content": instruction},
                 {"role": "user", "content": payload},

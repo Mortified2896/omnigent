@@ -356,6 +356,14 @@ export function RoutingProposalCard({
 
         {recommendation && (
           <div className="space-y-4" data-testid="o3-catalogue-recommendations">
+            {recommendation.stale_warning && (
+              <div
+                className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
+                role="status"
+              >
+                {recommendation.stale_warning}
+              </div>
+            )}
             <div>
               <h3 className="mb-2 text-sm font-semibold">Callable non-Codex</h3>
               <RecommendationRows items={recommendation.callable_non_codex} />
@@ -382,6 +390,15 @@ export function RoutingProposalCard({
               0 ||
               expanded) && (
               <div>
+                {(recommendation.section_counts.callable_non_codex ?? 0) +
+                  (recommendation.section_counts.other_above_floor ?? 0) +
+                  (recommendation.section_counts.codex_subscription_fallback ?? 0) ===
+                  0 && (
+                  <p className="mb-2 text-sm text-muted-foreground">
+                    No catalogue model meets the conservative floor. Nearest alternatives are shown
+                    for review, not as qualifying matches.
+                  </p>
+                )}
                 <h3 className="mb-2 text-sm font-semibold">Nearest below floor</h3>
                 <RecommendationRows items={recommendation.nearest_below_floor} />
               </div>

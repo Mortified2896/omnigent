@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { O3RoutingProposal } from "@/lib/o3RoutingReview";
+import type { O3CatalogueRecommendation, O3RoutingProposal } from "@/lib/o3RoutingReview";
 import { RoutingProposalCard } from "./RoutingProposalCard";
 
 function proposal(overrides: Partial<O3RoutingProposal> = {}): O3RoutingProposal {
@@ -152,6 +152,72 @@ function proposal(overrides: Partial<O3RoutingProposal> = {}): O3RoutingProposal
   return { ...base, ...overrides };
 }
 
+function recommendation(
+  overrides: Partial<O3CatalogueRecommendation> = {},
+): O3CatalogueRecommendation {
+  const item = {
+    route_id: "free/model-a",
+    provider_id: "free",
+    displayed_model: "Model A",
+    equivalence_identity: "model-a",
+    reasoning_mode: "high",
+    capability_score_central: 90,
+    capability_score_lower: 81,
+    capability_score_upper: 96,
+    estimated_tier: "frontier",
+    conservative_tier: "hard",
+    capability_confidence: "high",
+    estimate_method: "published benchmark prior",
+    gap_from_floor: 21,
+    live_present: true,
+    responses_callability: "callable_now",
+    readiness_observed_at: "2026-09-05T00:00:00Z",
+    operator_resource_class: "non_codex_zero_marginal_cost",
+    raw_cost_class: "free",
+    alternate_route_ids: [],
+    caveats: ["Recommendation confidence is limited by snapshot age."],
+  };
+  return {
+    policy_version: "test-policy-v1",
+    forecast_version: "test-policy-v1",
+    forecast_hash: "forecast-hash",
+    readiness_version: "test-readiness-v1",
+    readiness_hash: "readiness-hash",
+    source_snapshot_timestamp: "2026-09-05T00:00:00Z",
+    readiness_observed_at: "2026-09-05T00:00:00Z",
+    raw_benchmark_floor: 0.6,
+    common_capability_floor: 60,
+    total_route_count: 3152,
+    live_present_count: 42,
+    section_counts: {
+      callable_non_codex: 1,
+      other_above_floor: 1,
+      codex_subscription_fallback: 1,
+      nearest_below_floor: 1,
+    },
+    callable_non_codex: [item],
+    other_above_floor: [{ ...item, route_id: "other/model-b", provider_id: "other" }],
+    codex_subscription_fallback: [
+      {
+        ...item,
+        route_id: "codex/model-c",
+        provider_id: "codex",
+        operator_resource_class: "codex_subscription",
+      },
+    ],
+    nearest_below_floor: [
+      {
+        ...item,
+        route_id: "free/model-d",
+        capability_score_lower: 59,
+        gap_from_floor: -1,
+      },
+    ],
+    stale_warning: "Readiness snapshot may be stale.",
+    ...overrides,
+  };
+}
+
 const slices = [
   {
     benchmark_id: "terminal-bench",
@@ -203,6 +269,44 @@ function renderCard(value = proposal()) {
 }
 
 describe("RoutingProposalCard", () => {
+  it("renders recommendation floors, separated route sections, and warnings", () => {
+    renderCard(proposal({ recommendation: recommendation() }));
+
+    const recommendations = screen.getByTestId("o3-catalogue-recommendations");
+    expect(screen.getByText("Raw benchmark floor").parentElement).toHaveTextContent("0.600000");
+    expect(screen.getByText("Common capability floor").parentElement).toHaveTextContent(
+      "60 / 100 rough prior",
+    );
+    expect(recommendations).toHaveTextContent("Callable non-Codex");
+    expect(recommendations).toHaveTextContent("Other models above floor");
+    expect(recommendations).toHaveTextContent("Codex subscription fallback");
+    expect(recommendations).toHaveTextContent("Recommendation confidence is limited");
+    expect(screen.getByText("Readiness snapshot may be stale.")).toBeInTheDocument();
+  });
+
+  it("renders a useful no-match state with nearest alternatives", () => {
+    renderCard(
+      proposal({
+        recommendation: recommendation({
+          section_counts: {
+            callable_non_codex: 0,
+            other_above_floor: 0,
+            codex_subscription_fallback: 0,
+            nearest_below_floor: 1,
+          },
+          callable_non_codex: [],
+          other_above_floor: [],
+          codex_subscription_fallback: [],
+        }),
+      }),
+    );
+
+    expect(screen.getByText("Above-floor matches").parentElement).toHaveTextContent("0");
+    expect(screen.getByText(/No catalogue model meets the conservative floor\./)).toBeVisible();
+    expect(screen.getByText("Nearest below floor")).toBeVisible();
+    expect(screen.getByText(/free\/Model A/)).toBeVisible();
+  });
+
   it("renders compact requirements and expands candidate evidence", () => {
     renderCard();
 
