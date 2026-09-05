@@ -204,6 +204,50 @@ export interface O3RoutingProposal {
   provenance_synced_at: string | null;
   task_outcome: string | null;
   terminal_disposition: string | null;
+  recommendation?: O3CatalogueRecommendation | null;
+}
+
+export interface O3CatalogueRecommendationItem {
+  route_id: string;
+  provider_id: string;
+  displayed_model: string;
+  equivalence_identity: string;
+  reasoning_mode: string;
+  capability_score_central: number;
+  capability_score_lower: number;
+  capability_score_upper: number | null;
+  estimated_tier: string;
+  conservative_tier: string;
+  capability_confidence: string;
+  estimate_method: string;
+  gap_from_floor: number;
+  live_present: boolean;
+  responses_callability: string;
+  readiness_observed_at: string | null;
+  operator_resource_class: string;
+  raw_cost_class: string;
+  alternate_route_ids: string[];
+  caveats: string[];
+}
+
+export interface O3CatalogueRecommendation {
+  policy_version: string;
+  forecast_version: string;
+  forecast_hash: string;
+  readiness_version: string;
+  readiness_hash: string;
+  source_snapshot_timestamp: string;
+  readiness_observed_at: string | null;
+  raw_benchmark_floor: number;
+  common_capability_floor: number;
+  total_route_count: number;
+  live_present_count: number;
+  section_counts: Record<string, number>;
+  callable_non_codex: O3CatalogueRecommendationItem[];
+  other_above_floor: O3CatalogueRecommendationItem[];
+  codex_subscription_fallback: O3CatalogueRecommendationItem[];
+  nearest_below_floor: O3CatalogueRecommendationItem[];
+  stale_warning: string | null;
 }
 
 export interface O3ProposalAdjustment {

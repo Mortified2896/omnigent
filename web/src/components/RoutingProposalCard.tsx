@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type {
   O3BenchmarkSlice,
+  O3CatalogueRecommendationItem,
   O3Difficulty,
   O3ProposalAdjustment,
   O3ProposalDecision,
@@ -63,6 +64,42 @@ function costSummary(proposal: O3RoutingProposal): string {
   const costText =
     cost === 0 ? "free route" : cost == null ? "cost unknown" : `$${cost.toFixed(4)}`;
   return quota == null ? costText : `${costText}, ${Math.round(quota)}% quota left`;
+}
+
+function RecommendationRows({ items }: { items: O3CatalogueRecommendationItem[] }) {
+  return (
+    <div className="space-y-2">
+      {items.map((item) => (
+        <details key={item.route_id} className="rounded-md border border-border px-3 py-2">
+          <summary className="cursor-pointer text-sm">
+            <span className="font-medium">
+              {item.provider_id}/{item.displayed_model}
+            </span>{" "}
+            <span className="text-muted-foreground">
+              · {item.reasoning_mode} · conservative {item.capability_score_lower.toFixed(0)} ·
+              central {item.capability_score_central.toFixed(0)} ·{" "}
+              {titleCase(item.capability_confidence)} confidence ·{" "}
+              {titleCase(item.responses_callability)} · {titleCase(item.operator_resource_class)}
+            </span>
+          </summary>
+          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+            <p>
+              {item.estimate_method} · readiness {item.readiness_observed_at ?? "unknown"} · raw
+              cost {item.raw_cost_class}
+            </p>
+            {item.alternate_route_ids.length > 0 && (
+              <p>
+                {item.alternate_route_ids.length} aliases: {item.alternate_route_ids.join(", ")}
+              </p>
+            )}
+            {item.caveats.map((caveat) => (
+              <p key={caveat}>{caveat}</p>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
 }
 
 export function RoutingProposalCard({
@@ -121,6 +158,7 @@ export function RoutingProposalCard({
   const canApprove = eligible.length > 0 && proposal.decision === null;
   const canResumeLaunch = approved && proposal.derived_combo_name !== null;
   const hasProvisional = eligible.some((item) => item.status === "provisional");
+  const recommendation = proposal.recommendation ?? null;
 
   async function decide(decision: O3ProposalDecision, launch: boolean): Promise<void> {
     setBusy(decision.action);
@@ -252,6 +290,38 @@ export function RoutingProposalCard({
               {benchmark.slice_id}
             </dd>
           </div>
+          {recommendation && (
+            <>
+              <div>
+                <dt className="text-xs text-muted-foreground">Raw benchmark floor</dt>
+                <dd className="mt-0.5 font-medium">
+                  {recommendation.raw_benchmark_floor.toFixed(6)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Common capability floor</dt>
+                <dd className="mt-0.5 font-medium">
+                  {recommendation.common_capability_floor.toFixed(0)} / 100{" "}
+                  <span className="text-xs font-normal text-muted-foreground">rough prior</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Catalogue considered</dt>
+                <dd className="mt-0.5 font-medium">
+                  {recommendation.total_route_count.toLocaleString()} routes ·{" "}
+                  {recommendation.live_present_count.toLocaleString()} live
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Above-floor matches</dt>
+                <dd className="mt-0.5 font-medium">
+                  {(recommendation.section_counts.callable_non_codex ?? 0) +
+                    (recommendation.section_counts.other_above_floor ?? 0) +
+                    (recommendation.section_counts.codex_subscription_fallback ?? 0)}
+                </dd>
+              </div>
+            </>
+          )}
           <div>
             <dt className="text-xs text-muted-foreground">Difficulty</dt>
             <dd className="mt-0.5 font-medium">{titleCase(constraints.difficulty)}</dd>
@@ -283,6 +353,41 @@ export function RoutingProposalCard({
             <dd className="mt-0.5 font-medium">{costSummary(proposal)}</dd>
           </div>
         </dl>
+
+        {recommendation && (
+          <div className="space-y-4" data-testid="o3-catalogue-recommendations">
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Callable non-Codex</h3>
+              <RecommendationRows items={recommendation.callable_non_codex} />
+              {recommendation.callable_non_codex.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No callable non-Codex route meets the conservative floor.
+                </p>
+              )}
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Other models above floor</h3>
+              <RecommendationRows items={recommendation.other_above_floor} />
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Codex subscription fallback</h3>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Subscription-backed fallback, shown after non-Codex options.
+              </p>
+              <RecommendationRows items={recommendation.codex_subscription_fallback} />
+            </div>
+            {((recommendation.section_counts.callable_non_codex ?? 0) +
+              (recommendation.section_counts.other_above_floor ?? 0) +
+              (recommendation.section_counts.codex_subscription_fallback ?? 0) ===
+              0 ||
+              expanded) && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold">Nearest below floor</h3>
+                <RecommendationRows items={recommendation.nearest_below_floor} />
+              </div>
+            )}
+          </div>
+        )}
 
         {proposal.frontier.capability_gap && (
           <div
@@ -414,7 +519,9 @@ export function RoutingProposalCard({
                 data-testid="o3-adjust-difficulty"
               >
                 {(["easy", "normal", "moderate", "hard", "frontier"] as const).map((value) => (
-                  <option key={value} value={value}>{titleCase(value)}</option>
+                  <option key={value} value={value}>
+                    {titleCase(value)}
+                  </option>
                 ))}
               </select>
             </label>

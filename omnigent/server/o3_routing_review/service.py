@@ -32,6 +32,12 @@ from .models import (
     RoutingProposal,
 )
 from .omniroute import OmniRouteClient, OmniRouteError
+from .recommendation import (
+    CATALOG_DIR_ENV,
+    RecommendationCatalogue,
+    load_recommendation_catalogue,
+    recommend,
+)
 from .registry import BENCHMARK_REGISTRY_ENV, BenchmarkRegistry
 from .store import ProposalStore
 
@@ -69,6 +75,7 @@ class O3RoutingReviewService:
         store: ProposalStore,
         ttl_seconds: int = DEFAULT_PROPOSAL_TTL_SECONDS,
         forecaster: ModelScoreForecaster | None = None,
+        recommendation_catalogue: RecommendationCatalogue | None = None,
     ) -> None:
         if ttl_seconds < 60 or ttl_seconds > 30 * 24 * 60 * 60:
             raise ValueError("O3 proposal TTL must be between 60 seconds and 30 days")
@@ -78,14 +85,18 @@ class O3RoutingReviewService:
         self.store = store
         self.ttl_seconds = ttl_seconds
         self.forecaster = forecaster
+        self.recommendation_catalogue = recommendation_catalogue
 
     @classmethod
     def from_env(cls) -> O3RoutingReviewService:
-        client = OmniRouteClient.from_env()
         if not os.environ.get(BENCHMARK_REGISTRY_ENV):
             raise ValueError(
                 f"{BENCHMARK_REGISTRY_ENV} is required while O3 routing review is enabled"
             )
+        catalog_dir = os.environ.get(CATALOG_DIR_ENV)
+        if not catalog_dir:
+            raise ValueError(f"{CATALOG_DIR_ENV} is required while O3 routing review is enabled")
+        client = OmniRouteClient.from_env()
         raw_ttl = os.environ.get(PROPOSAL_TTL_ENV)
         ttl = int(raw_ttl) if raw_ttl is not None else DEFAULT_PROPOSAL_TTL_SECONDS
         registry = BenchmarkRegistry()
@@ -96,6 +107,7 @@ class O3RoutingReviewService:
             store=ProposalStore(),
             ttl_seconds=ttl,
             forecaster=ModelScoreForecaster(client),
+            recommendation_catalogue=load_recommendation_catalogue(catalog_dir),
         )
 
     def _require(self, proposal_id: str) -> RoutingProposal:
@@ -132,12 +144,11 @@ class O3RoutingReviewService:
         if not prompt.strip():
             raise RoutingReviewError("prompt must not be blank")
         await self.cleanup_expired()
-        candidates = await self.omniroute.live_candidates(self.registry.candidates)
         analysis = await self.adviser.analyse(
             prompt=prompt,
             workspace_summary=request.workspace_summary,
             registry=self.registry,
-            candidates=candidates,
+            candidates=[],
         )
         self._validate_analysis(analysis)
         selection = analysis.benchmark_requirements[0]
@@ -161,6 +172,26 @@ class O3RoutingReviewService:
             evidence_policy=analysis.evidence_policy,
             cost_quota_preference="preserve_subscription",
         )
+        live_ids = (
+            await self.omniroute.model_ids()
+            if self.recommendation_catalogue is not None
+            else set()
+        )
+        recommendation = (
+            recommend(
+                self.recommendation_catalogue,
+                difficulty=analysis.difficulty,
+                raw_floor=requirement.minimum_score,
+                live_route_ids=live_ids,
+            )
+            if self.recommendation_catalogue is not None
+            else None
+        )
+        try:
+            candidates = await self.omniroute.live_candidates(self.registry.candidates)
+        except OmniRouteError:
+            _logger.info("O3 execution pool unavailable; recommendation remains usable")
+            candidates = []
         if self.forecaster is not None:
             forecasts = []
             for candidate in candidates:
@@ -173,29 +204,40 @@ class O3RoutingReviewService:
                     forecasts.append(forecast)
             self.registry.add_runtime_evidence(forecasts)
         result = evaluate_candidates(self.registry, analysis, candidates, constraints)
-        final_disposition = result.disposition
-        if result.disposition is Disposition.DECOMPOSE:
-            gap = result.frontier.capability_gap or "No adequate route."
-            decomposed = await self.adviser.decompose(
-                prompt=prompt,
-                workspace_summary=request.workspace_summary,
-                registry=self.registry,
-                candidates=candidates,
-                prior=analysis,
-                capability_gap=gap,
+        has_catalogue_match = bool(
+            recommendation
+            and sum(
+                recommendation.section_counts.get(name, 0)
+                for name in (
+                    "callable_non_codex",
+                    "other_above_floor",
+                    "codex_subscription_fallback",
+                )
             )
-            self._validate_analysis(decomposed)
-            decomposition = self._validate_decomposition(decomposed, candidates)
-            analysis = analysis.model_copy(
-                update={
-                    "decomposition": decomposition,
-                    "rationale": decomposed.rationale,
-                    "disposition": (Disposition.DECOMPOSE if decomposition else Disposition.DEFER),
-                }
-            )
-            final_disposition = analysis.disposition
+        )
+        if self.recommendation_catalogue is None:
+            final_disposition = result.disposition
+            if result.disposition is Disposition.DECOMPOSE:
+                gap = result.frontier.capability_gap or "No adequate route."
+                decomposed = await self.adviser.decompose(
+                    prompt=prompt,
+                    workspace_summary=request.workspace_summary,
+                    registry=self.registry,
+                    candidates=candidates,
+                    prior=analysis,
+                    capability_gap=gap,
+                )
+                self._validate_analysis(decomposed)
+                decomposition = self._validate_decomposition(decomposed, candidates)
+                analysis = analysis.model_copy(
+                    update={"decomposition": decomposition, "rationale": decomposed.rationale}
+                )
+            analysis = analysis.model_copy(update={"disposition": final_disposition})
         else:
-            analysis = analysis.model_copy(update={"disposition": result.disposition})
+            final_disposition = Disposition.ROUTE if has_catalogue_match else Disposition.DEFER
+            analysis = analysis.model_copy(
+                update={"disposition": final_disposition, "decomposition": []}
+            )
 
         now = datetime.now(timezone.utc)
         proposal = RoutingProposal(
@@ -210,6 +252,7 @@ class O3RoutingReviewService:
             evaluations=result.evaluations,
             frontier=result.frontier,
             disposition=final_disposition,
+            recommendation=recommendation,
         )
         self.store.put(proposal)
         return proposal
@@ -339,7 +382,11 @@ class O3RoutingReviewService:
                 ),
             }
         )
-        candidates = await self.omniroute.live_candidates(self.registry.candidates)
+        try:
+            candidates = await self.omniroute.live_candidates(self.registry.candidates)
+        except OmniRouteError:
+            _logger.info("O3 execution pool unavailable during recommendation adjustment")
+            candidates = []
         analysis = proposal.adviser.model_copy(
             update={
                 "benchmark_requirements": [
@@ -358,7 +405,30 @@ class O3RoutingReviewService:
             }
         )
         result = evaluate_candidates(self.registry, analysis, candidates, constraints)
-        analysis = analysis.model_copy(update={"disposition": result.disposition})
+        live_ids = await self.omniroute.model_ids()
+        recommendation = (
+            recommend(
+                self.recommendation_catalogue,
+                difficulty=difficulty,
+                raw_floor=benchmark.minimum_score,
+                live_route_ids=live_ids,
+            )
+            if self.recommendation_catalogue is not None
+            else proposal.recommendation
+        )
+        has_match = bool(
+            recommendation
+            and sum(
+                recommendation.section_counts.get(name, 0)
+                for name in (
+                    "callable_non_codex",
+                    "other_above_floor",
+                    "codex_subscription_fallback",
+                )
+            )
+        )
+        disposition = Disposition.ROUTE if has_match else Disposition.DEFER
+        analysis = analysis.model_copy(update={"disposition": disposition})
         updated = proposal.model_copy(
             update={
                 "updated_at": datetime.now(timezone.utc),
@@ -366,7 +436,8 @@ class O3RoutingReviewService:
                 "approved_constraints": constraints,
                 "evaluations": result.evaluations,
                 "frontier": result.frontier,
-                "disposition": result.disposition,
+                "disposition": disposition,
+                "recommendation": recommendation,
             }
         )
         self.store.put(updated)

@@ -224,6 +224,49 @@ class ApprovedConstraints(StrictModel):
     cost_quota_preference: CostQuotaPreference = "balanced"
 
 
+class CatalogueRecommendationItem(StrictModel):
+    route_id: str
+    provider_id: str
+    displayed_model: str
+    equivalence_identity: str
+    reasoning_mode: str
+    capability_score_central: float
+    capability_score_lower: float
+    capability_score_upper: float | None = None
+    estimated_tier: str
+    conservative_tier: str
+    capability_confidence: str
+    estimate_method: str
+    gap_from_floor: float
+    live_present: bool
+    responses_callability: str
+    readiness_observed_at: str | None = None
+    operator_resource_class: str
+    raw_cost_class: str
+    alternate_route_ids: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
+class CatalogueRecommendation(StrictModel):
+    policy_version: str
+    forecast_version: str
+    forecast_hash: str
+    readiness_version: str
+    readiness_hash: str
+    source_snapshot_timestamp: str
+    readiness_observed_at: str | None = None
+    raw_benchmark_floor: float
+    common_capability_floor: float
+    total_route_count: int
+    live_present_count: int
+    section_counts: dict[str, int]
+    callable_non_codex: list[CatalogueRecommendationItem] = Field(default_factory=list)
+    other_above_floor: list[CatalogueRecommendationItem] = Field(default_factory=list)
+    codex_subscription_fallback: list[CatalogueRecommendationItem] = Field(default_factory=list)
+    nearest_below_floor: list[CatalogueRecommendationItem] = Field(default_factory=list)
+    stale_warning: str | None = None
+
+
 class ExecutionTokenUsage(StrictModel):
     """Sanitized token counters copied from an OmniRoute call-log row."""
 
@@ -281,6 +324,7 @@ class RoutingProposal(StrictModel):
     provenance_synced_at: datetime | None = None
     task_outcome: str | None = None
     terminal_disposition: str | None = None
+    recommendation: CatalogueRecommendation | None = None
 
 
 class ProposalCreateRequest(StrictModel):
