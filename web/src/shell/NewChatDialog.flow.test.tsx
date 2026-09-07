@@ -496,12 +496,8 @@ describe("NewChatLandingScreen create flow", () => {
     expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
       "OmniRoute O3 · Local",
     );
-    fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
-      target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
-    });
-    fireEvent.change(screen.getByTestId("o3-estimator-threshold"), {
-      target: { value: "40" },
-    });
+    expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
+    expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
     typeMessage("inspect the repo without changing it");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -516,6 +512,7 @@ describe("NewChatLandingScreen create flow", () => {
     expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
       "inspect the repo without changing it",
     );
+    expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
 
     fireEvent.click(screen.getByTestId("o3-approve"));
 
@@ -638,6 +635,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding([], O3_SERVER_INFO);
     await waitForWorkspaceSeed();
+    fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
     fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
       target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
     });

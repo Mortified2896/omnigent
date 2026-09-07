@@ -2400,6 +2400,7 @@ export function NewChatLandingScreen() {
   const [o3EstimatorEvidence, setO3EstimatorEvidence] = useState<
     O3EstimatorPolicy["evidence_policy"]
   >(savedEstimatorPolicy?.evidence_policy ?? "provisional");
+  const [o3EstimatorOverrideOpen, setO3EstimatorOverrideOpen] = useState(false);
   const [o3ReviewLoading, setO3ReviewLoading] = useState(false);
   const [o3RoutingSelected, setO3RoutingSelected] = useState(true);
   const [o3ReviewError, setO3ReviewError] = useState<string | null>(null);
@@ -3846,28 +3847,31 @@ export function NewChatLandingScreen() {
       setO3ReviewError(null);
       o3RestoreAttemptedRef.current = true;
       try {
-        const chosenEstimatorSlice = o3Slices.find(
-          (slice) =>
-            `${slice.benchmark_id}|${slice.version}|${slice.slice_id}` === o3EstimatorSlice,
-        );
-        const estimatorThreshold = Number(o3EstimatorThreshold);
-        if (
-          chosenEstimatorSlice === undefined ||
-          !Number.isFinite(estimatorThreshold) ||
-          estimatorThreshold < 0 ||
-          estimatorThreshold > 100
-        ) {
-          throw new Error("Choose an estimator benchmark and a threshold from 0 to 100.");
+        let estimatorPolicy: O3EstimatorPolicy | undefined;
+        if (o3EstimatorOverrideOpen) {
+          const chosenEstimatorSlice = o3Slices.find(
+            (slice) =>
+              `${slice.benchmark_id}|${slice.version}|${slice.slice_id}` === o3EstimatorSlice,
+          );
+          const estimatorThreshold = Number(o3EstimatorThreshold);
+          if (
+            chosenEstimatorSlice === undefined ||
+            !Number.isFinite(estimatorThreshold) ||
+            estimatorThreshold < 0 ||
+            estimatorThreshold > 100
+          ) {
+            throw new Error("Choose an estimator benchmark and a threshold from 0 to 100.");
+          }
+          estimatorPolicy = {
+            benchmark_id: chosenEstimatorSlice.benchmark_id,
+            version: chosenEstimatorSlice.version,
+            slice_id: chosenEstimatorSlice.slice_id,
+            minimum_common_capability: estimatorThreshold,
+            evidence_policy: o3EstimatorEvidence,
+            reasoning_effort: o3EstimatorEffort,
+          };
+          writeO3EstimatorPolicy(estimatorPolicy);
         }
-        const estimatorPolicy: O3EstimatorPolicy = {
-          benchmark_id: chosenEstimatorSlice.benchmark_id,
-          version: chosenEstimatorSlice.version,
-          slice_id: chosenEstimatorSlice.slice_id,
-          minimum_common_capability: estimatorThreshold,
-          evidence_policy: o3EstimatorEvidence,
-          reasoning_effort: o3EstimatorEffort,
-        };
-        writeO3EstimatorPolicy(estimatorPolicy);
         const workspaceSummary = o3WorkspaceSummary();
         const proposal = await createO3RoutingProposal(
           initialPrompt,
@@ -5359,60 +5363,78 @@ export function NewChatLandingScreen() {
               className="grid w-full gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2"
               data-testid="o3-estimator-settings"
             >
-              <div className="sm:col-span-2">
-                <p className="text-sm font-semibold">Estimator policy</p>
-                <p className="text-xs text-muted-foreground">
-                  Choose which configurations may assess the task. Catalogue scores are labeled
-                  approximate proxies; this setting is separate from the task floor.
-                </p>
+              <div className="flex items-start justify-between gap-4 sm:col-span-2">
+                <div>
+                  <p className="text-sm font-semibold">Benchmark selection</p>
+                  <p className="text-xs text-muted-foreground">
+                    Automatic — the estimator chooses the task benchmark. Override only when its
+                    choice needs correction.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setO3EstimatorOverrideOpen((open) => !open)}
+                  aria-expanded={o3EstimatorOverrideOpen}
+                  data-testid="o3-estimator-override-toggle"
+                >
+                  {o3EstimatorOverrideOpen ? "Use automatic" : "Adjust"}
+                </Button>
               </div>
-              <select
-                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                value={o3EstimatorSlice}
-                onChange={(event) => setO3EstimatorSlice(event.target.value)}
-                data-testid="o3-estimator-slice"
-              >
-                <option value="">Choose estimator benchmark…</option>
-                {o3Slices.map((slice) => (
-                  <option
-                    key={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
-                    value={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+              {o3EstimatorOverrideOpen && (
+                <>
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                    value={o3EstimatorSlice}
+                    onChange={(event) => setO3EstimatorSlice(event.target.value)}
+                    data-testid="o3-estimator-slice"
                   >
-                    {slice.label} ({slice.slice_id})
-                  </option>
-                ))}
-              </select>
-              <input
-                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                type="number"
-                min={0}
-                max={100}
-                value={o3EstimatorThreshold}
-                onChange={(event) => setO3EstimatorThreshold(event.target.value)}
-                placeholder="Minimum proxy score (0–100)"
-                data-testid="o3-estimator-threshold"
-              />
-              <select
-                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                value={o3EstimatorEvidence}
-                onChange={(event) =>
-                  setO3EstimatorEvidence(event.target.value as O3EstimatorPolicy["evidence_policy"])
-                }
-              >
-                <option value="provisional">Allow approximate proxy evidence</option>
-                <option value="strict">Strict measured evidence only</option>
-              </select>
-              <select
-                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                value={o3EstimatorEffort}
-                onChange={(event) => setO3EstimatorEffort(event.target.value)}
-              >
-                {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort} reasoning
-                  </option>
-                ))}
-              </select>
+                    <option value="">Choose estimator benchmark…</option>
+                    {o3Slices.map((slice) => (
+                      <option
+                        key={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+                        value={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+                      >
+                        {slice.label} ({slice.slice_id})
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={o3EstimatorThreshold}
+                    onChange={(event) => setO3EstimatorThreshold(event.target.value)}
+                    placeholder="Minimum proxy score (0–100)"
+                    data-testid="o3-estimator-threshold"
+                  />
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                    value={o3EstimatorEvidence}
+                    onChange={(event) =>
+                      setO3EstimatorEvidence(
+                        event.target.value as O3EstimatorPolicy["evidence_policy"],
+                      )
+                    }
+                  >
+                    <option value="provisional">Allow approximate proxy evidence</option>
+                    <option value="strict">Strict measured evidence only</option>
+                  </select>
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                    value={o3EstimatorEffort}
+                    onChange={(event) => setO3EstimatorEffort(event.target.value)}
+                  >
+                    {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
+                      <option key={effort} value={effort}>
+                        {effort} reasoning
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
           )}
 

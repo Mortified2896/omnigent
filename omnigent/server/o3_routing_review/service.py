@@ -26,6 +26,7 @@ from .models import (
     DecisionAction,
     DecompositionItem,
     Disposition,
+    EstimatorPolicy,
     EstimatorSelection,
     EvidencePolicy,
     ProposalAdjustmentRequest,
@@ -157,11 +158,27 @@ class O3RoutingReviewService:
         else:
             policy = request.estimator_policy
             if policy is None:
+                preferred = next(
+                    (item for item in self.registry.slices if item.slice_id == "tb4.overall"),
+                    next(
+                        (item for item in self.registry.slices if item.official),
+                        self.registry.slices[0] if self.registry.slices else None,
+                    ),
+                )
+                if preferred is not None:
+                    policy = EstimatorPolicy(
+                        benchmark_id=preferred.benchmark_id,
+                        version=preferred.version,
+                        slice_id=preferred.slice_id,
+                        minimum_common_capability=20,
+                        evidence_policy=EvidencePolicy.PROVISIONAL,
+                        reasoning_effort="low",
+                    )
+            if policy is None:
                 raise RoutingReviewError(
-                    "choose an estimator benchmark, threshold, evidence policy, "
-                    "and reasoning effort",
+                    "no benchmark slice is available for automatic estimator selection",
                     status_code=409,
-                    code="estimator_policy_required",
+                    code="estimator_policy_unavailable",
                 )
             try:
                 self.registry.require_slice(

@@ -715,14 +715,15 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
 
     monkeypatch.setattr(service, "cleanup_expired", forbidden_cleanup)
 
-    proposal = await service.create_proposal(
-        ProposalCreateRequest(prompt="Review this task", estimator_policy=_estimator_policy())
-    )
+    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Review this task"))
     adjusted = await service.adjust_proposal(
         proposal.proposal_id, ProposalAdjustmentRequest(difficulty="hard")
     )
 
     assert proposal.recommendation is not None
+    assert proposal.estimator is not None
+    assert proposal.estimator.policy.slice_id == _SLICE.slice_id
+    assert proposal.estimator.policy.minimum_common_capability == 20
     assert adjusted.recommendation is not None
     assert adjusted.recommendation.common_capability_floor == 80
     assert proposal.recommendation.execution_set is not None
