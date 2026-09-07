@@ -20,8 +20,9 @@ from .models import (
     ProposalSessionLinkRequest,
     RoutingProposal,
 )
+from .omniroute import OmniRouteError
 from .registry import SOURCE_POOL_NAME
-from .service import O3RoutingReviewService, get_o3_routing_review_service
+from .service import O3RoutingReviewService, RoutingReviewError, get_o3_routing_review_service
 
 _JSON_MUTATION_GUARDS = [
     Depends(require_json_content_type),
@@ -59,7 +60,15 @@ def create_o3_routing_review_router(
         request: Request,
         body: ProposalCreateRequest,
     ) -> RoutingProposal:
-        return await service_for(request).create_proposal(body)
+        try:
+            return await service_for(request).create_proposal(body)
+        except OmniRouteError as exc:
+            raise RoutingReviewError(
+                "OmniRoute is temporarily unavailable while preparing the route review; "
+                "try again.",
+                status_code=503,
+                code="omniroute_unavailable",
+            ) from exc
 
     @router.get(
         "/o3/routing-review/proposals/{proposal_id}",

@@ -498,6 +498,8 @@ describe("NewChatLandingScreen create flow", () => {
     );
     expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
     expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
+    fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
+    expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
     typeMessage("inspect the repo without changing it");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 

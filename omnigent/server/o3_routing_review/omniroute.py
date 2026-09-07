@@ -81,13 +81,21 @@ class OmniRouteClient:
         timeout: float | None = None,
     ) -> tuple[object, dict[str, str]]:
         headers = {"Authorization": self._authorization, "Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
-            response = await client.request(
-                method,
-                self.base_url + path,
-                headers=headers,
-                json=body,
-            )
+        request_timeout = timeout or self.timeout
+        try:
+            async with httpx.AsyncClient(timeout=request_timeout) as client:
+                response = await client.request(
+                    method,
+                    self.base_url + path,
+                    headers=headers,
+                    json=body,
+                )
+        except httpx.TimeoutException as exc:
+            raise OmniRouteError(
+                f"OmniRoute {method} {path} timed out after {request_timeout:g} seconds"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise OmniRouteError(f"OmniRoute {method} {path} request failed") from exc
         if response.status_code < 200 or response.status_code >= 300:
             try:
                 payload = response.json()

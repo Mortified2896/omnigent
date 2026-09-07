@@ -3848,13 +3848,17 @@ export function NewChatLandingScreen() {
       o3RestoreAttemptedRef.current = true;
       try {
         let estimatorPolicy: O3EstimatorPolicy | undefined;
-        if (o3EstimatorOverrideOpen) {
+        const hasEstimatorSlice = o3EstimatorSlice.trim() !== "";
+        const hasEstimatorThreshold = o3EstimatorThreshold.trim() !== "";
+        if (o3EstimatorOverrideOpen && (hasEstimatorSlice || hasEstimatorThreshold)) {
           const chosenEstimatorSlice = o3Slices.find(
             (slice) =>
               `${slice.benchmark_id}|${slice.version}|${slice.slice_id}` === o3EstimatorSlice,
           );
           const estimatorThreshold = Number(o3EstimatorThreshold);
           if (
+            !hasEstimatorSlice ||
+            !hasEstimatorThreshold ||
             chosenEstimatorSlice === undefined ||
             !Number.isFinite(estimatorThreshold) ||
             estimatorThreshold < 0 ||
@@ -5375,7 +5379,10 @@ export function NewChatLandingScreen() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setO3EstimatorOverrideOpen((open) => !open)}
+                  onClick={() => {
+                    if (o3EstimatorOverrideOpen) setO3ReviewError(null);
+                    setO3EstimatorOverrideOpen((open) => !open);
+                  }}
                   aria-expanded={o3EstimatorOverrideOpen}
                   data-testid="o3-estimator-override-toggle"
                 >

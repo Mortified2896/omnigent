@@ -1401,6 +1401,11 @@ class _RouteService:
         return self.proposal
 
 
+class _UnavailableRouteService(_RouteService):
+    async def create_proposal(self, _body: ProposalCreateRequest) -> RoutingProposal:
+        raise OmniRouteError("upstream detail must remain private")
+
+
 async def test_mutating_routes_require_auth_json_and_trusted_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1457,3 +1462,51 @@ async def test_mutating_routes_require_auth_json_and_trusted_origin(
     assert accepted.status_code == 201
     assert accepted.json()["proposal_id"] == proposal.proposal_id
     assert route_service.create_calls == 1
+
+
+async def test_create_route_returns_recoverable_error_when_omniroute_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_LOCAL_SINGLE_USER", "1")
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[], candidates=[])
+    proposal = _evaluated_proposal(registry, _analysis(), [_candidate()])
+    route_service = _UnavailableRouteService(proposal, registry)
+    app = FastAPI()
+
+    @app.exception_handler(RoutingReviewError)
+    async def handle_routing_error(
+        _request: Request,
+        exc: RoutingReviewError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": str(exc)}},
+        )
+
+    app.include_router(
+        create_o3_routing_review_router(
+            auth_provider=UnifiedAuthProvider(source="header", local_single_user=False),
+            service_factory=lambda: cast(O3RoutingReviewService, route_service),
+        ),
+        prefix="/v1",
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/o3/routing-review/proposals",
+            json={"prompt": "Inspect this repository"},
+            headers={
+                "X-Forwarded-Email": "alice@example.com",
+                "Origin": "http://127.0.0.1:5173",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "code": "omniroute_unavailable",
+            "message": (
+                "OmniRoute is temporarily unavailable while preparing the route review; try again."
+            ),
+        }
+    }
