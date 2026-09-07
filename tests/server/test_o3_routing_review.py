@@ -505,7 +505,7 @@ def test_no_adequate_candidate_does_not_lower_threshold() -> None:
 class _FakeOmniRoute:
     def __init__(self, candidates: list[CandidateSnapshot]) -> None:
         self.candidates = candidates
-        self.created: list[tuple[str, list[CandidateEvaluation], str]] = []
+        self.created: list[tuple[str, list[object], str]] = []
         self.deleted: list[str] = []
 
     async def live_candidates(self, _profiles: object) -> list[CandidateSnapshot]:
@@ -521,9 +521,20 @@ class _FakeOmniRoute:
         *,
         reasoning_effort: str,
     ) -> tuple[str, dict[str, object]]:
-        self.created.append((proposal_id, evaluations, reasoning_effort))
+        self.created.append((proposal_id, list(evaluations), reasoning_effort))
         name = "custom/o3-route-" + proposal_id.replace("-", "")[:12]
         return name, {"name": name}
+
+    async def create_catalogue_combo(
+        self,
+        proposal_id: str,
+        decisions: object,
+        *,
+        reasoning_effort: str,
+    ) -> tuple[str, dict[str, object]]:
+        self.created.append((proposal_id, list(decisions), reasoning_effort))  # type: ignore[arg-type]
+        name = "custom/o3-route-" + proposal_id.replace("-", "")[:12]
+        return name, {"name": name, "models": list(decisions)}  # type: ignore[arg-type]
 
     async def delete_derived_combo(self, name: str) -> bool:
         self.deleted.append(name)
@@ -683,6 +694,51 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
     assert adjusted.disposition is Disposition.ROUTE
     assert omni.created == []
     assert omni.deleted == []
+
+
+async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Path) -> None:
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[],
+        candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.2,
+                            "normal": 0.4,
+                            "moderate": 0.6,
+                            "hard": 0.8,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    omni = _RecommendationOnlyOmniRoute([])
+    service = O3RoutingReviewService(
+        registry=registry,
+        omniroute=cast(OmniRouteClient, omni),
+        adviser=cast(RoutingAdviser, _FakeAdviser(_analysis())),
+        store=ProposalStore(tmp_path / "o3-state.json"),
+        recommendation_catalogue=_recommendation_catalogue(),
+    )
+    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Execute this task"))
+
+    approved = await service.decide_proposal(
+        proposal.proposal_id,
+        ProposalDecisionRequest(action=DecisionAction.APPROVE),
+    )
+
+    assert approved.derived_combo_name is not None
+    assert len(omni.created) == 1
+    assert [item.route_id for item in omni.created[0][1]] == ["free/model-a"]
 
 
 async def test_provisional_candidate_requires_deliberate_acknowledgement(tmp_path: Path) -> None:

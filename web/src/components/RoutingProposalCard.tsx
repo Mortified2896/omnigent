@@ -153,12 +153,13 @@ export function RoutingProposalCard({
     [proposal.evaluations],
   );
   const best = eligible[0] ?? null;
+  const recommendation = proposal.recommendation ?? null;
   const terminal = proposal.decision === "decline" || proposal.decision === "defer";
   const approved = proposal.decision === "approve" || proposal.decision === "run_anyway";
-  const canApprove = eligible.length > 0 && proposal.decision === null;
+  const catalogueEligible = recommendation?.execution_set?.eligible_count ?? 0;
+  const canApprove = (eligible.length > 0 || catalogueEligible > 0) && proposal.decision === null;
   const canResumeLaunch = approved && proposal.derived_combo_name !== null;
   const hasProvisional = eligible.some((item) => item.status === "provisional");
-  const recommendation = proposal.recommendation ?? null;
 
   async function decide(decision: O3ProposalDecision, launch: boolean): Promise<void> {
     setBusy(decision.action);

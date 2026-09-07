@@ -15,6 +15,7 @@ from .models import (
     CandidateEvaluation,
     CandidateProfile,
     CandidateSnapshot,
+    CatalogueExecutionDecision,
     ExecutionProvenance,
     ExecutionTokenUsage,
 )
@@ -247,6 +248,93 @@ class OmniRouteClient:
                     "routerStrategy": "rules",
                     "explorationRate": 0,
                     "candidatePool": sorted({pair[0] for pair in requested_pairs}),
+                    "weights": {
+                        "taskFit": 0.0,
+                        "health": 0.30,
+                        "stability": 0.20,
+                        "quota": 0.20,
+                        "costInv": 0.15,
+                        "latencyInv": 0.10,
+                        "tierPriority": 0.0,
+                        "tierAffinity": 0.0,
+                        "specificityMatch": 0.0,
+                        "contextAffinity": 0.0,
+                        "cacheAffinity": 0.0,
+                        "sessionAvailability": 0.05,
+                        "resetWindowAffinity": 0.0,
+                    },
+                }
+            },
+        }
+        existing = await self.get_combo(name)
+        if existing is not None:
+            if self._combo_matches(existing, body):
+                return name, body
+            raise OmniRouteError(f"refusing to overwrite non-identical existing Combo {name!r}")
+        await self._request("POST", "/api/combos", body=body)
+        created = await self.get_combo(name)
+        if created is None or not self._combo_matches(created, body):
+            raise OmniRouteError(
+                f"derived Combo {name!r} did not persist with the requested targets"
+            )
+        return name, body
+
+    async def create_catalogue_combo(
+        self,
+        proposal_id: str,
+        decisions: list[CatalogueExecutionDecision],
+        *,
+        reasoning_effort: str,
+    ) -> tuple[str, dict[str, object]]:
+        """Persist an owned Combo from the complete approved catalogue set."""
+        short_id = proposal_id.replace("-", "")[:12].lower()
+        name = DERIVED_COMBO_PREFIX + short_id
+        if not _DERIVED_NAME_RE.fullmatch(name):
+            raise OmniRouteError("proposal id cannot produce a safe derived Combo name")
+        if not decisions:
+            raise OmniRouteError("cannot create an empty derived Combo")
+
+        targets: dict[tuple[str, str], CatalogueExecutionDecision] = {}
+        for decision in decisions:
+            pair = _target_pair(decision.provider_id, decision.route_id)
+            prior = targets.get(pair)
+            if prior is not None and prior.reasoning_mode != decision.reasoning_mode:
+                raise OmniRouteError(
+                    "OmniRoute Combo targets cannot preserve two reasoning configurations "
+                    f"for {decision.route_id!r}"
+                )
+            targets[pair] = decision
+
+        models: list[dict[str, object]] = []
+        for index, (pair, decision) in enumerate(sorted(targets.items()), start=1):
+            models.append(
+                {
+                    "id": f"o3-route-{short_id}-{index}",
+                    "kind": "model",
+                    "providerId": pair[0],
+                    "model": pair[1],
+                    "label": f"{decision.displayed_model} ({decision.reasoning_mode})",
+                    "weight": 0,
+                }
+            )
+        body: dict[str, object] = {
+            "name": name,
+            "displayName": f"O3 approved route {short_id}",
+            "type": "auto",
+            "strategy": "auto",
+            "description": (
+                f"Ephemeral O3 route owned by proposal {proposal_id}; approved effort "
+                f"{reasoning_effort}. Targets come from the full capability execution set."
+            ),
+            "explorationRate": 0,
+            "fallbackEnabled": True,
+            "useLkgp": False,
+            "models": models,
+            "config": {
+                "auto": {
+                    "routerStrategy": "rules",
+                    "explorationRate": 0,
+                    "candidatePool": sorted({pair[0] for pair in targets}),
                     "weights": {
                         "taskFit": 0.0,
                         "health": 0.30,

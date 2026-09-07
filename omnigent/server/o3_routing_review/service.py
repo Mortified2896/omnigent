@@ -485,18 +485,27 @@ class O3RoutingReviewService:
                 raise RoutingReviewError(
                     "provisional evidence requires deliberate acknowledgement", status_code=409
                 )
-        if not selected:
+        catalogue_set = proposal.recommendation.execution_set if proposal.recommendation else None
+        catalogue_selected = catalogue_set.eligible if catalogue_set is not None else []
+        if not selected and not catalogue_selected:
             raise RoutingReviewError(
                 "no structurally usable candidate exists for the approved effort",
                 status_code=409,
                 code="no_adequate_route",
             )
         try:
-            combo_name, combo_definition = await self.omniroute.create_derived_combo(
-                proposal.proposal_id,
-                selected,
-                reasoning_effort=proposal.approved_constraints.reasoning_effort,
-            )
+            if catalogue_selected:
+                combo_name, combo_definition = await self.omniroute.create_catalogue_combo(
+                    proposal.proposal_id,
+                    catalogue_selected,
+                    reasoning_effort=proposal.approved_constraints.reasoning_effort,
+                )
+            else:
+                combo_name, combo_definition = await self.omniroute.create_derived_combo(
+                    proposal.proposal_id,
+                    selected,
+                    reasoning_effort=proposal.approved_constraints.reasoning_effort,
+                )
         except OmniRouteError as exc:
             raise RoutingReviewError(
                 str(exc),
