@@ -461,7 +461,6 @@ describe("NewChatLandingScreen create flow", () => {
     const pending = o3Proposal();
     const approved = o3Proposal("approve");
     vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce(jsonResponse(pending))
       .mockResolvedValueOnce(
         jsonResponse({
           source_pool: "custom/o3-codex-pool",
@@ -479,6 +478,7 @@ describe("NewChatLandingScreen create flow", () => {
           ],
         }),
       )
+      .mockResolvedValueOnce(jsonResponse(pending))
       .mockResolvedValueOnce(jsonResponse(approved))
       .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
       .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
@@ -493,6 +493,12 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding([], O3_SERVER_INFO);
     await waitForWorkspaceSeed();
+    fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
+      target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
+    });
+    fireEvent.change(screen.getByTestId("o3-estimator-threshold"), {
+      target: { value: "40" },
+    });
     typeMessage("inspect the repo without changing it");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -594,7 +600,6 @@ describe("NewChatLandingScreen create flow", () => {
     const pending = o3Proposal();
     const approved = o3Proposal("approve");
     vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce(jsonResponse(pending))
       .mockResolvedValueOnce(
         jsonResponse({
           source_pool: "custom/o3-codex-pool",
@@ -612,6 +617,7 @@ describe("NewChatLandingScreen create flow", () => {
           ],
         }),
       )
+      .mockResolvedValueOnce(jsonResponse(pending))
       .mockResolvedValueOnce(jsonResponse(approved))
       .mockResolvedValueOnce(jsonResponse({ id: "conv_o3_retry" }))
       .mockResolvedValueOnce(errorResponse("Proposal link temporarily failed"))
@@ -629,6 +635,12 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding([], O3_SERVER_INFO);
     await waitForWorkspaceSeed();
+    fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
+      target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
+    });
+    fireEvent.change(screen.getByTestId("o3-estimator-threshold"), {
+      target: { value: "40" },
+    });
     typeMessage("inspect the retry handoff");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
     await screen.findByTestId("o3-routing-proposal-card");

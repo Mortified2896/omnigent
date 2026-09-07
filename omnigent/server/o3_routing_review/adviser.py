@@ -8,7 +8,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from .models import AdviserAnalysis, CandidateSnapshot
+from .models import AdviserAnalysis, CandidateSnapshot, ResourceAdvice, ResourceSnapshot
 from .omniroute import OmniRouteClient, OmniRouteError
 from .registry import ADVISER_COMBO_NAME, BenchmarkRegistry
 
@@ -23,6 +23,8 @@ class RoutingAdviser(Protocol):
         workspace_summary: str,
         registry: BenchmarkRegistry,
         candidates: list[CandidateSnapshot],
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> AdviserAnalysis: ...
 
     async def decompose(
@@ -130,8 +132,21 @@ class OmniRouteRoutingAdviser:
         self.model = os.environ.get(ADVISER_MODEL_ENV, ADVISER_COMBO_NAME).strip()
         if not self.model:
             raise ValueError(f"{ADVISER_MODEL_ENV} must not be blank")
+        self.actual_provider: str | None = None
+        self.actual_model: str | None = None
 
-    async def _call(self, payload: str, *, decomposition: bool) -> AdviserAnalysis:
+    def _remember_attribution(self, headers: dict[str, str]) -> None:
+        self.actual_provider = headers.get("x-omniroute-provider") or headers.get("x-provider")
+        self.actual_model = headers.get("x-omniroute-model") or headers.get("x-model")
+
+    async def _call(
+        self,
+        payload: str,
+        *,
+        decomposition: bool,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> AdviserAnalysis:
         instruction = (
             "You are the O3 routing requirements adviser. Interpret the task and return only "
             "the supplied JSON schema. You may choose only a benchmark ID/version/slice that "
@@ -162,12 +177,12 @@ class OmniRouteRoutingAdviser:
             )
         schema = AdviserAnalysis.model_json_schema()
         base_body: dict[str, object] = {
-            "model": self.model,
+            "model": model or self.model,
             "input": [
                 {"role": "system", "content": instruction},
                 {"role": "user", "content": payload},
             ],
-            "reasoning": {"effort": "low"},
+            "reasoning": {"effort": reasoning_effort or "low"},
             "store": False,
         }
         strict_body = {
@@ -183,6 +198,7 @@ class OmniRouteRoutingAdviser:
         }
         try:
             response = await self.client.create_response(strict_body)
+            self._remember_attribution(response.headers)
             return _decode_analysis(_extract_text(response.body))
         except OmniRouteError:
             # Some empirically Responses-compatible non-OpenAI adapters reject
@@ -204,6 +220,7 @@ class OmniRouteRoutingAdviser:
                 ],
             }
             response = await self.client.create_response(repair_body)
+            self._remember_attribution(response.headers)
             return _decode_analysis(_extract_text(response.body))
 
     async def analyse(
@@ -213,6 +230,8 @@ class OmniRouteRoutingAdviser:
         workspace_summary: str,
         registry: BenchmarkRegistry,
         candidates: list[CandidateSnapshot],
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> AdviserAnalysis:
         return await self._call(
             _json_payload(
@@ -222,7 +241,55 @@ class OmniRouteRoutingAdviser:
                 candidates=candidates,
             ),
             decomposition=False,
+            model=model,
+            reasoning_effort=reasoning_effort,
         )
+
+    async def advise_resources(
+        self,
+        *,
+        snapshot: ResourceSnapshot,
+        model: str,
+        reasoning_effort: str,
+    ) -> ResourceAdvice:
+        schema = ResourceAdvice.model_json_schema()
+        body: dict[str, object] = {
+            "model": model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only the supplied JSON schema. Recommend exactly start_now, wait, "
+                        "or ask_to_lower_floor from this aggregate operational snapshot. Missing "
+                        "coverage is unknown. Do not claim quota suffices to finish and do not "
+                        "invent reset times or change hard requirements. Set source=estimator."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(snapshot.model_dump(mode="json"), separators=(",", ":")),
+                },
+            ],
+            "reasoning": {"effort": reasoning_effort},
+            "store": False,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "o3_resource_advice",
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        }
+        response = await self.client.create_response(body)
+        self._remember_attribution(response.headers)
+        try:
+            advice = ResourceAdvice.model_validate(json.loads(_extract_text(response.body)))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise OmniRouteError("resource adviser output failed schema validation") from exc
+        if advice.action == "start_now" and snapshot.usable_routes == 0:
+            raise OmniRouteError("resource adviser recommended start without a known usable route")
+        return advice
 
     async def decompose(
         self,

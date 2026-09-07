@@ -18,6 +18,7 @@ from .models import (
     CatalogueExecutionDecision,
     ExecutionProvenance,
     ExecutionTokenUsage,
+    ResourceSnapshot,
 )
 from .registry import SOURCE_POOL_NAME
 
@@ -143,6 +144,55 @@ class OmniRouteClient:
             for item in raw
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
+
+    async def resource_snapshot(
+        self, decisions: list[CatalogueExecutionDecision]
+    ) -> ResourceSnapshot:
+        """Aggregate current circuit state for an explicit approved set."""
+        observed_at = datetime.now(timezone.utc).isoformat()
+        try:
+            response = await self._request("GET", "/api/monitoring/health")
+            raw_breakers = response.body.get("circuitBreakers")
+            breakers = raw_breakers if isinstance(raw_breakers, list) else []
+        except OmniRouteError:
+            breakers = []
+        states: dict[str, tuple[str, str | None]] = {}
+        for item in breakers:
+            if not isinstance(item, dict):
+                continue
+            provider = item.get("provider") or item.get("providerId")
+            state = item.get("state") or item.get("circuitState")
+            reset = item.get("resetAt")
+            if isinstance(provider, str) and isinstance(state, str):
+                states[provider] = (state.upper(), reset if isinstance(reset, str) else None)
+        usable = blocked = unknown = 0
+        resets: set[str] = set()
+        for decision in decisions:
+            state, reset = states.get(decision.provider_id, ("UNKNOWN", None))
+            if state == "CLOSED":
+                usable += 1
+            elif state == "OPEN":
+                blocked += 1
+                if reset:
+                    resets.add(reset)
+            else:
+                unknown += 1
+        total = len(decisions)
+        raw = {
+            "eligible_configurations": total,
+            "eligible_routes": total,
+            "usable_routes": usable,
+            "blocked_routes": blocked,
+            "unknown_routes": unknown,
+            "provider_diversity": len({item.provider_id for item in decisions}),
+            "status_coverage_percent": ((usable + blocked) / total * 100) if total else 0,
+            "observed_at": observed_at,
+            "reset_times": sorted(resets)[:20],
+        }
+        size = len(json.dumps(raw, separators=(",", ":")).encode())
+        if size > 4096:
+            raise OmniRouteError("aggregate O3 resource snapshot exceeded 4096 bytes")
+        return ResourceSnapshot(**raw, serialized_bytes=size)
 
     async def live_candidates(self, profiles: list[CandidateProfile]) -> list[CandidateSnapshot]:
         """Cross-check every profile against the persisted source pool and catalogue."""
@@ -365,6 +415,40 @@ class OmniRouteClient:
                 f"derived Combo {name!r} did not persist with the requested targets"
             )
         return name, body
+
+    async def create_estimator_combo(
+        self,
+        proposal_id: str,
+        decisions: list[CatalogueExecutionDecision],
+        *,
+        reasoning_effort: str,
+    ) -> tuple[str, dict[str, object]]:
+        """Create an estimator-only pool without exposing Codex subscription routes."""
+        short_id = proposal_id.replace("-", "")[:12].lower()
+        execution_name = DERIVED_COMBO_PREFIX + short_id
+        estimator_name = f"custom/o3-estimator-{short_id}"
+        name, body = await self.create_catalogue_combo(
+            proposal_id, decisions, reasoning_effort=reasoning_effort
+        )
+        if name != execution_name:
+            raise OmniRouteError("unexpected owned Combo name")
+        created = await self.get_combo(name)
+        if created is None:
+            raise OmniRouteError("estimator Combo was not persisted")
+        combo_id = created.get("id")
+        if not isinstance(combo_id, str) or not combo_id:
+            raise OmniRouteError("estimator Combo has no replaceable id")
+        await self._request("DELETE", f"/api/combos/{combo_id}")
+        estimator_body = {
+            **body,
+            "name": estimator_name,
+            "displayName": f"O3 estimator {short_id}",
+        }
+        await self._request("POST", "/api/combos", body=estimator_body)
+        persisted = await self.get_combo(estimator_name)
+        if persisted is None or not self._combo_matches(persisted, estimator_body):
+            raise OmniRouteError("estimator Combo did not persist with the requested targets")
+        return estimator_name, estimator_body
 
     @staticmethod
     def _combo_matches(existing: dict[str, object], wanted: dict[str, object]) -> bool:

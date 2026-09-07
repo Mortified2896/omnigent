@@ -36,12 +36,14 @@ from omnigent.server.o3_routing_review.models import (
     DecisionAction,
     DecompositionItem,
     Disposition,
+    EstimatorPolicy,
     EvidenceClass,
     EvidencePolicy,
     ProposalAdjustmentRequest,
     ProposalCreateRequest,
     ProposalDecisionRequest,
     ProposalOutcomeRequest,
+    ResourceSnapshot,
     RoutingProposal,
     RoutingRequirements,
 )
@@ -514,6 +516,20 @@ class _FakeOmniRoute:
     async def model_ids(self) -> set[str]:
         return {candidate.catalogue_model_id for candidate in self.candidates}
 
+    async def resource_snapshot(self, decisions: object) -> ResourceSnapshot:
+        items = list(decisions)  # type: ignore[arg-type]
+        return ResourceSnapshot(
+            eligible_configurations=len(items),
+            eligible_routes=len(items),
+            usable_routes=len(items),
+            blocked_routes=0,
+            unknown_routes=0,
+            provider_diversity=len({item.provider_id for item in items}),
+            status_coverage_percent=100,
+            observed_at="2026-09-07T00:00:00Z",
+            serialized_bytes=256,
+        )
+
     async def create_derived_combo(
         self,
         proposal_id: str,
@@ -534,6 +550,16 @@ class _FakeOmniRoute:
     ) -> tuple[str, dict[str, object]]:
         self.created.append((proposal_id, list(decisions), reasoning_effort))  # type: ignore[arg-type]
         name = "custom/o3-route-" + proposal_id.replace("-", "")[:12]
+        return name, {"name": name, "models": list(decisions)}  # type: ignore[arg-type]
+
+    async def create_estimator_combo(
+        self,
+        proposal_id: str,
+        decisions: object,
+        *,
+        reasoning_effort: str,
+    ) -> tuple[str, dict[str, object]]:
+        name = "custom/o3-estimator-" + proposal_id.replace("-", "")[:12]
         return name, {"name": name, "models": list(decisions)}  # type: ignore[arg-type]
 
     async def delete_derived_combo(self, name: str) -> bool:
@@ -618,6 +644,17 @@ def _recommendation_catalogue() -> RecommendationCatalogue:
     )
 
 
+def _estimator_policy(threshold: float = 40) -> EstimatorPolicy:
+    return EstimatorPolicy(
+        benchmark_id=_SLICE.benchmark_id,
+        version=_SLICE.version,
+        slice_id=_SLICE.slice_id,
+        minimum_common_capability=threshold,
+        evidence_policy=EvidencePolicy.PROVISIONAL,
+        reasoning_effort="low",
+    )
+
+
 def _service(
     tmp_path: Path,
     registry: BenchmarkRegistry,
@@ -678,7 +715,9 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
 
     monkeypatch.setattr(service, "cleanup_expired", forbidden_cleanup)
 
-    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Review this task"))
+    proposal = await service.create_proposal(
+        ProposalCreateRequest(prompt="Review this task", estimator_policy=_estimator_policy())
+    )
     adjusted = await service.adjust_proposal(
         proposal.proposal_id, ProposalAdjustmentRequest(difficulty="hard")
     )
@@ -729,7 +768,9 @@ async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Pa
         store=ProposalStore(tmp_path / "o3-state.json"),
         recommendation_catalogue=_recommendation_catalogue(),
     )
-    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Execute this task"))
+    proposal = await service.create_proposal(
+        ProposalCreateRequest(prompt="Execute this task", estimator_policy=_estimator_policy())
+    )
 
     approved = await service.decide_proposal(
         proposal.proposal_id,
@@ -739,6 +780,102 @@ async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Pa
     assert approved.derived_combo_name is not None
     assert len(omni.created) == 1
     assert [item.route_id for item in omni.created[0][1]] == ["free/model-a"]
+
+
+async def test_estimator_threshold_changes_actual_admission(tmp_path: Path) -> None:
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[],
+        candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.2,
+                            "normal": 0.4,
+                            "moderate": 0.6,
+                            "hard": 0.8,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    omni = _RecommendationOnlyOmniRoute([])
+    service = O3RoutingReviewService(
+        registry=registry,
+        omniroute=cast(OmniRouteClient, omni),
+        adviser=cast(RoutingAdviser, _FakeAdviser(_analysis())),
+        store=ProposalStore(tmp_path / "o3-state.json"),
+        recommendation_catalogue=_recommendation_catalogue(),
+    )
+
+    with pytest.raises(RoutingReviewError, match="no evidenced, callable non-Codex"):
+        await service.create_proposal(
+            ProposalCreateRequest(prompt="Assess me", estimator_policy=_estimator_policy(82))
+        )
+
+    admitted = await service.create_proposal(
+        ProposalCreateRequest(prompt="Assess me", estimator_policy=_estimator_policy(81))
+    )
+    assert admitted.estimator is not None
+    assert admitted.estimator.eligible_count == 1
+    assert admitted.estimator.combo_name is not None
+    assert admitted.resource_snapshot is not None
+    assert admitted.resource_snapshot.serialized_bytes < 4096
+    assert admitted.resource_advice is not None
+    assert admitted.resource_advice.action == "start_now"
+
+
+async def test_wait_is_resumable_and_adjustment_versions_constraints(tmp_path: Path) -> None:
+    candidate = _candidate()
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[_evidence(candidate)],
+        candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.2,
+                            "normal": 0.4,
+                            "moderate": 0.6,
+                            "hard": 0.8,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    analysis = _analysis()
+    service, _omni = _service(tmp_path, registry, [candidate], analysis)
+    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Preserve this task"))
+    waiting = await service.decide_proposal(
+        proposal.proposal_id, ProposalDecisionRequest(action=DecisionAction.WAIT)
+    )
+
+    assert waiting.decision is DecisionAction.WAIT
+    assert waiting.terminal_disposition is None
+    assert waiting.prompt_fingerprint == proposal.prompt_fingerprint
+
+    adjusted = await service.adjust_proposal(
+        proposal.proposal_id, ProposalAdjustmentRequest(difficulty="easy")
+    )
+    assert adjusted.decision is None
+    assert adjusted.constraint_version == proposal.constraint_version + 1
+    assert adjusted.prompt_fingerprint == proposal.prompt_fingerprint
 
 
 async def test_provisional_candidate_requires_deliberate_acknowledgement(tmp_path: Path) -> None:

@@ -155,9 +155,12 @@ export function RoutingProposalCard({
   const best = eligible[0] ?? null;
   const recommendation = proposal.recommendation ?? null;
   const terminal = proposal.decision === "decline" || proposal.decision === "defer";
+  const waiting = proposal.decision === "wait";
   const approved = proposal.decision === "approve" || proposal.decision === "run_anyway";
   const catalogueEligible = recommendation?.execution_set?.eligible_count ?? 0;
-  const canApprove = (eligible.length > 0 || catalogueEligible > 0) && proposal.decision === null;
+  const canApprove =
+    (eligible.length > 0 || catalogueEligible > 0) &&
+    (proposal.decision === null || proposal.decision === "wait");
   const canResumeLaunch = approved && proposal.derived_combo_name !== null;
   const hasProvisional = eligible.some((item) => item.status === "provisional");
 
@@ -418,6 +421,24 @@ export function RoutingProposalCard({
           </div>
         )}
 
+        {proposal.resource_advice && proposal.resource_snapshot && (
+          <div
+            className="rounded-md border border-border px-3 py-2 text-sm"
+            data-testid="o3-resource-advice"
+          >
+            <p className="font-semibold">{titleCase(proposal.resource_advice.action)}</p>
+            <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
+              {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
+              {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
+              {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
+              {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
+              {titleCase(proposal.resource_advice.source)}.
+            </p>
+          </div>
+        )}
+
         {reviewingSplit && proposal.adviser.decomposition.length > 0 && (
           <div className="space-y-2" data-testid="o3-decomposition">
             <p className="text-sm font-semibold">Proposed split</p>
@@ -443,6 +464,24 @@ export function RoutingProposalCard({
 
         {expanded && (
           <div className="space-y-3 border-t border-border pt-3" data-testid="o3-routing-details">
+            {proposal.estimator && (
+              <div className="rounded-md border border-border px-3 py-2 text-xs">
+                <p className="font-semibold">Estimator policy</p>
+                <p className="mt-1 text-muted-foreground">
+                  {proposal.estimator.policy.slice_id} · minimum proxy{" "}
+                  {proposal.estimator.policy.minimum_common_capability.toFixed(0)} ·{" "}
+                  {proposal.estimator.policy.evidence_policy} evidence ·{" "}
+                  {proposal.estimator.policy.reasoning_effort} reasoning
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  {proposal.estimator.evidence_label} · {proposal.estimator.eligible_count} eligible
+                  · actual{" "}
+                  {proposal.estimator.actual_provider && proposal.estimator.actual_model
+                    ? `${proposal.estimator.actual_provider}/${proposal.estimator.actual_model}`
+                    : "unknown"}
+                </p>
+              </div>
+            )}
             <p className="text-xs text-muted-foreground" data-testid="o3-calibration-detail">
               {titleCase(constraints.difficulty)} → O3 admission floor{" "}
               {benchmark.minimum_score.toFixed(6)} via {constraints.calibration_version}
@@ -508,7 +547,7 @@ export function RoutingProposalCard({
           </div>
         )}
 
-        {adjusting && proposal.decision === null && (
+        {adjusting && (proposal.decision === null || waiting) && (
           <div className="grid gap-3 rounded-lg border border-border bg-muted/30 p-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               Benchmark slice
@@ -612,7 +651,7 @@ export function RoutingProposalCard({
           </div>
         )}
 
-        {runAnyway && proposal.decision === null && (
+        {runAnyway && (proposal.decision === null || waiting) && (
           <div
             className="space-y-2 rounded-lg border border-destructive bg-destructive/5 p-3"
             data-testid="o3-run-anyway-confirmation"
@@ -665,6 +704,18 @@ export function RoutingProposalCard({
           </p>
         )}
 
+        {waiting && (
+          <div
+            className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
+            role="status"
+            data-testid="o3-waiting"
+          >
+            Waiting preserves task, capability floor, and constraint version{" "}
+            {proposal.constraint_version ?? 1}. Continue rechecks the approved route before launch;
+            Adjust creates a new constraint version.
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
           {approved ? (
             <p
@@ -704,10 +755,10 @@ export function RoutingProposalCard({
                 variant="ghost"
                 size="sm"
                 disabled={busy !== null}
-                onClick={() => void decide({ action: "defer" }, false)}
-                data-testid="o3-defer"
+                onClick={() => void decide({ action: "wait" }, false)}
+                data-testid="o3-wait"
               >
-                <ClockIcon className="mr-1 size-3.5" /> Defer
+                <ClockIcon className="mr-1 size-3.5" /> Wait
               </Button>
               <Button
                 type="button"
@@ -754,7 +805,11 @@ export function RoutingProposalCard({
               ) : (
                 <PlayIcon className="mr-1 size-3.5" />
               )}
-              {canResumeLaunch ? "Resume approved launch" : "Approve and run"}
+              {canResumeLaunch
+                ? "Resume approved launch"
+                : waiting
+                  ? "Continue after recheck"
+                  : "Approve and run"}
             </Button>
           )}
         </div>

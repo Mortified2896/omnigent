@@ -20,15 +20,19 @@ from .models import (
     CandidateEvaluation,
     CandidateSnapshot,
     CandidateStatus,
+    CatalogueExecutionDecision,
     CleanupResult,
     DecisionAction,
     DecompositionItem,
     Disposition,
+    EstimatorSelection,
+    EvidencePolicy,
     ProposalAdjustmentRequest,
     ProposalCreateRequest,
     ProposalDecisionRequest,
     ProposalOutcomeRequest,
     ProposalSessionLinkRequest,
+    ResourceAdvice,
     RoutingProposal,
 )
 from .omniroute import OmniRouteClient, OmniRouteError
@@ -143,14 +147,98 @@ class O3RoutingReviewService:
         prompt = request.prompt
         if not prompt.strip():
             raise RoutingReviewError("prompt must not be blank")
+        proposal_id = str(uuid.uuid4())
+        estimator: EstimatorSelection | None = None
+        adviser_model: str | None = None
+        adviser_effort: str | None = None
         if self.recommendation_catalogue is None:
             await self.cleanup_expired()
+        else:
+            policy = request.estimator_policy
+            if policy is None:
+                raise RoutingReviewError(
+                    "choose an estimator benchmark, threshold, evidence policy, "
+                    "and reasoning effort",
+                    status_code=409,
+                    code="estimator_policy_required",
+                )
+            try:
+                self.registry.require_slice(policy)
+            except ValueError as exc:
+                raise RoutingReviewError(str(exc), code="invalid_estimator_policy") from exc
+            live_ids = await self.omniroute.model_ids()
+            eligible: list[CatalogueExecutionDecision] = []
+            if policy.evidence_policy is EvidencePolicy.PROVISIONAL:
+                for row in self.recommendation_catalogue.forecasts:
+                    route_id = row.get("provider_model_route_id")
+                    lower = row.get("capability_score_lower")
+                    if not isinstance(route_id, str) or not isinstance(lower, (int, float)):
+                        continue
+                    ready = self.recommendation_catalogue.readiness.get(route_id, {})
+                    resource = str(ready.get("operator_resource_policy") or "unknown")
+                    callability = str(ready.get("responses_callability") or "unknown")
+                    reasoning = str(row.get("reasoning_mode") or "default")
+                    if (
+                        not row.get("adviser_applicable", False)
+                        or float(lower) < policy.minimum_common_capability
+                        or route_id not in live_ids
+                        or "non_codex" not in resource
+                        or callability
+                        not in {"callable", "callable_now", "success", "responses_callable"}
+                        or reasoning not in {"default", policy.reasoning_effort}
+                    ):
+                        continue
+                    eligible.append(
+                        CatalogueExecutionDecision(
+                            route_id=route_id,
+                            provider_id=str(row.get("provider") or route_id.split("/", 1)[0]),
+                            displayed_model=str(
+                                row.get("display_model_alias") or route_id.split("/", 1)[-1]
+                            ),
+                            reasoning_mode=reasoning,
+                            capability_score_lower=float(lower),
+                            compatibility_basis=[
+                                "approximate common-capability proxy",
+                                "current catalogue presence",
+                                "non-Codex operator resource policy",
+                                "Responses readiness",
+                            ],
+                        )
+                    )
+            if not eligible:
+                raise RoutingReviewError(
+                    "the selected estimator policy has no evidenced, callable non-Codex "
+                    "candidate; "
+                    "change the estimator setting explicitly",
+                    status_code=409,
+                    code="no_estimator_route",
+                )
+            adviser_model, _definition = await self.omniroute.create_estimator_combo(
+                proposal_id,
+                eligible,
+                reasoning_effort=policy.reasoning_effort,
+            )
+            adviser_effort = policy.reasoning_effort
+            estimator = EstimatorSelection(
+                policy=policy,
+                eligible_count=len(eligible),
+                combo_name=adviser_model,
+            )
         analysis = await self.adviser.analyse(
             prompt=prompt,
             workspace_summary=request.workspace_summary,
             registry=self.registry,
             candidates=[],
+            model=adviser_model,
+            reasoning_effort=adviser_effort,
         )
+        if estimator is not None:
+            estimator = estimator.model_copy(
+                update={
+                    "actual_provider": getattr(self.adviser, "actual_provider", None),
+                    "actual_model": getattr(self.adviser, "actual_model", None),
+                }
+            )
         self._validate_analysis(analysis)
         selection = analysis.benchmark_requirements[0]
         try:
@@ -190,6 +278,33 @@ class O3RoutingReviewService:
             if self.recommendation_catalogue is not None
             else None
         )
+        resource_snapshot = None
+        resource_advice = None
+        execution_set = recommendation.execution_set if recommendation else None
+        if execution_set is not None:
+            resource_snapshot = await self.omniroute.resource_snapshot(execution_set.eligible)
+            advise_resources = getattr(self.adviser, "advise_resources", None)
+            if callable(advise_resources) and adviser_model and adviser_effort:
+                try:
+                    resource_advice = await advise_resources(
+                        snapshot=resource_snapshot,
+                        model=adviser_model,
+                        reasoning_effort=adviser_effort,
+                    )
+                except OmniRouteError:
+                    _logger.info("O3 resource adviser unavailable; using deterministic guidance")
+            if resource_advice is None:
+                action = "start_now" if resource_snapshot.usable_routes > 0 else "wait"
+                reason = (
+                    "At least one approved route is currently reported usable."
+                    if action == "start_now"
+                    else "No approved route is currently confirmed usable; preserve the floor."
+                )
+                resource_advice = ResourceAdvice(
+                    action=action,
+                    reason=reason,
+                    source="deterministic_fallback",
+                )
         candidates: list[CandidateSnapshot] = []
         if self.recommendation_catalogue is None:
             try:
@@ -241,7 +356,7 @@ class O3RoutingReviewService:
 
         now = datetime.now(timezone.utc)
         proposal = RoutingProposal(
-            proposal_id=str(uuid.uuid4()),
+            proposal_id=proposal_id,
             created_at=now,
             updated_at=now,
             expires_at=now + timedelta(seconds=self.ttl_seconds),
@@ -253,6 +368,9 @@ class O3RoutingReviewService:
             frontier=result.frontier,
             disposition=final_disposition,
             recommendation=recommendation,
+            estimator=estimator,
+            resource_snapshot=resource_snapshot,
+            resource_advice=resource_advice,
         )
         self.store.put(proposal)
         return proposal
@@ -329,7 +447,7 @@ class O3RoutingReviewService:
         self, proposal_id: str, request: ProposalAdjustmentRequest
     ) -> RoutingProposal:
         proposal = self._require(proposal_id)
-        if proposal.decision is not None:
+        if proposal.decision is not None and proposal.decision is not DecisionAction.WAIT:
             raise RoutingReviewError("a decided proposal cannot be adjusted", status_code=409)
         current = proposal.approved_constraints
         selection = current.benchmark.model_copy(
@@ -435,6 +553,10 @@ class O3RoutingReviewService:
                 "frontier": result.frontier,
                 "disposition": disposition,
                 "recommendation": recommendation,
+                "decision": None,
+                "decision_reason": None,
+                "terminal_disposition": None,
+                "constraint_version": proposal.constraint_version + 1,
             }
         )
         self.store.put(updated)
@@ -444,17 +566,19 @@ class O3RoutingReviewService:
         self, proposal_id: str, request: ProposalDecisionRequest
     ) -> RoutingProposal:
         proposal = self._require(proposal_id)
-        if proposal.decision is not None:
+        if proposal.decision is not None and proposal.decision is not DecisionAction.WAIT:
             if proposal.decision is request.action:
                 return proposal
             raise RoutingReviewError("proposal already has a different decision", status_code=409)
-        if request.action in {DecisionAction.DECLINE, DecisionAction.DEFER}:
+        if request.action in {DecisionAction.DECLINE, DecisionAction.DEFER, DecisionAction.WAIT}:
             updated = proposal.model_copy(
                 update={
                     "decision": request.action,
                     "decision_reason": request.reason,
                     "updated_at": datetime.now(timezone.utc),
-                    "terminal_disposition": request.action.value,
+                    "terminal_disposition": (
+                        None if request.action is DecisionAction.WAIT else request.action.value
+                    ),
                 }
             )
             self.store.put(updated)

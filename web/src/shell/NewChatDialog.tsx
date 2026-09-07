@@ -214,10 +214,13 @@ import {
   getO3RoutingProposal,
   getO3RoutingRegistry,
   linkO3RoutingProposalSession,
+  readO3EstimatorPolicy,
   readO3RoutingDraft,
   routingDraftForProposal,
   writeO3RoutingDraft,
+  writeO3EstimatorPolicy,
   type O3BenchmarkSlice,
+  type O3EstimatorPolicy,
   type O3ProposalAdjustment,
   type O3ProposalDecision,
   type O3RoutingDraft,
@@ -2381,6 +2384,21 @@ export function NewChatLandingScreen() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [o3Proposal, setO3Proposal] = useState<O3RoutingProposal | null>(null);
   const [o3Slices, setO3Slices] = useState<O3BenchmarkSlice[]>([]);
+  const savedEstimatorPolicy = useMemo(() => readO3EstimatorPolicy(), []);
+  const [o3EstimatorSlice, setO3EstimatorSlice] = useState(
+    savedEstimatorPolicy
+      ? `${savedEstimatorPolicy.benchmark_id}|${savedEstimatorPolicy.version}|${savedEstimatorPolicy.slice_id}`
+      : "",
+  );
+  const [o3EstimatorThreshold, setO3EstimatorThreshold] = useState(
+    savedEstimatorPolicy?.minimum_common_capability.toString() ?? "",
+  );
+  const [o3EstimatorEffort, setO3EstimatorEffort] = useState(
+    savedEstimatorPolicy?.reasoning_effort ?? "low",
+  );
+  const [o3EstimatorEvidence, setO3EstimatorEvidence] = useState<
+    O3EstimatorPolicy["evidence_policy"]
+  >(savedEstimatorPolicy?.evidence_policy ?? "provisional");
   const [o3ReviewLoading, setO3ReviewLoading] = useState(false);
   const [o3ReviewError, setO3ReviewError] = useState<string | null>(null);
   const [o3Draft, setO3Draft] = useState<O3RoutingDraft | null>(() => readO3RoutingDraft());
@@ -2447,7 +2465,7 @@ export function NewChatLandingScreen() {
     void Promise.all([getO3RoutingProposal(o3Draft.proposalId), getO3RoutingRegistry()])
       .then(([proposal, registry]) => {
         setO3Proposal(proposal);
-        setO3Slices(registry.slices);
+        setO3Slices(registry.slices ?? []);
       })
       .catch((cause: unknown) => {
         setO3ReviewError(
@@ -2458,6 +2476,13 @@ export function NewChatLandingScreen() {
       })
       .finally(() => setO3ReviewLoading(false));
   }, [o3Draft, o3RoutingReviewEnabled]);
+
+  useEffect(() => {
+    if (!o3RoutingReviewEnabled || o3Draft !== null || o3Slices.length > 0) return;
+    void getO3RoutingRegistry()
+      .then((registry) => setO3Slices(registry.slices ?? []))
+      .catch(() => {});
+  }, [o3Draft, o3RoutingReviewEnabled, o3Slices.length]);
 
   const { recent, addRecent } = useRecentWorkspaces(selectedHostId);
   const { addRecentHarness } = useRecentHarnesses();
@@ -3819,15 +3844,37 @@ export function NewChatLandingScreen() {
       setO3ReviewError(null);
       o3RestoreAttemptedRef.current = true;
       try {
+        const chosenEstimatorSlice = o3Slices.find(
+          (slice) =>
+            `${slice.benchmark_id}|${slice.version}|${slice.slice_id}` === o3EstimatorSlice,
+        );
+        const estimatorThreshold = Number(o3EstimatorThreshold);
+        if (
+          chosenEstimatorSlice === undefined ||
+          !Number.isFinite(estimatorThreshold) ||
+          estimatorThreshold < 0 ||
+          estimatorThreshold > 100
+        ) {
+          throw new Error("Choose an estimator benchmark and a threshold from 0 to 100.");
+        }
+        const estimatorPolicy: O3EstimatorPolicy = {
+          benchmark_id: chosenEstimatorSlice.benchmark_id,
+          version: chosenEstimatorSlice.version,
+          slice_id: chosenEstimatorSlice.slice_id,
+          minimum_common_capability: estimatorThreshold,
+          evidence_policy: o3EstimatorEvidence,
+          reasoning_effort: o3EstimatorEffort,
+        };
+        writeO3EstimatorPolicy(estimatorPolicy);
         const workspaceSummary = o3WorkspaceSummary();
-        const [proposal, registry] = await Promise.all([
-          createO3RoutingProposal(initialPrompt, workspaceSummary),
-          getO3RoutingRegistry(),
-        ]);
+        const proposal = await createO3RoutingProposal(
+          initialPrompt,
+          workspaceSummary,
+          estimatorPolicy,
+        );
         const draft = routingDraftForProposal(proposal, initialPrompt, message, workspaceSummary);
         writeO3RoutingDraft(draft);
         setO3Draft(draft);
-        setO3Slices(registry.slices);
         setO3Proposal(proposal);
       } catch (cause) {
         setO3ReviewError(
@@ -5267,6 +5314,68 @@ export function NewChatLandingScreen() {
             >
               <Loader2Icon className="size-4 animate-spin" /> Analysing the task and evaluating
               every O3 source-pool candidate…
+            </div>
+          )}
+
+          {o3RoutingReviewEnabled && o3Proposal === null && !o3ReviewLoading && (
+            <div
+              className="grid w-full gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2"
+              data-testid="o3-estimator-settings"
+            >
+              <div className="sm:col-span-2">
+                <p className="text-sm font-semibold">Estimator policy</p>
+                <p className="text-xs text-muted-foreground">
+                  Choose which configurations may assess the task. Catalogue scores are labeled
+                  approximate proxies; this setting is separate from the task floor.
+                </p>
+              </div>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                value={o3EstimatorSlice}
+                onChange={(event) => setO3EstimatorSlice(event.target.value)}
+                data-testid="o3-estimator-slice"
+              >
+                <option value="">Choose estimator benchmark…</option>
+                {o3Slices.map((slice) => (
+                  <option
+                    key={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+                    value={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+                  >
+                    {slice.label} ({slice.slice_id})
+                  </option>
+                ))}
+              </select>
+              <input
+                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                type="number"
+                min={0}
+                max={100}
+                value={o3EstimatorThreshold}
+                onChange={(event) => setO3EstimatorThreshold(event.target.value)}
+                placeholder="Minimum proxy score (0–100)"
+                data-testid="o3-estimator-threshold"
+              />
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                value={o3EstimatorEvidence}
+                onChange={(event) =>
+                  setO3EstimatorEvidence(event.target.value as O3EstimatorPolicy["evidence_policy"])
+                }
+              >
+                <option value="provisional">Allow approximate proxy evidence</option>
+                <option value="strict">Strict measured evidence only</option>
+              </select>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                value={o3EstimatorEffort}
+                onChange={(event) => setO3EstimatorEffort(event.target.value)}
+              >
+                {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort} reasoning
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 

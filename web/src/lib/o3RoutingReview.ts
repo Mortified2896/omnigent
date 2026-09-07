@@ -4,7 +4,7 @@ export type O3EvidenceClass = "exact" | "proxy" | "advisory" | "forecast" | "unk
 export type O3Difficulty = "easy" | "normal" | "moderate" | "hard" | "frontier";
 export type O3EvidencePolicy = "strict" | "provisional";
 export type O3Disposition = "route" | "borderline" | "decompose" | "defer";
-export type O3DecisionAction = "approve" | "decline" | "defer" | "run_anyway";
+export type O3DecisionAction = "approve" | "decline" | "defer" | "wait" | "run_anyway";
 export type O3CandidateStatus = "pass" | "provisional" | "excluded";
 
 export interface O3BenchmarkSlice {
@@ -211,6 +211,33 @@ export interface O3RoutingProposal {
   task_outcome: string | null;
   terminal_disposition: string | null;
   recommendation?: O3CatalogueRecommendation | null;
+  constraint_version?: number;
+  estimator?: {
+    policy: O3EstimatorPolicy;
+    evidence_label: string;
+    eligible_count: number;
+    combo_name: string | null;
+    actual_provider: string | null;
+    actual_model: string | null;
+  } | null;
+  resource_snapshot?: {
+    eligible_configurations: number;
+    eligible_routes: number;
+    usable_routes: number;
+    blocked_routes: number;
+    unknown_routes: number;
+    provider_diversity: number;
+    status_coverage_percent: number;
+    observed_at: string;
+    reset_times: string[];
+    serialized_bytes: number;
+  } | null;
+  resource_advice?: {
+    action: "start_now" | "wait" | "ask_to_lower_floor";
+    reason: string;
+    proposed_common_floor: number | null;
+    source: "estimator" | "deterministic_fallback";
+  } | null;
 }
 
 export interface O3CatalogueRecommendationItem {
@@ -288,6 +315,15 @@ export interface O3ProposalAdjustment {
   cost_quota_preference?: string;
 }
 
+export interface O3EstimatorPolicy {
+  benchmark_id: string;
+  version: string;
+  slice_id: string;
+  minimum_common_capability: number;
+  evidence_policy: O3EvidencePolicy;
+  reasoning_effort: string;
+}
+
 export interface O3ProposalDecision {
   action: O3DecisionAction;
   acknowledge_provisional?: boolean;
@@ -329,10 +365,15 @@ function jsonMutation(method: "POST" | "PATCH", body: object): RequestInit {
 export function createO3RoutingProposal(
   prompt: string,
   workspaceSummary: string,
+  estimatorPolicy?: O3EstimatorPolicy,
 ): Promise<O3RoutingProposal> {
   return routingRequest(
     "/v1/o3/routing-review/proposals",
-    jsonMutation("POST", { prompt, workspace_summary: workspaceSummary }),
+    jsonMutation("POST", {
+      prompt,
+      workspace_summary: workspaceSummary,
+      ...(estimatorPolicy ? { estimator_policy: estimatorPolicy } : {}),
+    }),
   );
 }
 
@@ -375,6 +416,34 @@ export function linkO3RoutingProposalSession(
 }
 
 const O3_DRAFT_KEY = "omnigent:o3-routing-review:draft:v1";
+const O3_ESTIMATOR_POLICY_KEY = "omnigent:o3-routing-review:estimator-policy:v1";
+
+export function readO3EstimatorPolicy(): O3EstimatorPolicy | null {
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(O3_ESTIMATOR_POLICY_KEY) ?? "null",
+    ) as Partial<O3EstimatorPolicy> | null;
+    return parsed &&
+      typeof parsed.benchmark_id === "string" &&
+      typeof parsed.version === "string" &&
+      typeof parsed.slice_id === "string" &&
+      typeof parsed.minimum_common_capability === "number" &&
+      (parsed.evidence_policy === "strict" || parsed.evidence_policy === "provisional") &&
+      typeof parsed.reasoning_effort === "string"
+      ? (parsed as O3EstimatorPolicy)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeO3EstimatorPolicy(policy: O3EstimatorPolicy): void {
+  try {
+    window.localStorage.setItem(O3_ESTIMATOR_POLICY_KEY, JSON.stringify(policy));
+  } catch {
+    // The selected policy remains active in memory when storage is unavailable.
+  }
+}
 
 export interface O3RoutingDraft {
   version: 1;

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 Difficulty: TypeAlias = Literal["easy", "normal", "moderate", "hard", "frontier"]
 Risk: TypeAlias = Literal["low", "medium", "high"]
 ReasoningEffort: TypeAlias = Literal["low", "medium", "high", "xhigh"]
+ResourceAdviceAction: TypeAlias = Literal["start_now", "wait", "ask_to_lower_floor"]
 CostQuotaPreference: TypeAlias = Literal[
     "balanced", "preserve_subscription", "lowest_cost", "lowest_latency"
 ]
@@ -46,6 +47,7 @@ class DecisionAction(StrEnum):
     APPROVE = "approve"
     DECLINE = "decline"
     DEFER = "defer"
+    WAIT = "wait"
     RUN_ANYWAY = "run_anyway"
 
 
@@ -230,6 +232,44 @@ class ApprovedConstraints(StrictModel):
     cost_quota_preference: CostQuotaPreference = "balanced"
 
 
+class EstimatorPolicy(StrictModel):
+    benchmark_id: str
+    version: str
+    slice_id: str
+    minimum_common_capability: float = Field(ge=0, le=100)
+    evidence_policy: EvidencePolicy = EvidencePolicy.PROVISIONAL
+    reasoning_effort: ReasoningEffort
+
+
+class EstimatorSelection(StrictModel):
+    policy: EstimatorPolicy
+    evidence_label: str = "approximate common-capability proxy"
+    eligible_count: int = Field(ge=0)
+    combo_name: str | None = None
+    actual_provider: str | None = None
+    actual_model: str | None = None
+
+
+class ResourceSnapshot(StrictModel):
+    eligible_configurations: int = Field(ge=0)
+    eligible_routes: int = Field(ge=0)
+    usable_routes: int = Field(ge=0)
+    blocked_routes: int = Field(ge=0)
+    unknown_routes: int = Field(ge=0)
+    provider_diversity: int = Field(ge=0)
+    status_coverage_percent: float = Field(ge=0, le=100)
+    observed_at: str
+    reset_times: list[str] = Field(default_factory=list, max_length=20)
+    serialized_bytes: int = Field(ge=0)
+
+
+class ResourceAdvice(StrictModel):
+    action: ResourceAdviceAction
+    reason: str = Field(max_length=500)
+    proposed_common_floor: float | None = Field(default=None, ge=0, le=100)
+    source: Literal["estimator", "deterministic_fallback"]
+
+
 class CatalogueRecommendationItem(StrictModel):
     route_id: str
     provider_id: str
@@ -353,11 +393,16 @@ class RoutingProposal(StrictModel):
     task_outcome: str | None = None
     terminal_disposition: str | None = None
     recommendation: CatalogueRecommendation | None = None
+    constraint_version: int = Field(default=1, ge=1)
+    estimator: EstimatorSelection | None = None
+    resource_snapshot: ResourceSnapshot | None = None
+    resource_advice: ResourceAdvice | None = None
 
 
 class ProposalCreateRequest(StrictModel):
     prompt: str = Field(min_length=1, max_length=200_000)
     workspace_summary: str = Field(default="", max_length=20_000)
+    estimator_policy: EstimatorPolicy | None = None
 
 
 class ProposalAdjustmentRequest(StrictModel):

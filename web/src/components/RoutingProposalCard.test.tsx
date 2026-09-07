@@ -394,7 +394,7 @@ describe("RoutingProposalCard", () => {
     await waitFor(() => expect(onApproved).toHaveBeenCalledTimes(1));
   });
 
-  it.each(["decline", "defer"] as const)("records %s without launching", async (action) => {
+  it.each(["decline", "wait"] as const)("records %s without launching", async (action) => {
     const { onDecision, onApproved } = renderCard();
     fireEvent.click(screen.getByTestId(`o3-${action}`));
 
