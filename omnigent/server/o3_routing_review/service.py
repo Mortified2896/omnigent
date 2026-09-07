@@ -17,6 +17,7 @@ from .models import (
     AdviserAnalysis,
     ApprovedConstraints,
     BenchmarkRequirement,
+    BenchmarkSelection,
     CandidateEvaluation,
     CandidateSnapshot,
     CandidateStatus,
@@ -163,7 +164,14 @@ class O3RoutingReviewService:
                     code="estimator_policy_required",
                 )
             try:
-                self.registry.require_slice(policy)
+                self.registry.require_slice(
+                    BenchmarkSelection(
+                        benchmark_id=policy.benchmark_id,
+                        version=policy.version,
+                        slice_id=policy.slice_id,
+                        reason="user-selected estimator policy",
+                    )
+                )
             except ValueError as exc:
                 raise RoutingReviewError(str(exc), code="invalid_estimator_policy") from exc
             live_ids = await self.omniroute.model_ids()
@@ -283,10 +291,13 @@ class O3RoutingReviewService:
         execution_set = recommendation.execution_set if recommendation else None
         if execution_set is not None:
             resource_snapshot = await self.omniroute.resource_snapshot(execution_set.eligible)
-            advise_resources = getattr(self.adviser, "advise_resources", None)
-            if callable(advise_resources) and adviser_model and adviser_effort:
+            if (
+                isinstance(self.adviser, OmniRouteRoutingAdviser)
+                and adviser_model
+                and adviser_effort
+            ):
                 try:
-                    resource_advice = await advise_resources(
+                    resource_advice = await self.adviser.advise_resources(
                         snapshot=resource_snapshot,
                         model=adviser_model,
                         reasoning_effort=adviser_effort,
