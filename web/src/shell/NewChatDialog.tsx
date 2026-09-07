@@ -366,6 +366,7 @@ const CODEX_NATIVE_APPROVAL_MODES: {
 const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
 const CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane";
 const O3_ROUTING_PROPOSAL_LABEL_KEY = "o3.routing.proposal_id";
+const O3_ROUTING_MODEL_ID = "__omniroute_o3__";
 type CodexAccessLane = NonNullable<NativeModelOption["accessLane"]>;
 type ModelPickerOption = Pick<
   NativeModelOption,
@@ -2400,6 +2401,7 @@ export function NewChatLandingScreen() {
     O3EstimatorPolicy["evidence_policy"]
   >(savedEstimatorPolicy?.evidence_policy ?? "provisional");
   const [o3ReviewLoading, setO3ReviewLoading] = useState(false);
+  const [o3RoutingSelected, setO3RoutingSelected] = useState(true);
   const [o3ReviewError, setO3ReviewError] = useState<string | null>(null);
   const [o3Draft, setO3Draft] = useState<O3RoutingDraft | null>(() => readO3RoutingDraft());
   const o3RestoreAttemptedRef = useRef(false);
@@ -3834,7 +3836,7 @@ export function NewChatLandingScreen() {
         ? storedDraft.initialPrompt
         : computedInitialPrompt;
 
-    if (o3RoutingReviewEnabled && !o3Approved) {
+    if (o3RoutingReviewEnabled && o3RoutingSelected && !o3Approved) {
       if (o3Proposal !== null) return;
       if (o3CodexAgent === null) {
         setO3ReviewError("The local O3 server is enabled, but no Codex harness is available.");
@@ -4690,15 +4692,28 @@ export function NewChatLandingScreen() {
                   selectedHostId !== null && (
                     <SearchableModelPicker
                       value={
-                        !pickedModel
-                          ? MODEL_SELECT_DEFAULT
-                          : selectedNativeHarness === "codex-native"
-                            ? codexSelectionIdentity(pickedModel, pickedCodexAccessLane)
-                            : pickedModel
+                        o3RoutingReviewEnabled &&
+                        selectedNativeHarness === "codex-native" &&
+                        o3RoutingSelected
+                          ? O3_ROUTING_MODEL_ID
+                          : !pickedModel
+                            ? MODEL_SELECT_DEFAULT
+                            : selectedNativeHarness === "codex-native"
+                              ? codexSelectionIdentity(pickedModel, pickedCodexAccessLane)
+                              : pickedModel
                       }
                       options={
                         selectedNativeHarness === "codex-native"
-                          ? codexModelOptions
+                          ? o3RoutingReviewEnabled
+                            ? [
+                                {
+                                  id: O3_ROUTING_MODEL_ID,
+                                  displayName: "OmniRoute O3 · Local",
+                                  groupLabel: "Routing",
+                                },
+                                ...codexModelOptions,
+                              ]
+                            : codexModelOptions
                           : piModelOptions
                       }
                       loading={
@@ -4711,6 +4726,14 @@ export function NewChatLandingScreen() {
                           setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value);
                           return;
                         }
+                        if (value === O3_ROUTING_MODEL_ID) {
+                          setO3RoutingSelected(true);
+                          setPickedCodexModel("", null);
+                          resetO3Review();
+                          return;
+                        }
+                        setO3RoutingSelected(false);
+                        resetO3Review();
                         const option = codexModelOptions.find(
                           (candidate) => modelOptionSelectionIdentity(candidate) === value,
                         );
@@ -4803,23 +4826,37 @@ export function NewChatLandingScreen() {
                       <span className="inline-flex">
                         <Button
                           type="submit"
-                          size="icon"
+                          size={o3RoutingReviewEnabled && o3RoutingSelected ? "sm" : "icon"}
                           disabled={!canSubmit}
                           aria-label={
                             creating
                               ? "Starting session"
                               : o3ReviewLoading
                                 ? "Reviewing route"
-                                : o3RoutingReviewEnabled
+                                : o3RoutingReviewEnabled && o3RoutingSelected
                                   ? "Review route"
                                   : "Start session"
                           }
                           aria-busy={creating || o3ReviewLoading}
                           data-testid="new-chat-landing-submit"
-                          className="size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100 "
+                          className={
+                            o3RoutingReviewEnabled && o3RoutingSelected
+                              ? "h-8 gap-1.5 rounded-lg bg-foreground px-3 disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                              : "size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                          }
                         >
                           {creating || o3ReviewLoading ? (
-                            <Loader2Icon className="size-4 animate-spin" />
+                            <>
+                              <Loader2Icon className="size-4 animate-spin" />
+                              {o3RoutingReviewEnabled && o3RoutingSelected && (
+                                <span>Reviewing route</span>
+                              )}
+                            </>
+                          ) : o3RoutingReviewEnabled && o3RoutingSelected ? (
+                            <>
+                              <ShuffleIcon className="size-4" aria-hidden />
+                              <span>Review route</span>
+                            </>
                           ) : (
                             <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
                           )}

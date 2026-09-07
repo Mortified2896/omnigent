@@ -493,6 +493,9 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding([], O3_SERVER_INFO);
     await waitForWorkspaceSeed();
+    expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
+      "OmniRoute O3 · Local",
+    );
     fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
       target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
     });
