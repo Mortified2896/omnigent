@@ -162,6 +162,12 @@ export interface O3RoutingProposal {
       tools: boolean;
       minimum_context_tokens: number;
       vision: boolean;
+      input_modalities?: string[];
+      output_modalities?: string[];
+      minimum_input_tokens?: number;
+      minimum_output_tokens?: number;
+      structured_output?: boolean;
+      client_endpoint?: "responses";
     };
     benchmark_requirements: O3BenchmarkSelection[];
     proposed_reasoning_effort: string;
@@ -248,6 +254,26 @@ export interface O3CatalogueRecommendation {
   codex_subscription_fallback: O3CatalogueRecommendationItem[];
   nearest_below_floor: O3CatalogueRecommendationItem[];
   stale_warning: string | null;
+  execution_set?: O3CatalogueExecutionSet | null;
+}
+
+export interface O3CatalogueExecutionDecision {
+  route_id: string;
+  provider_id: string;
+  displayed_model: string;
+  reasoning_mode: string;
+  capability_score_lower: number | null;
+  equivalence_identity: string | null;
+  compatibility_basis: string[];
+  exclusions: string[];
+}
+
+export interface O3CatalogueExecutionSet {
+  total_evaluated: number;
+  eligible_count: number;
+  eligible: O3CatalogueExecutionDecision[];
+  excluded: O3CatalogueExecutionDecision[];
+  exclusion_counts: Record<string, number>;
 }
 
 export interface O3ProposalAdjustment {

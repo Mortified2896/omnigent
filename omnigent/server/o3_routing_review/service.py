@@ -184,6 +184,8 @@ class O3RoutingReviewService:
                 difficulty=analysis.difficulty,
                 raw_floor=requirement.minimum_score,
                 live_route_ids=live_ids,
+                requirements=analysis.requirements,
+                reasoning_effort=constraints.reasoning_effort,
             )
             if self.recommendation_catalogue is not None
             else None
@@ -210,14 +212,8 @@ class O3RoutingReviewService:
         result = evaluate_candidates(self.registry, analysis, candidates, constraints)
         has_catalogue_match = bool(
             recommendation
-            and sum(
-                recommendation.section_counts.get(name, 0)
-                for name in (
-                    "callable_non_codex",
-                    "other_above_floor",
-                    "codex_subscription_fallback",
-                )
-            )
+            and recommendation.execution_set
+            and recommendation.execution_set.eligible_count
         )
         if self.recommendation_catalogue is None:
             final_disposition = result.disposition
@@ -417,20 +413,16 @@ class O3RoutingReviewService:
                 difficulty=difficulty,
                 raw_floor=benchmark.minimum_score,
                 live_route_ids=live_ids,
+                requirements=analysis.requirements,
+                reasoning_effort=constraints.reasoning_effort,
             )
             if self.recommendation_catalogue is not None
             else proposal.recommendation
         )
         has_match = bool(
             recommendation
-            and sum(
-                recommendation.section_counts.get(name, 0)
-                for name in (
-                    "callable_non_codex",
-                    "other_above_floor",
-                    "codex_subscription_fallback",
-                )
-            )
+            and recommendation.execution_set
+            and recommendation.execution_set.eligible_count
         )
         disposition = Disposition.ROUTE if has_match else Disposition.DEFER
         analysis = analysis.model_copy(update={"disposition": disposition})

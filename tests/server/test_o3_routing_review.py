@@ -579,11 +579,16 @@ def _recommendation_catalogue() -> RecommendationCatalogue:
                 "provider_model_route_id": "free/model-a",
                 "provider": "free",
                 "display_model_alias": "Model A",
-                "reasoning_mode": "high",
+                "reasoning_mode": "default",
                 "capability_score_central": 90,
                 "capability_score_lower": 81,
                 "adviser_applicable": True,
                 "confidence": "high",
+                "input_modalities": ["text"],
+                "output_modalities": ["text"],
+                "context_window": 128_000,
+                "tool_calling": True,
+                "responses_compatibility": "catalog_declared",
                 "source_snapshot_timestamp": "2026-09-05T00:00:00Z",
             },
         ),
@@ -670,6 +675,12 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
     assert proposal.recommendation is not None
     assert adjusted.recommendation is not None
     assert adjusted.recommendation.common_capability_floor == 80
+    assert proposal.recommendation.execution_set is not None
+    assert proposal.recommendation.execution_set.eligible_count == 1
+    assert adjusted.recommendation.execution_set is not None
+    assert adjusted.recommendation.execution_set.eligible_count == 1
+    assert proposal.disposition is Disposition.ROUTE
+    assert adjusted.disposition is Disposition.ROUTE
     assert omni.created == []
     assert omni.deleted == []
 

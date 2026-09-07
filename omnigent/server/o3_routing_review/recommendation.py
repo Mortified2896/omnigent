@@ -9,7 +9,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .models import CatalogueRecommendation, CatalogueRecommendationItem, Difficulty
+from .eligibility import build_execution_set
+from .models import (
+    CatalogueRecommendation,
+    CatalogueRecommendationItem,
+    Difficulty,
+    ReasoningEffort,
+    RoutingRequirements,
+)
 
 CATALOG_DIR_ENV = "OMNIGENT_O3_RECOMMENDATION_CATALOG_DIR"
 REQUIRED_FILES = (
@@ -102,6 +109,8 @@ def recommend(
     difficulty: Difficulty,
     raw_floor: float,
     live_route_ids: set[str],
+    requirements: RoutingRequirements | None = None,
+    reasoning_effort: ReasoningEffort = "low",
 ) -> CatalogueRecommendation:
     floor = catalogue.floor(difficulty)
     grouped: dict[tuple[str, str], list[CatalogueRecommendationItem]] = {}
@@ -205,6 +214,13 @@ def recommend(
         "nearest_below_floor": len(below),
         "alias_routes_collapsed": collapsed,
     }
+    execution_set = build_execution_set(
+        catalogue,
+        common_floor=floor,
+        requirements=requirements or RoutingRequirements(),
+        reasoning_effort=reasoning_effort,
+        live_route_ids=live_route_ids,
+    )
     return CatalogueRecommendation(
         policy_version=str(catalogue.policy.get("policy_version") or "unknown"),
         forecast_version=str(catalogue.policy.get("policy_version") or "unknown"),
@@ -226,4 +242,5 @@ def recommend(
         other_above_floor=other[:20],
         codex_subscription_fallback=codex[:20],
         nearest_below_floor=below[:10],
+        execution_set=execution_set,
     )

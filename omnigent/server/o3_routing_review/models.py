@@ -116,6 +116,12 @@ class RoutingRequirements(StrictModel):
     tools: bool = True
     minimum_context_tokens: int = Field(default=0, ge=0)
     vision: bool = False
+    input_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    output_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    minimum_input_tokens: int = Field(default=0, ge=0)
+    minimum_output_tokens: int = Field(default=0, ge=0)
+    structured_output: bool = False
+    client_endpoint: Literal["responses"] = "responses"
 
 
 class DecompositionItem(StrictModel):
@@ -247,6 +253,27 @@ class CatalogueRecommendationItem(StrictModel):
     caveats: list[str] = Field(default_factory=list)
 
 
+class CatalogueExecutionDecision(StrictModel):
+    route_id: str
+    provider_id: str
+    displayed_model: str
+    reasoning_mode: str
+    capability_score_lower: float | None = None
+    equivalence_identity: str | None = None
+    compatibility_basis: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+
+
+class CatalogueExecutionSet(StrictModel):
+    """Uncapped capability and effective-I/O decisions for the exposed catalogue."""
+
+    total_evaluated: int
+    eligible_count: int
+    eligible: list[CatalogueExecutionDecision] = Field(default_factory=list)
+    excluded: list[CatalogueExecutionDecision] = Field(default_factory=list)
+    exclusion_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class CatalogueRecommendation(StrictModel):
     policy_version: str
     forecast_version: str
@@ -265,6 +292,7 @@ class CatalogueRecommendation(StrictModel):
     codex_subscription_fallback: list[CatalogueRecommendationItem] = Field(default_factory=list)
     nearest_below_floor: list[CatalogueRecommendationItem] = Field(default_factory=list)
     stale_warning: str | None = None
+    execution_set: CatalogueExecutionSet | None = None
 
 
 class ExecutionTokenUsage(StrictModel):
