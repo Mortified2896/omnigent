@@ -4255,14 +4255,14 @@ export function NewChatLandingScreen() {
     // the hero reads better optically.
     <div
       ref={setLandingSurface}
-      className="flex flex-1 items-center justify-center"
+      className="min-h-0 flex-1 overflow-y-auto"
       data-testid="new-chat-landing"
     >
       {/* Padding lives inside the 840px cap, so the composer renders at
           840 − 80 = 760px max on desktop. px-4 on phones (16px gutters)
           keeps the composer from feeling cramped against the viewport
           edges; widens to the full px-10 at the md breakpoint and up. */}
-      <div className="flex w-full max-w-[840px] flex-col items-center gap-6 px-4 pt-8 pb-16 md:select-none md:px-10">
+      <div className="mx-auto flex min-h-full w-full max-w-[840px] flex-col items-center justify-center gap-6 px-4 pt-8 pb-16 md:select-none md:px-10">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
           {selectedProject ? (
             // Landing inside a project: swap Otto's eyes for the same folder

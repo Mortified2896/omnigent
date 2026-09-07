@@ -910,6 +910,14 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByTestId("new-chat-landing-input")).toBeTruthy();
   });
 
+  it("keeps expanded new-session content vertically scrollable", () => {
+    renderLanding();
+
+    const landing = screen.getByTestId("new-chat-landing");
+    expect(landing).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(landing.firstElementChild).toHaveClass("min-h-full", "justify-center");
+  });
+
   it("uses a home-specific focus shadow without a resting shadow or focus border", () => {
     renderLanding();
 
