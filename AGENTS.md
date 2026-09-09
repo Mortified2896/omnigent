@@ -3,6 +3,21 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
+## Mac app development lane
+
+For explicitly Mac-local O3 work, use `codex/mac-app` as the integration and PR
+base. Its stable checkout is `/Users/Jo/GitHub/omnigent-o3-routing-review-mvp`;
+the installed Mac app uses the Python environment at that path. Keep feature
+work in separate `codex/mac-*` branches and linked worktrees under
+`/Users/Jo/GitHub/_worktrees/omnigent/`. See
+[`docs/mac-app-development.md`](docs/mac-app-development.md) for the workflow.
+
+Mac-local work does not use the HomeLab server-first implementation boundary.
+Do not merge Mac features into `main` or deploy them to O1/O2 unless explicitly
+requested. Keep the integration checkout stable while the installed app uses it.
+Separate worktrees do not isolate native runtime state; do not start competing
+native servers or daemons merely by assigning a different port.
+
 ## HomeLab server-first boundary
 
 This section applies to the `Mortified2896/omnigent` HomeLab deployment. Other
