@@ -1,0 +1,1055 @@
+{
+  "before-coding": {
+    "status": "idle",
+    "context_window": 258400,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 88075,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 122,
+        "reasoning_output_tokens": 17,
+        "total_tokens": 88197
+      },
+      "last_token_usage": {
+        "input_tokens": 88075,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 122,
+        "reasoning_output_tokens": 17,
+        "total_tokens": 88197
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 187118,
+        "cached_input_tokens": 7040,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 183,
+        "reasoning_output_tokens": 17,
+        "total_tokens": 187301
+      },
+      "last_token_usage": {
+        "input_tokens": 99043,
+        "cached_input_tokens": 3712,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 61,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 99104
+      },
+      "model_context_window": 258400
+    },
+    "fresh": true,
+    "requests": [
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 88075,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "namespace",
+            "multi_agent_v1"
+          ],
+          [
+            "namespace",
+            "mcp__anki"
+          ],
+          [
+            "namespace",
+            "mcp__node_repl"
+          ],
+          [
+            "namespace",
+            "mcp__omnigent"
+          ],
+          [
+            "namespace",
+            "mcp__omniroute"
+          ],
+          [
+            "namespace",
+            "mcp__shadcn"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__apple_music"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__codex_document_control"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__github"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__gmail"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__google_calendar"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__google_drive"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__hotline"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__plugin_management"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__safety_settings"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__sites"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__todoist__to_do_list___calendar"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 477,
+        "omniroute_schema_count": 110,
+        "prior_assistant_messages": 0
+      }
+    ]
+  },
+  "delivered-minimal": {
+    "status": "idle",
+    "context_window": 258400,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 16285,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 6,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16291
+      },
+      "last_token_usage": {
+        "input_tokens": 16285,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 6,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16291
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 16285,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 6,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16291
+      },
+      "last_token_usage": {
+        "input_tokens": 16285,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 6,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16291
+      },
+      "model_context_window": 258400
+    },
+    "fresh": true,
+    "requests": [
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 16285,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "custom",
+            "apply_patch"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "tool_search",
+            null
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 13,
+        "omniroute_schema_count": 0,
+        "prior_assistant_messages": 0
+      }
+    ]
+  },
+  "delivered-coding": {
+    "status": "idle",
+    "context_window": 258400,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 16477,
+        "cached_input_tokens": 9472,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 103,
+        "reasoning_output_tokens": 16,
+        "total_tokens": 16580
+      },
+      "last_token_usage": {
+        "input_tokens": 16477,
+        "cached_input_tokens": 9472,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 103,
+        "reasoning_output_tokens": 16,
+        "total_tokens": 16580
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 34608,
+        "cached_input_tokens": 12800,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 149,
+        "reasoning_output_tokens": 16,
+        "total_tokens": 34757
+      },
+      "last_token_usage": {
+        "input_tokens": 18131,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 46,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 18177
+      },
+      "model_context_window": 258400
+    },
+    "fresh": true,
+    "requests": [
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 16477,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "custom",
+            "apply_patch"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "tool_search",
+            null
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 14,
+        "omniroute_schema_count": 0,
+        "prior_assistant_messages": 0
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 18131,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "custom",
+            "apply_patch"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "tool_search",
+            null
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 14,
+        "omniroute_schema_count": 0,
+        "prior_assistant_messages": 0
+      }
+    ]
+  },
+  "delivered-omniroute": {
+    "status": "idle",
+    "context_window": 258400,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 16484,
+        "cached_input_tokens": 9472,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 87,
+        "reasoning_output_tokens": 30,
+        "total_tokens": 16571
+      },
+      "last_token_usage": {
+        "input_tokens": 16484,
+        "cached_input_tokens": 9472,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 87,
+        "reasoning_output_tokens": 30,
+        "total_tokens": 16571
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 54247,
+        "cached_input_tokens": 16128,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 171,
+        "reasoning_output_tokens": 30,
+        "total_tokens": 54418
+      },
+      "last_token_usage": {
+        "input_tokens": 19009,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 63,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 19072
+      },
+      "model_context_window": 258400
+    },
+    "fresh": true,
+    "requests": [
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 16484,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "custom",
+            "apply_patch"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "tool_search",
+            null
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 14,
+        "omniroute_schema_count": 0,
+        "prior_assistant_messages": 0
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 18754,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "custom",
+            "apply_patch"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "tool_search",
+            null
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 14,
+        "omniroute_schema_count": 0,
+        "prior_assistant_messages": 0
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "input_tokens": 19009,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "custom",
+            "apply_patch"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "tool_search",
+            null
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 14,
+        "omniroute_schema_count": 0,
+        "prior_assistant_messages": 0
+      }
+    ]
+  },
+  "fallback": {
+    "status": "idle",
+    "context_window": 258400,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 91203,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 62,
+        "reasoning_output_tokens": 45,
+        "total_tokens": 91265
+      },
+      "last_token_usage": {
+        "input_tokens": 91203,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 62,
+        "reasoning_output_tokens": 45,
+        "total_tokens": 91265
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 91203,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 62,
+        "reasoning_output_tokens": 45,
+        "total_tokens": 91265
+      },
+      "last_token_usage": {
+        "input_tokens": 91203,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 62,
+        "reasoning_output_tokens": 45,
+        "total_tokens": 91265
+      },
+      "model_context_window": 258400
+    },
+    "fresh": true,
+    "requests": [
+      {
+        "model": "gpt-5.3-codex-spark",
+        "input_tokens": 91203,
+        "tool_types_and_names": [
+          [
+            "function",
+            "exec_command"
+          ],
+          [
+            "function",
+            "write_stdin"
+          ],
+          [
+            "function",
+            "list_mcp_resources"
+          ],
+          [
+            "function",
+            "list_mcp_resource_templates"
+          ],
+          [
+            "function",
+            "read_mcp_resource"
+          ],
+          [
+            "function",
+            "request_user_input"
+          ],
+          [
+            "function",
+            "request_plugin_install"
+          ],
+          [
+            "function",
+            "view_image"
+          ],
+          [
+            "namespace",
+            "multi_agent_v1"
+          ],
+          [
+            "namespace",
+            "mcp__anki"
+          ],
+          [
+            "namespace",
+            "mcp__bitwarden"
+          ],
+          [
+            "namespace",
+            "mcp__node_repl"
+          ],
+          [
+            "namespace",
+            "mcp__omnigent"
+          ],
+          [
+            "namespace",
+            "mcp__omniroute"
+          ],
+          [
+            "namespace",
+            "mcp__shadcn"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__apple_music"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__codex_document_control"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__github"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__gmail"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__google_calendar"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__google_drive"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__hotline"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__plugin_management"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__safety_settings"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__sites"
+          ],
+          [
+            "namespace",
+            "mcp__codex_apps__todoist__to_do_list___calendar"
+          ],
+          [
+            "function",
+            "get_goal"
+          ],
+          [
+            "function",
+            "create_goal"
+          ],
+          [
+            "function",
+            "update_goal"
+          ],
+          [
+            "web_search",
+            null
+          ]
+        ],
+        "callable_entries": 536,
+        "omniroute_schema_count": 110,
+        "prior_assistant_messages": 0
+      }
+    ]
+  },
+  "capabilities": {
+    "gateway_version": "3.8.50",
+    "routes": {
+      "cx/gpt-5.3-codex-spark": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.3-codex-spark",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.949956+00:00"
+      },
+      "cx/gpt-5.5": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.5",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.950397+00:00"
+      },
+      "cx/gpt-5.5-low": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.5",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.950656+00:00"
+      },
+      "cx/gpt-5.6-luna": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-luna",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.950826+00:00"
+      },
+      "cx/gpt-5.6-luna-low": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-luna",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.950978+00:00"
+      },
+      "cx/gpt-5.6-sol": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-sol",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.951196+00:00"
+      },
+      "cx/gpt-5.6-sol-low": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-sol",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.951606+00:00"
+      },
+      "cx/gpt-5.6-sol-ultra": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-sol",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.951734+00:00"
+      },
+      "cx/gpt-5.6-terra": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-terra",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.951950+00:00"
+      },
+      "cx/gpt-5.6-terra-low": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-terra",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.952136+00:00"
+      },
+      "cx/gpt-5.6-terra-ultra": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.6-terra",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.952389+00:00"
+      },
+      "codex/gpt-5.5": {
+        "provider": "codex",
+        "resolved_model": "gpt-5.5",
+        "supports_search_tool": true,
+        "search_call": true,
+        "loaded_tool_call": true,
+        "observed_at": "2026-09-09T03:55:55.952575+00:00"
+      },
+      "minimax/minimax-m3:free": {
+        "provider": "openrouter",
+        "resolved_model": null,
+        "supports_search_tool": false,
+        "search_call": false,
+        "loaded_tool_call": false,
+        "observed_at": "2026-09-09T03:55:55.952756+00:00"
+      }
+    }
+  },
+  "registered_tools": {
+    "before": 539,
+    "after": 539,
+    "omniroute_before": 110,
+    "omniroute_after": 110
+  },
+  "discovery": {
+    "loaded_omniroute_tools": [
+      "omniroute_pool_health",
+      "omniroute_get_health",
+      "obsidian_check_status",
+      "plugin_list",
+      "omniroute_ccr_inspect"
+    ],
+    "called": "omniroute_get_health",
+    "additional_other_tools": 3
+  },
+  "schema_attribution_controls": {
+    "delivered-minimal": {
+      "http_status": 200,
+      "model": "gpt-5.6-terra",
+      "usage": {
+        "input_tokens": 16285,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 15616
+        },
+        "output_tokens": 6,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 16291
+      },
+      "request_fields": {
+        "tools": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 7203,
+          "input_tokens": 7203,
+          "output_tokens": 0
+        },
+        "instructions": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 2896,
+          "input_tokens": 2896,
+          "output_tokens": 0
+        }
+      }
+    },
+    "delivered-coding": {
+      "http_status": 200,
+      "model": "gpt-5.6-terra",
+      "usage": {
+        "input_tokens": 16477,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 15616
+        },
+        "output_tokens": 81,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 16558
+      },
+      "request_fields": {
+        "tools": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 7369,
+          "input_tokens": 7369,
+          "output_tokens": 0
+        },
+        "instructions": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 2896,
+          "input_tokens": 2896,
+          "output_tokens": 0
+        }
+      }
+    }
+  }
+}

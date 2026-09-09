@@ -3161,12 +3161,10 @@ def test_forwarder_posts_codex_usage_live_per_frame(
     # only the CHANGED keys — context_window was unchanged, so the coalescer's
     # dedup drops it (proving latest-only diffing, not blind re-posting).
     assert posts_after_usage_updates[0]["data"] == {
-        "context_tokens": 100,
         "context_window": 200_000,
         "cumulative_input_tokens": 100,
     }
     assert posts_after_usage_updates[1]["data"] == {
-        "context_tokens": 150,
         "cumulative_input_tokens": 150,
     }
     # Text still streams via its own coalescer — the per-frame usage posts
@@ -8394,7 +8392,7 @@ def test_session_usage_data_extracts_cumulative_tokens() -> None:
     assert data["cumulative_input_tokens"] == 1000
     assert data["cumulative_output_tokens"] == 250
     # Existing context-ring fields still flow.
-    assert data["context_tokens"] == 1000
+    assert "context_tokens" not in data
     assert data["context_window"] == 200000
     # No ``cachedInputTokens`` in the frame ⇒ no cache field forwarded. A
     # failure here would mean the server splits a phantom cache bucket out of
@@ -8480,10 +8478,9 @@ def test_session_usage_data_context_tokens_uses_last_turn_input() -> None:
     assert data["context_window"] == 1_178_000
 
 
-def test_session_usage_data_context_tokens_falls_back_without_last() -> None:
+def test_session_usage_data_context_tokens_omitted_without_last() -> None:
     """
-    When ``tokenUsage.last`` is absent (e.g. first frame before a turn
-    completes), ``context_tokens`` falls back to ``total.inputTokens``.
+    Missing latest usage must not inflate occupancy with cumulative usage.
     """
     params = {
         "tokenUsage": {
@@ -8496,16 +8493,13 @@ def test_session_usage_data_context_tokens_falls_back_without_last() -> None:
     }
     data = codex_native_forwarder._session_usage_data_from_params(params)
     assert data is not None
-    assert data["context_tokens"] == 1000
+    assert "context_tokens" not in data
     assert data["cumulative_input_tokens"] == 1000
 
 
-def test_session_usage_data_context_tokens_falls_back_when_last_missing_input() -> None:
+def test_session_usage_data_context_tokens_omitted_when_last_missing_input() -> None:
     """
-    When ``tokenUsage.last`` is present but lacks a usable ``inputTokens``,
-    ``context_tokens`` falls back to ``total.inputTokens`` rather than being
-    omitted (which would leave the UI ring stuck on a stale value from a
-    previous coalescer frame).
+    Incomplete latest usage must not overwrite occupancy with session totals.
     """
     params = {
         "tokenUsage": {
@@ -8522,7 +8516,7 @@ def test_session_usage_data_context_tokens_falls_back_when_last_missing_input() 
     }
     data = codex_native_forwarder._session_usage_data_from_params(params)
     assert data is not None
-    assert data["context_tokens"] == 3000
+    assert "context_tokens" not in data
 
 
 def test_usage_coalescer_flush_attaches_model_to_every_post() -> None:
@@ -10372,3 +10366,48 @@ def test_codex_discover_thread_and_forward_writes_routing_summary_on_timeout(
     assert err is not None
     assert "Launch routing: Codex CLI login (no provider configured) -- SENTINEL" in err
     assert "startup timed out" in err
+
+
+def test_session_usage_data_native_window_overrides_legacy_window() -> None:
+    """Native schema must replace the fallback denominator for routed models."""
+    data = codex_native_forwarder._session_usage_data_from_params(
+        {
+            "tokenUsage": {
+                "total": {
+                    "inputTokens": 296638,
+                    "outputTokens": 64,
+                    "contextWindow": 128000,
+                },
+                "last": {"inputTokens": 104361, "outputTokens": 25},
+                "modelContextWindow": 258400,
+            }
+        }
+    )
+    assert data is not None
+    assert data["context_window"] == 258400
+    assert data["context_tokens"] == 104361
+    assert round(100 * data["context_tokens"] / data["context_window"]) == 40
+    assert data["cumulative_input_tokens"] == 296638
+
+
+@pytest.mark.parametrize("window", [None, 0, -1, True, "258400"])
+def test_session_usage_data_invalid_native_window_uses_valid_legacy(window: Any) -> None:
+    data = codex_native_forwarder._session_usage_data_from_params(
+        {"tokenUsage": {"modelContextWindow": window, "total": {"contextWindow": 200000}}}
+    )
+    assert data == {"context_window": 200000}
+
+
+def test_session_usage_data_window_only_notification() -> None:
+    data = codex_native_forwarder._session_usage_data_from_params(
+        {"tokenUsage": {"modelContextWindow": 258400}}
+    )
+    assert data == {"context_window": 258400}
+
+
+@pytest.mark.parametrize("last", [None, {}, {"inputTokens": -1}, {"inputTokens": True}])
+def test_session_usage_data_incomplete_latest_never_uses_cumulative(last: Any) -> None:
+    data = codex_native_forwarder._session_usage_data_from_params(
+        {"tokenUsage": {"total": {"inputTokens": 900000}, "last": last}}
+    )
+    assert data == {"cumulative_input_tokens": 900000}

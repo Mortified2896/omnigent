@@ -775,7 +775,30 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
     assert omni.deleted == []
 
 
-async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Path) -> None:
+@pytest.mark.parametrize("search_qualified", [None, True, False])
+async def test_catalogue_approval_routes_the_uncapped_execution_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, search_qualified: bool | None
+) -> None:
+    path = tmp_path / "search-capabilities.json"
+    monkeypatch.setenv("OMNIGENT_O3_TOOL_SEARCH_CAPABILITIES", str(path))
+    if search_qualified is not None:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "routes": {
+                        "free/model-a": {
+                            "provider": "free",
+                            "resolved_model": "model-a",
+                            "supports_search_tool": search_qualified,
+                            "search_call": search_qualified,
+                            "loaded_tool_call": search_qualified,
+                            "evidence": "local probe",
+                        }
+                    },
+                }
+            )
+        )
     registry = BenchmarkRegistry(
         slices=[_SLICE],
         evidence=[],
@@ -811,6 +834,15 @@ async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Pa
     proposal = await service.create_proposal(
         ProposalCreateRequest(prompt="Execute this task", estimator_policy=_estimator_policy())
     )
+
+    if search_qualified is False:
+        with pytest.raises(RoutingReviewError, match="no structurally usable candidate"):
+            await service.decide_proposal(
+                proposal.proposal_id, ProposalDecisionRequest(action=DecisionAction.APPROVE)
+            )
+        assert omni.created == []
+        assert proposal.recommendation.execution_set.eligible_count == 1
+        return
 
     approved = await service.decide_proposal(
         proposal.proposal_id,
