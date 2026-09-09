@@ -691,6 +691,52 @@ class O3RoutingReviewService:
             proposal = proposal.model_copy(update={"recommendation": refreshed})
         catalogue_set = proposal.recommendation.execution_set if proposal.recommendation else None
         catalogue_selected = catalogue_set.eligible if catalogue_set is not None else []
+        from .tool_search import qualified_route, read_capabilities
+
+        search_registry = read_capabilities()
+        if search_registry is not None:
+            # Adviser rankings remain intact; this is the native execution contract.
+            catalogue_selected = [
+                item
+                for item in catalogue_selected
+                if qualified_route(search_registry, item.provider_id, item.route_id)
+            ]
+            if catalogue_set is not None and proposal.recommendation is not None:
+                retained = {item.route_id for item in catalogue_selected}
+                reason = "client tool-search continuation is not qualified for this destination"
+                excluded = [
+                    item.model_copy(update={"exclusions": [*item.exclusions, reason]})
+                    for item in catalogue_set.eligible
+                    if item.route_id not in retained
+                ]
+                counts = dict(catalogue_set.exclusion_counts)
+                if excluded:
+                    counts[reason] = len(excluded)
+                proposal = proposal.model_copy(
+                    update={
+                        "recommendation": proposal.recommendation.model_copy(
+                            update={
+                                "execution_set": catalogue_set.model_copy(
+                                    update={
+                                        "eligible": catalogue_selected,
+                                        "eligible_count": len(catalogue_selected),
+                                        "excluded": [*catalogue_set.excluded, *excluded],
+                                        "exclusion_counts": counts,
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            selected = [
+                item
+                for item in selected
+                if qualified_route(
+                    search_registry,
+                    item.candidate.provider_id,
+                    item.candidate.catalogue_model_id,
+                )
+            ]
         if not selected and not catalogue_selected:
             raise RoutingReviewError(
                 "no structurally usable candidate exists for the approved effort",

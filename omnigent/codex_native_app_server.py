@@ -960,6 +960,14 @@ class CodexNativeAppServer:
             inject_hooks=self.router_hooks_registered,
             extend_model_catalog=codex_extended_catalog_requested(self.env),
         )
+        if self.pinned_model and self.pinned_model.startswith("custom/o3-route-"):
+            from omnigent.server.o3_routing_review.tool_search import prepare_alias_catalog
+
+            catalog_path = await prepare_alias_catalog(
+                self.codex_home, self.pinned_model, self.codex_path
+            )
+            if catalog_path is not None:
+                self.config_overrides.append(f"model_catalog_json={json.dumps(str(catalog_path))}")
         if self.trust_project:
             _trust_codex_project(self.codex_home, self.cwd)
         # Write the MCP server config into config.toml so the app-server
