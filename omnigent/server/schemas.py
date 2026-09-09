@@ -1609,6 +1609,13 @@ class ModelUsage(BaseModel):
     total_cost_usd: float | None = None
 
 
+class TerminalResponse(BaseModel):
+    """Durable terminal outcome for the latest response in a session."""
+
+    response_id: str
+    status: Literal["completed", "failed", "cancelled", "incomplete"]
+
+
 class SessionResponse(BaseModel):
     """
     API representation of a session.
@@ -1840,6 +1847,10 @@ class SessionResponse(BaseModel):
         ``_session_sandbox_status_cache`` at snapshot build time, so
         a client opening the session mid-launch sees the current
         stage.
+    :param terminal_response: Latest durably recorded terminal turn outcome.
+        Keyed by the response id used by conversation items and response
+        lifecycle events, so reconnecting clients can settle exactly the turn
+        that ended even when its live terminal event was lost.
     :param active_response_id: Response id of the turn currently in
         flight, or ``None`` when the session is idle. Sourced from the
         server's ``_session_active_response_cache`` at snapshot build
@@ -1913,6 +1924,7 @@ class SessionResponse(BaseModel):
     # ``_session_mcp_startup_cache`` at snapshot build time so a client
     # opening the session mid-startup sees the startup band.
     mcp_startup: dict[str, McpServerStartup] | None = None
+    terminal_response: TerminalResponse | None = None
     active_response_id: str | None = None
     # First-class project this session is filed under, or ``None`` when
     # unfiled. Distinct from the legacy ``omni_project`` label (surfaced in
@@ -2549,6 +2561,8 @@ class _SSEEventBase(BaseModel):
 
     - ``type``: the event-type discriminator literal (defined per
       subclass so :data:`ServerStreamEvent` can dispatch).
+    - ``connection_id``: privacy-safe identifier for one browser stream.
+    - ``published_at``: server serialization timestamp in epoch milliseconds.
     - ``sequence_number``: monotonic per-stream sequence number
       assigned by the SSE serializer at emit time
       (``_format_sse`` in ``omnigent/server/routes/sessions.py``).
@@ -2569,6 +2583,8 @@ class _SSEEventBase(BaseModel):
         sequencing.
     """
 
+    connection_id: str | None = None
+    published_at: int | None = None
     sequence_number: int | None = None
 
     model_config = ConfigDict(extra="ignore")

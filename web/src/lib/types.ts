@@ -449,6 +449,11 @@ export interface Session {
    * a client opening the session mid-startup sees the startup band.
    */
   mcpStartup?: Record<string, McpServerStartup> | null;
+  /** Latest durably recorded terminal turn outcome. */
+  terminalResponse?: {
+    responseId: string;
+    status: "completed" | "failed" | "cancelled" | "incomplete";
+  } | null;
   /**
    * Response id of the turn currently in flight, or `null`/absent when
    * the session is idle. Sourced from the server's

@@ -108,6 +108,7 @@ from omnigent.server.routes._sessions.common import (
     _interrupt_fenced_sessions,
     _logger,
     _pushed_model_options_cache,
+    _session_active_response_cache,
     _session_mcp_startup_cache,
     _session_sandbox_status_cache,
     get_server_runner_router,
@@ -137,6 +138,7 @@ from omnigent.server.routes._sessions.helpers import (
     _persist_external_subagent_start,
     _persist_policy_deny_sentinel,
     _persist_session_status_error_labels,
+    _persist_terminal_response,
     _prune_session_read_state,
     _publish_compaction_completed,
     _publish_compaction_failed,
@@ -475,7 +477,7 @@ def register_events_routes(
                 reason = _input_verdict.get("reason", "Denied by policy")
                 _publish_status(session_id, "running")
                 _publish_policy_deny(session_id, reason)
-                await _persist_policy_deny_sentinel(
+                deny_response_id = await _persist_policy_deny_sentinel(
                     session_id,
                     conv,
                     reason,
@@ -484,7 +486,19 @@ def register_events_routes(
                 )
                 # Terminal response.completed before idle so live-tail
                 # consumers (the headless ``-p`` client) unblock.
-                _publish_input_deny_terminal(session_id, conv, reason)
+                _publish_input_deny_terminal(
+                    session_id,
+                    conv,
+                    reason,
+                    response_id=deny_response_id,
+                )
+                await _persist_terminal_response(
+                    session_id,
+                    deny_response_id,
+                    "completed",
+                    conversation_store,
+                    authoritative=True,
+                )
                 _publish_status(session_id, "idle")
                 # Return the same shape the client expects from POST
                 # /events so postEvent doesn't throw on an unexpected
@@ -507,7 +521,7 @@ def register_events_routes(
                 reason = _input_verdict.get("reason", "Denied by policy")
                 _publish_status(session_id, "running")
                 _publish_policy_deny(session_id, reason)
-                await _persist_policy_deny_sentinel(
+                deny_response_id = await _persist_policy_deny_sentinel(
                     session_id,
                     conv,
                     reason,
@@ -515,7 +529,19 @@ def register_events_routes(
                     agent_store,
                 )
                 # Terminal response.completed before idle (see message branch).
-                _publish_input_deny_terminal(session_id, conv, reason)
+                _publish_input_deny_terminal(
+                    session_id,
+                    conv,
+                    reason,
+                    response_id=deny_response_id,
+                )
+                await _persist_terminal_response(
+                    session_id,
+                    deny_response_id,
+                    "completed",
+                    conversation_store,
+                    authoritative=True,
+                )
                 _publish_status(session_id, "idle")
                 return {"queued": False, "denied": True, "reason": reason}
         elif (
@@ -807,6 +833,13 @@ def register_events_routes(
                     code=ErrorCode.INVALID_INPUT,
                 )
             _publish_interrupted(session_id, response_id=response_id)
+            await _persist_terminal_response(
+                session_id,
+                response_id,
+                "cancelled",
+                conversation_store,
+                authoritative=True,
+            )
             return {"queued": False}
         if body.type == _EXTERNAL_SESSION_SUPERSEDED_TYPE:
             target_conversation_id = body.data.get("target_conversation_id")
@@ -888,6 +921,17 @@ def register_events_routes(
             if effective_status != status:
                 status = effective_status
                 body.data["status"] = status
+            if status in {"idle", "failed"}:
+                terminal_response_id = response_id or _session_active_response_cache.get(
+                    session_id
+                )
+                await _persist_terminal_response(
+                    session_id,
+                    terminal_response_id,
+                    "failed" if status == "failed" else "completed",
+                    conversation_store,
+                    authoritative=status == "failed",
+                )
             _publish_status(
                 session_id,
                 status,

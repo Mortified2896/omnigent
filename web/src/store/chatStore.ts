@@ -78,7 +78,8 @@ import type {
   StreamEvent,
 } from "@/lib/events";
 import { createPresenceIdleTracker } from "@/lib/presenceIdle";
-import { parseEvent, parseSseStream, type SseStreamResult } from "@/lib/sse";
+import { parseEvent, parseSseStream, type SseFrameMetadata, type SseStreamResult } from "@/lib/sse";
+import { recordDeliveryTelemetry } from "@/lib/deliveryTelemetry";
 import { clearSseLog, pushSseEvent } from "@/lib/sseEventLog";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import { sessionItemsQueryKey } from "@/hooks/useSessionItems";
@@ -312,6 +313,8 @@ export interface ChatState {
    * for the rest of the session lifetime.
    */
   sessionStatus: SessionStatus;
+  /** Browser-to-server live stream freshness, independent of runner liveness. */
+  streamConnectionStatus: "connecting" | "connected" | "reconnecting" | "stale" | "closed";
   backgroundTaskCount: number;
   /**
    * Why a still-`running` session is parked, e.g. "permission prompt".
@@ -891,6 +894,7 @@ const STREAM_RECONNECT_MAX_MS = 5_000;
 // of trusting them forever, so a truly deleted/invalid conversation still
 // gives up rather than polling it forever.
 const MAX_TRANSIENT_404_RETRIES = 10;
+export const STREAM_STALE_AFTER_MS = 45_000;
 
 // Sticky picker prefs — persisted so a new chat inherits the user's
 // last pick across reloads and across sessions.
@@ -1045,6 +1049,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   interruptedResponseIds: [],
   status: "idle",
   sessionStatus: "idle",
+  streamConnectionStatus: "closed",
   backgroundTaskCount: 0,
   blockedOn: null,
   isNativeTerminalSession: false,
@@ -1755,6 +1760,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         interruptedResponseIds: [],
         status: "idle",
         sessionStatus: "idle",
+        streamConnectionStatus: conversationId === null ? "closed" : "connecting",
         backgroundTaskCount: 0,
         blockedOn: null,
         isNativeTerminalSession: false,
@@ -2414,7 +2420,7 @@ async function bindStream(
 ): Promise<void> {
   racedNativeModelOptions.delete(id);
   const controller = new AbortController();
-  set({ abortController: controller });
+  set({ abortController: controller, streamConnectionStatus: "connecting" });
 
   void startStreamPump(id, controller, set, get);
 
@@ -2702,6 +2708,7 @@ async function bindStream(
         // The voided page's stale early-return skips its own flag clear.
         loadingMoreHistory: false,
         sessionStatus: session.status,
+        streamConnectionStatus: state.streamConnectionStatus,
         // Mid-turn first open: the snapshot carries the in-flight turn's
         // `activeResponseId`, and the turn-start `running` edge that would
         // have opened the streaming lifecycle is long gone from the SSE
@@ -2720,11 +2727,22 @@ async function bindStream(
               },
             }
           : {}),
+        ...(session.status !== "running" && session.terminalResponse != null
+          ? {
+              status: "idle" as const,
+              activeResponse: {
+                responseId: session.terminalResponse.responseId,
+                state: session.terminalResponse.status,
+                error: null,
+                completedAt: Date.now(),
+              },
+            }
+          : {}),
         // Re-show "N background tasks still running" after a reload/navigate-back: the
         // live SSE edge that set this is long gone, so the count rides in on
         // the snapshot (server keeps it sticky past the trailing PTY `idle`).
         backgroundTaskCount: session.backgroundTaskCount ?? 0,
-        blockedOn: null,
+        blockedOn: (session.pendingElicitations?.length ?? 0) > 0 ? "approval" : null,
         selectedEffort: effectiveEffort,
         selectedModel:
           catalogWonBindRace && preservedModelValid ? state.selectedModel : effectiveModel,
@@ -2777,6 +2795,38 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
     // (`resolve` is idempotent; this closes any registration-ordering gap.)
     if (signal.aborted) onAbort();
   });
+}
+
+function createStreamFreshnessMonitor(
+  staleAfterMs: number,
+  onStale: () => void,
+): {
+  stale: Promise<void>;
+  noteActivity: () => void;
+  stop: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let resolveStale!: () => void;
+  const stale = new Promise<void>((resolve) => {
+    resolveStale = resolve;
+  });
+  const arm = (): void => {
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      onStale();
+      resolveStale();
+    }, staleAfterMs);
+  };
+  arm();
+  return {
+    stale,
+    noteActivity: arm,
+    stop: () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    },
+  };
 }
 
 /**
@@ -2867,7 +2917,10 @@ const RECONNECT_BACKFILL_MAX_PAGES = 4;
  * and its tool cards static for the rest of the turn.
  */
 function reconnectStatusPatch(session: Session, s: ChatState): Partial<ChatState> {
-  const patch: Partial<ChatState> = { sessionStatus: session.status };
+  const patch: Partial<ChatState> = {
+    sessionStatus: session.status,
+    blockedOn: (session.pendingElicitations?.length ?? 0) > 0 ? "approval" : null,
+  };
   // Recover the background-shell tally across the gap too, so the spinner
   // returns to "N background tasks still running" rather than vanishing on reconnect.
   patch.backgroundTaskCount = session.backgroundTaskCount ?? 0;
@@ -2883,7 +2936,15 @@ function reconnectStatusPatch(session: Session, s: ChatState): Partial<ChatState
   // reconnect and strand the composer on the "(queued)" placeholder — re-queuing
   // sends, the exact behavior this fix removes. `sessionStatus` stays `waiting`
   // and `backgroundTaskCount` is recovered above, so the spinner survives.
-  if (
+  if (session.status !== "running" && session.terminalResponse != null) {
+    patch.activeResponse = {
+      responseId: session.terminalResponse.responseId,
+      state: session.terminalResponse.status,
+      error: null,
+      completedAt: Date.now(),
+    };
+    patch.status = "idle";
+  } else if (
     (session.status === "idle" || session.status === "failed") &&
     s.activeResponse?.state === "streaming"
   ) {
@@ -3230,6 +3291,23 @@ async function reconcileOnReconnect(id: string, set: Setter, get: Getter): Promi
     if (nextBlocks !== s.blocks) patch.blocks = nextBlocks;
     return patch;
   });
+  const appliedWatermark = get()
+    .blocks.map((block) => block.ctx.itemId)
+    .filter((itemId): itemId is string => Boolean(itemId))
+    .at(-1);
+  recordDeliveryTelemetry({
+    phase: "reconcile",
+    timestamp: Date.now(),
+    publishedAt: null,
+    connectionId: null,
+    conversationId: id,
+    responseId: session.terminalResponse?.responseId ?? session.activeResponseId ?? null,
+    eventSequence: null,
+    eventType: null,
+    snapshotWatermark: page.items.at(-1)?.id ?? null,
+    clientAppliedWatermark: appliedWatermark ?? null,
+    classification: "snapshot_applied",
+  });
 }
 
 // ── Presence idle reporting ─────────────────────────────────────────
@@ -3275,6 +3353,7 @@ export async function startStreamPump(
   controller: AbortController,
   set: Setter,
   get: Getter,
+  options?: { staleAfterMs?: number },
 ): Promise<void> {
   let failedOpens = 0;
   // Consecutive 404s only — reset on any non-404 outcome (success or a
@@ -3308,6 +3387,7 @@ export async function startStreamPump(
       controller.signal.addEventListener("abort", onOuterAbort);
       presenceAttemptController = attempt;
       try {
+        if (hasConnected) set({ streamConnectionStatus: "reconnecting" });
         const idle = presenceIdle.idleNow();
         let streamRes: Response;
         try {
@@ -3368,6 +3448,7 @@ export async function startStreamPump(
         failedOpens = 0;
         consecutive404s = 0;
         presenceIdle.noteReported(idle);
+        set({ streamConnectionStatus: "connected" });
         if (reconnecting) {
           dropEphemeralInFlightBlocks(id, set);
         } else {
@@ -3377,11 +3458,65 @@ export async function startStreamPump(
         }
         // Start the pump, then reconcile the snapshot concurrently (race-safe
         // via itemId dedup) — mirrors bindStream's stream-then-snapshot order.
-        const pumpPromise = pumpStreamEvents(id, streamRes.body, controller, set, get);
+        let connectionId: string | null = null;
+        let eventSequence: number | null = null;
+        const freshness = createStreamFreshnessMonitor(
+          options?.staleAfterMs ?? STREAM_STALE_AFTER_MS,
+          () => {
+            if (get().conversationId !== id || controller.signal.aborted) return;
+            set({ streamConnectionStatus: "stale" });
+            recordDeliveryTelemetry({
+              phase: "disconnect",
+              timestamp: Date.now(),
+              publishedAt: null,
+              connectionId,
+              conversationId: id,
+              responseId: get().activeResponse?.responseId ?? null,
+              eventSequence,
+              eventType: null,
+              snapshotWatermark: null,
+              clientAppliedWatermark: null,
+              classification: "heartbeat_timeout",
+            });
+          },
+        );
+        const onFrame = (metadata: SseFrameMetadata): void => {
+          connectionId = metadata.connectionId;
+          eventSequence = metadata.sequenceNumber;
+          freshness.noteActivity();
+          recordDeliveryTelemetry({
+            phase: "receive",
+            timestamp: Date.now(),
+            publishedAt: metadata.publishedAt,
+            connectionId,
+            conversationId: id,
+            responseId: get().activeResponse?.responseId ?? null,
+            eventSequence,
+            eventType: metadata.eventType,
+            snapshotWatermark: null,
+            clientAppliedWatermark: null,
+            classification: null,
+          });
+        };
+        const pumpPromise = pumpStreamEvents(id, streamRes.body, controller, set, get, undefined, {
+          onFrame,
+        });
         if (reconnecting) {
           await reconcileOnReconnect(id, set, get);
         }
-        let reason = await pumpPromise;
+        const outcome = await Promise.race([
+          pumpPromise.then((reason) => ({ kind: "pump" as const, reason })),
+          freshness.stale.then(() => ({ kind: "stale" as const })),
+        ]);
+        freshness.stop();
+        let reason: StreamEndReason;
+        if (outcome.kind === "stale") {
+          attempt.abort();
+          await pumpPromise;
+          reason = "dropped";
+        } else {
+          reason = outcome.reason;
+        }
 
         // A presence flip aborts only the attempt; the pump reads that as
         // "aborted" but the outer controller is still live — reconnect so
@@ -3391,6 +3526,20 @@ export async function startStreamPump(
         }
         // Only a transport drop is reconnectable; everything else ends the loop.
         if (reason !== "dropped") break;
+        set({ streamConnectionStatus: "reconnecting" });
+        recordDeliveryTelemetry({
+          phase: "reconnect",
+          timestamp: Date.now(),
+          publishedAt: null,
+          connectionId,
+          conversationId: id,
+          responseId: get().activeResponse?.responseId ?? null,
+          eventSequence,
+          eventType: null,
+          snapshotWatermark: null,
+          clientAppliedWatermark: null,
+          classification: outcome.kind === "stale" ? "stale_stream" : "transport_drop",
+        });
       } finally {
         controller.signal.removeEventListener("abort", onOuterAbort);
         if (presenceAttemptController === attempt) {
@@ -3400,7 +3549,7 @@ export async function startStreamPump(
     }
   } finally {
     if (get().abortController === controller) {
-      set({ abortController: null });
+      set({ abortController: null, streamConnectionStatus: "closed" });
     }
   }
   /* eslint-enable no-await-in-loop */
@@ -3793,10 +3942,17 @@ export async function pumpStreamEvents(
   set: Setter,
   get: Getter,
   scheduler: FrameScheduler = createRafScheduler(),
+  options?: { onFrame?: (metadata: SseFrameMetadata) => void },
 ): Promise<StreamEndReason> {
   const stream = new BlockStream();
   const sseResult: SseStreamResult = { sawDone: false };
-  const rawEvents = parseSseStream(body, sseResult);
+  let latestFrameMetadata: SseFrameMetadata | null = null;
+  const rawEvents = parseSseStream(body, sseResult, {
+    onFrame: (metadata) => {
+      latestFrameMetadata = metadata;
+      options?.onFrame?.(metadata);
+    },
+  });
   // Tap the raw event stream for `session.*` side effects (sessionStatus,
   // pending-message promotion, interrupted decoration) before handing it
   // to the BlockStream reducer. The reducer is intentionally pure
@@ -3810,7 +3966,7 @@ export async function pumpStreamEvents(
   // Per-message high-water chunk index, for delta duplicate suppression.
   const liveLastIndex = new Map<string, number>();
   const events = tapLiveDeltas(
-    tapSessionEvents(rawEvents, id),
+    tapSessionEvents(rawEvents, id, () => latestFrameMetadata),
     id,
     retiredLiveMessages,
     liveLastIndex,
@@ -5148,11 +5304,38 @@ function applyChildSessionUpdated(
 async function* tapSessionEvents(
   events: AsyncIterable<StreamEvent>,
   sessionId?: string,
+  frameMetadata?: () => SseFrameMetadata | null,
 ): AsyncIterable<StreamEvent> {
   for await (const event of events) {
     handleSessionEvent(event);
-    if (sessionId !== undefined) pushSseEvent(sessionId, event);
+    if (sessionId !== undefined) {
+      pushSseEvent(sessionId, event);
+    }
     yield event;
+    if (sessionId !== undefined) {
+      // Record application only after the downstream BlockStream has consumed
+      // this event and committed its blocks. The watermark then answers
+      // "client apply?", rather than merely "parser yielded?".
+      const state = useChatStore.getState();
+      const metadata = frameMetadata?.() ?? null;
+      const appliedWatermark = state.blocks
+        .map((block) => block.ctx.itemId)
+        .filter((itemId): itemId is string => Boolean(itemId))
+        .at(-1);
+      recordDeliveryTelemetry({
+        phase: "apply",
+        timestamp: Date.now(),
+        publishedAt: metadata?.publishedAt ?? null,
+        connectionId: metadata?.connectionId ?? null,
+        conversationId: sessionId,
+        responseId: state.activeResponse?.responseId ?? null,
+        eventSequence: metadata?.sequenceNumber ?? null,
+        eventType: event.type,
+        snapshotWatermark: null,
+        clientAppliedWatermark: appliedWatermark ?? null,
+        classification: null,
+      });
+    }
   }
 }
 

@@ -270,6 +270,30 @@
             "title": "Args",
             "type": "object"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -301,6 +325,30 @@
       "CancelledEvent": {
         "description": "Terminal event for a turn cancelled before completion.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The final response object with `status=\"cancelled\"`."
@@ -609,6 +657,30 @@
             "description": "Synthetic `call_id` the SDK uses to reconcile the local task; `None` when no pending tool call row exists for the task.",
             "title": "Call Id"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -758,6 +830,30 @@
             "default": null,
             "title": "Compacted Messages"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -890,6 +986,30 @@
       "CompactionFailedEvent": {
         "description": "Conversation history compaction failed.\n\nEmitted by `omnigent/server/routes/sessions.py` when\n`compact_conversation_now()` raises. Clients that rendered a\n\"Compacting\u2026\" spinner on `CompactionInProgressEvent`\nshould dismiss it without leaving a permanent marker, since the\nconversation history was not modified.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -918,6 +1038,30 @@
       "CompactionInProgressEvent": {
         "description": "Conversation history is being compacted.\n\nEmitted by `omnigent/runtime/compaction.py` while a\ncompaction step runs so clients can render a \"summarizing\nhistory\u2026\" indicator. Wire shape matches `compaction.py:765`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -946,6 +1090,30 @@
       "CompletedEvent": {
         "description": "Terminal event for a successfully completed turn.\n\nCarries the final\n`omnigent.server.schemas.ResponseObject`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The final response object with `status=\"completed\"`."
@@ -1048,6 +1216,9 @@
               },
               {
                 "$ref": "#/components/schemas/ResourceEventData"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseTerminalData"
               },
               {
                 "$ref": "#/components/schemas/RoutingDecisionData"
@@ -1256,6 +1427,30 @@
       "CreatedEvent": {
         "description": "Initial event emitted at the start of every streaming response.\n\nCarries the freshly-allocated\n`omnigent.server.schemas.ResponseObject` (status will\nbe `\"queued\"` or `\"in_progress\"` depending on whether the\ntask started immediately).",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The newly-allocated response object."
@@ -1289,6 +1484,18 @@
       "ElicitationRequestEvent": {
         "description": "Synchronous request for a decision from upstream.\n\nEmitted by Omnigent (or, under the new contract, by a harness)\nwhen the LLM / a tool / a policy needs a verdict before\nproceeding. The consumer replies via\n`POST /v1/sessions/{session_id}/events` with\n`type == \"approval\"` and\n`omnigent.server.schemas.ElicitationResult` fields in\n`data`. This preserves MCP request/reply correlation by id\nwithout threading elicitations through PATCH.\n\nWire shape matches the existing emit at\n`omnigent/runtime/policies/approval.py:175`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "elicitation_id": {
             "description": "Unique correlation id for this request \u2014 appears in the consumer's approval event payload, e.g. `\"elicit_abc123\"`.",
             "title": "Elicitation Id",
@@ -1304,6 +1511,18 @@
           "params": {
             "$ref": "#/components/schemas/ElicitationRequestParams",
             "description": "The MCP-shaped params block carrying the prompt and (form-mode only) the requested schema."
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -1440,10 +1659,34 @@
       "ElicitationResolvedEvent": {
         "description": "Signal that a previously-published elicitation is no longer\noutstanding, even though no UI `approval` verdict was\ndelivered through `POST /v1/sessions/{id}/events`.\n\nEmitted by the runner when its own `_pending_approvals`\nFuture is popped without a verdict (the runner's wait timed\nout, the turn was cancelled, the harness exited) so the AP\nserver's `omnigent.runtime.pending_elicitations`\nindex can decrement the sidebar badge in lockstep with the\nunderlying awaiter's lifecycle. Without this signal, the AP\nserver has no way to learn that the prompt is dead and the\nbadge stays stuck.\n\nIdempotent on the consumer side: the Omnigent server's index\ndecrement is a no-op when the id isn't tracked, so the\nrunner can fire-and-forget on every Future cleanup.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "elicitation_id": {
             "description": "Correlation id of the elicitation being cleared, e.g. `\"elicit_abc123\"`. Must match the id of a prior `ElicitationRequestEvent`.",
             "title": "Elicitation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -1527,9 +1770,33 @@
       "ErrorEvent": {
         "description": "Non-recoverable error reported during the turn.\n\nEmitted from multiple sites in\n`omnigent/runtime/workflow.py` \u2014 terminal LLM failures\n(`_emit_llm_error_event`), execution timeouts\n(`_handle_execution_timeout`), and the agent-loop catch-all\n(`except Exception`). Wire shape matches those emits.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "error": {
             "$ref": "#/components/schemas/RetryErrorDetail",
             "description": "Classified error description."
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -1584,6 +1851,30 @@
       "FailedEvent": {
         "description": "Terminal event for a turn that ended with an error.\n\nCarries the final\n`omnigent.server.schemas.ResponseObject` whose\n`error` field describes the failure.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The final response object with `status=\"failed\"` and `error` populated."
@@ -1706,6 +1997,18 @@
       "HeartbeatEvent": {
         "description": "Keepalive event emitted on a fixed cadence during streaming.\n\nLets consumers detect stalled producers via missed-interval\ntiming. Cadence is set by `_HEARTBEAT_INTERVAL_S` in\n`omnigent/runtime/workflow.py` (15 seconds at the time of\nwriting). Wire shape matches the existing emit at\n`omnigent/runtime/workflow.py:4636-4639`.\n\nPer `designs/SERVER_HARNESS_CONTRACT.md` \u00a7Heartbeats, the\nevent MAY carry timing metadata so consumers can do richer\ndead-detection than \"did anything arrive\":\n\n- `server_time` is the producer's wall-clock at emission,\n  letting consumers detect clock drift between producer and\n  consumer.\n- `last_event_seq` is the `sequence_number` of the most\n  recent NON-heartbeat event (or `None` when this is the\n  first heartbeat before any user-visible event), letting\n  consumers detect dropped events on reconnect.\n\nBoth fields are optional on the wire (`None` round-trips as\nomitted) so older AP\u2192harness pairs that pre-date the field\naddition still parse cleanly.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "last_event_seq": {
             "anyOf": [
               {
@@ -1718,6 +2021,18 @@
             "default": null,
             "description": "Sequence number of the last non- heartbeat event seen on the same stream, e.g. `42`. `None` before any user-visible event has fired (first heartbeat of the turn, before deltas land), or when the producer chose not to populate it.",
             "title": "Last Event Seq"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -1869,6 +2184,30 @@
       "InProgressEvent": {
         "description": "Event emitted once the task transitions to in-progress.\n\nAlways follows `response.created` (and `response.queued`\nfor background tasks).",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The response object with `status=\"in_progress\"`."
@@ -1917,6 +2256,30 @@
       "IncompleteEvent": {
         "description": "Terminal event for a turn that ended without completing\n(e.g. hit the iteration cap or token budget).",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The final response object with `status=\"incomplete\"` and `incomplete_details` populated describing the reason."
@@ -2220,6 +2583,17 @@
         "additionalProperties": true,
         "description": "One runner-owned native model-picker row.",
         "properties": {
+          "accessLane": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accesslane"
+          },
           "defaultReasoningEffort": {
             "anyOf": [
               {
@@ -2241,6 +2615,17 @@
               }
             ],
             "title": "Displayname"
+          },
+          "groupLabel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grouplabel"
           },
           "id": {
             "title": "Id",
@@ -2327,6 +2712,18 @@
       "OutputFileDoneEvent": {
         "description": "A streamed file output completed materializing.\n\nEmitted by `_emit_file_annotation_events` in\n`omnigent/runtime/workflow.py` once per file annotation in\nthe assistant's output. `filename` and `content_type` are\nonly populated when the originating annotation carried them.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "content_type": {
             "anyOf": [
               {
@@ -2358,6 +2755,18 @@
             "description": "Original filename if the annotation supplied one, e.g. `\"report.pdf\"`. `None` otherwise.",
             "title": "Filename"
           },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -2387,11 +2796,35 @@
       "OutputItemDoneEvent": {
         "description": "A conversation output item completed during the turn.\n\nCarries any item type the conversation persists (message,\nfunction_call, function_call_output, reasoning, compaction,\nnative_tool, \u2026). The `item` payload's wire shape merges\ncommon fields (`id`, `type`, `status`) with the\ntype-specific data fields \u2014 it is NOT nested as\n`{type, data}`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "item": {
             "additionalProperties": true,
             "description": "The completed item dict. Heterogeneous and item-type-specific; see `omnigent/entities/conversation.py` for the per-type `*Data` shapes that drive serialization. Example for a function_call item: `{\"id\": \"fc_abc123\", \"type\": \"function_call\", \"status\": \"action_required\", \"name\": \"search.web\", \"arguments\": \"{\\\"q\\\": \\\"foo\\\"}\", \"call_id\": \"call_xyz\"}`.",
             "title": "Item",
             "type": "object"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -2422,6 +2855,18 @@
       "OutputTextDeltaEvent": {
         "description": "Incremental assistant-text token emitted during streaming.\n\nWire shape matches the existing raw-dict emit at\n`omnigent/runtime/workflow.py:1352-1356`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "delta": {
             "description": "The text fragment for this chunk, e.g. `\"Hello\"`.",
             "title": "Delta",
@@ -2465,6 +2910,18 @@
             "default": null,
             "description": "For terminal-observed streaming (claude-native), the vendor's stable per-message id, e.g. `\"2ca51d97-2f0f-493a-aed7-85a5b56c5747\"`. Lets the web UI scope an in-flight buffer to one assistant message and reconcile it against the final item. `None` for ordinary in-process task streaming, where deltas already group by the active response.",
             "title": "Message Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -2571,6 +3028,18 @@
       "PolicyDeniedEvent": {
         "description": "Signal that a policy DENY was enforced on a native harness turn.\n\nA native harness (Claude Code, Codex, ...) routes each tool call and\nprompt through Omnigent's policy engine via the vendor command-hook\n(`POST /v1/sessions/{id}/policies/evaluate`). The DENY verdict is\nreturned synchronously to that hook, so unlike the SDK/wrap path there is\nno stream-visible signal that a native action was blocked \u2014 only the\n*effect* (the blocked tool never runs). This event surfaces the decision\nitself on the session stream so observers (the web UI, the capability\nbench) can see a native DENY as a positive signal rather than infer it\nfrom an absence.\n\nFire-and-forget and observational: it does not gate the turn (the hook\nresponse already did that) and carries no correlation id.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session/conversation id the DENY applies to, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
@@ -2581,6 +3050,18 @@
             "description": "The policy phase the DENY landed on, e.g. `\"tool_call\"`.",
             "title": "Phase",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "reason": {
             "default": "",
@@ -2686,6 +3167,30 @@
       "QueuedEvent": {
         "description": "Optional event emitted between `created` and `in_progress`\nfor background tasks that are queued before they start.\n\nForeground streaming responses skip this event.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "response": {
             "$ref": "#/components/schemas/ResponseObject",
             "description": "The response object with `status=\"queued\"`."
@@ -2797,6 +3302,30 @@
       "ReasoningStartedEvent": {
         "description": "Marker emitted once when a reasoning block begins.\n\nFired even when the reasoning content itself is encrypted /\nredacted (so no delta events follow), letting clients render\na \"thinking\u2026\" indicator regardless of provider verification\nstatus. Wire shape matches `omnigent/runtime/workflow.py:1350`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -2825,10 +3354,34 @@
       "ReasoningSummaryTextDeltaEvent": {
         "description": "Incremental reasoning-summary token.\n\nEmitted when `reasoning.summary` is configured on the\nrequest. Wire shape matches\n`omnigent/runtime/workflow.py:1370-1373`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "delta": {
             "description": "The summary text fragment, e.g. `\"Will use the search tool to gather context.\"`.",
             "title": "Delta",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -2859,10 +3412,34 @@
       "ReasoningTextDeltaEvent": {
         "description": "Incremental reasoning-text token (full chain-of-thought).\n\nOnly emitted by providers that surface reasoning content\n(e.g. OpenAI o-series with appropriate verification). Wire\nshape matches `omnigent/runtime/workflow.py:1358-1364`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "delta": {
             "description": "The reasoning text fragment, e.g. `\"Considering the user's intent...\"`.",
             "title": "Delta",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3093,6 +3670,26 @@
         "title": "ResponseObject",
         "type": "object"
       },
+      "ResponseTerminalData": {
+        "description": "Durable, payload-free terminal outcome for one response.",
+        "properties": {
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "incomplete"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ResponseTerminalData",
+        "type": "object"
+      },
       "RetryErrorDetail": {
         "description": "Error block carried by `RetryEvent` and `ErrorEvent`.\n\nMirrors the shape that `llm_retry.py` and `tool_retry.py`\nemit today \u2014 flat `code` / `message` plus an optional\n`detail` for provider-specific structured fields.",
         "properties": {
@@ -3136,6 +3733,18 @@
             "title": "Attempt",
             "type": "integer"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "delay_seconds": {
             "description": "Seconds the producer will sleep before retrying, rounded to two decimals, e.g. `1.5`.",
             "title": "Delay Seconds",
@@ -3149,6 +3758,18 @@
             "description": "Total tries allowed by the retry policy, e.g. `3`. Lets clients render \"attempt 2 of 3\".",
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3607,10 +4228,34 @@
             "title": "Agent Name",
             "type": "string"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3643,11 +4288,35 @@
       "SessionChangedFilesInvalidatedEvent": {
         "description": "The session's changed-files list may have changed \u2014 refetch it.\n\nA coarse \"something changed\" signal (per-file events aren't available\nfor git-mode workspaces) emitted by the runner after a file-mutating\ntool. The web treats it as a refetch trigger for the changed-files\npanel; transient (not persisted \u2014 the REST list is source of truth).",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "environment_id": {
             "default": "default",
             "description": "Environment whose changes were invalidated, e.g. `\"default\"`.",
             "title": "Environment Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3694,10 +4363,34 @@
             "title": "Child Session Id",
             "type": "string"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "The PARENT (carrier) session id.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3730,6 +4423,18 @@
       "SessionCollaborationModeEvent": {
         "description": "Active collaboration-mode update from a Codex-native session.\n\nEmitted after the web UI toggles Codex collaboration mode, and after the\nCodex forwarder observes a `thread/settings/updated` notification from\nthe native Codex TUI. Lets connected clients show a clear Plan-mode\nindicator without a reload.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
@@ -3739,6 +4444,18 @@
             "description": "The active collaboration mode string, e.g. `\"plan\"` or `\"default\"`. Category: **transient** (SSE-only). The server also writes `omnigent.codex_native.collaboration_mode` on the conversation labels, so reconnect clients restore the same state from the session snapshot.",
             "title": "Mode",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3788,6 +4505,18 @@
             "title": "Child Session Id",
             "type": "string"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "The PARENT session/conversation id \u2014 this event rides the parent's stream, e.g. `\"conv_parent123\"`.",
             "title": "Conversation Id",
@@ -3805,6 +4534,18 @@
             "default": null,
             "description": "Echo of `conversation_id` for consumers that key on a dedicated \"parent\" field rather than the carrier `conversation_id`. Always equal to `conversation_id`; included for forward-compat with clients that may relay these events across stream boundaries. Category: **transient** (SSE-only). The corresponding durable record of \"a child session exists\" lives in the conversation store as the child conversation row itself (`parent_conversation_id` foreign key) and the parent's tunneled `function_call` item \u2014 reconnecting clients discover children by walking the parent's persisted history, not by replaying this event.",
             "title": "Parent Session Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -3913,6 +4654,30 @@
       "SessionHeartbeatEvent": {
         "description": "Idle-stream keepalive on `GET /v1/sessions/{id}/stream`.\n\nEmitted by the session-stream route on a fixed cadence whenever\nthe underlying publish queue has been quiet (no turn in flight,\nno resource events). Distinct from `HeartbeatEvent`\n(`response.heartbeat`), which is per-turn and is driven by\nthe runtime workflow while a response is producing output.\n\nWhy this exists: the session stream stays open across many turns\nand through idle periods (waiting for the user to type). Without\na periodic emit, intermediate proxies, OS-level sockets, and the\nclient's SSE read-timeout can leave a half-open stream\nundetected for minutes after a network event (laptop sleep,\nWi-Fi handoff). The heartbeat puts a regular byte on the wire\nso the client's read-timeout and the server's\n`request.is_disconnected()` check both fire promptly.\n\nConsumers MAY ignore the payload entirely (the bytes crossing\nthe wire are sufficient). The optional `server_time` mirrors\n`HeartbeatEvent` for symmetry and debugging.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -3954,9 +4719,33 @@
       "SessionInputConsumedEvent": {
         "description": "A queued input item was materialized into conversation history.\n\nEmitted by `POST /v1/sessions/{id}/events` once per accepted\ninput item at the moment it is persisted into conversation\nhistory (either onto a steered active turn or as the seed item\nof a freshly-started one). Wire shape uses the NESTED envelope:\n`{\"type\": \"session.input.consumed\", \"data\": <SessionInputConsumedPayload>, \"sequence_number\": null}`.\n\nThe event name is **provisional** \u2014 it may be renamed in a\nfuture revision. Consumers should reference\n`SessionInputConsumedEvent` (or its `type` literal)\nrather than hardcoding the wire string.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "data": {
             "$ref": "#/components/schemas/SessionInputConsumedPayload",
             "description": "The decoded queued-item payload \u2014 see `SessionInputConsumedPayload`."
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -4041,9 +4830,33 @@
       "SessionInterruptedEvent": {
         "description": "User-triggered cancel reached the loop.\n\nEmitted by `_publish_interrupted` in\n`omnigent/server/routes/sessions.py` when a client posts\na `{\"type\": \"interrupt\"}` to `POST /v1/sessions/{id}/events`. Co-emitted with\n`IncompleteEvent` (with the underlying response carrying\n`incomplete_details.reason == \"user_interrupt\"`) so off-the-\nshelf Responses parsers still close cleanly. Wire shape uses\nthe NESTED envelope verbatim from the existing emit site.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "data": {
             "$ref": "#/components/schemas/SessionInterruptedPayload",
             "description": "The interrupt metadata \u2014 see `SessionInterruptedPayload`."
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -4451,10 +5264,34 @@
       "SessionMcpStartupEvent": {
         "description": "Per-MCP-server startup progress for a native harness session.\n\nA codex-native session brings up its configured MCP servers when its\nCodex thread starts; slow or failing servers previously left the web\nsession looking hung with no signal. The native forwarder mirrors\nCodex's `mcpServer/startupStatus/updated` notifications as\n`external_mcp_startup` posts, republished here so the web UI can\nshow which servers are still starting and which failed or were\ncancelled.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -4494,6 +5331,18 @@
       "SessionModelEvent": {
         "description": "Active-model update from a terminal-backed integration.\n\nEmitted after an `external_model_change` POST from the\n`omnigent claude` transcript forwarder when the model is\nswitched inside the Claude Code terminal (a `/model` command or\nthe in-TUI picker). Lets the web model picker reflect a TUI-side\nswitch without a reload.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
@@ -4503,6 +5352,18 @@
             "description": "Tier alias the session is now on, e.g. `\"opus\"` \u2014 Claude Code's version-agnostic alias, matching the picker's vocabulary (not a pinned `\"claude-opus-4-8\"` id). Category: **transient** (SSE-only). The server also writes `model_override` on the conversation, so on reconnect clients restore the selection from the snapshot's `model_override` rather than from a replayed event.",
             "title": "Model",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -4534,10 +5395,34 @@
       "SessionModelOptionsEvent": {
         "description": "Signal that a native session's model catalog has resolved.\n\nModel options are fetched from the bound runner and cached on the session\nsnapshot. The initial snapshot can return an empty list while this\nbackground fetch is in flight; this event tells connected clients to\nre-read the snapshot and apply its now-populated `model_options`.\n\nCarries no payload beyond the conversation id. The snapshot's\n`model_options` field remains the source of truth.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`. Category: **transient** (SSE-only). On reconnect, clients seed Native model / effort controls from the session snapshot.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -4568,10 +5453,34 @@
       "SessionPresenceEvent": {
         "description": "The session's viewer list changed \u2014 full state, not a delta.\n\nEmitted on `GET /v1/sessions/{id}/stream` whenever a user\njoins, leaves (after the server-side grace window absorbs\nreconnect churn), or flips their idle aggregate, and once to\neach newly-connected stream as a snapshot-on-connect. Every\nevent carries the COMPLETE viewer list so clients replace their\nstate wholesale \u2014 missed events self-heal on the next event or\nreconnect. Viewers are scoped to the session *tree* (the root\nconversation and every sub-agent conversation under it), so a\nuser on a sub-agent page and a user on the root page appear in\neach other's lists. See `omnigent/server/presence.py` and\n`designs/UI/PRESENCE.md`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "The conversation whose stream delivered this event \u2014 the root or a sub-agent conversation, e.g. `\"conv_abc123\"`. Matches the streamed conversation (not necessarily the tree's root) so clients can guard events by the conversation they are viewing.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -4638,10 +5547,34 @@
       "SessionReasoningEffortEvent": {
         "description": "Active reasoning-effort update from a terminal-backed integration.\n\nEmitted after an `external_reasoning_effort_change` POST from a native\nterminal forwarder when the user changes the thinking level inside the\nterminal UI. Lets the web effort picker reflect a TUI-side switch without\na reload.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "reasoning_effort": {
             "anyOf": [
@@ -4685,6 +5618,30 @@
       "SessionResourceCreatedEvent": {
         "description": "A session resource was created.\n\nEmitted when a terminal is launched, a file is uploaded, or\nany other resource is materialized under a session. Wire shape\nis FLAT: `{\"type\": \"session.resource.created\", \"resource\": <SessionResourceObject-like dict>}`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "resource": {
             "additionalProperties": true,
             "description": "The newly created resource object.",
@@ -4720,6 +5677,30 @@
       "SessionResourceDeletedEvent": {
         "description": "A session resource was deleted.\n\nEmitted when a terminal is closed, a file is deleted, or\nany other resource is removed from a session.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "resource_id": {
             "description": "Opaque id of the deleted resource.",
             "title": "Resource Id",
@@ -5294,6 +6275,17 @@
             "title": "Terminal Pending",
             "type": "boolean"
           },
+          "terminal_response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminalResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Latest durably recorded terminal turn outcome. Keyed by the response id used by conversation items and response lifecycle events, so reconnecting clients can settle exactly the turn that ended even when its live terminal event was lost."
+          },
           "title": {
             "anyOf": [
               {
@@ -5379,6 +6371,18 @@
       "SessionSandboxStatusEvent": {
         "description": "Managed-sandbox launch progress for a `host_type=\"managed\"` session.\n\nA managed create returns before its sandbox exists; the Omnigent\nserver emits this event as the background launch pipeline advances\nso the Web UI can show live provisioning progress on the session\npage instead of a silent dead chat: sandbox provision \u2192 repository\nclone \u2192 host startup \u2192 runner connect \u2192 ready, or a terminal\nfailure with the reason.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
@@ -5396,6 +6400,18 @@
             "default": null,
             "description": "Failure detail when `stage == \"failed\"`, e.g. `\"managed sandbox launch failed: spend limit reached\"`. `None` otherwise. Category: **transient** (SSE-only). On reconnect, clients seed the progress indicator from the session snapshot's `sandbox_status` field, which is populated by `_session_sandbox_status_cache` at snapshot build time.",
             "title": "Error"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -5440,10 +6456,34 @@
       "SessionSkillsEvent": {
         "description": "Signal that a session's runner-owned skills have resolved.\n\nSkills are discovered against the bound runner's filesystem and\nfetched off the session-snapshot hot path: the snapshot kicks a\nsingle background fetch (`_load_runner_skills` in\n`omnigent/server/routes/sessions.py`) and serves `[]` until\nit lands. This event fires the moment that background fetch\npopulates the per-session skills cache, so a connected web client\ncan re-read the snapshot and fill its slash-command menu instead\nof waiting for the next bind.\n\nCarries no payload beyond the conversation id \u2014 it is a \"skills\nare ready, re-read the snapshot\" nudge, mirroring the\ninvalidate-then-refetch shape used by\n`SessionChangedFilesInvalidatedEvent`. The snapshot's\n`skills` field (now cache-backed) stays the source of truth.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`. Category: **transient** (SSE-only). On reconnect, clients seed the menu from the session snapshot's `skills` field, which is populated by the runner-skills cache at snapshot build time.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -5499,6 +6539,18 @@
             "description": "Short human phrase naming what a still-`running` session is parked on, e.g. `\"permission prompt\"` or `\"dialog open\"`. Set by terminal-backed integrations whose agent can block on a dialog the web UI does not mirror, so the client can say *why* nothing is moving instead of showing a bare spinner. `None` whenever the session is not parked. Unrelated to the `waiting` status above, which means the turn has ended and only background work remains. Category: **transient** (SSE-only). Status is rederived on reconnect from the cached last-relayed turn lifecycle event or by re-querying the runner; not persisted by the runtime.",
             "title": "Blocked On"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "The conversation/session identifier whose status changed, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
@@ -5515,6 +6567,18 @@
             ],
             "default": null,
             "description": "Machine-readable failure detail, present only when `status == \"failed\"`. Carries the message the runner attached when a turn died \u2014 most importantly a SETUP-phase failure (spec resolution, spawn-env build) that ends the turn before any `response.failed` event is emitted. `None` for every non-failed transition. Clients render `error.message` as the terminal error line; without it a setup failure shows as a silent end."
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "response_id": {
             "anyOf": [
@@ -5571,10 +6635,34 @@
       "SessionSupersededEvent": {
         "description": "This conversation was superseded by another and clients should\nfollow to it.\n\nEmitted by `_publish_session_superseded` in\n`omnigent/server/routes/sessions.py` when the claude-native\nforwarder rotates a session away on a Claude `/clear` (the old\nconversation keeps its history but the live terminal moves to a\nfresh conversation \u2014 see `_post_clear_supersession` in\n`omnigent/claude_native_forwarder.py`). A client actively viewing\nthe superseded conversation auto-redirects to `target_conversation_id`.\n\nCategory: **transient** (SSE-only), live-only by design. There is no\nSSE replay: a client that connects after the rotation does not get\nthis event. The durable counterpart is the persisted notice message\nappended to the old conversation (a `message` item linking to the\nnew conversation), which a reloading client renders instead of being\nforce-redirected.\n\nThe wire shape is FLAT (not enveloped):\n`{\"type\": \"session.superseded\", \"conversation_id\": <old>, \"target_conversation_id\": <new>, \"reason\": \"clear\"}`.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "The superseded (old) conversation id this event rides the stream of, e.g. `\"conv_old\"`.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "reason": {
             "const": "clear",
@@ -5634,6 +6722,30 @@
       "SessionTerminalActivityEvent": {
         "description": "A terminal's pane produced output (runner-determined activity pulse).\n\nPowers the web \"active\" badge for any terminal without a client PTY\nattach \u2014 the runner's per-terminal pane watcher emits this when the\npane content changes. Transient (a live pulse; not persisted, not in\nthe connect snapshot).",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -5674,6 +6786,18 @@
       "SessionTerminalPendingEvent": {
         "description": "Terminal spin-up status for a terminal-first session.\n\nTwo sources emit this event:\n\n1. The Omnigent server at `POST /v1/sessions` for host-launched\n   terminal-first sessions \u2014 the earliest possible point, before\n   the runner even starts, so the spinner appears immediately on\n   session create rather than after the runner boots.\n2. The Omnigent relay when the runner's `session.terminal_pending` frame\n   arrives \u2014 covers non-host-launched sessions (e.g. server-dispatched\n   sub-agents) and carries the authoritative `pending=False` clear\n   emitted by the runner's `finally` block.\n\nTogether they allow web to show a spinner on the Terminal pill\nwhile the backend boots the terminal instead of a silent greyed-out\nbutton, and to distinguish \"still starting up\" from \"no terminal\"\n(killed or never created).",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
@@ -5683,6 +6807,18 @@
             "description": "`True` while the terminal is being created; `False` once it lands or auto-create fails. Category: **transient** (SSE-only). On reconnect, clients seed the spinner from the session snapshot's `terminal_pending` field, which is populated by `_session_terminal_pending_cache` at snapshot build time.",
             "title": "Pending",
             "type": "boolean"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -5714,10 +6850,34 @@
       "SessionTodosEvent": {
         "description": "Todo-list update from a Claude Code terminal-backed session.\n\nEmitted after an `external_session_todos` POST from the\n`omnigent claude` transcript forwarder, which captures todo\nupdates via `PostToolUse`/`TodoWrite` hook events from Claude\nCode and forwards them to the Omnigent server. Lets web render a\nlive todo panel in the right column without polling.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "conversation_id": {
             "description": "Session identifier, e.g. `\"conv_abc123\"`.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -5811,6 +6971,18 @@
       "SessionUsageEvent": {
         "description": "Token-usage update from a terminal-backed integration.\n\nEmitted after an `external_session_usage` POST from an\nout-of-AP runtime (e.g. the `omnigent claude` transcript\nforwarder). Either field may be absent; clients should leave\ncached values untouched for missing fields.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "context_tokens": {
             "anyOf": [
               {
@@ -5841,6 +7013,18 @@
             "description": "Session identifier.",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -6172,6 +7356,31 @@
         "title": "TerminalCommandData",
         "type": "object"
       },
+      "TerminalResponse": {
+        "description": "Durable terminal outcome for the latest response in a session.",
+        "properties": {
+          "response_id": {
+            "title": "Response Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "incomplete"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "response_id",
+          "status"
+        ],
+        "title": "TerminalResponse",
+        "type": "object"
+      },
       "ToolOutputDeltaEvent": {
         "description": "Incremental output from an in-progress function call.",
         "properties": {
@@ -6180,10 +7389,34 @@
             "title": "Call Id",
             "type": "string"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "delta": {
             "description": "Command stdout/stderr fragment.",
             "title": "Delta",
             "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -6215,6 +7448,30 @@
       "TurnCancelledEvent": {
         "description": "Emitted when a turn is interrupted by the user or system.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -6249,6 +7506,30 @@
       "TurnCompletedEvent": {
         "description": "Emitted when a turn finishes successfully with no pending work.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {
@@ -6283,11 +7564,35 @@
       "TurnFailedEvent": {
         "description": "Emitted when a turn fails due to an LLM error, timeout, or crash.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
           "error": {
             "additionalProperties": true,
             "description": "Error details, e.g. `{\"message\": \"LLM timeout\", \"type\": \"TimeoutError\"}`.",
             "title": "Error",
             "type": "object"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
           },
           "sequence_number": {
             "anyOf": [
@@ -6323,6 +7628,30 @@
       "TurnStartedEvent": {
         "description": "Emitted when the runner starts a new turn for a session.",
         "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connection Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          },
           "sequence_number": {
             "anyOf": [
               {

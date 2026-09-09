@@ -525,6 +525,29 @@ async def test_patch_rejects_client_supplied_per_user_pin_key(
     assert "omnigent.pinned.bob@example.com" not in conv.labels
 
 
+async def test_patch_rejects_client_supplied_terminal_lifecycle_labels(
+    client: httpx.AsyncClient,
+    session_id: str,
+    db_uri: str,
+) -> None:
+    """Only server terminal processing may write snapshot lifecycle truth."""
+    conv_store = SqlAlchemyConversationStore(db_uri)
+    for key in (
+        "omnigent.last_terminal_response_id",
+        "omnigent.last_terminal_response_status",
+    ):
+        resp = await client.patch(
+            f"/v1/sessions/{session_id}",
+            json={"labels": {key: "forged"}},
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+    conv = conv_store.get_conversation(session_id)
+    assert conv is not None
+    assert "omnigent.last_terminal_response_id" not in conv.labels
+    assert "omnigent.last_terminal_response_status" not in conv.labels
+
+
 async def test_patch_rejects_client_supplied_sandbox_labels(
     client: httpx.AsyncClient,
     session_id: str,

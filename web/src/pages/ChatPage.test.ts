@@ -722,6 +722,10 @@ describe("computeShowsWorking", () => {
     expect(computeShowsWorking("idle", opts())).toBe(false);
   });
 
+  it("a retained idle runner heartbeat is not active work", () => {
+    expect(computeShowsWorking("idle", opts({ runnerOnline: true }))).toBe(false);
+  });
+
   it("parent running → working", () => {
     expect(computeShowsWorking("running", opts())).toBe(true);
   });
@@ -859,6 +863,11 @@ describe("workingIndicatorLabel — parked on a dialog", () => {
 });
 
 describe("workingIndicatorLabel", () => {
+  it("surfaces stale and reconnecting browser streams ahead of work labels", () => {
+    expect(workingIndicatorLabel(0, 0, null, "stale")).toBe("Connection stale — reconnecting…");
+    expect(workingIndicatorLabel(4, 2, null, "reconnecting")).toBe("Reconnecting…");
+  });
+
   it("shows the plain Working label when no background tasks remain", () => {
     expect(workingIndicatorLabel(0)).toBe("Working…");
   });

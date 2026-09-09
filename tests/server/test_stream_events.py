@@ -300,6 +300,8 @@ def test_session_skills_event_round_trips_through_union() -> None:
     )
     dumped = event.model_dump()
     assert dumped == {
+        "connection_id": None,
+        "published_at": None,
         "type": "session.skills",
         "conversation_id": "conv_abc",
         "sequence_number": None,
@@ -320,6 +322,8 @@ def test_session_model_options_event_round_trips_through_union() -> None:
     )
     dumped = event.model_dump()
     assert dumped == {
+        "connection_id": None,
+        "published_at": None,
         "type": "session.model_options",
         "conversation_id": "conv_abc",
         "sequence_number": None,

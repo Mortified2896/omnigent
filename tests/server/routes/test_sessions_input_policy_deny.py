@@ -126,7 +126,7 @@ def test_input_policy_deny_persists_item_readable_from_items_api(
     items_resp = client.get(f"/v1/sessions/{session_id}/items", params={"limit": 100})
     assert items_resp.status_code == 200
     items = items_resp.json()["data"]
-    assert [item["type"] for item in items] == ["message"]
+    assert [item["type"] for item in items] == ["message", "response_terminal"]
     persisted = items[0]
     assert persisted["role"] == "assistant"
     assert persisted["model"] == "test-agent"
@@ -136,3 +136,11 @@ def test_input_policy_deny_persists_item_readable_from_items_api(
             "text": "[Denied by policy: Request contains BLOCK_THIS_TOKEN]",
         }
     ]
+    terminal = items[1]
+    assert terminal["response_id"] == persisted["response_id"]
+    snapshot_resp = client.get(f"/v1/sessions/{session_id}")
+    assert snapshot_resp.status_code == 200
+    assert snapshot_resp.json()["terminal_response"] == {
+        "response_id": persisted["response_id"],
+        "status": "completed",
+    }

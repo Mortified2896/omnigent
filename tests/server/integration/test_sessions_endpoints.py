@@ -4061,12 +4061,12 @@ async def test_post_external_session_interrupted_publishes_session_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    ``external_session_interrupted`` emits a live interruption signal only.
+    ``external_session_interrupted`` emits a live signal and durable outcome.
 
     Codex-native uses this when app-server reports a terminal
     ``turn/completed`` status of ``interrupted``. The event must decorate
-    the active web turn as cancelled, but must not persist a transcript item
-    or start / steer an Omnigent task.
+    the active web turn as cancelled and persist a payload-free terminal item,
+    but must not start or steer an Omnigent task.
     """
     published: list[tuple[str, dict[str, Any]]] = []
 
@@ -4106,7 +4106,11 @@ async def test_post_external_session_interrupted_publishes_session_interrupted(
 
     snap = await client.get(f"/v1/sessions/{session['id']}")
     assert snap.status_code == 200, snap.text
-    assert snap.json()["items"] == []
+    assert [item["type"] for item in snap.json()["items"]] == ["response_terminal"]
+    assert snap.json()["terminal_response"] == {
+        "response_id": "codex_turn_123",
+        "status": "cancelled",
+    }
 
 
 async def test_post_interrupt_without_data_field_is_accepted(

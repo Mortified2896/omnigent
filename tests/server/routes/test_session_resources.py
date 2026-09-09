@@ -4453,13 +4453,15 @@ async def test_relay_flushes_partial_text_on_failed_turn_before_error_item() -> 
         # (or missing the message) means the failed-turn flush regressed and
         # reload shows the error without the text the user watched stream.
         types = [i.type for i in store.appended_items]
-        assert types == ["message", "error"], types
-        message, error = store.appended_items
+        assert types == ["message", "response_terminal", "error"], types
+        message, terminal, error = store.appended_items
         assert "".join(b["text"] for b in message.data.content) == (
             "Drafting the plan. Now running checks."
         )
         # Both items share the failed turn's id so they group in one bubble.
         assert message.response_id == "resp_fail"
+        assert terminal.response_id == "resp_fail"
+        assert terminal.data.status == "failed"
         assert error.response_id == "resp_fail"
         assert error.data.code == "llm_error"
         assert error.data.message == "LLM exploded"
@@ -4846,6 +4848,7 @@ async def test_relay_interleaves_text_segments_with_tool_calls() -> None:
             "function_call",
             "function_call_output",
             "message",
+            "response_terminal",
         ], types
 
         # Three SEPARATE messages, each its own segment — not one run-on.
