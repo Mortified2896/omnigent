@@ -1,12 +1,20 @@
-# Control Room trusted-root policy
+# Historical Control Room broad-privilege bundle
 
-This directory is the repository-managed source of truth for the opt-in
-trusted-agent host policy used by the Control Room's O1 and O2 Omnigent host
-services. It is intentionally separate from generic Omnigent installation and
-is not applied by any upstream install path unless an operator explicitly runs
-this installer.
+> **Historical and non-operative. Do not install or restore this bundle.**
 
-The bundle owns these artifacts:
+This directory preserves source evidence for a superseded Control Room design.
+It is not current desired policy, it does not describe ordinary O1/O2 child
+capability, and it is not an installation or recovery runbook. The installer
+accepts source validation only and refuses installation.
+
+Current desired capability policy belongs to authorized machine-enforced
+configuration. Current observed capability belongs to authorized timestamped
+observation. Public prose cannot grant or prove either. Ordinary O1/O2 coding
+agents and harness children cannot elevate, and broad child sudo must not be
+restored. Human emergency root and the root-owned, narrowly scoped deployment
+interface are separate boundaries.
+
+The retired bundle contained these artifacts:
 
 | Source | Installed destination |
 | --- | --- |
@@ -16,36 +24,16 @@ The bundle owns these artifacts:
 | `env/omnigent-production-trusted-root.env` | `/etc/omnigent-production/trusted-root.env` |
 | `sudoers/99-omnigent-agent-root` | `/etc/sudoers.d/99-omnigent-agent-root` |
 
-The two drop-ins explicitly set `OMNIGENT_TRUSTED_ROOT_ACCESS=true`, load the
-same value from the corresponding non-secret env fragment, clear the service
-hardening that blocks authorized root administration, and reset inherited
-syscall/capability restrictions. In particular, both drop-ins clear
-`SystemCallArchitectures`; O2 must never inherit `SystemCallArchitectures=native`.
+These files describe the rejected broad-privilege design and remain only for
+source-history review while issue #115 defines a truthful future capability
+contract. They are not evidence of installed or executable capability.
 
-The sudoers rule is:
-
-```text
-hermes ALL=(ALL:ALL) NOPASSWD: ALL
-```
-
-Before installation, the script renders a candidate sudoers fragment and runs
-`visudo -cf` against it. Only a successfully validated candidate is copied to
-the destination. Existing application env files are not overwritten; the
-dedicated fragments are loaded by the trusted host drop-ins.
-
-Check the repository-owned sources without changing the host:
+Check the historical source bundle without changing the host:
 
 ```bash
 deploy/control-room/trusted-root/install.sh --check
 ```
 
-Install or reconcile the Control Room host policy from a clean checkout:
-
-```bash
-sudo deploy/control-room/trusted-root/install.sh --install
-```
-
-The installer reloads systemd but never restarts O1 or O2. After merge and the
-planned deployment window, activate the two instances sequentially, with O1/O2
-health checks between changes. Do not run the installer as part of a generic
-Omnigent deployment.
+There is no installation mode. Do not copy these fragments into host
+configuration or use them for recovery. Follow the authoritative dual-instance
+safety contract and the authorized HomeLab machine-policy authority instead.
