@@ -776,8 +776,12 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
 
 
 @pytest.mark.parametrize("search_qualified", [None, True, False])
+@pytest.mark.parametrize("override_tools", [False, None])
 async def test_catalogue_approval_routes_the_uncapped_execution_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, search_qualified: bool | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    search_qualified: bool | None,
+    override_tools: bool | None,
 ) -> None:
     path = tmp_path / "search-capabilities.json"
     monkeypatch.setenv("OMNIGENT_O3_TOOL_SEARCH_CAPABILITIES", str(path))
@@ -834,6 +838,18 @@ async def test_catalogue_approval_routes_the_uncapped_execution_set(
     proposal = await service.create_proposal(
         ProposalCreateRequest(prompt="Execute this task", estimator_policy=_estimator_policy())
     )
+
+    if override_tools is not None:
+        from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+        proposal = await service.adjust_proposal(
+            proposal.proposal_id,
+            ProposalAdjustmentRequest(
+                requirement_overrides=RequirementOverrides(tools=override_tools)
+            ),
+        )
+        assert proposal.adviser.requirements.tools is True
+        assert proposal.effective_requirements.tools is False
 
     if search_qualified is False:
         with pytest.raises(RoutingReviewError, match="no structurally usable candidate"):
@@ -1711,3 +1727,106 @@ async def test_adviser_transcripts_are_request_scoped() -> None:
         context = json.loads(exchange.request["input"][1]["content"])
         assert context["unchanged_user_task"] == name
         assert "candidates" not in context
+
+
+async def test_execution_overrides_persist_reset_and_recompute(tmp_path: Path) -> None:
+    from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[],
+        candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.2,
+                            "normal": 0.4,
+                            "moderate": 0.6,
+                            "hard": 0.8,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    omni = _RecommendationOnlyOmniRoute([])
+    service = O3RoutingReviewService(
+        registry=registry,
+        omniroute=cast(OmniRouteClient, omni),
+        adviser=cast(RoutingAdviser, _FakeAdviser(_analysis())),
+        store=ProposalStore(tmp_path / "state.json"),
+        recommendation_catalogue=_recommendation_catalogue(),
+    )
+    initial = await service.create_proposal(ProposalCreateRequest(prompt="Inspect a repository"))
+    original = initial.adviser.requirements.model_dump()
+    assert initial.requirement_overrides.model_dump(exclude_none=True) == {}
+    assert initial.effective_requirements.tools
+
+    async def adjust(**values):
+        return await service.adjust_proposal(
+            initial.proposal_id,
+            ProposalAdjustmentRequest(
+                requirement_overrides=RequirementOverrides(**values),
+            ),
+        )
+
+    changed = await adjust(tools=False, image_input=True)
+    assert changed.adviser.requirements.model_dump() == original
+    assert not changed.effective_requirements.tools
+    assert changed.effective_requirements.vision
+    assert changed.recommendation.execution_set.eligible_count == 0
+    fetched = ProposalStore(tmp_path / "state.json").get(initial.proposal_id)
+    assert fetched.effective_requirements == changed.effective_requirements
+    assert fetched.requirement_overrides.image_input is True
+    assert fetched.constraint_version == initial.constraint_version + 1
+    assert fetched.model_dump()["effective_requirements"]["tools"] is False
+    reset = await adjust(image_input=None)
+    assert reset.requirement_overrides.image_input is None
+    assert not reset.effective_requirements.vision
+    assert reset.requirement_overrides.tools is False
+    assert reset.recommendation.execution_set.eligible_count == 1
+    restored = await adjust(tools=True)
+    assert restored.requirement_overrides.model_dump(exclude_none=True) == {}
+    assert restored.effective_requirements.model_dump() == original
+    floor = await service.adjust_proposal(
+        initial.proposal_id, ProposalAdjustmentRequest(minimum_score=0.63)
+    )
+    limited = await adjust(minimum_context_tokens=256_000)
+    assert limited.approved_constraints.benchmark == floor.approved_constraints.benchmark
+    assert limited.recommendation.execution_set.eligible_count == 0
+    quality = await service.adjust_proposal(
+        initial.proposal_id, ProposalAdjustmentRequest(reasoning_effort="high")
+    )
+    assert quality.requirement_overrides.minimum_context_tokens == 256_000
+    assert quality.approved_constraints.reasoning_effort == "high"
+    assert quality.adviser.requirements.model_dump() == original
+    fresh = await service.create_proposal(ProposalCreateRequest(prompt="Another independent task"))
+    assert fresh.requirement_overrides.model_dump(exclude_none=True) == {}
+    assert omni.created == []
+
+
+def test_image_requirement_override_preserves_other_modalities() -> None:
+    from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+    estimator = RoutingRequirements(vision=True, input_modalities=["text", "image", "audio"])
+    effective = RequirementOverrides(image_input=False, image_output=True).resolve(estimator)
+    assert effective.input_modalities == ["text", "audio"]
+    assert not effective.vision
+    assert effective.output_modalities == ["text", "image"]
+    assert estimator.vision
+    assert estimator.input_modalities == ["text", "image", "audio"]
+
+
+@pytest.mark.parametrize(
+    "patch", [{"tools": "false"}, {"minimum_context_tokens": -1}, {"web_search": True}]
+)
+def test_requirement_patch_rejects_invalid_or_unsupported_fields(patch) -> None:
+    with pytest.raises(ValueError):
+        ProposalAdjustmentRequest.model_validate({"requirement_overrides": patch})

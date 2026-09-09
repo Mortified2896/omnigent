@@ -1,0 +1,24 @@
+ruff format..............................................................Passed
+ruff check...............................................................Passed
+pyrefly..................................................................Passed
+no globally-clobbering asyncio monkeypatch...............................Passed
+no unconditional `@pytest.mark.skip`.....................................Passed
+no new hardcoded LLM model ids...........................................Passed
+web prettier.............................................................Passed
+web oxlint...............................................................Passed
+web TypeScript type check................................................Passed
+VS Code extension TypeScript type check..............(no files to check)Skipped
+android ktlint format................................(no files to check)Skipped
+android ktlint check.................................(no files to check)Skipped
+web ios swift-format.................................(no files to check)Skipped
+web ios swift format lint............................(no files to check)Skipped
+sync omnigent/version.py to pyproject version........(no files to check)Skipped
+normalize uv.lock registry to pypi.org...............(no files to check)Skipped
+routing protobuf bindings are up to date.............(no files to check)Skipped
+trim trailing whitespace.................................................Passed
+ensure files end with newline............................................Passed
+check yaml syntax....................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+prevent large files......................................................Passed
+check for case conflicts.................................................Passed
+check line endings.......................................................Passed

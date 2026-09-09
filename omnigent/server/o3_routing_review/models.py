@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field
 
 Difficulty: TypeAlias = Literal["easy", "normal", "moderate", "hard", "frontier"]
 Risk: TypeAlias = Literal["low", "medium", "high"]
@@ -124,6 +124,53 @@ class RoutingRequirements(StrictModel):
     minimum_output_tokens: int = Field(default=0, ge=0)
     structured_output: bool = False
     client_endpoint: Literal["responses"] = "responses"
+
+
+class RequirementOverrides(StrictModel):
+    """Sparse task requirements; null in an adjustment resets one field."""
+
+    tools: bool | None = Field(default=None, strict=True)
+    image_input: bool | None = Field(default=None, strict=True)
+    image_output: bool | None = Field(default=None, strict=True)
+    structured_output: bool | None = Field(default=None, strict=True)
+    minimum_context_tokens: int | None = Field(default=None, ge=0, strict=True)
+    minimum_output_tokens: int | None = Field(default=None, ge=0, strict=True)
+
+    @staticmethod
+    def estimated(requirements: RoutingRequirements) -> dict[str, bool | int]:
+        return {
+            "tools": requirements.tools,
+            "image_input": requirements.vision or "image" in requirements.input_modalities,
+            "image_output": "image" in requirements.output_modalities,
+            "structured_output": requirements.structured_output,
+            "minimum_context_tokens": requirements.minimum_context_tokens,
+            "minimum_output_tokens": requirements.minimum_output_tokens,
+        }
+
+    def adjusted(
+        self, patch: RequirementOverrides, estimator: RoutingRequirements
+    ) -> RequirementOverrides:
+        values = self.model_dump(exclude_none=True)
+        estimated = self.estimated(estimator)
+        for key, value in patch.model_dump(exclude_unset=True).items():
+            if value is None or value == estimated[key]:
+                values.pop(key, None)
+            else:
+                values[key] = value
+        return RequirementOverrides.model_validate(values)
+
+    def resolve(self, estimator: RoutingRequirements) -> RoutingRequirements:
+        values = estimator.model_dump()
+        for key, value in self.model_dump(exclude_none=True).items():
+            if key in {"image_input", "image_output"}:
+                direction = "input_modalities" if key == "image_input" else "output_modalities"
+                modalities = [item for item in values[direction] if item != "image"]
+                values[direction] = [*modalities, "image"] if value else modalities
+                if key == "image_input":
+                    values["vision"] = value
+            else:
+                values[key] = value
+        return RoutingRequirements.model_validate(values)
 
 
 class DecompositionItem(StrictModel):
@@ -400,6 +447,13 @@ class RoutingProposal(StrictModel):
     prompt_fingerprint: str
     workspace_summary: str
     adviser: AdviserAnalysis
+    requirement_overrides: RequirementOverrides = Field(default_factory=RequirementOverrides)
+
+    @computed_field
+    @property
+    def effective_requirements(self) -> RoutingRequirements:
+        return self.requirement_overrides.resolve(self.adviser.requirements)
+
     adviser_exchanges: list[AdviserExchange] = Field(default_factory=list)
     adviser_mode: Literal["model", "local_rule", "unknown"] = "unknown"
     approved_constraints: ApprovedConstraints
@@ -433,6 +487,7 @@ class ProposalCreateRequest(StrictModel):
 
 
 class ProposalAdjustmentRequest(StrictModel):
+    requirement_overrides: RequirementOverrides | None = None
     benchmark_id: str | None = None
     version: str | None = None
     slice_id: str | None = None

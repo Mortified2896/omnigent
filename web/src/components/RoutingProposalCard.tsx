@@ -12,6 +12,7 @@ import {
   XIcon,
 } from "lucide-react";
 
+import { ExecutionProfile } from "./ExecutionProfile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type {
@@ -244,6 +245,18 @@ export function RoutingProposalCard({
       setAdjusting(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Adjustment could not be validated");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function adjustRequirements(adjustment: O3ProposalAdjustment): Promise<void> {
+    setBusy("capabilities");
+    setError(null);
+    try {
+      onProposalChange(await onAdjust(adjustment));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Requirements could not be validated");
     } finally {
       setBusy(null);
     }
@@ -644,6 +657,13 @@ export function RoutingProposalCard({
             )}
           </div>
         )}
+
+        <ExecutionProfile
+          key={`${proposal.proposal_id}-${proposal.constraint_version ?? 1}`}
+          proposal={proposal}
+          disabled={busy !== null || !(proposal.decision === null || waiting)}
+          onAdjust={adjustRequirements}
+        />
 
         {proposal.frontier.capability_gap && catalogueEligible === 0 && (
           <div
