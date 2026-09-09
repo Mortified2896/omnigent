@@ -42,6 +42,49 @@ describe("setup clipboard IPC wiring", () => {
   });
 });
 
+describe("local desktop self-recovery wiring", () => {
+  it("disables hardware acceleration before creating a window", () => {
+    const disableAcceleration = liveCode.indexOf("app.disableHardwareAcceleration()");
+    const createWindow = liveCode.indexOf("function createWindow(");
+    assert.ok(disableAcceleration >= 0, "software compositor fallback is missing");
+    assert.ok(createWindow >= 0, "createWindow is missing");
+    assert.ok(
+      disableAcceleration < createWindow,
+      "hardware acceleration must be disabled before creating a window",
+    );
+  });
+
+  it("registers load failure recovery before the first destination navigation", () => {
+    const listener = liveCode.indexOf('win.webContents.on(\n    "did-fail-load"');
+    const firstNavigation = liveCode.indexOf('recoverLocalWindow(win, "launch", true)');
+    assert.ok(listener >= 0, "did-fail-load listener is missing");
+    assert.ok(firstNavigation >= 0, "launch recovery is missing");
+    assert.ok(listener < firstNavigation, "load failure listener must precede initial navigation");
+  });
+
+  it("recovers renderer crashes, hangs, focus, and background server exits", () => {
+    assert.match(liveCode, /webContents\.on\("render-process-gone"/);
+    assert.match(liveCode, /win\.on\("unresponsive"/);
+    assert.match(liveCode, /win\.on\("focus"/);
+    assert.match(liveCode, /setInterval\([\s\S]{0,300}recoverLocalWindow\(win, "watchdog"\)/);
+  });
+
+  it("auto-connects this Mac only after the canonical local O3 page loads", () => {
+    assert.match(
+      liveCode,
+      /webContents\.on\("did-finish-load",[\s\S]{0,160}ensureCanonicalLocalHostConnected\(win\)/,
+    );
+    assert.match(
+      liveCode,
+      /sameLoopbackServer\(state\.serverUrl, CANONICAL_LOCAL_URL\)[\s\S]{0,220}CANONICAL_LOCAL_ORIGIN/,
+    );
+    assert.match(
+      liveCode,
+      /recoverLocalWindow\(win, "watchdog"\)[\s\S]{0,120}ensureCanonicalLocalHostConnected\(win\)/,
+    );
+  });
+});
+
 describe("workspace chrome injection wiring (src/main.js)", () => {
   it("invokes registerWorkspaceChromeHide(win.webContents) as live code", () => {
     assert.match(

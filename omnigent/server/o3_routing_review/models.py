@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 Difficulty: TypeAlias = Literal["easy", "normal", "moderate", "hard", "frontier"]
 Risk: TypeAlias = Literal["low", "medium", "high"]
@@ -140,8 +140,21 @@ class DecompositionItem(StrictModel):
     blocked: bool = False
 
 
+class AdviserExchange(StrictModel):
+    requested_model: str
+    actual_model: str | None = None
+    actual_provider: str | None = None
+    reasoning_effort: str
+    request: dict[str, object]
+    explanation: str
+    reasoning_summary: str | None = None
+    attempt: int = 1
+
+
 class AdviserAnalysis(StrictModel):
     """Model-authored requirements only; provider/model selection is absent by design."""
+
+    _exchanges: list[AdviserExchange] = PrivateAttr(default_factory=list)
 
     task_summary: str
     task_classification: str
@@ -293,6 +306,17 @@ class CatalogueRecommendationItem(StrictModel):
     caveats: list[str] = Field(default_factory=list)
 
 
+class CatalogueModelGroup(StrictModel):
+    """Display grouping only; every execution route retains its own evidence."""
+
+    model_identity: str
+    displayed_model: str
+    route_count: int
+    eligible_route_count: int
+    configuration_count: int
+    configurations: list[CatalogueRecommendationItem] = Field(default_factory=list)
+
+
 class CatalogueExecutionDecision(StrictModel):
     route_id: str
     provider_id: str
@@ -331,6 +355,7 @@ class CatalogueRecommendation(StrictModel):
     other_above_floor: list[CatalogueRecommendationItem] = Field(default_factory=list)
     codex_subscription_fallback: list[CatalogueRecommendationItem] = Field(default_factory=list)
     nearest_below_floor: list[CatalogueRecommendationItem] = Field(default_factory=list)
+    model_groups: list[CatalogueModelGroup] = Field(default_factory=list)
     stale_warning: str | None = None
     execution_set: CatalogueExecutionSet | None = None
 
@@ -375,6 +400,8 @@ class RoutingProposal(StrictModel):
     prompt_fingerprint: str
     workspace_summary: str
     adviser: AdviserAnalysis
+    adviser_exchanges: list[AdviserExchange] = Field(default_factory=list)
+    adviser_mode: Literal["model", "local_rule", "unknown"] = "unknown"
     approved_constraints: ApprovedConstraints
     evaluations: list[CandidateEvaluation]
     frontier: FrontierSnapshot

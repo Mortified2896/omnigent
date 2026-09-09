@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from .eligibility import build_execution_set
 from .models import (
+    CatalogueModelGroup,
     CatalogueRecommendation,
     CatalogueRecommendationItem,
     Difficulty,
@@ -19,11 +21,13 @@ from .models import (
 )
 
 CATALOG_DIR_ENV = "OMNIGENT_O3_RECOMMENDATION_CATALOG_DIR"
+READINESS_FILENAME = "o3-route-readiness-v1.json"
+READINESS_MANIFEST_FILENAME = "o3-route-readiness-manifest-v1.json"
 REQUIRED_FILES = (
     "model-capability-estimation-policy-v1.json",
     "model-capability-forecasts-v1.json",
-    "o3-route-readiness-v1.json",
-    "o3-route-readiness-manifest-v1.json",
+    READINESS_FILENAME,
+    READINESS_MANIFEST_FILENAME,
 )
 _CONFIDENCE = {"high": 4, "medium": 3, "low": 2, "very_low": 1, "unknown": 0}
 _CALLABLE = {"callable", "callable_now", "success", "responses_callable"}
@@ -42,6 +46,32 @@ class RecommendationCatalogue:
             return float(self.policy["normalization"]["anchors"][difficulty])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"catalogue policy has no valid {difficulty!r} common floor") from exc
+
+
+def model_identity(row: dict[str, Any], ready: dict[str, Any]) -> str:
+    """Group declared checkpoints; opaque hypotheses stay route-specific."""
+    route_id = str(row["provider_model_route_id"])
+    if row.get("estimate_method") == "opaque_alias_hypothesis":
+        return str(ready.get("equivalence_key") or route_id)
+    return str(
+        row.get("inferred_base_checkpoint")
+        or ready.get("equivalence_key")
+        or row.get("canonical_live_model")
+        or route_id
+    )
+
+
+def readiness_is_recent(observed: object, *, now: datetime | None = None) -> bool:
+    if not isinstance(observed, str):
+        return False
+    try:
+        timestamp = datetime.fromisoformat(observed.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            return False
+        age = ((now or datetime.now(timezone.utc)) - timestamp).total_seconds()
+        return 0 <= age <= 900
+    except ValueError:
+        return False
 
 
 def _read(path: Path) -> tuple[dict[str, Any], str]:
@@ -115,6 +145,7 @@ def recommend(
     floor = catalogue.floor(difficulty)
     grouped: dict[tuple[str, str], list[CatalogueRecommendationItem]] = {}
     observed = catalogue.manifest.get("live_catalogue_timestamp")
+    all_items: list[CatalogueRecommendationItem] = []
     for row in catalogue.forecasts:
         route_id = row["provider_model_route_id"]
         lower, central = row.get("capability_score_lower"), row.get("capability_score_central")
@@ -122,12 +153,7 @@ def recommend(
             continue
         ready = catalogue.readiness.get(route_id, {})
         reasoning = str(row.get("reasoning_mode") or "default")
-        identity = str(
-            ready.get("equivalence_key")
-            or row.get("inferred_base_checkpoint")
-            or row.get("canonical_live_model")
-            or route_id
-        )
+        identity = model_identity(row, ready)
         callability = str(ready.get("responses_callability") or "not_tested")
         caveats = [] if callability in _CALLABLE else [f"Responses readiness: {callability}"]
         if row.get("codex_tool_continuation_compatibility", "unknown") == "unknown":
@@ -157,6 +183,7 @@ def recommend(
             ),
             caveats=caveats,
         )
+        all_items.append(item)
         grouped.setdefault((identity, reasoning), []).append(item)
 
     def rank(item: CatalogueRecommendationItem) -> tuple[float, float, int, int, str]:
@@ -172,6 +199,8 @@ def recommend(
     for variants in grouped.values():
         variants.sort(
             key=lambda item: (
+                -int(item.live_present),
+                -int(item.capability_score_lower >= floor),
                 -int(
                     "non_codex" in item.operator_resource_class
                     and item.responses_callability in _CALLABLE
@@ -221,6 +250,50 @@ def recommend(
         reasoning_effort=reasoning_effort,
         live_route_ids=live_route_ids,
     )
+    eligible_ids = {item.route_id for item in execution_set.eligible}
+    model_variants: dict[str, list[CatalogueRecommendationItem]] = {}
+    for item in all_items:
+        if item.live_present and item.capability_score_lower >= floor:
+            model_variants.setdefault(item.equivalence_identity, []).append(item)
+    model_groups = []
+    for identity, variants in model_variants.items():
+        variants.sort(
+            key=lambda item: (
+                -int(item.route_id in eligible_ids),
+                -int(
+                    "non_codex" in item.operator_resource_class
+                    and item.responses_callability in _CALLABLE
+                ),
+                *rank(item),
+            )
+        )
+        model_groups.append(
+            CatalogueModelGroup(
+                model_identity=identity,
+                displayed_model=identity,
+                route_count=len(variants),
+                eligible_route_count=sum(item.route_id in eligible_ids for item in variants),
+                configuration_count=len({item.reasoning_mode for item in variants}),
+                configurations=variants,
+            )
+        )
+    model_groups.sort(
+        key=lambda group: (
+            -int(group.eligible_route_count > 0),
+            -int(
+                any(
+                    "non_codex" in item.operator_resource_class
+                    and item.responses_callability in _CALLABLE
+                    for item in group.configurations
+                )
+            ),
+            -max(item.capability_score_lower for item in group.configurations),
+            group.model_identity,
+        )
+    )
+    counts["above_floor_models"] = len(model_groups)
+    counts["above_floor_routes"] = sum(group.route_count for group in model_groups)
+    counts["eligible_models"] = sum(group.eligible_route_count > 0 for group in model_groups)
     return CatalogueRecommendation(
         policy_version=str(catalogue.policy.get("policy_version") or "unknown"),
         forecast_version=str(catalogue.policy.get("policy_version") or "unknown"),
@@ -243,4 +316,10 @@ def recommend(
         codex_subscription_fallback=codex[:20],
         nearest_below_floor=below[:10],
         execution_set=execution_set,
+        model_groups=model_groups[:20],
+        stale_warning=(
+            "Readiness is a historical snapshot; current access is checked before use."
+            if not readiness_is_recent(observed)
+            else None
+        ),
     )

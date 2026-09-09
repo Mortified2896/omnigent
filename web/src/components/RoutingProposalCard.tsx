@@ -36,6 +36,7 @@ interface RoutingProposalCardProps {
 
 const fieldClass =
   "h-9 rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus-visible:border-ring";
+const MAX_VISIBLE_RECOMMENDATIONS = 20;
 
 function percent(value: number | null): string {
   return value === null ? "Unknown" : `${Math.round(value * 100)}%`;
@@ -49,12 +50,19 @@ function titleCase(value: string): string {
 }
 
 function evidenceSummary(proposal: O3RoutingProposal): string {
+  if (proposal.recommendation?.execution_set?.eligible_count)
+    return "Catalogue compatibility evidence";
   if (proposal.frontier.passing_exact_candidates.length > 0) return "Exact evidence";
   if (proposal.frontier.provisional_candidates.length > 0) return "Provisional evidence";
   return "No qualifying evidence";
 }
 
 function costSummary(proposal: O3RoutingProposal): string {
+  if (proposal.recommendation?.execution_set) {
+    return proposal.recommendation.execution_set.eligible_count > 0
+      ? "Live quota and cost require recheck"
+      : "No eligible route";
+  }
   const best = proposal.evaluations.find(
     (item) => item.status === "pass" || item.status === "provisional",
   );
@@ -66,23 +74,49 @@ function costSummary(proposal: O3RoutingProposal): string {
   return quota == null ? costText : `${costText}, ${Math.round(quota)}% quota left`;
 }
 
-function RecommendationRows({ items }: { items: O3CatalogueRecommendationItem[] }) {
+function readinessLabel(item: O3CatalogueRecommendationItem): string {
+  const successful = ["callable", "callable_now", "success", "responses_callable"].includes(
+    item.responses_callability,
+  );
+  if (!successful) return `Unverified · last result: ${titleCase(item.responses_callability)}`;
+  const age = item.readiness_observed_at
+    ? Date.now() - Date.parse(item.readiness_observed_at)
+    : NaN;
+  return age >= 0 && age <= 15 * 60 * 1000 ? "Recently verified" : "Previously verified";
+}
+
+function RecommendationRows({
+  items,
+  totalCount = items.length,
+}: {
+  items: O3CatalogueRecommendationItem[];
+  totalCount?: number;
+}) {
+  const visibleItems = items.slice(0, MAX_VISIBLE_RECOMMENDATIONS);
+  const hiddenCount = Math.max(
+    totalCount - visibleItems.length,
+    items.length - visibleItems.length,
+  );
   return (
     <div className="space-y-2">
-      {items.map((item) => (
-        <details key={item.route_id} className="rounded-md border border-border px-3 py-2">
+      {visibleItems.map((item) => (
+        <details
+          key={item.route_id}
+          className="rounded-md border border-border px-3 py-2"
+          data-testid="o3-recommendation-row"
+        >
           <summary className="cursor-pointer text-sm">
-            <span className="font-medium">
-              {item.provider_id}/{item.displayed_model}
-            </span>{" "}
+            <span className="font-medium">{item.route_id}</span>{" "}
             <span className="text-muted-foreground">
-              · {item.reasoning_mode} · conservative {item.capability_score_lower.toFixed(0)} ·
-              central {item.capability_score_central.toFixed(0)} ·{" "}
-              {titleCase(item.capability_confidence)} confidence ·{" "}
-              {titleCase(item.responses_callability)} · {titleCase(item.operator_resource_class)}
+              · {item.reasoning_mode} · {readinessLabel(item)}
             </span>
           </summary>
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+            <p>
+              Capability: {item.capability_score_lower.toFixed(0)}–
+              {item.capability_score_upper?.toFixed(0) ?? "?"} / 100 ·{" "}
+              {titleCase(item.capability_confidence)} confidence
+            </p>
             <p>
               {item.estimate_method} · readiness {item.readiness_observed_at ?? "unknown"} · raw
               cost {item.raw_cost_class}
@@ -98,6 +132,12 @@ function RecommendationRows({ items }: { items: O3CatalogueRecommendationItem[] 
           </div>
         </details>
       ))}
+      {hiddenCount > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="o3-recommendation-truncated">
+          Showing the first {visibleItems.length.toLocaleString()} of {totalCount.toLocaleString()}.
+          The full catalogue remains in the proposal record.
+        </p>
+      )}
     </div>
   );
 }
@@ -112,6 +152,7 @@ export function RoutingProposalCard({
   onReset,
 }: RoutingProposalCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [alternativesExpanded, setAlternativesExpanded] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
   const [reviewingSplit, setReviewingSplit] = useState(false);
   const [runAnyway, setRunAnyway] = useState(false);
@@ -269,7 +310,6 @@ export function RoutingProposalCard({
             <p className="mt-2 text-sm font-medium" data-testid="o3-task-interpretation">
               {proposal.adviser.task_summary}
             </p>
-            <p className="mt-1 text-sm text-muted-foreground">{proposal.adviser.rationale}</p>
           </div>
           <button
             type="button"
@@ -287,78 +327,261 @@ export function RoutingProposalCard({
           </button>
         </div>
 
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm md:grid-cols-4">
-          <div>
-            <dt className="text-xs text-muted-foreground">Benchmark</dt>
-            <dd className="mt-0.5 font-medium" data-testid="o3-benchmark-requirement">
-              {benchmark.slice_id}
-            </dd>
-          </div>
-          {recommendation && (
-            <>
-              <div>
-                <dt className="text-xs text-muted-foreground">Raw benchmark floor</dt>
-                <dd className="mt-0.5 font-medium">
-                  {recommendation.raw_benchmark_floor.toFixed(6)}
-                </dd>
+        <details open className="rounded-lg border p-3" data-testid="o3-review-activity">
+          <summary className="cursor-pointer text-sm font-semibold">Review conversation</summary>
+          <div className="mt-3 space-y-3 text-sm">
+            {proposal.adviser_exchanges?.length ? (
+              proposal.adviser_exchanges.map((exchange) => (
+                <div key={JSON.stringify(exchange.request)} className="space-y-3">
+                  <div className="ml-6 rounded-lg bg-muted/50 p-3">
+                    <p className="font-medium">Context sent to advisor</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Requested: {exchange.requested_model} · Reasoning effort:{" "}
+                      {exchange.reasoning_effort}
+                      {exchange.attempt > 1 ? " · Schema repair retry" : ""}
+                    </p>
+                    <details className="mt-2">
+                      <summary className="cursor-pointer">
+                        View exact request and instructions
+                      </summary>
+                      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs">
+                        {JSON.stringify(exchange.request, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                  <div className="mr-6 rounded-lg border p-3">
+                    <p className="font-medium">
+                      Advisor · {exchange.actual_model ?? "Actual model not reported"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Provider: {exchange.actual_provider ?? "Not reported"}
+                    </p>
+                    <p className="mt-2 whitespace-pre-wrap">{exchange.explanation}</p>
+                    {exchange.reasoning_summary ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer">Provider reasoning summary</summary>
+                        <p className="mt-2 whitespace-pre-wrap">{exchange.reasoning_summary}</p>
+                      </details>
+                    ) : (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        No reasoning summary was returned by the provider.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="mr-6 rounded-lg border p-3">
+                <p className="font-medium">
+                  {proposal.adviser_mode === "local_rule"
+                    ? "App · Local greeting rule"
+                    : "Review explanation"}
+                </p>
+                <p className="mt-2">{proposal.adviser.rationale}</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {proposal.adviser_mode === "local_rule"
+                    ? "No model was called for this exact standalone greeting."
+                    : "No advisor request transcript was recorded for this review."}
+                  {proposal.estimator?.actual_model
+                    ? ` Reported advisor: ${proposal.estimator.actual_model}.`
+                    : ""}
+                </p>
               </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Common capability floor</dt>
-                <dd className="mt-0.5 font-medium">
-                  {recommendation.common_capability_floor.toFixed(0)} / 100{" "}
-                  <span className="text-xs font-normal text-muted-foreground">rough prior</span>
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Catalogue considered</dt>
-                <dd className="mt-0.5 font-medium">
-                  {recommendation.total_route_count.toLocaleString()} routes ·{" "}
-                  {recommendation.live_present_count.toLocaleString()} live
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Above-floor matches</dt>
-                <dd className="mt-0.5 font-medium">
-                  {(recommendation.section_counts.callable_non_codex ?? 0) +
-                    (recommendation.section_counts.other_above_floor ?? 0) +
-                    (recommendation.section_counts.codex_subscription_fallback ?? 0)}
-                </dd>
-              </div>
-            </>
-          )}
-          <div>
-            <dt className="text-xs text-muted-foreground">Difficulty</dt>
-            <dd className="mt-0.5 font-medium">{titleCase(constraints.difficulty)}</dd>
+            )}
+            <div className="rounded-lg bg-muted/30 p-3">
+              <p className="font-medium">App · Current floor mapping</p>
+              <p className="mt-1">
+                {titleCase(constraints.difficulty)} → {constraints.benchmark.slice_id} → minimum{" "}
+                {percent(constraints.benchmark.minimum_score)}.
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Calibration: {constraints.calibration_version}. The app applies the floor and checks
+                route eligibility. Route checks verify provider access to a model; they are separate
+                from the advisor explanation.
+              </p>
+            </div>
           </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Evidence</dt>
-            <dd className="mt-0.5 font-medium">{evidenceSummary(proposal)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Reasoning</dt>
-            <dd className="mt-0.5 font-medium">
-              {titleCase(proposal.approved_constraints.reasoning_effort)}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Passing routes</dt>
-            <dd className="mt-0.5 font-medium">
-              {proposal.frontier.passing_exact_candidates.length} exact, {eligible.length} usable
-            </dd>
-          </div>
-          <div className="col-span-2 md:col-span-1">
-            <dt className="text-xs text-muted-foreground">Best available</dt>
-            <dd className="mt-0.5 truncate font-medium" title={best?.candidate.catalogue_model_id}>
-              {best?.candidate.catalogue_model_id ?? "None"}
-            </dd>
-          </div>
-          <div className="col-span-2">
-            <dt className="text-xs text-muted-foreground">Quota and cost</dt>
-            <dd className="mt-0.5 font-medium">{costSummary(proposal)}</dd>
-          </div>
-        </dl>
+        </details>
 
         {recommendation && (
+          <div
+            className="rounded-lg border border-border bg-muted/30 p-3"
+            data-testid="o3-compact-recommendation"
+          >
+            <p className="text-sm font-semibold">
+              {catalogueEligible > 0
+                ? `${recommendation.section_counts.eligible_models != null ? `${recommendation.section_counts.eligible_models} model groups · ` : ""}${catalogueEligible} eligible routes`
+                : "No route meets these requirements"}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {catalogueEligible > 0
+                ? "Routes meet the capability and input/output requirements. Access is rechecked when you continue."
+                : "Adjust the requirements or wait for availability to change."}
+            </p>
+            {recommendation.model_groups?.find((group) => group.eligible_route_count > 0) && (
+              <p className="mt-2 break-words text-sm">
+                Leading option:{" "}
+                <strong>
+                  {
+                    recommendation.model_groups.find((group) => group.eligible_route_count > 0)
+                      ?.displayed_model
+                  }
+                </strong>
+                <span className="text-muted-foreground">
+                  {" "}
+                  · final route selected after access recheck
+                </span>
+              </p>
+            )}
+          </div>
+        )}
+
+        {(!recommendation || expanded) && (
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm md:grid-cols-4">
+            <div>
+              <dt className="text-xs text-muted-foreground">Benchmark</dt>
+              <dd className="mt-0.5 font-medium" data-testid="o3-benchmark-requirement">
+                {benchmark.slice_id}
+              </dd>
+            </div>
+            {recommendation && (
+              <>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Raw benchmark floor</dt>
+                  <dd className="mt-0.5 font-medium">
+                    {recommendation.raw_benchmark_floor.toFixed(6)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Common capability floor</dt>
+                  <dd className="mt-0.5 font-medium">
+                    {recommendation.common_capability_floor.toFixed(0)} / 100{" "}
+                    <span className="text-xs font-normal text-muted-foreground">rough prior</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Catalogue considered</dt>
+                  <dd className="mt-0.5 font-medium">
+                    {recommendation.total_route_count.toLocaleString()} routes ·{" "}
+                    {recommendation.live_present_count.toLocaleString()} live
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Above-floor configurations</dt>
+                  <dd className="mt-0.5 font-medium">
+                    {(recommendation.section_counts.callable_non_codex ?? 0) +
+                      (recommendation.section_counts.other_above_floor ?? 0) +
+                      (recommendation.section_counts.codex_subscription_fallback ?? 0)}
+                  </dd>
+                </div>
+              </>
+            )}
+            <div>
+              <dt className="text-xs text-muted-foreground">Difficulty</dt>
+              <dd className="mt-0.5 font-medium">{titleCase(constraints.difficulty)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Evidence</dt>
+              <dd className="mt-0.5 font-medium">{evidenceSummary(proposal)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Reasoning</dt>
+              <dd className="mt-0.5 font-medium">
+                {titleCase(proposal.approved_constraints.reasoning_effort)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Passing routes</dt>
+              <dd className="mt-0.5 font-medium">
+                {recommendation?.execution_set
+                  ? `${catalogueEligible} catalogue-eligible; runtime readiness separate`
+                  : `${proposal.frontier.passing_exact_candidates.length} exact, ${eligible.length} usable`}
+              </dd>
+            </div>
+            <div className="col-span-2 md:col-span-1">
+              <dt className="text-xs text-muted-foreground">Best available</dt>
+              <dd
+                className="mt-0.5 truncate font-medium"
+                title={best?.candidate.catalogue_model_id}
+              >
+                {recommendation?.execution_set
+                  ? catalogueEligible > 0
+                    ? "Selected on approval after recheck"
+                    : "None"
+                  : (best?.candidate.catalogue_model_id ?? "None")}
+              </dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="text-xs text-muted-foreground">Quota and cost</dt>
+              <dd className="mt-0.5 font-medium">{costSummary(proposal)}</dd>
+            </div>
+          </dl>
+        )}
+
+        {recommendation && (
+          <div>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 text-sm font-medium"
+              aria-expanded={alternativesExpanded}
+              aria-controls="o3-model-alternatives"
+              data-testid="o3-alternatives-toggle"
+              onClick={() => setAlternativesExpanded((value) => !value)}
+            >
+              <span>Models and provider routes</span>
+              {alternativesExpanded ? (
+                <ChevronUpIcon className="size-4" />
+              ) : (
+                <ChevronDownIcon className="size-4" />
+              )}
+            </button>
+            {alternativesExpanded && (
+              <div id="o3-model-alternatives" className="mt-3 space-y-3">
+                {recommendation.model_groups?.length ? (
+                  <div data-testid="o3-model-groups" className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      {recommendation.section_counts.above_floor_models} model groups ·{" "}
+                      {recommendation.section_counts.above_floor_routes} above-floor routes. Only{" "}
+                      {catalogueEligible} routes satisfy all task requirements. Uncertain identities
+                      stay separate.
+                    </p>
+                    {recommendation.model_groups.map((group) => (
+                      <details
+                        key={group.model_identity}
+                        className="rounded-md border border-border p-3"
+                        data-testid="o3-model-group"
+                      >
+                        <summary className="cursor-pointer break-words text-sm">
+                          <span className="font-medium">{group.displayed_model}</span>
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · {group.configuration_count} configurations · {group.route_count}{" "}
+                            routes · {group.eligible_route_count} eligible
+                          </span>
+                        </summary>
+                        <div className="mt-3">
+                          <RecommendationRows
+                            items={group.configurations}
+                            totalCount={group.route_count}
+                          />
+                        </div>
+                      </details>
+                    ))}
+                    {recommendation.section_counts.above_floor_models >
+                      recommendation.model_groups.length && (
+                      <p className="text-xs text-muted-foreground">
+                        Showing {recommendation.model_groups.length} model groups, with eligible
+                        options first. All execution routes remain in the proposal.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        )}
+
+        {recommendation && alternativesExpanded && !recommendation.model_groups?.length && (
           <div className="space-y-4" data-testid="o3-catalogue-recommendations">
             {recommendation.stale_warning && (
               <div
@@ -369,24 +592,33 @@ export function RoutingProposalCard({
               </div>
             )}
             <div>
-              <h3 className="mb-2 text-sm font-semibold">Callable non-Codex</h3>
-              <RecommendationRows items={recommendation.callable_non_codex} />
+              <h3 className="mb-2 text-sm font-semibold">Previously verified non-Codex</h3>
+              <RecommendationRows
+                items={recommendation.callable_non_codex}
+                totalCount={recommendation.section_counts.callable_non_codex}
+              />
               {recommendation.callable_non_codex.length === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  No callable non-Codex route meets the conservative floor.
+                  No previously verified non-Codex route meets the conservative floor.
                 </p>
               )}
             </div>
             <div>
               <h3 className="mb-2 text-sm font-semibold">Other models above floor</h3>
-              <RecommendationRows items={recommendation.other_above_floor} />
+              <RecommendationRows
+                items={recommendation.other_above_floor}
+                totalCount={recommendation.section_counts.other_above_floor}
+              />
             </div>
             <div>
               <h3 className="mb-2 text-sm font-semibold">Codex subscription fallback</h3>
               <p className="mb-2 text-xs text-muted-foreground">
                 Subscription-backed fallback, shown after non-Codex options.
               </p>
-              <RecommendationRows items={recommendation.codex_subscription_fallback} />
+              <RecommendationRows
+                items={recommendation.codex_subscription_fallback}
+                totalCount={recommendation.section_counts.codex_subscription_fallback}
+              />
             </div>
             {((recommendation.section_counts.callable_non_codex ?? 0) +
               (recommendation.section_counts.other_above_floor ?? 0) +
@@ -404,13 +636,16 @@ export function RoutingProposalCard({
                   </p>
                 )}
                 <h3 className="mb-2 text-sm font-semibold">Nearest below floor</h3>
-                <RecommendationRows items={recommendation.nearest_below_floor} />
+                <RecommendationRows
+                  items={recommendation.nearest_below_floor}
+                  totalCount={recommendation.section_counts.nearest_below_floor}
+                />
               </div>
             )}
           </div>
         )}
 
-        {proposal.frontier.capability_gap && (
+        {proposal.frontier.capability_gap && catalogueEligible === 0 && (
           <div
             className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
             role="status"
@@ -426,16 +661,23 @@ export function RoutingProposalCard({
             className="rounded-md border border-border px-3 py-2 text-sm"
             data-testid="o3-resource-advice"
           >
-            <p className="font-semibold">{titleCase(proposal.resource_advice.action)}</p>
-            <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
-              {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
-              {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
-              {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
-              {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
-              {titleCase(proposal.resource_advice.source)}.
+            <p className="font-semibold">
+              {proposal.resource_snapshot.usable_routes === 0 &&
+              proposal.resource_snapshot.unknown_routes > 0
+                ? "Availability unverified"
+                : titleCase(proposal.resource_advice.action)}
             </p>
+            <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
+            {expanded && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
+                {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
+                {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
+                {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
+                {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
+                {titleCase(proposal.resource_advice.source)}.
+              </p>
+            )}
           </div>
         )}
 

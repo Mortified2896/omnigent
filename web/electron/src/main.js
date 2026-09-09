@@ -29,6 +29,11 @@ const {
   shell,
   systemPreferences,
 } = require("electron");
+
+// Prefer the software compositor. A lost/stuck GPU process otherwise leaves
+// the native window black even though the server and renderer are healthy.
+app.disableHardwareAcceleration();
+
 const { autoUpdater } = require("electron-updater");
 const { createDesktopUpdater } = require("./desktop_updater");
 const { createUpdateOverlay } = require("./update_overlay");
@@ -47,6 +52,19 @@ const { registerSessionExpiryReload } = require("./session-expiry");
 const { decideWindowOpen, stripCrossOriginOpenerHeaders, WEB_SCHEMES } = require("./popupPolicy");
 const omnigentCli = require("./omnigent_cli");
 const serverManager = require("./server_manager");
+const { createLocalServerRecovery } = require("./local_server_recovery");
+const {
+  CANONICAL_LOCAL_URL,
+  CANONICAL_LOCAL_ORIGIN,
+  canonicalizeLocalUrl,
+  canonicalizeLocalSettings,
+  applyO3ServerEnvironment,
+} = require("./o3_local_profile");
+
+// This branch builds the dedicated Mac-local O3 app. Every server process the
+// shell starts inherits the complete feature profile instead of silently
+// booting the stock application on the default port.
+applyO3ServerEnvironment(process.env);
 
 /** Absolute path to the bundled setup page (the "connect to server" form). */
 const SETUP_PAGE = path.join(__dirname, "..", "setup", "index.html");
@@ -75,6 +93,9 @@ const FIND_BAR_INSET = 16;
  * Electron doesn't export the net error codes as named constants.
  */
 const ERR_ABORTED = -3;
+
+/** How often a visible local window verifies its backing server is alive. */
+const LOCAL_SERVER_WATCHDOG_MS = 5000;
 
 /**
  * No-op preload for OAuth popup windows — children must never inherit the
@@ -681,6 +702,18 @@ function saveSettings(settings) {
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
 }
 
+/** Persist the one-local-endpoint migration while preserving remote servers. */
+function migrateCanonicalLocalSettings() {
+  const current = loadSettings();
+  const migrated = canonicalizeLocalSettings(current);
+  if (JSON.stringify(current) !== JSON.stringify(migrated)) saveSettings(migrated);
+}
+
+/** Normalize user-entered loopback aliases onto the app's canonical endpoint. */
+function normalizeDesktopServerUrl(value) {
+  return canonicalizeLocalUrl(normalizeUrl(value));
+}
+
 /**
  * Resolve the `omnigent` CLI binary path from the user's configured override
  * (``settings.omnigent_path``) plus the standard locations, or null when none
@@ -965,6 +998,77 @@ function loadServerUrl(win, serverUrl, routePath) {
   return win.loadURL(routePath ? resolveServerPath(serverUrl, routePath) : serverUrl);
 }
 
+/** Persist the URL selected by automatic local recovery. */
+function rememberRecoveredLocalUrl(serverUrl) {
+  const normalized = normalizeDesktopServerUrl(serverUrl);
+  const settings = loadSettings();
+  settings.server_url = normalized;
+  rememberRecentServer(settings, normalized);
+  saveSettings(settings);
+}
+
+const localServerRecovery = createLocalServerRecovery({
+  isLoopbackServer: omnigentCli.isLoopbackServer,
+  sameLoopbackServer: omnigentCli.sameLoopbackServer,
+  probeServer: omnigentCli.loopbackServerHealthy,
+  resolveCliPath: resolvedCliPath,
+  startLocalServer: serverManager.startLocalServer,
+  loadUrl: (win, serverUrl) => loadServerUrl(win, normalizeUrl(serverUrl)),
+  rememberUrl: rememberRecoveredLocalUrl,
+  log: console,
+});
+
+/**
+ * Show a useful recovery surface after both navigation and automatic local
+ * restart failed. This is deliberately a bundled file, so it works without a
+ * renderer server and can offer Start locally / Connect again.
+ */
+function showLoadFailure(win, failedUrl, error) {
+  if (!win || win.isDestroyed()) return;
+  const state = windows.get(win);
+  const params = new URLSearchParams({
+    error: error || "load failed",
+    url: failedUrl || state?.serverUrl || "",
+  });
+  if (state?.ephemeral) params.set("ephemeral", "1");
+  pinWindow(win, null);
+  void win.loadFile(SETUP_PAGE, { search: params.toString() });
+}
+
+/** Recover a normal loopback-backed window, returning false for remote ones. */
+async function recoverLocalWindow(win, reason, reloadWhenHealthy = false) {
+  const state = windows.get(win);
+  if (!state || state.ephemeral || !state.serverUrl) return false;
+  const result = await localServerRecovery.ensure(win, state.serverUrl, {
+    reason,
+    reloadWhenHealthy,
+  });
+  return result.handled ? result : false;
+}
+
+/** Keep the dedicated local O3 app attached to this Mac as its runner. */
+async function ensureCanonicalLocalHostConnected(win) {
+  const state = windows.get(win);
+  if (
+    !state ||
+    state.ephemeral ||
+    !state.serverUrl ||
+    !omnigentCli.sameLoopbackServer(state.serverUrl, CANONICAL_LOCAL_URL) ||
+    originOf(win.webContents.getURL()) !== CANONICAL_LOCAL_ORIGIN
+  ) {
+    return false;
+  }
+  if (!(await omnigentCli.loopbackServerHealthy(CANONICAL_LOCAL_URL))) return false;
+  const cliPath = resolvedCliPath();
+  if (!cliPath) return false;
+  const result = await serverManager.ensureHostConnected(cliPath, CANONICAL_LOCAL_URL);
+  if (!result.ok) {
+    console.warn(`[omnigent] canonical local host connection failed: ${result.error || "unknown"}`);
+  }
+  broadcastHostStatus();
+  return result.ok;
+}
+
 /**
  * Create a shell window and load a destination, in priority order:
  *   1. `opts.path` joined onto `opts.serverUrl` (a deep link opening a
@@ -1063,22 +1167,6 @@ function createWindow(targetUrl, opts = {}) {
     // Per-conversation embedded-browser view registry for this window.
     browserRegistry: createBrowserRegistryForWindow(win),
   });
-  if (destination) {
-    void win.loadURL(destination);
-  } else {
-    // ?ephemeral=1 only changes the setup page's copy (the window's
-    // WindowState is the source of truth for persistence behavior).
-    const search = new URLSearchParams();
-    if (ephemeral) search.set("ephemeral", "1");
-    if (serverUrl && !destinationOrigin) {
-      // Fail loud on a corrupt hand-edited settings.json: show WHY the
-      // window landed on setup instead of silently presenting a blank form.
-      search.set("error", "saved server URL in settings.json is not a valid URL");
-      search.set("url", serverUrl);
-    }
-    void win.loadFile(SETUP_PAGE, search.size > 0 ? { search: search.toString() } : undefined);
-  }
-
   // Page-initiated window.open / target=_blank: web links open in the
   // user's real browser and non-web schemes get a consent dialog. The one
   // exception — an OAuth sign-in popup, whose callback needs window.opener
@@ -1121,6 +1209,13 @@ function createWindow(targetUrl, opts = {}) {
   // Fires only for window.open the handler above allowed (OAuth popups).
   win.webContents.on("did-create-window", (child) => hardenOauthPopup(child));
 
+  // The dedicated O3 app owns its canonical loopback server and is unusable
+  // without a runner. Once that exact local page has loaded, attach this Mac;
+  // remote and ephemeral windows retain the explicit enrollment flow.
+  win.webContents.on("did-finish-load", () => {
+    void ensureCanonicalLocalHostConnected(win);
+  });
+
   // Server unreachable / DNS failure / TLS error → fall back to the setup
   // page with the failure shown, instead of stranding the user on Chromium's
   // raw error surface with no way back. The saved server_url is left intact:
@@ -1135,27 +1230,72 @@ function createWindow(targetUrl, opts = {}) {
       // not yank the window off its new destination.
       const failedOrigin = originOf(validatedURL ?? "");
       if (failedOrigin !== windows.get(win)?.origin) return;
-      const params = new URLSearchParams({
-        error: `${errorDescription || "load failed"} (${errorCode})`,
-        // The failure often happens on a deep SPA route (e.g. /chat/…);
-        // prefill the setup form with just the server origin — that's what
-        // the user connects to — not the full path that happened to fail.
-        url: failedOrigin ? failedOrigin + "/" : (validatedURL ?? ""),
+      void recoverLocalWindow(win, "load-failed", true).then((recovered) => {
+        if (recovered && recovered.ok) return;
+        showLoadFailure(
+          win,
+          failedOrigin ? failedOrigin + "/" : (validatedURL ?? ""),
+          recovered?.error || `${errorDescription || "load failed"} (${errorCode})`,
+        );
       });
-      if (windows.get(win)?.ephemeral) params.set("ephemeral", "1");
-      pinWindow(win, null); // back on the setup page → no trusted origin
-      void win.loadFile(SETUP_PAGE, { search: params.toString() });
     },
   );
+
+  // A renderer crash previously left the still-running macOS app as a black
+  // rectangle forever. Recreate its page, starting a dead local server first.
+  win.webContents.on("render-process-gone", (_event, details) => {
+    if (win.isDestroyed()) return;
+    void recoverLocalWindow(win, `renderer-${details?.reason || "gone"}`, true).then(
+      (recovered) => {
+        if (recovered) {
+          if (!recovered.ok) showLoadFailure(win, windows.get(win)?.serverUrl, recovered.error);
+          return;
+        }
+        win.webContents.reload();
+      },
+    );
+  });
+
+  // Chromium emits unresponsive only after its own hang threshold. A reload is
+  // preferable to a permanently black/non-interactive window.
+  win.on("unresponsive", () => {
+    void recoverLocalWindow(win, "renderer-unresponsive", true).then((recovered) => {
+      if (!recovered) win.webContents.reload();
+    });
+  });
+
+  // Clicking back into an already-running app is an immediate recovery signal;
+  // users should not have to find the setup screen or restart it manually.
+  win.on("focus", () => {
+    void recoverLocalWindow(win, "window-focus");
+  });
+
+  // Register every failure/crash listener BEFORE the first navigation. A fast
+  // localhost ECONNREFUSED can arrive in the same turn as loadURL; registering
+  // after loadURL was the race that stranded the shell on a black surface.
+  if (destination) {
+    void recoverLocalWindow(win, "launch", true).then((recovered) => {
+      if (recovered) {
+        if (!recovered.ok) showLoadFailure(win, serverUrl, recovered.error);
+        return;
+      }
+      void win.loadURL(destination);
+    });
+  } else {
+    const search = new URLSearchParams();
+    if (ephemeral) search.set("ephemeral", "1");
+    if (serverUrl && !destinationOrigin) {
+      search.set("error", "saved server URL in settings.json is not a valid URL");
+      search.set("url", serverUrl);
+    }
+    void win.loadFile(SETUP_PAGE, search.size > 0 ? { search: search.toString() } : undefined);
+  }
 
   // Databricks workspace-hosted Omnigent renders inside the workspace's
   // top-nav chrome (the SPA is a workspace page). On a dedicated desktop
   // window, hide it by overlaying Omnigent's own root — see
   // registerWorkspaceChromeHide, which wires the inject-on-did-finish-load.
   registerWorkspaceChromeHide(win.webContents);
-
-  // The desktop never auto-connects this machine as a runner — on launch or on
-  // connect. Connecting is an explicit action from the host menu.
 
   win.on("closed", () => {
     // Destroy this window's embedded-browser views, else they leak webContents.
@@ -2041,7 +2181,7 @@ function registerIpc() {
       // A server page must never be able to re-point which server is saved.
       throw new Error("set-server-url is only available to the setup page");
     }
-    const normalized = normalizeUrl(url); // throws → rejects → setup page shows error
+    const normalized = normalizeDesktopServerUrl(url); // throws → rejects → setup page shows error
     // Bare Databricks workspace URLs serve a 404 at the root; expand them to
     // the Omnigent UI mount so the user can paste just the workspace host.
     const target = await expandDatabricksWorkspaceUrl(normalized);
@@ -2362,7 +2502,7 @@ function registerIpc() {
     if (!cliPath) {
       return { ok: false, error: "The omnigent CLI was not found. Install it or set its path." };
     }
-    return serverManager.startLocalServer(cliPath);
+    return serverManager.startLocalServer(cliPath, CANONICAL_LOCAL_URL);
   });
 
   // SPA → this machine's identity: is the CLI installed, and its host id. Both
@@ -2855,6 +2995,7 @@ if (!gotLock) {
     // instant (primes the in-memory cache in resolvedCliPath); also lets the
     // setup page / Local CLI settings pre-fill the resolved path immediately.
     resolvedCliPath();
+    migrateCanonicalLocalSettings();
     // Register the omnigent:// scheme so OS clicks route to this app. The
     // build manifest (package.json `build.protocols`) is the reliable
     // per-install registration that survives reinstalls; this lets dev
@@ -2871,6 +3012,19 @@ if (!gotLock) {
       createWindow();
     }
     updater.init();
+
+    // If a managed local server exits while the shell remains open, restart it
+    // within one watchdog interval and repoint the window to the recovered URL.
+    const localServerWatchdog = setInterval(() => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed() && win.isVisible()) {
+          void recoverLocalWindow(win, "watchdog").then(() =>
+            ensureCanonicalLocalHostConnected(win),
+          );
+        }
+      }
+    }, LOCAL_SERVER_WATCHDOG_MS);
+    if (typeof localServerWatchdog.unref === "function") localServerWatchdog.unref();
 
     app.on("activate", () => {
       // macOS: re-create the window when the dock icon is clicked and none

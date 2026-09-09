@@ -39,6 +39,7 @@
   "build": {
     "appId": "ai.omnigent.desktop",
     "productName": "Omnigent",
+    "buildVersion": "0.9.0",
     "directories": {
       "output": "dist"
     },

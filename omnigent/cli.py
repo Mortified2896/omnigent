@@ -3097,6 +3097,15 @@ def _ensure_databricks_server_auth(server: str, *, non_interactive: bool = False
         not a TTY or ``non_interactive`` is set) — or the login flow itself
         fails.
     """
+    from urllib.parse import urlsplit
+
+    # An explicitly named loopback server is still local. It never needs the
+    # Databricks auth probe, and constructing a proxy-aware HTTP client here can
+    # fail before the no-proxy rule is applied when an optional SOCKS transport
+    # isn't installed.
+    if urlsplit(server).hostname in {"localhost", "127.0.0.1", "::1"}:
+        return
+
     import httpx as _httpx
 
     from omnigent.chat import _remote_headers
@@ -3107,7 +3116,7 @@ def _ensure_databricks_server_auth(server: str, *, non_interactive: bool = False
             headers=_remote_headers(server_url=server),
             timeout=10.0,
         )
-    except _httpx.HTTPError:
+    except (_httpx.HTTPError, ImportError, OSError):
         # Unreachable / transient: let the connect path raise its own,
         # already-actionable error rather than failing the pre-flight.
         return
@@ -3637,7 +3646,12 @@ def server(
         # `omnigent server --background` is the canonical spelling for the
         # detached server; the deprecated ``server start`` alias routes to the
         # same helper so both spellings can never drift.
-        _run_background_server()
+        port_source = ctx.get_parameter_source("port")
+        port_was_explicit = port_source is click.core.ParameterSource.COMMANDLINE
+        _run_background_server(
+            preferred_port=port if port_was_explicit else None,
+            allow_port_fallback=not port_was_explicit,
+        )
         return
 
     port_source = ctx.get_parameter_source("port")
@@ -4053,7 +4067,11 @@ def _stop_local_server_and_daemon(*, force: bool) -> bool:
     return was_running or orphan_pid is not None
 
 
-def _run_background_server() -> None:
+def _run_background_server(
+    *,
+    preferred_port: int | None = None,
+    allow_port_fallback: bool = True,
+) -> None:
     """Ensure (or reuse) the managed detached local server and report it.
 
     The shared body of ``omnigent server --background`` and its deprecated
@@ -4063,7 +4081,13 @@ def _run_background_server() -> None:
 
     :returns: None.
     """
-    startup = ensure_local_omnigent_server()
+    if preferred_port is None and allow_port_fallback:
+        startup = ensure_local_omnigent_server()
+    else:
+        startup = ensure_local_omnigent_server(
+            preferred_port=preferred_port,
+            allow_port_fallback=allow_port_fallback,
+        )
     verb = (
         "Started background server at"
         if startup.spawned
@@ -8086,6 +8110,8 @@ def _host_http_json(
         quick liveness probe. Defaults to ``10.0`` for management calls.
     :returns: Decoded HTTP result.
     """
+    from urllib.parse import urlsplit
+
     import httpx
 
     from omnigent.chat import _remote_headers
@@ -8100,9 +8126,10 @@ def _host_http_json(
             base_url=base_url,
             headers=headers,
             timeout=timeout_s,
+            trust_env=urlsplit(base_url).hostname not in _LOOPBACK_HOSTS,
         ) as client:
             resp = client.request(method, path, params=params, json=json_body)
-    except (httpx.HTTPError, OSError) as exc:
+    except (httpx.HTTPError, ImportError, OSError) as exc:
         return _HostHttpResult(
             status_code=0,
             body=f"{type(exc).__name__}: {exc}",
@@ -10214,7 +10241,7 @@ def _workspace_api_server_url(server: str) -> str:
         return server
     try:
         probe = _httpx.get(f"{server}/v1/me", timeout=10.0)
-    except _httpx.HTTPError:
+    except (_httpx.HTTPError, ImportError, OSError):
         return server
     # Already something we understand at the root: an omnigent server
     # (200 / 401-with-login_url JSON) or a Databricks Apps edge /
@@ -10229,7 +10256,7 @@ def _workspace_api_server_url(server: str) -> str:
     candidate = urlunsplit((parsed.scheme, parsed.netloc, WORKSPACE_API_PATH, "", ""))
     try:
         api_probe = _httpx.get(f"{candidate}/v1/me", timeout=10.0)
-    except _httpx.HTTPError:
+    except (_httpx.HTTPError, ImportError, OSError):
         return server
     if _workspace_mount_probe_matches(candidate, api_probe):
         click.echo(
@@ -10249,7 +10276,7 @@ def _workspace_api_server_url(server: str) -> str:
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=10.0,
             )
-        except _httpx.HTTPError:
+        except (_httpx.HTTPError, ImportError, OSError):
             authed_probe = None
         if authed_probe is not None and _workspace_mount_probe_matches(candidate, authed_probe):
             click.echo(
@@ -10352,7 +10379,7 @@ def _databricks_root_is_usable(server: str) -> bool:
     root = _probe_root(server)
     try:
         probe = _httpx.get(f"{root}/v1/me", timeout=10.0)
-    except _httpx.HTTPError:
+    except (_httpx.HTTPError, ImportError, OSError):
         return False
     if probe.status_code == 200:
         return True

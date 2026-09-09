@@ -152,6 +152,17 @@ export interface O3RoutingProposal {
   expires_at: string;
   prompt_fingerprint: string;
   workspace_summary: string;
+  adviser_mode?: "model" | "local_rule" | "unknown";
+  adviser_exchanges?: {
+    requested_model: string;
+    actual_model: string | null;
+    actual_provider: string | null;
+    reasoning_effort: string;
+    request: Record<string, unknown>;
+    explanation: string;
+    reasoning_summary: string | null;
+    attempt: number;
+  }[];
   adviser: {
     task_summary: string;
     task_classification: string;
@@ -280,6 +291,14 @@ export interface O3CatalogueRecommendation {
   other_above_floor: O3CatalogueRecommendationItem[];
   codex_subscription_fallback: O3CatalogueRecommendationItem[];
   nearest_below_floor: O3CatalogueRecommendationItem[];
+  model_groups?: {
+    model_identity: string;
+    displayed_model: string;
+    route_count: number;
+    eligible_route_count: number;
+    configuration_count: number;
+    configurations: O3CatalogueRecommendationItem[];
+  }[];
   stale_warning: string | null;
   execution_set?: O3CatalogueExecutionSet | null;
 }
@@ -336,22 +355,41 @@ export interface O3RoutingRegistry {
   slices: O3BenchmarkSlice[];
 }
 
+export class O3RoutingReviewRequestError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null) {
+    super(message);
+    this.name = "O3RoutingReviewRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function routingRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await authenticatedFetch(path, init);
   if (response.ok) return (await response.json()) as T;
   let message = `${response.status} ${response.statusText}`.trim();
+  let code: string | null = null;
   try {
     const body = (await response.json()) as {
-      error?: string | { message?: string };
+      error?: string | { code?: string; message?: string };
       detail?: string;
     };
     if (typeof body.error === "string") message = body.error;
-    else if (typeof body.error?.message === "string") message = body.error.message;
-    else if (typeof body.detail === "string") message = body.detail;
+    else if (typeof body.error === "object" && body.error !== null) {
+      if (typeof body.error.message === "string") message = body.error.message;
+      if (typeof body.error.code === "string") code = body.error.code;
+    } else if (typeof body.detail === "string") message = body.detail;
   } catch {
     // Preserve the status fallback for non-JSON errors.
   }
-  throw new Error(message || "Routing review request failed");
+  throw new O3RoutingReviewRequestError(
+    message || "Routing review request failed",
+    response.status,
+    code,
+  );
 }
 
 function jsonMutation(method: "POST" | "PATCH", body: object): RequestInit {

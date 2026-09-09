@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 import httpx
+import tomllib
 
 from .models import (
     CandidateEvaluation,
@@ -30,6 +33,32 @@ _CALL_LOG_PAGE_SIZE = 100
 _MAX_CALL_LOG_PAGES = 20
 _MAX_EXECUTION_RECORDS = 100
 _CALL_LOG_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _codex_mcp_omniroute_key(
+    base_url: str,
+    config_path: Path | None = None,
+) -> str | None:
+    """Read the existing loopback OmniRoute MCP bearer without persisting it."""
+    path = config_path or Path.home() / ".codex" / "config.toml"
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        entry = config["mcp_servers"]["omniroute"]
+        mcp_url = urlsplit(entry["url"])
+        target = urlsplit(base_url)
+        if (
+            mcp_url.scheme != "http"
+            or mcp_url.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or target.scheme != "http"
+            or target.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or mcp_url.port != target.port
+        ):
+            return None
+        headers = entry.get("http_headers", {})
+        value = headers.get("Authorization") or headers.get("authorization")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+    except (KeyError, OSError, TypeError, ValueError, tomllib.TOMLDecodeError):
+        return None
 
 
 def _target_pair(provider_id: str, model: str) -> tuple[str, str]:
@@ -67,9 +96,12 @@ class OmniRouteClient:
     @classmethod
     def from_env(cls) -> OmniRouteClient:
         base_url = os.environ.get(OMNIROUTE_BASE_URL_ENV, "http://127.0.0.1:20128")
-        key = os.environ.get(OMNIROUTE_KEY_ENV)
+        key = os.environ.get(OMNIROUTE_KEY_ENV) or _codex_mcp_omniroute_key(base_url)
         if key is None:
-            raise ValueError(f"{OMNIROUTE_KEY_ENV} is required while O3 routing review is enabled")
+            raise ValueError(
+                f"{OMNIROUTE_KEY_ENV} or a loopback OmniRoute Codex MCP credential is required "
+                "while O3 routing review is enabled"
+            )
         return cls(base_url, key)
 
     async def _request_json(
@@ -83,7 +115,7 @@ class OmniRouteClient:
         headers = {"Authorization": self._authorization, "Accept": "application/json"}
         request_timeout = timeout or self.timeout
         try:
-            async with httpx.AsyncClient(timeout=request_timeout) as client:
+            async with httpx.AsyncClient(timeout=request_timeout, trust_env=False) as client:
                 response = await client.request(
                     method,
                     self.base_url + path,
@@ -153,13 +185,73 @@ class OmniRouteClient:
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
 
+    async def recheck_routes(self, route_ids: list[str], *, reasoning_effort: str) -> str:
+        """Confirm a bounded shortlist without transmitting the user's task."""
+        shortlist = list(dict.fromkeys(route_ids))[:3]
+        try:
+            async with asyncio.timeout(3):
+                rows = await self.list_call_logs(limit=100, offset=0)
+        except (OmniRouteError, TimeoutError):
+            rows = []
+        now = datetime.now(timezone.utc)
+        for route_id in shortlist:
+            recent = []
+            for row in rows:
+                timestamp = self._parse_timestamp(row.get("timestamp"))
+                if (
+                    row.get("requestedModel") == route_id
+                    and row.get("path") == "/v1/responses"
+                    and timestamp is not None
+                    and 0 <= (now - timestamp).total_seconds() <= 900
+                ):
+                    recent.append((timestamp, row))
+            if recent:
+                latest = max(recent, key=lambda item: item[0])[1]
+                if latest.get("status") == 200:
+                    return route_id
+        for route_id in shortlist:
+            try:
+                async with asyncio.timeout(10):
+                    response = await self._request(
+                        "POST",
+                        "/v1/responses",
+                        timeout=10,
+                        body={
+                            "model": route_id,
+                            "input": "Reply with OK only.",
+                            "reasoning": {"effort": reasoning_effort},
+                            "store": False,
+                            "max_output_tokens": 128,
+                        },
+                    )
+                body = response.body
+                output = body.get("output")
+                if body.get("status") == "failed" or body.get("error"):
+                    continue
+                if body.get("output_text") or (
+                    isinstance(output, list)
+                    and any(
+                        isinstance(item, dict)
+                        and item.get("type") == "message"
+                        and item.get("content")
+                        for item in output
+                    )
+                ):
+                    return route_id
+            except (OmniRouteError, TimeoutError):
+                continue
+        raise OmniRouteError(
+            "No route in the preferred shortlist could be verified. "
+            "Wait or revalidate before continuing."
+        )
+
     async def resource_snapshot(
         self, decisions: list[CatalogueExecutionDecision]
     ) -> ResourceSnapshot:
         """Aggregate current circuit state for an explicit approved set."""
         observed_at = datetime.now(timezone.utc).isoformat()
         try:
-            response = await self._request("GET", "/api/monitoring/health")
+            response = await self._request("GET", "/api/monitoring/health", timeout=3)
             raw_breakers = response.body.get("circuitBreakers")
             breakers = raw_breakers if isinstance(raw_breakers, list) else []
         except OmniRouteError:

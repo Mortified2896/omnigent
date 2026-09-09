@@ -54,6 +54,7 @@ async def generate_background_title(context: BackgroundTitleContext) -> str | No
             bridge_dir=temp_root / "bridge",
             extra_config_overrides=launch.config_overrides,
             env_passthrough=launch.env_passthrough,
+            credential_env=launch.credential_env,
         )
         native_server.config_overrides = materialize_codex_provider_config(
             codex_home,

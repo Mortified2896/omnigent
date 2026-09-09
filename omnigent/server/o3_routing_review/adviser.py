@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from typing import Protocol
 
 from pydantic import ValidationError
 
-from .models import AdviserAnalysis, CandidateSnapshot, ResourceAdvice, ResourceSnapshot
-from .omniroute import OmniRouteClient, OmniRouteError
+from .models import (
+    AdviserAnalysis,
+    AdviserExchange,
+    CandidateSnapshot,
+    ResourceAdvice,
+    ResourceSnapshot,
+)
+from .omniroute import OmniRouteClient, OmniRouteError, OmniRouteResponse
 from .registry import ADVISER_COMBO_NAME, BenchmarkRegistry
 
 ADVISER_MODEL_ENV = "OMNIGENT_O3_ADVISER_MODEL"
@@ -91,7 +98,7 @@ def _extract_text(body: dict[str, object]) -> str:
     if isinstance(output, list):
         chunks: list[str] = []
         for item in output:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or item.get("type") == "reasoning":
                 continue
             content = item.get("content")
             if not isinstance(content, list):
@@ -122,6 +129,40 @@ def _decode_analysis(text: str) -> AdviserAnalysis:
         return AdviserAnalysis.model_validate(raw)
     except ValidationError as exc:
         raise OmniRouteError("routing adviser output failed schema validation") from exc
+
+
+def _record_exchange(
+    analysis: AdviserAnalysis,
+    request: dict[str, object],
+    response: OmniRouteResponse,
+    attempt: int,
+) -> AdviserAnalysis:
+    headers = {key.lower(): value for key, value in response.headers.items()}
+    summaries = []
+    output = response.body.get("output")
+    for item in output if isinstance(output, list) else []:
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        summary = item.get("summary")
+        for part in summary if isinstance(summary, list) else []:
+            if isinstance(part, dict) and part.get("type") == "summary_text":
+                if isinstance(part.get("text"), str):
+                    summaries.append(part["text"])
+    reasoning = request.get("reasoning")
+    effort = reasoning.get("effort", "low") if isinstance(reasoning, dict) else "low"
+    analysis._exchanges.append(
+        AdviserExchange(
+            requested_model=str(request["model"]),
+            actual_model=headers.get("x-omniroute-model") or headers.get("x-model"),
+            actual_provider=headers.get("x-omniroute-provider") or headers.get("x-provider"),
+            reasoning_effort=str(effort),
+            request=copy.deepcopy(request),
+            explanation=analysis.rationale,
+            reasoning_summary="\n".join(summaries) or None,
+            attempt=attempt,
+        )
+    )
+    return analysis
 
 
 class OmniRouteRoutingAdviser:
@@ -199,7 +240,9 @@ class OmniRouteRoutingAdviser:
         try:
             response = await self.client.create_response(strict_body)
             self._remember_attribution(response.headers)
-            return _decode_analysis(_extract_text(response.body))
+            return _record_exchange(
+                _decode_analysis(_extract_text(response.body)), strict_body, response, 1
+            )
         except OmniRouteError:
             # Some empirically Responses-compatible non-OpenAI adapters reject
             # text.format or return JSON that does not honor its vocabulary. A
@@ -221,7 +264,9 @@ class OmniRouteRoutingAdviser:
             }
             response = await self.client.create_response(repair_body)
             self._remember_attribution(response.headers)
-            return _decode_analysis(_extract_text(response.body))
+            return _record_exchange(
+                _decode_analysis(_extract_text(response.body)), repair_body, response, 2
+            )
 
     async def analyse(
         self,

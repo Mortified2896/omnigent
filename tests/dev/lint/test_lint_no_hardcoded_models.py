@@ -238,3 +238,16 @@ def test_precommit_trigger_matches_scan_surface() -> None:
     assert triggered_paths == scanned_paths
     for extension in SOURCE_EXTENSIONS:
         assert files_pattern.search(Path(f"lint_probe{extension}").as_posix())
+
+
+def test_scan_distinguishes_o3_metadata_from_model_selection(tmp_path: Path) -> None:
+    source = tmp_path / "profile.py"
+    source.write_text(
+        'O3_PROFILE_FINGERPRINT_KEY = "o3"\n'
+        'O3_TRACE_PROVIDER_NAME = "o3-omniroute-loopback"\n'
+        'FORECASTER_VERSION = "o3-task-blind-score-forecaster-v1"\n'
+        'READINESS_FILENAME = "o3-route-readiness-v1.json"\n'
+        'READINESS_MANIFEST_FILENAME = "o3-route-readiness-manifest-v1.json"\n'
+        'model = "o3"\n'
+    )
+    assert [hit.model for hit in scan(source)] == ["o3"]

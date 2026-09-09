@@ -1,3 +1,5 @@
+import { O3ReviewTimingStatus } from "@/components/O3ReviewTimingStatus";
+import { startReviewTiming, finishReviewTiming, type O3ReviewTiming } from "@/lib/o3ReviewTiming";
 import {
   type DragEvent,
   type ReactNode,
@@ -214,6 +216,7 @@ import {
   getO3RoutingProposal,
   getO3RoutingRegistry,
   linkO3RoutingProposalSession,
+  O3RoutingReviewRequestError,
   readO3EstimatorPolicy,
   readO3RoutingDraft,
   routingDraftForProposal,
@@ -2402,6 +2405,7 @@ export function NewChatLandingScreen() {
   >(savedEstimatorPolicy?.evidence_policy ?? "provisional");
   const [o3EstimatorOverrideOpen, setO3EstimatorOverrideOpen] = useState(false);
   const [o3ReviewLoading, setO3ReviewLoading] = useState(false);
+  const [o3ReviewTiming, setO3ReviewTiming] = useState<O3ReviewTiming | null>(null);
   const [o3RoutingSelected, setO3RoutingSelected] = useState(true);
   const [o3ReviewError, setO3ReviewError] = useState<string | null>(null);
   const [o3Draft, setO3Draft] = useState<O3RoutingDraft | null>(() => readO3RoutingDraft());
@@ -2471,6 +2475,17 @@ export function NewChatLandingScreen() {
         setO3Slices(registry.slices ?? []);
       })
       .catch((cause: unknown) => {
+        if (
+          cause instanceof O3RoutingReviewRequestError &&
+          cause.status === 404 &&
+          cause.code === "not_found"
+        ) {
+          clearO3RoutingDraft();
+          setO3Draft(null);
+          setO3Proposal(null);
+          setO3ReviewError(null);
+          return;
+        }
         setO3ReviewError(
           cause instanceof Error
             ? cause.message
@@ -3799,6 +3814,7 @@ export function NewChatLandingScreen() {
   }
 
   function resetO3Review(): void {
+    setO3ReviewTiming(null);
     clearO3RoutingDraft();
     setO3Draft(null);
     setO3Proposal(null);
@@ -3844,6 +3860,7 @@ export function NewChatLandingScreen() {
         return;
       }
       setO3ReviewLoading(true);
+      setO3ReviewTiming(null);
       setO3ReviewError(null);
       o3RestoreAttemptedRef.current = true;
       try {
@@ -3877,11 +3894,14 @@ export function NewChatLandingScreen() {
           writeO3EstimatorPolicy(estimatorPolicy);
         }
         const workspaceSummary = o3WorkspaceSummary();
+        const timing = startReviewTiming();
+        setO3ReviewTiming(timing);
         const proposal = await createO3RoutingProposal(
           initialPrompt,
           workspaceSummary,
           estimatorPolicy,
         );
+        setO3ReviewTiming(finishReviewTiming(timing));
         const draft = routingDraftForProposal(proposal, initialPrompt, message, workspaceSummary);
         writeO3RoutingDraft(draft);
         setO3Draft(draft);
@@ -3891,6 +3911,7 @@ export function NewChatLandingScreen() {
           cause instanceof Error ? cause.message : "The O3 route review could not be created.",
         );
       } finally {
+        setO3ReviewTiming((timing) => (timing?.actualMs === undefined ? null : timing));
         setO3ReviewLoading(false);
       }
       return;
@@ -5351,14 +5372,16 @@ export function NewChatLandingScreen() {
                 host / working-directory / worktree / project chips. */}
           </div>
 
+          {o3ReviewTiming && <O3ReviewTimingStatus timing={o3ReviewTiming} />}
+
           {o3ReviewLoading && (
             <div
               className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
               role="status"
               data-testid="o3-routing-loading"
             >
-              <Loader2Icon className="size-4 animate-spin" /> Analysing the task and evaluating
-              every O3 source-pool candidate…
+              <Loader2Icon className="size-4 animate-spin" /> Waiting for the route review. Advisor
+              requests and availability checks can take time.
             </div>
           )}
 

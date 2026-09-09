@@ -144,6 +144,63 @@ def test_ensure_local_omnigent_server_reuses_without_spawning(
     assert result.spawned is False
 
 
+def test_ensure_exact_port_replaces_managed_wrong_port(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Exact-port mode stops the one managed server before replacing it."""
+    monkeypatch.setattr(
+        local_server, "local_server_url_if_healthy", lambda: "http://127.0.0.1:6767"
+    )
+    monkeypatch.setattr(
+        local_server, "_read_local_server_sig", local_server.server_config_signature
+    )
+    stopped: list[bool] = []
+    monkeypatch.setattr(local_server, "stop_local_omnigent_server", lambda: stopped.append(True))
+    monkeypatch.setattr(local_server, "pick_local_port", lambda preferred: preferred)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    monkeypatch.setattr(local_server, "_LOCAL_SERVER_PID_PATH", tmp_path / "local_server.pid")
+    monkeypatch.setattr(local_server, "_LOCAL_SERVER_SIG_PATH", tmp_path / "local_server.sig")
+    monkeypatch.setattr(
+        local_server, "_LOCAL_SERVER_LOG_REF_PATH", tmp_path / "local_server.logpath"
+    )
+
+    class _Proc:
+        pid = 9001
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr(local_server.subprocess, "Popen", _Proc)
+    monkeypatch.setattr(local_server, "_wait_for_local_omnigent_server", lambda *_a, **_k: None)
+    monkeypatch.setattr(local_server, "_pid_listening_on_port", lambda _port: 9001)
+
+    result = local_server.ensure_local_omnigent_server(
+        preferred_port=6768,
+        allow_port_fallback=False,
+    )
+
+    assert stopped == [True]
+    assert result.url == "http://127.0.0.1:6768"
+
+
+def test_ensure_exact_port_refuses_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A busy canonical port is an error, never a random replacement URL."""
+    monkeypatch.setattr(local_server, "local_server_url_if_healthy", lambda: None)
+    monkeypatch.setattr(local_server, "pick_local_port", lambda preferred: 49123)
+
+    with pytest.raises(click.ClickException, match="refusing to select a different port"):
+        local_server.ensure_local_omnigent_server(
+            preferred_port=6768,
+            allow_port_fallback=False,
+        )
+
+
 def test_ensure_local_omnigent_server_respawns_on_config_drift(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

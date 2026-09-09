@@ -36,6 +36,7 @@ from .models import (
     ProposalSessionLinkRequest,
     ResourceAdvice,
     RoutingProposal,
+    RoutingRequirements,
 )
 from .omniroute import OmniRouteClient, OmniRouteError
 from .recommendation import (
@@ -145,6 +146,47 @@ class O3RoutingReviewService:
                     str(exc), status_code=502, code="invalid_adviser_output"
                 ) from exc
 
+    def _greeting_analysis(self, request: ProposalCreateRequest) -> AdviserAnalysis | None:
+        if self.recommendation_catalogue is None or request.estimator_policy is not None:
+            return None
+        if request.prompt.strip().casefold().rstrip("!.") not in {
+            "hi",
+            "hihi",
+            "hello",
+            "hey",
+            "hallo",
+            "你好",
+        }:
+            return None
+        preferred = next(
+            (item for item in self.registry.slices if item.slice_id == "tb4.overall"), None
+        )
+        if preferred is None:
+            return None
+        return AdviserAnalysis(
+            task_summary="Reply to a greeting.",
+            task_classification="greeting",
+            difficulty="easy",
+            risk="low",
+            requirements=RoutingRequirements(terminal=False, tools=False),
+            benchmark_requirements=[
+                BenchmarkSelection(
+                    benchmark_id=preferred.benchmark_id,
+                    version=preferred.version,
+                    slice_id=preferred.slice_id,
+                    reason="Standalone greeting; local requirements rule",
+                )
+            ],
+            proposed_reasoning_effort="low",
+            evidence_policy=EvidencePolicy.PROVISIONAL,
+            disposition=Disposition.ROUTE,
+            confidence=1.0,
+            rationale=(
+                "An exact standalone greeting needs only a text response. "
+                "Reviewed locally without an estimator request."
+            ),
+        )
+
     async def create_proposal(self, request: ProposalCreateRequest) -> RoutingProposal:
         prompt = request.prompt
         if not prompt.strip():
@@ -153,9 +195,11 @@ class O3RoutingReviewService:
         estimator: EstimatorSelection | None = None
         adviser_model: str | None = None
         adviser_effort: str | None = None
+        analysis = self._greeting_analysis(request)
+        adviser_mode = "local_rule" if analysis is not None else "model"
         if self.recommendation_catalogue is None:
             await self.cleanup_expired()
-        else:
+        elif analysis is None:
             policy = request.estimator_policy
             if policy is None:
                 preferred = next(
@@ -238,9 +282,13 @@ class O3RoutingReviewService:
                     status_code=409,
                     code="no_estimator_route",
                 )
+            verified_estimator = await self.omniroute.recheck_routes(
+                [item.route_id for item in eligible],
+                reasoning_effort=policy.reasoning_effort,
+            )
             adviser_model, _definition = await self.omniroute.create_estimator_combo(
                 proposal_id,
-                eligible,
+                [item for item in eligible if item.route_id == verified_estimator],
                 reasoning_effort=policy.reasoning_effort,
             )
             adviser_effort = policy.reasoning_effort
@@ -249,7 +297,7 @@ class O3RoutingReviewService:
                 eligible_count=len(eligible),
                 combo_name=adviser_model,
             )
-        analysis = await self.adviser.analyse(
+        analysis = analysis or await self.adviser.analyse(
             prompt=prompt,
             workspace_summary=request.workspace_summary,
             registry=self.registry,
@@ -260,8 +308,12 @@ class O3RoutingReviewService:
         if estimator is not None:
             estimator = estimator.model_copy(
                 update={
-                    "actual_provider": getattr(self.adviser, "actual_provider", None),
-                    "actual_model": getattr(self.adviser, "actual_model", None),
+                    "actual_provider": analysis._exchanges[-1].actual_provider
+                    if analysis._exchanges
+                    else None,
+                    "actual_model": analysis._exchanges[-1].actual_model
+                    if analysis._exchanges
+                    else None,
                 }
             )
         self._validate_analysis(analysis)
@@ -308,19 +360,6 @@ class O3RoutingReviewService:
         execution_set = recommendation.execution_set if recommendation else None
         if execution_set is not None:
             resource_snapshot = await self.omniroute.resource_snapshot(execution_set.eligible)
-            if (
-                isinstance(self.adviser, OmniRouteRoutingAdviser)
-                and adviser_model
-                and adviser_effort
-            ):
-                try:
-                    resource_advice = await self.adviser.advise_resources(
-                        snapshot=resource_snapshot,
-                        model=adviser_model,
-                        reasoning_effort=adviser_effort,
-                    )
-                except OmniRouteError:
-                    _logger.info("O3 resource adviser unavailable; using deterministic guidance")
             if resource_advice is None:
                 action = "start_now" if resource_snapshot.usable_routes > 0 else "wait"
                 reason = (
@@ -370,6 +409,7 @@ class O3RoutingReviewService:
                     prior=analysis,
                     capability_gap=gap,
                 )
+                analysis._exchanges.extend(decomposed._exchanges)
                 self._validate_analysis(decomposed)
                 decomposition = self._validate_decomposition(decomposed, candidates)
                 analysis = analysis.model_copy(
@@ -391,6 +431,8 @@ class O3RoutingReviewService:
             prompt_fingerprint="sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
             workspace_summary=request.workspace_summary,
             adviser=analysis,
+            adviser_exchanges=analysis._exchanges,
+            adviser_mode=adviser_mode,
             approved_constraints=constraints,
             evaluations=result.evaluations,
             frontier=result.frontier,
@@ -637,6 +679,16 @@ class O3RoutingReviewService:
                 raise RoutingReviewError(
                     "provisional evidence requires deliberate acknowledgement", status_code=409
                 )
+        if self.recommendation_catalogue is not None:
+            refreshed = recommend(
+                self.recommendation_catalogue,
+                difficulty=proposal.approved_constraints.difficulty,
+                raw_floor=proposal.approved_constraints.benchmark.minimum_score,
+                live_route_ids=await self.omniroute.model_ids(),
+                requirements=proposal.adviser.requirements,
+                reasoning_effort=proposal.approved_constraints.reasoning_effort,
+            )
+            proposal = proposal.model_copy(update={"recommendation": refreshed})
         catalogue_set = proposal.recommendation.execution_set if proposal.recommendation else None
         catalogue_selected = catalogue_set.eligible if catalogue_set is not None else []
         if not selected and not catalogue_selected:
@@ -647,6 +699,24 @@ class O3RoutingReviewService:
             )
         try:
             if catalogue_selected:
+                ready_ids = (
+                    {item.route_id for item in proposal.recommendation.callable_non_codex}
+                    if proposal.recommendation
+                    else set()
+                )
+                shortlist = sorted(
+                    catalogue_selected,
+                    key=lambda item: (
+                        -int(item.route_id in ready_ids),
+                        -float(item.capability_score_lower or 0),
+                        item.route_id,
+                    ),
+                )
+                if request.action is not DecisionAction.RUN_ANYWAY:
+                    await self.omniroute.recheck_routes(
+                        [item.route_id for item in shortlist],
+                        reasoning_effort=proposal.approved_constraints.reasoning_effort,
+                    )
                 combo_name, combo_definition = await self.omniroute.create_catalogue_combo(
                     proposal.proposal_id,
                     catalogue_selected,

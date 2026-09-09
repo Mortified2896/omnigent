@@ -36,6 +36,8 @@ from omnigent.process_logging import (
     open_process_log_file,
 )
 
+O3_PROFILE_FINGERPRINT_KEY = "o3"
+
 _LOCAL_SERVER_READY_TIMEOUT_SECONDS = 45.0
 
 # Max seconds to wait for a bind-race-doomed server child's natural
@@ -109,7 +111,9 @@ def server_config_signature() -> str:
       Folding the version in makes the next CLI command notice the drift
       and respawn the server on the new code through the existing
       config-drift path in :func:`ensure_local_omnigent_server` — no
-      explicit restart required.
+      explicit restart required; and
+    * the opt-in O3 routing-review profile — its catalogue, adviser, and
+      loopback OmniRoute credential are all read when the server boots.
 
     Deliberately narrow otherwise, so unrelated env churn does not force
     needless restarts.
@@ -129,7 +133,22 @@ def server_config_signature() -> str:
         # nothing to key version-drift on, so leave it out of the payload.
         version = ""
 
-    payload = json.dumps({"auth": resolve_auth_source(), "version": version}, sort_keys=True)
+    o3_keys = (
+        "OMNIGENT_O3_ROUTING_REVIEW",
+        "OMNIGENT_O3_OMNIROUTE_BASE_URL",
+        "OMNIGENT_O3_RECOMMENDATION_CATALOG_DIR",
+        "OMNIGENT_O3_BENCHMARK_REGISTRY",
+        "OMNIGENT_O3_ADVISER_MODEL",
+        "OMNIROUTE_O3_KEY",
+    )
+    payload = json.dumps(
+        {
+            "auth": resolve_auth_source(),
+            "version": version,
+            O3_PROFILE_FINGERPRINT_KEY: {key: os.environ.get(key, "") for key in o3_keys},
+        },
+        sort_keys=True,
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -440,7 +459,11 @@ class LocalServerStartup:
     log_path: Path | None = None
 
 
-def ensure_local_omnigent_server() -> LocalServerStartup:
+def ensure_local_omnigent_server(
+    *,
+    preferred_port: int | None = None,
+    allow_port_fallback: bool = True,
+) -> LocalServerStartup:
     """Ensure a persistent background local Omnigent server is running.
 
     Reuses a healthy server recorded in the pidfile; otherwise spawns a
@@ -466,21 +489,28 @@ def ensure_local_omnigent_server() -> LocalServerStartup:
     desired_sig = server_config_signature()
     reused = local_server_url_if_healthy()
     if reused is not None:
-        if _read_local_server_sig() == desired_sig:
+        reused_port = int(reused.rsplit(":", 1)[-1])
+        port_matches = preferred_port is None or reused_port == preferred_port
+        if _read_local_server_sig() == desired_sig and port_matches:
             return LocalServerStartup(
                 url=reused, spawned=False, log_path=_read_local_server_log_path()
             )
-        # Config drift: the running server was spawned under a different
-        # auth source and cannot be reconfigured in place (auth
-        # mode, cookie secret, etc. are baked at boot). Stop it and spawn
-        # a fresh one below so the invocation's intent takes effect.
+        # Config or requested-port drift cannot be changed in place. Stop the
+        # one managed local server before replacing it, so exact-port callers
+        # never leave an older local instance running beside the replacement.
         stop_local_omnigent_server()
 
     # Prefer the stable :6767 so the daemon-spawned server lands on the
     # same URL as a manual `omnigent server` (and reuse via the pidfile
     # keeps them from ever both running); fall back to a free port if
     # taken.
-    port = pick_local_port()
+    requested_port = preferred_port if preferred_port is not None else _DEFAULT_LOCAL_PORT
+    port = pick_local_port(requested_port)
+    if port != requested_port and not allow_port_fallback:
+        raise click.ClickException(
+            f"Requested local server port {requested_port} is unavailable; "
+            "refusing to select a different port."
+        )
     retried = False
     while True:
         spawned = _spawn_local_server(port)
@@ -516,6 +546,11 @@ def ensure_local_omnigent_server() -> LocalServerStartup:
         # natural EADDRINUSE exit, then respawn once on an OS-assigned
         # free port, which concurrent spawners never prefer.
         _await_doomed_child_exit(spawned.proc)
+        if not allow_port_fallback:
+            raise click.ClickException(
+                f"Requested local server port {requested_port} is owned by pid "
+                f"{foreign_owner}; refusing to select a different port."
+            )
         if retried:
             raise click.ClickException(
                 f"Local server port contention persists: port {port} is owned by "

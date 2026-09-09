@@ -516,9 +516,10 @@ def test_build_codex_native_server_preserves_only_declared_provider_env(
         profile=None,
         bridge_dir=tmp_path / "bridge",
         env_passthrough=("OMNIROUTE_O3_KEY",),
+        credential_env={"OMNIROUTE_O3_KEY": "resolved-sentinel"},
     )
 
-    assert app_server.env["OMNIROUTE_O3_KEY"] == "sentinel-bearer"
+    assert app_server.env["OMNIROUTE_O3_KEY"] == "resolved-sentinel"
     assert "UNRELATED_PROVIDER_SECRET" not in app_server.env
 
 

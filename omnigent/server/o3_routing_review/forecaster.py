@@ -16,6 +16,7 @@ from .models import BenchmarkEvidence, BenchmarkRequirement, CandidateSnapshot, 
 from .omniroute import OmniRouteClient, OmniRouteError
 from .registry import ADVISER_COMBO_NAME, BenchmarkRegistry, canonical_model_name
 
+STATE_DIRECTORY_NAME = "o3-routing-review"
 FORECASTER_VERSION = "o3-task-blind-score-forecaster-v1"
 
 
@@ -40,7 +41,7 @@ def _decode_forecast_output(text: str) -> ForecastOutput:
 
 class ForecastCache:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or data_dir() / "o3-routing-review" / "forecast-cache-v1.json"
+        self.path = path or data_dir() / STATE_DIRECTORY_NAME / "forecast-cache-v1.json"
 
     def get(self, key: str) -> BenchmarkEvidence | None:
         if not self.path.exists():

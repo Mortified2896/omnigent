@@ -62,6 +62,7 @@ function loadMainHarness({
   const electron = {
     app: {
       isPackaged: false,
+      disableHardwareAcceleration: () => {},
       getPath: (name) => (name === "userData" ? userData : userData),
       setName: () => {},
       requestSingleInstanceLock: () => true,

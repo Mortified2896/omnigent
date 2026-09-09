@@ -252,6 +252,26 @@ async function localServerHealthy(timeoutMs = 1500) {
 }
 
 /**
+ * Probe one explicit loopback server URL. Unlike localServerHealthy(), this
+ * does not depend on the managed pidfile, so it also recognizes a dedicated
+ * local server the user started separately (for example on port 6768).
+ *
+ * @param {string} serverUrl
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+async function loopbackServerHealthy(serverUrl, timeoutMs = 1500) {
+  if (!isLoopbackServer(serverUrl)) return false;
+  try {
+    const base = normalizeServerUrl(serverUrl);
+    const resp = await fetch(`${base}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The CLI binary's two console-script names — both resolve to the same entry
  * point (`omnigent.cli:main`); `omni` is the short alias. We probe `omnigent`
  * first (canonical) but accept `omni` so a machine that only installed the
@@ -530,8 +550,13 @@ async function getServerStatus(cliPath) {
  * @param {string} cliPath
  * @returns {Promise<{ ok: boolean, url?: string, port?: number, pid?: number, error?: string }>}
  */
-async function startLocalServer(cliPath) {
-  const res = await runCli(cliPath, ["server", "--background"], { timeoutMs: 30000 });
+async function startLocalServer(cliPath, port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { ok: false, error: "A valid local server port is required." };
+  }
+  const res = await runCli(cliPath, ["server", "--background", "--port", String(port)], {
+    timeoutMs: 60000,
+  });
   const status = await getServerStatus(cliPath);
   if (status && status.running && typeof status.url === "string") {
     return { ok: true, url: status.url, port: status.port, pid: status.pid };
@@ -559,10 +584,13 @@ async function stopLocalServer(cliPath) {
  *
  * @param {string} cliPath
  * @param {string} serverUrl
+ * @param {{daemonOnly?: boolean}} [opts]
  * @returns {Promise<{ ok: boolean, output: string }>}
  */
-async function stopHost(cliPath, serverUrl) {
-  const res = await runCli(cliPath, ["host", "stop", "--server", serverUrl], {
+async function stopHost(cliPath, serverUrl, opts = {}) {
+  const args = ["host", "stop", "--server", serverUrl];
+  if (opts.daemonOnly) args.push("--daemon-only");
+  const res = await runCli(cliPath, args, {
     timeoutMs: 15000,
   });
   return { ok: res.code === 0, output: (res.stdout || res.stderr).trim() };
@@ -881,6 +909,7 @@ module.exports = {
   readLocalServerPidfile,
   localServerStatus,
   localServerHealthy,
+  loopbackServerHealthy,
   candidatePaths,
   isExecutableFile,
   whichOmnigent,

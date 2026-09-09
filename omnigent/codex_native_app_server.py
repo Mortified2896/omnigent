@@ -14,7 +14,7 @@ import sys
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, cast
 
@@ -60,6 +60,8 @@ from omnigent.inner.codex_executor import (
     write_codex_hooks_file,
 )
 from omnigent.inner.databricks_executor import _databricks_gateway_host
+
+O3_TRACE_PROVIDER_NAME = "o3-omniroute-loopback"
 
 _logger = logging.getLogger(__name__)
 
@@ -1772,6 +1774,7 @@ def build_codex_native_server(
     bypass_sandbox: bool = False,
     trust_project: bool = False,
     env_passthrough: Sequence[str] = (),
+    credential_env: Mapping[str, str] | None = None,
 ) -> CodexNativeAppServer:
     """
     Build a configured native Codex app-server process wrapper.
@@ -1809,6 +1812,7 @@ def build_codex_native_server(
     :param trust_project: Whether to trust ``cwd`` in the private session
         config before app-server startup. Intended for runner-owned headless
         sessions whose hidden TUI cannot answer Codex's project-trust prompt.
+    :param credential_env: Resolved credentials passed only through the child environment.
     :param env_passthrough: Explicit credential variable names to preserve in
         the otherwise filtered Codex subprocess environment.
     :returns: Configured app-server process wrapper.
@@ -1824,6 +1828,7 @@ def build_codex_native_server(
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
     env = _clean_codex_env(env_passthrough)
+    env.update(credential_env or {})
     config_overrides: list[str] = []
     if profile is not None:
         # Use the profile's own host so the gateway base URL matches the token
@@ -1904,6 +1909,7 @@ class NativeCodexLaunch:
         outcome (provider / profile / model, or the login-fallback state),
         set at resolution time and surfaced in the startup-timeout error so
         hosted users can diagnose without runner-log access (see #2745).
+    :param credential_env: In-memory credentials omitted from config overrides and repr.
     :param env_passthrough: Credential variable names the resolved provider
         explicitly permits in the filtered Codex subprocess environment.
     """
@@ -1914,6 +1920,7 @@ class NativeCodexLaunch:
     summary: str = ""
     trace_provenance: CodexTraceLaunchProvenance | None = None
     env_passthrough: tuple[str, ...] = ()
+    credential_env: Mapping[str, str] = field(default_factory=dict, repr=False)
 
 
 def codex_session_meta_model_provider(launch: NativeCodexLaunch) -> str:
@@ -2260,10 +2267,18 @@ def _resolve_native_codex_access_lane(
         # deployment details, not stable OmniRoute identity.
         entry = default_provider_for_harness(load_config(), "codex")
         if entry is None:
-            o3_key = os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+            from omnigent.server.o3_routing_review.omniroute import _codex_mcp_omniroute_key
+
             o3_base = os.environ.get(
                 "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
             ).rstrip("/")
+            o3_key = (
+                os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+                or _codex_mcp_omniroute_key(o3_base)
+                or ""
+            )
+            if o3_key.lower().startswith("bearer "):
+                o3_key = o3_key[7:].strip()
             if not o3_key or not o3_base.startswith(("http://127.0.0.1:", "http://localhost:")):
                 raise OmnigentError(
                     "OmniRoute lane unavailable",
@@ -2281,9 +2296,10 @@ def _resolve_native_codex_access_lane(
                 summary=f"O3 OmniRoute lane (model={model!r})",
                 trace_provenance=CodexTraceLaunchProvenance(
                     access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
-                    provider="o3-omniroute-loopback",
+                    provider=O3_TRACE_PROVIDER_NAME,
                 ),
                 env_passthrough=("OMNIROUTE_O3_KEY",),
+                credential_env={"OMNIROUTE_O3_KEY": o3_key},
             )
         launch = _codex_provider_launch(entry, model)
         if launch is None:
@@ -2361,6 +2377,9 @@ def resolve_native_codex_launch(
         Codex's built-in subscription transport. Neither lane falls back.
     :returns: The resolved :class:`NativeCodexLaunch`.
     """
+    # Approved O3 Combo IDs belong to OmniRoute, including auxiliary title execs.
+    if access_lane is None and model and model.startswith("custom/o3-route-"):
+        access_lane = "omniroute"
     if access_lane is not None:
         return _resolve_native_codex_access_lane(access_lane=access_lane, model=model)
     from omnigent.onboarding.detected import (

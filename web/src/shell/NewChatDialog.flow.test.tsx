@@ -598,6 +598,52 @@ describe("NewChatLandingScreen create flow", () => {
     expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
   });
 
+  it("drops a stale saved proposal after a local server restart while preserving the prompt", async () => {
+    const pending = o3Proposal();
+    writeO3RoutingDraft(
+      routingDraftForProposal(
+        pending,
+        "inspect the repo after server restart",
+        "inspect the repo after server restart",
+        `Workspace: ${SEEDED_WORKSPACE}`,
+      ),
+    );
+    vi.mocked(authenticatedFetch)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        json: async () => ({
+          error: { code: "not_found", message: "routing proposal not found" },
+        }),
+      } as Response)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          source_pool: "custom/o3-codex-pool",
+          slices: [],
+        }),
+      );
+    setAgents([
+      agent({
+        id: "ag_codex",
+        name: "codex-native-ui",
+        display_name: "Codex",
+        harness: "codex-native",
+      }),
+    ]);
+
+    renderLanding([], O3_SERVER_INFO);
+
+    await waitFor(() => {
+      expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
+    });
+    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(
+      "inspect the repo after server restart",
+    );
+    expect(screen.queryByTestId("o3-review-error")).not.toBeInTheDocument();
+    expect(screen.getByTestId("new-chat-landing-submit")).toHaveTextContent("Review route");
+  });
+
   it("retains the created session id until proposal linking succeeds", async () => {
     const pending = o3Proposal();
     const approved = o3Proposal("approve");

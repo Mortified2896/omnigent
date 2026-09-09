@@ -10,6 +10,7 @@ parser; config + ambient are isolated so resolution is deterministic.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -804,3 +805,29 @@ def test_spec_subscription_logged_in_uses_cli_login(
     assert launch.profile is None
     assert "codex-sub" in launch.summary
     assert "Codex is logged in" in launch.summary
+
+
+@pytest.mark.parametrize("access_lane", ["omniroute", None])
+def test_o3_launch_reuses_mcp_credential_without_global_env(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch, access_lane: str | None
+) -> None:
+    monkeypatch.delenv("OMNIROUTE_O3_KEY", raising=False)
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+    codex_dir = _isolated / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text(
+        '[mcp_servers.omniroute]\nurl = "http://127.0.0.1:20128/mcp"\n'
+        '[mcp_servers.omniroute.http_headers]\nAuthorization = "Bearer local-sentinel"\n'
+    )
+    launch = resolve_native_codex_launch(model="custom/o3-route-deadbeef", access_lane=access_lane)
+    assert launch.credential_env == {"OMNIROUTE_O3_KEY": "local-sentinel"}
+    assert "local-sentinel" not in repr(launch)
+    assert "local-sentinel" not in "\n".join(launch.config_overrides)
+    assert "OMNIROUTE_O3_KEY" not in os.environ
+    assert launch.trace_provenance.access_lane == "omniroute"
+
+
+def test_o3_auxiliary_launch_does_not_fall_back_to_subscription(_isolated: Path) -> None:
+    _write_codex_login(_isolated, logged_in=True)
+    with pytest.raises(OmnigentError, match="OmniRoute lane unavailable"):
+        resolve_native_codex_launch(model="custom/o3-route-deadbeef")

@@ -194,6 +194,27 @@ def test_server_background_reuses(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "log: ~/.omnigent/logs/server/server-cd34.log" in result.output
 
 
+def test_server_background_explicit_port_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit background port disables random-port fallback."""
+    observed: list[dict[str, object]] = []
+
+    def _ensure(**kwargs: object) -> LocalServerStartup:
+        observed.append(kwargs)
+        return LocalServerStartup(
+            url="http://127.0.0.1:6768",
+            spawned=True,
+            log_path=None,
+        )
+
+    monkeypatch.setattr("omnigent.cli.ensure_local_omnigent_server", _ensure)
+
+    result = CliRunner().invoke(cli, ["server", "--background", "--port", "6768"])
+
+    assert result.exit_code == 0, result.output
+    assert observed == [{"preferred_port": 6768, "allow_port_fallback": False}]
+    assert "http://127.0.0.1:6768" in result.output
+
+
 def test_server_background_omits_log_when_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     """No log line when the running server has no captured-log file.
 

@@ -321,3 +321,64 @@ def test_unresolved_structured_output_and_output_limit_fail_closed() -> None:
         "output limit is unknown",
         "structured output support is unresolved",
     ]
+
+
+def test_model_groups_keep_configurations_and_every_execution_route(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    catalogue = load_recommendation_catalogue(str(_catalogue(tmp_path)))
+    base = catalogue.forecasts[0]
+    low = {**base, "provider_model_route_id": "free/model-a-low", "reasoning_mode": "low"}
+    catalogue = replace(catalogue, forecasts=(*catalogue.forecasts, low))
+    result = recommend(
+        catalogue,
+        difficulty="easy",
+        raw_floor=0.1,
+        live_route_ids={row["provider_model_route_id"] for row in catalogue.forecasts},
+    )
+    assert result.section_counts["above_floor_models"] == 2
+    assert result.section_counts["above_floor_routes"] == 4
+    group = next(item for item in result.model_groups if item.model_identity == "model-a")
+    assert group.route_count == 3
+    assert group.configuration_count == 2
+    assert {item.route_id for item in group.configurations} == {
+        "free/model-a",
+        "alias/model-a",
+        "free/model-a-low",
+    }
+    assert result.execution_set.total_evaluated == 4
+
+
+def test_missing_live_alias_does_not_hide_present_model(tmp_path: Path) -> None:
+    catalogue = load_recommendation_catalogue(str(_catalogue(tmp_path)))
+    result = recommend(
+        catalogue, difficulty="hard", raw_floor=0.3, live_route_ids={"alias/model-a"}
+    )
+    assert result.section_counts["above_floor_models"] == 1
+    assert result.other_above_floor[0].route_id == "alias/model-a"
+
+
+def test_readiness_expiry_and_unknown_identity_are_conservative() -> None:
+    from datetime import datetime, timezone
+
+    from omnigent.server.o3_routing_review.recommendation import (
+        model_identity,
+        readiness_is_recent,
+    )
+
+    now = datetime(2026, 9, 8, 12, tzinfo=timezone.utc)
+    assert readiness_is_recent("2026-09-08T11:50:00Z", now=now)
+    for timestamp in [
+        None,
+        "broken",
+        "2026-09-08",
+        "2026-09-08T11:00:00Z",
+        "2026-09-09T12:00:00Z",
+    ]:
+        assert not readiness_is_recent(timestamp, now=now)
+    row = {
+        "provider_model_route_id": "provider/opaque",
+        "estimate_method": "opaque_alias_hypothesis",
+        "inferred_base_checkpoint": "famous-model",
+    }
+    assert model_identity(row, {}) == "provider/opaque"

@@ -1726,6 +1726,20 @@ def test_databricks_preflight_non_interactive_overrides_tty(
     assert login_calls == []
 
 
+def test_databricks_preflight_skips_explicit_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit local URL never constructs the remote auth HTTP client."""
+    import httpx
+
+    def _unexpected_probe(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("loopback must not run the Databricks auth probe")
+
+    monkeypatch.setattr(httpx, "get", _unexpected_probe)
+
+    cli._ensure_databricks_server_auth("http://127.0.0.1:6768", non_interactive=True)
+
+
 def _patch_foreground_host(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

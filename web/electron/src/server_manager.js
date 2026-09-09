@@ -44,6 +44,9 @@ const spawnedHostChildren = new Set();
 /** { url, port, pid } when this app started the local server; null otherwise. */
 let ownedLocalServer = null;
 
+/** One desktop-wide local startup at a time, including setup/recovery races. */
+let localServerStartInFlight = null;
+
 /** Single listener notified when a host child's lifecycle changes (no polling). */
 let changeListener = null;
 
@@ -123,6 +126,7 @@ function ownsLiveHost(key) {
  * registers it. Never rejects.
  *
  * @param {string} cliPath
+ * @param {string} targetUrl Exact loopback URL the desktop requires.
  * @param {string} serverUrl
  * @returns {Promise<{ ok: boolean, child: import("child_process").ChildProcess, holder: {text: string}, error?: string }>}
  */
@@ -233,7 +237,7 @@ async function connectHost(cliPath, serverUrl, key) {
     return { ok: true, ownedByDesktop: false, adopted: true };
   }
 
-  const spawned = await spawnHostChild(cliPath, serverUrl);
+  let spawned = await spawnHostChild(cliPath, serverUrl);
   if (!spawned.ok) {
     // Connect failed or timed out. Await the child's termination — escalating to
     // SIGKILL after the grace period — rather than firing a single SIGTERM and
@@ -246,14 +250,29 @@ async function connectHost(cliPath, serverUrl, key) {
     // one (e.g. a local-mode daemon our pre-check couldn't match). That means a
     // host is in fact already connected — adopt it rather than report failure.
     if (isDaemonConflict(spawned.error)) {
-      return { ok: true, ownedByDesktop: false, adopted: true };
+      const existing = await cli.getHostConnectionFast(serverUrl);
+      if (existing.connected) {
+        return { ok: true, ownedByDesktop: false, adopted: true };
+      }
+      const stopped = await cli.stopHost(cliPath, serverUrl, { daemonOnly: true });
+      if (!stopped.ok) {
+        return {
+          ok: false,
+          ownedByDesktop: false,
+          error: stopped.output || "could not stop the disconnected host daemon",
+        };
+      }
+      spawned = await spawnHostChild(cliPath, serverUrl);
+      if (!spawned.ok) await stopChild(spawned.child);
     }
-    return {
-      ok: false,
-      ownedByDesktop: false,
-      error: spawned.error,
-      authError: isAuthError(spawned.error),
-    };
+    if (!spawned.ok) {
+      return {
+        ok: false,
+        ownedByDesktop: false,
+        error: spawned.error,
+        authError: isAuthError(spawned.error),
+      };
+    }
   }
   hostChildren.set(key, { child: spawned.child, serverUrl, log: spawned.holder });
   // Persistent cleanup: drop the entry when this child eventually exits. If the
@@ -362,7 +381,25 @@ function stopChild(child) {
  * @param {string} cliPath
  * @returns {Promise<{ ok: boolean, url?: string, alreadyRunning?: boolean, error?: string }>}
  */
-async function startLocalServer(cliPath) {
+function startLocalServer(cliPath, targetUrl) {
+  if (localServerStartInFlight) return localServerStartInFlight;
+  const operation = startLocalServerOnce(cliPath, targetUrl).finally(() => {
+    if (localServerStartInFlight === operation) localServerStartInFlight = null;
+  });
+  localServerStartInFlight = operation;
+  return operation;
+}
+
+async function startLocalServerOnce(cliPath, targetUrl) {
+  let port;
+  try {
+    port = Number.parseInt(new URL(targetUrl).port, 10);
+  } catch {
+    return { ok: false, error: "The canonical local server URL is invalid." };
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { ok: false, error: "The canonical local server URL has no valid port." };
+  }
   // Reuse a server that's already running — but health-verify it (pidfile +
   // pid + /health), not just pid-liveness, since we're about to navigate the
   // window to this URL: a stale pidfile (dead/reused pid, hung server) must NOT
@@ -371,12 +408,27 @@ async function startLocalServer(cliPath) {
   // ownership claim.
   const existing = await cli.localServerHealthy();
   if (existing) {
-    return { ok: true, url: existing.url, alreadyRunning: true };
+    if (cli.sameLoopbackServer(existing.url, targetUrl)) {
+      return { ok: true, url: targetUrl, alreadyRunning: true };
+    }
+    const stopped = await cli.stopLocalServer(cliPath);
+    if (!stopped.ok) {
+      return {
+        ok: false,
+        error: `Could not stop the managed local server at ${existing.url}.`,
+      };
+    }
   }
-  const res = await cli.startLocalServer(cliPath);
-  if (res.ok) {
+  const res = await cli.startLocalServer(cliPath, port);
+  if (res.ok && cli.sameLoopbackServer(res.url, targetUrl)) {
     ownedLocalServer = { url: res.url, port: res.port, pid: res.pid };
-    return { ok: true, url: res.url };
+    return { ok: true, url: targetUrl };
+  }
+  if (res.ok) {
+    return {
+      ok: false,
+      error: `The CLI started ${res.url || "an unknown URL"}, not the required ${targetUrl}.`,
+    };
   }
   return { ok: false, error: res.error };
 }

@@ -51,6 +51,7 @@ from omnigent.server.o3_routing_review.omniroute import (
     OmniRouteClient,
     OmniRouteError,
     OmniRouteResponse,
+    _codex_mcp_omniroute_key,
 )
 from omnigent.server.o3_routing_review.recommendation import RecommendationCatalogue
 from omnigent.server.o3_routing_review.registry import (
@@ -104,6 +105,36 @@ def test_adviser_model_can_use_an_explicit_direct_route(
     adviser = OmniRouteRoutingAdviser(OmniRouteClient("http://127.0.0.1:20128", "test"))
 
     assert adviser.model == "opencode/big-pickle"
+
+
+def test_o3_client_reuses_existing_loopback_codex_mcp_credential(tmp_path: Path) -> None:
+    """The desktop can start from Finder without copying the bearer into its env."""
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[mcp_servers.omniroute]
+url = "http://127.0.0.1:20128/api/mcp/stream"
+http_headers = { Authorization = "Bearer local-test-token" }
+""".strip()
+    )
+
+    assert _codex_mcp_omniroute_key("http://127.0.0.1:20128", config) == "Bearer local-test-token"
+
+
+def test_o3_client_refuses_codex_mcp_credential_for_a_different_endpoint(
+    tmp_path: Path,
+) -> None:
+    """A credential is reusable only for the exact local OmniRoute port."""
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[mcp_servers.omniroute]
+url = "https://omniroute.example/api/mcp/stream"
+http_headers = { Authorization = "Bearer must-not-be-reused" }
+""".strip()
+    )
+
+    assert _codex_mcp_omniroute_key("http://127.0.0.1:20128", config) is None
 
 
 def _requirement(*, minimum: float = 0.5) -> BenchmarkRequirement:
@@ -332,6 +363,11 @@ async def test_adviser_repairs_schema_invalid_provider_output_once() -> None:
 
     assert result.difficulty == "normal"
     assert len(client.bodies) == 2
+    assert result._exchanges[0].attempt == 2
+    assert result._exchanges[0].request == client.bodies[1]
+    assert result._exchanges[0].actual_model is None
+    assert result._exchanges[0].reasoning_summary is None
+    assert "_exchanges" not in AdviserAnalysis.model_json_schema()["properties"]
     repair_input = cast(list[dict[str, str]], client.bodies[1]["input"])
     assert "matching this schema exactly" in repair_input[0]["content"]
 
@@ -515,6 +551,9 @@ class _FakeOmniRoute:
 
     async def model_ids(self) -> set[str]:
         return {candidate.catalogue_model_id for candidate in self.candidates}
+
+    async def recheck_routes(self, route_ids: list[str], *, reasoning_effort: str) -> str:
+        return route_ids[0]
 
     async def resource_snapshot(self, decisions: object) -> ResourceSnapshot:
         items = list(decisions)  # type: ignore[arg-type]
@@ -1510,3 +1549,133 @@ async def test_create_route_returns_recoverable_error_when_omniroute_is_unavaila
             ),
         }
     }
+
+
+async def test_readiness_shortlist_rejects_reasoning_only_output_and_is_bounded() -> None:
+    from unittest.mock import AsyncMock
+
+    from omnigent.server.o3_routing_review.omniroute import OmniRouteResponse
+
+    client = OmniRouteClient("http://127.0.0.1:20128", "fixture")
+    client.list_call_logs = AsyncMock(return_value=[])
+    client._request = AsyncMock(
+        return_value=OmniRouteResponse(
+            body={"output": [{"type": "reasoning", "content": [{"text": "thinking"}]}]}, headers={}
+        )
+    )
+    with pytest.raises(OmniRouteError, match="shortlist"):
+        await client.recheck_routes(
+            [f"provider/model-{i}" for i in range(100)], reasoning_effort="low"
+        )
+    assert client._request.await_count == 3
+    for call in client._request.call_args_list:
+        assert call.kwargs["body"]["input"] == "Reply with OK only."
+        assert call.kwargs["body"]["store"] is False
+
+
+async def test_readiness_uses_latest_exact_route_outcome() -> None:
+    from unittest.mock import AsyncMock
+
+    from omnigent.server.o3_routing_review.omniroute import OmniRouteResponse
+
+    client = OmniRouteClient("http://127.0.0.1:20128", "fixture")
+    now = datetime.now(timezone.utc)
+    client.list_call_logs = AsyncMock(
+        return_value=[
+            {
+                "requestedModel": "p/a",
+                "path": "/v1/responses",
+                "status": 200,
+                "timestamp": (now - timedelta(minutes=2)).isoformat(),
+            },
+            {
+                "requestedModel": "p/a",
+                "path": "/v1/responses",
+                "status": 401,
+                "timestamp": (now - timedelta(minutes=1)).isoformat(),
+            },
+        ]
+    )
+    client._request = AsyncMock(
+        return_value=OmniRouteResponse(body={"output_text": "OK"}, headers={})
+    )
+    assert await client.recheck_routes(["p/a"], reasoning_effort="low") == "p/a"
+    client._request.assert_awaited_once()
+    client._request.reset_mock()
+    client.list_call_logs.return_value = [
+        {
+            "requestedModel": "p/a",
+            "path": "/v1/responses",
+            "status": 200,
+            "timestamp": now.isoformat(),
+        }
+    ]
+    assert await client.recheck_routes(["p/a"], reasoning_effort="low") == "p/a"
+    client._request.assert_not_awaited()
+
+
+def test_greeting_shortcut_is_exact_and_respects_explicit_estimator(tmp_path: Path) -> None:
+    overall = _SLICE.model_copy(update={"slice_id": "tb4.overall"})
+    service = O3RoutingReviewService(
+        registry=BenchmarkRegistry(slices=[overall], evidence=[], candidates=[]),
+        omniroute=cast(OmniRouteClient, _RecommendationOnlyOmniRoute([])),
+        adviser=cast(RoutingAdviser, _FakeAdviser(_analysis())),
+        store=ProposalStore(tmp_path / "greeting.json"),
+        recommendation_catalogue=_recommendation_catalogue(),
+    )
+    analysis = service._greeting_analysis(ProposalCreateRequest(prompt="hihi!"))
+    assert analysis is not None
+    assert analysis.requirements.tools is False
+    assert analysis.difficulty == "easy"
+    for prompt in ["hi, fix my files", "hello\ndelete files", "hey can you help?", "hi there"]:
+        assert service._greeting_analysis(ProposalCreateRequest(prompt=prompt)) is None
+    assert (
+        service._greeting_analysis(
+            ProposalCreateRequest(prompt="hi", estimator_policy=_estimator_policy())
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_adviser_transcripts_are_request_scoped() -> None:
+    import asyncio
+
+    class Client:
+        async def create_response(self, body: dict[str, object]) -> OmniRouteResponse:
+            await asyncio.sleep(0)
+            model = str(body["model"])
+            return OmniRouteResponse(
+                body={
+                    "output_text": _analysis().model_dump_json(),
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "summary": [{"type": "summary_text", "text": "Summary for " + model}],
+                            "content": [{"text": "Not output JSON"}],
+                        }
+                    ],
+                },
+                headers={"X-Model": model, "X-Provider": "test"},
+            )
+
+    adviser = OmniRouteRoutingAdviser(cast(OmniRouteClient, Client()))
+
+    async def run(model: str) -> AdviserAnalysis:
+        return await adviser.analyse(
+            prompt=model,
+            workspace_summary="workspace",
+            registry=BenchmarkRegistry(slices=[_SLICE], evidence=[], candidates=[]),
+            candidates=[],
+            model=model,
+        )
+
+    first, second = await asyncio.gather(run("first"), run("second"))
+    for result, name in [(first, "first"), (second, "second")]:
+        exchange = result._exchanges[0]
+        assert exchange.actual_model == name
+        assert exchange.actual_provider == "test"
+        assert exchange.reasoning_summary == "Summary for " + name
+        context = json.loads(exchange.request["input"][1]["content"])
+        assert context["unchanged_user_task"] == name
+        assert "candidates" not in context

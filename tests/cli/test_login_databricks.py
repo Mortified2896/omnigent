@@ -770,6 +770,22 @@ def test_workspace_url_leaves_oss_server_alone(
     )
 
 
+def test_workspace_url_probe_tolerates_missing_optional_socks_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured SOCKS proxy cannot crash ordinary server URL parsing."""
+    import httpx
+
+    def _missing_socks(*_args: object, **_kwargs: object) -> object:
+        raise ImportError("socksio is not installed")
+
+    monkeypatch.setattr(httpx, "get", _missing_socks)
+
+    assert (
+        cli_mod._workspace_api_server_url("https://omni.example.com") == "https://omni.example.com"
+    )
+
+
 def test_workspace_url_leaves_apps_edge_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

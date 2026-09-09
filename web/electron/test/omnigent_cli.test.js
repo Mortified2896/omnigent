@@ -20,6 +20,7 @@ const {
   parseDaemonRecord,
   daemonServerUrl,
   getHostConnectionFast,
+  loopbackServerHealthy,
 } = require("../src/omnigent_cli");
 
 describe("normalizeServerUrl", () => {
@@ -62,6 +63,38 @@ describe("sameLoopbackServer", () => {
   it("does not match when either side is remote, or on junk", () => {
     assert.equal(sameLoopbackServer("http://localhost:6767", "https://example.com:6767"), false);
     assert.equal(sameLoopbackServer("not a url", "http://localhost:6767"), false);
+  });
+});
+
+describe("loopbackServerHealthy", () => {
+  it("probes the explicit loopback URL instead of relying on the pidfile", async () => {
+    const originalFetch = global.fetch;
+    let requested = null;
+    global.fetch = async (url) => {
+      requested = url;
+      return { ok: true };
+    };
+    try {
+      assert.equal(await loopbackServerHealthy("http://127.0.0.1:6768/"), true);
+      assert.equal(requested, "http://127.0.0.1:6768/health");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("refuses remote URLs without sending a request", async () => {
+    const originalFetch = global.fetch;
+    let called = false;
+    global.fetch = async () => {
+      called = true;
+      return { ok: true };
+    };
+    try {
+      assert.equal(await loopbackServerHealthy("https://example.com"), false);
+      assert.equal(called, false);
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });
 
