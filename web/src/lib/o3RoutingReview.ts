@@ -144,7 +144,18 @@ export interface O3ExecutionProvenance {
   estimated_cost_usd: number | null;
 }
 
+export interface O3RequirementOverrides {
+  tools?: boolean | null;
+  image_input?: boolean | null;
+  image_output?: boolean | null;
+  structured_output?: boolean | null;
+  minimum_context_tokens?: number | null;
+  minimum_output_tokens?: number | null;
+}
+
 export interface O3RoutingProposal {
+  requirement_overrides?: O3RequirementOverrides;
+  effective_requirements?: O3RoutingProposal["adviser"]["requirements"];
   schema_version: number;
   proposal_id: string;
   created_at: string;
@@ -323,6 +334,7 @@ export interface O3CatalogueExecutionSet {
 }
 
 export interface O3ProposalAdjustment {
+  requirement_overrides?: O3RequirementOverrides;
   benchmark_id?: string;
   version?: string;
   slice_id?: string;

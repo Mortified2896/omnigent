@@ -605,3 +605,44 @@ it("keeps model groups collapsed and exposes distinct provider routes on demand"
   fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
   expect(screen.queryByTestId("o3-model-groups")).not.toBeInTheDocument();
 });
+
+it("shows estimator controls and sends only the changed requirement without executing", async () => {
+  const { onAdjust, onApproved, onDecision } = renderCard();
+  expect(screen.getByRole("switch", { name: "Tools required" })).toBeChecked();
+  expect(screen.queryByTestId("o3-override-tools")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("switch", { name: "Tools required" }));
+  await waitFor(() =>
+    expect(onAdjust).toHaveBeenCalledWith({ requirement_overrides: { tools: false } }),
+  );
+  expect(onApproved).not.toHaveBeenCalled();
+  expect(onDecision).not.toHaveBeenCalled();
+});
+
+it("renders persisted effective values and resets just one overridden field", async () => {
+  const value = proposal();
+  value.requirement_overrides = { tools: false, image_input: true };
+  value.effective_requirements = { ...value.adviser.requirements, tools: false, vision: true };
+  const { onAdjust } = renderCard(value);
+  expect(screen.getByRole("switch", { name: "Tools required" })).not.toBeChecked();
+  expect(screen.getByRole("switch", { name: "Image input" })).toBeChecked();
+  expect(screen.getByTestId("o3-override-tools")).toHaveTextContent("Overridden");
+  fireEvent.click(screen.getByRole("button", { name: "Reset Tools required to estimator" }));
+  await waitFor(() =>
+    expect(onAdjust).toHaveBeenCalledWith({ requirement_overrides: { tools: null } }),
+  );
+  expect(value.adviser.requirements.tools).toBe(true);
+});
+
+it("requires a valid numeric capacity before applying it", async () => {
+  const { onAdjust } = renderCard();
+  const input = screen.getByLabelText("Minimum context (tokens)");
+  fireEvent.change(input, { target: { value: "-1" } });
+  expect(screen.getByRole("button", { name: "Apply Minimum context (tokens)" })).toBeDisabled();
+  fireEvent.change(input, { target: { value: "128000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply Minimum context (tokens)" }));
+  await waitFor(() =>
+    expect(onAdjust).toHaveBeenCalledWith({
+      requirement_overrides: { minimum_context_tokens: 128000 },
+    }),
+  );
+});

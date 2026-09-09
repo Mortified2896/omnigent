@@ -519,6 +519,12 @@ class O3RoutingReviewService:
         proposal = self._require(proposal_id)
         if proposal.decision is not None and proposal.decision is not DecisionAction.WAIT:
             raise RoutingReviewError("a decided proposal cannot be adjusted", status_code=409)
+        overrides = proposal.requirement_overrides
+        if request.requirement_overrides is not None:
+            overrides = overrides.adjusted(
+                request.requirement_overrides, proposal.adviser.requirements
+            )
+        effective = overrides.resolve(proposal.adviser.requirements)
         current = proposal.approved_constraints
         selection = current.benchmark.model_copy(
             update={
@@ -545,6 +551,11 @@ class O3RoutingReviewService:
                 }
             )
             calibration_version = "manual-raw-score-override"
+        elif not any(
+            (request.benchmark_id, request.version, request.slice_id, request.difficulty)
+        ):
+            benchmark = current.benchmark
+            calibration_version = current.calibration_version
         else:
             benchmark = self.registry.calibrated_requirement(selection, difficulty)
             assert self.registry.calibration is not None
@@ -579,12 +590,12 @@ class O3RoutingReviewService:
         analysis = proposal.adviser.model_copy(
             update={
                 "benchmark_requirements": [
-                    {
-                        "benchmark_id": benchmark.benchmark_id,
-                        "version": benchmark.version,
-                        "slice_id": benchmark.slice_id,
-                        "reason": benchmark.reason,
-                    }
+                    BenchmarkSelection(
+                        benchmark_id=benchmark.benchmark_id,
+                        version=benchmark.version,
+                        slice_id=benchmark.slice_id,
+                        reason=benchmark.reason,
+                    )
                 ],
                 "difficulty": difficulty,
                 "proposed_reasoning_effort": constraints.reasoning_effort,
@@ -593,7 +604,12 @@ class O3RoutingReviewService:
                 "decomposition": [],
             }
         )
-        result = evaluate_candidates(self.registry, analysis, candidates, constraints)
+        result = evaluate_candidates(
+            self.registry,
+            analysis.model_copy(update={"requirements": effective}),
+            candidates,
+            constraints,
+        )
         live_ids = await self.omniroute.model_ids()
         recommendation = (
             recommend(
@@ -601,11 +617,30 @@ class O3RoutingReviewService:
                 difficulty=difficulty,
                 raw_floor=benchmark.minimum_score,
                 live_route_ids=live_ids,
-                requirements=analysis.requirements,
+                requirements=effective,
                 reasoning_effort=constraints.reasoning_effort,
             )
             if self.recommendation_catalogue is not None
             else proposal.recommendation
+        )
+        execution_set = recommendation.execution_set if recommendation else None
+        resource_snapshot = (
+            await self.omniroute.resource_snapshot(execution_set.eligible)
+            if execution_set is not None
+            else None
+        )
+        resource_advice = (
+            ResourceAdvice(
+                action="start_now" if resource_snapshot.usable_routes else "wait",
+                reason=(
+                    "At least one eligible route is currently reported usable."
+                    if resource_snapshot.usable_routes
+                    else "No eligible route is confirmed usable; preserve the requirements."
+                ),
+                source="deterministic_fallback",
+            )
+            if resource_snapshot is not None
+            else None
         )
         has_match = bool(
             recommendation
@@ -618,6 +653,9 @@ class O3RoutingReviewService:
             update={
                 "updated_at": datetime.now(timezone.utc),
                 "adviser": analysis,
+                "requirement_overrides": overrides,
+                "resource_snapshot": resource_snapshot,
+                "resource_advice": resource_advice,
                 "approved_constraints": constraints,
                 "evaluations": result.evaluations,
                 "frontier": result.frontier,
@@ -685,7 +723,7 @@ class O3RoutingReviewService:
                 difficulty=proposal.approved_constraints.difficulty,
                 raw_floor=proposal.approved_constraints.benchmark.minimum_score,
                 live_route_ids=await self.omniroute.model_ids(),
-                requirements=proposal.adviser.requirements,
+                requirements=proposal.effective_requirements,
                 reasoning_effort=proposal.approved_constraints.reasoning_effort,
             )
             proposal = proposal.model_copy(update={"recommendation": refreshed})

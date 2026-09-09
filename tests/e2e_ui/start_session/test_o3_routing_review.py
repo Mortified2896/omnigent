@@ -30,7 +30,9 @@ def _proposal(
     session_id: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "constraint_version": 1,
+        "requirement_overrides": {},
         "proposal_id": _PROPOSAL_ID,
         "created_at": "2026-09-04T00:00:00Z",
         "updated_at": "2026-09-04T00:01:00Z",
@@ -40,7 +42,7 @@ def _proposal(
         "adviser": {
             "task_summary": "Inspect the routing layer without mutating the repository",
             "task_classification": "systems",
-            "difficulty": "medium",
+            "difficulty": "normal",
             "risk": "low",
             "requirements": {
                 "terminal": True,
@@ -65,6 +67,8 @@ def _proposal(
             "decomposition": [],
         },
         "approved_constraints": {
+            "difficulty": "normal",
+            "calibration_version": "test",
             "benchmark": {
                 "benchmark_id": "terminal-bench",
                 "version": "4.0.0",
@@ -166,6 +170,8 @@ async def _register_routes(
     link_bodies: list[dict[str, Any]],
     event_bodies: list[dict[str, Any]],
 ) -> None:
+    current = _proposal()
+
     async def handle_info(route: Route) -> None:
         await route.fulfill(
             status=200,
@@ -283,7 +289,24 @@ async def _register_routes(
             status = 201
         elif path.endswith(f"/{_PROPOSAL_ID}") and route.request.method == "PATCH":
             adjustment_bodies.append(route.request.post_data_json)
-            body = _proposal(effort="high", minimum_score=0.58)
+            patch = route.request.post_data_json
+            if "requirement_overrides" in patch:
+                for field, value in patch["requirement_overrides"].items():
+                    if value is None or value == current["adviser"]["requirements"][field]:
+                        current["requirement_overrides"].pop(field, None)
+                    else:
+                        current["requirement_overrides"][field] = value
+                current["effective_requirements"] = {
+                    **current["adviser"]["requirements"],
+                    **current["requirement_overrides"],
+                }
+                current["constraint_version"] += 1
+                body = current
+            else:
+                body = _proposal(effort="high", minimum_score=0.58)
+            status = 200
+        elif path.endswith(f"/{_PROPOSAL_ID}") and route.request.method == "GET":
+            body = current
             status = 200
         elif path.endswith("/decision"):
             decision_bodies.append(route.request.post_data_json)
@@ -308,6 +331,14 @@ async def _register_routes(
             raise AssertionError(f"unexpected O3 request: {route.request.method} {path}")
         await route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
 
+    await page.route(
+        "**/resources/terminals?*",
+        lambda route: route.fulfill(status=200, json={"data": []}),
+    )
+    await page.route(
+        "**/resources/environments/default",
+        lambda route: route.fulfill(status=200, json={}),
+    )
     await page.route("**/v1/info", handle_info)
     await page.route("**/v1/hosts", handle_hosts)
     await page.route("**/v1/agents", handle_agents)
@@ -387,8 +418,24 @@ async def _drive_o3_review(base_url: str, session_id: str) -> None:
             await expect(card).to_contain_text("tb4.cr-systems-db-v1")
             assert create_bodies == [], "a Codex session started before routing approval"
 
+            tools = page.get_by_role("switch", name="Tools required")
+            await expect(tools).to_be_checked()
+            await expect(page.get_by_test_id("o3-override-tools")).to_have_count(0)
+            await tools.click()
+            await expect(tools).not_to_be_checked()
+            await expect(page.get_by_test_id("o3-override-tools")).to_be_visible()
+            await page.reload()
+            await expect(tools).not_to_be_checked()
+            await page.get_by_role("button", name="Reset Tools required to estimator").click()
+            await expect(tools).to_be_checked()
+            await expect(page.get_by_test_id("o3-override-tools")).to_have_count(0)
+            assert adjustment_bodies == [
+                {"requirement_overrides": {"tools": False}},
+                {"requirement_overrides": {"tools": None}},
+            ]
+            adjustment_bodies.clear()
+            assert create_bodies == []
             await page.get_by_test_id("o3-adjust").click()
-            await page.get_by_test_id("o3-adjust-minimum").fill("0.58")
             await page.get_by_test_id("o3-adjust-effort").select_option("high")
             await page.get_by_test_id("o3-adjust-save").click()
             await _wait_until(lambda: len(adjustment_bodies) == 1)
@@ -408,7 +455,7 @@ async def _drive_o3_review(base_url: str, session_id: str) -> None:
                     "benchmark_id": "terminal-bench",
                     "version": "4.0.0",
                     "slice_id": "tb4.cr-systems-db-v1",
-                    "minimum_score": 0.58,
+                    "difficulty": "normal",
                     "reasoning_effort": "high",
                     "risk": "low",
                     "evidence_policy": "provisional",
