@@ -100,3 +100,27 @@ temporary files for age/size boundaries, combined accounting, oldest-first delet
 active protection, symlink safety and idempotency. Synthetic fixtures do not replace
 fresh actual Desktop and Omnigent turns in the same archive. Restart, actual producer
 capture, duplicate ingestion, live privacy and login persistence remain separate gates.
+
+### Native acceptance and installed-source compatibility
+
+Record the Collector activation boundary, then use a fresh Desktop turn and a fresh
+turn through the installed Omnigent native runner. A documented Omnigent session
+event may submit the latter; verify its completed transcript in the installed app.
+For a bounded tool check, ask it to discover a read-only file tool and read this
+README's first line. Verify the actual tool call, not only the assistant's reply.
+Correlate each native thread/turn ID with lean records after activation, retaining
+only counts and field availability in shared evidence. An existing thread can run
+a fresh turn; old records in that thread are not new acceptance evidence.
+
+Check the current process start time, executable, private home, profile and command
+overrides against the source config. Export proves the observed destination; it
+does not by itself prove prompt logging is disabled or every config layer resolved.
+Keep process/config reload and actual login persistence as distinct checks.
+
+Before adopting the minimal-home change, compare the installed executor with this
+branch's executor. If the installed app has newer changes, prepare a patch containing
+only the `otel` addition to the minimal-config allowlist. Validate that patch against
+a copy of the installed source and run the config-home tests. Do not replace the
+installed checkout or app with this branch's older baseline. An applicable patch is
+preparation evidence; the installed minimal-home path still needs runtime acceptance
+after an authorized compatible integration and safe process reload.

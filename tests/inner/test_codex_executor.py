@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import tomllib
 
 from omnigent.inner.codex_executor import (
     _TURN_EVENT_WARN_SECONDS,
@@ -2551,6 +2552,42 @@ def test_populate_codex_home_config_minimal_mode_keeps_routing_and_telemetry(
     assert "[otel]" in config_text
     assert "log_user_prompt = false" in config_text
     assert 'exporter = "none"' in config_text
+
+
+@pytest.mark.parametrize("telemetry_enabled", [False, True])
+def test_populate_codex_home_config_minimal_exporters_are_preserved(
+    tmp_path: Path, telemetry_enabled: bool
+) -> None:
+    """Minimal homes preserve nested exporters without opting absent configs in."""
+    from omnigent.inner.codex_executor import _populate_codex_home_config
+
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    config = 'model_provider = "example"\n[mcp_servers.example]\ncommand = "unused"\n'
+    if telemetry_enabled:
+        config += '[otel]\nenvironment = "fixture"\nlog_user_prompt = false\n'
+        for exporter, signal in (
+            ("exporter", "logs"),
+            ("trace_exporter", "traces"),
+            ("metrics_exporter", "metrics"),
+        ):
+            config += (
+                f"[otel.{exporter}.otlp-http]\n"
+                f'endpoint = "http://127.0.0.1:4318/v1/{signal}"\n'
+                'protocol = "binary"\n'
+            )
+    (source / "config.toml").write_text(config)
+
+    _populate_codex_home_config(target, source, minimal_config=True)
+
+    copied = tomllib.loads((target / "config.toml").read_text())
+    assert copied.get("otel") == tomllib.loads(config).get("otel")
+    assert ("otel" in copied) is telemetry_enabled
+    assert copied["model_provider"] == "example"
+    assert "mcp_servers" not in copied
+    assert (source / "config.toml").read_text() == config
 
 
 def test_populate_codex_home_config_config_toml_copy_is_isolated(tmp_path: Path) -> None:
