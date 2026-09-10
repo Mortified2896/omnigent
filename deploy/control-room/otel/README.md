@@ -124,3 +124,10 @@ a copy of the installed source and run the config-home tests. Do not replace the
 installed checkout or app with this branch's older baseline. An applicable patch is
 preparation evidence; the installed minimal-home path still needs runtime acceptance
 after an authorized compatible integration and safe process reload.
+
+The local host can fork new runners from a preloaded runner process. A new runner
+PID alone therefore does not prove updated Python code was loaded. When that host
+predates adoption, check its sessions are idle, use the supported local host stop
+and app reconnect flow, then verify the fresh runner and its actual minimal-home
+child. Do not restart a shared host while another session is active. Preserve the
+backend and Collector when only the host's cached code needs refreshing.
