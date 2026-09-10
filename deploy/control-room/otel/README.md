@@ -131,3 +131,30 @@ predates adoption, check its sessions are idle, use the supported local host sto
 and app reconnect flow, then verify the fresh runner and its actual minimal-home
 child. Do not restart a shared host while another session is active. Preserve the
 backend and Collector when only the host's cached code needs refreshing.
+
+### Status evidence is not a storage guarantee
+
+Counter values are `null` in JSON and `unavailable` in human output when absent,
+malformed or ambiguous; an observed zero remains zero. The reader accepts the
+Collector's raw and Prometheus `_total` counter names, but does not sum both
+aliases if both appear. Optional sample timestamps are not counter values.
+
+`retention_evidence` checks the last cleanup record's archive, exact policy,
+non-dry-run result and timezone-aware timestamp. Its default freshness window is
+900 seconds; `status`/`check --max-retention-lag-seconds N` can set a positive
+observation window without changing the actual cleanup schedule or retention.
+Missing, invalid or stale evidence is not proof of successful current cleanup.
+
+`HEALTHY` / `NO ACTIVITY` require complete observed counters and a matching fresh
+cleanup record. Known failures or measured archive/sub-budget overshoot produce
+`DEGRADED`; missing evidence produces `INCOMPLETE`; an unavailable Collector
+produces `FAILED`. `check` returns nonzero for all three unsuccessful states.
+`INCOMPLETE` does not assert exporter failure and must not trigger an automatic
+restart. A Collector may legitimately omit a counter; report that gap instead.
+
+The status explicitly reports `budget_scope: archive_only` and
+`ancillary_bounds_verified: false`, plus archive/forensic headroom and overshoot.
+It does not inventory or enforce limits for auxiliary logs, provenance databases
+or rollback files. `HEALTHY` therefore does not certify a machine-wide disk cap.
+These checks never delete data, stop writers or alter retention. Ancillary-writer
+bounds and real Mac restart/login acceptance remain separate completion gates.
