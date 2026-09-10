@@ -1,0 +1,207 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 128
+    spike_limit_mib: 32
+  resource/control_room:
+    attributes:
+      - {key: deployment.environment.name, value: "${env:CONTROL_ROOM_ENVIRONMENT}", action: upsert}
+      - {key: controlroom.capture_node_id, value: "${env:CONTROL_ROOM_CAPTURE_NODE_ID}", action: upsert}
+      - {key: host.name, value: "${env:CONTROL_ROOM_HOSTNAME}", action: upsert}
+      - {key: os.type, value: darwin, action: upsert}
+      - {key: controlroom.collector.version, value: "${env:CONTROL_ROOM_COLLECTOR_VERSION}", action: upsert}
+  filter/lean_traces:
+    error_mode: propagate
+    trace_conditions:
+      - context: span
+        conditions:
+          - 'span.name == "receiving"'
+          - 'span.name == "append_items"'
+          - 'span.name == "persist_rollout_items"'
+          - 'span.name == "handle_responses" and Len(span.attributes) == 9 and Len(span.events) == 0 and span.status.code != STATUS_CODE_ERROR'
+  attributes/lean_traces:
+    actions:
+      - {key: code.file.path, action: delete}
+      - {key: code.module.name, action: delete}
+      - {key: code.line.number, action: delete}
+      - {key: thread.name, action: delete}
+      - {key: target, action: delete}
+      - {key: busy_ns, action: delete}
+      - {key: idle_ns, action: delete}
+  transform/lean_traces:
+    error_mode: propagate
+    trace_statements:
+      - context: span
+        statements:
+          - 'delete_key(span.attributes, "thread.id") where IsInt(span.attributes["thread.id"])'
+          - 'delete_key(span.attributes, "error.message")'
+          - 'delete_key(span.attributes, "arguments")'
+          - 'delete_key(span.attributes, "output")'
+          - 'delete_key(span.attributes, "prompt")'
+          - 'delete_key(span.attributes, "tool.arguments")'
+          - 'delete_key(span.attributes, "tool.output")'
+          - 'delete_key(span.attributes, "gen_ai.prompt")'
+          - 'delete_key(span.attributes, "gen_ai.completion")'
+          - 'delete_key(span.attributes, "user.email")'
+          - 'delete_key(span.attributes, "user.account_id")'
+          - 'delete_key(span.attributes, "cwd")'
+          - 'delete_key(span.attributes, "remote")'
+          - 'set(span.status.message, "")'
+      - context: spanevent
+        statements:
+          - 'delete_key(spanevent.attributes, "error.message")'
+          - 'delete_key(spanevent.attributes, "arguments")'
+          - 'delete_key(spanevent.attributes, "output")'
+          - 'delete_key(spanevent.attributes, "prompt")'
+          - 'delete_key(spanevent.attributes, "tool.arguments")'
+          - 'delete_key(spanevent.attributes, "tool.output")'
+          - 'delete_key(spanevent.attributes, "gen_ai.prompt")'
+          - 'delete_key(spanevent.attributes, "gen_ai.completion")'
+          - 'delete_key(spanevent.attributes, "user.email")'
+          - 'delete_key(spanevent.attributes, "user.account_id")'
+          - 'delete_key(spanevent.attributes, "cwd")'
+          - 'delete_key(spanevent.attributes, "remote")'
+  attributes/privacy_logs:
+    actions:
+      - {key: prompt, action: delete}
+      - {key: tool.arguments, action: delete}
+      - {key: tool.output, action: delete}
+      - {key: gen_ai.prompt, action: delete}
+      - {key: gen_ai.completion, action: delete}
+      - {key: cwd, action: delete}
+      - {key: remote, action: delete}
+      - {key: arguments, action: delete}
+      - {key: output, action: delete}
+      - {key: user.email, action: delete}
+      - {key: user.account_id, action: delete}
+      - {key: error.message, action: delete}
+  transform/privacy_log_body:
+    error_mode: propagate
+    log_statements:
+      - context: log
+        statements:
+          - 'set(log.body, "")'
+  transform/producer:
+    error_mode: propagate
+    log_statements:
+      - context: log
+        statements:
+          - 'set(log.attributes["codex.producer"], "desktop") where log.attributes["originator"] == "Codex_Desktop"'
+          - 'set(log.attributes["codex.producer"], "omnigent") where IsMatch(log.attributes["originator"], "^omnigent(-[a-z-]+)?$")'
+    trace_statements:
+      - context: span
+        statements:
+          - 'set(span.attributes["codex.producer"], "desktop") where span.attributes["originator"] == "Codex_Desktop" or span.attributes["app_server.client_name"] == "Codex Desktop"'
+          - 'set(span.attributes["codex.producer"], "omnigent") where IsMatch(span.attributes["originator"], "^omnigent(-[a-z-]+)?$") or IsMatch(span.attributes["app_server.client_name"], "^omnigent(-[a-z-]+)?$")'
+  transform/scrub_logs:
+    error_mode: propagate
+    log_statements:
+      - context: log
+        statements:
+          - 'replace_all_patterns(log.attributes, "value", "(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(log.attributes, "value", "(?i)((?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|pwd|client[-_ ]?secret|authorization|proxy-authorization|cookie|set-cookie)\\s*[\"'']?\\s*[:=]\\s*[\"'']?)[^\\s\"'',;&}\\]]+", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(log.attributes, "value", "\\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(log.attributes, "value", "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(log.attributes, "value", "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", "[REDACTED_SECRET]")'
+          - 'replace_pattern(log.body, "(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$$1[REDACTED_SECRET]") where IsString(log.body)'
+          - 'replace_pattern(log.body, "(?i)((?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|pwd|client[-_ ]?secret|authorization|proxy-authorization|cookie|set-cookie)\\s*[\"'']?\\s*[:=]\\s*[\"'']?)[^\\s\"'',;&}\\]]+", "$$1[REDACTED_SECRET]") where IsString(log.body)'
+          - 'replace_pattern(log.body, "\\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\\b", "[REDACTED_SECRET]") where IsString(log.body)'
+          - 'replace_pattern(log.body, "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b", "[REDACTED_SECRET]") where IsString(log.body)'
+          - 'replace_pattern(log.body, "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", "[REDACTED_SECRET]") where IsString(log.body)'
+  transform/scrub_traces:
+    error_mode: propagate
+    trace_statements:
+      - context: span
+        statements:
+          - 'replace_all_patterns(span.attributes, "value", "(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(span.attributes, "value", "(?i)((?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|pwd|client[-_ ]?secret|authorization|proxy-authorization|cookie|set-cookie)\\s*[\"'']?\\s*[:=]\\s*[\"'']?)[^\\s\"'',;&}\\]]+", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(span.attributes, "value", "\\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(span.attributes, "value", "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(span.attributes, "value", "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", "[REDACTED_SECRET]")'
+      - context: spanevent
+        statements:
+          - 'replace_all_patterns(spanevent.attributes, "value", "(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(spanevent.attributes, "value", "(?i)((?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|pwd|client[-_ ]?secret|authorization|proxy-authorization|cookie|set-cookie)\\s*[\"'']?\\s*[:=]\\s*[\"'']?)[^\\s\"'',;&}\\]]+", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(spanevent.attributes, "value", "\\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(spanevent.attributes, "value", "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(spanevent.attributes, "value", "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", "[REDACTED_SECRET]")'
+  transform/scrub_metrics:
+    error_mode: propagate
+    metric_statements:
+      - context: datapoint
+        statements:
+          - 'replace_all_patterns(datapoint.attributes, "value", "(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(datapoint.attributes, "value", "(?i)((?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|pwd|client[-_ ]?secret|authorization|proxy-authorization|cookie|set-cookie)\\s*[\"'']?\\s*[:=]\\s*[\"'']?)[^\\s\"'',;&}\\]]+", "$$1[REDACTED_SECRET]")'
+          - 'replace_all_patterns(datapoint.attributes, "value", "\\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(datapoint.attributes, "value", "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b", "[REDACTED_SECRET]")'
+          - 'replace_all_patterns(datapoint.attributes, "value", "(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", "[REDACTED_SECRET]")'
+  batch:
+    timeout: 2s
+    send_batch_size: 256
+
+exporters:
+  file/logs:
+    path: "${env:CONTROL_ROOM_OTEL_HOME}/data/lean/logs/logs.otlp.json"
+    format: json
+    create_directory: true
+    rotation: {max_megabytes: 16, max_backups: 512, max_days: 60, localtime: false}
+  file/traces:
+    path: "${env:CONTROL_ROOM_OTEL_HOME}/data/lean/traces/traces.otlp.json"
+    format: json
+    create_directory: true
+    rotation: {max_megabytes: 16, max_backups: 1536, max_days: 60, localtime: false}
+  file/metrics:
+    path: "${env:CONTROL_ROOM_OTEL_HOME}/data/lean/metrics/metrics.otlp.json"
+    format: json
+    create_directory: true
+    rotation: {max_megabytes: 16, max_backups: 512, max_days: 60, localtime: false}
+  file/forensic_traces:
+    path: "${env:CONTROL_ROOM_OTEL_HOME}/data/forensic/traces/traces.otlp.json"
+    format: json
+    create_directory: true
+    rotation: {max_megabytes: 16, max_backups: 256, max_days: 3, localtime: false}
+
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+
+service:
+  telemetry:
+    resource:
+      attributes:
+        - {name: controlroom.capture_node_id, value: "${env:CONTROL_ROOM_CAPTURE_NODE_ID}"}
+        - {name: controlroom.source.role, value: otel-collector-mac}
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 8888
+  extensions: [health_check]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/control_room, transform/producer, transform/scrub_logs, attributes/privacy_logs, transform/privacy_log_body, batch]
+      exporters: [file/logs]
+    traces/lean:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/control_room, filter/lean_traces, transform/producer, transform/scrub_traces, transform/lean_traces, attributes/lean_traces, batch]
+      exporters: [file/traces]
+    traces/forensic:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/control_room, transform/producer, transform/scrub_traces, batch]
+      exporters: [file/forensic_traces]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/control_room, transform/scrub_metrics, batch]
+      exporters: [file/metrics]

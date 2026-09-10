@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.controlroom.otelcol</string>
+  <key>ProgramArguments</key><array>
+    <string>@@HOME@@/bin/otelcol-contrib</string><string>--config</string><string>@@HOME@@/config/otelcol-macos.yaml</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>CONTROL_ROOM_OTEL_HOME</key><string>@@HOME@@</string>
+    <key>CONTROL_ROOM_CAPTURE_NODE_ID</key><string>@@NODE_ID@@</string>
+    <key>CONTROL_ROOM_ENVIRONMENT</key><string>mac-local</string>
+    <key>CONTROL_ROOM_SOURCE_ROLE</key><string>mac-codex</string>
+    <key>CONTROL_ROOM_HOSTNAME</key><string>@@HOSTNAME@@</string>
+    <key>CONTROL_ROOM_COLLECTOR_VERSION</key><string>@@VERSION@@</string>
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Background</string><key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>@@HOME@@/collector-logs/stdout.log</string>
+  <key>StandardErrorPath</key><string>@@HOME@@/collector-logs/stderr.log</string>
+</dict></plist>
