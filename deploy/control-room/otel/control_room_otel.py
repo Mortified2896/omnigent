@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from decimal import Decimal, InvalidOperation
 
 try:
     import tomllib
@@ -30,6 +31,7 @@ ARCHIVE_MAX_AGE_DAYS = 60
 ARCHIVE_MAX_BYTES = 50_000_000_000
 FORENSIC_MAX_AGE_DAYS = 3
 FORENSIC_MAX_BYTES = 4_000_000_000
+RETENTION_MAX_LAG_SECONDS = 900
 ACTIVE_ARCHIVE_FILES = {
     "lean/logs/logs.otlp.json",
     "lean/traces/traces.otlp.json",
@@ -184,14 +186,89 @@ def prom():
 
 
 def metric(body, name, signal=None):
-    total = 0.0
+    """Sum observed counter series; absent, invalid or ambiguous means unavailable."""
+    sample = re.compile(
+        rf"^(?P<family>{re.escape(name)}(?:_total)?)"
+        r'(?P<labels>\{(?:[^"\\}]|"(?:\\.|[^"\\])*")*\})?'
+        r"[ \t]+(?P<value>\S+)(?:[ \t]+[+-]?\d+)?[ \t]*$"
+    )
+    label = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*("(?:\\.|[^"\\])*")\s*(?:,\s*|$)')
+    prefix = re.compile(rf"^{re.escape(name)}(?:_total)?(?=[{{ \t]|$)")
+    families = set()
+    seen = set()
+    total = 0
     for line in body.splitlines():
-        if line.startswith(name + ("{" if "{" in line else " ")):
-            if signal and (f'type="{signal}"' not in line and f'data_type="{signal}"' not in line):
+        if not prefix.match(line):
+            continue
+        match = sample.fullmatch(line)
+        if match is None:
+            return None
+        labels = {}
+        text = (match.group("labels") or "{}")[1:-1].strip()
+        while text:
+            item = label.match(text)
+            if item is None or item[1] in labels:
+                return None
+            labels[item[1]] = item[2]
+            text = text[item.end():]
+        if signal is not None:
+            values = {labels[key] for key in ("type", "data_type") if key in labels}
+            if values != {json.dumps(signal)}:
                 continue
-            with contextlib.suppress(Exception):
-                total += float(line.rsplit(" ", 1)[1])
-    return int(total)
+        identity = tuple(sorted(labels.items()))
+        family = match.group("family")
+        families.add(family)
+        if len(families) != 1 or identity in seen:
+            return None
+        seen.add(identity)
+        try:
+            value = Decimal(match.group("value"))
+        except InvalidOperation:
+            return None
+        if not value.is_finite() or value < 0 or value.adjusted() > 63 or value != value.to_integral_value():
+            return None
+        total += int(value)
+    return total if seen else None
+
+
+def retention_evidence(record, *, now=None, max_lag_seconds=RETENTION_MAX_LAG_SECONDS):
+    """Check a cleanup result against the archive, policy and freshness window."""
+    result = {"status": "invalid", "lag_seconds": None, "max_lag_seconds": max_lag_seconds}
+    if record is None:
+        return result | {"status": "unavailable"}
+    if not isinstance(record, dict):
+        return result
+    expected = {
+        "max_bytes": ARCHIVE_MAX_BYTES,
+        "max_age_days": ARCHIVE_MAX_AGE_DAYS,
+        "forensic_max_bytes": FORENSIC_MAX_BYTES,
+        "forensic_max_age_days": FORENSIC_MAX_AGE_DAYS,
+    }
+    if (
+        record.get("dry_run") is not False
+        or type(record.get("converged")) is not bool
+        or not isinstance(record.get("errors"), list)
+        or any(type(record.get(key)) is not int or record[key] != value for key, value in expected.items())
+        or not isinstance(record.get("archive_root"), str)
+        or not isinstance(record.get("run_at"), str)
+    ):
+        return result
+    try:
+        if Path(record["archive_root"]).resolve() != (OTEL_HOME / "data").resolve():
+            return result
+        stamp = dt.datetime.fromisoformat(record["run_at"])
+        if stamp.tzinfo is None:
+            return result
+        current = now if now is not None else dt.datetime.now(dt.timezone.utc).timestamp()
+        lag = current - stamp.timestamp()
+    except (ValueError, TypeError, OSError, OverflowError, RuntimeError):
+        return result
+    if lag < 0:
+        return result
+    result["lag_seconds"] = lag
+    if not record["converged"] or record["errors"]:
+        return result | {"status": "failed"}
+    return result | {"status": "stale" if lag > max_lag_seconds else "verified"}
 
 
 def _is_within(path, root):
@@ -345,12 +422,21 @@ def storage_summary(recent_seconds=86400):
         if x["mtime"] >= now - recent_seconds and x["relative"].startswith(("lean/", "forensic/"))
     )
     total = sum(x["size"] for x in files)
+    forensic = sum(x["size"] for x in files if x["relative"].startswith("forensic/"))
     return {
+        "budget_scope": "archive_only",
+        "ancillary_bounds_verified": False,
+        "archive_present": _root.is_dir(),
+        "headroom_bytes": max(0, ARCHIVE_MAX_BYTES - total),
+        "overshoot_bytes": max(0, total - ARCHIVE_MAX_BYTES),
+        "forensic_max_bytes": FORENSIC_MAX_BYTES,
+        "forensic_headroom_bytes": max(0, FORENSIC_MAX_BYTES - forensic),
+        "forensic_overshoot_bytes": max(0, forensic - FORENSIC_MAX_BYTES),
         "total_bytes": total,
         "logs_bytes": by_signal["logs"],
         "traces_bytes": by_signal["traces"],
         "metrics_bytes": by_signal["metrics"],
-        "forensic_bytes": sum(x["size"] for x in files if x["relative"].startswith("forensic/")),
+        "forensic_bytes": forensic,
         "rotated_files": len(rotated),
         "oldest_retained_file": oldest["relative"] if oldest else None,
         "oldest_retained_mtime": dt.datetime.fromtimestamp(
@@ -480,15 +566,20 @@ def launchd_loaded(label):
         return False
 
 
-def report(since=3600):
+def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
     body = prom()
     arc = archives(since)
     storage = storage_summary(since)
     running = launchd_loaded("com.controlroom.otelcol")
     retention_loaded = launchd_loaded("com.controlroom.otel-retention")
     retention_last = None
-    with contextlib.suppress(Exception):
+    try:
         retention_last = json.loads((OTEL_HOME / "state/retention-last-run.json").read_text())
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        retention_last = {}
+    retention = retention_evidence(retention_last, max_lag_seconds=retention_max_lag)
     version = "unknown"
     b = OTEL_HOME / "bin/otelcol-contrib"
     if b.exists():
@@ -502,6 +593,7 @@ def report(since=3600):
         "collector_version": version,
         "retention_agent_loaded": retention_loaded,
         "retention_last_run": retention_last,
+        "retention_evidence": retention,
         "endpoints": {
             "otlp_grpc": "127.0.0.1:4317",
             "otlp_http": "127.0.0.1:4318",
@@ -540,23 +632,25 @@ def report(since=3600):
     }
     malformed = sum(x["malformed"] for x in arc.values())
     activity = sum(x["records"] for x in arc.values())
+    data["unavailable_counters"] = [key for key, value in data["collector"].items() if value is None]
     failures = sum(
-        data["collector"][k] for k in data["collector"] if "failed" in k or "refused" in k
+        value for key, value in data["collector"].items()
+        if ("failed" in key or "refused" in key) and value is not None
     )
-    retention_bad = (OTEL_HOME / "bin/control_room_otel.py").exists() and (
-        not retention_loaded
-        or (
-            retention_last is not None
-            and (retention_last.get("errors") or not retention_last.get("converged", False))
-        )
+    retention_bad = not retention_loaded or retention["status"] == "failed"
+    over_budget = storage["overshoot_bytes"] > 0 or storage["forensic_overshoot_bytes"] > 0
+    incomplete = (
+        data["unavailable_counters"]
+        or retention["status"] != "verified"
+        or not storage["archive_present"]
     )
     data["state"] = (
         "FAILED"
         if not running or not body
         else (
             "DEGRADED"
-            if failures or malformed or retention_bad
-            else ("HEALTHY" if activity else "NO ACTIVITY")
+            if failures or malformed or retention_bad or over_budget
+            else ("INCOMPLETE" if incomplete else ("HEALTHY" if activity else "NO ACTIVITY"))
         )
     )
     return data
@@ -571,6 +665,11 @@ def human(d, status=False):
     print("Archive:", d["archive"], "(%d bytes)" % d["archive_bytes"])
     print("Codex OTel configured:", d["codex_configured"])
     s = d["storage"]
+    print("Storage budget scope:", s["budget_scope"], "(ancillary bounds not verified)")
+    print("Archive headroom:", s["headroom_bytes"], "overshoot:", s["overshoot_bytes"])
+    print("Retention evidence:", d["retention_evidence"]["status"])
+    if d["unavailable_counters"]:
+        print("Collector counters unavailable:", ", ".join(d["unavailable_counters"]))
     print(
         "Storage: logs=%d traces=%d metrics=%d forensic=%d rotated=%d oldest=%s"
         % (
@@ -597,7 +696,7 @@ def human(d, status=False):
             % (s, x["files"], x["records"], x["items"], x["malformed"], x["first"], x["last"])
         )
     if not status:
-        print("Collector integrity:", " ".join("{}={}".format(*x) for x in d["collector"].items()))
+        print("Collector integrity:", " ".join(f"{key}={value if value is not None else 'unavailable'}" for key, value in d["collector"].items()))
     print(d["state"])
 
 
@@ -619,6 +718,8 @@ def main():
         q = sub.add_parser(n)
         q.add_argument("--json", action="store_true")
         q.add_argument("--since", default="1h")
+        q.add_argument("--max-retention-lag-seconds", type=int, default=RETENTION_MAX_LAG_SECONDS)
+
     k = sub.add_parser("retain")
     k.add_argument("--archive-root", type=Path, default=OTEL_HOME / "data")
     k.add_argument("--max-bytes", type=int, default=ARCHIVE_MAX_BYTES)
@@ -661,11 +762,13 @@ def main():
         sys.exit(0 if result["converged"] and not result["errors"] else 1)
     m = re.fullmatch(r"(\d+)([smhd])", a.since)
     secs = int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)] if m else 3600
-    d = report(secs)
+    if a.max_retention_lag_seconds <= 0:
+        p.error("--max-retention-lag-seconds must be positive")
+    d = report(secs, a.max_retention_lag_seconds)
     print(json.dumps(d, indent=2) if a.json else "")
     if not a.json:
         human(d, a.cmd == "status")
-    if a.cmd == "check" and d["state"] in ("FAILED", "DEGRADED"):
+    if a.cmd == "check" and d["state"] in ("FAILED", "DEGRADED", "INCOMPLETE"):
         sys.exit(1)
 
 
