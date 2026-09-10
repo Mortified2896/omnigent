@@ -13,10 +13,11 @@ import ipaddress
 import json
 import os
 import stat
-import tomllib
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+import tomllib
 
 MAX_CONFIG_BYTES = 1_048_576
 SIGNALS = {

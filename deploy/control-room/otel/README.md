@@ -1,61 +1,102 @@
-# Codex telemetry preparation
+# Shared Mac Codex telemetry
 
-This directory currently contains **read-only preparation**, not an installed
-Collector or a completed migration. The active delivery is tracked in
-[issue 153](https://github.com/Mortified2896/omnigent/issues/153).
+Portable tooling for [issue 153](https://github.com/Mortified2896/omnigent/issues/153).
+Runtime acceptance is tracked separately in the companion private operations issue.
+This directory does not instrument the Omnigent application or deploy server services.
 
-## Compare supplied configuration files
+## Provenance and installation boundary
 
-After independently resolving the Desktop and Omnigent-launched Codex user-home
-configuration paths and the actual Collector origin, run:
+`migration-source.json` records the exact historical source commit and original
+SHA-256 for each relocated file. Historical PRs #5 and #7 in
+`Mortified2896/control-room-standalone` explain the original privacy and audit work.
+That source tree had no LICENSE, COPYING or NOTICE file; this owner-authorized
+migration retains its provenance without asserting a new license.
+
+The old installer and destructive uninstaller are deliberately not migrated.
+`adopt_macos.py` only updates an **existing** installation with an existing capture
+identity, validates against its installed Collector, verifies the canonical source
+location and origin, and backs up replaced files with an executable rollback.
+It never downloads a binary, creates an archive, launches a service, changes Codex
+configuration, or restarts an application. A remote URL is a source-selection guard,
+not cryptographic proof of trust. Its manifest records actual file hashes and whether
+the source was dirty; a commit hash alone does not identify uncommitted bytes.
+
+```sh
+python3 deploy/control-room/otel/adopt_macos.py --home "$OTEL_DIRECTORY" --plist "$COLLECTOR_PLIST"
+# After review and an idle-window plan, add --apply to stage the validated files.
+```
+
+Inspect the returned rollback path before activation. Run that executable to restore
+backed-up files, then reload only the Collector in an approved idle window. Existing
+archive data, capture identity, Collector binary and LaunchAgent wiring stay in place.
+The installed helper and audit run from the installation's `bin` directory; no retired
+checkout is an executable/configuration fallback.
+
+## Configuration and identity
+
+The supplied-file preflight remains deliberately limited:
 
 ```sh
 python3 deploy/control-room/otel/preflight_codex_config.py \
-  --desktop-config /path/to/desktop/config.toml \
-  --omnigent-config /path/to/session/config.toml \
+  --desktop-config "$DESKTOP_CONFIG" --omnigent-config "$SESSION_CONFIG" \
   --collector-origin http://127.0.0.1:4318
 ```
 
-The example origin is not autodiscovery. Substitute the verified local origin.
-Python 3.11+ is required. No third-party packages, network request, Codex process,
-Collector start, configuration write or archive read is performed.
+It does not resolve effective profiles, command-line overrides, version support, or
+capture. Its `runtime_verified=false` is intentional. Resolve actual binary/config
+sources first. The [official Codex configuration reference](https://developers.openai.com/codex/config-reference/)
+documents `otel.exporter`, `otel.trace_exporter`, `otel.metrics_exporter`,
+`otel.environment` and `otel.log_user_prompt`. Keep prompt logging explicitly false.
+Minimal Omnigent homes now preserve the supplied `otel` table alongside provider
+routing, without loading plugins or MCP servers. Disabled or absent settings stay
+as supplied and remain visible through preflight; this is not an implicit opt-in.
 
-The check requires an explicit privacy setting and all three OTLP/HTTP signals
-pointing to their matching endpoint paths. JSON output includes categorical
-findings and valid-file hashes, never config values, filenames, headers, raw
-parser errors or endpoint URLs. Exit 0 means these supplied files pass; exit 1
-means a finding; exit 2 means invalid arguments. gRPC is outside this deliberately
-HTTP-specific check, not a statement that Codex cannot export over gRPC.
+The Collector preserves native service identity and native IDs. It adds the
+low-cardinality `codex.producer` attribute only to records with explicit native
+`originator` or `app_server.client_name` evidence. Desktop's known names and
+Omnigent's client namespace are recognized; unmatched records remain unclassified.
+Trace correlation can connect classified spans to other spans without timestamp
+guesses. Metrics receive no new producer/session metric labels. This means not every
+item is individually attributable, and conflicting or missing identity needs review.
 
-**This does not resolve Codex's effective configuration.** Profiles, managed
-settings, project layers, CLI overrides and installed-version compatibility
-must be inspected separately. Omitted `log_user_prompt` is flagged because this
-preflight requires explicit `false`; it does not imply that Codex's default
-captures prompts.
+A reported `model` is distinct from `actual_model`; routing aliases do not prove the
+actual provider/model. Missing fields remain unavailable. Native usage, retry, error
+category/status, reasoning, latency and tool identity are retained where emitted.
 
-A passing result deliberately contains `runtime_verified: false`. It does not
-prove that either application loaded the file, distinguish emitted producers,
-verify collector health, identify an archive, enforce retention or validate a
-privacy transform. Fresh native turns from both real clients and archive
-readback are mandatory in the tracked delivery. Do not treat two matching
-configuration files as two-source runtime acceptance.
+## Privacy and storage
 
-## Offline fixtures
+Lean logs drop prompts, arguments/results, account/email and free-text error fields;
+free-text log bodies are cleared. Lean spans/events also drop these fields and
+working-directory/remote values, and clear span status messages. Existing installed
+secret-pattern scrubbing is retained, including the separate forensic trace pipeline.
+Forensic content is private, short-lived, and is not claimed to be lean-safe.
+Historical data is not rewritten or manually cleaned.
+
+One aggregate archive target is **50,000,000,000 bytes**. Lean age is 60 days;
+forensic age is 3 days and its 4,000,000,000-byte sub-budget is **included** in the
+aggregate. LaunchAgent retention cadence is 300 seconds. This is periodic retention,
+not a filesystem quota. Active files and unsafe/unrelated paths are protected;
+nonconvergence is reported when protected bytes prevent reaching a target. Collector
+log files, provenance databases, binaries and rollback backups are outside that
+archive budget and must be inventoried separately; no new ancillary writer is added.
+
+The historical `status`/`audit` commands can scan many files. Use a deliberate time
+boundary and bounded targeted readback for runtime acceptance; do not dump archives.
+
+## Verification
 
 ```sh
-python3 -m unittest discover -s deploy/control-room/otel -p 'test_*.py' -v
+python3 -m unittest discover -s deploy/control-room/otel -p 'test_*.py'
+# PyYAML is a test-only dependency; fixture uses file receivers and no listeners.
+python3 deploy/control-room/otel/test_filter_fixture.py "$COLLECTOR_BINARY"
+uv run pytest tests/inner/test_codex_executor.py -k populate_codex_home_config
+uv run pytest tests/test_codex_native.py
+uv run --no-sync pyrefly check
 ```
 
-Fixtures use temporary files only. No private machine state or telemetry is
-included. Integration, installed-Mac, Collector and repository-wide checks are
-separate gates; this helper does not replace them.
-
-## Migration boundary
-
-Reusable Codex tooling belongs in the active Omnigent source. Host-specific
-configuration, private observations and rollback evidence stay with the
-appropriate private operations owner. Preserve existing archive data and
-capture identity; do not add another Collector, archive or database.
-
-This preparation does not introduce an estimator schema, general application
-instrumentation, a benchmark harness or a documentation/truth framework.
+The Collector fixture loads the actual candidate processors, verifies explicit and
+unknown producer identity, native IDs and lean privacy canaries. Retention uses tiny
+temporary files for age/size boundaries, combined accounting, oldest-first deletion,
+active protection, symlink safety and idempotency. Synthetic fixtures do not replace
+fresh actual Desktop and Omnigent turns in the same archive. Restart, actual producer
+capture, duplicate ingestion, live privacy and login persistence remain separate gates.

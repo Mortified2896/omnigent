@@ -1,0 +1,67 @@
+{
+  "repository": "Mortified2896/control-room-standalone",
+  "commit": "2f43a4ad2c558c349c9958d3f4ebfc7adf4d8904",
+  "license": "No LICENSE, COPYING or NOTICE file present in source tree; owner-authorized migration retains original provenance. No new license asserted.",
+  "files": [
+    {
+      "source": "scripts/otel/control_room_otel.py",
+      "destination": "deploy/control-room/otel/control_room_otel.py",
+      "source_sha256": "af6584aaf39a659b89a08ec5086d85764bdec635bc256346d07c2ba166c76776"
+    },
+    {
+      "source": "scripts/otel/test_telemetry_audit.py",
+      "destination": "deploy/control-room/otel/test_telemetry_audit.py",
+      "source_sha256": "8eaa8c09dc21785065485dc039a9ec78b5a8167aa1ae47b0aad19c82cef1e85d"
+    },
+    {
+      "source": "scripts/otel/status.sh",
+      "destination": "deploy/control-room/otel/status.sh",
+      "source_sha256": "81b1af6c1c9787fd831e154c40385d97ccb89f9e29b1961416e2e62e889572eb"
+    },
+    {
+      "source": "scripts/otel/test_filter_fixture.py",
+      "destination": "deploy/control-room/otel/test_filter_fixture.py",
+      "source_sha256": "1868a4afd9f56dd2630770f7982746a5266a478886137edcca244b54658b1da7"
+    },
+    {
+      "source": "scripts/otel/telemetry_audit.py",
+      "destination": "deploy/control-room/otel/telemetry_audit.py",
+      "source_sha256": "33f7b69fc031bea429545c410eaff560094bc329ed37b4d160cf848e21661ad0"
+    },
+    {
+      "source": "scripts/otel/test_control_room_otel.py",
+      "destination": "deploy/control-room/otel/test_control_room_otel.py",
+      "source_sha256": "4791b18ff9fe99d24557e2de4a33f9cc7c91e5db07152622ddd5b6ef2737b0d0"
+    },
+    {
+      "source": "scripts/otel/check.sh",
+      "destination": "deploy/control-room/otel/check.sh",
+      "source_sha256": "012e918eaa2881f2201d45bd9baada786bb215a70e4e389a2f7f124d20c33431"
+    },
+    {
+      "source": "scripts/otel/audit.sh",
+      "destination": "deploy/control-room/otel/audit.sh",
+      "source_sha256": "96544cbf128e1228a21da843c97dfc7b61e7c5c76a18054977de4cccb5f5d691"
+    },
+    {
+      "source": "scripts/otel/test.sh",
+      "destination": "deploy/control-room/otel/test.sh",
+      "source_sha256": "243300fe03877c3d57af7f05c962e02161e22a3e4cbb8598600a6f1e23bd720c"
+    },
+    {
+      "source": "scripts/otel/config/otelcol-macos.yaml",
+      "destination": "deploy/control-room/otel/config/otelcol-macos.yaml",
+      "source_sha256": "2f3cdf007f25f0e5e871dc3ab250084ddcab6f1848890eda6afece3e76bb2cbd"
+    },
+    {
+      "source": "scripts/otel/launchd/com.controlroom.otel-retention.plist.template",
+      "destination": "deploy/control-room/otel/launchd/com.controlroom.otel-retention.plist.template",
+      "source_sha256": "3709f409bcfe850a722a10f4430b5490a9d4a179c4845882a411c97157e7ae91"
+    },
+    {
+      "source": "scripts/otel/launchd/com.controlroom.otelcol.plist.template",
+      "destination": "deploy/control-room/otel/launchd/com.controlroom.otelcol.plist.template",
+      "source_sha256": "7a91f96d92b774db38fbe3a73c24cf9e793b3a72146067679745855f449de6f5"
+    }
+  ]
+}

@@ -2515,7 +2515,7 @@ def test_populate_codex_home_config_minimal_mode_skips_plugins_cache(tmp_path: P
     assert not (target / "plugins" / "cache").exists()
 
 
-def test_populate_codex_home_config_minimal_mode_keeps_only_provider_routing(
+def test_populate_codex_home_config_minimal_mode_keeps_routing_and_telemetry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2532,6 +2532,7 @@ def test_populate_codex_home_config_minimal_mode_keeps_only_provider_routing(
         "[plugins.example]\nenabled = true\n"
         '[mcp_servers.github]\nenabled = true\ncommand = "github-mcp"\n'
         '[marketplaces.example]\nsource = "https://example"\n'
+        '[otel]\nlog_user_prompt = false\nexporter = "none"\n'
     )
     target = tmp_path / "temp_codex_home"
     target.mkdir()
@@ -2547,6 +2548,9 @@ def test_populate_codex_home_config_minimal_mode_keeps_only_provider_routing(
     assert "plugins" not in config_text
     assert "mcp_servers" not in config_text
     assert "marketplaces" not in config_text
+    assert "[otel]" in config_text
+    assert "log_user_prompt = false" in config_text
+    assert 'exporter = "none"' in config_text
 
 
 def test_populate_codex_home_config_config_toml_copy_is_isolated(tmp_path: Path) -> None:

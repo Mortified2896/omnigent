@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Offline regression fixtures; these never start Codex or a Collector."""
 
 from __future__ import annotations
@@ -62,7 +63,10 @@ class ConfigPreflightTest(unittest.TestCase):
         for replacement in ("true", '"false"', "0"):
             with self.subTest(replacement=replacement):
                 self.omnigent.write_text(config_text().replace("false", replacement, 1))
-                self.assertIn("explicit_prompt_privacy_required", self.report()["producers"]["omnigent_codex"]["issues"])
+                self.assertIn(
+                    "explicit_prompt_privacy_required",
+                    self.report()["producers"]["omnigent_codex"]["issues"],
+                )
         self.omnigent.write_text(config_text().replace("log_user_prompt = false\n", ""))
         self.assertEqual(self.report()["status"], "fail")
 
@@ -72,7 +76,9 @@ class ConfigPreflightTest(unittest.TestCase):
                 self.omnigent.write_text(config_text().replace(f"/v1/{signal}", "/v1/wrong"))
                 report = self.report()
                 self.assertEqual(report["status"], "fail")
-                self.assertFalse(report["producers"]["omnigent_codex"]["signals"][signal]["matches"])
+                self.assertFalse(
+                    report["producers"]["omnigent_codex"]["signals"][signal]["matches"]
+                )
 
     def test_each_producer_must_match_expected_collector(self) -> None:
         self.desktop.write_text(config_text("http://127.0.0.1:9999"))
@@ -129,23 +135,45 @@ class ConfigPreflightTest(unittest.TestCase):
                 self.assertNotIn("sensitive-canary", json.dumps(self.report()))
 
     def test_auth_headers_never_appear_in_report(self) -> None:
-        self.omnigent.write_text(config_text().replace('protocol = "binary"', 'protocol = "binary", headers = { Authorization = "sensitive-canary" }'))
+        self.omnigent.write_text(
+            config_text().replace(
+                'protocol = "binary"',
+                'protocol = "binary", headers = { Authorization = "sensitive-canary" }',
+            )
+        )
         self.assertEqual(self.report()["status"], "pass")
         self.assertNotIn("sensitive-canary", json.dumps(self.report()))
 
     def test_origin_validation_never_resolves_remote_hosts(self) -> None:
-        for value in ("http://example.org:4318", "http://127.0.0.1", "http://127.0.0.1:0", "http://127.0.0.1:4318/path", "http://u:secret@127.0.0.1:4318", "http://127.0.0.1:4318?secret", "file:///secret", "http://[invalid]:4318"):
+        for value in (
+            "http://example.org:4318",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:4318/path",
+            "http://u:secret@127.0.0.1:4318",
+            "http://127.0.0.1:4318?secret",
+            "file:///secret",
+            "http://[invalid]:4318",
+        ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 checker.local_origin(value)
 
     def test_ipv6_and_localhost_supported_without_equating_distinct_hosts(self) -> None:
         self.assertEqual(checker.local_origin("http://[::1]:4318"), ("http", "::1", 4318))
-        self.assertEqual(checker.local_origin("http://localhost:4318"), ("http", "localhost", 4318))
-        self.assertFalse(checker.endpoint_matches("http://127.0.0.2:4318/v1/logs", checker.local_origin(ORIGIN), "logs"))
+        self.assertEqual(
+            checker.local_origin("http://localhost:4318"), ("http", "localhost", 4318)
+        )
+        self.assertFalse(
+            checker.endpoint_matches(
+                "http://127.0.0.2:4318/v1/logs", checker.local_origin(ORIGIN), "logs"
+            )
+        )
 
     def test_large_file_is_not_read(self) -> None:
         with patch.object(checker, "MAX_CONFIG_BYTES", 4):
-            self.assertEqual(self.report()["producers"]["desktop"]["read_status"], "config_too_large")
+            self.assertEqual(
+                self.report()["producers"]["desktop"]["read_status"], "config_too_large"
+            )
 
     def test_fifo_does_not_block(self) -> None:
         path = self.root / "fifo"
@@ -153,7 +181,14 @@ class ConfigPreflightTest(unittest.TestCase):
         self.assertEqual(checker.read_config(path)[1], "not_regular_file")
 
     def test_cli_returns_exit_codes_and_json(self) -> None:
-        args = ["--desktop-config", str(self.desktop), "--omnigent-config", str(self.omnigent), "--collector-origin", ORIGIN]
+        args = [
+            "--desktop-config",
+            str(self.desktop),
+            "--omnigent-config",
+            str(self.omnigent),
+            "--collector-origin",
+            ORIGIN,
+        ]
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             self.assertEqual(checker.main(args), 0)
@@ -164,7 +199,14 @@ class ConfigPreflightTest(unittest.TestCase):
 
     def test_invalid_origin_cli_does_not_echo_value(self) -> None:
         output = io.StringIO()
-        args = ["--desktop-config", str(self.desktop), "--omnigent-config", str(self.omnigent), "--collector-origin", "http://sensitive-canary.example:4318"]
+        args = [
+            "--desktop-config",
+            str(self.desktop),
+            "--omnigent-config",
+            str(self.omnigent),
+            "--collector-origin",
+            "http://sensitive-canary.example:4318",
+        ]
         with contextlib.redirect_stderr(output), self.assertRaises(SystemExit) as exit_context:
             checker.main(args)
         self.assertEqual(exit_context.exception.code, 2)
