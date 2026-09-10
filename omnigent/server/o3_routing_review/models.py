@@ -23,6 +23,20 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ExecutionMode(StrEnum):
+    TOOL_CAPABLE_NATIVE = "tool_capable_native"
+    HARD_TOOL_FREE = "hard_tool_free"
+
+
+class ExecutionOption(StrictModel):
+    mode: ExecutionMode
+    route: str
+    provider: str
+    cost_class: str
+    capability_score_lower: float
+    reason: str
+
+
 class EvidenceClass(StrEnum):
     EXACT = "exact"
     PROXY = "proxy"
@@ -440,6 +454,10 @@ class ExecutionProvenance(StrictModel):
 
 class RoutingProposal(StrictModel):
     schema_version: int = 2
+    execution_options: list[ExecutionOption] = Field(default_factory=list)
+    selected_execution: ExecutionOption | None = None
+    execution_exclusions: dict[str, str] = Field(default_factory=dict)
+    tool_free_provenance: dict[str, object] | None = None
     proposal_id: str
     created_at: datetime
     updated_at: datetime

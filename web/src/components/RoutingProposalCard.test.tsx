@@ -646,3 +646,55 @@ it("requires a valid numeric capacity before applying it", async () => {
     }),
   );
 });
+
+it("acknowledges tool-free evidence without native provisional candidates", async () => {
+  const { onDecision } = renderCard(
+    proposal({
+      evaluations: [],
+      execution_options: [
+        {
+          mode: "hard_tool_free",
+          route: "free/model",
+          provider: "free",
+          cost_class: "free",
+          capability_score_lower: 60,
+          reason: "Qualified",
+        },
+      ],
+      selected_execution: {
+        mode: "hard_tool_free",
+        route: "free/model",
+        provider: "free",
+        cost_class: "free",
+        capability_score_lower: 60,
+        reason: "Tools not required; meets floor; preserves subscription",
+      },
+    }),
+  );
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent("Execution: Tool-free");
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent("free/model");
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent(
+    "Follow-ups require a new routing review",
+  );
+  fireEvent.click(screen.getByTestId("o3-approve"));
+  await waitFor(() =>
+    expect(onDecision).toHaveBeenCalledWith({ action: "approve", acknowledge_provisional: true }),
+  );
+});
+
+it("shows tool-capable mode when the recomputed selection requires tools", () => {
+  renderCard(
+    proposal({
+      selected_execution: {
+        mode: "tool_capable_native",
+        route: "codex/model",
+        provider: "codex",
+        cost_class: "subscription",
+        capability_score_lower: 90,
+        reason: "Qualified native tool contract",
+      },
+    }),
+  );
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent("Execution: Tool-capable");
+  expect(screen.queryByText(/No callable tools/)).not.toBeInTheDocument();
+});
