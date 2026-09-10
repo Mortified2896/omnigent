@@ -5,6 +5,7 @@
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -185,7 +186,7 @@ def prom():
         return ""
 
 
-def metric(body, name, signal=None):
+def metric(body, name, signal=None, *, exporter=None):
     """Sum observed counter series; absent, invalid or ambiguous means unavailable."""
     sample = re.compile(
         rf"^(?P<family>{re.escape(name)}(?:_total)?)"
@@ -215,6 +216,8 @@ def metric(body, name, signal=None):
             values = {labels[key] for key in ("type", "data_type") if key in labels}
             if values != {json.dumps(signal)}:
                 continue
+        if exporter is not None and labels.get("exporter") != json.dumps(exporter):
+            continue
         identity = tuple(sorted(labels.items()))
         family = match.group("family")
         families.add(family)
@@ -229,6 +232,127 @@ def metric(body, name, signal=None):
             return None
         total += int(value)
     return total if seen else None
+
+
+# This profile is limited to the reviewed, queue-free Collector configuration.
+FILE_ONLY_CONFIG_SHA256 = "81f395c2f0916a6c76bd8bd2919a121f808063d0f0093efc221188e09feaadf7"
+FILE_ONLY_PROFILE = "otelcol-contrib-0.159.0-file-only"
+FILE_EXPORTERS = {
+    "logs": ("log_records", ("file/logs",)),
+    "spans": ("spans", ("file/traces", "file/forensic_traces")),
+    "metric_points": ("metric_points", ("file/metrics",)),
+}
+
+
+def _probe_text(args):
+    """Bound read-only process probes; never print command output or errors."""
+    text = subprocess.check_output(
+        args, text=True, stderr=subprocess.DEVNULL, timeout=3,
+        env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+    )
+    if len(text) > 65_536:
+        raise ValueError("oversized process evidence")
+    return text.strip()
+
+
+def _collector_process():
+    text = _probe_text(["launchctl", "print", f"gui/{os.getuid()}/com.controlroom.otelcol"])
+    pids = re.findall(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", text)
+    blocks = re.findall(r"(?ms)^\s*arguments = \{\n(.*?)^\s*\}\s*$", text)
+    if len(pids) != 1 or len(blocks) != 1:
+        raise ValueError("unrecognized loaded process")
+    arguments = [line.strip() for line in blocks[0].splitlines() if line.strip()]
+    return pids[0], arguments
+
+
+def _process_started(pid):
+    text = _probe_text(["ps", "-p", pid, "-o", "lstart="])
+    # The subprocess uses UTC/C locale; avoid the parent interpreter's locale.
+    fields = text.split()
+    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+    if len(fields) != 5 or fields[1] not in months:
+        raise ValueError("unrecognized process start")
+    hour, minute, second = map(int, fields[3].split(":"))
+    return dt.datetime(
+        int(fields[4]), months.index(fields[1]) + 1, int(fields[2]),
+        hour, minute, second, tzinfo=dt.timezone.utc,
+    ).timestamp()
+
+
+def collector_counter_profile(version, scrape_started_at):
+    """Bind absence rules to one running Mac binary/configuration and listener."""
+    unknown = {"status": "unavailable", "reason": "runtime_profile_unverified"}
+    if sys.platform != "darwin":
+        return unknown | {"reason": "not_macos"}
+    if version not in {"otelcol-contrib version 0.159.0", "otelcol-contrib 0.159.0"}:
+        return unknown | {"reason": "unqualified_collector_version"}
+    try:
+        binary = OTEL_HOME / "bin/otelcol-contrib"
+        config = OTEL_HOME / "config/otelcol-macos.yaml"
+        files = (binary, config)
+        if any(path.is_symlink() or not path.is_file() for path in files):
+            return unknown | {"reason": "unsafe_or_missing_profile_file"}
+        before = tuple(path.stat() for path in files)
+        if before[1].st_size > 65_536:
+            return unknown | {"reason": "unqualified_configuration"}
+        config_hash = hashlib.sha256(config.read_bytes()).hexdigest()
+        if config_hash != FILE_ONLY_CONFIG_SHA256:
+            return unknown | {"reason": "unqualified_configuration"}
+        pid, arguments = _collector_process()
+        if arguments != [str(binary), "--config", str(config)]:
+            return unknown | {"reason": "loaded_configuration_mismatch"}
+        started = _process_started(pid)
+        if started > scrape_started_at or any(
+            max(item.st_mtime, item.st_ctime) >= started for item in before
+        ):
+            return unknown | {"reason": "files_or_process_changed_since_launch"}
+        listeners = set(_probe_text([
+            "lsof", "-nP", "-a", "-iTCP@127.0.0.1:8888", "-sTCP:LISTEN", "-t",
+        ]).split())
+        after = tuple(path.stat() for path in files)
+        if (
+            listeners != {pid} or _collector_process() != (pid, arguments)
+            or _process_started(pid) != started
+            or any(
+                (a.st_dev, a.st_ino, a.st_size, a.st_mtime_ns, a.st_ctime_ns)
+                != (b.st_dev, b.st_ino, b.st_size, b.st_mtime_ns, b.st_ctime_ns)
+                for a, b in zip(before, after, strict=True)
+            )
+        ):
+            return unknown | {"reason": "runtime_binding_changed_or_mismatched"}
+    except (OSError, ValueError, OverflowError, subprocess.SubprocessError):
+        return unknown
+    return {
+        "status": "verified", "profile": FILE_ONLY_PROFILE,
+        "config_sha256": config_hash,
+        "scope": "local_process_and_reviewed_config_not_end_to_end_delivery",
+    }
+
+
+def counter_evidence(body, counters, profile):
+    """Explain nulls only under qualified runtime evidence; never manufacture zero."""
+    evidence = {
+        key: {"status": "observed" if value is not None else "unavailable"}
+        for key, value in counters.items()
+    }
+    if profile.get("status") != "verified" or profile.get("profile") != FILE_ONLY_PROFILE:
+        return evidence
+    for suffix, (metric_suffix, exporters) in FILE_EXPORTERS.items():
+        sent_name = f"otelcol_exporter_sent_{metric_suffix}"
+        active = all(
+            (metric(body, sent_name, exporter=name) or 0) > 0 for name in exporters
+        )
+        for prefix, family, status, reason in (
+            ("export_failed", "send_failed", "conditionally_absent", "failure_series_only_created_on_failure"),
+            ("enqueue_failed", "enqueue_failed", "not_applicable", "reviewed_file_exporters_have_no_sending_queue"),
+        ):
+            key = f"{prefix}_{suffix}"
+            name = f"otelcol_exporter_{family}_{metric_suffix}"
+            # Malformed/ambiguous samples are not the same as an absent family.
+            present = re.search(rf"(?m)^\s*{re.escape(name)}(?:_total)?(?=[{{\s]|$)", body)
+            if key in evidence and counters[key] is None and not present and active:
+                evidence[key] = {"status": status, "reason": reason}
+    return evidence
 
 
 def retention_evidence(record, *, now=None, max_lag_seconds=RETENTION_MAX_LAG_SECONDS):
@@ -567,6 +691,7 @@ def launchd_loaded(label):
 
 
 def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
+    scrape_started_at = dt.datetime.now(dt.timezone.utc).timestamp()
     body = prom()
     arc = archives(since)
     storage = storage_summary(since)
@@ -633,6 +758,13 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
     malformed = sum(x["malformed"] for x in arc.values())
     activity = sum(x["records"] for x in arc.values())
     data["unavailable_counters"] = [key for key, value in data["collector"].items() if value is None]
+    profile = collector_counter_profile(version, scrape_started_at)
+    data["counter_profile"] = profile
+    data["counter_evidence"] = counter_evidence(body, data["collector"], profile)
+    data["unexplained_counters"] = [
+        key for key, item in data["counter_evidence"].items()
+        if item["status"] == "unavailable"
+    ]
     failures = sum(
         value for key, value in data["collector"].items()
         if ("failed" in key or "refused" in key) and value is not None
@@ -640,7 +772,7 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
     retention_bad = not retention_loaded or retention["status"] == "failed"
     over_budget = storage["overshoot_bytes"] > 0 or storage["forensic_overshoot_bytes"] > 0
     incomplete = (
-        data["unavailable_counters"]
+        data["unexplained_counters"]
         or retention["status"] != "verified"
         or not storage["archive_present"]
     )
@@ -670,6 +802,9 @@ def human(d, status=False):
     print("Retention evidence:", d["retention_evidence"]["status"])
     if d["unavailable_counters"]:
         print("Collector counters unavailable:", ", ".join(d["unavailable_counters"]))
+    for key, item in d.get("counter_evidence", {}).items():
+        if item["status"] in {"conditionally_absent", "not_applicable"}:
+            print(f"{key}: {item['status']} ({item['reason']}; raw value unavailable)")
     print(
         "Storage: logs=%d traces=%d metrics=%d forensic=%d rotated=%d oldest=%s"
         % (

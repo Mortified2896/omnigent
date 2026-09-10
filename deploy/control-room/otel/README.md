@@ -145,12 +145,42 @@ non-dry-run result and timezone-aware timestamp. Its default freshness window is
 observation window without changing the actual cleanup schedule or retention.
 Missing, invalid or stale evidence is not proof of successful current cleanup.
 
-`HEALTHY` / `NO ACTIVITY` require complete observed counters and a matching fresh
+`HEALTHY` / `NO ACTIVITY` require sufficient counter evidence and a matching fresh
 cleanup record. Known failures or measured archive/sub-budget overshoot produce
-`DEGRADED`; missing evidence produces `INCOMPLETE`; an unavailable Collector
-produces `FAILED`. `check` returns nonzero for all three unsuccessful states.
-`INCOMPLETE` does not assert exporter failure and must not trigger an automatic
-restart. A Collector may legitimately omit a counter; report that gap instead.
+`DEGRADED`; unexplained missing evidence produces `INCOMPLETE`; an unavailable
+Collector produces `FAILED`. `check` returns nonzero for all three unsuccessful
+states. `INCOMPLETE` must not trigger an automatic restart.
+
+`counter_evidence` distinguishes `observed`, `conditionally_absent`,
+`not_applicable` and `unavailable`. Raw missing values remain `null`, including
+expected omissions, and remain listed in `unavailable_counters`.
+`unexplained_counters` is the subset that blocks a complete status.
+The bounded exception applies only to the reviewed file-only configuration and
+Collector 0.159.0. Its [exporter helper](https://github.com/open-telemetry/opentelemetry-collector/blob/v0.159.0/exporter/exporterhelper/internal/obs_report_sender.go)
+records send-failure counters only for positive failures; the
+[file exporter factory](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.159.0/exporter/fileexporter/factory.go)
+does not enable a sending queue. This is not a measured zero or proof of no loss.
+
+`counter_profile` checks the installed configuration fingerprint, binary version,
+loaded LaunchAgent arguments, process start, file modification/change times and
+the metrics listener's owning PID. It rejects extra config/override arguments,
+files changed after process startup, process changes during probing, unrecognized
+versions/configs and unavailable tools. Each probe has a three-second timeout;
+raw process output is never printed. Every expected exporter for a signal must
+also have positive sent-counter evidence before a missing failure family is
+explained. Malformed/ambiguous families and observed positive failures are never
+excused. These local consistency checks are not cryptographic attestation.
+
+A version or configuration change requires reviewing the profile again, not
+silently extending the exception. Run the new offline fixtures with:
+
+```sh
+python3 -m unittest discover -s deploy/control-room/otel -p 'test_counter_applicability.py' -v
+```
+
+The actual Mac process-output format and success/failure Collector fixture remain
+local acceptance requirements. A failed profile probe is explicit incomplete
+evidence; do not restart or loosen checks just to obtain a green result.
 
 The status explicitly reports `budget_scope: archive_only` and
 `ancillary_bounds_verified: false`, plus archive/forensic headroom and overshoot.
