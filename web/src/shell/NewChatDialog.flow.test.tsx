@@ -457,96 +457,125 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
-  it("holds an O3 task until approval, then launches the derived Codex route once", async () => {
-    const pending = o3Proposal();
-    const approved = o3Proposal("approve");
-    vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce(
-        jsonResponse({
-          source_pool: "custom/o3-codex-pool",
-          slices: [
-            {
-              benchmark_id: "terminal-bench",
-              version: "4.0.0",
-              slice_id: "tb4.cr-systems-db-v1",
-              label: "Systems and databases",
-              interpretation: "Systems tasks",
-              task_ids: [],
-              task_manifest_digest: "sha256:test",
-              official: false,
-            },
-          ],
+  it.each(["native", "free"])(
+    "holds an O3 task until approval, then launches the %s route once",
+    async (lane) => {
+      const pending = o3Proposal();
+      const approved = o3Proposal("approve");
+      if (lane === "free") {
+        const selection = {
+          mode: "hard_tool_free" as const,
+          route: "free/model",
+          provider: "free",
+          cost_class: "free",
+          capability_score_lower: 60,
+          reason: "Meets floor with zero tools",
+        };
+        pending.selected_execution = selection;
+        approved.selected_execution = selection;
+        approved.derived_combo_name = null;
+      }
+      vi.mocked(authenticatedFetch)
+        .mockResolvedValueOnce(
+          jsonResponse({
+            source_pool: "custom/o3-codex-pool",
+            slices: [
+              {
+                benchmark_id: "terminal-bench",
+                version: "4.0.0",
+                slice_id: "tb4.cr-systems-db-v1",
+                label: "Systems and databases",
+                interpretation: "Systems tasks",
+                task_ids: [],
+                task_manifest_digest: "sha256:test",
+                official: false,
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(jsonResponse(pending))
+        .mockResolvedValueOnce(jsonResponse(approved))
+        .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
+        .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
+      setAgents([
+        agent({
+          id: "ag_codex",
+          name: "codex-native-ui",
+          display_name: "Codex",
+          harness: "codex-native",
         }),
-      )
-      .mockResolvedValueOnce(jsonResponse(pending))
-      .mockResolvedValueOnce(jsonResponse(approved))
-      .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
-      .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
-    setAgents([
-      agent({
-        id: "ag_codex",
-        name: "codex-native-ui",
-        display_name: "Codex",
-        harness: "codex-native",
-      }),
-    ]);
+        agent({
+          id: "ag_free",
+          name: "local-tool-free",
+          display_name: "Tool-free",
+          harness: "local-tool-free",
+        }),
+      ]);
 
-    renderLanding([], O3_SERVER_INFO);
-    await waitForWorkspaceSeed();
-    expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
-      "OmniRoute O3 · Local",
-    );
-    expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
-    expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
-    fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
-    expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
-    typeMessage("inspect the repo without changing it");
-    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+      renderLanding([], O3_SERVER_INFO);
+      await waitForWorkspaceSeed();
+      expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
+        "OmniRoute O3 · Local",
+      );
+      expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
+      expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
+      fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
+      expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
+      typeMessage("inspect the repo without changing it");
+      fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
-    await screen.findByTestId("o3-routing-proposal-card");
-    const callsBeforeApproval = vi.mocked(authenticatedFetch).mock.calls;
-    expect(callsBeforeApproval.some(([url]) => url === "/v1/sessions")).toBe(false);
-    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
-    expect(navigateMock).not.toHaveBeenCalled();
-    const proposalCall = callsBeforeApproval.find(
-      ([url]) => url === "/v1/o3/routing-review/proposals",
-    );
-    expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
-      "inspect the repo without changing it",
-    );
-    expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
+      await screen.findByTestId("o3-routing-proposal-card");
+      const callsBeforeApproval = vi.mocked(authenticatedFetch).mock.calls;
+      expect(callsBeforeApproval.some(([url]) => url === "/v1/sessions")).toBe(false);
+      expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
+      expect(navigateMock).not.toHaveBeenCalled();
+      const proposalCall = callsBeforeApproval.find(
+        ([url]) => url === "/v1/o3/routing-review/proposals",
+      );
+      expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
+        "inspect the repo without changing it",
+      );
+      expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
 
-    fireEvent.click(screen.getByTestId("o3-approve"));
+      fireEvent.click(screen.getByTestId("o3-approve"));
 
-    await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
-    const sessionCall = vi
-      .mocked(authenticatedFetch)
-      .mock.calls.find(([url]) => url === "/v1/sessions");
-    expect(sessionCall).toBeDefined();
-    const sessionBody = JSON.parse(sessionCall?.[1]?.body as string);
-    expect(sessionBody).toMatchObject({
-      agent_id: "ag_codex",
-      harness_override: "codex-native",
-      model_override: "custom/o3-route-0123456789ab",
-      reasoning_effort: "low",
-      cost_control_mode_override: "off",
-      labels: {
-        "omnigent.access_lane": "omniroute",
-        "o3.routing.proposal_id": pending.proposal_id,
-      },
-    });
-    expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
-      text: "inspect the repo without changing it",
-      skill: null,
-      files: [],
-    });
-    const linkCall = vi
-      .mocked(authenticatedFetch)
-      .mock.calls.find(([url]) => String(url).endsWith("/session"));
-    expect(JSON.parse(linkCall?.[1]?.body as string)).toEqual({ session_id: "conv_o3" });
-    expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
-    expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3");
-  });
+      await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
+      const sessionCall = vi
+        .mocked(authenticatedFetch)
+        .mock.calls.find(([url]) => url === "/v1/sessions");
+      expect(sessionCall).toBeDefined();
+      const sessionBody = JSON.parse(sessionCall?.[1]?.body as string);
+      expect(sessionBody).toMatchObject({
+        agent_id: lane === "free" ? "ag_free" : "ag_codex",
+        harness_override: lane === "free" ? "local-tool-free" : "codex-native",
+        model_override:
+          lane === "free"
+            ? `local-tool-free/${pending.proposal_id}`
+            : "custom/o3-route-0123456789ab",
+        reasoning_effort: "low",
+        cost_control_mode_override: "off",
+        labels: {
+          ...(lane === "native" ? { "omnigent.access_lane": "omniroute" } : {}),
+          "o3.routing.proposal_id": pending.proposal_id,
+        },
+      });
+      if (lane === "free") {
+        expect(sessionBody.labels["omnigent.wrapper"]).toBeUndefined();
+        expect(sessionBody.labels["omnigent.ui"]).toBeUndefined();
+      }
+      expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
+        text: "inspect the repo without changing it",
+        skill: null,
+        files: [],
+      });
+      const linkCall = vi
+        .mocked(authenticatedFetch)
+        .mock.calls.find(([url]) => String(url).endsWith("/session"));
+      expect(JSON.parse(linkCall?.[1]?.body as string)).toEqual({ session_id: "conv_o3" });
+      expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
+      expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3");
+    },
+  );
 
   it("restores the unsent O3 prompt and proposal across a page reload", async () => {
     const pending = o3Proposal();

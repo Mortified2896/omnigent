@@ -201,10 +201,17 @@ export function RoutingProposalCard({
   const approved = proposal.decision === "approve" || proposal.decision === "run_anyway";
   const catalogueEligible = recommendation?.execution_set?.eligible_count ?? 0;
   const canApprove =
-    (eligible.length > 0 || catalogueEligible > 0) &&
+    (eligible.length > 0 ||
+      catalogueEligible > 0 ||
+      (proposal.execution_options?.length ?? 0) > 0) &&
     (proposal.decision === null || proposal.decision === "wait");
-  const canResumeLaunch = approved && proposal.derived_combo_name !== null;
-  const hasProvisional = eligible.some((item) => item.status === "provisional");
+  const canResumeLaunch =
+    approved &&
+    (proposal.derived_combo_name !== null ||
+      proposal.selected_execution?.mode === "hard_tool_free");
+  const hasProvisional =
+    eligible.some((item) => item.status === "provisional") ||
+    proposal.selected_execution?.mode === "hard_tool_free";
 
   async function decide(decision: O3ProposalDecision, launch: boolean): Promise<void> {
     setBusy(decision.action);
@@ -431,21 +438,22 @@ export function RoutingProposalCard({
                 ? "Routes meet the capability and input/output requirements. Access is rechecked when you continue."
                 : "Adjust the requirements or wait for availability to change."}
             </p>
-            {recommendation.model_groups?.find((group) => group.eligible_route_count > 0) && (
-              <p className="mt-2 break-words text-sm">
-                Leading option:{" "}
-                <strong>
-                  {
-                    recommendation.model_groups.find((group) => group.eligible_route_count > 0)
-                      ?.displayed_model
-                  }
-                </strong>
-                <span className="text-muted-foreground">
-                  {" "}
-                  · final route selected after access recheck
-                </span>
-              </p>
-            )}
+            {!proposal.selected_execution &&
+              recommendation.model_groups?.find((group) => group.eligible_route_count > 0) && (
+                <p className="mt-2 break-words text-sm">
+                  Leading option:{" "}
+                  <strong>
+                    {
+                      recommendation.model_groups.find((group) => group.eligible_route_count > 0)
+                        ?.displayed_model
+                    }
+                  </strong>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · final route selected after access recheck
+                  </span>
+                </p>
+              )}
           </div>
         )}
 
@@ -676,30 +684,32 @@ export function RoutingProposalCard({
           </div>
         )}
 
-        {proposal.resource_advice && proposal.resource_snapshot && (
-          <div
-            className="rounded-md border border-border px-3 py-2 text-sm"
-            data-testid="o3-resource-advice"
-          >
-            <p className="font-semibold">
-              {proposal.resource_snapshot.usable_routes === 0 &&
-              proposal.resource_snapshot.unknown_routes > 0
-                ? "Availability unverified"
-                : titleCase(proposal.resource_advice.action)}
-            </p>
-            <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
-            {expanded && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
-                {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
-                {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
-                {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
-                {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
-                {titleCase(proposal.resource_advice.source)}.
+        {proposal.selected_execution?.mode !== "hard_tool_free" &&
+          proposal.resource_advice &&
+          proposal.resource_snapshot && (
+            <div
+              className="rounded-md border border-border px-3 py-2 text-sm"
+              data-testid="o3-resource-advice"
+            >
+              <p className="font-semibold">
+                {proposal.resource_snapshot.usable_routes === 0 &&
+                proposal.resource_snapshot.unknown_routes > 0
+                  ? "Availability unverified"
+                  : titleCase(proposal.resource_advice.action)}
               </p>
-            )}
-          </div>
-        )}
+              <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
+              {expanded && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
+                  {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
+                  {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
+                  {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
+                  {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
+                  {titleCase(proposal.resource_advice.source)}.
+                </p>
+              )}
+            </div>
+          )}
 
         {reviewingSplit && proposal.adviser.decomposition.length > 0 && (
           <div className="space-y-2" data-testid="o3-decomposition">
@@ -966,6 +976,28 @@ export function RoutingProposalCard({
           </p>
         )}
 
+        {proposal.selected_execution && (
+          <div
+            className="rounded-md border border-border px-3 py-2 text-sm"
+            data-testid="o3-execution-mode"
+          >
+            <p>
+              Execution:{" "}
+              {proposal.selected_execution.mode === "hard_tool_free" ? "Tool-free" : "Tool-capable"}
+            </p>
+            <p>
+              {proposal.selected_execution.route} · {proposal.selected_execution.cost_class}
+            </p>
+            <p className="text-xs text-muted-foreground">{proposal.selected_execution.reason}</p>
+            {proposal.selected_execution.mode === "hard_tool_free" && (
+              <p className="text-xs text-muted-foreground">
+                No callable tools. Follow-ups require a new routing review. Approval accepts
+                provisional quality evidence for this route.
+              </p>
+            )}
+          </div>
+        )}
+
         {waiting && (
           <div
             className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
@@ -984,7 +1016,7 @@ export function RoutingProposalCard({
               className="min-w-0 truncate text-xs text-muted-foreground"
               data-testid="o3-approved-route"
             >
-              Approved route: {proposal.derived_combo_name}
+              Approved route: {proposal.selected_execution?.route ?? proposal.derived_combo_name}
             </p>
           ) : (
             <div className="flex flex-wrap gap-1.5">

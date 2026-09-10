@@ -221,6 +221,8 @@ export interface O3RoutingProposal {
   disposition: O3Disposition;
   decision: O3DecisionAction | null;
   decision_reason: string | null;
+  execution_options?: O3ExecutionOption[];
+  selected_execution?: O3ExecutionOption | null;
   derived_combo_name: string | null;
   derived_combo_definition: Record<string, unknown> | null;
   session_id: string | null;
@@ -562,4 +564,13 @@ export function routingDraftForProposal(
     workspaceSummary,
     sessionId,
   };
+}
+
+export interface O3ExecutionOption {
+  mode: "tool_capable_native" | "hard_tool_free";
+  route: string;
+  provider: string;
+  cost_class: string;
+  capability_score_lower: number;
+  reason: string;
 }

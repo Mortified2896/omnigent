@@ -3919,7 +3919,8 @@ export function NewChatLandingScreen() {
 
     if (
       o3Approved &&
-      (approvedProposal.derived_combo_name === null ||
+      ((approvedProposal.derived_combo_name === null &&
+        approvedProposal.selected_execution?.mode !== "hard_tool_free") ||
         (approvedProposal.decision !== "approve" && approvedProposal.decision !== "run_anyway"))
     ) {
       setO3ReviewError("The proposal must create an approved derived route before launch.");
@@ -3959,13 +3960,19 @@ export function NewChatLandingScreen() {
       // in an existing worktree sends no git opts — the workspace is bound
       // straight to that dir, which also sidesteps the "branch already
       // exists" guard.
-      const launchAgentId = o3Approved ? o3CodexAgent?.id : effectiveAgentId;
+      const toolFree = o3Approved && approvedProposal.selected_execution?.mode === "hard_tool_free";
+      const launchAgentId = toolFree
+        ? agentList.find((item) => item.name === "local-tool-free")?.id
+        : o3Approved
+          ? o3CodexAgent?.id
+          : effectiveAgentId;
       if (!launchAgentId) throw new Error("The Codex harness is unavailable for this O3 route.");
       const agent = agentList.find((a) => a.id === launchAgentId);
       const nativeAgent = nativeCodingAgentForAvailableAgent(agent);
-      const nativeLabels = nativeWrapperLabelsForAgent(agent);
+      const nativeLabels = toolFree ? undefined : nativeWrapperLabelsForAgent(agent);
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
-      const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
+      const agentSupportsApprovalMode =
+        !toolFree && nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
       const agentSupportsModelPicker = nativeAgentHasCapability(agent, "modelPicker");
       // Smart Routing — server-side. The fully-auto harness always routes
@@ -4006,7 +4013,7 @@ export function NewChatLandingScreen() {
       // survives reload.
       const codexLaneLabel = o3Approved
         ? {
-            [CODEX_ACCESS_LANE_LABEL_KEY]: "omniroute",
+            ...(!toolFree ? { [CODEX_ACCESS_LANE_LABEL_KEY]: "omniroute" } : {}),
             [O3_ROUTING_PROPOSAL_LABEL_KEY]: approvedProposal.proposal_id,
           }
         : nativeAgent?.harness === "codex-native" && selectedCodexOption?.accessLane
@@ -4145,7 +4152,9 @@ export function NewChatLandingScreen() {
             // terminal launch; an unselected ("") knob is omitted so the
             // harness keeps its own configured/default model.
             model_override: o3Approved
-              ? approvedProposal.derived_combo_name
+              ? toolFree
+                ? `local-tool-free/${approvedProposal.proposal_id}`
+                : approvedProposal.derived_combo_name
               : !smartRoutingHarnessSelected &&
                   !routingOwnsModel &&
                   (agentSupportsModelPicker || nativeAgent?.harness === "codex-native") &&
@@ -4168,7 +4177,9 @@ export function NewChatLandingScreen() {
             // message text rides along for routing only — the client still
             // delivers the real message after navigation.
             harness_override: o3Approved
-              ? "codex-native"
+              ? toolFree
+                ? "local-tool-free"
+                : "codex-native"
               : smartRoutingHarnessSelected
                 ? AUTO_HARNESS_ID
                 : (pickedHarness ?? undefined),

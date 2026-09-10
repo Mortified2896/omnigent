@@ -251,3 +251,17 @@ def test_scan_distinguishes_o3_metadata_from_model_selection(tmp_path: Path) -> 
         'model = "o3"\n'
     )
     assert [hit.model for hit in scan(source)] == ["o3"]
+
+
+def test_audit_observations_are_not_runtime_model_choices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "diagnostics" / "audit"
+    directory.mkdir(parents=True)
+    observation = directory / "routes.json"
+    observation.write_text('{"observed_model": "gpt-5.5"}')
+    assert scan(observation) == []
+    executable = directory / "probe.py"
+    executable.write_text('model = "gpt-5.5"')
+    assert [hit.model for hit in scan(executable)] == ["gpt-5.5"]

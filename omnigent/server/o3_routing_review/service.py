@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from omnigent.process_logging import env_truthy
 
@@ -29,6 +32,7 @@ from .models import (
     EstimatorPolicy,
     EstimatorSelection,
     EvidencePolicy,
+    ExecutionMode,
     ProposalAdjustmentRequest,
     ProposalCreateRequest,
     ProposalDecisionRequest,
@@ -93,6 +97,7 @@ class O3RoutingReviewService:
         self.ttl_seconds = ttl_seconds
         self.forecaster = forecaster
         self.recommendation_catalogue = recommendation_catalogue
+        self._tool_free_audits: dict[tuple[float, str], tuple[datetime, dict[str, object]]] = {}
 
     @classmethod
     def from_env(cls) -> O3RoutingReviewService:
@@ -130,6 +135,70 @@ class O3RoutingReviewService:
     def get_proposal(self, proposal_id: str) -> RoutingProposal:
         """Return a persisted proposal or raise the public not-found error."""
         return self._require(proposal_id)
+
+    async def _with_execution_options(self, proposal: RoutingProposal) -> RoutingProposal:
+        path = os.environ.get("OMNIGENT_O3_TOOL_FREE_QUALIFICATIONS")
+        enabled = env_truthy(os.environ.get("OMNIGENT_O3_HARD_TOOL_FREE"))
+        if (not path and not enabled) or self.recommendation_catalogue is None:
+            return proposal
+        from .execution_modes import options_from_audit, select_execution
+
+        audit: dict[str, object] = {}
+        try:
+            if path:
+                audit = json.loads(Path(path).read_text())
+            elif not proposal.effective_requirements.tools:
+                from .tool_free_qualification import qualify_current_catalogue
+
+                key = (
+                    proposal.recommendation.common_capability_floor
+                    if proposal.recommendation
+                    else 100,
+                    proposal.approved_constraints.reasoning_effort,
+                )
+                cached = self._tool_free_audits.get(key)
+                if cached and (datetime.now(timezone.utc) - cached[0]).total_seconds() < 300:
+                    audit = cached[1]
+                else:
+                    audit = await qualify_current_catalogue(
+                        self.omniroute, self.recommendation_catalogue, proposal
+                    )
+                    self._tool_free_audits[key] = (datetime.now(timezone.utc), audit)
+            else:
+                audit = {"rows": []}
+            options = options_from_audit(
+                proposal,
+                self.recommendation_catalogue,
+                audit,
+                await self.omniroute.model_ids(),
+            )
+        except (OSError, ValueError, TypeError, KeyError, OmniRouteError):
+            options = []
+        selected = select_execution(
+            options,
+            requirements=proposal.effective_requirements,
+            floor=proposal.recommendation.common_capability_floor
+            if proposal.recommendation
+            else 100,
+            preference=proposal.approved_constraints.cost_quota_preference,
+        )
+        selected_routes = {item.route for item in options}
+        rows = audit.get("rows", [])
+        rows = rows if isinstance(rows, list) else []
+        exclusions = {
+            str(row["route"]): str(
+                row.get("exclusion") or "Does not satisfy tool-free evidence or requirements"
+            )
+            for row in rows
+            if isinstance(row, dict) and row.get("route") and row["route"] not in selected_routes
+        }
+        return proposal.model_copy(
+            update={
+                "execution_options": options,
+                "selected_execution": selected,
+                "execution_exclusions": exclusions,
+            }
+        )
 
     def _validate_analysis(self, analysis: AdviserAnalysis) -> None:
         if len(analysis.benchmark_requirements) != 1:
@@ -442,6 +511,7 @@ class O3RoutingReviewService:
             resource_snapshot=resource_snapshot,
             resource_advice=resource_advice,
         )
+        proposal = await self._with_execution_options(proposal)
         self.store.put(proposal)
         return proposal
 
@@ -667,6 +737,7 @@ class O3RoutingReviewService:
                 "constraint_version": proposal.constraint_version + 1,
             }
         )
+        updated = await self._with_execution_options(updated)
         self.store.put(updated)
         return updated
 
@@ -691,6 +762,75 @@ class O3RoutingReviewService:
             )
             self.store.put(updated)
             return updated
+
+        proposal = await self._with_execution_options(proposal)
+        execution = proposal.selected_execution
+        if execution is not None and execution.mode is ExecutionMode.HARD_TOOL_FREE:
+            if request.action is DecisionAction.RUN_ANYWAY:
+                raise RoutingReviewError(
+                    "Tool-free execution requires normal floor approval", status_code=409
+                )
+            if not request.acknowledge_provisional:
+                raise RoutingReviewError(
+                    "provisional evidence requires deliberate acknowledgement", status_code=409
+                )
+            from .execution_modes import select_execution
+            from .tool_free import execute
+
+            remaining = list(proposal.execution_options)
+            exclusions = dict(proposal.execution_exclusions)
+            while execution is not None and execution.mode is ExecutionMode.HARD_TOOL_FREE:
+                try:
+                    async with asyncio.timeout(60):
+                        result = await execute(
+                            self.omniroute,
+                            route=execution.route,
+                            prompt=f"Reply OK only. Check {uuid.uuid4().hex}",
+                            max_output_tokens=1024,
+                            reasoning_effort=proposal.approved_constraints.reasoning_effort,
+                        )
+                    if (
+                        result.provider != execution.provider
+                        or result.model
+                        not in {
+                            execution.route,
+                            execution.route.split("/", 1)[-1],
+                        }
+                        or float(result.cost_usd or "nan") != 0
+                    ):
+                        raise OmniRouteError("tool-free route or zero cost could not be verified")
+                except (OmniRouteError, ValueError, TimeoutError) as exc:
+                    exclusions[execution.route] = str(exc) or "Approval recheck timed out"
+                    self._tool_free_audits.clear()
+                    remaining = [item for item in remaining if item != execution]
+                    execution = select_execution(
+                        remaining,
+                        requirements=proposal.effective_requirements,
+                        floor=proposal.recommendation.common_capability_floor
+                        if proposal.recommendation
+                        else 100,
+                        preference=proposal.approved_constraints.cost_quota_preference,
+                    )
+                    continue
+                updated = proposal.model_copy(
+                    update={
+                        "decision": request.action,
+                        "decision_reason": request.reason,
+                        "execution_options": remaining,
+                        "execution_exclusions": exclusions,
+                        "selected_execution": execution,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+                self.store.put(updated)
+                return updated
+            proposal = proposal.model_copy(
+                update={
+                    "execution_options": remaining,
+                    "execution_exclusions": exclusions,
+                    "selected_execution": execution,
+                }
+            )
 
         selected: list[CandidateEvaluation]
         decision_reason = request.reason
@@ -839,8 +979,11 @@ class O3RoutingReviewService:
                 "only an approved proposal can link a session",
                 status_code=409,
             )
-        if proposal.derived_combo_name is None:
-            raise RoutingReviewError("approved proposal has no derived Combo", status_code=409)
+        if proposal.derived_combo_name is None and not (
+            proposal.selected_execution is not None
+            and proposal.selected_execution.mode is ExecutionMode.HARD_TOOL_FREE
+        ):
+            raise RoutingReviewError("approved proposal has no executable route", status_code=409)
         if proposal.session_id is not None and proposal.session_id != request.session_id:
             raise RoutingReviewError(
                 "proposal is already linked to another session",
