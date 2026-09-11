@@ -18,5 +18,10 @@
     "telemetry_runtime": 1000000000,
     "legacy_selection": 512000000,
     "other_managed": 1000000000
+  },
+  "management": {
+    "cleanup_start_bytes": 45000000000,
+    "resume_optional_bytes": 46000000000,
+    "pause_optional_bytes": 48000000000
   }
 }
