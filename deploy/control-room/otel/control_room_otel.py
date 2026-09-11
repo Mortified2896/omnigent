@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # ruff: noqa: E501
 # ruff: noqa: UP031
-#!/usr/bin/env python3
 """Dependency-free Control Room OTel config merge and archive inspection."""
 
 import argparse
@@ -211,7 +211,7 @@ def metric(body, name, signal=None, *, exporter=None):
             if item is None or item[1] in labels:
                 return None
             labels[item[1]] = item[2]
-            text = text[item.end():]
+            text = text[item.end() :]
         if signal is not None:
             values = {labels[key] for key in ("type", "data_type") if key in labels}
             if values != {json.dumps(signal)}:
@@ -228,7 +228,12 @@ def metric(body, name, signal=None, *, exporter=None):
             value = Decimal(match.group("value"))
         except InvalidOperation:
             return None
-        if not value.is_finite() or value < 0 or value.adjusted() > 63 or value != value.to_integral_value():
+        if (
+            not value.is_finite()
+            or value < 0
+            or value.adjusted() > 63
+            or value != value.to_integral_value()
+        ):
             return None
         total += int(value)
     return total if seen else None
@@ -247,7 +252,10 @@ FILE_EXPORTERS = {
 def _probe_text(args):
     """Bound read-only process probes; never print command output or errors."""
     text = subprocess.check_output(
-        args, text=True, stderr=subprocess.DEVNULL, timeout=3,
+        args,
+        text=True,
+        stderr=subprocess.DEVNULL,
+        timeout=3,
         env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
     )
     if len(text) > 65_536:
@@ -269,13 +277,18 @@ def _process_started(pid):
     text = _probe_text(["ps", "-p", pid, "-o", "lstart="])
     # The subprocess uses UTC/C locale; avoid the parent interpreter's locale.
     fields = text.split()
-    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     if len(fields) != 5 or fields[1] not in months:
         raise ValueError("unrecognized process start")
     hour, minute, second = map(int, fields[3].split(":"))
     return dt.datetime(
-        int(fields[4]), months.index(fields[1]) + 1, int(fields[2]),
-        hour, minute, second, tzinfo=dt.timezone.utc,
+        int(fields[4]),
+        months.index(fields[1]) + 1,
+        int(fields[2]),
+        hour,
+        minute,
+        second,
+        tzinfo=dt.timezone.utc,
     ).timestamp()
 
 
@@ -306,12 +319,22 @@ def collector_counter_profile(version, scrape_started_at):
             max(item.st_mtime, item.st_ctime) >= started for item in before
         ):
             return unknown | {"reason": "files_or_process_changed_since_launch"}
-        listeners = set(_probe_text([
-            "lsof", "-nP", "-a", "-iTCP@127.0.0.1:8888", "-sTCP:LISTEN", "-t",
-        ]).split())
+        listeners = set(
+            _probe_text(
+                [
+                    "lsof",
+                    "-nP",
+                    "-a",
+                    "-iTCP@127.0.0.1:8888",
+                    "-sTCP:LISTEN",
+                    "-t",
+                ]
+            ).split()
+        )
         after = tuple(path.stat() for path in files)
         if (
-            listeners != {pid} or _collector_process() != (pid, arguments)
+            listeners != {pid}
+            or _collector_process() != (pid, arguments)
             or _process_started(pid) != started
             or any(
                 (a.st_dev, a.st_ino, a.st_size, a.st_mtime_ns, a.st_ctime_ns)
@@ -323,7 +346,8 @@ def collector_counter_profile(version, scrape_started_at):
     except (OSError, ValueError, OverflowError, subprocess.SubprocessError):
         return unknown
     return {
-        "status": "verified", "profile": FILE_ONLY_PROFILE,
+        "status": "verified",
+        "profile": FILE_ONLY_PROFILE,
         "config_sha256": config_hash,
         "scope": "local_process_and_reviewed_config_not_end_to_end_delivery",
     }
@@ -339,12 +363,20 @@ def counter_evidence(body, counters, profile):
         return evidence
     for suffix, (metric_suffix, exporters) in FILE_EXPORTERS.items():
         sent_name = f"otelcol_exporter_sent_{metric_suffix}"
-        active = all(
-            (metric(body, sent_name, exporter=name) or 0) > 0 for name in exporters
-        )
+        active = all((metric(body, sent_name, exporter=name) or 0) > 0 for name in exporters)
         for prefix, family, status, reason in (
-            ("export_failed", "send_failed", "conditionally_absent", "failure_series_only_created_on_failure"),
-            ("enqueue_failed", "enqueue_failed", "not_applicable", "reviewed_file_exporters_have_no_sending_queue"),
+            (
+                "export_failed",
+                "send_failed",
+                "conditionally_absent",
+                "failure_series_only_created_on_failure",
+            ),
+            (
+                "enqueue_failed",
+                "enqueue_failed",
+                "not_applicable",
+                "reviewed_file_exporters_have_no_sending_queue",
+            ),
         ):
             key = f"{prefix}_{suffix}"
             name = f"otelcol_exporter_{family}_{metric_suffix}"
@@ -372,7 +404,10 @@ def retention_evidence(record, *, now=None, max_lag_seconds=RETENTION_MAX_LAG_SE
         record.get("dry_run") is not False
         or type(record.get("converged")) is not bool
         or not isinstance(record.get("errors"), list)
-        or any(type(record.get(key)) is not int or record[key] != value for key, value in expected.items())
+        or any(
+            type(record.get(key)) is not int or record[key] != value
+            for key, value in expected.items()
+        )
         or not isinstance(record.get("archive_root"), str)
         or not isinstance(record.get("run_at"), str)
     ):
@@ -757,16 +792,18 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
     }
     malformed = sum(x["malformed"] for x in arc.values())
     activity = sum(x["records"] for x in arc.values())
-    data["unavailable_counters"] = [key for key, value in data["collector"].items() if value is None]
+    data["unavailable_counters"] = [
+        key for key, value in data["collector"].items() if value is None
+    ]
     profile = collector_counter_profile(version, scrape_started_at)
     data["counter_profile"] = profile
     data["counter_evidence"] = counter_evidence(body, data["collector"], profile)
     data["unexplained_counters"] = [
-        key for key, item in data["counter_evidence"].items()
-        if item["status"] == "unavailable"
+        key for key, item in data["counter_evidence"].items() if item["status"] == "unavailable"
     ]
     failures = sum(
-        value for key, value in data["collector"].items()
+        value
+        for key, value in data["collector"].items()
         if ("failed" in key or "refused" in key) and value is not None
     )
     retention_bad = not retention_loaded or retention["status"] == "failed"
@@ -831,7 +868,13 @@ def human(d, status=False):
             % (s, x["files"], x["records"], x["items"], x["malformed"], x["first"], x["last"])
         )
     if not status:
-        print("Collector integrity:", " ".join(f"{key}={value if value is not None else 'unavailable'}" for key, value in d["collector"].items()))
+        print(
+            "Collector integrity:",
+            " ".join(
+                f"{key}={value if value is not None else 'unavailable'}"
+                for key, value in d["collector"].items()
+            ),
+        )
     print(d["state"])
 
 

@@ -21,6 +21,11 @@ configuration, or restarts an application. A remote URL is a source-selection gu
 not cryptographic proof of trust. Its manifest records actual file hashes and whether
 the source was dirty; a commit hash alone does not identify uncommitted bytes.
 
+Identical installed files are skipped in both adoption and rollback, preserving
+the running Collector's config timestamps during helper-only updates. The status
+helper is directly executable and takes effect on its next invocation; a
+helper-only update does not require restarting the Collector.
+
 ```sh
 python3 deploy/control-room/otel/adopt_macos.py --home "$OTEL_DIRECTORY" --plist "$COLLECTOR_PLIST"
 # After review and an idle-window plan, add --apply to stage the validated files.

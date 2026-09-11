@@ -15,6 +15,11 @@ SPEC.loader.exec_module(ADOPT)
 
 
 class AdoptionTests(unittest.TestCase):
+    def test_status_helper_direct_invocation(self):
+        helper = Path(__file__).with_name("control_room_otel.py")
+        result = subprocess.run([str(helper), "--help"], capture_output=True, check=True)
+        self.assertIn(b"status", result.stdout)
+
     def test_rejects_retired_source_before_installation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -48,6 +53,9 @@ class AdoptionTests(unittest.TestCase):
             (home / "state").mkdir()
             (home / "state/capture_node_id").write_text("stable-capture")
             (home / "bin/otelcol-contrib").write_text("pinned-binary")
+            config = home / "config/otelcol-macos.yaml"
+            config.write_text("candidate")
+            config_before = config.stat()
             plist = root / "collector.plist"
             plist.write_bytes(
                 plistlib.dumps(
@@ -66,10 +74,18 @@ class AdoptionTests(unittest.TestCase):
             ):
                 result = ADOPT.adopt(source, home, plist)
             self.assertFalse(result["restarted"])
+            config_after = config.stat()
+            self.assertEqual(
+                (config_before.st_ino, config_before.st_mtime_ns, config_before.st_ctime_ns),
+                (config_after.st_ino, config_after.st_mtime_ns, config_after.st_ctime_ns),
+            )
+            self.assertEqual((home / "bin/control_room_otel.py").read_text(), "candidate")
             self.assertEqual((home / "state/capture_node_id").read_text(), "stable-capture")
             subprocess.run(["python3", result["rollback"]], check=True, capture_output=True)
+            self.assertEqual(config.stat().st_ctime_ns, config_before.st_ctime_ns)
             for relative in ADOPT.FILES.values():
-                self.assertEqual((home / relative).read_text(), "original")
+                expected = "candidate" if relative == "config/otelcol-macos.yaml" else "original"
+                self.assertEqual((home / relative).read_text(), expected)
             self.assertTrue(
                 json.loads((home / "state/source-manifest.json").read_text())["runtime_verified"]
                 is False
