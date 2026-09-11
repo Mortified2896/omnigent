@@ -78,3 +78,25 @@ Before claiming this policy active on the Mac:
 
 A filesystem quota or custom native/exporter build is not required for this
 managed-target policy.
+
+## Optional gap attribution
+
+`skipped_optional_hooks` remains a cumulative lower bound of observed skipped
+operations, not lost turns. Repeated hooks within one turn can each increment
+it. `optional_gap_reasons` contains fixed, bounded aggregate counters for
+`managed_pause` (including stale inventory), `writer_lock_busy`,
+`storage_allocation`, `sqlite_or_wal`, `reconcile_skipped`, `hook_failure`, and
+`unknown`. The last gap timestamp and fixed reason are retained across refresh.
+Historical counts without attribution remain `unknown`; they are never
+retroactively assigned a cause. Counters saturate at the existing integer limit.
+
+These counters cover the existing pause/failure paths plus failures caught by
+the hook dispatcher. Partial artifact errors handled inside START/END capture,
+silent producer loss, and a paused `maintain` reconciliation are not additional
+counter events. Maintenance reports its pause separately. A control lock or
+storage failure can prevent recording a gap; reporting then stays unavailable.
+No prompts, paths, exception text, or event history enter the attribution state,
+and attribution failure must not interrupt ordinary Codex execution.
+
+Verify with `/usr/bin/python3 -B -m unittest discover -s deploy/control-room/otel
+-p 'test_gap_attribution.py'` from the Mac feature worktree.

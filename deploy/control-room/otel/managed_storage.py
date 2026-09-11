@@ -235,7 +235,59 @@ def _read_control(path):
     return json.loads(data)
 
 
-def management_status(home=None, *, policy=None, refresh=False, gap=False):
+GAP_REASONS = (
+    "managed_pause",
+    "writer_lock_busy",
+    "storage_allocation",
+    "sqlite_or_wal",
+    "reconcile_skipped",
+    "hook_failure",
+    "unknown",
+)
+
+
+def gap_reason(exc):
+    """Map known failure codes to fixed labels; never persist exception text."""
+    import sqlite3
+
+    if isinstance(exc, sqlite3.Error):
+        return "sqlite_or_wal"
+    code = exc.args[0] if isinstance(exc, StoragePaused) and exc.args else None
+    if not isinstance(code, str):
+        return "unknown"
+    if code == "another_telemetry_writer_is_active":
+        return "writer_lock_busy"
+    if code in {
+        "database_allocation_full",
+        "wal_reader_pinned",
+        "wal_allocation_full",
+        "oversized_database_record",
+    }:
+        return "sqlite_or_wal"
+    if code in {
+        "capture_allocation_full",
+        "log_allocation_full",
+        "oversized_capture",
+        "oversized_untracked_capture",
+    }:
+        return "storage_allocation"
+    return "unknown"
+
+
+def _gap_counts(prior):
+    total = (prior or {}).get("skipped_optional_hooks", 0)
+    saved = (prior or {}).get("optional_gap_reasons")
+    if (
+        not isinstance(saved, dict)
+        or set(saved) != set(GAP_REASONS)
+        or any(type(v) is not int or not 0 <= v <= 2**63 - 1 for v in saved.values())
+        or sum(saved.values()) != total
+    ):
+        return dict.fromkeys(GAP_REASONS, 0) | {"unknown": total}
+    return dict(saved)
+
+
+def management_status(home=None, *, policy=None, refresh=False, gap=False, reason="unknown"):
     """Persist hysteresis in a bounded control record; never reserve task storage.
 
     The existing retention timer refreshes the inventory. Hooks only read fresh
@@ -347,7 +399,16 @@ def management_status(home=None, *, policy=None, refresh=False, gap=False):
                     gap_count_basis="lower_bound; lock_or_disk_failure_may_prevent_count",
                     last_optional_gap_at=(prior or {}).get("last_optional_gap_at"),
                 )
+            result["last_optional_gap_at"] = (prior or {}).get("last_optional_gap_at")
+            counts = _gap_counts(prior)
+            result["optional_gap_reasons"] = counts
+            latest = (prior or {}).get("last_optional_gap_reason")
+            result["last_optional_gap_reason"] = latest if latest in GAP_REASONS else "unknown"
             if gap:
+                reason = reason if reason in GAP_REASONS else "unknown"
+                if result.get("skipped_optional_hooks", 0) < 2**63 - 1:
+                    counts[reason] += 1
+                result["last_optional_gap_reason"] = reason
                 result["skipped_optional_hooks"] = min(
                     2**63 - 1, result.get("skipped_optional_hooks", 0) + 1
                 )
