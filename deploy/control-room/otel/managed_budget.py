@@ -23,7 +23,13 @@ COMPONENTS = frozenset(
         "other_managed",
     }
 )
-_POLICY_KEYS = {"schema_version", "total_max_bytes", "forensic_max_bytes", "retention_days"}
+_POLICY_KEYS = {
+    "schema_version",
+    "total_max_bytes",
+    "forensic_max_bytes",
+    "retention_days",
+    "allocations",
+}
 _RETENTION_KEYS = {"lean", "forensic", "captures", "metadata"}
 
 
@@ -35,10 +41,10 @@ def _timestamp(value: object) -> dt.datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        stamp = dt.datetime.fromisoformat(value)
+        stamp = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
         if stamp.tzinfo is None or stamp.utcoffset() is None:
             return None
-        return stamp.astimezone(dt.UTC)
+        return stamp.astimezone(dt.timezone.utc)
     except (ValueError, OverflowError):
         return None
 
@@ -56,12 +62,28 @@ def validate_policy(policy: Mapping[str, Any]) -> None:
         or not isinstance(policy["retention_days"], Mapping)
         or set(policy["retention_days"]) != _RETENTION_KEYS
         or not all(_integer(value, 1) for value in policy["retention_days"].values())
+        or not isinstance(policy["allocations"], Mapping)
+        or set(policy["allocations"])
+        != {
+            "otel_archive",
+            "provenance_artifacts",
+            "native_rollouts",
+            "provenance_database",
+            "telemetry_logs",
+            "telemetry_backups",
+            "telemetry_runtime",
+            "legacy_selection",
+            "other_managed",
+        }
+        or not all(_integer(value, 1) for value in policy["allocations"].values())
+        or sum(policy["allocations"].values()) > policy["total_max_bytes"]
     ):
         raise ValueError("invalid managed-storage policy")
 
 
 def load_policy(path: Path | None = None) -> dict[str, Any]:
     """Read the small tracked policy; duplicate keys are not last-writer-wins."""
+
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -121,7 +143,7 @@ def assess_budget(
     observed = _timestamp(snapshot.get("observed_at"))
     if observed is None:
         return result | {"reason": "invalid_observation_time"}
-    age = (now.astimezone(dt.UTC) - observed).total_seconds()
+    age = (now.astimezone(dt.timezone.utc) - observed).total_seconds()
     if age < 0 or age > max_age_seconds:
         return result | {"reason": "future_or_stale_inventory"}
     components = snapshot.get("components")
@@ -175,7 +197,7 @@ def metadata_cleanup_decision(
     completed = _timestamp(record.get("completed_at"))
     if completed is None:
         return result | {"reason": "invalid_completion_time"}
-    age = (now.astimezone(dt.UTC) - completed).total_seconds()
+    age = (now.astimezone(dt.timezone.utc) - completed).total_seconds()
     if age <= policy["retention_days"]["metadata"] * 86_400:
         return result | {"reason": "within_retention_or_future"}
     return result | {"eligible": True, "reason": "expired_completed_unreferenced"}
