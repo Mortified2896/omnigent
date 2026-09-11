@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "total_max_bytes": 50000000000,
+  "forensic_max_bytes": 4000000000,
+  "retention_days": {
+    "lean": 60,
+    "forensic": 3,
+    "captures": 30,
+    "metadata": 30
+  }
+}
