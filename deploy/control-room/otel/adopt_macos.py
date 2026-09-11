@@ -78,7 +78,18 @@ def adopt(source, home, plist):
     definition = plistlib.loads(plist.read_bytes())
     binary = home / "bin/otelcol-contrib"
     config = home / "config/otelcol-macos.yaml"
-    if definition.get("ProgramArguments") != [str(binary), "--config", str(config)]:
+    child_args = [str(binary), "--config", str(config)]
+    supervised_args = [
+        "/usr/bin/python3",
+        str(home / "bin/managed_diagnostics.py"),
+        "--home",
+        str(home),
+        "--name",
+        "collector",
+        "--",
+        *child_args,
+    ]
+    if definition.get("ProgramArguments") not in (child_args, supervised_args):
         raise ValueError("LaunchAgent does not target the supplied installation")
     environment = {
         **os.environ,
