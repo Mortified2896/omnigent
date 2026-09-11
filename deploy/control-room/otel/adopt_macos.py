@@ -87,7 +87,12 @@ def adopt(source, home, plist):
     backup = home / "state" / ("rollback-" + stamp)
     backup.mkdir(mode=0o700)
     plan = []
-    for relative in [*FILES.values(), "state/source-manifest.json"]:
+    changed = {
+        name: relative
+        for name, relative in FILES.items()
+        if not (home / relative).is_file() or digest(home / relative) != digest(source / name)
+    }
+    for relative in [*changed.values(), "state/source-manifest.json"]:
         target = home / relative
         old = backup / relative
         if target.exists():
@@ -106,7 +111,8 @@ print("Files restored. Restart only the Collector in an approved idle window.")
     provenance["capture_identity_sha256"] = digest(home / "state/capture_node_id")
     provenance["collector_sha256"] = digest(binary)
     provenance["runtime_verified"] = False
-    for name, relative in FILES.items():
+    # Leave identical files untouched in both adoption and rollback.
+    for name, relative in changed.items():
         target = home / relative
         temporary = target.with_name(target.name + ".pending")
         if temporary.exists() or temporary.is_symlink():
