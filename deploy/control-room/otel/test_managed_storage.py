@@ -16,7 +16,14 @@ import codex_otel_decisions as provenance
 from managed_budget import load_policy
 from managed_metadata import apply_cleanup, cleanup_manifest, verified_backup
 from managed_sqlite import BoundedConnection
-from managed_storage import BoundedFiles, BoundedLog, StoragePaused, exclusive, measure
+from managed_storage import (
+    BoundedFiles,
+    BoundedLog,
+    StoragePaused,
+    exclusive,
+    management_status,
+    measure,
+)
 
 
 def compete(root, name, start, results):
@@ -314,6 +321,12 @@ class MetadataTests(unittest.TestCase):
             str(artifacts),
             "hook",
         ]
+        (self.root / "state").mkdir()
+        (self.root / "state/managed-roots.json").write_text(
+            json.dumps([{"path": str(self.root), "component": "other_managed"}])
+        )
+        management_status(self.root, refresh=True)
+        args = ["--management-home", str(self.root), *args]
         event = {"session_id": "fixture", "turn_id": "turn", "cwd": str(self.root)}
         for name in ("UserPromptSubmit", "Stop"):
             output = io.StringIO()
@@ -336,6 +349,8 @@ class MetadataTests(unittest.TestCase):
         with exclusive(self.root / ".provenance-writer.lock"), contextlib.redirect_stdout(output):
             code = provenance.main(
                 [
+                    "--management-home",
+                    str(self.root),
                     "--db",
                     str(self.root / "provenance.sqlite3"),
                     "--artifacts",

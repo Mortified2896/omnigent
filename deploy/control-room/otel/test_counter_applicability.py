@@ -392,10 +392,12 @@ class ReportIntegrationTests(unittest.TestCase):
         with patch.object(otel, "prom", return_value=body):
             self.assertEqual(otel.report()["state"], "INCOMPLETE")
 
-    def test_overshoot_retains_precedence(self):
+    def test_overshoot_is_reported_without_failing_capture(self):
         (self.home / "data/notes").write_bytes(b"12345")
         with patch.object(otel, "ARCHIVE_MAX_BYTES", 4):
-            self.assertEqual(otel.report()["state"], "DEGRADED")
+            result = otel.report()
+        self.assertEqual(result["state"], "INCOMPLETE")
+        self.assertTrue(result["storage_target_exceeded"])
 
     def test_stale_retention_stays_incomplete(self):
         with patch.object(otel, "retention_evidence", return_value={"status": "stale"}):

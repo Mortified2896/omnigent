@@ -152,8 +152,11 @@ observation window without changing the actual cleanup schedule or retention.
 Missing, invalid or stale evidence is not proof of successful current cleanup.
 
 `HEALTHY` / `NO ACTIVITY` require sufficient counter evidence and a matching fresh
-cleanup record. Known failures or measured archive/sub-budget overshoot produce
-`DEGRADED`; unexplained missing evidence produces `INCOMPLETE`; an unavailable
+cleanup record. Known exporter or cleanup errors produce `DEGRADED`;
+`target_pending` reports successful cleanup with space still to reclaim.
+Measured overshoot remains visible in `storage_target_exceeded` and the separate
+[managed-target state](managed-target.md); it is not a capture-policy failure.
+Unexplained missing evidence produces `INCOMPLETE`; an unavailable
 Collector produces `FAILED`. `check` returns nonzero for all three unsuccessful
 states. `INCOMPLETE` must not trigger an automatic restart.
 

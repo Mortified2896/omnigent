@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from managed_budget import load_policy
-from managed_storage import BoundedFiles, BoundedLog, StoragePaused, exclusive
+from managed_storage import BoundedFiles, BoundedLog, StoragePaused, exclusive, management_status
 
 STATUS_RESERVE = 262144
 CHUNK_BYTES = 16384
@@ -39,7 +39,7 @@ def collector_rotation_environment(policy):
     }
 
 
-def supervise(command, root, name, allocation, *, segment_bytes=1024**2):
+def supervise(command, root, name, allocation, *, segment_bytes=1024**2, pressure_home=None):
     """No child descriptor points at a rotated pathname; no disk queue is used.
 
     All Collector/retention logs, including legacy files, share 3/4 of the log
@@ -126,6 +126,10 @@ def supervise(command, root, name, allocation, *, segment_bytes=1024**2):
                             key.fileobj.close()
                             continue
                         try:
+                            if pressure_home is not None:
+                                pressure = management_status(pressure_home)
+                                if pressure["optional_telemetry_pause_requested"]:
+                                    raise StoragePaused("managed_target_optional_pause")
                             logs[key.data].write(data.decode("utf-8", errors="replace"))
                             status["accepted_bytes"] = min(
                                 2**63 - 1, status["accepted_bytes"] + len(data)
@@ -177,6 +181,7 @@ def main():
         args.home / "collector-logs",
         args.name,
         load_policy()["allocations"]["telemetry_logs"] * 3 // 4,
+        pressure_home=args.home,
     )
 
 

@@ -25,7 +25,7 @@ from typing import Any
 from managed_budget import load_policy
 from managed_metadata import cleanup_manifest
 from managed_sqlite import BoundedConnection
-from managed_storage import BoundedFiles, BoundedLog, StoragePaused, exclusive
+from managed_storage import BoundedFiles, BoundedLog, StoragePaused, exclusive, management_status
 
 OTEL = pathlib.Path.home() / "Library/Application Support/ControlRoom/otel/data"
 HOME = pathlib.Path.home() / "Library/Application Support/Codex/TelemetryProvenance"
@@ -764,6 +764,7 @@ def freeze(conn: sqlite3.Connection, session: str, turn: str, value: bool) -> No
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--management-home", type=pathlib.Path)
     p.add_argument("--db", type=pathlib.Path, default=DB)
     p.add_argument("--artifacts", type=pathlib.Path, default=ARTIFACTS)
     sub = p.add_subparsers(dest="command", required=True)
@@ -811,7 +812,12 @@ def run(args) -> int:
             print(
                 json.dumps(
                     {
-                        "reconcile": reconcile(conn, args.archive, args.artifacts, args.limit),
+                        "reconcile": (
+                            {"paused": "managed_target_optional_pause", "capture_gap": True}
+                            if args.management["optional_telemetry_pause_requested"]
+                            else reconcile(conn, args.archive, args.artifacts, args.limit)
+                        ),
+                        "management": args.management,
                         "cleanup": cleanup(conn, args.artifacts, args.days, args.max_bytes),
                         "metadata": cleanup_manifest(conn, POLICY)[0],
                     },
@@ -857,6 +863,16 @@ def main(argv: list[str] | None = None) -> int:
     global FILES
     args = parser().parse_args(argv)
     try:
+        args.management = management_status(
+            args.management_home, policy=POLICY, refresh=args.command == "maintain"
+        )
+        if (
+            args.command in {"hook", "reconcile"}
+            and args.management["optional_telemetry_pause_requested"]
+        ):
+            gap = management_status(args.management_home, policy=POLICY, gap=True)
+            print("{}" if args.command == "hook" else json.dumps(gap))
+            return 0
         args.artifacts.mkdir(parents=True, exist_ok=True, mode=0o700)
         FILES = BoundedFiles(args.artifacts, POLICY["allocations"]["provenance_artifacts"])
         with exclusive(args.db.parent / ".provenance-writer.lock"):
@@ -871,6 +887,8 @@ def main(argv: list[str] | None = None) -> int:
                 return result
             return run(args)
     except (StoragePaused, sqlite3.Error, OSError) as exc:
+        if args.command == "hook":
+            management_status(args.management_home, policy=POLICY, gap=True)
         report = json.dumps({"optional_telemetry_paused": type(exc).__name__}) + "\n"
         if args.command == "maintain":
             with contextlib.suppress(StoragePaused, OSError):
