@@ -1,7 +1,7 @@
-"""Pure shared-budget and cleanup decisions; no writer, scanner or deletion.
+"""Pure shared-target and cleanup decisions; no writer, scanner or deletion.
 
-Callers must inventory all managed roots and serialize admission/reservations.
-A snapshot that fits is not a reservation or evidence of runtime enforcement.
+Callers inventory managed roots. The 50 GB value is a managed upper target,
+not a mathematical filesystem quota and never a reason to stop normal Codex work.
 """
 
 from __future__ import annotations
@@ -29,8 +29,10 @@ _POLICY_KEYS = {
     "forensic_max_bytes",
     "retention_days",
     "allocations",
+    "management",
 }
 _RETENTION_KEYS = {"lean", "forensic", "captures", "metadata"}
+_MANAGEMENT_KEYS = {"cleanup_start_bytes", "pause_optional_bytes", "resume_optional_bytes"}
 
 
 def _integer(value: object, minimum: int = 0) -> bool:
@@ -77,7 +79,16 @@ def validate_policy(policy: Mapping[str, Any]) -> None:
         }
         or not all(_integer(value, 1) for value in policy["allocations"].values())
         or sum(policy["allocations"].values()) > policy["total_max_bytes"]
+        or not isinstance(policy["management"], Mapping)
+        or set(policy["management"]) != _MANAGEMENT_KEYS
+        or not all(_integer(value, 1) for value in policy["management"].values())
     ):
+        raise ValueError("invalid managed-storage policy")
+    cleanup = policy["management"]["cleanup_start_bytes"]
+    pause = policy["management"]["pause_optional_bytes"]
+    resume = policy["management"]["resume_optional_bytes"]
+    target = policy["total_max_bytes"]
+    if not (cleanup < resume < pause < target):
         raise ValueError("invalid managed-storage policy")
 
 
@@ -105,6 +116,23 @@ def load_policy(path: Path | None = None) -> dict[str, Any]:
     return policy
 
 
+def _management_state(
+    projected_bytes: int, *, policy: Mapping[str, Any], optional_paused: bool
+) -> tuple[str, bool, bool]:
+    """Return state, cleanup request and optional-telemetry pause request."""
+    management = policy["management"]
+    target = policy["total_max_bytes"]
+    if projected_bytes > target:
+        return "OVER_TARGET", True, True
+    if projected_bytes >= management["pause_optional_bytes"]:
+        return "OPTIONAL_PAUSED", True, True
+    if optional_paused and projected_bytes > management["resume_optional_bytes"]:
+        return "OPTIONAL_PAUSED", True, True
+    if projected_bytes >= management["cleanup_start_bytes"]:
+        return "CLEANUP_DUE", True, False
+    return "NORMAL", False, False
+
+
 def assess_budget(
     snapshot: Mapping[str, Any],
     *,
@@ -112,8 +140,9 @@ def assess_budget(
     now: dt.datetime,
     max_age_seconds: int,
     requested_growth_bytes: int = 0,
+    optional_paused: bool = False,
 ) -> dict[str, Any]:
-    """Assess total bytes, including protected data and all pending reservations."""
+    """Assess a managed target; telemetry pressure never blocks normal Codex work."""
     validate_policy(policy)
     if (
         not isinstance(now, dt.datetime)
@@ -121,22 +150,36 @@ def assess_budget(
         or now.utcoffset() is None
         or not _integer(max_age_seconds, 1)
         or not _integer(requested_growth_bytes)
+        or type(optional_paused) is not bool
     ):
         raise ValueError("invalid budget evaluation arguments")
+    management = policy["management"]
     result = {
         "scope": "all_managed_telemetry",
-        "enforcement_verified": False,
-        "reservation_created": False,
+        "management_mode": "managed_upper_target",
+        "hard_ceiling_enforced": False,
+        "normal_codex_allowed": True,
         "status": "INCOMPLETE",
+        "management_state": "INCOMPLETE",
         "reason": "invalid_snapshot",
+        "cleanup_requested": False,
+        "optional_telemetry_pause_requested": True,
+        "optional_telemetry_allowed": False,
         "fits_snapshot": False,
         "max_bytes": policy["total_max_bytes"],
+        "target_bytes": policy["total_max_bytes"],
+        "cleanup_start_bytes": management["cleanup_start_bytes"],
+        "pause_optional_bytes": management["pause_optional_bytes"],
+        "resume_optional_bytes": management["resume_optional_bytes"],
         "used_bytes": None,
         "protected_bytes": None,
         "reserved_bytes": None,
         "available_bytes": None,
         "overshoot_bytes": None,
+        "projected_bytes": None,
         "requested_growth_bytes": requested_growth_bytes,
+        "enforcement_verified": False,
+        "reservation_created": False,
     }
     if not isinstance(snapshot, Mapping) or snapshot.get("complete") is not True:
         return result | {"reason": "inventory_not_complete"}
@@ -163,17 +206,31 @@ def assess_budget(
             return result | {"reason": "invalid_component_measurement"}
         used += item["bytes"]
         protected += item["protected_bytes"]
+    projected = used + reserved + requested_growth_bytes
     available = max(0, policy["total_max_bytes"] - used - reserved)
-    fits = used + reserved + requested_growth_bytes <= policy["total_max_bytes"]
+    fits = projected <= policy["total_max_bytes"]
+    state, cleanup, pause = _management_state(
+        projected, policy=policy, optional_paused=optional_paused
+    )
     return result | {
         "status": "OVER_BUDGET" if used > policy["total_max_bytes"] else "WITHIN_BUDGET",
-        "reason": "fits_snapshot" if fits else "stop_optional_growth",
+        "management_state": state,
+        "reason": {
+            "NORMAL": "below_cleanup_threshold",
+            "CLEANUP_DUE": "cleanup_target_reached",
+            "OPTIONAL_PAUSED": "optional_telemetry_pressure",
+            "OVER_TARGET": "managed_target_exceeded",
+        }[state],
+        "cleanup_requested": cleanup,
+        "optional_telemetry_pause_requested": pause,
+        "optional_telemetry_allowed": not pause,
         "fits_snapshot": fits,
         "used_bytes": used,
         "protected_bytes": protected,
         "reserved_bytes": reserved,
         "available_bytes": available,
         "overshoot_bytes": max(0, used - policy["total_max_bytes"]),
+        "projected_bytes": projected,
     }
 
 
