@@ -144,5 +144,105 @@ def main():
     return 0
 
 
+PROVENANCE_FILES = (
+    "managed_budget.py",
+    "managed_storage_policy.json",
+    "managed_storage.py",
+    "managed_sqlite.py",
+    "managed_metadata.py",
+    "codex_otel_decisions.py",
+)
+
+
+def adopt_provenance(source, home, otel_home, expected_installed_sha256):
+    """Adopt only the short-lived sidecar; do not reload any native service."""
+    from managed_budget import load_policy
+    from managed_storage import StoragePaused, exclusive, measure
+
+    provenance = source_status(source)
+    if provenance["dirty"]:
+        raise ValueError("commit the reviewed source before adoption")
+    script = home / "bin/codex_otel_decisions.py"
+    if script.resolve() != script or digest(script) != expected_installed_sha256:
+        raise ValueError("installed source changed; preserve and review it first")
+    if not (home / "provenance.sqlite3").is_file():
+        raise ValueError("existing provenance database required")
+    state = otel_home / "state"
+    with exclusive(state / ".provenance-adoption.lock"):
+        inventory = measure([{"path": str(state), "component": "telemetry_backups"}])
+        required = 262144 + 2 * sum((source / name).stat().st_size for name in PROVENANCE_FILES)
+        used = inventory["components"]["telemetry_backups"]["bytes"]
+        if (
+            not inventory["complete"]
+            or used + required > load_policy()["allocations"]["telemetry_backups"]
+        ):
+            raise StoragePaused("adoption_reserve_unavailable")
+        for name in PROVENANCE_FILES:
+            target = home / "bin" / name
+            if (
+                target.resolve() != target
+                or target.with_suffix(target.suffix + ".pending").exists()
+            ):
+                raise ValueError("unsafe or interrupted adoption target")
+            if name != "codex_otel_decisions.py" and target.exists():
+                raise ValueError("module already installed; review before replacing it")
+        backup = state / (
+            "provenance-rollback-" + dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        )
+        backup.mkdir(mode=0o700)
+        plan = []
+        for name in PROVENANCE_FILES:
+            target = home / "bin" / name
+            old = backup / name
+            if target.exists():
+                shutil.copy2(target, old)
+            plan.append(
+                {
+                    "target": str(target),
+                    "backup": str(old) if old.exists() else None,
+                    "adopted_sha256": digest(source / name),
+                }
+            )
+        (backup / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+        rollback = backup / "rollback.py"
+        rollback.write_text("""#!/usr/bin/env python3
+import hashlib, json, pathlib, shutil
+plan = json.loads(pathlib.Path(__file__).with_name("plan.json").read_text())
+for item in plan:
+    target = pathlib.Path(item["target"])
+    changed = hashlib.sha256(target.read_bytes()).hexdigest() != item["adopted_sha256"]
+    if target.is_symlink() or changed:
+        raise SystemExit("Installed source changed; stop and review before rollback")
+for item in reversed(plan):
+    target = pathlib.Path(item["target"])
+    if item["backup"]:
+        pending = target.with_name(target.name + ".rollback-pending")
+        if pending.exists():
+            raise SystemExit("Interrupted rollback requires review")
+        shutil.copy2(item["backup"], pending)
+        pending.replace(target)
+    else:
+        target.unlink()
+print("Sidecar source restored. No database, capture, service or app was replaced.")
+""")
+        rollback.chmod(0o700)
+        # Dependencies first; atomically replace the hook entrypoint last.
+        for name in PROVENANCE_FILES:
+            target = home / "bin" / name
+            pending = target.with_suffix(target.suffix + ".pending")
+            shutil.copy2(source / name, pending)
+            pending.replace(target)
+        result = {
+            "repository": provenance["repository"],
+            "commit": provenance["commit"],
+            "files": {name: digest(home / "bin" / name) for name in PROVENANCE_FILES},
+            "rollback": str(rollback),
+            "services_restarted": False,
+            "total_enforcement_verified": False,
+        }
+        (backup / "adoption.json").write_text(json.dumps(result, indent=2) + "\n")
+        return result
+
+
 if __name__ == "__main__":
     sys.exit(main())

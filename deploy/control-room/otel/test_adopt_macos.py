@@ -90,3 +90,37 @@ class AdoptionTests(unittest.TestCase):
                 json.loads((home / "state/source-manifest.json").read_text())["runtime_verified"]
                 is False
             )
+
+
+class ProvenanceAdoptionTests(unittest.TestCase):
+    def test_source_only_adoption_and_verified_rollback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            source, home, otel = root / "source", root / "provenance", root / "otel"
+            source.mkdir()
+            (home / "bin").mkdir(parents=True)
+            (otel / "state").mkdir(parents=True)
+            (home / "provenance.sqlite3").write_bytes(b"preserved database fixture")
+            script = home / "bin/codex_otel_decisions.py"
+            script.write_bytes(b"old source")
+            before = ADOPT.digest(script)
+            for name in ADOPT.PROVENANCE_FILES:
+                (source / name).write_text("candidate " + name)
+            with patch.object(
+                ADOPT,
+                "source_status",
+                return_value={
+                    "dirty": False,
+                    "repository": "Mortified2896/omnigent",
+                    "commit": "fixture",
+                },
+            ):
+                result = ADOPT.adopt_provenance(source, home, otel, before)
+            self.assertFalse(result["total_enforcement_verified"])
+            self.assertFalse(result["services_restarted"])
+            subprocess.run(["python3", result["rollback"]], check=True, capture_output=True)
+            self.assertEqual(ADOPT.digest(script), before)
+            self.assertEqual(list((home / "bin").iterdir()), [script])
+            self.assertEqual(
+                (home / "provenance.sqlite3").read_bytes(), b"preserved database fixture"
+            )
