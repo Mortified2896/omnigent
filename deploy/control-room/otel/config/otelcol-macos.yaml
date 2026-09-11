@@ -152,22 +152,22 @@ exporters:
     path: "${env:CONTROL_ROOM_OTEL_HOME}/data/lean/logs/logs.otlp.json"
     format: json
     create_directory: true
-    rotation: {max_megabytes: 16, max_backups: 512, max_days: 60, localtime: false}
+    rotation: {max_megabytes: 16, max_backups: "${env:CONTROL_ROOM_LOGS_BACKUPS}", max_days: 60, localtime: false}
   file/traces:
     path: "${env:CONTROL_ROOM_OTEL_HOME}/data/lean/traces/traces.otlp.json"
     format: json
     create_directory: true
-    rotation: {max_megabytes: 16, max_backups: 1536, max_days: 60, localtime: false}
+    rotation: {max_megabytes: 16, max_backups: "${env:CONTROL_ROOM_TRACES_BACKUPS}", max_days: 60, localtime: false}
   file/metrics:
     path: "${env:CONTROL_ROOM_OTEL_HOME}/data/lean/metrics/metrics.otlp.json"
     format: json
     create_directory: true
-    rotation: {max_megabytes: 16, max_backups: 512, max_days: 60, localtime: false}
+    rotation: {max_megabytes: 16, max_backups: "${env:CONTROL_ROOM_METRICS_BACKUPS}", max_days: 60, localtime: false}
   file/forensic_traces:
     path: "${env:CONTROL_ROOM_OTEL_HOME}/data/forensic/traces/traces.otlp.json"
     format: json
     create_directory: true
-    rotation: {max_megabytes: 16, max_backups: 256, max_days: 3, localtime: false}
+    rotation: {max_megabytes: 16, max_backups: "${env:CONTROL_ROOM_FORENSIC_BACKUPS}", max_days: 3, localtime: false}
 
 extensions:
   health_check:

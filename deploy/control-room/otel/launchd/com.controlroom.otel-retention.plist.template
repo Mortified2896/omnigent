@@ -3,6 +3,8 @@
 <plist version="1.0"><dict>
   <key>Label</key><string>com.controlroom.otel-retention</string>
   <key>ProgramArguments</key><array>
+    <string>/usr/bin/python3</string><string>@@HOME@@/bin/managed_diagnostics.py</string>
+    <string>--home</string><string>@@HOME@@</string><string>--name</string><string>retention</string><string>--</string>
     <string>/usr/bin/python3</string><string>@@HOME@@/bin/control_room_otel.py</string><string>retain</string>
   </array>
   <key>EnvironmentVariables</key><dict>
@@ -11,6 +13,6 @@
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>300</integer>
   <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>@@HOME@@/collector-logs/retention-stdout.log</string>
-  <key>StandardErrorPath</key><string>@@HOME@@/collector-logs/retention-stderr.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict></plist>

@@ -14,7 +14,14 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/test_control_room_otel.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/test_telemetry_audit.py"
 COLLECTOR=${CONTROL_ROOM_OTEL_COLLECTOR:-"$HOME/Library/Application Support/ControlRoom/otel/bin/otelcol-contrib"}
 if [ -x "$COLLECTOR" ]; then
-  CONTROL_ROOM_OTEL_HOME=/tmp/control-room-otel-validate CONTROL_ROOM_CAPTURE_NODE_ID=test-node CONTROL_ROOM_ENVIRONMENT=mac-local CONTROL_ROOM_SOURCE_ROLE=mac-codex CONTROL_ROOM_HOSTNAME=test-host CONTROL_ROOM_COLLECTOR_VERSION=0.159.0 "$COLLECTOR" validate --config "$HERE/config/otelcol-macos.yaml"
+  CONTROL_ROOM_OTEL_HOME=/tmp/control-room-otel-validate CONTROL_ROOM_CAPTURE_NODE_ID=test-node CONTROL_ROOM_ENVIRONMENT=mac-local CONTROL_ROOM_SOURCE_ROLE=mac-codex CONTROL_ROOM_HOSTNAME=test-host CONTROL_ROOM_COLLECTOR_VERSION=0.159.0 python3 - "$HERE" "$COLLECTOR" <<'PYVALIDATE'
+import os, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+from managed_budget import load_policy
+from managed_diagnostics import collector_rotation_environment
+subprocess.run([sys.argv[2], "validate", "--config", sys.argv[1] + "/config/otelcol-macos.yaml"],
+               env={**os.environ, **collector_rotation_environment(load_policy())}, check=True)
+PYVALIDATE
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/test_filter_fixture.py" "$COLLECTOR"
 fi
 TMP=$(mktemp -d); trap 'test -n "${TMP:-}" && rm -rf "${TMP:?}"' EXIT HUP INT TERM

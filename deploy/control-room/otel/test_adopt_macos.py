@@ -15,6 +15,38 @@ SPEC.loader.exec_module(ADOPT)
 
 
 class AdoptionTests(unittest.TestCase):
+    def test_existing_retention_job_is_guarded_and_staged_without_activation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            source, home = root / "source", root / "otel"
+            source.mkdir()
+            (home / "bin").mkdir(parents=True)
+            (home / "state").mkdir()
+            for name in (
+                "managed_diagnostics.py",
+                "managed_storage.py",
+                "managed_budget.py",
+                "managed_storage_policy.json",
+            ):
+                (source / name).write_text("reviewed source")
+                (home / "bin" / name).write_text("reviewed source")
+            plist = root / "retention.plist"
+            command = ["/usr/bin/python3", str(home / "bin/control_room_otel.py"), "retain"]
+            plist.write_bytes(plistlib.dumps({"ProgramArguments": command, "StartInterval": 300}))
+            before = plist.read_bytes()
+            with patch.object(
+                ADOPT, "source_status", return_value={"dirty": False, "commit": "fixture"}
+            ):
+                result = ADOPT.adopt_diagnostic_job(
+                    source, home, plist, ADOPT.digest(plist), "retention"
+                )
+            self.assertFalse(result["activated"])
+            self.assertEqual(Path(result["backup"]).read_bytes(), before)
+            staged = plistlib.loads(plist.read_bytes())
+            self.assertEqual(staged["ProgramArguments"][-3:], command)
+            self.assertEqual(staged["StandardErrorPath"], "/dev/null")
+            self.assertEqual(staged["StartInterval"], 300)
+
     def test_status_helper_direct_invocation(self):
         helper = Path(__file__).with_name("control_room_otel.py")
         result = subprocess.run([str(helper), "--help"], capture_output=True, check=True)
@@ -22,7 +54,7 @@ class AdoptionTests(unittest.TestCase):
 
     def test_rejects_retired_source_before_installation(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            root = Path(temp).resolve()
             source = root / "deploy/control-room/otel"
             source.mkdir(parents=True)
             with (
@@ -40,7 +72,7 @@ class AdoptionTests(unittest.TestCase):
 
     def test_existing_installation_backup_and_rollback(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            root = Path(temp).resolve()
             source = root / "source"
             home = root / "installed"
             for name, relative in ADOPT.FILES.items():
@@ -95,7 +127,7 @@ class AdoptionTests(unittest.TestCase):
 class ProvenanceAdoptionTests(unittest.TestCase):
     def test_source_only_adoption_and_verified_rollback(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp).resolve()
+            root = Path(temp).resolve().resolve()
             source, home, otel = root / "source", root / "provenance", root / "otel"
             source.mkdir()
             (home / "bin").mkdir(parents=True)

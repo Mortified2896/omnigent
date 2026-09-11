@@ -200,7 +200,7 @@ class MetadataTests(unittest.TestCase):
 
         backup_root = self.root / "verified"
         backup_root.mkdir()
-        self.proof = verified_backup(self.conn, backup_root, 16 * 1024**2)
+        self.proof = verified_backup(self.conn, backup_root, 16 * 1024**2, budget_root=backup_root)
 
     def test_unknown_references_preserve_old_rows(self):
         manifest, batch = cleanup_manifest(self.conn, self.policy, now=self.now)
@@ -235,7 +235,7 @@ class MetadataTests(unittest.TestCase):
     def test_backup_restore_and_transactional_delete(self):
         backups = self.root / "backups"
         backups.mkdir()
-        proof = verified_backup(self.conn, backups, 16 * 1024**2)
+        proof = verified_backup(self.conn, backups, 16 * 1024**2, budget_root=backups)
         self.assertEqual(proof["restored_rows"], 1)
         self.assertEqual(proof["integrity"], "ok")
         _, batch = cleanup_manifest(self.conn, self.policy, self.refs, self.now)
@@ -250,16 +250,29 @@ class MetadataTests(unittest.TestCase):
         backups.mkdir()
         for kwargs in ({"allocation": 1}, {"allocation": 16 * 1024**2, "deadline_seconds": -1}):
             with self.assertRaises(StoragePaused):
-                verified_backup(self.conn, backups, **kwargs)
+                verified_backup(self.conn, backups, budget_root=backups, **kwargs)
             self.assertEqual(list(backups.glob("*.tmp")), [])
         self.assertEqual(self.conn.execute("SELECT count(*) FROM turns").fetchone()[0], 1)
 
     def test_required_backup_slot_is_never_overwritten(self):
         backups = self.root / "backups"
         backups.mkdir()
-        verified_backup(self.conn, backups, 16 * 1024**2)
+        verified_backup(self.conn, backups, 16 * 1024**2, budget_root=backups)
         with self.assertRaises(StoragePaused):
-            verified_backup(self.conn, backups, 16 * 1024**2)
+            verified_backup(self.conn, backups, 16 * 1024**2, budget_root=backups)
+
+    def test_backup_counts_sibling_adoption_and_shares_its_lock(self):
+        backups = self.root / "new-backup"
+        backups.mkdir()
+        (self.root / "required-rollback").write_bytes(b"p" * 1024**2)
+        with self.assertRaisesRegex(StoragePaused, "backup_reserve_unavailable"):
+            verified_backup(self.conn, backups, 1024**2, budget_root=self.root)
+        with (
+            exclusive(self.root / ".provenance-adoption.lock"),
+            self.assertRaisesRegex(StoragePaused, "another_telemetry_writer_is_active"),
+        ):
+            verified_backup(self.conn, backups, 16 * 1024**2, budget_root=self.root)
+        self.assertFalse(list(backups.glob("*.sqlite3")))
 
     def test_interrupted_deletion_rolls_back(self):
         def failed(_row):

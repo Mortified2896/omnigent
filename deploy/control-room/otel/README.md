@@ -77,7 +77,8 @@ secret-pattern scrubbing is retained, including the separate forensic trace pipe
 Forensic content is private, short-lived, and is not claimed to be lean-safe.
 Historical data is not rewritten or manually cleaned.
 
-One aggregate archive target is **50,000,000,000 bytes**. Lean age is 60 days;
+The archive target is **32,000,000,000 bytes inside the shared 50,000,000,000-byte
+managed telemetry budget**. Lean age is 60 days;
 forensic age is 3 days and its 4,000,000,000-byte sub-budget is **included** in the
 aggregate. LaunchAgent retention cadence is 300 seconds. This is periodic retention,
 not a filesystem quota. Active files and unsafe/unrelated paths are protected;

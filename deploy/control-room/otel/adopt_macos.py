@@ -12,8 +12,14 @@ import sys
 from pathlib import Path
 
 from managed_adoption import reserved_copies
+from managed_budget import load_policy
+from managed_diagnostics import collector_rotation_environment
 
 FILES = {
+    "managed_budget.py": "bin/managed_budget.py",
+    "managed_storage_policy.json": "bin/managed_storage_policy.json",
+    "managed_storage.py": "bin/managed_storage.py",
+    "managed_diagnostics.py": "bin/managed_diagnostics.py",
     "control_room_otel.py": "bin/control_room_otel.py",
     "telemetry_audit.py": "bin/telemetry_audit.py",
     "config/otelcol-macos.yaml": "config/otelcol-macos.yaml",
@@ -65,6 +71,8 @@ def source_status(source):
 
 def adopt(source, home, plist):
     provenance = source_status(source)
+    if provenance.get("dirty"):
+        raise ValueError("commit the reviewed source before adoption")
     if home.is_symlink() or not (home / "state/capture_node_id").is_file():
         raise ValueError("existing capture identity required; new installations are unsupported")
     definition = plistlib.loads(plist.read_bytes())
@@ -72,7 +80,11 @@ def adopt(source, home, plist):
     config = home / "config/otelcol-macos.yaml"
     if definition.get("ProgramArguments") != [str(binary), "--config", str(config)]:
         raise ValueError("LaunchAgent does not target the supplied installation")
-    environment = {**os.environ, **definition.get("EnvironmentVariables", {})}
+    environment = {
+        **os.environ,
+        **definition.get("EnvironmentVariables", {}),
+        **collector_rotation_environment(load_policy()),
+    }
     subprocess.run(
         [str(binary), "validate", "--config", str(source / "config/otelcol-macos.yaml")],
         env=environment,
@@ -85,9 +97,7 @@ def adopt(source, home, plist):
     with reserved_copies(
         [source / name for name in FILES], paths, home / "state", [home]
     ) as copies:
-        copies.assert_hashes(
-            {source / name: value for name, value in provenance["files"].items()}
-        )
+        copies.assert_hashes({source / name: value for name, value in provenance["files"].items()})
         for relative in FILES.values():
             target = home / relative
             if target.is_symlink() or not target.parent.is_dir():
@@ -165,6 +175,72 @@ def main():
     return 0
 
 
+def adopt_diagnostic_job(source, home, plist, expected_sha256, name):
+    """Stage the existing job's pipe supervisor; activation stays explicit."""
+    provenance = source_status(source)
+    if provenance.get("dirty") or name not in {"collector", "retention"}:
+        raise ValueError("committed reviewed diagnostic source required")
+    if digest(plist) != expected_sha256 or plist.resolve() != plist:
+        raise ValueError("job definition changed; review before replacing")
+    definition = plistlib.loads(plist.read_bytes())
+    child = (
+        [str(home / "bin/otelcol-contrib"), "--config", str(home / "config/otelcol-macos.yaml")]
+        if name == "collector"
+        else ["/usr/bin/python3", str(home / "bin/control_room_otel.py"), "retain"]
+    )
+    if definition.get("ProgramArguments") != child:
+        raise ValueError("unexpected existing job command")
+    for name_in_source in (
+        "managed_diagnostics.py",
+        "managed_storage.py",
+        "managed_budget.py",
+        "managed_storage_policy.json",
+    ):
+        if digest(home / "bin" / name_in_source) != digest(source / name_in_source):
+            raise ValueError("adopt and verify diagnostic dependencies first")
+    definition["ProgramArguments"] = [
+        "/usr/bin/python3",
+        str(home / "bin/managed_diagnostics.py"),
+        "--home",
+        str(home),
+        "--name",
+        name,
+        "--",
+        *child,
+    ]
+    definition["StandardOutPath"] = "/dev/null"
+    definition["StandardErrorPath"] = "/dev/null"
+    with reserved_copies([], [plist], home / "state", [home, plist.parent]) as copies:
+        copies.assert_hashes({plist: expected_sha256})
+        backup = (
+            home
+            / "state"
+            / (
+                "diagnostic-job-"
+                + name
+                + "-"
+                + dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            )
+        )
+        backup.mkdir(mode=0o700)
+        old = backup / plist.name
+        copies.copy2(plist, old)
+        pending = plist.with_name(plist.name + ".pending")
+        copies.write(pending, plistlib.dumps(definition), 0o600)
+        copies.assert_unchanged()
+        pending.replace(plist)
+        result = {
+            "commit": provenance["commit"],
+            "name": name,
+            "before_sha256": expected_sha256,
+            "installed_sha256": digest(plist),
+            "backup": str(old),
+            "activated": False,
+        }
+        copies.text(backup / "adoption.json", json.dumps(result, indent=2) + "\n")
+        return result
+
+
 PROVENANCE_FILES = (
     "managed_budget.py",
     "managed_storage_policy.json",
@@ -175,7 +251,7 @@ PROVENANCE_FILES = (
 )
 
 
-def adopt_provenance(source, home, otel_home, expected_installed_sha256):
+def adopt_provenance(source, home, otel_home, expected_installed_sha256, expected_files=None):
     """Adopt only the short-lived sidecar; do not reload any native service."""
     provenance = source_status(source)
     if provenance["dirty"]:
@@ -193,6 +269,12 @@ def adopt_provenance(source, home, otel_home, expected_installed_sha256):
         [home, otel_home],
     ) as copies:
         copies.assert_hashes({script: expected_installed_sha256})
+        if expected_files is not None:
+            if set(expected_files) != set(PROVENANCE_FILES):
+                raise ValueError("review every installed provenance module before update")
+            copies.assert_hashes(
+                {home / "bin" / name: value for name, value in expected_files.items()}
+            )
         for name in PROVENANCE_FILES:
             target = home / "bin" / name
             if (
@@ -200,7 +282,7 @@ def adopt_provenance(source, home, otel_home, expected_installed_sha256):
                 or target.with_suffix(target.suffix + ".pending").exists()
             ):
                 raise ValueError("unsafe or interrupted adoption target")
-            if name != "codex_otel_decisions.py" and target.exists():
+            if name != "codex_otel_decisions.py" and target.exists() and expected_files is None:
                 raise ValueError("module already installed; review before replacing it")
         backup = state / (
             "provenance-rollback-" + dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
