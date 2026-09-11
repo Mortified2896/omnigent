@@ -25,7 +25,14 @@ from typing import Any
 from managed_budget import load_policy
 from managed_metadata import cleanup_manifest
 from managed_sqlite import BoundedConnection
-from managed_storage import BoundedFiles, BoundedLog, StoragePaused, exclusive, management_status
+from managed_storage import (
+    BoundedFiles,
+    BoundedLog,
+    StoragePaused,
+    exclusive,
+    gap_reason,
+    management_status,
+)
 
 OTEL = pathlib.Path.home() / "Library/Application Support/ControlRoom/otel/data"
 HOME = pathlib.Path.home() / "Library/Application Support/Codex/TelemetryProvenance"
@@ -566,7 +573,7 @@ def end(conn: sqlite3.Connection, event: dict[str, Any], root: pathlib.Path) -> 
     conn.commit()
 
 
-def hook(db: pathlib.Path, root: pathlib.Path) -> int:
+def hook(db: pathlib.Path, root: pathlib.Path, management_home=None) -> int:
     try:
         event = json.load(sys.stdin)
         name = event.get("hook_event_name")
@@ -579,6 +586,14 @@ def hook(db: pathlib.Path, root: pathlib.Path) -> int:
                 end(conn, event, root)
         print("{}")
     except Exception as exc:  # noqa: BLE001 - optional hook failures cannot stop Codex
+        reason = gap_reason(exc)
+        with contextlib.suppress(Exception):
+            management_status(
+                management_home,
+                policy=POLICY,
+                gap=True,
+                reason="hook_failure" if reason == "unknown" else reason,
+            )
         print(f"provenance hook failed: {exc}", file=sys.stderr)
         print("{}")
     return 0
@@ -794,7 +809,7 @@ def parser() -> argparse.ArgumentParser:
 
 def run(args) -> int:
     if args.command == "hook":
-        return hook(args.db, args.artifacts)
+        return hook(args.db, args.artifacts, args.management_home)
     with contextlib.closing(connect(args.db)) as conn:
         if args.command == "reconcile":
             print(
@@ -870,7 +885,12 @@ def main(argv: list[str] | None = None) -> int:
             args.command in {"hook", "reconcile"}
             and args.management["optional_telemetry_pause_requested"]
         ):
-            gap = management_status(args.management_home, policy=POLICY, gap=True)
+            gap = management_status(
+                args.management_home,
+                policy=POLICY,
+                gap=True,
+                reason="reconcile_skipped" if args.command == "reconcile" else "managed_pause",
+            )
             print("{}" if args.command == "hook" else json.dumps(gap))
             return 0
         args.artifacts.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -888,7 +908,9 @@ def main(argv: list[str] | None = None) -> int:
             return run(args)
     except (StoragePaused, sqlite3.Error, OSError) as exc:
         if args.command == "hook":
-            management_status(args.management_home, policy=POLICY, gap=True)
+            management_status(
+                args.management_home, policy=POLICY, gap=True, reason=gap_reason(exc)
+            )
         report = json.dumps({"optional_telemetry_paused": type(exc).__name__}) + "\n"
         if args.command == "maintain":
             with contextlib.suppress(StoragePaused, OSError):
