@@ -7,10 +7,11 @@ import hashlib
 import json
 import os
 import plistlib
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from managed_adoption import reserved_copies
 
 FILES = {
     "control_room_otel.py": "bin/control_room_otel.py",
@@ -79,48 +80,68 @@ def adopt(source, home, plist):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    for relative in FILES.values():
-        target = home / relative
-        if target.is_symlink() or not target.parent.is_dir():
-            raise ValueError("unsafe installation target")
-    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    backup = home / "state" / ("rollback-" + stamp)
-    backup.mkdir(mode=0o700)
-    plan = []
-    changed = {
-        name: relative
-        for name, relative in FILES.items()
-        if not (home / relative).is_file() or digest(home / relative) != digest(source / name)
-    }
-    for relative in [*changed.values(), "state/source-manifest.json"]:
-        target = home / relative
-        old = backup / relative
-        if target.exists():
-            old.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(target, old)
-            plan.append({"target": str(target), "backup": str(old)})
-    (backup / "plan.json").write_text(json.dumps(plan))
-    rollback = backup / "rollback.py"
-    rollback.write_text("""#!/usr/bin/env python3
+    paths = [home / relative for relative in FILES.values()]
+    paths.append(home / "state/source-manifest.json")
+    with reserved_copies(
+        [source / name for name in FILES], paths, home / "state", [home]
+    ) as copies:
+        copies.assert_hashes(
+            {source / name: value for name, value in provenance["files"].items()}
+        )
+        for relative in FILES.values():
+            target = home / relative
+            if target.is_symlink() or not target.parent.is_dir():
+                raise ValueError("unsafe installation target")
+        for target in paths:
+            pending = target.with_name(target.name + ".pending")
+            if pending.exists() or pending.is_symlink():
+                raise ValueError("pending update already exists")
+        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        backup = home / "state" / ("rollback-" + stamp)
+        backup.mkdir(mode=0o700)
+        plan = []
+        changed = {
+            name: relative
+            for name, relative in FILES.items()
+            if copies.different(source / name, home / relative)
+        }
+        for relative in [*changed.values(), "state/source-manifest.json"]:
+            target = home / relative
+            old = backup / relative
+            if copies.present(target):
+                old.parent.mkdir(parents=True, exist_ok=True)
+                copies.copy2(target, old)
+                plan.append({"target": str(target), "backup": str(old)})
+        copies.text(backup / "plan.json", json.dumps(plan))
+        rollback = backup / "rollback.py"
+        copies.text(
+            rollback,
+            """#!/usr/bin/env python3
 import json, pathlib, shutil
 for item in json.loads(pathlib.Path(__file__).with_name("plan.json").read_text()):
     shutil.copy2(item["backup"], item["target"])
 print("Files restored. Restart only the Collector in an approved idle window.")
-""")
-    rollback.chmod(0o700)
-    provenance["capture_identity_sha256"] = digest(home / "state/capture_node_id")
-    provenance["collector_sha256"] = digest(binary)
-    provenance["runtime_verified"] = False
-    # Leave identical files untouched in both adoption and rollback.
-    for name, relative in changed.items():
-        target = home / relative
-        temporary = target.with_name(target.name + ".pending")
-        if temporary.exists() or temporary.is_symlink():
-            raise ValueError("pending update already exists")
-        shutil.copy2(source / name, temporary)
-        temporary.replace(target)
-    (home / "state/source-manifest.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    return {"staged": True, "restarted": False, "rollback": str(rollback), **provenance}
+""",
+        )
+        rollback.chmod(0o700)
+        provenance["capture_identity_sha256"] = digest(home / "state/capture_node_id")
+        provenance["collector_sha256"] = digest(binary)
+        provenance["runtime_verified"] = False
+        # Leave identical files untouched in both adoption and rollback.
+        copies.assert_unchanged()
+        for name, relative in changed.items():
+            target = home / relative
+            temporary = target.with_name(target.name + ".pending")
+            if temporary.exists() or temporary.is_symlink():
+                raise ValueError("pending update already exists")
+            copies.copy2(source / name, temporary)
+            temporary.replace(target)
+        copies.text(
+            home / "state/source-manifest.json",
+            json.dumps(provenance, indent=2) + "\n",
+            replace=True,
+        )
+        return {"staged": True, "restarted": False, "rollback": str(rollback), **provenance}
 
 
 def main():
@@ -156,9 +177,6 @@ PROVENANCE_FILES = (
 
 def adopt_provenance(source, home, otel_home, expected_installed_sha256):
     """Adopt only the short-lived sidecar; do not reload any native service."""
-    from managed_budget import load_policy
-    from managed_storage import StoragePaused, exclusive, measure
-
     provenance = source_status(source)
     if provenance["dirty"]:
         raise ValueError("commit the reviewed source before adoption")
@@ -168,15 +186,13 @@ def adopt_provenance(source, home, otel_home, expected_installed_sha256):
     if not (home / "provenance.sqlite3").is_file():
         raise ValueError("existing provenance database required")
     state = otel_home / "state"
-    with exclusive(state / ".provenance-adoption.lock"):
-        inventory = measure([{"path": str(state), "component": "telemetry_backups"}])
-        required = 262144 + 2 * sum((source / name).stat().st_size for name in PROVENANCE_FILES)
-        used = inventory["components"]["telemetry_backups"]["bytes"]
-        if (
-            not inventory["complete"]
-            or used + required > load_policy()["allocations"]["telemetry_backups"]
-        ):
-            raise StoragePaused("adoption_reserve_unavailable")
+    with reserved_copies(
+        [source / name for name in PROVENANCE_FILES],
+        [home / "bin" / name for name in PROVENANCE_FILES],
+        state,
+        [home, otel_home],
+    ) as copies:
+        copies.assert_hashes({script: expected_installed_sha256})
         for name in PROVENANCE_FILES:
             target = home / "bin" / name
             if (
@@ -194,18 +210,20 @@ def adopt_provenance(source, home, otel_home, expected_installed_sha256):
         for name in PROVENANCE_FILES:
             target = home / "bin" / name
             old = backup / name
-            if target.exists():
-                shutil.copy2(target, old)
+            if copies.present(target):
+                copies.copy2(target, old)
             plan.append(
                 {
                     "target": str(target),
                     "backup": str(old) if old.exists() else None,
-                    "adopted_sha256": digest(source / name),
+                    "adopted_sha256": copies.digest(source / name),
                 }
             )
-        (backup / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+        copies.text(backup / "plan.json", json.dumps(plan, indent=2) + "\n")
         rollback = backup / "rollback.py"
-        rollback.write_text("""#!/usr/bin/env python3
+        copies.text(
+            rollback,
+            """#!/usr/bin/env python3
 import hashlib, json, pathlib, shutil
 plan = json.loads(pathlib.Path(__file__).with_name("plan.json").read_text())
 for item in plan:
@@ -224,13 +242,15 @@ for item in reversed(plan):
     else:
         target.unlink()
 print("Sidecar source restored. No database, capture, service or app was replaced.")
-""")
+""",
+        )
         rollback.chmod(0o700)
         # Dependencies first; atomically replace the hook entrypoint last.
+        copies.assert_unchanged()
         for name in PROVENANCE_FILES:
             target = home / "bin" / name
             pending = target.with_suffix(target.suffix + ".pending")
-            shutil.copy2(source / name, pending)
+            copies.copy2(source / name, pending)
             pending.replace(target)
         result = {
             "repository": provenance["repository"],
@@ -240,7 +260,7 @@ print("Sidecar source restored. No database, capture, service or app was replace
             "services_restarted": False,
             "total_enforcement_verified": False,
         }
-        (backup / "adoption.json").write_text(json.dumps(result, indent=2) + "\n")
+        copies.text(backup / "adoption.json", json.dumps(result, indent=2) + "\n")
         return result
 
 
