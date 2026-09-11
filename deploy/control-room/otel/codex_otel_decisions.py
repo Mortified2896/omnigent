@@ -352,6 +352,7 @@ def trace_turn_info(session: str, turn: str, root: pathlib.Path = TRACE_ROOT) ->
         "prefix_sha256": None,
         "artifacts": [],
         "complete": False,
+        "completeness_scope": "end_marker_and_referenced_files; producer_silent_loss_unknown",
     }
     if not path_value:
         return result
@@ -360,6 +361,8 @@ def trace_turn_info(session: str, turn: str, root: pathlib.Path = TRACE_ROOT) ->
     digest = hashlib.sha256()
     offset = 0
     refs = set()
+    intact = True
+    previous_seq = 0
     try:
         with trace_path.open("rb") as handle:
             for line in handle:
@@ -368,7 +371,16 @@ def trace_turn_info(session: str, turn: str, root: pathlib.Path = TRACE_ROOT) ->
                 try:
                     record = json.loads(line)
                 except (json.JSONDecodeError, UnicodeDecodeError):
+                    intact = False
                     continue
+                if not isinstance(record, dict):
+                    intact = False
+                    continue
+                seq = record.get("seq")
+                if type(seq) is not int or seq != previous_seq + 1:
+                    intact = False
+                if type(seq) is int:
+                    previous_seq = seq
                 if record.get("codex_turn_id") == turn or contains(record.get("payload"), turn):
 
                     def collect(value: Any) -> None:
@@ -392,14 +404,14 @@ def trace_turn_info(session: str, turn: str, root: pathlib.Path = TRACE_ROOT) ->
                     and payload.get("type") == "codex_turn_ended"
                 ):
                     result.update(
-                        end_offset=offset, prefix_sha256=digest.hexdigest(), complete=True
+                        end_offset=offset, prefix_sha256=digest.hexdigest(), complete=intact
                     )
                     break
         if result["end_offset"] is None:
             result.update(end_offset=offset, prefix_sha256=digest.hexdigest())
         for relative in sorted(refs):
             item = trace_dir / relative
-            if item.is_file():
+            if item.resolve() == item and trace_dir in item.parents and item.is_file():
                 result["artifacts"].append(
                     {
                         "path": str(item),
@@ -408,8 +420,10 @@ def trace_turn_info(session: str, turn: str, root: pathlib.Path = TRACE_ROOT) ->
                         "sha256": sha_file(item),
                     }
                 )
+            else:
+                result["complete"] = False
     except OSError:
-        pass
+        result["complete"] = False
     return result
 
 

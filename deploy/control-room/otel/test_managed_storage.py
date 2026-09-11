@@ -177,6 +177,27 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT count(*) FROM data").fetchone()[0], 1)
 
 
+class NativeTraceReadbackTests(unittest.TestCase):
+    def test_end_marker_does_not_hide_missing_payload_or_sequence_gap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            bundle = root / "trace-fixture-session"
+            (bundle / "payloads").mkdir(parents=True)
+            path = bundle / "trace.jsonl"
+            first = {"seq": 1, "codex_turn_id": "turn", "payload": {"path": "payloads/1.json"}}
+            end = {"seq": 2, "codex_turn_id": "turn", "payload": {"type": "codex_turn_ended"}}
+            path.write_text(json.dumps(first) + "\n" + json.dumps(end) + "\n")
+            self.assertFalse(provenance.trace_turn_info("session", "turn", root)["complete"])
+            (bundle / "payloads/1.json").write_text("{}")
+            self.assertTrue(provenance.trace_turn_info("session", "turn", root)["complete"])
+            end["seq"] = 3
+            path.write_text(json.dumps(first) + "\n" + json.dumps(end) + "\n")
+            self.assertFalse(provenance.trace_turn_info("session", "turn", root)["complete"])
+            end["seq"] = 2
+            path.write_text(json.dumps(first) + "\n{broken\n" + json.dumps(end) + "\n")
+            self.assertFalse(provenance.trace_turn_info("session", "turn", root)["complete"])
+
+
 class MetadataTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
