@@ -117,7 +117,7 @@ def adopt(source, home, plist):
             pending = target.with_name(target.name + ".pending")
             if pending.exists() or pending.is_symlink():
                 raise ValueError("pending update already exists")
-        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         backup = home / "state" / ("rollback-" + stamp)
         backup.mkdir(mode=0o700)
         plan = []
@@ -230,7 +230,7 @@ def adopt_diagnostic_job(source, home, plist, expected_sha256, name):
                 "diagnostic-job-"
                 + name
                 + "-"
-                + dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
+                + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             )
         )
         backup.mkdir(mode=0o700)
@@ -296,7 +296,7 @@ def adopt_provenance(source, home, otel_home, expected_installed_sha256, expecte
             if name != "codex_otel_decisions.py" and target.exists() and expected_files is None:
                 raise ValueError("module already installed; review before replacing it")
         backup = state / (
-            "provenance-rollback-" + dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            "provenance-rollback-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         )
         backup.mkdir(mode=0o700)
         plan = []
