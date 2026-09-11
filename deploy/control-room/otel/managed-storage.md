@@ -1,5 +1,62 @@
 # Total managed telemetry budget
 
+## Writer integration and remaining architecture boundary
+
+The current retention/status helper reads the archive allocation from the shared
+policy (32 GB). `managed_diagnostics.py`, wired into the existing launchd jobs,
+passes policy-derived backup targets to the unchanged file exporters: active
+segments are included and one eighth of each tier is withheld from the nominal
+rotation target. These targets are NOT admission. Legacy files, protected files
+and failed asynchronous cleanup can exceed them. `managed_storage.state` remains
+`INCOMPLETE` independently of capture/processor health.
+
+The diagnostic supervisor owns pipes for both child descriptors and drains them
+even when disk logging pauses. Every record opens/closes its destination after
+synchronous rotation. All files in the Collector log directory, including legacy
+ones, are charged against three quarters of the log allocation; the provenance
+directory uses the remaining quarter. A reserved status slot records cumulative
+dropped-byte counts across restarts. Missing/stale status is unavailable. No
+pathname rotation is asserted to control a child's old open descriptor.
+
+SQL backup callers must supply the complete `budget_root`, containing their slot
+and sibling adoption/rollback evidence. They acquire the same adoption lock and
+count the entire root. Retention's bounded last-run record also joins this lock.
+Retention detail lists are capped at 128 entries, with aggregate counts retained.
+
+Actual pinned fileexporter pressure reproduction (temporary storage only):
+
+```sh
+.venv/bin/python deploy/control-room/otel/pressure_fileexporter.py --collector /absolute/path/to/otelcol-contrib
+```
+
+On macOS, this holds closed fixture segments immutable against the actual
+asynchronous remover. The pinned v0.159.0 Collector exceeded its nominal active
+plus backup allowance while continuing to accept writes. This is negative
+enforcement evidence, not a passing hard-cap test. The smallest strict archive
+alternative is a synchronous budget-aware exporter/write sink with explicit
+backpressure, while retaining the existing processors, identity and archive.
+
+The installed Codex executable itself writes optional `CODEX_ROLLOUT_TRACE_ROOT`
+bundles. These are distinct from required `sessions/.../rollout-*.jsonl` and the
+operational state SQLite database. The public implementation inspected at
+`openai/codex@02a8f038b87ad34d4a1dc5058eda26972ed7aa6c` uses a per-bundle mutex,
+direct payload file creation and a buffered open trace descriptor. It exposes no
+cross-process allocation or record cap through that interface. This public
+source corroborates the observed writer; it is not a claimed reproducible build
+provenance for the installed Desktop binary. `history.max_bytes` is unrelated.
+A safe strict native cap needs upstream writer support or a separately approved
+storage boundary. Do not patch the bundled binary or limit required session I/O.
+
+Capture deletion remains paused: a Stop hook and an idle/lsof snapshot do not
+prevent a native session from resuming or appending a retained reference during
+deletion. Native tracing and retained-evidence owners do not participate in the
+deletion transaction. Unknown references remain protected. No synthetic reference
+callback is presented as live coordination, and zero old metadata candidates is
+a valid outcome.
+
+The sections below describe the earlier sidecar checkpoint; the current writer
+coverage and machine adoption evidence remain in the paired issues.
+
 `managed_storage_policy.json` is the owner-approved **target** for the next
 storage integration. It does not change the installed archive-only policy merely
 by being present. The recovered provenance sidecar now consumes component

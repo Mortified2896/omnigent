@@ -22,16 +22,20 @@ except ImportError:
 import contextlib
 from pathlib import Path
 
+from managed_budget import load_policy
+from managed_storage import BoundedFiles
+
 OTEL_HOME = Path(
     os.environ.get(
         "CONTROL_ROOM_OTEL_HOME", Path.home() / "Library/Application Support/ControlRoom/otel"
     )
 )
 CODEX = Path.home() / ".codex/config.toml"
-ARCHIVE_MAX_AGE_DAYS = 60
-ARCHIVE_MAX_BYTES = 50_000_000_000
-FORENSIC_MAX_AGE_DAYS = 3
-FORENSIC_MAX_BYTES = 4_000_000_000
+POLICY = load_policy()
+ARCHIVE_MAX_AGE_DAYS = POLICY["retention_days"]["lean"]
+ARCHIVE_MAX_BYTES = POLICY["allocations"]["otel_archive"]
+FORENSIC_MAX_AGE_DAYS = POLICY["retention_days"]["forensic"]
+FORENSIC_MAX_BYTES = POLICY["forensic_max_bytes"]
 RETENTION_MAX_LAG_SECONDS = 900
 ACTIVE_ARCHIVE_FILES = {
     "lean/logs/logs.otlp.json",
@@ -240,7 +244,7 @@ def metric(body, name, signal=None, *, exporter=None):
 
 
 # This profile is limited to the reviewed, queue-free Collector configuration.
-FILE_ONLY_CONFIG_SHA256 = "81f395c2f0916a6c76bd8bd2919a121f808063d0f0093efc221188e09feaadf7"
+FILE_ONLY_CONFIG_SHA256 = "ed6faceefee975156d9507b6942895faf25ee4fc6d5ae356dd76c7a2179ec85e"
 FILE_ONLY_PROFILE = "otelcol-contrib-0.159.0-file-only"
 FILE_EXPORTERS = {
     "logs": ("log_records", ("file/logs",)),
@@ -270,6 +274,28 @@ def _collector_process():
     if len(pids) != 1 or len(blocks) != 1:
         raise ValueError("unrecognized loaded process")
     arguments = [line.strip() for line in blocks[0].splitlines() if line.strip()]
+    child_args = [
+        str(OTEL_HOME / "bin/otelcol-contrib"),
+        "--config",
+        str(OTEL_HOME / "config/otelcol-macos.yaml"),
+    ]
+    wrapper_args = [
+        "/usr/bin/python3",
+        str(OTEL_HOME / "bin/managed_diagnostics.py"),
+        "--home",
+        str(OTEL_HOME),
+        "--name",
+        "collector",
+        "--",
+        *child_args,
+    ]
+    if arguments == wrapper_args:
+        children = _probe_text(["pgrep", "-P", pids[0]]).split()
+        if len(children) != 1 or not children[0].isdigit():
+            raise ValueError("unrecognized Collector supervisor child")
+        if _probe_text(["ps", "-p", children[0], "-o", "command="]) != " ".join(child_args):
+            raise ValueError("unexpected Collector child command")
+        return children[0], child_args
     return pids[0], arguments
 
 
@@ -302,7 +328,17 @@ def collector_counter_profile(version, scrape_started_at):
     try:
         binary = OTEL_HOME / "bin/otelcol-contrib"
         config = OTEL_HOME / "config/otelcol-macos.yaml"
-        files = (binary, config)
+        dependencies = tuple(
+            OTEL_HOME / "bin" / name
+            for name in (
+                "managed_diagnostics.py",
+                "managed_storage.py",
+                "managed_budget.py",
+                "managed_storage_policy.json",
+            )
+            if (OTEL_HOME / "bin" / name).exists()
+        )
+        files = (binary, config, *dependencies)
         if any(path.is_symlink() or not path.is_file() for path in files):
             return unknown | {"reason": "unsafe_or_missing_profile_file"}
         before = tuple(path.stat() for path in files)
@@ -339,7 +375,7 @@ def collector_counter_profile(version, scrape_started_at):
             or any(
                 (a.st_dev, a.st_ino, a.st_size, a.st_mtime_ns, a.st_ctime_ns)
                 != (b.st_dev, b.st_ino, b.st_size, b.st_mtime_ns, b.st_ctime_ns)
-                for a, b in zip(before, after, strict=True)
+                for a, b in zip(before, after)  # noqa: B905 - fixed tuples; launchd Python 3.9
             )
         ):
             return unknown | {"reason": "runtime_binding_changed_or_mismatched"}
@@ -488,10 +524,13 @@ def prune_archive(
     before = total
     removed = []
     errors = []
+    removed_count = 0
+    removed_bytes = 0
+    error_count = 0
     removed_paths = set()
 
     def remove(item, reason):
-        nonlocal total
+        nonlocal total, removed_count, removed_bytes, error_count
         path = item["path"]
         if path in removed_paths:
             return False
@@ -510,10 +549,15 @@ def prune_archive(
                 path.unlink()
             total -= item["size"]
             removed_paths.add(path)
-            removed.append({"path": item["relative"], "bytes": item["size"], "reason": reason})
+            removed_count += 1
+            removed_bytes += item["size"]
+            if len(removed) < 128:
+                removed.append({"path": item["relative"], "bytes": item["size"], "reason": reason})
             return True
         except (FileNotFoundError, OSError, RuntimeError) as exc:
-            errors.append({"path": item["relative"], "error": str(exc)})
+            error_count += 1
+            if len(errors) < 128:
+                errors.append({"path": item["relative"], "error": str(exc)})
             return False
 
     candidates = sorted(
@@ -557,6 +601,9 @@ def prune_archive(
         "forensic_max_age_days": forensic_max_age_days,
         "dry_run": dry_run,
         "removed": removed,
+        "removed_count": removed_count,
+        "removed_bytes": removed_bytes,
+        "error_count": error_count,
         "errors": errors,
         "converged": total <= max_bytes and forensic_total <= forensic_max_bytes,
     }
@@ -749,6 +796,16 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
             ).strip()
     data = {
         "state": "FAILED",
+        "managed_storage": {
+            "state": "INCOMPLETE",
+            "total_max_bytes": POLICY["total_max_bytes"],
+            "allocations": POLICY["allocations"],
+            "unassigned_margin_bytes": POLICY["total_max_bytes"]
+            - sum(POLICY["allocations"].values()),
+            "archive_enforcement": "retention_target_only; external_exporter_not_admitted",
+            "native_capture_enforcement": "unbounded_external_codex_trace_writer",
+            "capture_cleanup": "paused; native_activity_and_references_uncoordinated",
+        },
         "collector_running": running,
         "collector_version": version,
         "retention_agent_loaded": retention_loaded,
@@ -790,6 +847,19 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
             ),
         },
     }
+    data["managed_storage"]["diagnostics"] = {}
+    for name, horizon in (("collector", 10), ("retention", retention_max_lag)):
+        try:
+            path = OTEL_HOME / "collector-logs" / ("managed-" + name + "-status.json")
+            if path.is_symlink():
+                raise ValueError("unsafe diagnostic status")
+            with path.open("rb") as handle:
+                item = json.loads(handle.read(4097))
+            age = scrape_started_at - item["observed_at_unix"]
+            item["freshness"] = "current" if 0 <= age <= horizon else "stale"
+        except (OSError, ValueError, TypeError, KeyError):
+            item = {"freshness": "unavailable"}
+        data["managed_storage"]["diagnostics"][name] = item
     malformed = sum(x["malformed"] for x in arc.values())
     activity = sum(x["records"] for x in arc.values())
     data["unavailable_counters"] = [
@@ -933,10 +1003,14 @@ def main():
         )
         print(json.dumps(result, indent=2))
         if not a.dry_run and a.archive_root.resolve() == (OTEL_HOME / "data").resolve():
-            atomic_write(
-                OTEL_HOME / "state/retention-last-run.json",
-                (json.dumps(result, indent=2) + "\n").encode(),
-            )
+            from managed_storage import exclusive
+
+            state = OTEL_HOME / "state"
+            with exclusive(state / ".provenance-adoption.lock"):
+                BoundedFiles(state, POLICY["allocations"]["telemetry_backups"]).write(
+                    state / "retention-last-run.json",
+                    (json.dumps(result, indent=2) + "\n").encode(),
+                )
         sys.exit(0 if result["converged"] and not result["errors"] else 1)
     m = re.fullmatch(r"(\d+)([smhd])", a.since)
     secs = int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)] if m else 3600

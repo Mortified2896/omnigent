@@ -14,7 +14,7 @@ SPEC.loader.exec_module(OTEL)
 class RetentionTests(unittest.TestCase):
     def test_mac_only_policy_constants(self):
         self.assertEqual(OTEL.ARCHIVE_MAX_AGE_DAYS, 60)
-        self.assertEqual(OTEL.ARCHIVE_MAX_BYTES, 50_000_000_000)
+        self.assertEqual(OTEL.ARCHIVE_MAX_BYTES, 32_000_000_000)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

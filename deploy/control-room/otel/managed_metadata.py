@@ -60,18 +60,26 @@ def cleanup_manifest(conn, policy, references=lambda _row: {}, now=None):
     }, eligible
 
 
-def verified_backup(conn, root, allocation, deadline_seconds=10):
+def verified_backup(conn, root, allocation, deadline_seconds=10, *, budget_root):
     """One retained backup slot, two bounded temporary files; never copy live WAL."""
     root = Path(root)
+    budget_root = Path(budget_root)
     if not root.is_dir() or root.resolve() != root:
         raise StoragePaused("backup_root_unknown")
+    if (
+        not budget_root.is_dir()
+        or budget_root.resolve() != budget_root
+        or (root != budget_root and budget_root not in root.parents)
+    ):
+        raise StoragePaused("backup_budget_root_unknown")
     final = root / "metadata-before-cleanup.sqlite3"
     temporary = root / "metadata-backup.tmp"
     restored = root / "metadata-restore.tmp"
-    with exclusive(root / ".backup.lock"):
+    # Source adoption and SQL backup must account under the same owner/root.
+    with exclusive(budget_root / ".provenance-adoption.lock"), exclusive(root / ".backup.lock"):
         if any(p.exists() for p in (final, temporary, restored)):
             raise StoragePaused("backup_slot_requires_review")
-        inventory = measure([{"path": str(root), "component": "telemetry_backups"}])
+        inventory = measure([{"path": str(budget_root), "component": "telemetry_backups"}])
         pages = conn.execute("PRAGMA page_count").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         upper = pages * page_size

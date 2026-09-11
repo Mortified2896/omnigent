@@ -850,14 +850,20 @@ def main(argv: list[str] | None = None) -> int:
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                     result = run(args)
-                BoundedLog(args.db.parent / "logs/managed-reconciler.log").write(output.getvalue())
+                BoundedLog(
+                    args.db.parent / "logs/managed-reconciler.log",
+                    allocation=POLICY["allocations"]["telemetry_logs"] // 4,
+                ).write(output.getvalue())
                 return result
             return run(args)
     except (StoragePaused, sqlite3.Error, OSError) as exc:
         report = json.dumps({"optional_telemetry_paused": type(exc).__name__}) + "\n"
         if args.command == "maintain":
             with contextlib.suppress(StoragePaused, OSError):
-                BoundedLog(args.db.parent / "logs/managed-reconciler.log").write(report)
+                BoundedLog(
+                    args.db.parent / "logs/managed-reconciler.log",
+                    allocation=POLICY["allocations"]["telemetry_logs"] // 4,
+                ).write(report)
         else:
             print("{}" if args.command == "hook" else report)
         return 0 if args.command == "hook" else 2

@@ -161,11 +161,14 @@ class BoundedFiles:
 class BoundedLog:
     """Rotate only this writer's files; open/close descriptors on every record."""
 
-    def __init__(self, path, segment_bytes=1024**2, backups=3, record_bytes=65536):
+    def __init__(
+        self, path, segment_bytes=1024**2, backups=3, record_bytes=65536, allocation=None
+    ):
         self.path = Path(path)
         self.segment_bytes = segment_bytes
         self.backups = backups
         self.record_bytes = min(record_bytes, segment_bytes)
+        self.allocation = allocation
 
     def write(self, text):
         data = text.encode()
@@ -173,7 +176,10 @@ class BoundedLog:
             data = b'{"optional_telemetry_paused":"oversized_log_record"}\n'[: self.record_bytes]
         if not self.path.parent.is_dir() or self.path.resolve() != self.path:
             raise StoragePaused("log_root_unknown")
-        with exclusive(self.path.parent / ("." + self.path.name + ".lock")):
+        lock_name = (
+            ".managed-logs.lock" if self.allocation is not None else "." + self.path.name + ".lock"
+        )
+        with exclusive(self.path.parent / lock_name):
             members = [self.path] + [
                 Path(str(self.path) + "." + str(i)) for i in range(1, self.backups + 1)
             ]
@@ -190,6 +196,13 @@ class BoundedLog:
                 ):
                     if source.exists():
                         source.replace(target)
+            if self.allocation is not None:
+                scan = measure([{"path": str(self.path.parent), "component": "telemetry_logs"}])
+                if not scan["complete"]:
+                    raise StoragePaused("log_inventory_unknown")
+                reserve = ((len(data) + 65535) // 65536) * 65536 + 65536
+                if scan["components"]["telemetry_logs"]["bytes"] + reserve > self.allocation:
+                    raise StoragePaused("log_allocation_full")
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             try:
                 view = memoryview(data)
