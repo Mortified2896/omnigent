@@ -31,7 +31,7 @@ class CounterTests(unittest.TestCase):
         self.assertEqual(otel.metric(f"{NAME} 7 1234567890000\n", NAME), 7)
 
     def test_labels_whitespace_escapes_and_braces(self):
-        body = f'{NAME}{{note="a }} b \\\" c",exporter="file"}}\t7\t123\n'
+        body = f'{NAME}{{note="a }} b \\" c",exporter="file"}}\t7\t123\n'
         self.assertEqual(otel.metric(body, NAME), 7)
 
     def test_sum_distinct_series(self):
@@ -72,7 +72,7 @@ class CounterTests(unittest.TestCase):
         self.assertIsNone(otel.metric(f"{NAME} 3\n{NAME}_total 3\n", NAME))
 
     def test_invalid_or_duplicate_labels_are_unknown(self):
-        for labels in ('a="1",a="2"', 'a=unquoted'):
+        for labels in ('a="1",a="2"', "a=unquoted"):
             with self.subTest(labels=labels):
                 self.assertIsNone(otel.metric(f"{NAME}{{{labels}}} 3\n", NAME))
 
@@ -113,7 +113,14 @@ class RetentionEvidenceTests(unittest.TestCase):
         self.assertEqual(self.evaluate(None)["status"], "unavailable")
 
     def test_invalid_shapes_are_not_trusted(self):
-        for record in ([], "bad", True, {}, self.record(converged="false"), self.record(errors="")):
+        for record in (
+            [],
+            "bad",
+            True,
+            {},
+            self.record(converged="false"),
+            self.record(errors=""),
+        ):
             with self.subTest(record=record):
                 self.assertEqual(self.evaluate(record)["status"], "invalid")
 
@@ -126,23 +133,37 @@ class RetentionEvidenceTests(unittest.TestCase):
         self.assertEqual(self.evaluate(self.record(run_at=stamp))["status"], "verified")
 
     def test_bad_or_unscoped_timestamps(self):
-        for stamp in (None, "not-a-time", "2033-05-18T03:33:20", dt.datetime.fromtimestamp(NOW + 1, dt.timezone.utc).isoformat()):
+        for stamp in (
+            None,
+            "not-a-time",
+            "2033-05-18T03:33:20",
+            dt.datetime.fromtimestamp(NOW + 1, dt.timezone.utc).isoformat(),
+        ):
             with self.subTest(stamp=stamp):
                 self.assertEqual(self.evaluate(self.record(run_at=stamp))["status"], "invalid")
 
     def test_wrong_archive_or_policy_is_not_proof(self):
-        for field, value in (("archive_root", str(self.home / "other")), ("max_bytes", 99), ("max_age_days", 1), ("forensic_max_bytes", 99), ("forensic_max_age_days", 1)):
+        for field, value in (
+            ("archive_root", str(self.home / "other")),
+            ("max_bytes", 99),
+            ("max_age_days", 1),
+            ("forensic_max_bytes", 99),
+            ("forensic_max_age_days", 1),
+        ):
             with self.subTest(field=field):
                 self.assertEqual(self.evaluate(self.record(**{field: value}))["status"], "invalid")
 
     def test_dry_run_is_not_cleanup_proof(self):
         self.assertEqual(self.evaluate(self.record(dry_run=True))["status"], "invalid")
 
-    def test_failure_and_nonconvergence_are_failed(self):
-        for record in (self.record(converged=False), self.record(errors=[{"error": "private-canary"}])):
+    def test_failure_and_nonconvergence_are_distinct(self):
+        for record, expected in (
+            (self.record(converged=False), "target_pending"),
+            (self.record(errors=[{"error": "private-canary"}]), "failed"),
+        ):
             with self.subTest(record=record):
                 evidence = self.evaluate(record)
-                self.assertEqual(evidence["status"], "failed")
+                self.assertEqual(evidence["status"], expected)
                 self.assertNotIn("private-canary", json.dumps(evidence))
 
 
@@ -160,8 +181,26 @@ class ReportTests(unittest.TestCase):
         self.stack.enter_context(patch.object(otel, "OTEL_HOME", self.home))
         self.stack.enter_context(patch.object(otel, "launchd_loaded", return_value=True))
         self.stack.enter_context(patch.object(otel, "configured", return_value=True))
-        self.stack.enter_context(patch.object(otel, "archives", return_value={signal: {"malformed": 0, "records": 1, "files": 1, "items": 1, "first": None, "last": None} for signal in ("logs", "traces", "metrics")}))
-        self.stack.enter_context(patch.object(otel, "prom", return_value="# no observed counters\n"))
+        self.stack.enter_context(
+            patch.object(
+                otel,
+                "archives",
+                return_value={
+                    signal: {
+                        "malformed": 0,
+                        "records": 1,
+                        "files": 1,
+                        "items": 1,
+                        "first": None,
+                        "last": None,
+                    }
+                    for signal in ("logs", "traces", "metrics")
+                },
+            )
+        )
+        self.stack.enter_context(
+            patch.object(otel, "prom", return_value="# no observed counters\n")
+        )
 
     def write_retention(self, **changes):
         record = {
@@ -201,7 +240,8 @@ class ReportTests(unittest.TestCase):
         (self.home / "data/notes.txt").write_bytes(b"12345")
         with patch.object(otel, "ARCHIVE_MAX_BYTES", 4):
             report = otel.report()
-        self.assertEqual(report["state"], "DEGRADED")
+        self.assertEqual(report["state"], "INCOMPLETE")
+        self.assertTrue(report["storage_target_exceeded"])
         self.assertEqual(report["storage"]["overshoot_bytes"], 1)
         self.assertEqual(report["storage"]["headroom_bytes"], 0)
         self.assertTrue((self.home / "data/notes.txt").exists())
@@ -212,7 +252,8 @@ class ReportTests(unittest.TestCase):
         (self.home / "data/forensic/notes.txt").write_bytes(b"12345")
         with patch.object(otel, "FORENSIC_MAX_BYTES", 4):
             report = otel.report()
-        self.assertEqual(report["state"], "DEGRADED")
+        self.assertEqual(report["state"], "INCOMPLETE")
+        self.assertTrue(report["storage_target_exceeded"])
         self.assertEqual(report["storage"]["forensic_overshoot_bytes"], 1)
 
     def test_archive_budget_is_not_claimed_to_cover_auxiliary_data(self):
@@ -228,7 +269,11 @@ class ReportTests(unittest.TestCase):
         self.assertIn("archive_only", output.getvalue())
 
     def test_check_exits_nonzero_for_incomplete_evidence(self):
-        with patch.object(otel.sys, "argv", ["control_room_otel.py", "check", "--json"]), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as result:
+        with (
+            patch.object(otel.sys, "argv", ["control_room_otel.py", "check", "--json"]),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(SystemExit) as result,
+        ):
             otel.main()
         self.assertEqual(result.exception.code, 1)
 
@@ -258,7 +303,15 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(otel.report()["state"], "FAILED")
 
     def test_invalid_cli_lag_is_rejected(self):
-        with patch.object(otel.sys, "argv", ["control_room_otel.py", "check", "--max-retention-lag-seconds", "0"]), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as result:
+        with (
+            patch.object(
+                otel.sys,
+                "argv",
+                ["control_room_otel.py", "check", "--max-retention-lag-seconds", "0"],
+            ),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as result,
+        ):
             otel.main()
         self.assertEqual(result.exception.code, 2)
 

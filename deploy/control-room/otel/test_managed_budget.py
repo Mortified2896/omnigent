@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import managed_budget as budget
 
-NOW = dt.datetime(2026, 9, 11, 6, tzinfo=dt.UTC)
+NOW = dt.datetime(2026, 9, 11, 6, tzinfo=dt.timezone.utc)
 
 
 class PolicyTests(unittest.TestCase):
@@ -18,7 +18,9 @@ class PolicyTests(unittest.TestCase):
         policy = budget.load_policy()
         self.assertEqual(policy["total_max_bytes"], 50_000_000_000)
         self.assertEqual(policy["forensic_max_bytes"], 4_000_000_000)
-        self.assertEqual(policy["retention_days"], {"lean": 60, "forensic": 3, "captures": 30, "metadata": 30})
+        self.assertEqual(
+            policy["retention_days"], {"lean": 60, "forensic": 3, "captures": 30, "metadata": 30}
+        )
 
     def test_invalid_policy_cannot_silently_default(self):
         for policy in (None, [], {}, {"schema_version": 99}):
@@ -40,7 +42,11 @@ class PolicyTests(unittest.TestCase):
             budget.validate_policy(policy)
 
     def test_retention_policy_must_be_complete(self):
-        for value in ({"metadata": 30}, [], {"lean": 60, "forensic": 3, "captures": 30, "metadata": False}):
+        for value in (
+            {"metadata": 30},
+            [],
+            {"lean": 60, "forensic": 3, "captures": 30, "metadata": False},
+        ):
             policy = budget.load_policy()
             policy["retention_days"] = value
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -49,7 +55,11 @@ class PolicyTests(unittest.TestCase):
     def test_loader_rejects_duplicate_keys_and_bad_json(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
-            for text in ('{"schema_version":1,"schema_version":1}', '{"secret":"unterminated', '[]'):
+            for text in (
+                '{"schema_version":1,"schema_version":1}',
+                '{"secret":"unterminated',
+                "[]",
+            ):
                 path.write_text(text)
                 with self.subTest(text=text), self.assertRaises(ValueError) as raised:
                     budget.load_policy(path)
@@ -74,7 +84,13 @@ class BudgetTests(unittest.TestCase):
         }
 
     def assess(self, growth=1):
-        return budget.assess_budget(self.snapshot, policy=self.policy, now=NOW, max_age_seconds=300, requested_growth_bytes=growth)
+        return budget.assess_budget(
+            self.snapshot,
+            policy=self.policy,
+            now=NOW,
+            max_age_seconds=300,
+            requested_growth_bytes=growth,
+        )
 
     def test_empty_verified_snapshot_does_not_claim_enforcement(self):
         result = self.assess()
@@ -159,7 +175,11 @@ class BudgetTests(unittest.TestCase):
         self.assertEqual(self.assess()["reason"], "unknown_reservations")
 
     def test_future_stale_and_unscoped_time(self):
-        for stamp in (NOW + dt.timedelta(seconds=1), NOW - dt.timedelta(seconds=301), NOW.replace(tzinfo=None)):
+        for stamp in (
+            NOW + dt.timedelta(seconds=1),
+            NOW - dt.timedelta(seconds=301),
+            NOW.replace(tzinfo=None),
+        ):
             self.snapshot["observed_at"] = stamp.isoformat()
             with self.subTest(stamp=stamp):
                 self.assertFalse(self.assess()["fits_snapshot"])
@@ -169,7 +189,12 @@ class BudgetTests(unittest.TestCase):
         self.assertTrue(self.assess()["fits_snapshot"])
 
     def test_invalid_evaluation_arguments(self):
-        for overrides in ({"requested_growth_bytes": -1}, {"requested_growth_bytes": True}, {"max_age_seconds": 0}, {"now": NOW.replace(tzinfo=None)}):
+        for overrides in (
+            {"requested_growth_bytes": -1},
+            {"requested_growth_bytes": True},
+            {"max_age_seconds": 0},
+            {"now": NOW.replace(tzinfo=None)},
+        ):
             args = {"policy": self.policy, "now": NOW, "max_age_seconds": 300} | overrides
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 budget.assess_budget(self.snapshot, **args)
@@ -212,7 +237,11 @@ class MetadataTests(unittest.TestCase):
             for value in (True, None, "false", 0):
                 record = self.record | {flag: value}
                 with self.subTest(flag=flag, value=value):
-                    self.assertFalse(budget.metadata_cleanup_decision(record, policy=self.policy, now=NOW)["eligible"])
+                    self.assertFalse(
+                        budget.metadata_cleanup_decision(record, policy=self.policy, now=NOW)[
+                            "eligible"
+                        ]
+                    )
 
     def test_missing_protection_cannot_default_to_false(self):
         del self.record["frozen"]
@@ -229,14 +258,22 @@ class MetadataTests(unittest.TestCase):
         self.assertFalse(self.decision()["eligible"])
 
     def test_future_or_missing_completion_is_retained(self):
-        for stamp in (None, "bad-time", NOW.isoformat(), (NOW + dt.timedelta(days=1)).isoformat(), NOW.replace(tzinfo=None).isoformat()):
+        for stamp in (
+            None,
+            "bad-time",
+            NOW.isoformat(),
+            (NOW + dt.timedelta(days=1)).isoformat(),
+            NOW.replace(tzinfo=None).isoformat(),
+        ):
             self.record["completed_at"] = stamp
             with self.subTest(stamp=stamp):
                 self.assertFalse(self.decision()["eligible"])
 
     def test_timezone_offsets_are_compared_as_instants(self):
         stamp = NOW - dt.timedelta(days=30, seconds=1)
-        self.record["completed_at"] = stamp.astimezone(dt.timezone(dt.timedelta(hours=8))).isoformat()
+        self.record["completed_at"] = stamp.astimezone(
+            dt.timezone(dt.timedelta(hours=8))
+        ).isoformat()
         self.assertTrue(self.decision()["eligible"])
 
     def test_old_format_is_not_blanket_deletion_permission(self):

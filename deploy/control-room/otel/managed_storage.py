@@ -1,7 +1,7 @@
 """Owned-root accounting and serialized, bounded optional file writes.
 
-These bounds apply only to cooperating writers. Native rollout and Collector
-coverage must be verified separately before declaring total-budget enforcement.
+Component bounds apply only to cooperating writers. Aggregate pressure uses a
+managed target; external writer overshoot is reported and never blocks tasks.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from managed_budget import COMPONENTS
+from managed_budget import COMPONENTS, assess_budget, load_policy
 
 
 class StoragePaused(RuntimeError):
@@ -213,22 +213,182 @@ class BoundedLog:
                 os.close(fd)
 
 
+MANAGEMENT_MAX_AGE = 360
+
+
+def management_home():
+    return Path(
+        os.environ.get(
+            "CONTROL_ROOM_OTEL_HOME",
+            str(Path.home() / "Library/Application Support/ControlRoom/otel"),
+        )
+    )
+
+
+def _read_control(path):
+    if path.resolve() != path:
+        raise ValueError("unsafe_management_path")
+    with path.open("rb") as stream:
+        data = stream.read(65537)
+    if len(data) > 65536:
+        raise ValueError("oversized_management_record")
+    return json.loads(data)
+
+
+def management_status(home=None, *, policy=None, refresh=False, gap=False):
+    """Persist hysteresis in a bounded control record; never reserve task storage.
+
+    The existing retention timer refreshes the inventory. Hooks only read fresh
+    state, or count a skipped hook, so scanning cannot delay ordinary tasks.
+    """
+    home = Path(home) if home is not None else management_home()
+    policy = policy if policy is not None else load_policy()
+    now = dt.datetime.now(dt.timezone.utc)
+    unavailable = assess_budget({}, policy=policy, now=now, max_age_seconds=MANAGEMENT_MAX_AGE)
+    unavailable.update(
+        state="INCOMPLETE",
+        inventory_complete=False,
+        gap_reporting="unavailable",
+        optional_capture_gap=True,
+    )
+    state = home / "state"
+    path = state / "managed-target-state.json"
+
+    def read_previous():
+        try:
+            prior = _read_control(path)
+            if (
+                not isinstance(prior, dict)
+                or type(prior.get("optional_telemetry_pause_requested")) is not bool
+                or type(prior.get("skipped_optional_hooks")) is not int
+                or not 0 <= prior["skipped_optional_hooks"] <= 2**63 - 1
+            ):
+                raise ValueError("invalid_management_state")
+            return prior
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def current(prior):
+        if prior is None:
+            return dict(unavailable)
+        try:
+            age = (now - dt.datetime.fromisoformat(prior["observed_at"])).total_seconds()
+            if not 0 <= age <= MANAGEMENT_MAX_AGE:
+                raise ValueError("stale_management_state")
+            for key, value in (
+                ("target_bytes", policy["total_max_bytes"]),
+                *policy["management"].items(),
+            ):
+                if prior.get(key) != value:
+                    raise ValueError("management_policy_changed")
+            return dict(prior)
+        except (KeyError, TypeError, ValueError):
+            return dict(
+                unavailable,
+                reason="stale_or_changed_management_state",
+                skipped_optional_hooks=prior["skipped_optional_hooks"],
+            )
+
+    if not refresh and not gap:
+        return current(read_previous())
+    try:
+        if state.resolve() != state or not state.is_dir():
+            raise StoragePaused("management_root_unavailable")
+        with exclusive(state / ".managed-target.lock"):
+            prior = read_previous()
+            result = current(prior)
+            if refresh:
+                try:
+                    roots = _read_control(state / "managed-roots.json")
+                    if not isinstance(roots, list) or not roots:
+                        raise ValueError("missing_managed_roots")
+                    scan = measure(roots)
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    scan = {
+                        "complete": False,
+                        "components": None,
+                        "errors": ["managed_roots_unavailable"],
+                        "observed_at": now.isoformat(),
+                    }
+                # Evaluate observed disk pressure, not unknown future reservations.
+                result = assess_budget(
+                    dict(scan, reserved_bytes=0),
+                    policy=policy,
+                    now=dt.datetime.now(dt.timezone.utc),
+                    max_age_seconds=MANAGEMENT_MAX_AGE,
+                    optional_paused=(prior or {}).get("optional_telemetry_pause_requested", True),
+                )
+                result.update(
+                    state=result["management_state"],
+                    observed_at=scan.get("observed_at", now.isoformat()),
+                    inventory_complete=scan["complete"],
+                    inventory_errors=scan["errors"],
+                    components=scan.get("components"),
+                    measurement_basis="per_inode_max_logical_allocated; observed_disk_pressure",
+                    protected_bytes_basis="conservative_count; not_deletion_eligibility",
+                    reserved_bytes=None,
+                    external_inflight_bytes=None,
+                    fits_snapshot=None,
+                    coverage_limitations=[
+                        "Collector/native optional writes may overshoot asynchronously",
+                        "Native optional trace writer has no safe live pause interface",
+                        "Unknown activity/evidence/rollback references prevent capture deletion",
+                        "APFS snapshots/clones and unrelated files are outside this measurement",
+                        "Hook inventory may be 360 seconds old; silent producer loss is unknown",
+                    ],
+                    known_external_writer_overshoot={
+                        "writer": "Collector fileexporter 0.159.0",
+                        "isolated_test_nominal_bytes": 2097152,
+                        "isolated_test_peak_bytes": 9584640,
+                        "current_overshoot_attribution": "unknown; see overshoot_bytes",
+                    },
+                    skipped_optional_hooks=(prior or {}).get("skipped_optional_hooks", 0),
+                    gap_reporting="available",
+                    gap_count_basis="lower_bound; lock_or_disk_failure_may_prevent_count",
+                    last_optional_gap_at=(prior or {}).get("last_optional_gap_at"),
+                )
+            if gap:
+                result["skipped_optional_hooks"] = min(
+                    2**63 - 1, result.get("skipped_optional_hooks", 0) + 1
+                )
+                result["last_optional_gap_at"] = now.isoformat()
+                result["gap_reporting"] = "available"
+            result["optional_capture_gap"] = bool(
+                result.get("skipped_optional_hooks", 0)
+                or result["optional_telemetry_pause_requested"]
+            )
+            # Control evidence may update during pause; it cannot grow unbounded.
+            BoundedFiles(
+                state, policy["allocations"]["telemetry_backups"], record_limit=65536
+            ).write(path, (json.dumps(result, sort_keys=True) + "\n").encode())
+            return result
+    except (StoragePaused, OSError, ValueError, KeyError, TypeError):
+        return dict(unavailable, reason="management_inventory_or_state_unavailable")
+
+
+def cleanup_archive_target(management, configured_target):
+    """Accelerate only the existing archive candidate cleanup under pressure."""
+    if not management.get("inventory_complete") or not management.get("cleanup_requested"):
+        return configured_target
+    excess = max(0, management["used_bytes"] - management["cleanup_start_bytes"])
+    archive_bytes = management["components"]["otel_archive"]["bytes"]
+    return min(configured_target, max(0, archive_bytes - excess))
+
+
 def main():
     import argparse
 
-    from managed_budget import load_policy
-
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("roots", type=Path)
+    parser.add_argument("roots", type=Path, nargs="?")
+    parser.add_argument("--home", type=Path)
     args = parser.parse_args()
-    roots = json.loads(args.roots.read_text())
-    result = measure(roots)
-    result["total_max_bytes"] = load_policy()["total_max_bytes"]
-    result["measured_bytes"] = sum(v["bytes"] for v in (result["components"] or {}).values())
-    result["status"] = "INCOMPLETE"
-    result["reason"] = "writer_coverage_and_inflight_bytes_unverified"
+    if args.roots:
+        result = measure(_read_control(args.roots))
+        result["measured_bytes"] = sum(v["bytes"] for v in (result["components"] or {}).values())
+    else:
+        result = management_status(args.home, refresh=True)
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 2
+    return 0 if result.get("inventory_complete", result.get("complete")) else 2
 
 
 if __name__ == "__main__":

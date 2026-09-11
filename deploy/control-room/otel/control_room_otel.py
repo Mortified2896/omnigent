@@ -23,7 +23,7 @@ import contextlib
 from pathlib import Path
 
 from managed_budget import load_policy
-from managed_storage import BoundedFiles
+from managed_storage import BoundedFiles, cleanup_archive_target, management_status
 
 OTEL_HOME = Path(
     os.environ.get(
@@ -436,6 +436,15 @@ def retention_evidence(record, *, now=None, max_lag_seconds=RETENTION_MAX_LAG_SE
         "forensic_max_bytes": FORENSIC_MAX_BYTES,
         "forensic_max_age_days": FORENSIC_MAX_AGE_DAYS,
     }
+    pressure_target = record.get("max_bytes")
+    if (
+        type(pressure_target) is int
+        and 0 <= pressure_target < ARCHIVE_MAX_BYTES
+        and record.get("configured_max_bytes") == ARCHIVE_MAX_BYTES
+        and isinstance(record.get("managed_target_before"), dict)
+        and record["managed_target_before"].get("cleanup_requested") is True
+    ):
+        expected["max_bytes"] = pressure_target
     if (
         record.get("dry_run") is not False
         or type(record.get("converged")) is not bool
@@ -461,9 +470,13 @@ def retention_evidence(record, *, now=None, max_lag_seconds=RETENTION_MAX_LAG_SE
     if lag < 0:
         return result
     result["lag_seconds"] = lag
-    if not record["converged"] or record["errors"]:
+    if record["errors"]:
         return result | {"status": "failed"}
-    return result | {"status": "stale" if lag > max_lag_seconds else "verified"}
+    return result | {
+        "status": "stale"
+        if lag > max_lag_seconds
+        else ("verified" if record["converged"] else "target_pending")
+    }
 
 
 def _is_within(path, root):
@@ -797,7 +810,7 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
     data = {
         "state": "FAILED",
         "managed_storage": {
-            "state": "INCOMPLETE",
+            **management_status(OTEL_HOME, policy=POLICY, refresh=True),
             "total_max_bytes": POLICY["total_max_bytes"],
             "allocations": POLICY["allocations"],
             "unassigned_margin_bytes": POLICY["total_max_bytes"]
@@ -877,10 +890,12 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
         if ("failed" in key or "refused" in key) and value is not None
     )
     retention_bad = not retention_loaded or retention["status"] == "failed"
-    over_budget = storage["overshoot_bytes"] > 0 or storage["forensic_overshoot_bytes"] > 0
+    data["storage_target_exceeded"] = (
+        storage["overshoot_bytes"] > 0 or storage["forensic_overshoot_bytes"] > 0
+    )
     incomplete = (
         data["unexplained_counters"]
-        or retention["status"] != "verified"
+        or retention["status"] not in {"verified", "target_pending"}
         or not storage["archive_present"]
     )
     data["state"] = (
@@ -888,7 +903,7 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
         if not running or not body
         else (
             "DEGRADED"
-            if failures or malformed or retention_bad or over_budget
+            if failures or malformed or retention_bad
             else ("INCOMPLETE" if incomplete else ("HEALTHY" if activity else "NO ACTIVITY"))
         )
     )
@@ -904,7 +919,30 @@ def human(d, status=False):
     print("Archive:", d["archive"], "(%d bytes)" % d["archive_bytes"])
     print("Codex OTel configured:", d["codex_configured"])
     s = d["storage"]
-    print("Storage budget scope:", s["budget_scope"], "(ancillary bounds not verified)")
+    managed = d["managed_storage"]
+    print(
+        "Managed telemetry:",
+        managed["management_state"],
+        managed["used_bytes"],
+        "/",
+        managed["target_bytes"],
+        "bytes; hard ceiling enforced: false",
+    )
+    print(
+        "Cleanup requested:",
+        managed["cleanup_requested"],
+        "optional pause:",
+        managed["optional_telemetry_pause_requested"],
+        "normal Codex allowed: true",
+    )
+    print(
+        "Optional capture gap:",
+        managed["optional_capture_gap"],
+        "gap reporting:",
+        managed["gap_reporting"],
+    )
+    print("External writers: asynchronous overshoot possible; native live pause unavailable")
+    print("Storage component:", s["budget_scope"])
     print("Archive headroom:", s["headroom_bytes"], "overshoot:", s["overshoot_bytes"])
     print("Retention evidence:", d["retention_evidence"]["status"])
     if d["unavailable_counters"]:
@@ -992,15 +1030,29 @@ def main():
             and os.environ.get("CONTROL_ROOM_OTEL_TESTING") != "1"
         ):
             raise SystemExit("refusing retention outside the configured Mac Codex archive")
+        management = management_status(OTEL_HOME, policy=POLICY, refresh=True)
         result = prune_archive(
             a.archive_root,
-            a.max_bytes,
+            cleanup_archive_target(management, a.max_bytes),
             a.max_age_days,
             a.forensic_max_bytes,
             a.forensic_max_age_days,
             a.now,
             a.dry_run,
         )
+        result["configured_max_bytes"] = a.max_bytes
+        result["managed_target_before"] = {
+            key: management[key]
+            for key in (
+                "management_state",
+                "cleanup_requested",
+                "optional_telemetry_pause_requested",
+            )
+        }
+        if not a.dry_run:
+            after = management_status(OTEL_HOME, policy=POLICY, refresh=True)
+            result["managed_target_after"] = after["management_state"]
+            result["managed_cleanup_blocked"] = bool(after["cleanup_requested"])
         print(json.dumps(result, indent=2))
         if not a.dry_run and a.archive_root.resolve() == (OTEL_HOME / "data").resolve():
             from managed_storage import exclusive
@@ -1011,7 +1063,7 @@ def main():
                     state / "retention-last-run.json",
                     (json.dumps(result, indent=2) + "\n").encode(),
                 )
-        sys.exit(0 if result["converged"] and not result["errors"] else 1)
+        sys.exit(0 if not result["errors"] else 1)
     m = re.fullmatch(r"(\d+)([smhd])", a.since)
     secs = int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)] if m else 3600
     if a.max_retention_lag_seconds <= 0:
