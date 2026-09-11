@@ -14,6 +14,13 @@ logical and allocated bytes, and persists hysteresis in a bounded
 The existing retention job refreshes it every 300 seconds; installed status and
 provenance maintenance also refresh it. No additional scheduler or database exists.
 
+Keep managed acceptance reports inside the existing telemetry-owned Application
+Support root. macOS can deny a launchd Python job access to Documents even when
+the same interpreter can read it from Desktop. A denied root leaves inventory
+incomplete and pauses optional hooks despite a successful retention exit. Verify
+scheduled state without invoking `status`, which refreshes inventory in the
+caller's permission context and can conceal this failure.
+
 Hooks read that state without scanning the archive. A missing, corrupt, stale
 (over 360 seconds), or policy-mismatched record pauses optional capture. At
 48 GB and above, or while recovering above 46 GB, hooks return protocol success
