@@ -855,7 +855,7 @@ def report(since=3600, retention_max_lag=RETENTION_MAX_LAG_SECONDS):
                 raise ValueError("unsafe diagnostic status")
             with path.open("rb") as handle:
                 item = json.loads(handle.read(4097))
-            age = scrape_started_at - item["observed_at_unix"]
+            age = dt.datetime.now(dt.timezone.utc).timestamp() - item["observed_at_unix"]
             item["freshness"] = "current" if 0 <= age <= horizon else "stale"
         except (OSError, ValueError, TypeError, KeyError):
             item = {"freshness": "unavailable"}
