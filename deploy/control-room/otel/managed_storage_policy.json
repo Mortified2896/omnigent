@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "total_max_bytes": 50000000000,
+  "forensic_max_bytes": 4000000000,
+  "retention_days": {
+    "lean": 60,
+    "forensic": 3,
+    "captures": 30,
+    "metadata": 30
+  },
+  "allocations": {
+    "otel_archive": 32000000000,
+    "provenance_artifacts": 6000000000,
+    "native_rollouts": 6000000000,
+    "provenance_database": 1000000000,
+    "telemetry_logs": 256000000,
+    "telemetry_backups": 1000000000,
+    "telemetry_runtime": 1000000000,
+    "legacy_selection": 512000000,
+    "other_managed": 1000000000
+  },
+  "management": {
+    "cleanup_start_bytes": 45000000000,
+    "resume_optional_bytes": 46000000000,
+    "pause_optional_bytes": 48000000000
+  }
+}

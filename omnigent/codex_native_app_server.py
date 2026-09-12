@@ -1115,6 +1115,17 @@ class CodexNativeAppServer:
             )
         await client.connect()
         try:
+            from omnigent.inner.codex_hook_ownership import reconcile_inherited_provenance_hooks
+
+            try:
+                await reconcile_inherited_provenance_hooks(
+                    client.request,
+                    cwd=str(self.cwd),
+                    codex_home=self.codex_home,
+                    source_path=_codex_home_config_source_from_env() / _CODEX_HOOKS_FILE,
+                )
+            except Exception:  # noqa: BLE001 - optional provenance never disables policy hooks
+                _logger.warning("could not reconcile inherited provenance hooks", exc_info=True)
             await trust_native_policy_hooks(client, cwd=str(self.cwd))
             # Routing hooks live in the same generated file but under a
             # different module, so they need their own trust pass. Best
@@ -1425,10 +1436,9 @@ def _write_codex_policy_hooks_file(
     """
     Write ``hooks.json`` into the private CODEX_HOME (atomically).
 
-    This file is the only ``hooks.json`` codex loads, so the policy hooks,
-    the subagent-routing hooks and the user's own hooks all go through the
-    shared :func:`write_codex_hooks_file` into one payload — written
-    separately, whichever ran last would erase the other.
+    Policy, routing and copied user hooks share this private file so one
+    generator cannot erase another. Codex also discovers other active config
+    layers; startup reconciles independently loaded provenance registrations.
 
     :param codex_home: Private per-session ``CODEX_HOME`` directory.
     :param bridge_dir: Native Codex bridge directory for the hook command.

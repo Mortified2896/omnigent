@@ -827,7 +827,7 @@ def _populate_codex_home_config(
             # its timeout. auth.json alone cannot supply these provider tables.
             source_config = tomlkit.parse(source_file.read_text())
             minimal_document = tomlkit.document()
-            for key in ("model_provider", "model_providers", "profiles"):
+            for key in ("model_provider", "model_providers", "profiles", "otel"):
                 if key in source_config:
                     minimal_document[key] = source_config[key]
             dest_path.write_text(tomlkit.dumps(minimal_document))
@@ -1051,8 +1051,8 @@ def merge_codex_user_hooks(payload: dict[str, Any], user_hooks_path: Path) -> di
     """
     Merge the user's ``hooks.json`` entries into a generated payload.
 
-    Omnigent's entries stay in first position per event so the routing
-    gate runs before user hooks; events the user declares alone are added
+    Omnigent's entries stay in first position per event for stable discovery
+    keys; events the user declares alone are added
     wholesale. A missing or malformed user file leaves *payload*
     unchanged — routing must not break because the user's hooks file is
     bad.
@@ -1075,9 +1075,9 @@ def merge_codex_hook_payloads(payloads: Iterable[Mapping[str, Any]]) -> dict[str
     """
     Merge ``hooks.json``-shaped payloads, earlier ones first per event.
 
-    Codex loads exactly one hooks file per ``CODEX_HOME``, so every
-    generator (policy hooks, routing hooks, the user's own hooks) has to
-    share a single payload; order decides which hook gates first.
+    Generators targeting the same private file must share one payload. Other
+    active config layers also contribute hooks, and matching command handlers
+    execute concurrently; this order does not establish execution precedence.
 
     :param payloads: Payloads to merge, most privileged first.
     :returns: The merged payload.
