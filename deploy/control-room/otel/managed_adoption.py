@@ -86,18 +86,14 @@ class ReservedCopies:
 
     def write(self, path, data, mode=0o600):
         path = Path(path)
-        if path.resolve() != path or not any(
-            root in path.parents for root in self.allowed_roots
-        ):
+        if path.resolve() != path or not any(root in path.parents for root in self.allowed_roots):
             raise StoragePaused("unsafe_adoption_destination")
         # Charge actual writes again, even if a caller mistakenly copies twice.
         charge = ((len(data) + 65535) // 65536) * 65536 + 65536
         if self.written_bytes + charge > self.required_bytes:
             raise StoragePaused("adoption_reservation_exhausted")
         self.written_bytes += charge
-        descriptor = os.open(
-            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-        )
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
             stream.flush()
