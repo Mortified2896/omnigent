@@ -46,21 +46,40 @@ class AdoptionReserveTests(unittest.TestCase):
         (self.state / "capture_node_id").write_text("fixture-identity")
         (self.home / "bin/otelcol-contrib").write_text("fixture-not-executable")
         self.plist = self.root / "collector.plist"
-        self.plist.write_bytes(plistlib.dumps({"ProgramArguments": [
-            str(self.home / "bin/otelcol-contrib"), "--config",
-            str(self.home / "config/otelcol-macos.yaml")
-        ]}))
+        self.plist.write_bytes(
+            plistlib.dumps(
+                {
+                    "ProgramArguments": [
+                        str(self.home / "bin/otelcol-contrib"),
+                        "--config",
+                        str(self.home / "config/otelcol-macos.yaml"),
+                    ]
+                }
+            )
+        )
         self.limit = 32 * 1024**2
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         for module in (admission, managed_budget):
-            stack.enter_context(patch.object(module, "load_policy", side_effect=lambda: {
-                "allocations": {"telemetry_backups": self.limit}
-            }))
-        stack.enter_context(patch.object(adopt, "source_status", side_effect=lambda source: {
-            "dirty": False, "repository": "Mortified2896/omnigent", "commit": "fixture",
-            "files": {name: adopt.digest(source / name) for name in adopt.FILES}
-        }))
+            stack.enter_context(
+                patch.object(
+                    module,
+                    "load_policy",
+                    side_effect=lambda: {"allocations": {"telemetry_backups": self.limit}},
+                )
+            )
+        stack.enter_context(
+            patch.object(
+                adopt,
+                "source_status",
+                side_effect=lambda source: {
+                    "dirty": False,
+                    "repository": "Mortified2896/omnigent",
+                    "commit": "fixture",
+                    "files": {name: adopt.digest(source / name) for name in adopt.FILES},
+                },
+            )
+        )
 
     def generic(self):
         # Only the external pinned-Collector config-validation process is mocked.
@@ -117,9 +136,13 @@ class AdoptionReserveTests(unittest.TestCase):
         self.assert_no_backup()
 
     def test_unknown_inventory_cannot_mean_empty(self):
-        with patch.object(admission, "measure", return_value={"complete": False, "components": None}):
-            with self.assertRaisesRegex(StoragePaused, "adoption_inventory_unknown"):
-                self.generic()
+        with (
+            patch.object(
+                admission, "measure", return_value={"complete": False, "components": None}
+            ),
+            self.assertRaisesRegex(StoragePaused, "adoption_inventory_unknown"),
+        ):
+            self.generic()
         self.assert_no_backup()
 
     def test_generic_success_keeps_config_identity_and_rollback(self):
@@ -144,7 +167,9 @@ class AdoptionReserveTests(unittest.TestCase):
         subprocess.run([sys.executable, result["rollback"]], check=True, capture_output=True)
         self.assertEqual(before, self.script.read_bytes())
         self.assertEqual(list((self.sidecar / "bin").iterdir()), [self.script])
-        self.assertEqual((self.sidecar / "provenance.sqlite3").read_bytes(), b"do not touch database")
+        self.assertEqual(
+            (self.sidecar / "provenance.sqlite3").read_bytes(), b"do not touch database"
+        )
 
     def test_both_adopters_share_real_process_lock(self):
         program = (
@@ -153,7 +178,10 @@ class AdoptionReserveTests(unittest.TestCase):
         )
         child = subprocess.Popen(
             [sys.executable, "-c", program, str(self.state / ".provenance-adoption.lock")],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             self.assertEqual(child.stdout.readline().strip(), "locked")
@@ -176,9 +204,11 @@ class AdoptionReserveTests(unittest.TestCase):
 
     def test_reviewed_hash_mismatch_is_refused(self):
         source = self.source / "control_room_otel.py"
-        with admission.reserved_copies([source], [], self.state, [self.home]) as copies:
-            with self.assertRaisesRegex(StoragePaused, "reviewed_source_changed"):
-                copies.assert_hashes({source: "0" * 64})
+        with (
+            admission.reserved_copies([source], [], self.state, [self.home]) as copies,
+            self.assertRaisesRegex(StoragePaused, "reviewed_source_changed"),
+        ):
+            copies.assert_hashes({source: "0" * 64})
         self.assert_no_backup()
 
     def test_unknown_candidate_hash_cannot_be_skipped(self):
@@ -206,9 +236,11 @@ class AdoptionReserveTests(unittest.TestCase):
     def test_parent_symlink_is_refused(self):
         alias = self.root / "state-alias"
         alias.symlink_to(self.state, target_is_directory=True)
-        with self.assertRaises(StoragePaused):
-            with admission.reserved_copies([], [], alias, [self.home]):
-                self.fail("unsafe state admitted")
+        with (
+            self.assertRaises(StoragePaused),
+            admission.reserved_copies([], [], alias, [self.home]),
+        ):
+            self.fail("unsafe state admitted")
 
     def test_hardlinked_candidate_is_refused(self):
         source = self.source / "control_room_otel.py"
@@ -250,9 +282,11 @@ class AdoptionReserveTests(unittest.TestCase):
     def test_copy_cannot_escape_admitted_destination(self):
         source = self.source / "control_room_otel.py"
         outside = self.root / "outside"
-        with admission.reserved_copies([source], [], self.state, [self.home]) as copies:
-            with self.assertRaises(StoragePaused):
-                copies.copy2(source, outside)
+        with (
+            admission.reserved_copies([source], [], self.state, [self.home]) as copies,
+            self.assertRaises(StoragePaused),
+        ):
+            copies.copy2(source, outside)
         self.assertFalse(outside.exists())
 
     def test_control_output_and_total_written_bytes_are_bounded(self):
