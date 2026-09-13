@@ -1531,6 +1531,15 @@ def register_core_routes(
                     f"To fork this session instead, run: omnigent run --fork {session_id}",
                     code=ErrorCode.FORBIDDEN,
                 )
+        from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
+
+        policy_session = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if policy_session is not None:
+            protect_recorded_policy(
+                policy_session.labels or {},
+                {key: getattr(policy_session, key, None) for key in body.model_fields_set},
+                body.model_dump(exclude_unset=True),
+            )
         if body.labels:
             _reject_server_reserved_label_seed(body.labels)
             # Advisor-owned cost_control.* labels are written only by the
