@@ -237,6 +237,7 @@ export function isCostRoutingEligible(
   return (
     smartRoutingEnabled(serverInfo) &&
     isCostRoutingSession(session) &&
+    session?.labels?.["omnigent.routing_policy"] !== "benchmark" &&
     !isNativeTerminalSession(session)
   );
 }
@@ -250,7 +251,11 @@ export function isSubagentRoutingEligible(
   serverInfo: ServerInfoValue,
   session: Session | null | undefined,
 ): boolean {
-  return smartRoutingEnabled(serverInfo) && isSubagentRoutingSession(session);
+  return (
+    smartRoutingEnabled(serverInfo) &&
+    session?.labels?.["omnigent.routing_policy"] !== "benchmark" &&
+    isSubagentRoutingSession(session)
+  );
 }
 
 function extractUserText(content: MessageContentBlock[]): string {
@@ -4091,6 +4096,15 @@ function ComposerStatusLine({
   // from the same source the badge does so the tray's render guard matches.
   const { session } = useSession(conversationId);
   const isHostBound = !!session?.hostId;
+  const routingPolicy = session?.labels?.["omnigent.routing_policy"];
+  const routingLabel =
+    routingPolicy === "benchmark"
+      ? "Benchmark Routing (O3)"
+      : routingPolicy === "native"
+        ? "Omnigent Smart Routing"
+        : routingPolicy === "manual"
+          ? "Manual / default"
+          : null;
 
   const showBranch = !!conversationId && !!gitBranch;
   // Host indicator (green/red dot + host name), left of the worktree branch.
@@ -4111,7 +4125,8 @@ function ComposerStatusLine({
   // the badge is where it lives and an unreachable session often has no
   // branch/ring at all.
   const showHostBadge = showHost && isHostBound;
-  if (!showBranch && !showPlanMode && !showGoal && !showRing && !showHostBadge) return null;
+  if (!showBranch && !showPlanMode && !showGoal && !showRing && !showHostBadge && !routingLabel)
+    return null;
 
   return (
     <div
@@ -4122,6 +4137,20 @@ function ComposerStatusLine({
         CHAT_COLUMN_WIDTH,
       )}
     >
+      {routingLabel && (
+        <span
+          data-testid="composer-routing-policy"
+          className="text-xs text-muted-foreground"
+          title={
+            "Routing policy selected when this conversation was created" +
+            (routingPolicy === "native"
+              ? " · Backend: " + (session?.labels?.["omnigent.routing_backend"] ?? "unavailable")
+              : "")
+          }
+        >
+          {routingLabel}
+        </span>
+      )}
       {/* Left: host + branch. flex-1 keeps the right cluster pinned; truncate, no wrap. */}
       <div className="flex min-w-0 flex-1 items-center gap-3 text-sm text-muted-foreground">
         {showHost && conversationId && (

@@ -477,6 +477,10 @@ def _ensure_default_agents(
     _ensure_default_debby_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_polly_agent(agent_store, artifact_store, agent_cache)
     _ensure_extra_builtin_agents(agent_store, artifact_store, agent_cache)
+    if os.environ.get("OMNIGENT_O3_HARD_TOOL_FREE") == "1":
+        from omnigent.server.o3_routing_review.agent import ensure_agent
+
+        ensure_agent(agent_store, artifact_store, agent_cache)
 
 
 # Env var listing extra built-in agent specs to seed at startup, in addition

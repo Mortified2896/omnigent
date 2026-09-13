@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import pytest
 from playwright.async_api import Page, Route, async_playwright, expect
 
 from tests.e2e_ui.start_session.test_start_session import (
@@ -30,7 +32,9 @@ def _proposal(
     session_id: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "constraint_version": 1,
+        "requirement_overrides": {},
         "proposal_id": _PROPOSAL_ID,
         "created_at": "2026-09-04T00:00:00Z",
         "updated_at": "2026-09-04T00:01:00Z",
@@ -40,7 +44,7 @@ def _proposal(
         "adviser": {
             "task_summary": "Inspect the routing layer without mutating the repository",
             "task_classification": "systems",
-            "difficulty": "medium",
+            "difficulty": "normal",
             "risk": "low",
             "requirements": {
                 "terminal": True,
@@ -65,6 +69,8 @@ def _proposal(
             "decomposition": [],
         },
         "approved_constraints": {
+            "difficulty": "normal",
+            "calibration_version": "test",
             "benchmark": {
                 "benchmark_id": "terminal-bench",
                 "version": "4.0.0",
@@ -166,6 +172,9 @@ async def _register_routes(
     link_bodies: list[dict[str, Any]],
     event_bodies: list[dict[str, Any]],
 ) -> None:
+    current = _proposal()
+    current["original_adviser"] = dict(current["adviser"])
+
     async def handle_info(route: Route) -> None:
         await route.fulfill(
             status=200,
@@ -283,22 +292,48 @@ async def _register_routes(
             status = 201
         elif path.endswith(f"/{_PROPOSAL_ID}") and route.request.method == "PATCH":
             adjustment_bodies.append(route.request.post_data_json)
-            body = _proposal(effort="high", minimum_score=0.58)
+            patch = route.request.post_data_json
+            if "requirement_overrides" in patch:
+                for field, value in patch["requirement_overrides"].items():
+                    if value is None or value == current["adviser"]["requirements"][field]:
+                        current["requirement_overrides"].pop(field, None)
+                    else:
+                        current["requirement_overrides"][field] = value
+                current["effective_requirements"] = {
+                    **current["adviser"]["requirements"],
+                    **current["requirement_overrides"],
+                }
+                current["constraint_version"] += 1
+                body = current
+            else:
+                current["approved_constraints"]["reasoning_effort"] = (
+                    "low" if patch.get("reset_reasoning_effort") else patch["reasoning_effort"]
+                )
+                current["constraint_version"] += 1
+                current["decision"] = None
+                body = current
+            status = 200
+        elif path.endswith(f"/{_PROPOSAL_ID}") and route.request.method == "GET":
+            body = current
             status = 200
         elif path.endswith("/decision"):
             decision_bodies.append(route.request.post_data_json)
-            body = _proposal(
-                effort="high",
-                minimum_score=0.58,
-                decision="approve",
-                derived_combo=_DERIVED_COMBO,
-            )
+            if route.request.post_data_json["action"] == "wait":
+                current["decision"] = "wait"
+                body = current
+            else:
+                body = _proposal(
+                    effort="high",
+                    minimum_score=0.5,
+                    decision="approve",
+                    derived_combo=_DERIVED_COMBO,
+                )
             status = 200
         elif path.endswith("/session"):
             link_bodies.append(route.request.post_data_json)
             body = _proposal(
                 effort="high",
-                minimum_score=0.58,
+                minimum_score=0.5,
                 decision="approve",
                 derived_combo=_DERIVED_COMBO,
                 session_id=created_session_id,
@@ -308,6 +343,14 @@ async def _register_routes(
             raise AssertionError(f"unexpected O3 request: {route.request.method} {path}")
         await route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
 
+    await page.route(
+        "**/resources/terminals?*",
+        lambda route: route.fulfill(status=200, json={"data": []}),
+    )
+    await page.route(
+        "**/resources/environments/default",
+        lambda route: route.fulfill(status=200, json={}),
+    )
     await page.route("**/v1/info", handle_info)
     await page.route("**/v1/hosts", handle_hosts)
     await page.route("**/v1/agents", handle_agents)
@@ -328,18 +371,25 @@ async def _register_routes(
     )
 
 
+@pytest.mark.parametrize(
+    "viewport", [{"width": 1280, "height": 900}, {"width": 390, "height": 844}]
+)
 def test_o3_review_adjust_approve_launches_codex_once(
     seeded_session: tuple[str, str],
+    tmp_path: Path,
+    viewport: dict[str, int],
 ) -> None:
     """Approval pins the derived Combo/effort and hands off the prompt once."""
     base_url, session_id = seeded_session
-    _run_in_fresh_loop(_drive_o3_review(base_url, session_id))
+    _run_in_fresh_loop(_drive_o3_review(base_url, session_id, viewport, tmp_path))
 
 
-async def _drive_o3_review(base_url: str, session_id: str) -> None:
+async def _drive_o3_review(
+    base_url: str, session_id: str, viewport: dict[str, int], evidence: Path
+) -> None:
     async with async_playwright() as pw:
         browser = await pw.chromium.launch()
-        page = await browser.new_page(viewport={"width": 1280, "height": 900})
+        page = await browser.new_page(viewport=viewport)
         try:
             create_bodies: list[dict[str, Any]] = []
             adjustment_bodies: list[dict[str, Any]] = []
@@ -379,6 +429,13 @@ async def _drive_o3_review(base_url: str, session_id: str) -> None:
             await page.goto(f"{base_url}/")
             composer = page.get_by_test_id("new-chat-landing-input")
             await composer.wait_for(state="visible", timeout=30_000)
+            picker = page.get_by_test_id("new-chat-landing-inline-model")
+            await expect(picker).to_contain_text("Default")
+            await picker.click()
+            await expect(page.get_by_text("Omnigent Smart Routing", exact=True)).to_be_visible()
+            await expect(page.get_by_text("Benchmark Routing (O3)", exact=True)).to_be_visible()
+            await page.screenshot(path=str(evidence / "routing-options.png"), full_page=True)
+            await page.get_by_text("Benchmark Routing (O3)", exact=True).click()
             await composer.fill(_PROMPT)
             await page.get_by_test_id("new-chat-landing-submit").click()
 
@@ -387,13 +444,40 @@ async def _drive_o3_review(base_url: str, session_id: str) -> None:
             await expect(card).to_contain_text("tb4.cr-systems-db-v1")
             assert create_bodies == [], "a Codex session started before routing approval"
 
-            await page.get_by_test_id("o3-adjust").click()
-            await page.get_by_test_id("o3-adjust-minimum").fill("0.58")
-            await page.get_by_test_id("o3-adjust-effort").select_option("high")
-            await page.get_by_test_id("o3-adjust-save").click()
+            tools = page.get_by_role("switch", name="Tools required")
+            await expect(tools).to_be_checked()
+            await expect(page.get_by_test_id("o3-override-tools")).to_have_count(0)
+            await tools.click()
+            await expect(tools).not_to_be_checked()
+            await expect(page.get_by_test_id("o3-override-tools")).to_be_visible()
+            await page.reload()
+            await expect(tools).not_to_be_checked()
+            await page.get_by_role("button", name="Reset Tools required to estimator").click()
+            await expect(tools).to_be_checked()
+            await expect(page.get_by_test_id("o3-override-tools")).to_have_count(0)
+            assert adjustment_bodies == [
+                {"requirement_overrides": {"tools": False}},
+                {"requirement_overrides": {"tools": None}},
+            ]
+            adjustment_bodies.clear()
+            assert create_bodies == []
+            effort_picker = page.get_by_role("combobox", name="Execution reasoning")
+            await effort_picker.click()
+            await page.get_by_role("option", name="High", exact=True).click()
             await _wait_until(lambda: len(adjustment_bodies) == 1)
-            await expect(card).to_contain_text("High")
+            await expect(effort_picker).to_contain_text("High")
+            await page.get_by_test_id("o3-reset-reasoning").click()
+            await _wait_until(lambda: len(adjustment_bodies) == 2)
+            await expect(effort_picker).to_contain_text("Low")
+            await effort_picker.click()
+            await page.get_by_role("option", name="High", exact=True).click()
+            await _wait_until(lambda: len(adjustment_bodies) == 3)
+            await expect(effort_picker).to_contain_text("High")
+            await page.screenshot(path=str(evidence / "reasoning-override.png"), full_page=True)
             assert create_bodies == [], "adjustment created a session before approval"
+            await page.get_by_test_id("o3-wait").click()
+            await expect(card).to_contain_text("Wait")
+            await page.screenshot(path=str(evidence / "waiting.png"), full_page=True)
 
             await page.get_by_test_id("o3-approve").click()
             await _wait_until(lambda: len(create_bodies) == 1)
@@ -404,18 +488,14 @@ async def _drive_o3_review(base_url: str, session_id: str) -> None:
             await page.wait_for_timeout(250)
 
             assert adjustment_bodies == [
-                {
-                    "benchmark_id": "terminal-bench",
-                    "version": "4.0.0",
-                    "slice_id": "tb4.cr-systems-db-v1",
-                    "minimum_score": 0.58,
-                    "reasoning_effort": "high",
-                    "risk": "low",
-                    "evidence_policy": "provisional",
-                    "cost_quota_preference": "preserve_subscription",
-                }
+                {"reasoning_effort": "high"},
+                {"reset_reasoning_effort": True},
+                {"reasoning_effort": "high"},
             ]
-            assert decision_bodies == [{"action": "approve", "acknowledge_provisional": True}]
+            assert decision_bodies == [
+                {"action": "wait"},
+                {"action": "approve", "acknowledge_provisional": True},
+            ]
             create = create_bodies[0]
             assert create["agent_id"] == "ag_codex_e2e"
             assert create["harness_override"] == "codex-native"

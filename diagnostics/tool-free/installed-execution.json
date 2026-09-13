@@ -1,0 +1,123 @@
+{
+  "proposal_id": "887f4017-34f1-4f29-ab50-ddf693b61f7e",
+  "session_id": "05895ba3cd1d4fa7922a8893643f65e0",
+  "effective_requirements": {
+    "terminal": false,
+    "tools": false,
+    "minimum_context_tokens": 0,
+    "vision": false,
+    "input_modalities": [
+      "text"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "minimum_input_tokens": 0,
+    "minimum_output_tokens": 0,
+    "structured_output": false,
+    "client_endpoint": "responses"
+  },
+  "selected_execution": {
+    "mode": "hard_tool_free",
+    "route": "oc/mimo-v2.5-free",
+    "provider": "oc",
+    "cost_class": "free",
+    "capability_score_lower": 20.0,
+    "reason": "Tools not required; meets floor; free route preserves subscription"
+  },
+  "provenance": {
+    "endpoint": "/v1/responses",
+    "model": "mimo-v2.5-free",
+    "observed_at": "2026-09-10T06:13:05.279059+00:00",
+    "protocol": "local-tool-free-responses-v1",
+    "provider": "oc",
+    "reported_cost_usd": "0.0000000000",
+    "request_contract": {
+      "max_output_tokens": 1024,
+      "model": "oc/mimo-v2.5-free",
+      "reasoning": {
+        "effort": "low"
+      },
+      "store": false,
+      "stream": false,
+      "tool_choice": "none",
+      "tools": []
+    },
+    "response_id": "resp_gen-1789020779-92M5Tzad4BiYMxzptw5W",
+    "store": false,
+    "stream": false,
+    "tool_choice": "none",
+    "tools": [],
+    "usage": {
+      "input_tokens": 46,
+      "input_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 178,
+      "output_tokens_details": {
+        "audio_tokens": 0,
+        "reasoning_tokens": 145
+      },
+      "total_tokens": 224
+    }
+  },
+  "messages": [
+    {
+      "id": "fffdf1f198bf4cdbbfa8146eb5e86188",
+      "response_id": "turn_bd9e78c4a8c7409fb00d7a168a040d2c",
+      "type": "message",
+      "status": "completed",
+      "created_at": 1789020777,
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Hi"
+        }
+      ]
+    },
+    {
+      "id": "94bdccad48eb4444ada39dcd265f15c2",
+      "response_id": "resp_92ec8b2f57c8410bb86e109d",
+      "type": "message",
+      "status": "completed",
+      "created_at": 1789020786,
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Hello! How can I assist you today? If you have any questions or need help with something, feel free to ask. I'm here to help."
+        }
+      ],
+      "model": "local-tool-free"
+    },
+    {
+      "id": "0f8bc78a22924798b0d9e50af8d503d7",
+      "response_id": "turn_4cf30d3c6de34e5284d9406be09964f7",
+      "type": "message",
+      "status": "completed",
+      "created_at": 1789020869,
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Read the files in my current folder and tell me what is there."
+        }
+      ]
+    }
+  ],
+  "followup_errors": [
+    {
+      "id": "d714e302755648ec974067b2c3301f21",
+      "response_id": "resp_c015560b142848ada12a98d4",
+      "type": "error",
+      "status": "completed",
+      "created_at": 1789020870,
+      "source": "execution",
+      "code": "RuntimeError",
+      "message": "inner executor error: Tool-free follow-ups require a new routing review."
+    }
+  ]
+}

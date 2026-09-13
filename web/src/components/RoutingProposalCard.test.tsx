@@ -605,3 +605,119 @@ it("keeps model groups collapsed and exposes distinct provider routes on demand"
   fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
   expect(screen.queryByTestId("o3-model-groups")).not.toBeInTheDocument();
 });
+
+it("shows estimator controls and sends only the changed requirement without executing", async () => {
+  const { onAdjust, onApproved, onDecision } = renderCard();
+  expect(screen.getByRole("switch", { name: "Tools required" })).toBeChecked();
+  expect(screen.queryByTestId("o3-override-tools")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("switch", { name: "Tools required" }));
+  await waitFor(() =>
+    expect(onAdjust).toHaveBeenCalledWith({ requirement_overrides: { tools: false } }),
+  );
+  expect(onApproved).not.toHaveBeenCalled();
+  expect(onDecision).not.toHaveBeenCalled();
+});
+
+it("renders persisted effective values and resets just one overridden field", async () => {
+  const value = proposal();
+  value.requirement_overrides = { tools: false, image_input: true };
+  value.effective_requirements = { ...value.adviser.requirements, tools: false, vision: true };
+  const { onAdjust } = renderCard(value);
+  expect(screen.getByRole("switch", { name: "Tools required" })).not.toBeChecked();
+  expect(screen.getByRole("switch", { name: "Image input" })).toBeChecked();
+  expect(screen.getByTestId("o3-override-tools")).toHaveTextContent("Overridden");
+  fireEvent.click(screen.getByRole("button", { name: "Reset Tools required to estimator" }));
+  await waitFor(() =>
+    expect(onAdjust).toHaveBeenCalledWith({ requirement_overrides: { tools: null } }),
+  );
+  expect(value.adviser.requirements.tools).toBe(true);
+});
+
+it("requires a valid numeric capacity before applying it", async () => {
+  const { onAdjust } = renderCard();
+  const input = screen.getByLabelText("Minimum context (tokens)");
+  fireEvent.change(input, { target: { value: "-1" } });
+  expect(screen.getByRole("button", { name: "Apply Minimum context (tokens)" })).toBeDisabled();
+  fireEvent.change(input, { target: { value: "128000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply Minimum context (tokens)" }));
+  await waitFor(() =>
+    expect(onAdjust).toHaveBeenCalledWith({
+      requirement_overrides: { minimum_context_tokens: 128000 },
+    }),
+  );
+});
+
+it("acknowledges tool-free evidence without native provisional candidates", async () => {
+  const { onDecision } = renderCard(
+    proposal({
+      evaluations: [],
+      execution_options: [
+        {
+          mode: "hard_tool_free",
+          route: "free/model",
+          provider: "free",
+          cost_class: "free",
+          capability_score_lower: 60,
+          reason: "Qualified",
+        },
+      ],
+      selected_execution: {
+        mode: "hard_tool_free",
+        route: "free/model",
+        provider: "free",
+        cost_class: "free",
+        capability_score_lower: 60,
+        reason: "Tools not required; meets floor; preserves subscription",
+      },
+    }),
+  );
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent("Execution: Tool-free");
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent("free/model");
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent(
+    "Follow-ups require a new routing review",
+  );
+  fireEvent.click(screen.getByTestId("o3-approve"));
+  await waitFor(() =>
+    expect(onDecision).toHaveBeenCalledWith({ action: "approve", acknowledge_provisional: true }),
+  );
+});
+
+it("shows tool-capable mode when the recomputed selection requires tools", () => {
+  renderCard(
+    proposal({
+      selected_execution: {
+        mode: "tool_capable_native",
+        route: "codex/model",
+        provider: "codex",
+        cost_class: "subscription",
+        capability_score_lower: 90,
+        reason: "Qualified native tool contract",
+      },
+    }),
+  );
+  expect(screen.getByTestId("o3-execution-mode")).toHaveTextContent("Execution: Tool-capable");
+  expect(screen.queryByText(/No callable tools/)).not.toBeInTheDocument();
+});
+
+it("shows the preserved recommendation and resets execution effort without touching the floor", async () => {
+  const original = proposal();
+  const value = proposal({
+    constraint_version: 3,
+    original_adviser: original.adviser,
+    approved_constraints: { ...original.approved_constraints, reasoning_effort: "high" },
+  });
+  const { onAdjust } = renderCard(value);
+  expect(screen.getByTestId("o3-execution-reasoning")).toHaveTextContent(
+    "Estimator recommendation: Low",
+  );
+  fireEvent.click(screen.getByTestId("o3-reset-reasoning"));
+  await waitFor(() => expect(onAdjust).toHaveBeenCalledWith({ reset_reasoning_effort: true }));
+});
+
+it("explains unavailable originals on legacy adjusted reviews", () => {
+  renderCard(proposal({ constraint_version: 2 }));
+  expect(screen.getByTestId("o3-reset-reasoning")).toBeDisabled();
+  expect(screen.getByTestId("o3-execution-reasoning")).toHaveTextContent(
+    "unavailable for this older review",
+  );
+});

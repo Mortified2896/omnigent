@@ -12,8 +12,16 @@ import {
   XIcon,
 } from "lucide-react";
 
+import { ExecutionProfile } from "./ExecutionProfile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type {
   O3BenchmarkSlice,
   O3CatalogueRecommendationItem,
@@ -199,11 +207,29 @@ export function RoutingProposalCard({
   const waiting = proposal.decision === "wait";
   const approved = proposal.decision === "approve" || proposal.decision === "run_anyway";
   const catalogueEligible = recommendation?.execution_set?.eligible_count ?? 0;
+  const originalAdviser =
+    proposal.original_adviser ?? (proposal.constraint_version === 1 ? proposal.adviser : null);
+  const executionEfforts = Array.from(
+    new Set([
+      constraints.reasoning_effort,
+      ...(originalAdviser ? [originalAdviser.proposed_reasoning_effort] : []),
+      ...proposal.evaluations.flatMap((item) => item.candidate.supported_reasoning_efforts),
+      ...(recommendation?.execution_set?.eligible ?? []).map((item) => item.reasoning_mode),
+      ...(recommendation?.execution_set?.excluded ?? []).map((item) => item.reasoning_mode),
+    ]),
+  ).filter((value) => ["low", "medium", "high", "xhigh"].includes(value));
   const canApprove =
-    (eligible.length > 0 || catalogueEligible > 0) &&
+    (eligible.length > 0 ||
+      catalogueEligible > 0 ||
+      (proposal.execution_options?.length ?? 0) > 0) &&
     (proposal.decision === null || proposal.decision === "wait");
-  const canResumeLaunch = approved && proposal.derived_combo_name !== null;
-  const hasProvisional = eligible.some((item) => item.status === "provisional");
+  const canResumeLaunch =
+    approved &&
+    (proposal.derived_combo_name !== null ||
+      proposal.selected_execution?.mode === "hard_tool_free");
+  const hasProvisional =
+    eligible.some((item) => item.status === "provisional") ||
+    proposal.selected_execution?.mode === "hard_tool_free";
 
   async function decide(decision: O3ProposalDecision, launch: boolean): Promise<void> {
     setBusy(decision.action);
@@ -231,10 +257,14 @@ export function RoutingProposalCard({
     setError(null);
     try {
       const updated = await onAdjust({
-        benchmark_id: chosen.benchmark_id,
-        version: chosen.version,
-        slice_id: chosen.slice_id,
-        difficulty,
+        ...(sliceKey !== [benchmark.benchmark_id, benchmark.version, benchmark.slice_id].join("|")
+          ? {
+              benchmark_id: chosen.benchmark_id,
+              version: chosen.version,
+              slice_id: chosen.slice_id,
+            }
+          : {}),
+        ...(difficulty !== constraints.difficulty ? { difficulty } : {}),
         reasoning_effort: effort,
         risk,
         evidence_policy: evidencePolicy,
@@ -244,6 +274,18 @@ export function RoutingProposalCard({
       setAdjusting(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Adjustment could not be validated");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function adjustRequirements(adjustment: O3ProposalAdjustment): Promise<void> {
+    setBusy("capabilities");
+    setError(null);
+    try {
+      onProposalChange(await onAdjust(adjustment));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Requirements could not be validated");
     } finally {
       setBusy(null);
     }
@@ -418,23 +460,66 @@ export function RoutingProposalCard({
                 ? "Routes meet the capability and input/output requirements. Access is rechecked when you continue."
                 : "Adjust the requirements or wait for availability to change."}
             </p>
-            {recommendation.model_groups?.find((group) => group.eligible_route_count > 0) && (
-              <p className="mt-2 break-words text-sm">
-                Leading option:{" "}
-                <strong>
-                  {
-                    recommendation.model_groups.find((group) => group.eligible_route_count > 0)
-                      ?.displayed_model
-                  }
-                </strong>
-                <span className="text-muted-foreground">
-                  {" "}
-                  · final route selected after access recheck
-                </span>
-              </p>
-            )}
+            {!proposal.selected_execution &&
+              recommendation.model_groups?.find((group) => group.eligible_route_count > 0) && (
+                <p className="mt-2 break-words text-sm">
+                  Leading option:{" "}
+                  <strong>
+                    {
+                      recommendation.model_groups.find((group) => group.eligible_route_count > 0)
+                        ?.displayed_model
+                    }
+                  </strong>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · final route selected after access recheck
+                  </span>
+                </p>
+              )}
           </div>
         )}
+
+        <div
+          className="space-y-2 rounded-md border border-border p-3"
+          data-testid="o3-execution-reasoning"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Execution reasoning</span>
+            <Select
+              value={constraints.reasoning_effort}
+              disabled={busy !== null || terminal || approved}
+              onValueChange={(value) => void adjustRequirements({ reasoning_effort: value })}
+            >
+              <SelectTrigger className="h-9 w-32" aria-label="Execution reasoning">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {executionEfforts.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {titleCase(value)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null || terminal || approved || originalAdviser === null}
+              onClick={() => void adjustRequirements({ reset_reasoning_effort: true })}
+              data-testid="o3-reset-reasoning"
+            >
+              Reset to recommendation
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Estimator recommendation:{" "}
+            {originalAdviser
+              ? titleCase(originalAdviser.proposed_reasoning_effort)
+              : "unavailable for this older review"}
+            . Changes recheck supported configurations at the same quality floor. Estimator
+            inference effort is separate.
+          </p>
+        </div>
 
         {(!recommendation || expanded) && (
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm md:grid-cols-4">
@@ -645,6 +730,13 @@ export function RoutingProposalCard({
           </div>
         )}
 
+        <ExecutionProfile
+          key={`${proposal.proposal_id}-${proposal.constraint_version ?? 1}`}
+          proposal={proposal}
+          disabled={busy !== null || !(proposal.decision === null || waiting)}
+          onAdjust={adjustRequirements}
+        />
+
         {proposal.frontier.capability_gap && catalogueEligible === 0 && (
           <div
             className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
@@ -656,30 +748,32 @@ export function RoutingProposalCard({
           </div>
         )}
 
-        {proposal.resource_advice && proposal.resource_snapshot && (
-          <div
-            className="rounded-md border border-border px-3 py-2 text-sm"
-            data-testid="o3-resource-advice"
-          >
-            <p className="font-semibold">
-              {proposal.resource_snapshot.usable_routes === 0 &&
-              proposal.resource_snapshot.unknown_routes > 0
-                ? "Availability unverified"
-                : titleCase(proposal.resource_advice.action)}
-            </p>
-            <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
-            {expanded && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
-                {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
-                {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
-                {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
-                {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
-                {titleCase(proposal.resource_advice.source)}.
+        {proposal.selected_execution?.mode !== "hard_tool_free" &&
+          proposal.resource_advice &&
+          proposal.resource_snapshot && (
+            <div
+              className="rounded-md border border-border px-3 py-2 text-sm"
+              data-testid="o3-resource-advice"
+            >
+              <p className="font-semibold">
+                {proposal.resource_snapshot.usable_routes === 0 &&
+                proposal.resource_snapshot.unknown_routes > 0
+                  ? "Availability unverified"
+                  : titleCase(proposal.resource_advice.action)}
               </p>
-            )}
-          </div>
-        )}
+              <p className="mt-1 text-muted-foreground">{proposal.resource_advice.reason}</p>
+              {expanded && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Current status: {proposal.resource_snapshot.usable_routes} usable ·{" "}
+                  {proposal.resource_snapshot.blocked_routes} blocked ·{" "}
+                  {proposal.resource_snapshot.unknown_routes} unknown ·{" "}
+                  {proposal.resource_snapshot.status_coverage_percent.toFixed(0)}% coverage ·{" "}
+                  {proposal.resource_snapshot.serialized_bytes} bytes. Advice source:{" "}
+                  {titleCase(proposal.resource_advice.source)}.
+                </p>
+              )}
+            </div>
+          )}
 
         {reviewingSplit && proposal.adviser.decomposition.length > 0 && (
           <div className="space-y-2" data-testid="o3-decomposition">
@@ -946,6 +1040,28 @@ export function RoutingProposalCard({
           </p>
         )}
 
+        {proposal.selected_execution && (
+          <div
+            className="rounded-md border border-border px-3 py-2 text-sm"
+            data-testid="o3-execution-mode"
+          >
+            <p>
+              Execution:{" "}
+              {proposal.selected_execution.mode === "hard_tool_free" ? "Tool-free" : "Tool-capable"}
+            </p>
+            <p>
+              {proposal.selected_execution.route} · {proposal.selected_execution.cost_class}
+            </p>
+            <p className="text-xs text-muted-foreground">{proposal.selected_execution.reason}</p>
+            {proposal.selected_execution.mode === "hard_tool_free" && (
+              <p className="text-xs text-muted-foreground">
+                No callable tools. Follow-ups require a new routing review. Approval accepts
+                provisional quality evidence for this route.
+              </p>
+            )}
+          </div>
+        )}
+
         {waiting && (
           <div
             className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
@@ -964,7 +1080,7 @@ export function RoutingProposalCard({
               className="min-w-0 truncate text-xs text-muted-foreground"
               data-testid="o3-approved-route"
             >
-              Approved route: {proposal.derived_combo_name}
+              Approved route: {proposal.selected_execution?.route ?? proposal.derived_combo_name}
             </p>
           ) : (
             <div className="flex flex-wrap gap-1.5">

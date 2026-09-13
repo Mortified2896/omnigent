@@ -1,0 +1,76 @@
+# RTX integration feature disposition
+
+Candidate only. No source PR has been merged and no live O1 promotion is accepted.
+
+Verified baseline: origin/main 28095733f87dc50b3bf4e73adee39ad4a7e72c1d.
+The deployed O1/O2 release ba50146e9bd4512ec345feb7e9bc483421a04104 is
+an ancestor. Both old server/host pairs were active and healthy on 2026-09-13.
+The Mac O3 process uses the mac-tool-free-execution worktree at
+06c14e783c168474321f43802d9aceaaa9889365 with preserved untracked diagnostics.
+Mac OmniRoute reports 3.8.50 / build dea6bb8 / Node 22.22.3.
+
+| Feature | Disposition | Source / integration boundary |
+| --- | --- | --- |
+| Native execution, durable sessions/approvals/results, publication and repository safeguards | ALREADY PRESENT | Deployed release ancestry retained through current main; focused native/transport regression gates remain required. |
+| O3 estimator, versioned calibration and approved catalogue execution set | ALREADY PRESENT | PR 140 is merged; current main includes its corrections. No recalibration. |
+| Qualified lazy discovery and alias metadata | SEMANTIC PORT | Exact missing commit 264dcd07b2eb7c4cefbe96d07e733cde59c6aa30 from PR 149. Linux gateway qualification must be fresh. |
+| Capability/reasoning overrides, original recommendation and reset | SEMANTIC PORT | Exact missing commit 6d4f1ef698c9e55c6a2645f7abd378565f9329d7 from PR 151. |
+| Separate hard tool-free lane and its limitations | SEMANTIC PORT | Exact missing commit 06c14e783c168474321f43802d9aceaaa9889365 from PR 152. |
+| Mac telemetry installation, archive, rollback and historical counters | KEEP | PR 154 head 7f72743727160f9c132f786d792b7022dac94c7e remains preserved; do not run Mac adoption on Linux or migrate its archive. |
+| Minimal Codex OTEL config and optional provenance hook ownership | SEMANTIC PORT | Only native runtime helpers and focused tests from PR 154. Optional capture must not block execution. |
+| Visible Omnigent Smart Routing / Benchmark Routing (O3) / manual selection | INTEGRATED / TESTED | Implements the approved issue 113/124 controls using native selection and dispatch. Preserve unsupported reasons and isolate policies. |
+| Linux runtime qualification, immutable artifact and cross-host promotion | BLOCKED UNTIL VERIFIED | A Mac qualification or local-only peer deployer is not cross-host acceptance. |
+| Extra O2/O3 installations, GPU rework, new observability and benchmark platform | DISABLE-DEFER | Outside the initial single-guest migration. |
+
+The three Mac feature commits form an ancestry-checked sequence. They are
+applied individually to the current product baseline, without overlaying a
+runtime checkout or merging their old parent branches. Mac-only telemetry
+infrastructure is deliberately not installed on the new guest.
+
+Exactly one selected routing policy owns each new turn. Native mode retains
+native chooser semantics and never invokes O3. O3 approval must never be
+followed by a native semantic chooser or an unrestricted fallback. Executor
+effort is separate from estimator inference effort. Endpoint-bound evidence
+is revalidated before an approved execution set can run.
+
+Publication is a draft customization PR. Production promotion still requires
+accepted/approved source, immutable acceptance, real O2 supervision,
+consistent final state transfer and executable rollback.
+
+## Current integration validation
+
+The shared model picker now offers explicit native, benchmark and manual
+policies. New users remain on default/manual. Stored explicit selections are
+preserved; unavailable selected routing blocks submission with its reason.
+Native dispatch sends no O3 proposal or pinned executor effort. O3 approval
+explicitly disables native routing. Session labels record requested policy
+and native backend without asserting an unobserved provider result.
+Switching an unsent context invalidates a pending review; stale asynchronous
+responses cannot revive it. Creation freezes the controls.
+
+O3 persists the original estimator analysis separately from adjustments.
+Execution reasoning changes and reset revalidate without lowering the current
+floor. Modified legacy reviews with missing originals cannot invent a reset.
+The native/manual effort picker validates against current model options and
+persists the selected supported value.
+
+Validation on ai-control-hub: 240 focused integration/native tests passed,
+51 O3 tests including new reset/legacy checks passed, 86 frontend tests
+passed, TypeScript passed, and the production frontend build passed.
+Two Playwright scenarios cover 1280x900 desktop and 390x844 mobile:
+mode discovery, explicit O3 opt-in, capability override/reset/reload,
+execution effort override/reset, waiting and exactly-once approved dispatch.
+Rendered screenshots under diagnostics/rtx-ui are from this production UI
+with mocked routing responses; they do not prove live provider or phone use.
+
+Actual Linux gateway transport evidence belongs to the companion runtime
+PR: both low and medium Responses probes completed with matching response
+model/effort metadata. That does not qualify all historical catalogue entries,
+the full native edit/test loop, tool search, or a hard tool-free endpoint.
+
+Gear saves preserve the benchmark policy unless a routing/model option was
+explicitly selected. Resumed conversations display their recorded policy
+and native backend details; O3 conversations do not expose native routing
+toggles. Native wording distinguishes model selection from the harness
+reasoning default. The final focused frontend run passed 235 checks,
+including these settings and resume regressions.

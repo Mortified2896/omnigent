@@ -20,12 +20,17 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
     useWorkspaceDirectory: () => ({ data: undefined }),
   };
 });
+const sessionLabels = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 // HostBadge now renders in the composer's status-line tray and reads the
 // session's host binding via TanStack Query. Stub the hooks so it self-hides
 // (no host bound) without needing a QueryClient provider around these renders.
 vi.mock("@/hooks/useSession", async (importOriginal) => ({
   ...(await importOriginal<typeof UseSessionModule>()),
-  useSession: () => ({ session: { hostId: null }, isLoading: false, error: null }),
+  useSession: () => ({
+    session: { hostId: null, labels: sessionLabels.value },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@/hooks/useHosts", async (importOriginal) => ({
   ...(await importOriginal<typeof UseHostsModule>()),
@@ -159,6 +164,7 @@ describe("Composer Codex goal control", () => {
 
 describe("Composer slash-command menu", () => {
   beforeEach(() => {
+    sessionLabels.value = {};
     // Two skills so the menu has skill rows distinct from the built-ins.
     // Skills fill the textarea (with a trailing space) on selection rather
     // than executing, which lets us assert the completed value directly
@@ -2490,4 +2496,18 @@ describe("shouldQueueSend", () => {
   it("ignores queued messages belonging to a different conversation", () => {
     expect(shouldQueueSend("conv_a", "idle", "idle", [q("conv_b")])).toBe(false);
   });
+});
+
+it.each([
+  ["benchmark", "Benchmark Routing (O3)"],
+  ["native", "Omnigent Smart Routing"],
+  ["manual", "Manual / default"],
+])("restores the saved %s policy in the conversation status", (policy, label) => {
+  sessionLabels.value = { "omnigent.routing_policy": policy };
+  render(
+    <TooltipProvider>
+      <Composer {...composerProps()} />
+    </TooltipProvider>,
+  );
+  expect(screen.getByTestId("composer-routing-policy")).toHaveTextContent(label);
 });

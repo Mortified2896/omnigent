@@ -64,12 +64,15 @@ class ProposalStore:
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
-            proposals[proposal.proposal_id] = proposal.model_dump(mode="json")
+            proposals[proposal.proposal_id] = proposal.model_dump(
+                mode="json", exclude={"effective_requirements"}
+            )
             self._write(state)
 
     @staticmethod
     def _parse(raw: dict[str, object]) -> RoutingProposal:
         """Read schema-v1 numeric-floor proposals without destructive migration."""
+        raw = {key: value for key, value in raw.items() if key != "effective_requirements"}
         if raw.get("schema_version", 1) != 1:
             return RoutingProposal.model_validate(raw)
         adapted = json.loads(json.dumps(raw))

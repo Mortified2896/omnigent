@@ -1,0 +1,3 @@
+text initial 201 {'terminal': False, 'tools': False, 'minimum_context_tokens': 0, 'vision': False, 'input_modalities': ['text'], 'output_modalities': ['text'], 'minimum_input_tokens': 0, 'minimum_output_tokens': 0, 'structured_output': False, 'client_endpoint': 'responses'}
+text approved custom/o3-route-48edff3aac30
+text session http://127.0.0.1:6768/c/693f4ae2711a45f89fadcc11b00406f6
