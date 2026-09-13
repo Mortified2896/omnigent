@@ -3,92 +3,101 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
-## HomeLab server-first boundary
+## HomeLab controller, source, and runtime boundary
 
 This section applies to the `Mortified2896/omnigent` HomeLab deployment. Other
 upstream contributors may use their normal development environments.
 
-For HomeLab work, implementation, validation, and deployment are server-first
-on `ai-control-hub`. Read
-`/home/hermes/workspace/repos/HomeLab/docs/codex-server-workflow.md` before
-resolving a branch or changing live state.
+The Mac Codex app is the external controller. Source-only HomeLab changes may be
+implemented and validated in an isolated local Mac Git worktree. Keep Omnigent
+worktrees organized under:
 
-Before the first mutation, fetch, commit, push, merge, build, or deployment,
-verify all of these identities:
+```text
+/Users/Jo/GitHub/omnigent
+/Users/Jo/GitHub/_worktrees/omnigent/<task>
+```
 
-- remote hostname: `ai-control-hub`;
-- canonical source: `/home/hermes/workspace/repos/omnigent`;
-- origin fetch and push target: `Mortified2896/omnigent`;
-- worktree status and current branch; and
-- the exact remote ref when the user names an existing branch.
+A task worktree normally checks out its own `codex/<task>` branch. Before the
+first source mutation, fetch, commit, or push, verify:
 
-Stop on any mismatch. Do not silently repair a branch typo, substitute a
-similarly named branch from another repository, or treat a branch name or
-commit message as proof of product identity.
+- repository root and worktree status;
+- origin fetch and push target `Mortified2896/omnigent`;
+- current branch/base and HEAD; and
+- the exact remote ref when the task depends on an existing branch.
 
-Use an isolated Omnigent task worktree on `ai-control-hub`. A local Mac clone
-is read-only orientation, not the implementation or deployment source.
+Do not assume `main` contains the active RTX feature set while PR #156 remains
+unmerged. For changes that must preserve the running RTX integration lineage,
+inspect the current remote head of `codex/rtx-o1-integration` before selecting a
+base.
 
-The default branch, commit, pull-request, and merge target is the customized
-fork `Mortified2896/omnigent`. The official `omnigent-ai/omnigent` repository
-and the `upstream` remote are read-only unless the owner explicitly requests an
-upstream contribution. Inspect the resolved push URL before every push.
+The official `omnigent-ai/omnigent` repository and `upstream` remote are
+read-only unless the owner explicitly requests an upstream contribution.
+Inspect the resolved push URL before every push.
+
+The active HomeLab Omnigent runtime is no longer on `ai-control-hub`. Current
+runtime identity:
+
+- Proxmox host: `pve-gpu`;
+- guest: VM 100 `rtx-omnigent`;
+- private service: `https://rtx-omnigent.taile0361b.ts.net`;
+- application data/releases: under `/srv` in the guest;
+- active application: RTX O1 + execution host + newer OmniRoute 3.8.50.
+
+Old O1 and O2 on `ai-control-hub` are stopped, disabled, restart-fenced, and
+archived. Old OpenCode Web and the old OmniRoute gateway were removed from active
+paths after verified archival. Do not route new implementation or acceptance
+work to the old instances because historical guidance names them.
+
+For live runtime work, read the current HomeLab topology/workflow documents and
+perform a fresh host identity check before mutation. Source-only local work does
+not require touching the running service.
+
+Never develop by editing `/srv/omnigent/releases/*` directly. Installed releases
+are immutable deployment artifacts; build/stage/deploy from a verified source
+branch through the existing rollback-preserving path.
 
 The standalone Control Room repository is retired and is never an Omnigent
 source checkout. Historical names such as `control-room-deploy` and
-`/var/lib/omnigent-control-room` are deployment labels, not repository
+`/var/lib/omnigent-control-room` are deployment/state labels, not repository
 identity.
 
-## HomeLab Omnigent dual-instance safety
+## HomeLab deployment safety
 
-This repository maintains the HomeLab Omnigent dual-instance deployment
-(O1 maintenance + O2 production). The hard invariant is:
+The peer-deployer implementation and
+`deploy/docs/control-room-dual-instance-upgrade-safety.md` retain a hard
+TARGET/SUPERVISOR separation invariant when that deployment mechanism is used.
+An instance must never supervise its own upgrade.
 
-> Never let an Omnigent instance upgrade itself. O1 upgrades O2;
-> O2 upgrades O1. The healthy peer stays alive and supervises the
-> entire operation.
+The current steady state, however, has one active RTX O1 and no live O2 peer.
+Source work does not require a supervisor. Do not fabricate or relabel a peer,
+feed remote observations into a local supervisor slot, or revive archived O2
+merely to satisfy stale prose. If a requested live deployment path genuinely
+requires a healthy peer, report that as a concrete deployment-architecture
+requirement before mutation.
 
-Any deployment action MUST explicitly declare a target and supervisor
-identity, and the two must be different instances. The deployment
-tooling (`deploy/scripts/peer_deployer/`) refuses to run if target
-and supervisor resolve to the same instance.
+Live deployment is distinct from source implementation. A passing build or test
+suite does not authorize a restart, release switch, database replacement, or
+service mutation.
 
-The authoritative safety contract is in
-`deploy/docs/control-room-dual-instance-upgrade-safety.md`. That
-document overrides any less-specific deployment wording in this
-repository. Read it before any deployment work.
+## HomeLab privilege boundary
 
-## HomeLab Omnigent trusted root access
-
-O1 and O2 are intentionally trusted administrative agents on the private
-HomeLab host. They have unrestricted passwordless root access through
-`sudo -n <command>`. For authorized, in-scope Omnigent work, use `sudo -n`
-autonomously whenever root is useful or required. Root required is a capability,
-not a blocker: do not stop, ask the user to SSH into the server, or ask the user
-to run privileged commands manually merely because root is required.
-
-Normal in-scope uses include systemd/service administration; deployment and
-rollback; diagnostics and journals; filesystem ownership and permissions;
-package/runtime installation; HomeLab configuration; authorized database
-backup or migration; and recovery of broken O1/O2 states.
-
-Root access does not remove the dual-instance safety invariant:
-
-- Never let an Omnigent instance upgrade itself.
-- O1 upgrades O2; O2 upgrades O1.
-- Target and supervisor must differ.
-- Keep the healthy supervisor available throughout an upgrade or recovery.
+Privilege comes from current machine policy and fresh observation, not from this
+document. For live RTX operations, use the normal `hermes` account and only use
+`sudo -n` for narrowly scoped operations after verifying it is available and
+needed. A source-only Mac task should not touch live services simply to prove
+privileged access.
 
 For destructive actions outside the requested scope—including deleting user
 data, destroying VMs or storage, removing credentials, disabling recovery or
-rollback, or materially widening external access—obtain explicit user
+rollback, or materially widening external access—obtain explicit owner
 authorization first.
 
 ## Committing
 
 Run the `pre-commit` hook before committing (`pre-commit run --all-files`, or
-let it run on staged files via `git commit`). Fix any issues it reports so the
-commit lands clean — CI runs the same checks.
+let it run on staged files via `git commit`). Fix issues introduced by the task
+and distinguish pre-existing repository failures rather than hiding or broadly
+cleaning unrelated debt.
 
 ## Local development shortcuts
 
@@ -132,21 +141,17 @@ work — tell them exactly what to do.
 ## Deprecating features
 
 When deprecating a feature, note the version in which it is expected to be
-removed so we can clean it up when that version ships. Call out the deprecation
-version in code (e.g. a `@deprecated` tag or comment naming the target release)
-and in the PR/commit description, so there's a clear marker to act on later.
+removed so it can be cleaned up when that version ships. Call out the
+deprecation version in code and in the PR/commit description.
 
 ## Code comments
 
 Keep comments short and focused on the code, not on the change history.
 
 - **Keep them brief** — prefer one or two lines. Avoid comments longer than
-  three lines; if you need more, the code likely needs refactoring or a doc
-  string, not a wall of inline commentary.
-- **Describe the scenario, not the PR** — explain *what* the code handles or
-  *why* it exists, in terms a future reader needs. Don't reference PR numbers,
-  issue numbers, or ticket IDs (e.g. `#1646`, `fixes JIRA-123`); the scenario
-  should be clear without chasing external links.
+  three lines; if more explanation is needed, prefer a docstring or design doc.
+- **Describe the scenario, not the PR** — explain what the code handles or why
+  it exists without requiring future readers to chase issue/PR numbers.
 
 ## Database query names
 
