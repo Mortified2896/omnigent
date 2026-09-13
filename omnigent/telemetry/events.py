@@ -47,6 +47,10 @@ class SessionCreatedEvent:
     is_sub_agent: bool
     agent_name: str | None = None
     routing_enabled: bool = False
+    repository_id: int | None = None
+    repository_name: str | None = None
+    repository_role: str | None = None
+    repository_head: str | None = None
 
 
 @dataclass

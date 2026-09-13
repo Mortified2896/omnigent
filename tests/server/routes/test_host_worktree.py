@@ -127,6 +127,13 @@ async def test_create_worktree_success_returns_path_and_branch(
             "worktree_path": "/Users/alice/myrepo-worktrees/feature-login",
             "branch": "feature/login",
             "error": None,
+            "repository_provenance": {
+                "repository_id": 1293694128,
+                "full_name": "Mortified2896/omnigent",
+                "role": "omnigent_product_runtime",
+                "default_branch": "main",
+                "head_sha": "a" * 40,
+            },
         }
     )
     conn = registry.get(_HOST_ID)

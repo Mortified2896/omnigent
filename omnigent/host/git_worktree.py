@@ -344,6 +344,7 @@ class CreatedWorktree:
 
     worktree_path: str
     branch: str
+    repository_provenance: dict[str, str | int] | None = None
 
 
 def create_worktree(

@@ -183,6 +183,13 @@ async def register_host(
                                     "worktree_path": f"{frame.repo_path}-worktrees/{dirname}",
                                     "branch": frame.branch_name,
                                     "error": None,
+                                    "repository_provenance": {
+                                        "repository_id": frame.resolved_repository_id,
+                                        "full_name": "Mortified2896/omnigent",
+                                        "role": frame.objective_role,
+                                        "default_branch": "main",
+                                        "head_sha": "a" * 40,
+                                    },
                                 }
                             )
                         else:
@@ -258,7 +265,11 @@ async def _launch(
     """
     body: dict[str, object] = {"session_id": session_id, "workspace": _SOURCE_REPO}
     if git is not None:
-        body["git"] = git
+        body["git"] = {
+            **git,
+            "resolved_repository_id": 1293694128,
+            "objective_role": "omnigent_product_runtime",
+        }
     return await client.post(f"/v1/hosts/{_HOST_ID}/runners", json=body)
 
 

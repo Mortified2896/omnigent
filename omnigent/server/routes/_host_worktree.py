@@ -78,6 +78,7 @@ class CreatedWorktree:
 
     worktree_path: str
     branch: str
+    repository_provenance: dict[str, str | int]
 
 
 async def _await_host_worktree_result(
@@ -137,6 +138,9 @@ async def create_worktree_on_host(
     repo_path: str,
     branch_name: str,
     base_branch: str | None,
+    resolved_repository_id: int = 0,
+    objective_role: str = "",
+    archival_override_reason: str | None = None,
 ) -> CreatedWorktree:
     """
     Send a ``host.create_worktree`` frame and await the result.
@@ -162,6 +166,9 @@ async def create_worktree_on_host(
             repo_path=repo_path,
             branch_name=branch_name,
             base_branch=base_branch,
+            resolved_repository_id=resolved_repository_id,
+            objective_role=objective_role,
+            archival_override_reason=archival_override_reason,
         )
     )
     result = await _await_host_worktree_result(
@@ -180,7 +187,14 @@ async def create_worktree_on_host(
     branch = result.get("branch")
     if not isinstance(worktree_path, str) or not isinstance(branch, str):
         raise WorktreeProxyError("host returned an incomplete worktree result")
-    return CreatedWorktree(worktree_path=worktree_path, branch=branch)
+    provenance = result.get("repository_provenance")
+    if not isinstance(provenance, dict):
+        raise WorktreeProxyError("host returned no verified repository provenance")
+    return CreatedWorktree(
+        worktree_path=worktree_path,
+        branch=branch,
+        repository_provenance=provenance,
+    )
 
 
 async def remove_worktree_on_host(

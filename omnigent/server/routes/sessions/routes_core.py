@@ -491,6 +491,20 @@ def register_core_routes(
                         # spawning. None (agent not resolvable) skips the
                         # host-side check.
                         harness=resp.harness,
+                        resolved_repository_id=(
+                            int(resp.labels["omnigent.repository.repository_id"])
+                            if "omnigent.repository.repository_id" in resp.labels
+                            else (
+                                body.git.resolved_repository_id if body.git is not None else None
+                            )
+                        ),
+                        objective_role=(
+                            resp.labels.get("omnigent.repository.role")
+                            or (body.git.objective_role if body.git is not None else None)
+                        ),
+                        archival_override_reason=(
+                            body.git.archival_override_reason if body.git is not None else None
+                        ),
                     )
                 )
                 host_registry.send_text(conn, launch_frame)
@@ -521,6 +535,15 @@ def register_core_routes(
                     # spinner. No-op when we never set it.
                     if _terminal_first_create:
                         _publish_terminal_pending(resp.id, False)
+                elif isinstance(launch_result.get("repository_provenance"), dict):
+                    await asyncio.to_thread(
+                        conversation_store.set_labels,
+                        resp.id,
+                        {
+                            f"omnigent.repository.{key}": str(value)
+                            for key, value in launch_result["repository_provenance"].items()
+                        },
+                    )
                 resp.runner_id = runner_id
                 resp.host_id = launch_host_id
 
