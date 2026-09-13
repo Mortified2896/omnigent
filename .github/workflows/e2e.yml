@@ -8,8 +8,8 @@ name: E2E Tests
 #   schedule            09:00 UTC daily (alongside nightly.yml).
 #   workflow_dispatch   manual run. Inputs: `branch` (non-main ref) and
 #                       `parallelism` (pytest `-n` worker count).
-#   pull_request        PR gate for ALL PRs -- same-repo AND fork. This suite
-#                       runs entirely against the in-process mock LLM (no
+#   pull_request        PR gate for non-documentation PRs -- same-repo AND
+#                       fork. This suite runs entirely against the in-process mock LLM (no
 #                       secrets), so fork PRs run it directly here just like
 #                       ci.yml, with no fork-e2e/** mirror (#802 removed the
 #                       credential setup). The four shard checks are required by
@@ -23,7 +23,7 @@ on:
     # (rerun-security-gate-run.yml falls back to this trigger). The concurrency
     # group key isolates label events so they never cancel a code-push run.
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
-    paths-ignore: ['web/**', 'tests/e2e_ui/**', 'CHANGELOG.md']
+    paths-ignore: ['web/**', 'tests/e2e_ui/**', '*.md', '**/*.md']
   workflow_dispatch:
     inputs:
       branch:

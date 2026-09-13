@@ -3,12 +3,13 @@ name: E2E UI Tests
 # Runs the Playwright UI suite against a freshly built web SPA, split across
 # a 3-shard matrix. The whole suite (including the native Claude/Codex/Cursor
 # render-parity tests) runs against the in-process mock LLM and needs NO
-# secrets, so it runs on ALL PRs -- same-repo AND fork -- directly, like ci.yml.
+# secrets, so it runs on non-documentation PRs -- same-repo AND fork --
+# directly, like ci.yml.
 # (The native_*_mock_session fixtures use the real gateway only when LLM_API_KEY
 # is set, e.g. local dev; CI never sets it.)
 #
 # Triggers:
-#   pull_request        ALL PRs (same-repo + fork). Draft PRs skip.
+#   pull_request        Non-documentation PRs (same-repo + fork). Drafts skip.
 #   schedule            09:00 UTC daily, alongside nightly.yml.
 #   workflow_dispatch   manual run. Input `branch` selects a non-main ref.
 
@@ -18,7 +19,7 @@ on:
     # Security Gate via rerun-security-gate.yml, so label churn need not re-run
     # the heavy Playwright suite. (#399 added these for the gate; superseded.)
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ['CHANGELOG.md']
+    paths-ignore: ['*.md', '**/*.md']
   schedule:
     - cron: "0 9 * * *"
   workflow_dispatch:
