@@ -18,7 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from . import acceptance, baseline, identity, preflight, service_state, transaction
+from . import acceptance, baseline, host_promotion, identity, preflight, service_state, transaction
 
 MAX_AGE_SECONDS = 60
 MUTATION_BLOCKERS = (
@@ -45,24 +45,15 @@ def _transactions() -> list[str]:
     root = transaction.DEFAULT_TX_ROOT
     if not root.exists():
         return []
-    unresolved = []
-    entries = sorted(root.iterdir())
-    if len(entries) > 1000:
-        raise CrossHostError("transaction inventory exceeds bounded inspection")
-    for directory in entries:
-        path = directory / "transaction.json"
-        if not path.exists():
-            unresolved.append(directory.name + ":missing-record")
-            continue
-        try:
-            record = json.loads(path.read_text())
-        except (OSError, ValueError):
-            unresolved.append(directory.name + ":unreadable")
-            continue
-        # Ambiguous historical records require the existing reconciliation path.
-        if record.get("phase") not in {"tx_committed", "rolled_back"}:
-            unresolved.append(directory.name)
-    return unresolved
+    with os.scandir(root) as entries:
+        for index, _ in enumerate(entries):
+            if index >= 1000:
+                raise CrossHostError("transaction inventory exceeds bounded inspection")
+    try:
+        host_promotion._no_live_transactions()
+    except host_promotion.PromotionError as exc:
+        return [str(exc)]
+    return []
 
 
 def observe_source() -> dict[str, Any]:

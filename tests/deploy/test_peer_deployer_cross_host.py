@@ -172,3 +172,23 @@ def test_no_promotion_interface_is_exposed():
     with pytest.raises(SystemExit) as exit_info:
         cross_host.main(["promote"])
     assert exit_info.value.code == 2
+
+
+def test_transaction_observation_uses_canonical_reconciliation(monkeypatch, tmp_path):
+    monkeypatch.setattr(cross_host.transaction, "DEFAULT_TX_ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        cross_host.host_promotion, "_no_live_transactions", lambda: calls.append(True)
+    )
+    assert cross_host._transactions() == []
+    assert calls == [True]
+
+
+def test_transaction_observation_preserves_canonical_refusal(monkeypatch, tmp_path):
+    monkeypatch.setattr(cross_host.transaction, "DEFAULT_TX_ROOT", tmp_path)
+
+    def refuse():
+        raise cross_host.host_promotion.PromotionError("unresolved transaction")
+
+    monkeypatch.setattr(cross_host.host_promotion, "_no_live_transactions", refuse)
+    assert cross_host._transactions() == ["unresolved transaction"]
