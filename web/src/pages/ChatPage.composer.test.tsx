@@ -2536,6 +2536,7 @@ it.each([
         <Composer
           {...composerProps({
             showModels: true,
+            showEffort: false,
             modelPickerKind: "codex",
             codexModelOptions: [{ id: "custom/o3-approved", displayName: "Approved route" }],
           })}

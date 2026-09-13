@@ -6126,7 +6126,7 @@ function SessionConfigModal({
               />
             </ConfigRow>
           )}
-          {showEffort && (
+          {(showEffort || approvalLocked) && (
             <ConfigRow label="Effort" description="Reasoning depth vs. speed">
               <Select
                 // Routing picks the model (and its effort) per turn, so an
