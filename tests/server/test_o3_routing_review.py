@@ -1887,3 +1887,39 @@ async def test_legacy_modified_review_cannot_invent_reasoning_recommendation(
             proposal.proposal_id,
             ProposalAdjustmentRequest(reasoning_effort="high", reset_reasoning_effort=True),
         )
+
+
+@pytest.mark.asyncio
+async def test_catalogue_combo_preserves_provider_and_vendor_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.server.o3_routing_review.models import CatalogueExecutionDecision
+
+    client = OmniRouteClient("http://127.0.0.1:20128", "test-only")
+    saved = {}
+
+    async def get_combo(name):
+        return saved.get(name)
+
+    async def request(method, path, *, body=None):
+        assert (method, path) == ("POST", "/api/combos")
+        saved[body["name"]] = body
+        return OmniRouteResponse(body={}, headers={})
+
+    monkeypatch.setattr(client, "get_combo", get_combo)
+    monkeypatch.setattr(client, "_request", request)
+    route = "openrouter/minimax/minimax-m3:free"
+    name, definition = await client.create_catalogue_combo(
+        "abcdef12-1234-1234-1234-abcdef123456",
+        [
+            CatalogueExecutionDecision(
+                route_id=route,
+                provider_id="openrouter",
+                displayed_model="MiniMax",
+                reasoning_mode="low",
+            )
+        ],
+        reasoning_effort="low",
+    )
+    assert saved[name]["models"][0]["model"] == route
+    assert definition["models"][0]["providerId"] == "openrouter"

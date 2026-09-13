@@ -2032,6 +2032,9 @@ def register_core_routes(
                     f"Session not found: {source_id!r}",
                     code=ErrorCode.NOT_FOUND,
                 )
+        from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+        require_new_review(source.labels or {}, "forking")
         if source.kind == "sub_agent":
             raise OmnigentError(
                 "Cannot fork a sub-agent session — only top-level sessions can be forked.",
@@ -2247,6 +2250,9 @@ def register_core_routes(
                     f"Session not found: {session_id!r}",
                     code=ErrorCode.NOT_FOUND,
                 )
+        from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+        require_new_review(session.labels or {}, "switching harness")
         if session.kind == "sub_agent":
             raise OmnigentError(
                 "Cannot switch the agent of a sub-agent session — only top-level "

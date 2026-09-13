@@ -322,7 +322,15 @@ def _pin_codex_config_model(codex_home: Path, model: str) -> None:
                 lines[i] = f"{effort_match.group(1)}{clamped}{effort_match.group(3)}"
     if not replaced:
         lines.insert(0, pin_line)
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    pinned = "\n".join(lines) + "\n"
+    if model.startswith("custom/o3-route-"):
+        document = tomlkit.parse(pinned)
+        features = document.setdefault("features", tomlkit.table())
+        # Native child decisions have no separate O3 approval channel.
+        features["multi_agent"] = False
+        features["multi_agent_v2"] = False
+        pinned = tomlkit.dumps(document)
+    config_path.write_text(pinned, encoding="utf-8")
 
 
 def _pin_codex_config_reasoning_effort(codex_home: Path, effort: str) -> None:

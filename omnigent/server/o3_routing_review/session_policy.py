@@ -82,3 +82,14 @@ def protect_recorded_policy(
                 "benchmark model and reasoning are approval-bound; start a new reviewed task",
                 status_code=409,
             )
+
+
+def require_new_review(labels: Mapping[str, str | None], operation: str) -> None:
+    """Keep an approval from being inherited by a different execution context."""
+    if labels.get(POLICY_LABEL) == "benchmark" or labels.get(PROPOSAL_LABEL):
+        from omnigent.errors import ErrorCode, OmnigentError
+
+        raise OmnigentError(
+            f"Benchmark Routing (O3) requires a new reviewed task before {operation}.",
+            code=ErrorCode.CONFLICT,
+        )

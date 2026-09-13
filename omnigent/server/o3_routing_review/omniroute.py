@@ -462,7 +462,8 @@ class OmniRouteClient:
                     "id": f"o3-route-{short_id}-{index}",
                     "kind": "model",
                     "providerId": pair[0],
-                    "model": pair[1],
+                    # Keep the provider qualifier when the model has a vendor namespace.
+                    "model": decision.route_id,
                     "label": f"{decision.displayed_model} ({decision.reasoning_mode})",
                     "weight": 0,
                 }

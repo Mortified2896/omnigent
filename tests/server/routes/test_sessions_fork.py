@@ -1134,3 +1134,18 @@ async def test_fork_clone_reuses_source_agent_name_verbatim() -> None:
     assert conv_store.fork_calls[0]["cloned_agent_name"] == "claude-native-ui", (
         "Fork clone should reuse the source name verbatim, no '(fork …)' suffix"
     )
+
+
+@pytest.mark.parametrize(
+    "labels", [{"omnigent.routing_policy": "benchmark"}, {"o3.routing.proposal_id": "approved"}]
+)
+def test_benchmark_fork_requires_review_without_creating_rows(labels: dict[str, str]) -> None:
+    conv = _make_conversation()
+    conv.labels = labels
+    store = _ConversationStore(conversations={conv.id: conv})
+    client = TestClient(_build_app(store))
+    response = client.post(f"/v1/sessions/{conv.id}/fork", json={"title": "Fork"})
+    assert response.status_code == 409
+    assert "new reviewed task" in response.text
+    assert store.fork_calls == []
+    assert conv.labels == labels

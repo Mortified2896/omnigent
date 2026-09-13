@@ -603,7 +603,14 @@ class LLMRoutingClient:
                 ),
                 timeout=ROUTING_REQUEST_TIMEOUT_S,
             )
-            text = response.output[0].content[0].text
+            # Responses may put reasoning/tool items before the verdict message.
+            text = "".join(
+                part.text
+                for item in response.output
+                if getattr(item, "type", None) == "message"
+                for part in item.content
+                if part.type == "output_text"
+            )
             # The verdict can echo prompt text in its rationale, so keep it off
             # INFO; the chosen model is logged by the caller either way.
             _logger.debug("LLMRoutingClient: raw response: %s", text[:500])

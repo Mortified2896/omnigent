@@ -1804,3 +1804,25 @@ async def test_codex_native_launch_config_reads_the_auto_harness_flag(
         config = await _codex_native_launch_config(session_id="conv_abc", server_client=client)
 
     assert config.auto_harness is expected
+
+
+def test_benchmark_native_config_disables_unreviewed_agents_in_private_copy(
+    tmp_path: Path,
+) -> None:
+    from omnigent.codex_native_app_server import _pin_codex_config_model
+
+    original = tmp_path / "shared.toml"
+    original.write_text(
+        "[features]\nmulti_agent = true\nmulti_agent_v2 = true\nweb_search = true\n"
+    )
+    private = tmp_path / "session"
+    private.mkdir()
+    (private / "config.toml").symlink_to(original)
+    _pin_codex_config_model(private, "custom/o3-route-abcdef123456")
+    config = tomllib.loads((private / "config.toml").read_text())
+    assert config["features"] == {
+        "multi_agent": False,
+        "multi_agent_v2": False,
+        "web_search": True,
+    }
+    assert tomllib.loads(original.read_text())["features"]["multi_agent"] is True

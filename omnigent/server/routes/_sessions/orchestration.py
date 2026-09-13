@@ -7505,6 +7505,10 @@ async def _create_session_from_existing_agent(
         _parent_for_routing = await asyncio.to_thread(
             conversation_store.get_conversation, body.parent_session_id
         )
+        if _parent_for_routing is not None:
+            from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+            require_new_review(_parent_for_routing.labels or {}, "spawning a child session")
         if (
             _parent_for_routing is not None
             and subagent_routing_enabled(_parent_for_routing.subagent_routing_override)
