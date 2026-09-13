@@ -19,7 +19,7 @@ Mac OmniRoute reports 3.8.50 / build dea6bb8 / Node 22.22.3.
 | Mac telemetry installation, archive, rollback and historical counters | KEEP | PR 154 head 7f72743727160f9c132f786d792b7022dac94c7e remains preserved; do not run Mac adoption on Linux or migrate its archive. |
 | Minimal Codex OTEL config and optional provenance hook ownership | SEMANTIC PORT | Only native runtime helpers and focused tests from PR 154. Optional capture must not block execution. |
 | Visible Omnigent Smart Routing / Benchmark Routing (O3) / manual selection | INTEGRATED / TESTED | Implements the approved issue 113/124 controls using native selection and dispatch. Preserve unsupported reasons and isolate policies. |
-| Linux runtime qualification, immutable artifact and cross-host promotion | BLOCKED UNTIL VERIFIED | A Mac qualification or local-only peer deployer is not cross-host acceptance. |
+| Linux runtime qualification, immutable artifact and cross-host promotion | PARTIAL / CUTOVER GATED | Linux 3.8.50, immutable artifact boot and real native/O3 tasks passed; single-route protocol checks do not qualify every fallback. Cross-host promotion remains unimplemented and gated. |
 | Extra O2/O3 installations, GPU rework, new observability and benchmark platform | DISABLE-DEFER | Outside the initial single-guest migration. |
 
 The three Mac feature commits form an ancestry-checked sequence. They are
@@ -74,3 +74,33 @@ and native backend details; O3 conversations do not expose native routing
 toggles. Native wording distinguishes model selection from the harness
 reasoning default. The final focused frontend run passed 235 checks,
 including these settings and resume regressions.
+
+## Live Linux acceptance and saved O3 configuration
+
+The isolated RTX service completed manual/native fixture read/edit/test,
+restart/reconnect, an O3 task with correlated allowed failover, and a real
+built-in OSS Smart Routing task selecting codex/gpt-5.6-sol-max. These are
+separate tasks, not a comparison experiment. Installed evidence and real
+desktop/mobile viewport screenshots are recorded in HomeLab's RTX runbook.
+
+Live O3 continuation on artifact a7d9fa39ee261d3ad9adc3514214c624aa15af79
+passed the four fixture tests. Model, effort, policy-relabel and fork requests
+returned 409 and left the saved configuration unchanged. The UI audit found
+that an unsupported effort edit could still appear in local picker state.
+The controls now show the approved configuration as read-only with a new-review
+explanation, and resume hydrates O3 model/effort without unrelated sticky picks.
+462 focused composer/store tests, TypeScript and scoped pre-commit passed.
+
+The single-route qualification CLI runs one explicit route with a 45-second
+overall deadline and never activates a registry. RTX codex/gpt-5.5 passed
+tool-search continuation and the closed tool-free Responses protocol.
+The latter reported an estimated cost and is not free-cost eligibility.
+OpenRouter's correctly qualified minimax/minimax-m3:free route returned 404
+stating it is unavailable for free. No paid MiniMax alternative was invoked
+and existing approved Combos were not edited.
+
+No canonical cross-host bootstrap is claimed. The existing deployer still
+assumes local peers and an active local target; state transfer, writer fencing,
+paired cross-host recovery and real O2 supervision must be implemented and
+accepted before promotion. Source review, the existing source-host storage
+guard latch, phone use and reboot/cutover remain separate gates.

@@ -5913,6 +5913,19 @@ describe("chatStore — bindStream sticky-pref handoff", () => {
     expect(useChatStore.getState().selectedEffort).toBe("high");
   });
 
+  it.each([
+    ["omnigent.routing_policy", "benchmark"],
+    ["o3.routing.proposal_id", "approved"],
+  ])("does not display or persist an unreviewed O3 effort: %s", async (key, value) => {
+    seedSession("conv_o3_locked", []);
+    withSnapshot("conv_o3_locked", { labels: { [key]: value }, reasoning_effort: "low" });
+    await useChatStore.getState().switchTo("conv_o3_locked");
+    fetchMock.mockClear();
+    await expect(useChatStore.getState().setEffort("high")).rejects.toThrow("new reviewed task");
+    expect(patchCallsFor("conv_o3_locked")).toEqual([]);
+    expect(useChatStore.getState().selectedEffort).toBe("low");
+  });
+
   it("PATCHes effort on an active claude-native session", async () => {
     seedSession("conv_supported", []);
     withSnapshot("conv_supported", { labels: { "omnigent.wrapper": "claude-code-native-ui" } });

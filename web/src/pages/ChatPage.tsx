@@ -5941,6 +5941,10 @@ function SessionConfigModal({
   const costControlModeOverride = useChatStore((s) => s.costControlModeOverride);
   const subagentRoutingOverride = useChatStore((s) => s.subagentRoutingOverride);
   const conversationId = useChatStore((s) => s.conversationId);
+  const { session } = useSession(conversationId);
+  const approvalLocked =
+    session?.labels?.["omnigent.routing_policy"] === "benchmark" ||
+    !!session?.labels?.["o3.routing.proposal_id"];
   const { llmModel, usesServerModelOptions, modelOptions, pickerSelectedModel, modelLabel } =
     useResolvedComposerModel(modelPickerKind, codexModelOptions);
 
@@ -6022,6 +6026,7 @@ function SessionConfigModal({
   const subagentRoutingValue = effectiveSubagentRouting === "on" ? "on" : "off";
 
   const save = () => {
+    if (approvalLocked) return;
     // Commit the changed knobs SEQUENTIALLY, awaiting each PATCH before the
     // next. Claude-native applies model/effort changes by typing separate
     // ``/model``/``/effort`` slash commands into its terminal, so firing them
@@ -6102,12 +6107,19 @@ function SessionConfigModal({
         </DialogHeader>
 
         <div className="flex flex-col gap-5 py-1">
+          {approvalLocked && (
+            <p className="text-sm text-muted-foreground" data-testid="composer-config-approval">
+              Benchmark Routing (O3) keeps this task's approved model and effort. Start a new task
+              to review changes.
+            </p>
+          )}
           {showModels && (
             <ConfigRow label="Model" description="Underlying LLM">
               <RoutingModelSelect
                 value={modelValue}
                 onValueChange={onModelChange}
                 offerSmartRouting={costRoutingEligible}
+                disabled={approvalLocked}
                 testId="composer-config-model"
                 models={modelSelectOptions}
                 activeModelId={draftModelId}
@@ -6122,7 +6134,7 @@ function SessionConfigModal({
                 // an em-dash placeholder (Radix shows it for the empty value).
                 value={draftRoutingOn ? "" : (draftEffort ?? EFFORT_SELECT_NONE)}
                 onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? null : v)}
-                disabled={draftRoutingOn}
+                disabled={draftRoutingOn || approvalLocked}
               >
                 <SelectTrigger
                   className="w-full"
@@ -6165,6 +6177,7 @@ function SessionConfigModal({
             <ConfigRow label={SUBAGENT_ROUTING_LABEL} description={SUBAGENT_ROUTING_DESCRIPTION}>
               <Select
                 value={subagentRoutingValue}
+                disabled={approvalLocked}
                 onValueChange={(v) => setPickedSubagentRouting(v === "on" ? "on" : "off")}
               >
                 <SelectTrigger
@@ -6196,7 +6209,12 @@ function SessionConfigModal({
           >
             Cancel
           </Button>
-          <Button type="button" onClick={save} data-testid="composer-config-save">
+          <Button
+            type="button"
+            onClick={save}
+            disabled={approvalLocked}
+            data-testid="composer-config-save"
+          >
             Save
           </Button>
         </DialogFooter>

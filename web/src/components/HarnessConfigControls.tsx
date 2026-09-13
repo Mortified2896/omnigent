@@ -64,6 +64,7 @@ export function RoutingModelSelect({
   defaultLabel = "Default",
   activeModelId,
   contentClassName,
+  disabled = false,
   children,
 }: {
   value: string;
@@ -75,10 +76,11 @@ export function RoutingModelSelect({
   defaultLabel?: string;
   activeModelId?: string | null;
   contentClassName?: string;
+  disabled?: boolean;
   children?: ReactNode;
 }) {
   return (
-    <Select value={value} onValueChange={onValueChange}>
+    <Select value={value} onValueChange={onValueChange} disabled={disabled}>
       <SelectTrigger className="w-full" data-testid={testId} aria-label={ariaLabel}>
         <SelectValue />
       </SelectTrigger>

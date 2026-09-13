@@ -2511,3 +2511,51 @@ it.each([
   );
   expect(screen.getByTestId("composer-routing-policy")).toHaveTextContent(label);
 });
+
+it.each([
+  { "omnigent.routing_policy": "benchmark" },
+  { "o3.routing.proposal_id": "approved-proposal" },
+] as Record<string, string>[])(
+  "keeps approved O3 controls visible and read-only: %s",
+  async (labels) => {
+    sessionLabels.value = labels;
+    const effort = vi.fn();
+    const model = vi.fn();
+    const original = useChatStore.getState();
+    useChatStore.setState({
+      conversationId: "conv_approved",
+      selectedEffort: "low",
+      selectedModel: "custom/o3-approved",
+      sessionModelOverride: "custom/o3-approved",
+      setEffort: effort,
+      setModel: model,
+      refreshSessionOverrides: vi.fn().mockResolvedValue(undefined),
+    });
+    try {
+      renderWithTooltips(
+        <Composer
+          {...composerProps({
+            showModels: true,
+            modelPickerKind: "codex",
+            codexModelOptions: [{ id: "custom/o3-approved", displayName: "Approved route" }],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("composer-config-gear"));
+      expect(await screen.findByTestId("composer-config-approval")).toHaveTextContent(
+        "Start a new task to review changes",
+      );
+      expect(screen.getByTestId("composer-config-model")).toBeDisabled();
+      expect(screen.getByTestId("composer-config-effort")).toBeDisabled();
+      expect(screen.getByTestId("composer-config-save")).toBeDisabled();
+      fireEvent.click(screen.getByTestId("composer-config-save"));
+      expect(effort).not.toHaveBeenCalled();
+      expect(model).not.toHaveBeenCalled();
+      expect(useChatStore.getState().selectedEffort).toBe("low");
+    } finally {
+      cleanup();
+      sessionLabels.value = {};
+      useChatStore.setState(original);
+    }
+  },
+);
