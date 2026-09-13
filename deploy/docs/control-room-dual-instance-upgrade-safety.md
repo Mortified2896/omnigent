@@ -369,3 +369,44 @@ cutover. The adapter exposes no stop, switch, promote, force or cleanup command.
 Source review, device acceptance and the existing source storage guard remain
 independent gates. The guard latch must not be cleared merely to advance a
 migration.
+
+## Planned cold maintenance of an idle source
+
+The external Mac controller may freeze old O1 under TARGET=O1, real
+SUPERVISOR=O2 before destination or phone acceptance. Use
+`python -B -m peer_deployer.cold_maintenance` with the exact source machine
+ID/O2 baseline file and the current accepted artifact. Omitting `--apply`
+performs inspection only. This is a source maintenance operation, not
+destination promotion.
+
+The maintenance command reuses every existing peer-copy preflight check
+against the currently accepted, matching O1/O2 artifact. It copies no runtime
+and selects no new release. The storage guard must be active and unlatched;
+neither cold downtime nor a passing observation adapter bypasses it.
+It requires no scheduled tasks, complete session pagination including archived
+sessions, fresh idle detail for every session, and no execution children
+other than the idle zygote. Active or unknown work holds the operation for
+inspection or completion; there is no force option.
+
+Before any stop it creates a canonical transaction, preserves a verified
+online database checkpoint, records the actual source and supervisor, and
+rechecks work, guard and identities. Transaction-owned systemd conditions
+prevent restart; the original enabled states are recorded. The server closes
+admission through graceful shutdown before the execution host stops. A
+failure or timeout preserves the fence, backup, transaction and any still
+draining process; no forced signal or automatic reopening occurs.
+
+A successful freeze records inactive units, empty service process groups,
+source database hash, source runtime and zero supervisor drift in
+`cold-maintenance.json`. Its canonical transaction closes only the freeze
+operation. Final frozen backups, state ownership, destination activation,
+private-device acceptance and later O2 retirement remain separate gates.
+Repeated invocation verifies the completed frozen state without new writes.
+An interrupted freeze retains its exact phase and refuses a second operation;
+inspect that transaction before completing its recorded stop sequence.
+
+Recovery must first prove no destination O1 is authoritative, revalidate the
+actual O2 and storage guard, and inspect the paired source application/current
+database. Retain the pre-stop backup as recovery evidence; never automatically
+restore it over later work. HomeLab owns the exact installed recovery commands
+and source/destination paths.
