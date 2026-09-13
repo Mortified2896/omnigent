@@ -5999,6 +5999,11 @@ function SessionConfigModal({
   // The Select value: the router sentinel when routing is drafted on, else the
   // drafted model, else the "Default" sentinel (no override).
   const modelValue = draftRoutingOn ? MODEL_SELECT_SMART : (draftModelId ?? MODEL_SELECT_DEFAULT);
+  const displayedEffort = approvalLocked ? selectedEffort : draftEffort;
+  const displayedEffortLevels =
+    approvalLocked && displayedEffort && !effortLevels.includes(displayedEffort)
+      ? [...effortLevels, displayedEffort]
+      : effortLevels;
 
   const onModelChange = (value: string) => {
     if (value === MODEL_SELECT_SMART) {
@@ -6113,7 +6118,7 @@ function SessionConfigModal({
               to review changes.
             </p>
           )}
-          {showModels && (
+          {(showModels || approvalLocked) && (
             <ConfigRow label="Model" description="Underlying LLM">
               <RoutingModelSelect
                 value={modelValue}
@@ -6132,7 +6137,7 @@ function SessionConfigModal({
                 // Routing picks the model (and its effort) per turn, so an
                 // explicit effort is meaningless: the row is frozen and reads as
                 // an em-dash placeholder (Radix shows it for the empty value).
-                value={draftRoutingOn ? "" : (draftEffort ?? EFFORT_SELECT_NONE)}
+                value={draftRoutingOn ? "" : (displayedEffort ?? EFFORT_SELECT_NONE)}
                 onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? null : v)}
                 disabled={draftRoutingOn || approvalLocked}
               >
@@ -6149,7 +6154,7 @@ function SessionConfigModal({
                   className="w-(--radix-select-trigger-width)"
                 >
                   <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
-                  {effortLevels.map((level) => (
+                  {displayedEffortLevels.map((level) => (
                     <SelectItem
                       key={level}
                       value={level}
@@ -6256,6 +6261,11 @@ function ComposerConfigGear({
   disabled: boolean;
   openNonce?: number;
 }) {
+  const conversationId = useChatStore((s) => s.conversationId);
+  const { session } = useSession(conversationId);
+  const approvalLocked =
+    session?.labels?.["omnigent.routing_policy"] === "benchmark" ||
+    !!session?.labels?.["o3.routing.proposal_id"];
   const [open, setOpen] = useState(false);
   const appliedOpenNonce = useRef(0);
   useEffect(() => {
@@ -6269,14 +6279,21 @@ function ComposerConfigGear({
   }, [openNonce, disabled]);
   const summary = useSessionConfigSummary({
     harnessLabel,
-    showModels,
-    showEffort,
+    showModels: showModels || approvalLocked,
+    showEffort: showEffort || approvalLocked,
     modelPickerKind,
     codexModelOptions,
     costRoutingEligible,
   });
 
-  if (!showModels && !showEffort && !costRoutingEligible && !subagentRoutingEligible) return null;
+  if (
+    !approvalLocked &&
+    !showModels &&
+    !showEffort &&
+    !costRoutingEligible &&
+    !subagentRoutingEligible
+  )
+    return null;
 
   return (
     <>

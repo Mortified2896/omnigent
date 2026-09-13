@@ -104,3 +104,15 @@ assumes local peers and an active local target; state transfer, writer fencing,
 paired cross-host recovery and real O2 supervision must be implemented and
 accepted before promotion. Source review, the existing source-host storage
 guard latch, phone use and reboot/cutover remain separate gates.
+
+The cross-host observation adapter now collects the real source O2 baseline
+and independently verifies candidate acceptance on its actual host. Its
+bounded freshness, persistent host/data identities, source guard and canonical
+writer checks have focused negative regression coverage. It deliberately
+returns `ready_for_mutation=false`; the transactional writer-fencing, final
+state-transfer and paired-recovery implementation remains outstanding. This
+preparation is not canonical cross-host bootstrap support.
+
+The final saved-configuration regression covers absent live model and effort
+controls plus an empty effort catalogue. Approved O3 model and effort stay
+visible and read-only, using their saved values after reconnect.

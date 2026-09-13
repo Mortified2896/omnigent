@@ -2535,8 +2535,9 @@ it.each([
       renderWithTooltips(
         <Composer
           {...composerProps({
-            showModels: true,
+            showModels: false,
             showEffort: false,
+            effortLevels: [],
             modelPickerKind: "codex",
             codexModelOptions: [{ id: "custom/o3-approved", displayName: "Approved route" }],
           })}
@@ -2548,6 +2549,7 @@ it.each([
       );
       expect(screen.getByTestId("composer-config-model")).toBeDisabled();
       expect(screen.getByTestId("composer-config-effort")).toBeDisabled();
+      expect(screen.getByTestId("composer-config-effort")).toHaveTextContent(/low/i);
       expect(screen.getByTestId("composer-config-save")).toBeDisabled();
       fireEvent.click(screen.getByTestId("composer-config-save"));
       expect(effort).not.toHaveBeenCalled();

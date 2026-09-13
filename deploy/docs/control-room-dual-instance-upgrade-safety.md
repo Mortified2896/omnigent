@@ -342,3 +342,30 @@ the `TestSixRequiredScenarios` class.
   * `systemctl` inactive-state bug (`pipefail` + `is-active`)
   * exact-artifact identity (main wheel + SDK wheels + runtime SHA)
   * O2 supervisor zero-drift guard
+
+## Cross-host observations (no mutation interface)
+
+`python -B -m peer_deployer.cross_host` adds independent read-only observations
+for migration preparation. Run `observe-source` on the original host and
+`observe-candidate` on the destination through the existing authenticated SSH
+route. The latter requires explicit immutable acceptance, candidate database,
+mountpoint and candidate server/host unit arguments. HomeLab supplies these
+installed paths and persistent host/data-volume identities.
+
+`assess --target O1 --supervisor O2 --source SOURCE.json --candidate CANDIDATE.json
+--expected EXPECTED.json` compares observations no older than 60 seconds with
+those recorded identities, the expected artifact/digest and actual O2 process
+baseline. It checks the source storage guard, unresolved transactions, data
+mount and headroom, and refuses a canonical writer already active on the
+candidate. Null or missing evidence fails the relevant check. It always exits
+2 and reports `ready_for_mutation=false`: successful observations are not an
+accepted cross-host promotion.
+
+These observations cannot be supplied to the existing local promotion FSM as
+a synthetic peer. The source's real O2 remains the supervisor. Transactional
+writer fencing, final state/workspace transfer and paired cross-host recovery
+still need a supported implementation and failure/reconnection testing before
+cutover. The adapter exposes no stop, switch, promote, force or cleanup command.
+Source review, device acceptance and the existing source storage guard remain
+independent gates. The guard latch must not be cleared merely to advance a
+migration.
