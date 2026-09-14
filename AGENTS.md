@@ -3,21 +3,25 @@
 Guidance for AI agents (Claude Code, Copilot, Cursor, etc.) working in this
 repository. See `CONTRIBUTING.md` for the full contributor workflow.
 
-## HomeLab controller, source, and runtime boundary
+## HomeLab execution, source, and runtime boundary
 
 This section applies to the `Mortified2896/omnigent` HomeLab deployment. Other
 upstream contributors may use their normal development environments.
 
-The Mac Codex app is the external controller. Source-only HomeLab changes may be
-implemented and validated in an isolated local Mac Git worktree. Keep Omnigent
-worktrees organized under:
+The default execution system for Omnigent work is the active RTX O1. Ordinary
+coding, analysis, repository, and agent tasks should be sent to O1 unless the
+owner explicitly chooses another execution environment for that task.
+
+The Mac Codex app is an explicit alternative, not the default and not a fallback.
+When a task is intended for the Mac Codex app, state that explicitly. For
+Mac-local source work, keep Omnigent worktrees organized under:
 
 ```text
 /Users/Jo/GitHub/omnigent
 /Users/Jo/GitHub/_worktrees/omnigent/<task>
 ```
 
-A task worktree normally checks out its own `codex/<task>` branch. Before the
+A Mac task worktree normally checks out its own `codex/<task>` branch. Before the
 first source mutation, fetch, commit, or push, verify:
 
 - repository root and worktree status;
@@ -34,8 +38,8 @@ The official `omnigent-ai/omnigent` repository and `upstream` remote are
 read-only unless the owner explicitly requests an upstream contribution.
 Inspect the resolved push URL before every push.
 
-The active HomeLab Omnigent runtime is no longer on `ai-control-hub`. Current
-runtime identity:
+The active HomeLab Omnigent runtime and default task executor are no longer on
+`ai-control-hub`. Current runtime identity:
 
 - Proxmox host: `pve-gpu`;
 - guest: VM 100 `rtx-omnigent`;
@@ -51,12 +55,11 @@ guidance names them.
 
 **Do not start, restore, recreate, or otherwise reactivate old O1/O2 merely to
 satisfy a legacy deployment tool, historical runbook, or stale supervisor
-requirement.** Reintroducing a second Omnigent peer is a topology change and
-requires explicit owner authorization.
+requirement.** Reintroducing O2 is a future topology decision and requires
+explicit owner authorization.
 
 For live runtime work, read the current HomeLab topology/workflow documents and
-perform a fresh host identity check before mutation. Source-only local work does
-not require touching the running service.
+perform a fresh host identity check before mutation.
 
 Never develop by editing `/srv/omnigent/releases/*` directly. Installed releases
 are immutable deployment artifacts; build/stage/deploy from a verified source
@@ -69,26 +72,30 @@ identity.
 
 ## HomeLab deployment safety
 
-The current HomeLab topology is **single-primary RTX O1 under external Mac Codex
-control**. There is no standing live O2 peer.
+The current HomeLab topology is a single active RTX O1 with no standing live O2
+peer.
 
-For current RTX deployments, preserve the safety properties that matter without
-fabricating a supervisor: exact tested/accepted candidate identity, consistent
-backups, reversible release switching, health/runtime verification, rollback
-preservation, and external control. The running O1 must not autonomously
-self-upgrade from inside its own task context.
+Ordinary work may run through O1, but O1 must not replace or upgrade its own
+running installation from inside its own task context. When a task specifically
+needs to switch the active O1 release while no updater peer exists, use an
+explicitly named external controller such as the Mac Codex app and preserve
+exact tested/accepted candidate identity, consistent backups, reversible release
+switching, health/runtime verification, and rollback preservation.
 
 The legacy `peer_deployer` and
 `deploy/docs/control-room-dual-instance-upgrade-safety.md` retain a hard
-TARGET/SUPERVISOR separation invariant **only when a two-peer deployment has
-been deliberately provisioned and that mechanism is explicitly selected**. They
-are not the default or required deployment path for the current RTX topology.
-Do not choose the legacy mechanism and then revive archived O2 to make its
-preflight pass.
+TARGET/SUPERVISOR separation invariant only when a two-peer deployment has been
+deliberately provisioned and that mechanism is explicitly selected. They are
+not the default or required deployment path for the current RTX topology. Do not
+choose the legacy mechanism and then revive archived O2 to make its preflight
+pass.
+
+O2 may be introduced again later as an updater/supervisor for O1, but until that
+is explicitly designed and provisioned it is operationally absent.
 
 If a procedure or old document says `TARGET=O1, SUPERVISOR=O2` is required for
 current RTX deployment, treat that as stale migration-era topology unless the
-owner has explicitly authorized reintroducing a second peer. Current HomeLab
+owner has explicitly authorized reintroducing O2. Current HomeLab
 `docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md` are the
 present-state authority.
 
@@ -101,8 +108,7 @@ service mutation.
 Privilege comes from current machine policy and fresh observation, not from this
 document. For live RTX operations, use the normal `hermes` account and only use
 `sudo -n` for narrowly scoped operations after verifying it is available and
-needed. A source-only Mac task should not touch live services simply to prove
-privileged access.
+needed.
 
 For destructive actions outside the requested scope—including deleting user
 data, destroying VMs or storage, removing credentials, disabling recovery or
