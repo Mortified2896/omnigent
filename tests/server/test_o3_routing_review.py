@@ -1545,13 +1545,22 @@ async def test_mutating_routes_require_auth_json_and_trusted_origin(
             json=payload,
             headers={**auth, "Origin": "http://127.0.0.1:5173"},
         )
+        uncompressed = await client.post(
+            url,
+            json=payload,
+            headers={**auth, "Accept-Encoding": "identity"},
+        )
 
     assert unauthenticated.status_code == 401
     assert wrong_type.status_code == 415
     assert untrusted.status_code == 403
     assert accepted.status_code == 201
     assert accepted.json()["proposal_id"] == proposal.proposal_id
-    assert route_service.create_calls == 1
+    assert accepted.headers["content-encoding"] == "gzip"
+    assert "content-encoding" not in uncompressed.headers
+    assert accepted.json() == uncompressed.json()
+    assert int(accepted.headers["content-length"]) < len(uncompressed.content)
+    assert route_service.create_calls == 2
 
 
 async def test_create_route_returns_recoverable_error_when_omniroute_is_unavailable(

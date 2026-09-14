@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._content_type import require_json_content_type
+from omnigent.server.routes._gzip_route import GZipFileContentRoute
 from omnigent.server.routes._origin import require_trusted_origin
 
 from .adviser import ReviewerCaptureError
@@ -38,7 +39,8 @@ def create_o3_routing_review_router(
     service_factory: Callable[[], O3RoutingReviewService] = get_o3_routing_review_service,
 ) -> APIRouter:
     """Create the feature-gated O3 routing-review router."""
-    router = APIRouter()
+    # Complete catalogue evidence and revisions can span megabytes of JSON.
+    router = APIRouter(route_class=GZipFileContentRoute)
 
     def service_for(request: Request) -> O3RoutingReviewService:
         require_user(request, auth_provider)
