@@ -210,6 +210,16 @@ class AdviserExchange(StrictModel):
     explanation: str
     reasoning_summary: str | None = None
     attempt: int = 1
+    transmitted_model: str | None = None
+    transmitted_effort: str | None = None
+    observed_effort: str | None = None
+    harness: str | None = None
+    duration_ms: float | None = None
+    response: dict[str, object] | None = None
+    response_text: str | None = None
+    response_headers: dict[str, object] | None = None
+    parse_error: str | None = None
+    parsed: dict[str, object] | None = None
 
 
 class AdviserAnalysis(StrictModel):
@@ -379,6 +389,7 @@ class CatalogueModelGroup(StrictModel):
 
 
 class CatalogueExecutionDecision(StrictModel):
+    metadata: dict[str, object] | None = None
     route_id: str
     provider_id: str
     displayed_model: str
@@ -434,6 +445,7 @@ class ExecutionTokenUsage(StrictModel):
 class ExecutionProvenance(StrictModel):
     """Account-safe execution metadata; request and response bodies are excluded."""
 
+    transport: dict[str, object] | None = None
     call_log_id: str
     timestamp: datetime
     path: str
@@ -453,6 +465,7 @@ class ExecutionProvenance(StrictModel):
 
 
 class RoutingProposal(StrictModel):
+    audit: dict[str, object] | None = None
     schema_version: int = 2
     execution_options: list[ExecutionOption] = Field(default_factory=list)
     selected_execution: ExecutionOption | None = None

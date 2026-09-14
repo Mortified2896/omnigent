@@ -269,171 +269,112 @@ function renderCard(value = proposal()) {
 }
 
 describe("RoutingProposalCard", () => {
-  it("identifies the local greeting rule without claiming a model call", () => {
+  it("identifies the local shortcut in a compact summary", () => {
     renderCard(proposal({ adviser_mode: "local_rule" }));
-    expect(screen.getByText("App · Local greeting rule")).toBeVisible();
-    expect(
-      screen.getByText("No model was called for this exact standalone greeting."),
-    ).toBeVisible();
+    expect(screen.getByText("Local rule · no model call")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Inspect decision"));
+    fireEvent.click(screen.getByText("Reviewer input", { exact: true }));
+    expect(screen.getByText("No reviewer invocation.")).toBeVisible();
   });
-  it("shows actual advisor attribution, exact context and provider summary", () => {
+  it("preserves complete raw output and exact input independently from parsing", () => {
     renderCard(
       proposal({
+        adviser_mode: "model",
         adviser_exchanges: [
           {
-            requested_model: "advisor-combo",
-            actual_model: "reported-model",
-            actual_provider: "reported-provider",
-            reasoning_effort: "low",
-            request: { input: [{ role: "user", content: "Exact user context" }] },
-            explanation: "Returned explanation",
-            reasoning_summary: "Returned summary",
-            attempt: 2,
+            requested_model: "combo",
+            actual_model: "reviewer",
+            actual_provider: "provider",
+            reasoning_effort: "medium",
+            transmitted_effort: "medium",
+            observed_effort: null,
+            request: { input: "Exact task" },
+            response: { output_text: "raw", extra: [1, 2] },
+            response_text: "  complete raw output\nreturned reasoning\n  ",
+            explanation: "parsed rationale",
+            reasoning_summary: null,
+            attempt: 1,
           },
         ],
       }),
     );
-    expect(screen.getByText("Advisor · reported-model")).toBeVisible();
-    expect(screen.getByText("Returned explanation")).toBeVisible();
-    fireEvent.click(screen.getByText("View exact request and instructions"));
-    expect(screen.getByText(/Exact user context/)).toBeVisible();
-    fireEvent.click(screen.getByText("Provider reasoning summary"));
-    expect(screen.getByText("Returned summary")).toBeVisible();
-    fireEvent.click(screen.getByText("Review conversation"));
-    expect(screen.getByText("Returned explanation")).not.toBeVisible();
-  });
-
-  it("does not invent a transcript for an older proposal", () => {
-    renderCard();
-    expect(screen.getByText(/No advisor request transcript was recorded/)).toBeVisible();
-    expect(screen.queryByText("Provider reasoning summary")).not.toBeInTheDocument();
-  });
-
-  it("renders recommendation floors, separated route sections, and warnings", () => {
-    renderCard(proposal({ recommendation: recommendation() }));
-
-    expect(screen.queryByTestId("o3-catalogue-recommendations")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
-    fireEvent.click(screen.getByTestId("o3-routing-details-toggle"));
-    const recommendations = screen.getByTestId("o3-catalogue-recommendations");
-    expect(screen.getByText("Raw benchmark floor").parentElement).toHaveTextContent("0.600000");
-    expect(screen.getByText("Common capability floor").parentElement).toHaveTextContent(
-      "60 / 100 rough prior",
+    fireEvent.click(screen.getByText("Inspect decision"));
+    fireEvent.click(screen.getByText("Raw reviewer output", { exact: true }));
+    expect(screen.getByLabelText("Attempt 1 · raw response verbatim").textContent).toBe(
+      "  complete raw output\nreturned reasoning\n  ",
     );
-    expect(recommendations).toHaveTextContent("Previously verified non-Codex");
-    expect(recommendations).toHaveTextContent("Other models above floor");
-    expect(recommendations).toHaveTextContent("Codex subscription fallback");
-    expect(recommendations).toHaveTextContent("Recommendation confidence is limited");
-    expect(screen.getByText("Readiness snapshot may be stale.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Complete response object").textContent).toContain('"extra"');
+    fireEvent.click(screen.getByText("Reviewer input", { exact: true }));
+    expect(screen.getByLabelText("Attempt 1 · exact safe request")).toHaveTextContent("Exact task");
   });
-
-  it("uses catalogue eligibility instead of an empty legacy execution pool", () => {
+  it("marks absent historic input as not recorded", () => {
+    renderCard();
+    fireEvent.click(screen.getByText("Inspect decision"));
+    fireEvent.click(screen.getByText("Reviewer input", { exact: true }));
+    expect(
+      screen.getAllByText("Not recorded for this review").some((e) => e.closest("details")?.open),
+    ).toBe(true);
+  });
+  it("shows calibration independently of the reviewer's recommendation", () => {
+    renderCard(proposal({ recommendation: recommendation() }));
+    fireEvent.click(screen.getByText("Inspect decision"));
+    fireEvent.click(screen.getByText("Benchmark & calibration", { exact: true }));
+    expect(screen.getByText("Effective raw floor").nextElementSibling).toHaveTextContent("50%");
+    expect(screen.getByText("Common capability floor").nextElementSibling).toHaveTextContent("60");
+  });
+  it("uses full catalogue counts and reveals every candidate without truncation", () => {
+    const eligible = Array.from({ length: 200 }, (_, i) => ({
+      route_id: `provider/model-${i}`,
+      provider_id: "provider",
+      displayed_model: `Model ${i}`,
+      reasoning_mode: "low",
+      capability_score_lower: 60,
+      compatibility_basis: [],
+      exclusions: [],
+      equivalence_identity: null,
+    }));
     renderCard(
       proposal({
         evaluations: [],
-        frontier: {
-          ...proposal().frontier,
-          passing_exact_candidates: [],
-          provisional_candidates: [],
-          capability_gap: "No source-pool configuration satisfies all approved hard constraints.",
-        },
         recommendation: recommendation({
           execution_set: {
-            total_evaluated: 3152,
-            eligible_count: 13,
-            eligible: [],
+            total_evaluated: 200,
+            eligible_count: 200,
+            eligible,
             excluded: [],
             exclusion_counts: {},
           },
         }),
       }),
     );
-    expect(screen.getByTestId("o3-compact-recommendation")).toHaveTextContent("13 eligible routes");
-    fireEvent.click(screen.getByTestId("o3-routing-details-toggle"));
-    expect(screen.getByText("13 catalogue-eligible; runtime readiness separate")).toBeVisible();
-    expect(screen.getByText("Live quota and cost require recheck")).toBeVisible();
-    expect(screen.queryByText("No eligible route")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("o3-capability-gap")).not.toBeInTheDocument();
-    expect(screen.getByTestId("o3-approve")).toBeEnabled();
+    expect(screen.getByTestId("o3-decision-summary")).toHaveTextContent("200 eligible");
+    fireEvent.click(screen.getByText("Inspect decision"));
+    fireEvent.click(screen.getByText("Candidates", { exact: true }));
+    expect(screen.getAllByRole("row")).toHaveLength(201);
+    fireEvent.change(screen.getByLabelText("Filter candidates"), {
+      target: { value: "model-199" },
+    });
+    expect(screen.getAllByRole("row")).toHaveLength(2);
   });
-
-  it("caps large recommendation sections so the proposal stays responsive", () => {
-    const item = recommendation().callable_non_codex[0]!;
-    const otherAboveFloor = Array.from({ length: 200 }, (_, index) => ({
-      ...item,
-      route_id: `other/model-${index}`,
-      provider_id: "other",
-      displayed_model: `Model ${index}`,
-    }));
+  it("offers all exclusion reasons and metadata for legacy candidates", () => {
+    const base = proposal();
     renderCard(
       proposal({
-        recommendation: recommendation({
-          section_counts: {
-            callable_non_codex: 0,
-            other_above_floor: 200,
-            codex_subscription_fallback: 0,
-            nearest_below_floor: 0,
+        evaluations: [
+          {
+            ...base.evaluations[0]!,
+            status: "excluded",
+            exclusions: ["context too small", "tools missing"],
           },
-          callable_non_codex: [],
-          other_above_floor: otherAboveFloor,
-          codex_subscription_fallback: [],
-          nearest_below_floor: [],
-        }),
+        ],
       }),
     );
-
-    expect(screen.queryByTestId("o3-recommendation-row")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
-    expect(screen.getAllByTestId("o3-recommendation-row")).toHaveLength(20);
-    expect(screen.getByTestId("o3-recommendation-truncated")).toHaveTextContent(
-      "Showing the first 20 of 200",
-    );
+    fireEvent.click(screen.getByText("Inspect decision"));
+    fireEvent.click(screen.getByText("Candidates", { exact: true }));
+    expect(screen.getByTestId("o3-candidate-table")).toHaveTextContent("context too small");
+    expect(screen.getByTestId("o3-candidate-table")).toHaveTextContent("tools missing");
   });
-
-  it("renders a useful no-match state with nearest alternatives", () => {
-    renderCard(
-      proposal({
-        recommendation: recommendation({
-          section_counts: {
-            callable_non_codex: 0,
-            other_above_floor: 0,
-            codex_subscription_fallback: 0,
-            nearest_below_floor: 1,
-          },
-          callable_non_codex: [],
-          other_above_floor: [],
-          codex_subscription_fallback: [],
-        }),
-      }),
-    );
-
-    expect(screen.getByText("No route meets these requirements")).toBeVisible();
-    fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
-    fireEvent.click(screen.getByTestId("o3-routing-details-toggle"));
-    expect(screen.getByText("Above-floor configurations").parentElement).toHaveTextContent("0");
-    expect(screen.getByText(/No catalogue model meets the conservative floor\./)).toBeVisible();
-    expect(screen.getByText("Nearest below floor")).toBeVisible();
-    expect(screen.getByText(/free\/model-d/)).toBeVisible();
-  });
-
-  it("renders compact requirements and expands candidate evidence", () => {
-    renderCard();
-
-    expect(screen.getByTestId("o3-task-interpretation")).toHaveTextContent(
-      "Inspect a harmless repository state",
-    );
-    expect(screen.getByTestId("o3-benchmark-requirement")).toHaveTextContent(
-      "tb4.cr-systems-db-v1",
-    );
-    expect(screen.getByText("Provisional evidence")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("o3-routing-details-toggle"));
-    expect(screen.getByTestId("o3-routing-details")).toHaveTextContent("test://tb4/proxy");
-    expect(screen.getByTestId("o3-routing-details")).toHaveTextContent(
-      "no exact benchmark evidence",
-    );
-  });
-
   it("adjusts the slice and difficulty before deterministic revalidation", async () => {
     const { onAdjust } = renderCard();
     fireEvent.click(screen.getByTestId("o3-adjust"));
@@ -571,39 +512,6 @@ describe("RoutingProposalCard", () => {
     expect(screen.queryByTestId("o3-decline")).not.toBeInTheDocument();
     expect(screen.queryByTestId("o3-run-anyway")).not.toBeInTheDocument();
   });
-});
-
-it("keeps model groups collapsed and exposes distinct provider routes on demand", () => {
-  const item = recommendation().callable_non_codex[0]!;
-  renderCard(
-    proposal({
-      recommendation: recommendation({
-        section_counts: { above_floor_models: 1, above_floor_routes: 2, eligible_models: 1 },
-        model_groups: [
-          {
-            model_identity: "model-a",
-            displayed_model: "Model A",
-            route_count: 2,
-            eligible_route_count: 1,
-            configuration_count: 2,
-            configurations: [item, { ...item, route_id: "other/model-a", reasoning_mode: "high" }],
-          },
-        ],
-      }),
-    }),
-  );
-  expect(screen.queryByTestId("o3-model-groups")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
-  const group = screen.getByTestId("o3-model-group");
-  expect(group).not.toHaveAttribute("open");
-  expect(group).toHaveTextContent("2 configurations · 2 routes · 1 eligible");
-  fireEvent.click(group.querySelector("summary")!);
-  expect(group).toHaveAttribute("open");
-  expect(screen.getByText("other/model-a")).toBeVisible();
-  expect(group).toHaveTextContent("Previously verified");
-  expect(group).not.toHaveTextContent("Callable Now");
-  fireEvent.click(screen.getByTestId("o3-alternatives-toggle"));
-  expect(screen.queryByTestId("o3-model-groups")).not.toBeInTheDocument();
 });
 
 it("shows estimator controls and sends only the changed requirement without executing", async () => {

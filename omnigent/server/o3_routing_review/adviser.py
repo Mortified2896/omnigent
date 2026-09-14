@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import os
+import time
 from typing import Protocol
 
 from pydantic import ValidationError
 
+from .audit import redact
 from .models import (
     AdviserAnalysis,
     AdviserExchange,
@@ -126,43 +127,64 @@ def _decode_analysis(text: str) -> AdviserAnalysis:
     except json.JSONDecodeError as exc:
         raise OmniRouteError("routing adviser returned invalid JSON") from exc
     try:
-        return AdviserAnalysis.model_validate(raw)
+        return AdviserAnalysis.model_validate(
+            {key: value for key, value in raw.items() if key in AdviserAnalysis.model_fields}
+        )
     except ValidationError as exc:
         raise OmniRouteError("routing adviser output failed schema validation") from exc
 
 
-def _record_exchange(
-    analysis: AdviserAnalysis,
+class ReviewerCaptureError(OmniRouteError):
+    def __init__(self, exchanges: list[AdviserExchange]) -> None:
+        super().__init__("Reviewer output could not be parsed; captured attempts are available.")
+        self.exchanges = exchanges
+        self.review_id: str | None = None
+
+
+def _exchange(
     request: dict[str, object],
-    response: OmniRouteResponse,
+    response: OmniRouteResponse | None,
     attempt: int,
-) -> AdviserAnalysis:
-    headers = {key.lower(): value for key, value in response.headers.items()}
-    summaries = []
-    output = response.body.get("output")
-    for item in output if isinstance(output, list) else []:
-        if not isinstance(item, dict) or item.get("type") != "reasoning":
-            continue
-        summary = item.get("summary")
-        for part in summary if isinstance(summary, list) else []:
-            if isinstance(part, dict) and part.get("type") == "summary_text":
-                if isinstance(part.get("text"), str):
-                    summaries.append(part["text"])
+    duration_ms: float,
+    error: str | None = None,
+) -> AdviserExchange:
+    headers = {key.lower(): value for key, value in response.headers.items()} if response else {}
+    body = response.body if response else {}
     reasoning = request.get("reasoning")
-    effort = reasoning.get("effort", "low") if isinstance(reasoning, dict) else "low"
-    analysis._exchanges.append(
-        AdviserExchange(
-            requested_model=str(request["model"]),
-            actual_model=headers.get("x-omniroute-model") or headers.get("x-model"),
-            actual_provider=headers.get("x-omniroute-provider") or headers.get("x-provider"),
-            reasoning_effort=str(effort),
-            request=copy.deepcopy(request),
-            explanation=analysis.rationale,
-            reasoning_summary="\n".join(summaries) or None,
-            attempt=attempt,
-        )
+    effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
+    observed_reasoning = body.get("reasoning")
+    observed_effort = (
+        observed_reasoning.get("effort") if isinstance(observed_reasoning, dict) else None
     )
-    return analysis
+    summaries = []
+    output = body.get("output")
+    for item in output if isinstance(output, list) else []:
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            summary = item.get("summary")
+            for part in summary if isinstance(summary, list) else []:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    summaries.append(part["text"])
+    return AdviserExchange(
+        requested_model=str(request["model"]),
+        transmitted_model=str(request["model"]),
+        actual_model=headers.get("x-omniroute-model")
+        or headers.get("x-model")
+        or (body.get("model") if isinstance(body.get("model"), str) else None),
+        actual_provider=headers.get("x-omniroute-provider") or headers.get("x-provider"),
+        reasoning_effort=str(effort or "unknown"),
+        transmitted_effort=str(effort) if effort else None,
+        observed_effort=observed_effort if isinstance(observed_effort, str) else None,
+        harness="Responses API via OmniRoute",
+        duration_ms=duration_ms,
+        request=redact(request),
+        response=redact(body) if response else None,
+        response_text=redact(response.raw_text) if response else None,
+        response_headers=redact(headers),
+        explanation="",
+        reasoning_summary=redact("\n".join(summaries)) or None,
+        attempt=attempt,
+        parse_error=redact(error),
+    )
 
 
 class OmniRouteRoutingAdviser:
@@ -242,36 +264,51 @@ class OmniRouteRoutingAdviser:
                 }
             },
         }
-        try:
-            response = await self.client.create_response(strict_body)
-            self._remember_attribution(response.headers)
-            return _record_exchange(
-                _decode_analysis(_extract_text(response.body)), strict_body, response, 1
+        repair_body = {
+            **base_body,
+            "input": [
+                {
+                    "role": "system",
+                    "content": instruction
+                    + " Return one JSON object matching this schema exactly: "
+                    + json.dumps(schema, separators=(",", ":")),
+                },
+                {"role": "user", "content": payload},
+            ],
+        }
+        exchanges: list[AdviserExchange] = []
+        for attempt, request in enumerate((strict_body, repair_body), 1):
+            started = time.perf_counter()
+            response = None
+            try:
+                response = await self.client.create_response(request)
+                self._remember_attribution(response.headers)
+            except OmniRouteError as exc:
+                response = getattr(exc, "response", None)
+                exchanges.append(
+                    _exchange(
+                        request,
+                        response,
+                        attempt,
+                        (time.perf_counter() - started) * 1000,
+                        str(exc),
+                    )
+                )
+                continue
+            exchange = _exchange(
+                request, response, attempt, (time.perf_counter() - started) * 1000
             )
-        except OmniRouteError:
-            # Some empirically Responses-compatible non-OpenAI adapters reject
-            # text.format or return JSON that does not honor its vocabulary. A
-            # single prompt-level repair retry includes the exact schema and is
-            # still accepted only after the same local Pydantic validation.
-            repair_body = {
-                **base_body,
-                "input": [
-                    {
-                        "role": "system",
-                        "content": (
-                            instruction
-                            + " Return one JSON object matching this schema exactly: "
-                            + json.dumps(schema, separators=(",", ":"))
-                        ),
-                    },
-                    {"role": "user", "content": payload},
-                ],
-            }
-            response = await self.client.create_response(repair_body)
-            self._remember_attribution(response.headers)
-            return _record_exchange(
-                _decode_analysis(_extract_text(response.body)), repair_body, response, 2
-            )
+            exchanges.append(exchange)
+            try:
+                analysis = _decode_analysis(_extract_text(response.body))
+            except (OmniRouteError, AttributeError, TypeError) as exc:
+                exchange.parse_error = redact(str(exc))
+                continue
+            exchange.parsed = redact(analysis.model_dump(mode="json"))
+            exchange.explanation = redact(analysis.rationale)
+            analysis._exchanges = exchanges
+            return analysis
+        raise ReviewerCaptureError(exchanges)
 
     async def analyse(
         self,

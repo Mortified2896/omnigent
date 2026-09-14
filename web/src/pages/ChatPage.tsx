@@ -1,3 +1,4 @@
+import { O3SessionReview } from "@/components/O3SessionReview";
 import {
   type DragEvent,
   type FormEvent,
@@ -1888,6 +1889,7 @@ function MainAgentSurface({
             <PreserveScrollDistanceOnResize />
             <ConversationScrollRefBridge onScroller={setScroller} />
             <HistoryAutoLoader scrollElement={scroller?.el ?? null} />
+            <O3SessionReview sessionId={conversationId ?? undefined} />
             {bubbles.length === 0 && !showWorkingIndicator && !mcpStartupActive ? (
               // Cold launch: a centered spinner instead of the "ready to
               // type" empty state (the create-then-send path uses the

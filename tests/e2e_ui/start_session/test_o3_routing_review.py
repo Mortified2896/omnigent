@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -31,7 +32,7 @@ def _proposal(
     derived_combo: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "schema_version": 2,
         "constraint_version": 1,
         "requirement_overrides": {},
@@ -161,6 +162,45 @@ def _proposal(
         "terminal_disposition": None,
     }
 
+    result["original_adviser"] = dict(result["adviser"])
+    result["adviser_mode"] = "model"
+    result["adviser_exchanges"] = [
+        {
+            "requested_model": "reviewer-combo",
+            "actual_model": "reviewer-model",
+            "actual_provider": "reviewer-provider",
+            "reasoning_effort": "medium",
+            "transmitted_model": "reviewer-combo",
+            "transmitted_effort": "medium",
+            "harness": "Responses API via OmniRoute",
+            "duration_ms": 7400,
+            "request": {
+                "input": [
+                    {"role": "system", "content": "Exact instructions"},
+                    {"role": "user", "content": _PROMPT},
+                ]
+            },
+            "response_text": "Complete provider output\n"
+            + "Returned rationale, uncertainty, notes.\n" * 80,
+            "response": {
+                "output_text": "Complete parsed JSON",
+                "unknown_future_field": [1, 2],
+                "reasoning": {"summary": "Returned reasoning"},
+                "usage": {"input_tokens": 1842},
+            },
+            "explanation": "Parsed rationale",
+            "reasoning_summary": "Returned reasoning",
+            "attempt": 1,
+        }
+    ]
+    result["audit"] = {
+        "version": 1,
+        "calibration_rule": "benchmark + difficulty -> threshold",
+        "initial_constraints": result["approved_constraints"],
+        "history": [],
+    }
+    return result
+
 
 async def _register_routes(
     page: Page,
@@ -270,7 +310,10 @@ async def _register_routes(
 
     async def handle_o3(route: Route) -> None:
         path = urlparse(route.request.url).path
-        if path.endswith("/registry"):
+        if "/session/" in path:
+            body = [current]
+            status = 200
+        elif path.endswith("/registry"):
             body: object = {
                 "source_pool": "custom/o3-codex-pool",
                 "slices": [
@@ -288,6 +331,7 @@ async def _register_routes(
             }
             status = 200
         elif path.endswith("/proposals") and route.request.method == "POST":
+            await asyncio.sleep(1.5)
             body = _proposal()
             status = 201
         elif path.endswith(f"/{_PROPOSAL_ID}") and route.request.method == "PATCH":
@@ -438,12 +482,34 @@ async def _drive_o3_review(
             await page.get_by_text("Benchmark Routing (O3)", exact=True).click()
             await composer.fill(_PROMPT)
             await page.get_by_test_id("new-chat-landing-submit").click()
+            await expect(page.get_by_test_id("o3-review-timing")).to_be_visible()
+            await page.screenshot(path=str(evidence / "in-progress.png"), full_page=True)
 
             card = page.get_by_test_id("o3-routing-proposal-card")
             await expect(card).to_be_visible(timeout=30_000)
             await expect(card).to_contain_text("tb4.cr-systems-db-v1")
             assert create_bodies == [], "a Codex session started before routing approval"
 
+            await page.screenshot(path=str(evidence / "compact-summary.png"), full_page=True)
+            await page.get_by_text("Inspect decision", exact=True).click()
+            await expect(page.get_by_role("dialog")).to_be_visible()
+            await expect(page.get_by_role("dialog")).to_have_css("opacity", "1")
+            await page.screenshot(path=str(evidence / "inspect.png"), full_page=True)
+            await page.get_by_text("Reviewer input", exact=True).click()
+            await page.screenshot(path=str(evidence / "raw-input.png"), full_page=True)
+            await page.get_by_text("Reviewer input", exact=True).click()
+            await page.get_by_text("Raw reviewer output", exact=True).click()
+            raw = page.get_by_label("Attempt 1 · raw response verbatim", exact=True)
+            await expect(raw).to_contain_text("Returned rationale, uncertainty, notes.")
+            await raw.evaluate("el => {el.scrollTop=el.scrollHeight}")
+            assert await raw.evaluate("el => el.scrollTop > 0")
+            await page.screenshot(path=str(evidence / "raw-output.png"), full_page=True)
+            await page.get_by_text("Raw reviewer output", exact=True).click()
+            await page.get_by_text("Candidates", exact=True).click()
+            await expect(page.get_by_test_id("o3-candidate-table")).to_be_visible()
+            await page.screenshot(path=str(evidence / "candidates.png"), full_page=True)
+            await page.get_by_role("button", name="Close", exact=True).click()
+            await page.get_by_text("Execution settings", exact=True).click()
             tools = page.get_by_role("switch", name="Tools required")
             await expect(tools).to_be_checked()
             await expect(page.get_by_test_id("o3-override-tools")).to_have_count(0)
@@ -451,6 +517,7 @@ async def _drive_o3_review(
             await expect(tools).not_to_be_checked()
             await expect(page.get_by_test_id("o3-override-tools")).to_be_visible()
             await page.reload()
+            await page.get_by_text("Execution settings", exact=True).click()
             await expect(tools).not_to_be_checked()
             await page.get_by_role("button", name="Reset Tools required to estimator").click()
             await expect(tools).to_be_checked()
@@ -512,6 +579,14 @@ async def _drive_o3_review(
                 "role": "user",
                 "content": [{"type": "input_text", "text": _PROMPT}],
             }
+            await page.reload()
+            await expect(page.get_by_test_id("o3-decision-summary")).to_be_visible()
+            await page.get_by_text("Inspect decision", exact=True).click()
+            await page.get_by_text("Raw reviewer output", exact=True).click()
+            await expect(
+                page.get_by_label("Attempt 1 · raw response verbatim", exact=True)
+            ).to_contain_text("Complete provider output")
+            await page.get_by_role("button", name="Close", exact=True).click()
             assert not page_errors, page_errors
             assert not http_errors, http_errors
             assert not console_errors, console_errors

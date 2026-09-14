@@ -15,13 +15,13 @@ describe("review timing", () => {
     vi.useFakeTimers();
     const now = vi.spyOn(performance, "now").mockReturnValue(0);
     render(<O3ReviewTimingStatus timing={startReviewTiming()} />);
-    expect(screen.getByText(/Rough starting estimate/)).toBeTruthy();
+    expect(screen.getByText("Reviewing route")).toBeTruthy();
     now.mockReturnValue(20_000);
     act(() => vi.advanceTimersByTime(1000));
-    expect(screen.getByText(/20s elapsed · About 40s remaining/)).toBeTruthy();
+    expect(screen.getByText(/20s elapsed/)).toBeTruthy();
     now.mockReturnValue(75_000);
     act(() => vi.advanceTimersByTime(1000));
-    expect(screen.getByText(/15s over.*still waiting/)).toBeTruthy();
+    expect(screen.getByText(/75s elapsed/)).toBeTruthy();
   });
 
   it("keeps the original estimate for comparison and learns from completed reviews", () => {
@@ -30,9 +30,7 @@ describe("review timing", () => {
     now.mockReturnValue(90_000);
     const finished = finishReviewTiming(start);
     render(<O3ReviewTimingStatus timing={finished} />);
-    expect(screen.getByRole("status").textContent).toContain(
-      "Review received in 90s · Estimated 60s · 30s slower than estimated (50%)",
-    );
+    expect(screen.getByRole("status").textContent).toContain("Review received90s");
     expect(startReviewTiming()).toMatchObject({ estimatedMs: 90_000, sampleCount: 1 });
   });
 

@@ -13,7 +13,8 @@ from pathlib import Path
 
 from omnigent.process_logging import env_truthy
 
-from .adviser import OmniRouteRoutingAdviser, RoutingAdviser
+from .adviser import OmniRouteRoutingAdviser, ReviewerCaptureError, RoutingAdviser
+from .audit import redact, snapshot
 from .evaluator import evaluate_candidates, hard_capable_candidates
 from .forecaster import ModelScoreForecaster
 from .models import (
@@ -264,6 +265,7 @@ class O3RoutingReviewService:
         estimator: EstimatorSelection | None = None
         adviser_model: str | None = None
         adviser_effort: str | None = None
+        reviewer_route_checks: list[dict[str, object]] | None = None
         analysis = self._greeting_analysis(request)
         adviser_mode = "local_rule" if analysis is not None else "model"
         if self.recommendation_catalogue is None:
@@ -355,6 +357,7 @@ class O3RoutingReviewService:
                 [item.route_id for item in eligible],
                 reasoning_effort=policy.reasoning_effort,
             )
+            reviewer_route_checks = getattr(verified_estimator, "checks", None)
             adviser_model, _definition = await self.omniroute.create_estimator_combo(
                 proposal_id,
                 [item for item in eligible if item.route_id == verified_estimator],
@@ -366,14 +369,27 @@ class O3RoutingReviewService:
                 eligible_count=len(eligible),
                 combo_name=adviser_model,
             )
-        analysis = analysis or await self.adviser.analyse(
-            prompt=prompt,
-            workspace_summary=request.workspace_summary,
-            registry=self.registry,
-            candidates=[],
-            model=adviser_model,
-            reasoning_effort=adviser_effort,
-        )
+        try:
+            analysis = analysis or await self.adviser.analyse(
+                prompt=prompt,
+                workspace_summary=request.workspace_summary,
+                registry=self.registry,
+                candidates=[],
+                model=adviser_model,
+                reasoning_effort=adviser_effort,
+            )
+        except ReviewerCaptureError as exc:
+            self.store.put_failed_review(
+                proposal_id,
+                {
+                    "review_id": proposal_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "input": request.model_dump(mode="json"),
+                    "exchanges": [item.model_dump(mode="json") for item in exc.exchanges],
+                },
+            )
+            exc.review_id = proposal_id
+            raise
         if estimator is not None:
             estimator = estimator.model_copy(
                 update={
@@ -386,6 +402,7 @@ class O3RoutingReviewService:
                 }
             )
         self._validate_analysis(analysis)
+        original_analysis = analysis.model_copy(deep=True)
         selection = analysis.benchmark_requirements[0]
         try:
             requirement = self.registry.calibrated_requirement(selection, analysis.difficulty)
@@ -500,7 +517,43 @@ class O3RoutingReviewService:
             prompt_fingerprint="sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
             workspace_summary=request.workspace_summary,
             adviser=analysis,
-            original_adviser=analysis.model_copy(deep=True),
+            original_adviser=original_analysis,
+            audit=redact(
+                {
+                    "version": 1,
+                    "reviewer_route_checks": reviewer_route_checks,
+                    "input": request.model_dump(mode="json"),
+                    "rule": "standalone-greeting-v1" if adviser_mode == "local_rule" else None,
+                    "initial_constraints": constraints.model_dump(mode="json"),
+                    "requirement_sources": {
+                        key: "local rule"
+                        if adviser_mode == "local_rule"
+                        else "reviewer"
+                        if key in original_analysis.requirements.model_fields_set
+                        else "schema default"
+                        for key in original_analysis.requirements.model_fields
+                    },
+                    "calibration_rule": "benchmark/version/slice + difficulty -> threshold",
+                    "selection_policy": {
+                        "eligibility": "capability, effort, I/O and Responses contract",
+                        "approval_recheck_order": (
+                            "callable non-Codex first; "
+                            "descending conservative capability; route ID"
+                        ),
+                        "selection": "O3 set -> OmniRoute auto Combo; weights in Combo definition",
+                        "resource_policy": constraints.cost_quota_preference,
+                    },
+                    "calibration": self.registry.calibration._rows.get(
+                        (selection.benchmark_id, selection.version, selection.slice_id)
+                    )
+                    if self.registry.calibration
+                    else None,
+                    "normalization": self.recommendation_catalogue.policy.get("normalization")
+                    if self.recommendation_catalogue
+                    else None,
+                    "history": [],
+                }
+            ),
             adviser_exchanges=analysis._exchanges,
             adviser_mode=adviser_mode,
             approved_constraints=constraints,
@@ -513,7 +566,7 @@ class O3RoutingReviewService:
             resource_advice=resource_advice,
         )
         proposal = await self._with_execution_options(proposal)
-        self.store.put(proposal)
+        self.store.put(snapshot(proposal, "review completed"))
         return proposal
 
     def _validate_decomposition(
@@ -749,7 +802,7 @@ class O3RoutingReviewService:
             }
         )
         updated = await self._with_execution_options(updated)
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     async def decide_proposal(
@@ -771,7 +824,7 @@ class O3RoutingReviewService:
                     ),
                 }
             )
-            self.store.put(updated)
+            self.store.put(snapshot(updated, "decision/execution state updated"))
             return updated
 
         proposal = await self._with_execution_options(proposal)
@@ -833,7 +886,7 @@ class O3RoutingReviewService:
                         "updated_at": datetime.now(timezone.utc),
                     }
                 )
-                self.store.put(updated)
+                self.store.put(snapshot(updated, "decision/execution state updated"))
                 return updated
             proposal = proposal.model_copy(
                 update={
@@ -948,10 +1001,14 @@ class O3RoutingReviewService:
                     ),
                 )
                 if request.action is not DecisionAction.RUN_ANYWAY:
-                    await self.omniroute.recheck_routes(
+                    checked_route = await self.omniroute.recheck_routes(
                         [item.route_id for item in shortlist],
                         reasoning_effort=proposal.approved_constraints.reasoning_effort,
                     )
+                    if proposal.audit is not None:
+                        proposal.audit["approval_route_checks"] = getattr(
+                            checked_route, "checks", None
+                        )
                 combo_name, combo_definition = await self.omniroute.create_catalogue_combo(
                     proposal.proposal_id,
                     catalogue_selected,
@@ -964,6 +1021,9 @@ class O3RoutingReviewService:
                     reasoning_effort=proposal.approved_constraints.reasoning_effort,
                 )
         except OmniRouteError as exc:
+            if proposal.audit is not None:
+                proposal.audit["approval_route_checks"] = exc.route_checks
+                self.store.put(snapshot(proposal, "approval recheck failed"))
             raise RoutingReviewError(
                 str(exc),
                 status_code=502,
@@ -978,7 +1038,7 @@ class O3RoutingReviewService:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     def link_session(
@@ -1003,7 +1063,7 @@ class O3RoutingReviewService:
         updated = proposal.model_copy(
             update={"session_id": request.session_id, "updated_at": datetime.now(timezone.utc)}
         )
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     def record_outcome(self, proposal_id: str, request: ProposalOutcomeRequest) -> RoutingProposal:
@@ -1025,7 +1085,7 @@ class O3RoutingReviewService:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     async def sync_execution_provenance(
@@ -1058,9 +1118,9 @@ class O3RoutingReviewService:
             latest = provenance[-1] if provenance else None
             latest_effort = next(
                 (
-                    item.reasoning_effort
+                    item.transport.get("observed_effort")
                     for item in reversed(provenance)
-                    if item.reasoning_effort is not None
+                    if item.transport and isinstance(item.transport.get("observed_effort"), str)
                 ),
                 None,
             )
@@ -1088,7 +1148,7 @@ class O3RoutingReviewService:
                     }
                 )
             updated = proposal.model_copy(update=update)
-            self.store.put(updated)
+            self.store.put(snapshot(updated, "decision/execution state updated"))
             updated_proposals.append(updated)
         return updated_proposals
 
@@ -1115,7 +1175,7 @@ class O3RoutingReviewService:
                         "updated_at": current,
                     }
                 )
-                self.store.put(updated)
+                self.store.put(snapshot(updated, "decision/execution state updated"))
             except OmniRouteError as exc:
                 result.failures[name] = str(exc)
         return result

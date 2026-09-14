@@ -363,10 +363,13 @@ async def test_adviser_repairs_schema_invalid_provider_output_once() -> None:
 
     assert result.difficulty == "normal"
     assert len(client.bodies) == 2
-    assert result._exchanges[0].attempt == 2
-    assert result._exchanges[0].request == client.bodies[1]
-    assert result._exchanges[0].actual_model is None
-    assert result._exchanges[0].reasoning_summary is None
+    assert len(result._exchanges) == 2
+    assert result._exchanges[0].parse_error is not None
+    assert result._exchanges[0].response == {"output_text": json.dumps(invalid)}
+    assert result._exchanges[1].attempt == 2
+    assert result._exchanges[1].request == client.bodies[1]
+    assert result._exchanges[1].actual_model is None
+    assert result._exchanges[1].reasoning_summary is None
     assert "_exchanges" not in AdviserAnalysis.model_json_schema()["properties"]
     repair_input = cast(list[dict[str, str]], client.bodies[1]["input"])
     assert "matching this schema exactly" in repair_input[0]["content"]
@@ -1425,7 +1428,7 @@ async def test_terminal_status_syncs_execution_provenance_and_manual_outcome(
 
     assert synced.actual_provider == "codex"
     assert synced.actual_model == "gpt-5.5"
-    assert synced.actual_reasoning_effort == "low"
+    assert synced.actual_reasoning_effort is None
     assert synced.execution_status == "idle"
     assert synced.task_outcome == "completed"
     assert synced.terminal_disposition == "completed"

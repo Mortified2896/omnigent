@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 from omnigent.process_logging import data_dir
 
@@ -64,10 +66,95 @@ class ProposalStore:
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
-            proposals[proposal.proposal_id] = proposal.model_dump(
-                mode="json", exclude={"effective_requirements"}
-            )
+            from .audit import redact
+
+            payload = redact(proposal.model_dump(mode="json", exclude={"effective_requirements"}))
+            extensions: list[dict[str, object]] = []
+
+            def extract(value: object, path: list[str | int]) -> None:
+                if isinstance(value, dict):
+                    for key in list(value):
+                        is_extension = (
+                            (not path and key == "audit")
+                            or (
+                                len(path) == 2
+                                and path[0] == "adviser_exchanges"
+                                and key
+                                in {
+                                    "transmitted_model",
+                                    "transmitted_effort",
+                                    "observed_effort",
+                                    "harness",
+                                    "duration_ms",
+                                    "response",
+                                    "response_text",
+                                    "response_headers",
+                                    "parse_error",
+                                    "parsed",
+                                }
+                            )
+                            or (key == "metadata" and "execution_set" in path)
+                            or (key == "transport" and "execution_provenance" in path)
+                        )
+                        if is_extension:
+                            extensions.append({"path": [*path, key], "value": value.pop(key)})
+                        else:
+                            extract(value[key], [*path, key])
+                elif isinstance(value, list):
+                    for index, item in enumerate(value):
+                        extract(item, [*path, index])
+
+            extract(payload, [])
+            proposals[proposal.proposal_id] = payload
+            audits = state.setdefault("proposal_extensions", {})
+            assert isinstance(audits, dict)
+            audits[proposal.proposal_id] = {
+                "base_hash": hashlib.sha256(
+                    json.dumps(payload, sort_keys=True).encode()
+                ).hexdigest(),
+                "fields": extensions,
+            }
             self._write(state)
+
+    @staticmethod
+    def _restore(raw: dict[str, object], state: dict[str, object]) -> dict[str, object]:
+        import copy
+
+        restored = copy.deepcopy(raw)
+        audits = state.get("proposal_extensions", {})
+        extension_record = (
+            audits.get(raw.get("proposal_id"), {}) if isinstance(audits, dict) else {}
+        )
+        expected = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
+        if extension_record.get("base_hash") != expected:
+            return restored
+        extensions = extension_record.get("fields", [])
+        for entry in extensions:
+            path = entry["path"]
+            target: Any = restored
+            try:
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = entry["value"]
+            except (KeyError, IndexError, TypeError):
+                # An older release may update the legacy portion after rollback.
+                continue
+        return restored
+
+    def put_failed_review(self, review_id: str, record: dict[str, object]) -> None:
+        from .audit import redact
+
+        with self._lock:
+            state = self._read()
+            failed = state.setdefault("failed_reviews", {})
+            assert isinstance(failed, dict)
+            failed[review_id] = redact(record)
+            self._write(state)
+
+    def get_failed_review(self, review_id: str) -> object:
+        with self._lock:
+            failed = self._read().get("failed_reviews", {})
+            return failed.get(review_id) if isinstance(failed, dict) else None
 
     @staticmethod
     def _parse(raw: dict[str, object]) -> RoutingProposal:
@@ -103,11 +190,15 @@ class ProposalStore:
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
             raw = proposals.get(proposal_id)
-            return self._parse(raw) if isinstance(raw, dict) else None
+            return self._parse(self._restore(raw, state)) if isinstance(raw, dict) else None
 
     def list(self) -> list[RoutingProposal]:
         with self._lock:
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
-            return [self._parse(raw) for raw in proposals.values() if isinstance(raw, dict)]
+            return [
+                self._parse(self._restore(raw, state))
+                for raw in proposals.values()
+                if isinstance(raw, dict)
+            ]

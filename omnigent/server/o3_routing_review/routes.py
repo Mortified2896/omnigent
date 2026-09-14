@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._content_type import require_json_content_type
 from omnigent.server.routes._origin import require_trusted_origin
 
+from .adviser import ReviewerCaptureError
 from .models import (
     CleanupResult,
     ProposalAdjustmentRequest,
@@ -42,6 +44,14 @@ def create_o3_routing_review_router(
         require_user(request, auth_provider)
         return service_factory()
 
+    @router.get("/o3/routing-review/failed/{review_id}")
+    async def failed_review(request: Request, review_id: str) -> object:
+        return service_for(request).store.get_failed_review(review_id)
+
+    @router.get("/o3/routing-review/session/{session_id}")
+    async def session_reviews(request: Request, session_id: str) -> list[RoutingProposal]:
+        return [p for p in service_for(request).store.list() if p.session_id == session_id]
+
     @router.get("/o3/routing-review/registry")
     async def get_registry(request: Request) -> dict[str, object]:
         service = service_for(request)
@@ -59,9 +69,20 @@ def create_o3_routing_review_router(
     async def create_proposal(
         request: Request,
         body: ProposalCreateRequest,
-    ) -> RoutingProposal:
+    ) -> RoutingProposal | JSONResponse:
         try:
             return await service_for(request).create_proposal(body)
+        except ReviewerCaptureError as exc:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": {
+                        "message": str(exc),
+                        "code": "reviewer_parse_failed",
+                        "audit_id": exc.review_id,
+                    }
+                },
+            )
         except OmniRouteError as exc:
             raise RoutingReviewError(
                 "OmniRoute is temporarily unavailable while preparing the route review; "
