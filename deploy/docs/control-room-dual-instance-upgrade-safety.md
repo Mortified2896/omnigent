@@ -6,8 +6,10 @@ instances have deliberately been provisioned and that mechanism has explicitly
 been selected**.
 
 It is **not** the current HomeLab deployment policy for the RTX Omnigent
-runtime. The current HomeLab topology has one active RTX O1 under external Mac
-Codex control and no standing live O2 peer. Old O1/O2 on `ai-control-hub` are
+runtime. The current HomeLab topology has one active RTX O1 for ordinary
+tasks and no standing live O2 peer. Release switching requires an explicitly
+selected external controller, such as the Mac Codex app. Old O1/O2 on
+`ai-control-hub` are
 retired from active service and archived.
 
 Therefore:
@@ -20,9 +22,9 @@ Therefore:
   than changing topology to make it pass;
 - reintroducing a second Omnigent peer requires explicit owner authorization;
 - current RTX deployment decisions are governed by the current HomeLab
-  `docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md`, with
-  the Mac Codex app as external controller and the rollback-preserving RTX
-  release path.
+  [HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md),
+  using an explicitly selected external controller for O1 release switching
+  and the rollback-preserving RTX release path.
 
 Historical migration text that says RTX O1 "must" use O2 supervision is
 superseded for present-state deployment decisions. This document overrides

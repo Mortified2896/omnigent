@@ -1,13 +1,19 @@
 # RTX integration feature disposition
 
-Candidate only. No source PR has been merged and no live O1 promotion is accepted.
+Status (2026-09-14): RTX O1 on VM 100 `rtx-omnigent` is the active runtime.
+This document preserves integration provenance and acceptance checkpoints;
+source publication and historical peer-promotion acceptance are distinct
+from current runtime status. For present-state decisions, defer to the
+[HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md).
+Old O1/O2, OpenCode Web and old OmniRoute on `ai-control-hub` are retired.
+Do not start, restore or recreate O2 to satisfy legacy deployer preflight.
 
-Verified baseline: origin/main 28095733f87dc50b3bf4e73adee39ad4a7e72c1d.
-The deployed O1/O2 release ba50146e9bd4512ec345feb7e9bc483421a04104 is
+Historical integration baseline: origin/main 28095733f87dc50b3bf4e73adee39ad4a7e72c1d.
+The historical O1/O2 release ba50146e9bd4512ec345feb7e9bc483421a04104 is
 an ancestor. Both old server/host pairs were active and healthy on 2026-09-13.
-The Mac O3 process uses the mac-tool-free-execution worktree at
+At that checkpoint, the Mac O3 process used the mac-tool-free-execution worktree at
 06c14e783c168474321f43802d9aceaaa9889365 with preserved untracked diagnostics.
-Mac OmniRoute reports 3.8.50 / build dea6bb8 / Node 22.22.3.
+Mac OmniRoute reported 3.8.50 / build dea6bb8 / Node 22.22.3.
 
 | Feature | Disposition | Source / integration boundary |
 | --- | --- | --- |
@@ -19,7 +25,7 @@ Mac OmniRoute reports 3.8.50 / build dea6bb8 / Node 22.22.3.
 | Mac telemetry installation, archive, rollback and historical counters | KEEP | PR 154 head 7f72743727160f9c132f786d792b7022dac94c7e remains preserved; do not run Mac adoption on Linux or migrate its archive. |
 | Minimal Codex OTEL config and optional provenance hook ownership | SEMANTIC PORT | Only native runtime helpers and focused tests from PR 154. Optional capture must not block execution. |
 | Visible Omnigent Smart Routing / Benchmark Routing (O3) / manual selection | INTEGRATED / TESTED | Implements the approved issue 113/124 controls using native selection and dispatch. Preserve unsupported reasons and isolate policies. |
-| Linux runtime qualification, immutable artifact and cross-host promotion | PARTIAL / CUTOVER GATED | Linux 3.8.50, immutable artifact boot and real native/O3 tasks passed; single-route protocol checks do not qualify every fallback. Cross-host promotion remains unimplemented and gated. |
+| Linux runtime qualification, immutable artifact and historical cross-host plan | RTX ACCEPTANCE RECORDED / LEGACY PLAN SUPERSEDED | Linux 3.8.50, immutable artifact boot and real native/O3 tasks passed; single-route protocol checks do not qualify every fallback. The unimplemented legacy cross-host transaction is not required for the current single-primary RTX workflow. |
 | Extra O2/O3 installations, GPU rework, new observability and benchmark platform | DISABLE-DEFER | Outside the initial single-guest migration. |
 
 The three Mac feature commits form an ancestry-checked sequence. They are
@@ -33,9 +39,12 @@ followed by a native semantic chooser or an unrestricted fallback. Executor
 effort is separate from estimator inference effort. Endpoint-bound evidence
 is revalidated before an approved execution set can run.
 
-Publication is a draft customization PR. Production promotion still requires
-accepted/approved source, immutable acceptance, real O2 supervision,
-consistent final state transfer and executable rollback.
+Publication is the existing customization PR #156. Current RTX release changes
+require accepted/approved source, immutable artifact identity, consistent
+backups, external control, runtime verification and executable rollback per
+the HomeLab workflow. The former requirement for real O2 supervision and
+final transfer from the old peers is superseded. Historical databases remain
+separate recovery evidence and must not replace active RTX history.
 
 ## Current integration validation
 
@@ -99,14 +108,19 @@ OpenRouter's correctly qualified minimax/minimax-m3:free route returned 404
 stating it is unavailable for free. No paid MiniMax alternative was invoked
 and existing approved Combos were not edited.
 
-No canonical cross-host bootstrap is claimed. The existing deployer still
-assumes local peers and an active local target; state transfer, writer fencing,
-paired cross-host recovery and real O2 supervision must be implemented and
-accepted before promotion. Source review, the existing source-host storage
-guard latch, phone use and reboot/cutover remain separate gates.
+No canonical cross-host bootstrap is claimed. The legacy deployer assumes
+local peers and an active local target. State transfer, writer fencing, paired
+cross-host recovery and real O2 supervision were requirements of that earlier
+plan, not of the current single-primary RTX deployment architecture. The
+source-host storage latch was subsequently cleared by the approved recovery
+recorded in HomeLab; it is not a current RTX blocker. Source review, real-phone
+acceptance and controlled reboot recovery remain distinct from the recorded
+runtime acceptance. Do not revive O2 or alter storage guards to complete the
+superseded plan.
 
-The cross-host observation adapter now collects the real source O2 baseline
-and independently verifies candidate acceptance on its actual host. Its
+The legacy cross-host observation adapter was validated against the then-live
+source O2 baseline and independently verified candidate acceptance on its
+actual host. Its
 bounded freshness, persistent host/data identities, source guard and canonical
 writer checks have focused negative regression coverage. It deliberately
 returns `ready_for_mutation=false`; the transactional writer-fencing, final
