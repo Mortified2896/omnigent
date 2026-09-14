@@ -43,10 +43,16 @@ runtime identity:
 - application data/releases: under `/srv` in the guest;
 - active application: RTX O1 + execution host + newer OmniRoute 3.8.50.
 
-Old O1 and O2 on `ai-control-hub` are stopped, disabled, restart-fenced, and
-archived. Old OpenCode Web and the old OmniRoute gateway were removed from active
-paths after verified archival. Do not route new implementation or acceptance
-work to the old instances because historical guidance names them.
+Old O1 and O2 on `ai-control-hub` are retired from active service: stopped,
+disabled, restart-fenced, and archived. Old OpenCode Web and the old OmniRoute
+gateway were removed from active paths after verified archival. Do not route new
+implementation or acceptance work to the old instances because historical
+guidance names them.
+
+**Do not start, restore, recreate, or otherwise reactivate old O1/O2 merely to
+satisfy a legacy deployment tool, historical runbook, or stale supervisor
+requirement.** Reintroducing a second Omnigent peer is a topology change and
+requires explicit owner authorization.
 
 For live runtime work, read the current HomeLab topology/workflow documents and
 perform a fresh host identity check before mutation. Source-only local work does
@@ -63,17 +69,28 @@ identity.
 
 ## HomeLab deployment safety
 
-The peer-deployer implementation and
-`deploy/docs/control-room-dual-instance-upgrade-safety.md` retain a hard
-TARGET/SUPERVISOR separation invariant when that deployment mechanism is used.
-An instance must never supervise its own upgrade.
+The current HomeLab topology is **single-primary RTX O1 under external Mac Codex
+control**. There is no standing live O2 peer.
 
-The current steady state, however, has one active RTX O1 and no live O2 peer.
-Source work does not require a supervisor. Do not fabricate or relabel a peer,
-feed remote observations into a local supervisor slot, or revive archived O2
-merely to satisfy stale prose. If a requested live deployment path genuinely
-requires a healthy peer, report that as a concrete deployment-architecture
-requirement before mutation.
+For current RTX deployments, preserve the safety properties that matter without
+fabricating a supervisor: exact tested/accepted candidate identity, consistent
+backups, reversible release switching, health/runtime verification, rollback
+preservation, and external control. The running O1 must not autonomously
+self-upgrade from inside its own task context.
+
+The legacy `peer_deployer` and
+`deploy/docs/control-room-dual-instance-upgrade-safety.md` retain a hard
+TARGET/SUPERVISOR separation invariant **only when a two-peer deployment has
+been deliberately provisioned and that mechanism is explicitly selected**. They
+are not the default or required deployment path for the current RTX topology.
+Do not choose the legacy mechanism and then revive archived O2 to make its
+preflight pass.
+
+If a procedure or old document says `TARGET=O1, SUPERVISOR=O2` is required for
+current RTX deployment, treat that as stale migration-era topology unless the
+owner has explicitly authorized reintroducing a second peer. Current HomeLab
+`docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md` are the
+present-state authority.
 
 Live deployment is distinct from source implementation. A passing build or test
 suite does not authorize a restart, release switch, database replacement, or
