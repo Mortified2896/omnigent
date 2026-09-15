@@ -179,6 +179,7 @@ class TurnCapture:
         self.native_home: Path | None = None
         self.native_path: str | None = None
         self.finished = False
+        self.gateway_requests: list[dict[str, Any]] = []
 
     @classmethod
     def begin(
@@ -211,6 +212,9 @@ class TurnCapture:
                     "capture_id": capture_id,
                     "omnigent_session_id": session_id,
                     "omnigent_turn_id": turn_id,
+                    "omnigent_response_id": turn_id
+                    if turn_id and turn_id.startswith("resp_")
+                    else None,
                     "task_identity": turn_id or capture_id,
                     "harness": harness,
                     "repo_root": str(repo_root),
@@ -325,10 +329,37 @@ class TurnCapture:
             datetime.fromisoformat(self.manifest["completed_at"])
             - datetime.fromisoformat(self.manifest["started_at"])
         ).total_seconds()
+        self.attempt("gateway", self._preserve_gateway)
         self.attempt("end", lambda: self._snapshot("end"))
         if self.manifest["harness"] == "codex":
             self.attempt("trajectory", self._preserve_native)
         self.persist()
+
+    def _preserve_gateway(self) -> None:
+        import time
+
+        from omnigent.gateway_capture import read_gateway_evidence
+
+        records = []
+        for request in self.gateway_requests:
+            evidence = None
+            for _ in range(30):
+                evidence = read_gateway_evidence(self.directory.parent, request["gateway_call_id"])
+                if evidence is not None and all(
+                    attempt["terminal_status"] not in {"sending", "streaming"}
+                    for attempt in evidence["attempts"]
+                ):
+                    break
+                time.sleep(0.1)
+            records.append(
+                {
+                    "gateway_call_id": request["gateway_call_id"],
+                    "http_status": request.get("http_status"),
+                    "execution": evidence,
+                }
+            )
+        self.manifest["gateway_requests"] = records
+        self._write_artifact("gateway-requests.json", records)
 
     def _preserve_native(self) -> None:
         from omnigent.benchmark_capture_codex import preserve_rollout
@@ -350,7 +381,14 @@ class TurnCapture:
 
 
 def _source_commit() -> str | None:
-    # Only identify a source checkout; a wheel's parent may be an unrelated repo.
+    try:
+        from omnigent._build_info import COMMIT_SHA
+
+        if COMMIT_SHA:
+            return COMMIT_SHA
+    except ImportError:
+        pass
+    # A wheel's parent may be an unrelated repository.
     root = Path(__file__).resolve().parent.parent
     return _git_text(root, "rev-parse", "HEAD", check=False) if (root / ".git").exists() else None
 
