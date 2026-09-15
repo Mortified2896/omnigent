@@ -37,6 +37,7 @@ from typing import Any, Protocol, TypeAlias, cast
 
 from omnigent._platform import resolve_cli_binary
 from omnigent.benchmark_capture import TurnCapture, capture_enabled, capture_io
+from omnigent.gateway_capture import GatewayCaptureProxy
 from omnigent.inner.agent_env import clean_agent_env, declared_passthrough
 from omnigent.llms._usage_observer import notify_from_dict as _notify_usage_from_dict
 from omnigent.models import model_catalog
@@ -3317,6 +3318,7 @@ class _CodexAppServerSession:
 
 @dataclass
 class _CodexSessionState:
+    capture_proxy: GatewayCaptureProxy | None = None
     app_session: _CodexAppServerSession | None = None
     signature: tuple[str | None, str, str, str] | None = None
 
@@ -3660,6 +3662,8 @@ class CodexExecutor(Executor):
         state = self._session_states.pop(session_key, None)
         if state is not None and state.app_session is not None:
             await state.app_session.close()
+        if state is not None and state.capture_proxy is not None:
+            await asyncio.to_thread(state.capture_proxy.close)
 
     async def close(self) -> None:
         keys = list(self._session_states.keys())
@@ -3677,12 +3681,20 @@ class CodexExecutor(Executor):
             return state.app_session
         if state.app_session is not None:
             await state.app_session.close()
+        overrides = self._codex_config_overrides
+        if state.capture_proxy is not None and self._base_url_override:
+            overrides = [
+                value.replace(
+                    json.dumps(self._base_url_override), json.dumps(state.capture_proxy.base_url)
+                )
+                for value in overrides
+            ]
         app_session = self._app_session_factory(
             codex_path=self._codex_path,
             cwd=effective_cwd,
             env=self._env,
             tool_executor=self._tool_executor,
-            codex_config_overrides=self._codex_config_overrides,
+            codex_config_overrides=overrides,
             retry_policy=self._retry_policy,
             disable_native_tools=self._disable_native_tools,
             bundle_dir=self._bundle_dir,
@@ -3768,6 +3780,18 @@ class CodexExecutor(Executor):
                     "provider_config_id": self._model_provider_override,
                 },
             )
+        if capture is not None and self._gateway and self._base_url_override:
+            try:
+                if state.capture_proxy is None:
+                    state.capture_proxy = GatewayCaptureProxy(self._base_url_override)
+                    state.signature = None
+                state.capture_proxy.bind(capture)
+            except Exception:  # noqa: BLE001 - optional capture cannot fail a task
+                capture.manifest["errors"].append(
+                    {"stage": "gateway_proxy", "error": "initialization_failed"}
+                )
+        if state.capture_proxy is not None:
+            state.capture_proxy.bind(capture)
         terminal = "failed"
         outcome: dict[str, Any] = {}
         app_session = None
