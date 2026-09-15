@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -2565,6 +2566,38 @@ def test_build_runner_env_propagates_data_dir_paths_not_db_uri() -> None:
     # The DB URI is NOT propagated — it may carry credentials and a runner
     # (hosted or local) has no business holding the server's DB connection.
     assert "OMNIGENT_DATABASE_URI" not in env
+
+
+@pytest.mark.parametrize("enabled", [None, "0", "1"])
+def test_benchmark_capture_survives_host_runner_harness_env(
+    monkeypatch: pytest.MonkeyPatch, enabled: str | None
+) -> None:
+    from omnigent.cli import _build_host_daemon_env
+    from omnigent.runtime.harnesses.process_manager import _build_harness_spawn_env
+
+    monkeypatch.delenv("OMNIGENT_BENCHMARK_CAPTURE", raising=False)
+    if enabled is not None:
+        monkeypatch.setenv("OMNIGENT_BENCHMARK_CAPTURE", enabled)
+    monkeypatch.setenv("OMNIGENT_BENCHMARK_CAPTURE_DIR", "/srv/benchmark-captures")
+    monkeypatch.setenv("UNRELATED_OPERATOR_SECRET", "must-not-forward")
+    daemon_env = _build_host_daemon_env(server_url="http://server")
+    runner_env = _build_runner_env(
+        daemon_env,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="binding-secret",
+        workspace="/ws",
+        parent_pid=42,
+    )
+    for key in list(os.environ):
+        monkeypatch.delenv(key)
+    for key, value in runner_env.items():
+        monkeypatch.setenv(key, value)
+    harness_env = _build_harness_spawn_env(None)
+    assert harness_env.get("OMNIGENT_BENCHMARK_CAPTURE") == enabled
+    assert harness_env["OMNIGENT_BENCHMARK_CAPTURE_DIR"] == "/srv/benchmark-captures"
+    assert "UNRELATED_OPERATOR_SECRET" not in harness_env
+    assert "binding-secret" not in harness_env.values()
 
 
 def test_build_runner_env_preserves_instance_identity_and_codex_home() -> None:

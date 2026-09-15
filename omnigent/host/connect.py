@@ -367,6 +367,9 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # cli._ensure_host_daemon), never to a (possibly hosted) runner.
         "OMNIGENT_CONFIG_HOME",
         "OMNIGENT_DATA_DIR",
+        # Capture is configured by the host owner and executed in the harness.
+        "OMNIGENT_BENCHMARK_CAPTURE",
+        "OMNIGENT_BENCHMARK_CAPTURE_DIR",
         # Low-cardinality deployment identity used by runner/harness traces.
         "OMNIGENT_INSTANCE_ID",
         # Non-secret Control Room opt-in. The runner performs its own bounded

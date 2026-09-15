@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.parse
 from pathlib import Path
@@ -116,6 +117,10 @@ def _main_evaluate_policy(argv: list[str]) -> int:
         return 0
 
     bridge_dir = Path(args.bridge_dir)
+    if os.environ.get("OMNIGENT_BENCHMARK_CAPTURE") == "1":
+        from omnigent.benchmark_capture_native import begin_native
+
+        begin_native(bridge_dir, payload)
     state = read_bridge_state(bridge_dir)
     if state is None:
         return 0

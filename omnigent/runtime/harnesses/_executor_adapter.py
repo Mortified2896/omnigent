@@ -271,7 +271,10 @@ class ExecutorAdapter(HarnessApp):
         # SDK never sees the new prompt and Claude keeps going.
         for message in messages:
             message["session_id"] = self._session_key
-        extra: dict[str, Any] = {}
+        extra: dict[str, Any] = {
+            "omnigent_turn_id": ctx.response_id,
+            "omnigent_session_id": ctx.session_id,
+        }
         if request.reasoning is not None:
             effort = request.reasoning.get("effort")
             if effort:

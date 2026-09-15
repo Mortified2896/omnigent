@@ -37,6 +37,7 @@ from typing import Any, Protocol, TypeAlias, cast
 
 from omnigent import model_catalog
 from omnigent._platform import resolve_cli_binary
+from omnigent.benchmark_capture import TurnCapture, capture_enabled, capture_io
 from omnigent.codex_model_vocabulary import (
     EXTENDED_CATALOG_MODELS,
     EXTENDED_MODEL_DEFAULT_EFFORT,
@@ -2052,6 +2053,7 @@ class _CodexAppServerSession:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.thread_id: str | None = None
         self.active_turn_id: str | None = None
+        self._benchmark_capture: TurnCapture | None = None
         # Last reasoning effort applied via ``thread/settings/update`` on the
         # current thread. Effort is not part of the executor's session
         # signature, so a change must be re-applied per turn; this is reset on
@@ -2074,7 +2076,7 @@ class _CodexAppServerSession:
             return
         self._loop = asyncio.get_running_loop()
         codex_home_root = Path(tempfile.gettempdir())
-        if self._cwd and self._cwd != "/":
+        if self._cwd and self._cwd != "/" and not capture_enabled():
             try:
                 codex_home_root = Path(self._cwd) / ".codex-tmp"
                 codex_home_root.mkdir(parents=True, exist_ok=True)
@@ -2235,6 +2237,8 @@ class _CodexAppServerSession:
         self._pending_requests.clear()
         if self._proc is not None:
             close_subprocess_transport(self._proc)
+        if self._benchmark_capture is not None:
+            await capture_io(self._benchmark_capture.finish, "cancelled")
         self._started = False
         self._proc = None
         self._reader_task = None
@@ -2348,8 +2352,12 @@ class _CodexAppServerSession:
         cwd: str,
         sandbox: str,
         reasoning_effort: str | None = None,
+        capture: TurnCapture | None = None,
     ) -> AsyncIterator[ExecutorEvent]:
+        self._benchmark_capture = capture
         await self.start()
+        if capture is not None:
+            capture.bind(native_home=self._codex_home_dir)
         assert self._proc is not None
 
         is_new_thread = self.thread_id is None
@@ -2380,6 +2388,8 @@ class _CodexAppServerSession:
             # settings update below re-sends it for this thread.
             self._applied_effort = None
 
+        if capture is not None:
+            capture.bind(thread_id=self.thread_id)
         assert self.thread_id is not None
         latest_user_content = _extract_latest_user_content(messages)
         goal_objective = _goal_objective_from_content(latest_user_content)
@@ -2441,6 +2451,8 @@ class _CodexAppServerSession:
         if effort_via_turn_start:
             turn_params["effort"] = reasoning_effort
             turn_params["summary"] = "detailed"
+        if capture is not None:
+            capture.record_input(turn_params)
         start_response = await self._request(
             "turn/start",
             turn_params,
@@ -2453,6 +2465,8 @@ class _CodexAppServerSession:
             return
         active_turn_id: str = raw_active_turn_id
         self.active_turn_id = active_turn_id
+        if capture is not None:
+            capture.bind(turn_id=active_turn_id)
 
         while not self._events.empty():
             queued_message = self._events.get_nowait()
@@ -2507,6 +2521,8 @@ class _CodexAppServerSession:
                 )
                 active_turn_id = event_turn_id
                 self.active_turn_id = event_turn_id
+                if capture is not None:
+                    capture.bind(turn_id=event_turn_id)
                 observed_turn_id = event_turn_id
                 return True
             return False
@@ -2666,6 +2682,11 @@ class _CodexAppServerSession:
                         if phase == "final_answer" or phase is None:
                             final_response = completed_text
                         if phase == "final_answer":
+                            if capture is not None:
+                                capture.manifest["final_response_id"] = completed_item_id
+                                capture.manifest["terminal_evidence"] = (
+                                    "item/completed.final_answer"
+                                )
                             # Diagnostic: log response head + turn id so
                             # ghost-events surface in CI logs.
                             logger.info(
@@ -2706,6 +2727,15 @@ class _CodexAppServerSession:
                             active_turn_id,
                         )
                         continue
+                    if capture is not None and turn.get("status") in {"failed", "interrupted"}:
+                        terminal = "cancelled" if turn.get("status") == "interrupted" else "failed"
+                        await capture_io(
+                            capture.finish,
+                            terminal,
+                            {"native_status": turn.get("status"), "error": turn.get("error")},
+                        )
+                        yield ExecutorError(message=str(turn.get("error") or terminal))
+                        return
                     if not final_response:
                         final_response = _latest_buffered_agent_message(message_buffers)
                     if not final_response:
@@ -3340,17 +3370,44 @@ class CodexExecutor(Executor):
             yield ExecutorError(message=str(exc), retryable=False)
             return
 
-        app_session = await self._ensure_app_session(
-            state,
-            signature=signature,
-            effective_cwd=effective_cwd,
-        )
         sandbox_mode = _sandbox_mode(self._os_env_spec)
         if tools and sandbox_mode == "read-only":
             sandbox_mode = "workspace-write"
 
+        capture = None
+        if capture_enabled():
+            capture = await capture_io(
+                TurnCapture.begin,
+                cwd=effective_cwd,
+                session_id=cfg.extra.get(
+                    "omnigent_session_id", session_key if session_key != "default" else None
+                ),
+                turn_id=cfg.extra.get("omnigent_turn_id"),
+                harness="codex",
+                task_input={
+                    "messages": messages,
+                    "system_prompt": system_prompt,
+                    "tools": tools,
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "cwd": effective_cwd,
+                    "sandbox": sandbox_mode,
+                    "approval_policy": "never",
+                    "provider_config_id": self._model_provider_override,
+                },
+            )
+        terminal = "failed"
+        outcome: dict[str, Any] = {}
+        app_session = None
         try:
+            app_session = await self._ensure_app_session(
+                state,
+                signature=signature,
+                effective_cwd=effective_cwd,
+            )
+            capture_kwargs = {"capture": capture} if capture is not None else {}
             async for event in app_session.run_turn(
+                **capture_kwargs,
                 messages=messages,
                 tools=tools,
                 system_prompt=system_prompt,
@@ -3359,6 +3416,25 @@ class CodexExecutor(Executor):
                 sandbox=sandbox_mode,
                 reasoning_effort=reasoning_effort,
             ):
+                if capture is not None:
+                    if isinstance(event, TurnComplete):
+                        terminal = "completed"
+                        outcome = {"response": event.response, "usage": event.usage}
+                        await capture_io(capture.finish, terminal, outcome)
+                    elif isinstance(event, ExecutorError):
+                        terminal = "failed"
+                        outcome = {"error": event.message, "retryable": event.retryable}
+                        await capture_io(capture.finish, terminal, outcome)
                 yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            terminal = "cancelled"
+            if capture is not None and app_session is not None:
+                # Stop the writer before snapshotting; close preserves the rollout before cleanup.
+                await app_session.close()
+            raise
         except Exception as exc:  # noqa: BLE001 — executor boundary converts any error into an ExecutorError event
+            outcome = {"error_class": type(exc).__name__}
             yield ExecutorError(message=f"Codex executor error: {exc}")
+        finally:
+            if capture is not None:
+                await capture_io(capture.finish, terminal, outcome)
