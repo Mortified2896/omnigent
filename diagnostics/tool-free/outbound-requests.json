@@ -1,0 +1,422 @@
+[
+  {
+    "model": "oc/hy3-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/north-mini-code-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/deepseek-v4-flash-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/deepseek-v4-flash-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/muse-spark-1.2-contributor-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/muse-spark-1.2-contributor-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/mimo-v2.5-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/mimo-v2.5-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/ling-3.0-flash-fin-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/ling-3.0-flash-fin-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/nemotron-3-ultra-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/nemotron-3-ultra-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/nemotron-3.5-lightning-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/nemotron-3.5-lightning-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "oc/laguna-s-2.1-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "opencode/laguna-s-2.1-free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/inclusionai/ling-3.0-flash-fin:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/dots-studio/dots-3-note-preview:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/liquid/lfm-2.5-2.6b:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/thinkingmachines/inkling-small:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/poolside/laguna-s-2.1:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/thinkingmachines/inkling:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/poolside/laguna-xs-2.1:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/cohere/north-mini-code:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/z-ai/glm-5.2:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/nvidia/nemotron-3.5-content-safety:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/minimax/minimax-m3:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/google/gemma-4-26b-a4b-it:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/google/gemma-4-31b-it:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/minimax/minimax-m2.7:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/openrouter/free",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/openrouter/bodybuilder",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "openrouter/openrouter/auto",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "mistral/labs-leanstral-1-5-1",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "mistral/labs-leanstral-1-5",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "nvidia/meta/llama-4-maverick-17b-128e-instruct",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "nvidia/openai/gpt-oss-120b",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  },
+  {
+    "model": "cf/@cf/mistral/mistral-7b-instruct-v0.2-lora",
+    "tools": [],
+    "tool_choice": "none",
+    "store": false,
+    "stream": false,
+    "reasoning": {
+      "effort": "low"
+    }
+  }
+]

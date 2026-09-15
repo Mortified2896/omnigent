@@ -140,7 +140,17 @@ def build_execution_set(
             exclusions.append("Responses client-contract compatibility is unresolved")
 
         identity = ready.get("equivalence_key")
+        from .audit import redact
+
         decision = CatalogueExecutionDecision(
+            metadata=redact(
+                {
+                    "forecast": row,
+                    "readiness": ready,
+                    "live_present": route_id in live_route_ids,
+                    "common_floor": common_floor,
+                }
+            ),
             route_id=route_id,
             provider_id=provider_id,
             displayed_model=str(row.get("display_model_alias") or route_id.split("/", 1)[-1]),

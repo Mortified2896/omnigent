@@ -457,96 +457,126 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
-  it("holds an O3 task until approval, then launches the derived Codex route once", async () => {
-    const pending = o3Proposal();
-    const approved = o3Proposal("approve");
-    vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce(
-        jsonResponse({
-          source_pool: "custom/o3-codex-pool",
-          slices: [
-            {
-              benchmark_id: "terminal-bench",
-              version: "4.0.0",
-              slice_id: "tb4.cr-systems-db-v1",
-              label: "Systems and databases",
-              interpretation: "Systems tasks",
-              task_ids: [],
-              task_manifest_digest: "sha256:test",
-              official: false,
-            },
-          ],
+  it.each(["native", "free"])(
+    "holds an O3 task until approval, then launches the %s route once",
+    async (lane) => {
+      const pending = o3Proposal();
+      const approved = o3Proposal("approve");
+      if (lane === "free") {
+        const selection = {
+          mode: "hard_tool_free" as const,
+          route: "free/model",
+          provider: "free",
+          cost_class: "free",
+          capability_score_lower: 60,
+          reason: "Meets floor with zero tools",
+        };
+        pending.selected_execution = selection;
+        approved.selected_execution = selection;
+        approved.derived_combo_name = null;
+      }
+      vi.mocked(authenticatedFetch)
+        .mockResolvedValueOnce(
+          jsonResponse({
+            source_pool: "custom/o3-codex-pool",
+            slices: [
+              {
+                benchmark_id: "terminal-bench",
+                version: "4.0.0",
+                slice_id: "tb4.cr-systems-db-v1",
+                label: "Systems and databases",
+                interpretation: "Systems tasks",
+                task_ids: [],
+                task_manifest_digest: "sha256:test",
+                official: false,
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(jsonResponse(pending))
+        .mockResolvedValueOnce(jsonResponse(approved))
+        .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
+        .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
+      setAgents([
+        agent({
+          id: "ag_codex",
+          name: "codex-native-ui",
+          display_name: "Codex",
+          harness: "codex-native",
         }),
-      )
-      .mockResolvedValueOnce(jsonResponse(pending))
-      .mockResolvedValueOnce(jsonResponse(approved))
-      .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
-      .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
-    setAgents([
-      agent({
-        id: "ag_codex",
-        name: "codex-native-ui",
-        display_name: "Codex",
-        harness: "codex-native",
-      }),
-    ]);
+        agent({
+          id: "ag_free",
+          name: "local-tool-free",
+          display_name: "Tool-free",
+          harness: "local-tool-free",
+        }),
+      ]);
 
-    renderLanding([], O3_SERVER_INFO);
-    await waitForWorkspaceSeed();
-    expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
-      "OmniRoute O3 · Local",
-    );
-    expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
-    expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
-    fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
-    expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
-    typeMessage("inspect the repo without changing it");
-    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+      renderLanding([], O3_SERVER_INFO);
+      await waitForWorkspaceSeed();
+      pickSelectOption("new-chat-landing-inline-model", "Benchmark Routing (O3)");
+      expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
+        "Benchmark Routing (O3)",
+      );
+      expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
+      expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
+      fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
+      expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
+      typeMessage("inspect the repo without changing it");
+      fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
-    await screen.findByTestId("o3-routing-proposal-card");
-    const callsBeforeApproval = vi.mocked(authenticatedFetch).mock.calls;
-    expect(callsBeforeApproval.some(([url]) => url === "/v1/sessions")).toBe(false);
-    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
-    expect(navigateMock).not.toHaveBeenCalled();
-    const proposalCall = callsBeforeApproval.find(
-      ([url]) => url === "/v1/o3/routing-review/proposals",
-    );
-    expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
-      "inspect the repo without changing it",
-    );
-    expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
+      await screen.findByTestId("o3-routing-proposal-card");
+      const callsBeforeApproval = vi.mocked(authenticatedFetch).mock.calls;
+      expect(callsBeforeApproval.some(([url]) => url === "/v1/sessions")).toBe(false);
+      expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
+      expect(navigateMock).not.toHaveBeenCalled();
+      const proposalCall = callsBeforeApproval.find(
+        ([url]) => url === "/v1/o3/routing-review/proposals",
+      );
+      expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
+        "inspect the repo without changing it",
+      );
+      expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
 
-    fireEvent.click(screen.getByTestId("o3-approve"));
+      fireEvent.click(screen.getByTestId("o3-approve"));
 
-    await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
-    const sessionCall = vi
-      .mocked(authenticatedFetch)
-      .mock.calls.find(([url]) => url === "/v1/sessions");
-    expect(sessionCall).toBeDefined();
-    const sessionBody = JSON.parse(sessionCall?.[1]?.body as string);
-    expect(sessionBody).toMatchObject({
-      agent_id: "ag_codex",
-      harness_override: "codex-native",
-      model_override: "custom/o3-route-0123456789ab",
-      reasoning_effort: "low",
-      cost_control_mode_override: "off",
-      labels: {
-        "omnigent.access_lane": "omniroute",
-        "o3.routing.proposal_id": pending.proposal_id,
-      },
-    });
-    expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
-      text: "inspect the repo without changing it",
-      skill: null,
-      files: [],
-    });
-    const linkCall = vi
-      .mocked(authenticatedFetch)
-      .mock.calls.find(([url]) => String(url).endsWith("/session"));
-    expect(JSON.parse(linkCall?.[1]?.body as string)).toEqual({ session_id: "conv_o3" });
-    expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
-    expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3");
-  });
+      await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
+      const sessionCall = vi
+        .mocked(authenticatedFetch)
+        .mock.calls.find(([url]) => url === "/v1/sessions");
+      expect(sessionCall).toBeDefined();
+      const sessionBody = JSON.parse(sessionCall?.[1]?.body as string);
+      expect(sessionBody).toMatchObject({
+        agent_id: lane === "free" ? "ag_free" : "ag_codex",
+        harness_override: lane === "free" ? "local-tool-free" : "codex-native",
+        model_override:
+          lane === "free"
+            ? `local-tool-free/${pending.proposal_id}`
+            : "custom/o3-route-0123456789ab",
+        reasoning_effort: "low",
+        cost_control_mode_override: "off",
+        labels: {
+          ...(lane === "native" ? { "omnigent.access_lane": "omniroute" } : {}),
+          "o3.routing.proposal_id": pending.proposal_id,
+        },
+      });
+      if (lane === "free") {
+        expect(sessionBody.labels["omnigent.wrapper"]).toBeUndefined();
+        expect(sessionBody.labels["omnigent.ui"]).toBeUndefined();
+      }
+      expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
+        text: "inspect the repo without changing it",
+        skill: null,
+        files: [],
+      });
+      const linkCall = vi
+        .mocked(authenticatedFetch)
+        .mock.calls.find(([url]) => String(url).endsWith("/session"));
+      expect(JSON.parse(linkCall?.[1]?.body as string)).toEqual({ session_id: "conv_o3" });
+      expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
+      expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3");
+    },
+  );
 
   it("restores the unsent O3 prompt and proposal across a page reload", async () => {
     const pending = o3Proposal();
@@ -683,6 +713,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding([], O3_SERVER_INFO);
     await waitForWorkspaceSeed();
+    pickSelectOption("new-chat-landing-inline-model", "Benchmark Routing (O3)");
     fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
     fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
       target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
@@ -738,7 +769,7 @@ describe("NewChatLandingScreen create flow", () => {
       workspace: SEEDED_WORKSPACE,
     });
     // A plain YAML agent carries no terminal-wrapper labels.
-    expect(body.labels).toBeUndefined();
+    expect(body.labels).toEqual({ "omnigent.routing_policy": "manual" });
 
     // On success the screen routes to the freshly created session.
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/c/conv_new"));
@@ -1127,6 +1158,7 @@ describe("NewChatLandingScreen create flow", () => {
     // the UI keys off to render the terminal wrapper. Dropping them would make
     // a native Claude Code session render as a plain chat.
     expect(body.labels).toEqual({
+      "omnigent.routing_policy": "manual",
       "omnigent.ui": "terminal",
       "omnigent.wrapper": "claude-code-native-ui",
     });
@@ -1154,6 +1186,7 @@ describe("NewChatLandingScreen create flow", () => {
     // agent name (unlike claude, whose wrapper is "claude-code-native-ui").
     // The runner/server key off exactly this value to boot the agy terminal.
     expect(body.labels).toEqual({
+      "omnigent.routing_policy": "manual",
       "omnigent.ui": "terminal",
       "omnigent.wrapper": "antigravity-native-ui",
     });
@@ -2023,4 +2056,68 @@ describe("sanitizeInitialPrompt", () => {
   ])("%s", (_label, input, expected) => {
     expect(sanitizeInitialPrompt(input)).toBe(expected);
   });
+});
+
+it("keeps manual and native dispatch isolated from an enabled O3 estimator", async () => {
+  vi.mocked(authenticatedFetch).mockImplementation(async (url) =>
+    jsonResponse(url === "/v1/sessions" ? { id: "conv_native_policy" } : { slices: [] }),
+  );
+  setAgents([
+    agent({
+      id: "ag_codex",
+      name: "codex-native-ui",
+      display_name: "Codex",
+      harness: "codex-native",
+    }),
+  ]);
+  renderLanding([], {
+    ...O3_SERVER_INFO,
+    smart_routing_enabled: true,
+    smart_routing_sources: { external: false, oss: true },
+  });
+  await waitForWorkspaceSeed();
+  expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("Default");
+  expect(screen.queryByTestId("o3-estimator-settings")).toBeNull();
+  pickSelectOption("new-chat-landing-inline-model", "Omnigent Smart Routing");
+  typeMessage("inspect the native routing fixture");
+  fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+  await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+  const calls = vi.mocked(authenticatedFetch).mock.calls;
+  expect(calls.some(([url]) => String(url).includes("/proposals"))).toBe(false);
+  const request = calls.find(([url]) => url === "/v1/sessions");
+  const body = JSON.parse(String(request?.[1]?.body));
+  expect(body.cost_control_mode_override).toBe("on");
+  expect(body.model_override).toBeUndefined();
+  expect(body.reasoning_effort).toBeUndefined();
+  expect(body.labels["omnigent.routing_policy"]).toBe("native");
+  expect(body.labels["omnigent.routing_backend"]).toBe("oss-llm");
+});
+
+it("preserves benchmark routing on an unrelated gear save and clears it for an explicit model selection", async () => {
+  setAgents([
+    agent({
+      id: "ag_codex",
+      name: "codex-native-ui",
+      display_name: "Codex",
+      harness: "codex-native",
+    }),
+  ]);
+  renderLanding([], O3_SERVER_INFO);
+  await waitForWorkspaceSeed();
+  pickSelectOption("new-chat-landing-inline-model", "Benchmark Routing (O3)");
+  fireEvent.click(screen.getByTestId("new-chat-landing-config-gear"));
+  expect(screen.getByTestId("new-chat-landing-config-model")).toHaveTextContent(
+    "Benchmark Routing (O3)",
+  );
+  saveConfig();
+  expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
+    "Benchmark Routing (O3)",
+  );
+  expect(screen.getByTestId("o3-estimator-settings")).toBeInTheDocument();
+  fireEvent.click(screen.getByTestId("new-chat-landing-config-gear"));
+  openSelect("new-chat-landing-config-model");
+  fireEvent.click(screen.getByRole("option", { name: /^Default/ }));
+  saveConfig();
+  expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("Default");
+  expect(screen.queryByTestId("o3-estimator-settings")).toBeNull();
 });

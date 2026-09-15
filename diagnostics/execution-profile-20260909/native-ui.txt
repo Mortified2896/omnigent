@@ -1,0 +1,5 @@
+initial 201 0ed78c59-723a-4fcf-9b48-daa6481144c8 {'terminal': True, 'tools': True, 'minimum_context_tokens': 0, 'vision': False, 'input_modalities': ['text'], 'output_modalities': ['text'], 'minimum_input_tokens': 0, 'minimum_output_tokens': 0, 'structured_output': False, 'client_endpoint': 'responses'}
+override {'tools': False, 'image_input': None, 'image_output': None, 'structured_output': None, 'minimum_context_tokens': None, 'minimum_output_tokens': None}
+reload persisted
+reset {'tools': None, 'image_input': None, 'image_output': None, 'structured_output': None, 'minimum_context_tokens': None, 'minimum_output_tokens': None}
+context count 1

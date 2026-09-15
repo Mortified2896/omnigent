@@ -1016,6 +1016,13 @@ def register_events_routes(
             )
             return {"queued": False}
         if body.type == _EXTERNAL_MODEL_CHANGE_TYPE:
+            from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
+
+            protect_recorded_policy(
+                conv.labels or {},
+                {"model_override": conv.model_override},
+                {"model_override": body.data.get("model")},
+            )
             await _persist_external_model_change(
                 session_id,
                 conv,
@@ -1027,6 +1034,13 @@ def register_events_routes(
             _persist_external_model_options(session_id, conv, body)
             return {"queued": False}
         if body.type == _EXTERNAL_REASONING_EFFORT_CHANGE_TYPE:
+            from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
+
+            protect_recorded_policy(
+                conv.labels or {},
+                {"reasoning_effort": conv.reasoning_effort},
+                {"reasoning_effort": body.data.get("reasoning_effort")},
+            )
             await _persist_external_reasoning_effort_change(
                 session_id,
                 conv,
@@ -1456,6 +1470,9 @@ def register_events_routes(
             event=body,
         )
         if body.type == _SLASH_COMMAND_TYPE:
+            from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+            require_new_review(conv.labels or {}, "running a native slash command")
             if _agent is None:
                 raise OmnigentError(
                     f"Session {session_id!r} has no agent; cannot run slash command",

@@ -20,12 +20,17 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
     useWorkspaceDirectory: () => ({ data: undefined }),
   };
 });
+const sessionLabels = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 // HostBadge now renders in the composer's status-line tray and reads the
 // session's host binding via TanStack Query. Stub the hooks so it self-hides
 // (no host bound) without needing a QueryClient provider around these renders.
 vi.mock("@/hooks/useSession", async (importOriginal) => ({
   ...(await importOriginal<typeof UseSessionModule>()),
-  useSession: () => ({ session: { hostId: null }, isLoading: false, error: null }),
+  useSession: () => ({
+    session: { hostId: null, labels: sessionLabels.value },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@/hooks/useHosts", async (importOriginal) => ({
   ...(await importOriginal<typeof UseHostsModule>()),
@@ -159,6 +164,7 @@ describe("Composer Codex goal control", () => {
 
 describe("Composer slash-command menu", () => {
   beforeEach(() => {
+    sessionLabels.value = {};
     // Two skills so the menu has skill rows distinct from the built-ins.
     // Skills fill the textarea (with a trailing space) on selection rather
     // than executing, which lets us assert the completed value directly
@@ -2491,3 +2497,68 @@ describe("shouldQueueSend", () => {
     expect(shouldQueueSend("conv_a", "idle", "idle", [q("conv_b")])).toBe(false);
   });
 });
+
+it.each([
+  ["benchmark", "Benchmark Routing (O3)"],
+  ["native", "Omnigent Smart Routing"],
+  ["manual", "Manual / default"],
+])("restores the saved %s policy in the conversation status", (policy, label) => {
+  sessionLabels.value = { "omnigent.routing_policy": policy };
+  render(
+    <TooltipProvider>
+      <Composer {...composerProps()} />
+    </TooltipProvider>,
+  );
+  expect(screen.getByTestId("composer-routing-policy")).toHaveTextContent(label);
+});
+
+it.each([
+  { "omnigent.routing_policy": "benchmark" },
+  { "o3.routing.proposal_id": "approved-proposal" },
+] as Record<string, string>[])(
+  "keeps approved O3 controls visible and read-only: %s",
+  async (labels) => {
+    sessionLabels.value = labels;
+    const effort = vi.fn();
+    const model = vi.fn();
+    const original = useChatStore.getState();
+    useChatStore.setState({
+      conversationId: "conv_approved",
+      selectedEffort: "low",
+      selectedModel: "custom/o3-approved",
+      sessionModelOverride: "custom/o3-approved",
+      setEffort: effort,
+      setModel: model,
+      refreshSessionOverrides: vi.fn().mockResolvedValue(undefined),
+    });
+    try {
+      renderWithTooltips(
+        <Composer
+          {...composerProps({
+            showModels: false,
+            showEffort: false,
+            effortLevels: [],
+            modelPickerKind: "codex",
+            codexModelOptions: [{ id: "custom/o3-approved", displayName: "Approved route" }],
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("composer-config-gear"));
+      expect(await screen.findByTestId("composer-config-approval")).toHaveTextContent(
+        "Start a new task to review changes",
+      );
+      expect(screen.getByTestId("composer-config-model")).toBeDisabled();
+      expect(screen.getByTestId("composer-config-effort")).toBeDisabled();
+      expect(screen.getByTestId("composer-config-effort")).toHaveTextContent(/low/i);
+      expect(screen.getByTestId("composer-config-save")).toBeDisabled();
+      fireEvent.click(screen.getByTestId("composer-config-save"));
+      expect(effort).not.toHaveBeenCalled();
+      expect(model).not.toHaveBeenCalled();
+      expect(useChatStore.getState().selectedEffort).toBe("low");
+    } finally {
+      cleanup();
+      sessionLabels.value = {};
+      useChatStore.setState(original);
+    }
+  },
+);

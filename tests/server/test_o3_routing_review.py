@@ -363,10 +363,13 @@ async def test_adviser_repairs_schema_invalid_provider_output_once() -> None:
 
     assert result.difficulty == "normal"
     assert len(client.bodies) == 2
-    assert result._exchanges[0].attempt == 2
-    assert result._exchanges[0].request == client.bodies[1]
-    assert result._exchanges[0].actual_model is None
-    assert result._exchanges[0].reasoning_summary is None
+    assert len(result._exchanges) == 2
+    assert result._exchanges[0].parse_error is not None
+    assert result._exchanges[0].response == {"output_text": json.dumps(invalid)}
+    assert result._exchanges[1].attempt == 2
+    assert result._exchanges[1].request == client.bodies[1]
+    assert result._exchanges[1].actual_model is None
+    assert result._exchanges[1].reasoning_summary is None
     assert "_exchanges" not in AdviserAnalysis.model_json_schema()["properties"]
     repair_input = cast(list[dict[str, str]], client.bodies[1]["input"])
     assert "matching this schema exactly" in repair_input[0]["content"]
@@ -775,7 +778,34 @@ async def test_recommendation_only_create_and_adjust_skip_execution_side_effects
     assert omni.deleted == []
 
 
-async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Path) -> None:
+@pytest.mark.parametrize("search_qualified", [None, True, False])
+@pytest.mark.parametrize("override_tools", [False, None])
+async def test_catalogue_approval_routes_the_uncapped_execution_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    search_qualified: bool | None,
+    override_tools: bool | None,
+) -> None:
+    path = tmp_path / "search-capabilities.json"
+    monkeypatch.setenv("OMNIGENT_O3_TOOL_SEARCH_CAPABILITIES", str(path))
+    if search_qualified is not None:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "routes": {
+                        "free/model-a": {
+                            "provider": "free",
+                            "resolved_model": "model-a",
+                            "supports_search_tool": search_qualified,
+                            "search_call": search_qualified,
+                            "loaded_tool_call": search_qualified,
+                            "evidence": "local probe",
+                        }
+                    },
+                }
+            )
+        )
     registry = BenchmarkRegistry(
         slices=[_SLICE],
         evidence=[],
@@ -811,6 +841,27 @@ async def test_catalogue_approval_routes_the_uncapped_execution_set(tmp_path: Pa
     proposal = await service.create_proposal(
         ProposalCreateRequest(prompt="Execute this task", estimator_policy=_estimator_policy())
     )
+
+    if override_tools is not None:
+        from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+        proposal = await service.adjust_proposal(
+            proposal.proposal_id,
+            ProposalAdjustmentRequest(
+                requirement_overrides=RequirementOverrides(tools=override_tools)
+            ),
+        )
+        assert proposal.adviser.requirements.tools is True
+        assert proposal.effective_requirements.tools is False
+
+    if search_qualified is False:
+        with pytest.raises(RoutingReviewError, match="no structurally usable candidate"):
+            await service.decide_proposal(
+                proposal.proposal_id, ProposalDecisionRequest(action=DecisionAction.APPROVE)
+            )
+        assert omni.created == []
+        assert proposal.recommendation.execution_set.eligible_count == 1
+        return
 
     approved = await service.decide_proposal(
         proposal.proposal_id,
@@ -1377,7 +1428,7 @@ async def test_terminal_status_syncs_execution_provenance_and_manual_outcome(
 
     assert synced.actual_provider == "codex"
     assert synced.actual_model == "gpt-5.5"
-    assert synced.actual_reasoning_effort == "low"
+    assert synced.actual_reasoning_effort is None
     assert synced.execution_status == "idle"
     assert synced.task_outcome == "completed"
     assert synced.terminal_disposition == "completed"
@@ -1494,13 +1545,22 @@ async def test_mutating_routes_require_auth_json_and_trusted_origin(
             json=payload,
             headers={**auth, "Origin": "http://127.0.0.1:5173"},
         )
+        uncompressed = await client.post(
+            url,
+            json=payload,
+            headers={**auth, "Accept-Encoding": "identity"},
+        )
 
     assert unauthenticated.status_code == 401
     assert wrong_type.status_code == 415
     assert untrusted.status_code == 403
     assert accepted.status_code == 201
     assert accepted.json()["proposal_id"] == proposal.proposal_id
-    assert route_service.create_calls == 1
+    assert accepted.headers["content-encoding"] == "gzip"
+    assert "content-encoding" not in uncompressed.headers
+    assert accepted.json() == uncompressed.json()
+    assert int(accepted.headers["content-length"]) < len(uncompressed.content)
+    assert route_service.create_calls == 2
 
 
 async def test_create_route_returns_recoverable_error_when_omniroute_is_unavailable(
@@ -1679,3 +1739,199 @@ async def test_adviser_transcripts_are_request_scoped() -> None:
         context = json.loads(exchange.request["input"][1]["content"])
         assert context["unchanged_user_task"] == name
         assert "candidates" not in context
+
+
+async def test_execution_overrides_persist_reset_and_recompute(tmp_path: Path) -> None:
+    from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+    registry = BenchmarkRegistry(
+        slices=[_SLICE],
+        evidence=[],
+        candidates=[],
+        calibration=DifficultyCalibration(
+            {
+                "calibration_version": "test-v1",
+                "calibrations": [
+                    {
+                        "benchmark_id": _SLICE.benchmark_id,
+                        "version": _SLICE.version,
+                        "slice_id": _SLICE.slice_id,
+                        "thresholds": {
+                            "easy": 0.2,
+                            "normal": 0.4,
+                            "moderate": 0.6,
+                            "hard": 0.8,
+                            "frontier": 0.95,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    omni = _RecommendationOnlyOmniRoute([])
+    service = O3RoutingReviewService(
+        registry=registry,
+        omniroute=cast(OmniRouteClient, omni),
+        adviser=cast(RoutingAdviser, _FakeAdviser(_analysis())),
+        store=ProposalStore(tmp_path / "state.json"),
+        recommendation_catalogue=_recommendation_catalogue(),
+    )
+    initial = await service.create_proposal(ProposalCreateRequest(prompt="Inspect a repository"))
+    original = initial.adviser.requirements.model_dump()
+    assert initial.requirement_overrides.model_dump(exclude_none=True) == {}
+    assert initial.effective_requirements.tools
+
+    async def adjust(**values):
+        return await service.adjust_proposal(
+            initial.proposal_id,
+            ProposalAdjustmentRequest(
+                requirement_overrides=RequirementOverrides(**values),
+            ),
+        )
+
+    changed = await adjust(tools=False, image_input=True)
+    assert changed.adviser.requirements.model_dump() == original
+    assert not changed.effective_requirements.tools
+    assert changed.effective_requirements.vision
+    assert changed.recommendation.execution_set.eligible_count == 0
+    fetched = ProposalStore(tmp_path / "state.json").get(initial.proposal_id)
+    assert fetched.effective_requirements == changed.effective_requirements
+    assert fetched.requirement_overrides.image_input is True
+    assert fetched.constraint_version == initial.constraint_version + 1
+    assert fetched.model_dump()["effective_requirements"]["tools"] is False
+    reset = await adjust(image_input=None)
+    assert reset.requirement_overrides.image_input is None
+    assert not reset.effective_requirements.vision
+    assert reset.requirement_overrides.tools is False
+    assert reset.recommendation.execution_set.eligible_count == 1
+    restored = await adjust(tools=True)
+    assert restored.requirement_overrides.model_dump(exclude_none=True) == {}
+    assert restored.effective_requirements.model_dump() == original
+    floor = await service.adjust_proposal(
+        initial.proposal_id, ProposalAdjustmentRequest(minimum_score=0.63)
+    )
+    limited = await adjust(minimum_context_tokens=256_000)
+    assert limited.approved_constraints.benchmark == floor.approved_constraints.benchmark
+    assert limited.recommendation.execution_set.eligible_count == 0
+    quality = await service.adjust_proposal(
+        initial.proposal_id, ProposalAdjustmentRequest(reasoning_effort="high")
+    )
+    assert quality.requirement_overrides.minimum_context_tokens == 256_000
+    assert quality.approved_constraints.reasoning_effort == "high"
+    assert quality.adviser.requirements.model_dump() == original
+    fresh = await service.create_proposal(ProposalCreateRequest(prompt="Another independent task"))
+    assert fresh.requirement_overrides.model_dump(exclude_none=True) == {}
+    assert omni.created == []
+
+
+def test_image_requirement_override_preserves_other_modalities() -> None:
+    from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+    estimator = RoutingRequirements(vision=True, input_modalities=["text", "image", "audio"])
+    effective = RequirementOverrides(image_input=False, image_output=True).resolve(estimator)
+    assert effective.input_modalities == ["text", "audio"]
+    assert not effective.vision
+    assert effective.output_modalities == ["text", "image"]
+    assert estimator.vision
+    assert estimator.input_modalities == ["text", "image", "audio"]
+
+
+@pytest.mark.parametrize(
+    "patch", [{"tools": "false"}, {"minimum_context_tokens": -1}, {"web_search": True}]
+)
+def test_requirement_patch_rejects_invalid_or_unsupported_fields(patch) -> None:
+    with pytest.raises(ValueError):
+        ProposalAdjustmentRequest.model_validate({"requirement_overrides": patch})
+
+
+async def test_execution_effort_reset_keeps_original_and_manual_floor(tmp_path: Path) -> None:
+    candidate = _candidate()
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[_evidence(candidate)], candidates=[])
+    analysis = _analysis()
+    service, _ = _service(tmp_path, registry, [candidate], analysis)
+    proposal = _evaluated_proposal(registry, analysis, [candidate]).model_copy(
+        update={"original_adviser": analysis.model_copy(deep=True)}
+    )
+    service.store.put(proposal)
+    manual = await service.adjust_proposal(
+        proposal.proposal_id, ProposalAdjustmentRequest(minimum_score=0.73)
+    )
+    changed = await service.adjust_proposal(
+        proposal.proposal_id, ProposalAdjustmentRequest(reasoning_effort="high")
+    )
+    assert changed.original_adviser is not None
+    assert changed.original_adviser.model_dump() == analysis.model_dump()
+    assert changed.approved_constraints.benchmark == manual.approved_constraints.benchmark
+    assert not changed.frontier.passing_exact_candidates
+    assert all(item.status == "excluded" for item in changed.evaluations)
+
+    service.store = ProposalStore(tmp_path / "o3-state.json")
+    reset = await service.adjust_proposal(
+        proposal.proposal_id, ProposalAdjustmentRequest(reset_reasoning_effort=True)
+    )
+    assert reset.original_adviser is not None
+    assert reset.original_adviser.model_dump() == analysis.model_dump()
+    assert reset.approved_constraints.reasoning_effort == "low"
+    assert reset.approved_constraints.benchmark == manual.approved_constraints.benchmark
+    assert reset.constraint_version == changed.constraint_version + 1
+    assert reset.decision is None
+
+
+async def test_legacy_modified_review_cannot_invent_reasoning_recommendation(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate()
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[_evidence(candidate)], candidates=[])
+    analysis = _analysis()
+    service, _ = _service(tmp_path, registry, [candidate], analysis)
+    proposal = _evaluated_proposal(registry, analysis, [candidate]).model_copy(
+        update={"constraint_version": 2}
+    )
+    service.store.put(proposal)
+    with pytest.raises(
+        RoutingReviewError, match="original reasoning recommendation is unavailable"
+    ):
+        await service.adjust_proposal(
+            proposal.proposal_id, ProposalAdjustmentRequest(reset_reasoning_effort=True)
+        )
+    with pytest.raises(RoutingReviewError, match="override or reset"):
+        await service.adjust_proposal(
+            proposal.proposal_id,
+            ProposalAdjustmentRequest(reasoning_effort="high", reset_reasoning_effort=True),
+        )
+
+
+@pytest.mark.asyncio
+async def test_catalogue_combo_preserves_provider_and_vendor_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.server.o3_routing_review.models import CatalogueExecutionDecision
+
+    client = OmniRouteClient("http://127.0.0.1:20128", "test-only")
+    saved = {}
+
+    async def get_combo(name):
+        return saved.get(name)
+
+    async def request(method, path, *, body=None):
+        assert (method, path) == ("POST", "/api/combos")
+        saved[body["name"]] = body
+        return OmniRouteResponse(body={}, headers={})
+
+    monkeypatch.setattr(client, "get_combo", get_combo)
+    monkeypatch.setattr(client, "_request", request)
+    route = "openrouter/minimax/minimax-m3:free"
+    name, definition = await client.create_catalogue_combo(
+        "abcdef12-1234-1234-1234-abcdef123456",
+        [
+            CatalogueExecutionDecision(
+                route_id=route,
+                provider_id="openrouter",
+                displayed_model="MiniMax",
+                reasoning_mode="low",
+            )
+        ],
+        reasoning_effort="low",
+    )
+    assert saved[name]["models"][0]["model"] == route
+    assert definition["models"][0]["providerId"] == "openrouter"

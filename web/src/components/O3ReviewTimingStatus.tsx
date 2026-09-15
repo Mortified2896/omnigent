@@ -10,37 +10,17 @@ export function O3ReviewTimingStatus({ timing }: { timing: O3ReviewTiming }) {
   }, [timing]);
 
   const elapsed = Math.max(0, now - timing.startedAt);
-  const difference = (timing.actualMs ?? 0) - timing.estimatedMs;
   return (
     <div
-      className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
+      className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-muted-foreground"
       data-testid="o3-review-timing"
+      role="status"
     >
-      {timing.actualMs === undefined ? (
-        <>
-          <p>Estimated review time: about {reviewDuration(timing.estimatedMs)}.</p>
-          <p>
-            {reviewDuration(elapsed)} elapsed ·{" "}
-            {elapsed < timing.estimatedMs
-              ? `About ${reviewDuration(timing.estimatedMs - elapsed)} remaining`
-              : `Taking longer than estimated (${reviewDuration(elapsed - timing.estimatedMs)} over); still waiting for the review…`}
-          </p>
-        </>
-      ) : (
-        <p role="status">
-          Review received in {reviewDuration(timing.actualMs)} · Estimated{" "}
-          {reviewDuration(timing.estimatedMs)} ·{" "}
-          {Math.abs(difference) < 500
-            ? "On estimate"
-            : `${reviewDuration(Math.abs(difference))} ${difference > 0 ? "slower" : "faster"} than estimated (${Math.round((Math.abs(difference) / timing.estimatedMs) * 100)}%)`}
-          .
-        </p>
-      )}
-      <p className="mt-1 text-xs">
-        {timing.sampleCount > 0
-          ? `Based on ${timing.sampleCount} recent successful review${timing.sampleCount === 1 ? "" : "s"} in this browser. Actual times vary by task and provider.`
-          : "Rough starting estimate; no previous review timings in this browser yet."}
-      </p>
+      <span>{timing.actualMs === undefined ? "Reviewing route" : "Review received"}</span>
+      <span className="tabular-nums">
+        {reviewDuration(timing.actualMs ?? elapsed)}
+        {timing.actualMs === undefined ? " elapsed" : ""}
+      </span>
     </div>
   );
 }

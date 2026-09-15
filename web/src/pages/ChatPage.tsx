@@ -1,3 +1,4 @@
+import { O3SessionReview } from "@/components/O3SessionReview";
 import {
   type DragEvent,
   type FormEvent,
@@ -237,6 +238,7 @@ export function isCostRoutingEligible(
   return (
     smartRoutingEnabled(serverInfo) &&
     isCostRoutingSession(session) &&
+    session?.labels?.["omnigent.routing_policy"] !== "benchmark" &&
     !isNativeTerminalSession(session)
   );
 }
@@ -250,7 +252,11 @@ export function isSubagentRoutingEligible(
   serverInfo: ServerInfoValue,
   session: Session | null | undefined,
 ): boolean {
-  return smartRoutingEnabled(serverInfo) && isSubagentRoutingSession(session);
+  return (
+    smartRoutingEnabled(serverInfo) &&
+    session?.labels?.["omnigent.routing_policy"] !== "benchmark" &&
+    isSubagentRoutingSession(session)
+  );
 }
 
 function extractUserText(content: MessageContentBlock[]): string {
@@ -1883,6 +1889,7 @@ function MainAgentSurface({
             <PreserveScrollDistanceOnResize />
             <ConversationScrollRefBridge onScroller={setScroller} />
             <HistoryAutoLoader scrollElement={scroller?.el ?? null} />
+            <O3SessionReview sessionId={conversationId ?? undefined} />
             {bubbles.length === 0 && !showWorkingIndicator && !mcpStartupActive ? (
               // Cold launch: a centered spinner instead of the "ready to
               // type" empty state (the create-then-send path uses the
@@ -4091,6 +4098,15 @@ function ComposerStatusLine({
   // from the same source the badge does so the tray's render guard matches.
   const { session } = useSession(conversationId);
   const isHostBound = !!session?.hostId;
+  const routingPolicy = session?.labels?.["omnigent.routing_policy"];
+  const routingLabel =
+    routingPolicy === "benchmark"
+      ? "Benchmark Routing (O3)"
+      : routingPolicy === "native"
+        ? "Omnigent Smart Routing"
+        : routingPolicy === "manual"
+          ? "Manual / default"
+          : null;
 
   const showBranch = !!conversationId && !!gitBranch;
   // Host indicator (green/red dot + host name), left of the worktree branch.
@@ -4111,7 +4127,8 @@ function ComposerStatusLine({
   // the badge is where it lives and an unreachable session often has no
   // branch/ring at all.
   const showHostBadge = showHost && isHostBound;
-  if (!showBranch && !showPlanMode && !showGoal && !showRing && !showHostBadge) return null;
+  if (!showBranch && !showPlanMode && !showGoal && !showRing && !showHostBadge && !routingLabel)
+    return null;
 
   return (
     <div
@@ -4122,6 +4139,20 @@ function ComposerStatusLine({
         CHAT_COLUMN_WIDTH,
       )}
     >
+      {routingLabel && (
+        <span
+          data-testid="composer-routing-policy"
+          className="text-xs text-muted-foreground"
+          title={
+            "Routing policy selected when this conversation was created" +
+            (routingPolicy === "native"
+              ? " · Backend: " + (session?.labels?.["omnigent.routing_backend"] ?? "unavailable")
+              : "")
+          }
+        >
+          {routingLabel}
+        </span>
+      )}
       {/* Left: host + branch. flex-1 keeps the right cluster pinned; truncate, no wrap. */}
       <div className="flex min-w-0 flex-1 items-center gap-3 text-sm text-muted-foreground">
         {showHost && conversationId && (
@@ -5912,6 +5943,10 @@ function SessionConfigModal({
   const costControlModeOverride = useChatStore((s) => s.costControlModeOverride);
   const subagentRoutingOverride = useChatStore((s) => s.subagentRoutingOverride);
   const conversationId = useChatStore((s) => s.conversationId);
+  const { session } = useSession(conversationId);
+  const approvalLocked =
+    session?.labels?.["omnigent.routing_policy"] === "benchmark" ||
+    !!session?.labels?.["o3.routing.proposal_id"];
   const { llmModel, usesServerModelOptions, modelOptions, pickerSelectedModel, modelLabel } =
     useResolvedComposerModel(modelPickerKind, codexModelOptions);
 
@@ -5966,6 +6001,11 @@ function SessionConfigModal({
   // The Select value: the router sentinel when routing is drafted on, else the
   // drafted model, else the "Default" sentinel (no override).
   const modelValue = draftRoutingOn ? MODEL_SELECT_SMART : (draftModelId ?? MODEL_SELECT_DEFAULT);
+  const displayedEffort = approvalLocked ? selectedEffort : draftEffort;
+  const displayedEffortLevels =
+    approvalLocked && displayedEffort && !effortLevels.includes(displayedEffort)
+      ? [...effortLevels, displayedEffort]
+      : effortLevels;
 
   const onModelChange = (value: string) => {
     if (value === MODEL_SELECT_SMART) {
@@ -5993,6 +6033,7 @@ function SessionConfigModal({
   const subagentRoutingValue = effectiveSubagentRouting === "on" ? "on" : "off";
 
   const save = () => {
+    if (approvalLocked) return;
     // Commit the changed knobs SEQUENTIALLY, awaiting each PATCH before the
     // next. Claude-native applies model/effort changes by typing separate
     // ``/model``/``/effort`` slash commands into its terminal, so firing them
@@ -6073,27 +6114,34 @@ function SessionConfigModal({
         </DialogHeader>
 
         <div className="flex flex-col gap-5 py-1">
-          {showModels && (
+          {approvalLocked && (
+            <p className="text-sm text-muted-foreground" data-testid="composer-config-approval">
+              Benchmark Routing (O3) keeps this task's approved model and effort. Start a new task
+              to review changes.
+            </p>
+          )}
+          {(showModels || approvalLocked) && (
             <ConfigRow label="Model" description="Underlying LLM">
               <RoutingModelSelect
                 value={modelValue}
                 onValueChange={onModelChange}
                 offerSmartRouting={costRoutingEligible}
+                disabled={approvalLocked}
                 testId="composer-config-model"
                 models={modelSelectOptions}
                 activeModelId={draftModelId}
               />
             </ConfigRow>
           )}
-          {showEffort && (
+          {(showEffort || approvalLocked) && (
             <ConfigRow label="Effort" description="Reasoning depth vs. speed">
               <Select
                 // Routing picks the model (and its effort) per turn, so an
                 // explicit effort is meaningless: the row is frozen and reads as
                 // an em-dash placeholder (Radix shows it for the empty value).
-                value={draftRoutingOn ? "" : (draftEffort ?? EFFORT_SELECT_NONE)}
+                value={draftRoutingOn ? "" : (displayedEffort ?? EFFORT_SELECT_NONE)}
                 onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? null : v)}
-                disabled={draftRoutingOn}
+                disabled={draftRoutingOn || approvalLocked}
               >
                 <SelectTrigger
                   className="w-full"
@@ -6108,7 +6156,7 @@ function SessionConfigModal({
                   className="w-(--radix-select-trigger-width)"
                 >
                   <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
-                  {effortLevels.map((level) => (
+                  {displayedEffortLevels.map((level) => (
                     <SelectItem
                       key={level}
                       value={level}
@@ -6136,6 +6184,7 @@ function SessionConfigModal({
             <ConfigRow label={SUBAGENT_ROUTING_LABEL} description={SUBAGENT_ROUTING_DESCRIPTION}>
               <Select
                 value={subagentRoutingValue}
+                disabled={approvalLocked}
                 onValueChange={(v) => setPickedSubagentRouting(v === "on" ? "on" : "off")}
               >
                 <SelectTrigger
@@ -6167,7 +6216,12 @@ function SessionConfigModal({
           >
             Cancel
           </Button>
-          <Button type="button" onClick={save} data-testid="composer-config-save">
+          <Button
+            type="button"
+            onClick={save}
+            disabled={approvalLocked}
+            data-testid="composer-config-save"
+          >
             Save
           </Button>
         </DialogFooter>
@@ -6209,6 +6263,11 @@ function ComposerConfigGear({
   disabled: boolean;
   openNonce?: number;
 }) {
+  const conversationId = useChatStore((s) => s.conversationId);
+  const { session } = useSession(conversationId);
+  const approvalLocked =
+    session?.labels?.["omnigent.routing_policy"] === "benchmark" ||
+    !!session?.labels?.["o3.routing.proposal_id"];
   const [open, setOpen] = useState(false);
   const appliedOpenNonce = useRef(0);
   useEffect(() => {
@@ -6222,14 +6281,21 @@ function ComposerConfigGear({
   }, [openNonce, disabled]);
   const summary = useSessionConfigSummary({
     harnessLabel,
-    showModels,
-    showEffort,
+    showModels: showModels || approvalLocked,
+    showEffort: showEffort || approvalLocked,
     modelPickerKind,
     codexModelOptions,
     costRoutingEligible,
   });
 
-  if (!showModels && !showEffort && !costRoutingEligible && !subagentRoutingEligible) return null;
+  if (
+    !approvalLocked &&
+    !showModels &&
+    !showEffort &&
+    !costRoutingEligible &&
+    !subagentRoutingEligible
+  )
+    return null;
 
   return (
     <>

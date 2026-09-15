@@ -7334,6 +7334,18 @@ async def _create_session_from_existing_agent(
         conversation_store=conversation_store,
     )
 
+    if (
+        body.labels.get("o3.routing.proposal_id")
+        or body.labels.get("omnigent.routing_policy") == "benchmark"
+    ):
+        from omnigent.server.o3_routing_review.service import get_o3_routing_review_service
+        from omnigent.server.o3_routing_review.session_policy import validate_approved_launch
+
+        proposal = get_o3_routing_review_service()._require(
+            body.labels.get("o3.routing.proposal_id", "")
+        )
+        validate_approved_launch(body.model_dump(), proposal)
+
     # Top-level Smart Routing: "auto" on a native wrapper agent means the client
     # picked Smart Routing with no bundle agent, and its ``agent_id`` is only a
     # placeholder. Route now (the terminal launches with the row, so there is no
@@ -7493,6 +7505,10 @@ async def _create_session_from_existing_agent(
         _parent_for_routing = await asyncio.to_thread(
             conversation_store.get_conversation, body.parent_session_id
         )
+        if _parent_for_routing is not None:
+            from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+            require_new_review(_parent_for_routing.labels or {}, "spawning a child session")
         if (
             _parent_for_routing is not None
             and subagent_routing_enabled(_parent_for_routing.subagent_routing_override)

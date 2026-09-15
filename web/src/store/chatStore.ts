@@ -1887,9 +1887,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setEffort: async (effort) => {
-    set({ selectedEffort: effort });
-    savePickerPref(PICKER_PREF_EFFORT_KEY, effort);
-    const { conversationId } = get();
+    const { conversationId, selectedEffort: previous } = get();
     if (conversationId) {
       if (queryClient === null) {
         throw new Error("chatStore.setEffort: queryClient not initialized");
@@ -1900,24 +1898,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
         staleTime: Infinity,
         retry: false,
       });
-      if (!supportsEffortControl(session)) return;
-      await updateSession(conversationId, { reasoningEffort: effort });
+      if (
+        session.labels?.["omnigent.routing_policy"] === "benchmark" ||
+        session.labels?.["o3.routing.proposal_id"]
+      ) {
+        throw new Error("Benchmark Routing (O3) requires a new reviewed task to change effort.");
+      }
+      if (get().conversationId !== conversationId) return;
+      if (supportsEffortControl(session)) {
+        try {
+          await updateSession(conversationId, { reasoningEffort: effort });
+        } catch (error) {
+          if (get().conversationId === conversationId) set({ selectedEffort: previous });
+          throw error;
+        }
+      }
     }
+    if (get().conversationId !== conversationId) return;
+    set({ selectedEffort: effort });
+    savePickerPref(PICKER_PREF_EFFORT_KEY, effort);
   },
 
   setModel: async (model) => {
-    // `selectedModel` is the sticky pick; `sessionModelOverride` is this
-    // session's applied override. An explicit `/model` sets both.
-    set({ selectedModel: model, sessionModelOverride: model });
-    savePickerPref(PICKER_PREF_MODEL_KEY, model);
     const { conversationId } = get();
     if (conversationId) {
       const session = await updateSession(conversationId, { modelOverride: model });
-      // Server-canonical may differ from the optimistic write (e.g.
-      // when a clear alias was sent) — refresh local state to match.
+      if (get().conversationId !== conversationId) return;
       const canonical = session.modelOverride ?? null;
       set({ selectedModel: canonical, sessionModelOverride: canonical });
       savePickerPref(PICKER_PREF_MODEL_KEY, canonical);
+    } else {
+      set({ selectedModel: model, sessionModelOverride: model });
+      savePickerPref(PICKER_PREF_MODEL_KEY, model);
     }
   },
 
@@ -2472,12 +2484,17 @@ async function bindStream(
     // Sub-agents inherit orchestrator choices.
     const isSubAgentSession = session.parentSessionId != null;
     const canApplyEffort = supportsEffortControl(session);
+    const approvalLocked =
+      session.labels?.["omnigent.routing_policy"] === "benchmark" ||
+      !!session.labels?.["o3.routing.proposal_id"];
     const stickyEffort = get().selectedEffort;
     const stickyModel = get().selectedModel;
     // Apply sticky effort only where the Web UI control is meaningful.
-    const effectiveEffort = canApplyEffort
-      ? (session.reasoningEffort ?? stickyEffort ?? null)
-      : stickyEffort;
+    const effectiveEffort = approvalLocked
+      ? (session.reasoningEffort ?? null)
+      : canApplyEffort
+        ? (session.reasoningEffort ?? stickyEffort ?? null)
+        : stickyEffort;
     // Non-native: don't auto-apply the model, but keep the sticky pick so
     // navigating back to a native session restores it.
     const compatibleStickyModel =
@@ -2486,8 +2503,11 @@ async function bindStream(
           ? stickyModel
           : null
         : stickyModel;
-    const effectiveModel =
-      nativeModelFamily !== null ? (session.modelOverride ?? compatibleStickyModel) : stickyModel;
+    const effectiveModel = approvalLocked
+      ? (session.modelOverride ?? null)
+      : nativeModelFamily !== null
+        ? (session.modelOverride ?? compatibleStickyModel)
+        : stickyModel;
     // The session's REAL effective override: the server's stored value,
     // plus the sticky model the native handoff is about to apply. Unlike
     // `effectiveModel`/`selectedModel` (which hold the unapplied sticky
@@ -2502,6 +2522,7 @@ async function bindStream(
     // then resolves to null too, so the /model readout doesn't mislabel it.
     const routingOn = session.costControlModeOverride === "on";
     const willApplyStickyModel =
+      !approvalLocked &&
       !isSubAgentSession &&
       !routingOn &&
       nativeModelFamily !== null &&
@@ -2510,6 +2531,7 @@ async function bindStream(
     const effectiveSessionOverride =
       session.modelOverride ?? (willApplyStickyModel ? compatibleStickyModel : null);
     if (
+      !approvalLocked &&
       !isSubAgentSession &&
       canApplyEffort &&
       session.reasoningEffort == null &&

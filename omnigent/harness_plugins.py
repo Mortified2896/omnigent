@@ -671,6 +671,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "kimi-native",
             "kiro-native",
             "open-responses",
+            "local-tool-free",
             "openai-agents",
             "opencode-native",
             "pi",
@@ -703,6 +704,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "kimi-native": "omnigent.inner.kimi_native_harness",
         "kiro-native": "omnigent.inner.kiro_native_harness",
         "openai-agents": "omnigent.inner.openai_agents_sdk_harness",
+        "local-tool-free": "omnigent.inner.o3_tool_free_harness",
         "opencode-native": "omnigent.inner.opencode_native_harness",
         "pi": "omnigent.inner.pi_harness",
         "pi-native": "omnigent.inner.pi_native_harness",
@@ -776,7 +778,9 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         for name, row in ACP_CLI_HARNESSES.items()
         for spelling in (name, *row.aliases)
     },
+    spawn_env_builders={"local-tool-free": "omnigent.inner.o3_tool_free_harness.spawn_env"},
     model_env_keys={
+        "local-tool-free": "HARNESS_LOCAL_TOOL_FREE_MODEL",
         "acp": "HARNESS_ACP_MODEL",
         "antigravity": "HARNESS_ANTIGRAVITY_MODEL",
         "claude-sdk": "HARNESS_CLAUDE_SDK_MODEL",

@@ -1,5 +1,12 @@
 # MLflow Tracing Deployment Guide
 
+This is an opt-in application integration guide, not a HomeLab topology
+reference. The `/etc/omnigent-production` and `/var/lib/omnigent-production`
+examples below are legacy deployment paths, not current RTX wiring. Follow
+HomeLab `docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md`
+for current operations; do not reactivate old O1/O2 or install the former
+MLflow/storage-guard stack merely to follow these examples.
+
 This document describes how to wire Omnigent's OpenTelemetry tracing into a local
 MLflow 3.x server for production observability of agent turns, tool calls, policy
 evaluations, and LLM calls. The same configuration works against any OTLP-compatible

@@ -946,3 +946,21 @@ async def test_switch_400_unloadable_target_bundle(monkeypatch: pytest.MonkeyPat
     assert resp.status_code == 400, resp.text
     # Pre-commit failure → no switch attempted (old agent intact).
     assert conv_store.switch_calls == []
+
+
+@pytest.mark.parametrize(
+    "labels", [{"omnigent.routing_policy": "benchmark"}, {"o3.routing.proposal_id": "approved"}]
+)
+def test_benchmark_harness_switch_requires_review_without_mutation(labels: dict[str, str]) -> None:
+    conv = _conv()
+    conv.labels = labels
+    store = _ConversationStore(conversations={conv.id: conv})
+    agents = _AgentStore({_CURRENT.id: _CURRENT, _BUILTIN_CODEX.id: _BUILTIN_CODEX})
+    client = TestClient(_build_app(store, agents))
+    response = client.post(
+        f"/v1/sessions/{conv.id}/switch-agent", json={"agent_id": _BUILTIN_CODEX.id}
+    )
+    assert response.status_code == 409
+    assert "new reviewed task" in response.text
+    assert store.switch_calls == []
+    assert conv.agent_id == _CURRENT.id

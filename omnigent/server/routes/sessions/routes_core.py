@@ -1531,6 +1531,15 @@ def register_core_routes(
                     f"To fork this session instead, run: omnigent run --fork {session_id}",
                     code=ErrorCode.FORBIDDEN,
                 )
+        from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
+
+        policy_session = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if policy_session is not None:
+            protect_recorded_policy(
+                policy_session.labels or {},
+                {key: getattr(policy_session, key, None) for key in body.model_fields_set},
+                body.model_dump(exclude_unset=True),
+            )
         if body.labels:
             _reject_server_reserved_label_seed(body.labels)
             # Advisor-owned cost_control.* labels are written only by the
@@ -2023,6 +2032,9 @@ def register_core_routes(
                     f"Session not found: {source_id!r}",
                     code=ErrorCode.NOT_FOUND,
                 )
+        from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+        require_new_review(source.labels or {}, "forking")
         if source.kind == "sub_agent":
             raise OmnigentError(
                 "Cannot fork a sub-agent session — only top-level sessions can be forked.",
@@ -2238,6 +2250,9 @@ def register_core_routes(
                     f"Session not found: {session_id!r}",
                     code=ErrorCode.NOT_FOUND,
                 )
+        from omnigent.server.o3_routing_review.session_policy import require_new_review
+
+        require_new_review(session.labels or {}, "switching harness")
         if session.kind == "sub_agent":
             raise OmnigentError(
                 "Cannot switch the agent of a sub-agent session — only top-level "
