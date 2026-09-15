@@ -3243,9 +3243,19 @@ async def _handle_terminal_turn_boundary(
     :param forwarder_state: Optional Plan-mode prompt state.
     :returns: None.
     """
+    from omnigent.benchmark_capture import capture_enabled, capture_io
+    from omnigent.benchmark_capture_native import finish_native
+
+    capture_id = None
+    if capture_enabled():
+        capture_id = await capture_io(finish_native, session_id, method, params)
     if forwarder_state is not None and forwarder_state.telemetry_turn_span is None:
         # Reconnects can miss ``turn/started``; still emit one bounded terminal trace.
         _start_codex_turn_span(session_id, params, forwarder_state)
+    if capture_id and forwarder_state is not None:
+        span = forwarder_state.telemetry_turn_span
+        if span is not None:
+            await capture_io(span.set_attribute, "omnigent.capture_id", capture_id)  # type: ignore[attr-defined]
     if delta_coalescer is not None:
         await delta_coalescer.flush()
     # Safety net: if a compaction was reported in progress but Codex never

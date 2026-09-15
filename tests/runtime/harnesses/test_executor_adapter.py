@@ -1500,7 +1500,10 @@ async def test_executor_adapter_builds_config_from_request() -> None:
     import asyncio
 
     ctx = TurnContext(
-        response_id="resp_reason", event_queue=asyncio.Queue(), cancelled=asyncio.Event()
+        response_id="resp_reason",
+        event_queue=asyncio.Queue(),
+        cancelled=asyncio.Event(),
+        session_id="conv_actual",
     )
     request = CreateResponseRequest(
         model="my_coding_agent",  # agent routing name, not an LLM
@@ -1509,7 +1512,12 @@ async def test_executor_adapter_builds_config_from_request() -> None:
         max_output_tokens=65536,
     )
     await adapter.run_turn(request, ctx)
-    assert captured["extra"] == {"reasoning_effort": "medium", "max_tokens": 65536}
+    assert captured["extra"] == {
+        "reasoning_effort": "medium",
+        "max_tokens": 65536,
+        "omnigent_turn_id": "resp_reason",
+        "omnigent_session_id": "conv_actual",
+    }
     assert captured["model"] is None
 
 
@@ -2001,3 +2009,39 @@ async def test_policy_evaluator_no_active_turn_context_is_phase_aware() -> None:
         verdict = await adapter._stable_policy_evaluator(advisory_phase, {})
         assert verdict.action == "POLICY_ACTION_ALLOW", advisory_phase
         assert verdict.reason is None, advisory_phase
+
+
+async def test_request_path_session_identity_is_independent_of_otel(monkeypatch):
+    import httpx
+
+    from omnigent.inner.executor import Executor, TurnComplete
+    from omnigent.runtime import telemetry
+    from omnigent.runtime.harnesses._executor_adapter import ExecutorAdapter
+
+    monkeypatch.setattr(telemetry, "telemetry_enabled", lambda: False)
+    recorded = {}
+
+    class CaptureExecutor(Executor):
+        async def run_turn(self, messages, tools, system_prompt, config=None):
+            recorded.update(config.extra)
+            yield TurnComplete(response="done")
+
+    adapter = ExecutorAdapter(executor_factory=CaptureExecutor, session_key="internal-cache-key")
+    app = adapter.build()
+    app.state.conversation_id = "actual-session"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        result = await client.post(
+            "/v1/sessions/actual-session/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "content": "work",
+                "model": "fixture-agent",
+            },
+        )
+    assert result.status_code == 200
+    assert recorded["omnigent_session_id"] == "actual-session"
+    assert recorded["omnigent_turn_id"].startswith("resp_")
+    assert recorded["omnigent_turn_id"] in result.text

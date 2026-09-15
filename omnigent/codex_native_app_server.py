@@ -1047,6 +1047,13 @@ class CodexNativeAppServer:
             config_overrides=self.config_overrides,
         )
         proc_env = {**self.env, "CODEX_HOME": str(self.codex_home)}
+        from omnigent.benchmark_capture import capture_enabled, capture_io, capture_root
+
+        if capture_enabled():
+            root = await capture_io(capture_root)
+            if root is not None:
+                proc_env["OMNIGENT_BENCHMARK_CAPTURE"] = "1"
+                proc_env["OMNIGENT_BENCHMARK_CAPTURE_DIR"] = str(root)
         self.process_owner_lock = acquire_codex_native_process_owner_lock()
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -1245,6 +1252,11 @@ class CodexNativeAppServer:
             self.stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.stderr_task
+        from omnigent.benchmark_capture import capture_enabled, capture_io
+        from omnigent.benchmark_capture_native import close_native
+
+        if capture_enabled():
+            await capture_io(close_native, self.bridge_dir)
         self.proc = None
         self.stderr_task = None
         self.process_registry_tag = None

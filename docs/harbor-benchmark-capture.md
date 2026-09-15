@@ -1,203 +1,331 @@
-# Harbor benchmark capture plan
+# Harbor benchmark capture
 
-Status: implementation started on 2026-09-15. This plan targets the active RTX Omnigent runtime and its Omnigent-managed Codex CLI / Codex App Server sessions. It does **not** require moving the current executor into Daytona, OpenShell, or another outer sandbox before capture begins.
+Status: source implementation and isolated Mac validation, 2026-09-15.
+Part of #158; continued in draft PR #159 on `codex/harbor-benchmark-capture`,
+based on `codex/rtx-o1-integration`. No RTX deployment is authorized by this work.
 
-## Decision
-
-Use existing software for the large pieces and keep the Omnigent-specific code thin:
-
-- **Codex native rollout/session artifacts** are the canonical full agent trajectory for Codex work.
-- **Git + a small Omnigent provenance layer** records the exact software state before and after a turn.
-- **OpenTelemetry** remains the cross-service correlation/timing layer for Omnigent, Codex and OmniRoute; it is not the canonical benchmark payload.
-- **SelfBench** is the first-choice benchmark constructor for turning selected completed real work into validated Harbor tasks.
-- **Harbor** is the canonical evaluation runner/task format and ATIF trajectory interchange layer for future replay across Codex, Claude, Pi and other harnesses.
-
-The intended boundary is:
+## Ownership and configuration
 
 ```text
-Omnigent task
-    |
-    +-- original instruction/context
-    +-- exact Git start state
-    +-- Codex native rollout
-    +-- model/reasoning configuration
-    +-- OmniRoute route/provider metadata
-    +-- exact Git end state + tests/outcome
-    |
-    v
-benchmark candidate archive
-    |
-    v
-SelfBench
-    |
-    v
-validated Harbor task
-    |
-    v
-Harbor replay: Codex / Claude / Pi / future harnesses
+Omnigent-managed Codex turn
+  + common task identity, input, Git start/end, runtime provenance
+  + Codex's original native rollout
+  -> offline candidate + SelfBench provenance JSONL
+  -> SelfBench construction and base/oracle verification
+  -> Harbor execution, grading, storage and ATIF interoperability
 ```
 
-## Why this architecture
+Codex owns the full trajectory. Omnigent records identity, exact ordinary Git
+worktree state and provenance. SelfBench constructs tests/reference solutions;
+Harbor runs and grades tasks. OTel supplies optional timing and correlation.
+There is no new trajectory, sandbox, verifier or observability framework.
 
-The current Codex executor already owns the correct lifecycle seam: one long-lived `codex app-server` subprocess per Omnigent session, with Codex threads persisted across turns. Capturing at that seam avoids separately re-instrumenting every Codex tool call.
+Disabled by default. Set these in the **source test runner/harness environment**:
 
-SelfBench is used for benchmark construction rather than as the live recorder. Harbor is used for reproducible evaluation rather than as the production task store. This keeps the live runtime independent from benchmark generation and lets benchmark construction improve later without losing already-recorded work.
+```sh
+export OMNIGENT_BENCHMARK_CAPTURE=1
+export OMNIGENT_BENCHMARK_CAPTURE_DIR=/absolute/path/outside/the/worktree
+```
 
-## Canonical capture contract
+The default is `<Omnigent data_dir>/benchmark-captures`, honoring
+`OMNIGENT_DATA_DIR` and otherwise using `~/.omnigent/benchmark-captures`.
+The disabled path performs no capture I/O or Git commands. The harness process
+manager inherits these environment variables from its runner; the native
+app-server explicitly passes the capture flag and resolved root to its hooks.
+Do not change a running session's capture root between start and finish.
 
-Every eligible Omnigent turn should be associated with one stable `capture_id`. The capture must be sufficient to reconstruct the task even when the repository was dirty before Codex started.
+Resolved capture roots inside the measured worktree, including symlink aliases,
+are rejected. Rejection disables that capture, not the coding task. Each UUID
+directory is private (0700). Captures contain full instructions, source and
+potentially sensitive native history: they remain local/private; nothing uploads
+automatically. No deployment storage quota, retention service or Linux service
+configuration is installed here. Inspect actual RTX storage before choosing those.
 
-Required fields/artifacts:
+## Exact lifecycle seams
 
-### Identity and instruction
+| Stage | Wrapped `codex` app-server executor | Omnigent-managed `codex-native` |
+| --- | --- | --- |
+| Identity | `ExecutorAdapter.run_turn` forwards scaffold `ctx.response_id` as `omnigent_turn_id`; `CodexExecutor.run_turn` allocates UUID once | Existing `codex_native_hook._main_evaluate_policy` invokes capture for `UserPromptSubmit`; native `turn_id` is the equivalent task identity |
+| Start | `TurnCapture.begin` before `_ensure_app_session` and `_CodexAppServerSession.start`, before `thread/start` or `turn/start` | Hook snapshots before returning control to Codex; requires explicit hook `cwd` and `turn_id` plus bridge session/thread identity |
+| Thread/turn | Bind `thread/start` response ID and `turn/start` response ID; preserve the executor's explicit observed-ID correction | Bridge thread ID plus hook turn ID; on-disk index hashes session/thread/turn, with a nonblocking process lock for duplicate submissions |
+| Input | Original messages, composed system/developer instructions, tools, model, effort, cwd, permissions; exact dispatched input in `codex-input.json` | Actual submitted prompt/cwd/model/effort when present in the hook; instruction context remains in native rollout |
+| End | Snapshot before yielding `TurnComplete` or `ExecutorError`; exception/finally path covers transport errors | `codex_native_forwarder._handle_terminal_turn_boundary` matches exact session/thread/turn before finalizing |
+| Cancellation | Stop owned app-server before snapshot; `close` preserves trajectory before private home deletion | Interrupted terminal notification -> cancelled; app-server `close` finalizes otherwise unfinished captures after stopping the writer |
 
-- `capture_id`
-- Omnigent session ID and turn ID
-- harness name (`codex` first)
-- native Codex thread/session identity and rollout artifact reference
-- original human instruction and any explicit task context supplied by Omnigent
-- timestamps
+The scaffold passes the validated request-path conversation ID through `TurnContext`
+independently of OTel. The adapter forwards it separately from its internal cache
+key (which can be random). Missing real IDs remain null; a raw executor can also
+supply an explicit message session ID. If no Omnigent response ID exists, `task_identity` uses the allocated
+capture UUID. Native submissions use the native turn ID explicitly; they do not
+pretend it is an Omnigent response ID. Steering stays within that native turn;
+its full details remain in the native rollout, not a second event recorder.
 
-### Start repository state
+The wrapped executor already treats a final-answer `item/completed` as terminal
+without requiring `turn/completed`. Capture preserves this behavior and records
+`terminal_evidence=item/completed.final_answer` and the final item ID. Native
+rollout boundary/preservation fields explicitly indicate whether the later native
+terminal record was durable yet. Capture does not wait indefinitely for an event
+that some supported Codex builds omit.
 
-- repository root and origin
-- HEAD SHA
-- branch / detached state
-- staged changes
-- unstaged changes
-- untracked files needed to reproduce the workspace
-- machine-readable `git status`
+When capture is enabled, the wrapped executor creates its temporary Codex home
+outside the workspace, avoiding capture of its copied authentication/config files.
+When disabled, its established workspace-local temporary-home behavior is unchanged.
 
-A HEAD SHA alone is insufficient when the worktree is dirty. The first implementation therefore captures binary-capable staged/unstaged patches plus an archive of untracked files.
+## Manifest and directory contract
 
-### Native trajectory
-
-- preserve the Codex-native rollout/session artifact without converting it on the hot path
-- record artifact path, byte size and digest
-- preserve native model/reasoning/session identifiers when available
-
-ATIF conversion is an export concern; Harbor can be the interoperability boundary later.
-
-### Routing and runtime metadata
-
-- requested model and reasoning effort
-- actual model when observed
-- OmniRoute request/correlation identifier when available
-- canonical model / provider / route selected by OmniRoute when observed
-- token/latency/retry/fallback metadata when available
-
-Routing metadata is allowed to remain incomplete rather than guessed. OmniRoute 3.8.50 currently emits its own OTel routing events; true W3C parent/child trace propagation can be added separately.
-
-### End state and outcome
-
-- end HEAD / branch
-- final staged/unstaged/untracked state
-- final patch or commit/PR identity when one exists
-- tests/commands/results surfaced by the run
-- terminal success/failure/cancellation state
-- later acceptance signal when available
-
-## Storage layout
-
-The capture store should be append-oriented and content-addressed where practical. Initial proposed shape:
+Example (UUID and filenames are illustrative):
 
 ```text
-<benchmark-capture-root>/
-  <capture_id>/
-    manifest.json
-    instruction.txt
-    trajectory/
-      codex-rollout.jsonl     # copy/link/reference, depending on native lifecycle
+benchmark-captures/
+  .native-index/                         # native session/thread/turn lookup + locks
+  7b5532fc-7b04-4e1b-b342-bc0623021be9/
+    manifest.json                       # atomically replaced
+    input.json                          # original boundary input
+    codex-input.json                     # wrapped app-server dispatch only
     start/
       git.json
+      status.z
       staged.patch
       unstaged.patch
-      status.z
       untracked.tar
     end/
       git.json
+      status.z
       staged.patch
       unstaged.patch
-      status.z
       untracked.tar
-    routing.json
-    outcome.json
+    trajectory/
+      rollout-2026-09-15T00-00-00-<thread-id>.jsonl
 ```
 
-The manifest must contain hashes for copied artifacts and must never claim completeness for missing data.
+`schema_version=1`. The common manifest includes:
 
-## Implementation phases
+- `capture_id`, `omnigent_session_id`, `omnigent_turn_id`, `task_identity`,
+  `harness`, `repo_root`, `started_at`, `completed_at`, `duration_seconds`,
+  `terminal_state` (`running`, `completed`, `failed`, `cancelled`).
+- `runtime`: Omnigent version, source commit if running from a source checkout,
+  and Codex version when present in native session metadata.
+- `requested_model`, `observed_model`, `observed_model_source`, requested/observed
+  reasoning effort. `observed_model_source=codex.turn_context` means Codex's
+  reported turn model, **not proof of a gateway's actual provider execution**.
+- `routing`: policy/provider/connection/canonical model/Combo/strategy/request ID/
+  correlation ID/retries/fallback/O3 proposal, currently null where the boundary
+  has no deterministic evidence. A requested alias is never used as provider proof.
+- `start`, `end`: Git snapshot metadata and artifact hashes/sizes; `artifacts`
+  holds the input file hashes. `codex_thread_id`, `codex_turn_id`, `native_rollout`
+  carry harness-specific trajectory association.
+- `outcome`: wrapped executor response and usage or error class/retryability;
+  native terminal status/error. Tests/tool output stay in the canonical rollout.
+  Final response item ID is recorded when reported. No semantic grading occurs.
+- `errors`: failed capture stages and exception types, without logging prompts,
+  credential-bearing subprocess stderr or filesystem paths into operational logs.
 
-### Phase 1 — Git-state primitive
+An end snapshot does not imply successful execution. A completed task does not
+imply a complete capture: inspect `errors`, both snapshots, preservation and
+boundary status independently. Null is unavailable evidence, never zero/false.
 
-Implement a harness-neutral Git snapshot helper that records:
+Future Claude/Pi adapters can call the same common `TurnCapture` layer and provide
+their own trajectory association/preservation. No harness event schema is required.
 
-- origin, HEAD, branch/detached state
-- `git status --porcelain=v1 -z`
-- `git diff --cached --binary --full-index`
-- `git diff --binary --full-index`
-- `git ls-files --others --exclude-standard -z` plus the referenced untracked files in a tar archive
-- hashes/sizes for each generated artifact
+## Native rollout handling
 
-This helper must be read-only with respect to the repository.
+Inspected local Codex CLI: **0.153.4** (no LLM call). Existing Omnigent native
+resume code and current upstream Codex protocol confirm a per-thread JSONL under
+`CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl`.
+Archived sessions may live under `archived_sessions`. A thread can contain many
+turns. `turn_context.turn_id` and `event_msg` task start/complete/abort IDs are
+explicit boundaries; older files may omit them.
 
-### Phase 2 — Codex capture adapter
+The adapter searches only the known private home using the exact thread suffix,
+then validates `session_meta.payload.id`. It refuses ambiguous matches instead
+of choosing the newest timestamp. An explicit path is supported by the adapter,
+but must remain in that known home and pass the same identity check.
 
-Wire the primitive into the Omnigent-managed Codex lifecycle behind an explicit opt-in feature flag/config. On each captured turn:
+One exact native file is copied per capture, with its original Harbor-compatible
+filename, byte size and SHA-256. A fixed 128 MiB per-file safety bound prevents
+unbounded copying; larger files are marked `over_limit` with the source path.
+The copy reads only the source size measured at finalization, so append activity
+cannot create an endless read. Incomplete JSONL tails are marked `partial`.
+`turn_start_line`/`turn_end_line` and `boundary_status` are metadata references into
+the unmodified native file; this is not a new trajectory format.
 
-1. allocate `capture_id` before dispatch;
-2. snapshot start Git state;
-3. bind the Omnigent turn to the native Codex thread/rollout artifact;
-4. snapshot end Git state when the turn terminates;
-5. persist model/reasoning/outcome metadata;
-6. never block the actual Codex turn because benchmark capture failed.
+Wrapped Codex homes are deleted by normal session cleanup, so retaining only the
+source path would lose evidence. Native homes are more durable but remain local
+mutable state. Captures preserve the file independently of either lifecycle.
+Resumed turns need prior native history, so the bounded copy includes the thread
+prefix. No Desktop sessions, auth files or full home directories are copied.
 
-The Codex-specific code should only resolve native trajectory/session information. Repository capture, manifests and later exporters remain harness-neutral so Claude/Pi adapters can be added without another benchmark pipeline.
+## Git reconstruction
 
-### Phase 3 — OmniRoute/OTel correlation
+The existing snapshot primitive is retained. It captures origin, HEAD, branch or
+detached state, NUL-delimited status, binary/full-index staged and unstaged patches,
+and non-ignored untracked files, including binary files, nested paths and symlinks.
+`git --no-optional-locks` prevents status refreshing the repository index. Diffs
+disable external diff/textconv/color and force standard prefixes.
 
-Record the stable IDs necessary to associate a capture with OmniRoute routing events. Keep OTel as searchable timing/routing evidence rather than the only source of benchmark data.
+To reconstruct **in a fresh disposable clone with the recorded HEAD available**:
 
-A later thin OmniRoute change may propagate W3C `traceparent`; that is useful but not a blocker for starting the benchmark corpus.
+1. Check out the chosen snapshot's `head`; restore its branch name if needed.
+2. Apply nonempty `staged.patch` with `git apply --index`.
+3. Apply nonempty `unstaged.patch` with `git apply` (without `--index`).
+4. Extract the trusted `untracked.tar`, preserving symlinks and modes. Python's
+   `tarfile` data filter works for the tested internal relative symlinks; review
+   external symlink targets rather than weakening extraction filters blindly.
+5. Compare status, index blobs and worktree bytes against the snapshot/artifacts.
 
-### Phase 4 — SelfBench / Harbor export
+Start/end may have different commits or branches. Snapshots record both. The
+archive is a worktree delta, not a Git-object backup: keep/fetch referenced commits
+before their source objects are garbage-collected. A future dirty-state adapter
+must materialize start and end in separate temporary checkouts and create reachable
+base/reference commits there. It must never commit/reset the user's measured repo.
 
-For selected completed captures:
+Limits: ignored files, submodule working trees, external symlink targets, LFS object
+storage and filter-specific reconstruction are not archived. Unborn HEAD is rejected.
+Snapshots are sequential Git reads, not an atomic filesystem snapshot: another writer
+in the same workspace can invalidate exactness. UUIDs/process locks prevent capture
+collisions but do not claim isolation from concurrent code edits.
 
-- feed clean committed/PR-backed work directly into SelfBench where supported;
-- reconstruct dirty-start tasks from the start-state artifacts before invoking benchmark construction;
-- keep the original Codex rollout available and export/attach ATIF through Harbor when useful;
-- require a verifier that checks task outcomes, not equality with the original Codex patch.
+## SelfBench compatibility, verified upstream
 
-The first acceptance target is 2–3 real Omnigent→Codex tasks converted into runnable Harbor tasks with base-fails / known-solution-passes validation.
+Inspected [mupt-ai/self-bench](https://github.com/mupt-ai/self-bench/tree/8376c776c29006fe56a01f3ac882f3488db8b6dc)
+at `8376c776c29006fe56a01f3ac882f3488db8b6dc`.
 
-### Phase 5 — Other harnesses
+- `src/provenance/local.ts` searches `.codex/sessions`, `.codex/archived_sessions`,
+  Claude and Pi roots, matching repository worktree paths. It does not discover
+  Omnigent's capture directory or private native homes automatically.
+- `src/provenance/session.ts` recognizes Codex `session_meta`, `event_msg`
+  user/agent messages, and `response_item` messages as fallback. It extracts user
+  instructions, filters injected context and redacts recognized secret patterns.
+- Discovery associates completed requests with repository history and merged PRs;
+  `src/cli/run.ts` uploads provenance and pins the repository. A local session
+  alone is not deterministic proof of a completed Git task.
+- The README explicitly says uncommitted changes are ignored. Dirty initial or
+  final state is not directly reconstructed by this ingestion path.
+- Private repositories are supported with authenticated GitHub read access.
+  The worker's repository access must include the referenced commits. No credentials
+  are included in the capture export.
+- SelfBench authors held-out tests, reference patch and pinned environment from
+  the base revision, then requires base-fails/oracle-passes validation. It exports
+  native Harbor tasks. Tests/reference solution are its outputs, not required
+  hand-authored inputs from our recorder.
 
-Add small trajectory adapters for Claude and Pi while keeping the same capture manifest, Git-state primitive, SelfBench handoff and Harbor dataset.
+Offline export:
 
-## Explicit non-goals for the first implementation
+```sh
+uv run --no-sync python -m omnigent.benchmark_capture_export \
+  /absolute/capture/root/<capture-id> /absolute/new-export-directory
+```
 
-- replacing the current RTX executor with Daytona/OpenShell solely for benchmark capture;
-- writing a new agent trajectory standard instead of preserving native rollouts / using ATIF;
-- building a custom Harbor task runner;
-- building a custom verifier framework instead of using Harbor/SelfBench conventions;
-- requiring OTel delivery for task execution to succeed;
-- making benchmark construction synchronous with ordinary Omnigent work.
+This emits `candidate.json` (normalized references, revisions, dirty flags,
+construction status) and `provenance.jsonl` using SelfBench's actual
+`ProvenanceMessage` contract: `sourceType`, `sessionId`, `messageIndex`, `content`.
+The source session selector is the capture UUID to distinguish multiple task inputs
+from one native thread; the manifest retains both actual session/thread IDs.
 
-## Acceptance criteria for initial rollout
+SelfBench's `POST /v1/provenance?runId=...` accepts this NDJSON format. Its normal
+CLI does not accept `candidate.json` as a run input. The remaining adapter must
+reconstruct dirty snapshots in an isolated repository and supply reachable pinned
+revisions/associations to SelfBench. Export deliberately says `not_constructed`;
+it does not silently discard dirty work or synthesize a verifier.
 
-1. Capture is opt-in and failure cannot fail an Omnigent/Codex turn.
-2. A dirty pre-task repository can be reconstructed byte-for-byte for tracked + non-ignored untracked files from the recorded start artifacts.
-3. The corresponding Codex native rollout is linked by stable identity and digest.
-4. Start/end Git artifacts and manifest hashes are internally consistent.
-5. Model/reasoning metadata is recorded; missing actual route/provider data remains explicit.
-6. One existing real RTX Omnigent→Codex task can be captured without changing sandbox architecture.
-7. At least one captured task is successfully converted by SelfBench into a Harbor task and re-run under Harbor.
+A temporary Node/tsx environment ran **actual upstream**
+`extractProvenanceMessages` and `provenanceMessageSchema` against synthetic native
+history and this implementation's exported record: one native prompt extracted,
+one export record validated. No SelfBench runtime dependency was added. The
+Temporal/Postgres/Docker/model-backed constructor was not started; this is format
+compatibility, not a validated runnable benchmark.
 
-## Ownership
+## Harbor compatibility, verified upstream
 
-- `Mortified2896/omnigent`: portable capture schema, Git-state capture, Codex/other harness adapters, SelfBench/Harbor export helpers.
-- `Mortified2896/HomeLab`: RTX storage path, service wiring, retention and operational recovery for the capture archive / OTel collector.
-- `Mortified2896/omniroute-customizations`: only thin routing-correlation changes if stock OmniRoute cannot expose the needed stable request identity.
+Inspected and installed [harbor-framework/harbor](https://github.com/harbor-framework/harbor/tree/96a13544537e54be84c0f316f8c3156769380684)
+at `96a13544537e54be84c0f316f8c3156769380684` in a temporary environment.
+`src/harbor/agents/installed/codex.py` already implements native rollout loading,
+`convert_trajectory` (Codex JSONL -> ATIF), and `atif_to_native_trajectory`.
+Executed all three paths on synthetic evidence: filename accepted, two ATIF v1.7
+steps emitted, native JSONL rendered back. No Omnigent ATIF converter is needed.
 
-Do not edit an installed RTX release tree as source. Source work follows the current `codex/rtx-o1-integration` lineage until that integration lands.
+Harbor's task contract includes `task.toml`, `instruction.md`, `environment/`,
+`tests/` and `solution/`; the verifier produces reward files under
+`/logs/verifier/` (`reward.txt` or `reward.json`). Its trial artifacts preserve
+agent output and trajectory. SelfBench exports this native task layout.
+
+Keep original historical rollouts alongside the task as private provenance or in
+a sibling archive. SelfBench's standard export excludes local provenance/session
+records, so archive preservation is our responsibility. Harbor's load-trajectory
+feature can seed history, but do **not** seed a solver evaluation with the completed
+reference trajectory: it reveals the answer. Preserve it for comparison instead.
+No Docker grading, full Harbor job or base/oracle task acceptance was claimed here.
+
+## OmniRoute and OTel fidelity
+
+The inspected executor emits requested model/effort and receives app-server events;
+it does not expose HTTP response headers or an OmniRoute per-attempt provider ledger.
+Native forwarder launch provenance records a configured access lane/provider and
+config-based model observations; those are not proof of an actual provider attempt.
+O3 decisions live outside the executor payload. Their proposal/approved fields
+remain null until explicit IDs are transported across that boundary.
+
+The OmniRoute usage/logs skill documents call/request/proxy logs and per-connection
+usage. Those read APIs alone do not join an Omnigent turn to a request deterministically.
+**No live OmniRoute inspection occurred.** 3.8.50 is the user-supplied runtime
+version, not a fresh version check, and its exact deployed correlation fields remain
+unverified. No timestamp/alias-based provider inference is used.
+
+Smallest later correlation work, conditional on live inspection: ensure one stable
+request/attempt ID is returned and recorded in OmniRoute call logs/OTel alongside
+connection, canonical provider/model, retry/fallback identity; expose that same ID
+in Codex's native evidence. Preserve/propagate W3C `traceparent` where supported.
+An HTTP header that Codex never surfaces is insufficient on its own. No OmniRoute
+code, routing, account, credentials or provider state changes belong in this PR.
+
+Existing Omnigent telemetry scopes traces by session/response; native spans carry
+Codex turn identity. Capture adds `omnigent.capture_id` to an available recording
+span (including native terminal spans). Codex config population already preserves
+its `[otel]` configuration. Recording succeeds without any OTel exporter or SDK.
+This does not establish continuous parent/child trace propagation through OmniRoute
+and its providers. PR #154 was inspected only for portable identity/preservation
+concepts; its Mac recorder/storage platform is not imported into this feature.
+
+## Failure semantics and remaining acceptance
+
+Recorder exceptions are isolated. Failed snapshot stages remain null with errors;
+end snapshot and rollout preservation are attempted independently. Capture I/O runs
+off the event loop and is drained on cancellation. Native duplicate/stale/other-session
+notifications cannot finalize the wrong capture; retrying errors are not terminal.
+A native process close without a terminal notification is marked failed/unknown
+outcome, never successful. A hard process/host kill can leave a `running` manifest;
+there is no new recovery daemon. Older/untrusted hooks without explicit turn/cwd
+cannot produce a native start snapshot and are not inferred from timestamps.
+
+Historical spike: inspected three existing **Omnigent-native** rollout headers on
+Mac, without altering them. None had Git provenance; one referenced a temporary
+fixture workspace, two a non-repository home directory. Classification: **impossible
+from those artifacts alone due to missing provenance**. This does not imply all
+historical tasks are unusable. No Desktop history or active RTX data was used.
+
+Validation commands (run from the requested Mac worktree):
+
+```sh
+uv sync --frozen --extra all --extra dev
+uv run --no-sync pytest tests/test_benchmark_capture.py \
+  tests/test_benchmark_capture_native.py tests/inner/test_codex_benchmark_capture.py \
+  tests/inner/test_codex_executor.py tests/test_codex_native.py \
+  tests/test_codex_native_app_server.py tests/test_codex_native_hook.py \
+  tests/test_codex_native_forwarder.py tests/inner/test_codex_native_executor.py \
+  tests/runtime/harnesses/test_executor_adapter.py tests/runtime/harnesses/test_scaffold.py \
+  tests/host/test_git_worktree.py tests/test_workspace_fs.py -q
+uv run --no-sync pyrefly check
+git diff --check
+```
+
+The acceptance fixture drives the actual wrapped app-server event loop with mocked
+transport, mutates a disposable Git repository, captures terminal outcomes, restores
+start/end state, resolves native history and exports SelfBench provenance. No LLM
+quota is consumed. Focused checks and staged pre-commit are used; full repo CI is not
+claimed. HomeLab PR #45 is unchanged: no concrete Linux storage/service requirement
+was introduced that warrants an operational deployment change.
+
+Next action: **A — read-only live RTX inspection**. Verify actual harness/version,
+hook payloads/trust, rollout persistence, available correlation evidence and `/srv`
+headroom before deciding whether an externally controlled opt-in canary is ready.
+No deployment, restart, merge or live mutation is part of this source task.
