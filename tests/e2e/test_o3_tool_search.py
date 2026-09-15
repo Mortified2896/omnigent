@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from omnigent.codex_native_app_server import CodexAppServerClient
+from omnigent.harnesses.codex_native.app_server import CodexAppServerClient
 
 _IDS = [os.getenv(f"O3_{name}_SESSION_ID") for name in ["EAGER", "LAZY", "DISCOVERY", "CODING"]]
 pytestmark = pytest.mark.skipif(not all(_IDS), reason="requires four local Mac native sessions")

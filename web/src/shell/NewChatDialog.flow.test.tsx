@@ -164,6 +164,8 @@ function agent(overrides: Partial<AvailableAgent> = {}): AvailableAgent {
 }
 
 const O3_SERVER_INFO: ServerInfo = {
+  enabled_connections: [],
+  features: {},
   accounts_enabled: false,
   single_user: true,
   login_url: null,

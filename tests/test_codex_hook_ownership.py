@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from omnigent.codex_native_app_server import _write_codex_policy_hooks_file
+from omnigent.harnesses.codex_native.app_server import _write_codex_policy_hooks_file
 from omnigent.inner.codex_hook_ownership import (
     inherited_provenance_replacement,
     reconcile_inherited_provenance_hooks,

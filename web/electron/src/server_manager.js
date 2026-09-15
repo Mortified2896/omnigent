@@ -125,19 +125,29 @@ function ownsLiveHost(key) {
  * (or fails / times out). On success the child keeps running; the caller
  * registers it. Never rejects.
  *
- * @param {string} cliPath
- * @param {string} targetUrl Exact loopback URL the desktop requires.
+ * @param {Parameters<typeof cli.cliCommandParts>[0]} cliCommand
  * @param {string} serverUrl
  * @returns {Promise<{ ok: boolean, child: import("child_process").ChildProcess, holder: {text: string}, error?: string }>}
  */
-function spawnHostChild(cliPath, serverUrl) {
+function spawnHostChild(cliCommand, serverUrl) {
   return new Promise((resolve) => {
     const holder = { text: "" };
     let child;
     try {
-      child = spawn(cliPath, ["host", "--server", serverUrl], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const { executable, prefixArgs } = cli.cliCommandParts(cliCommand);
+      // `--non-interactive`: the desktop owns the sign-in step (ensureServerAuth
+      // runs `omnigent login` first), so the host daemon must never try its own
+      // interactive login. Without the flag, an unauthed connect relies on the
+      // spawned child's stdin not being a TTY to bail — with it, the CLI raises a
+      // deterministic "run `omnigent login`" error that `isAuthError` classifies,
+      // so any residual auth gap becomes a fast, surfaced authError, not a hang.
+      child = spawn(
+        executable,
+        [...prefixArgs, "host", "--server", serverUrl, "--non-interactive"],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
     } catch (err) {
       resolve({ ok: false, child: null, holder, error: err.message });
       return;
@@ -189,11 +199,11 @@ function spawnHostChild(cliPath, serverUrl) {
  * error on the conflict, and we must not kill a daemon we didn't start. Adopted
  * connections report ownedByDesktop:false.
  *
- * @param {string} cliPath
+ * @param {Parameters<typeof cli.cliCommandParts>[0]} cliCommand
  * @param {string} serverUrl
  * @returns {Promise<{ ok: boolean, ownedByDesktop: boolean, adopted?: boolean, error?: string }>}
  */
-async function ensureHostConnected(cliPath, serverUrl) {
+async function ensureHostConnected(cliCommand, serverUrl) {
   const key = cli.normalizeServerUrl(serverUrl);
   if (key === "") return { ok: false, ownedByDesktop: false, error: "missing server URL" };
   if (ownsLiveHost(key)) return { ok: true, ownedByDesktop: true };
@@ -202,7 +212,7 @@ async function ensureHostConnected(cliPath, serverUrl) {
   // two `omnigent host` processes for one target.
   const inflight = connectingHosts.get(key);
   if (inflight) return inflight;
-  const op = connectHost(cliPath, serverUrl, key);
+  const op = connectHost(cliCommand, serverUrl, key);
   connectingHosts.set(key, op);
   // Ping the renderer right away so it re-reads (e.g. refetches the server's
   // host list), then again once the connect settles.
@@ -219,12 +229,12 @@ async function ensureHostConnected(cliPath, serverUrl) {
  * The actual connect: adopt a daemon already serving this target, else spawn
  * and track one. Serialized per target by ensureHostConnected.
  *
- * @param {string} cliPath
+ * @param {Parameters<typeof cli.cliCommandParts>[0]} cliCommand
  * @param {string} serverUrl
  * @param {string} key Normalized server URL.
  * @returns {Promise<{ ok: boolean, ownedByDesktop: boolean, adopted?: boolean, error?: string }>}
  */
-async function connectHost(cliPath, serverUrl, key) {
+async function connectHost(cliCommand, serverUrl, key) {
   // Adopt only a daemon we can VERIFY is connected (live process + an online
   // tunnel, via the fast disk-read + single HTTP probe — not the slow `omnigent
   // host status` subprocess). PID-liveness alone is not enough: a stale registry
@@ -237,7 +247,7 @@ async function connectHost(cliPath, serverUrl, key) {
     return { ok: true, ownedByDesktop: false, adopted: true };
   }
 
-  let spawned = await spawnHostChild(cliPath, serverUrl);
+  let spawned = await spawnHostChild(cliCommand, serverUrl);
   if (!spawned.ok) {
     // Connect failed or timed out. Await the child's termination — escalating to
     // SIGKILL after the grace period — rather than firing a single SIGTERM and
@@ -254,7 +264,7 @@ async function connectHost(cliPath, serverUrl, key) {
       if (existing.connected) {
         return { ok: true, ownedByDesktop: false, adopted: true };
       }
-      const stopped = await cli.stopHost(cliPath, serverUrl, { daemonOnly: true });
+      const stopped = await cli.stopHost(cliCommand, serverUrl, { daemonOnly: true });
       if (!stopped.ok) {
         return {
           ok: false,
@@ -262,7 +272,7 @@ async function connectHost(cliPath, serverUrl, key) {
           error: stopped.output || "could not stop the disconnected host daemon",
         };
       }
-      spawned = await spawnHostChild(cliPath, serverUrl);
+      spawned = await spawnHostChild(cliCommand, serverUrl);
       if (!spawned.ok) await stopChild(spawned.child);
     }
     if (!spawned.ok) {
@@ -293,11 +303,11 @@ async function connectHost(cliPath, serverUrl, key) {
  * daemon we merely adopted is asked to stop via the CLI (the user explicitly
  * toggled off, so honoring that is correct even for an adopted daemon).
  *
- * @param {string} cliPath
+ * @param {Parameters<typeof cli.cliCommandParts>[0]} cliCommand
  * @param {string} serverUrl
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-async function disconnectHost(cliPath, serverUrl) {
+async function disconnectHost(cliCommand, serverUrl) {
   const key = cli.normalizeServerUrl(serverUrl);
   const entry = hostChildren.get(key);
   if (entry) {
@@ -308,29 +318,47 @@ async function disconnectHost(cliPath, serverUrl) {
     return { ok: true };
   }
   // No desktop-owned child: ask the CLI to stop a daemon we'd adopted.
-  const res = await cli.stopHost(cliPath, serverUrl);
+  const res = await cli.stopHost(cliCommand, serverUrl);
   return { ok: res.ok, error: res.ok ? undefined : res.output };
 }
 
 /**
  * Ensure the CLI is authenticated for a server before connecting a host to it.
- * Local (loopback) servers need no auth. For a remote server with no valid
- * stored credentials, runs `omnigent login <url>` (browser/OIDC/Databricks; a
- * no-op when the server needs no auth). Returns ok when already authed, after a
- * successful login, or for a no-auth server; an error (pointing at `omnigent
- * login`) when login fails — e.g. a password/TTY mode that can't run headless.
+ * Local (loopback) servers need no auth. For a remote server, this asks the
+ * server itself (a `GET /v1/me` probe via {@link module:omnigent_cli.probeServerAuth})
+ * rather than trusting the on-disk token file — a Databricks pointer record has
+ * no readable expiry, so a stale file would otherwise falsely report "authed"
+ * and skip the login that should open the browser. When not authed it runs
+ * `omnigent login <url>` (browser/OIDC/Databricks), which is idempotent: a
+ * live-but-expired Databricks access token refreshes silently with no browser,
+ * and only a dead grant opens the sign-in browser.
  *
- * @param {string} cliPath
+ * Returns ok when already authed, when the server is unreachable (so the connect
+ * attempt can raise its own, clearer error), or after a successful login. On
+ * login failure returns `{ ok:false, authError:true, error }` so the UI can
+ * offer a sign-in/retry affordance instead of a generic failure.
+ *
+ * @param {Parameters<typeof cli.cliCommandParts>[0]} cliCommand
  * @param {string} serverUrl
- * @returns {Promise<{ ok: boolean, error?: string }>}
+ * @returns {Promise<{ ok: boolean, authError?: boolean, error?: string }>}
  */
-async function ensureServerAuth(cliPath, serverUrl) {
-  if (cli.isLoopbackServer(serverUrl) || cli.serverAuthed(serverUrl)) return { ok: true };
-  const res = await cli.loginServer(cliPath, serverUrl);
+async function ensureServerAuth(cliCommand, serverUrl) {
+  if (cli.isLoopbackServer(serverUrl)) return { ok: true };
+  const probe = await cli.probeServerAuth(serverUrl);
+  // Already authed, or unreachable — in the unreachable case skip a doomed login
+  // and let the connect attempt surface the real (connectivity) error.
+  if (probe.authed || !probe.reachable) return { ok: true };
+  const res = await cli.loginServer(cliCommand, serverUrl);
   if (res.ok) return { ok: true };
+  // Deliberately a fixed, generic message — NOT `res.output`. `omnigent login`
+  // stdout on the OIDC path contains the login-ticket URL
+  // (`…/auth/login?ticket=…`), which is auth material; threading it to the
+  // renderer would leak it. The server URL alone is safe (the renderer already
+  // knows it).
   return {
     ok: false,
-    error: `Sign-in required — run \`omnigent login ${serverUrl}\` in a terminal, then try again.`,
+    authError: true,
+    error: `Sign-in to ${serverUrl} didn't complete. A browser window should have opened — finish signing in and try again (or run \`${cli.cliCommandParts(cliCommand).displayName} login ${serverUrl}\` in a terminal).`,
   };
 }
 
@@ -338,13 +366,13 @@ async function ensureServerAuth(cliPath, serverUrl) {
  * Restart this machine's host connection: stop (awaiting the daemon down), then
  * reconnect.
  *
- * @param {string} cliPath
+ * @param {Parameters<typeof cli.cliCommandParts>[0]} cliCommand
  * @param {string} serverUrl
  * @returns {Promise<{ ok: boolean, ownedByDesktop: boolean, error?: string }>}
  */
-async function restartHost(cliPath, serverUrl) {
-  await disconnectHost(cliPath, serverUrl);
-  return ensureHostConnected(cliPath, serverUrl);
+async function restartHost(cliCommand, serverUrl) {
+  await disconnectHost(cliCommand, serverUrl);
+  return ensureHostConnected(cliCommand, serverUrl);
 }
 
 /**
@@ -378,59 +406,70 @@ function stopChild(child) {
  * *we* actually start it — a server that was already running is left to its
  * own lifecycle.
  *
+ * When `onLine` is given, forward the fresh server's startup log lines to it
+ * while it boots (Option B: tail the daemon's own logfile — we don't own the
+ * process). A reused server has no fresh startup, so it gets one status line.
+ *
  * @param {string} cliPath
+ * @param {(line: string) => void} [onLine]
  * @returns {Promise<{ ok: boolean, url?: string, alreadyRunning?: boolean, error?: string }>}
  */
-function startLocalServer(cliPath, targetUrl) {
+function startLocalServer(cliPath, targetUrlOrOnLine, onLine) {
   if (localServerStartInFlight) return localServerStartInFlight;
-  const operation = startLocalServerOnce(cliPath, targetUrl).finally(() => {
+  const targetUrl = typeof targetUrlOrOnLine === "string" ? targetUrlOrOnLine : null;
+  const progress = typeof targetUrlOrOnLine === "function" ? targetUrlOrOnLine : onLine;
+  const operation = startLocalServerOnce(cliPath, targetUrl, progress).finally(() => {
     if (localServerStartInFlight === operation) localServerStartInFlight = null;
   });
   localServerStartInFlight = operation;
   return operation;
 }
 
-async function startLocalServerOnce(cliPath, targetUrl) {
+async function startLocalServerOnce(cliPath, targetUrl, onLine) {
   let port;
-  try {
-    port = Number.parseInt(new URL(targetUrl).port, 10);
-  } catch {
-    return { ok: false, error: "The canonical local server URL is invalid." };
+  if (targetUrl) {
+    try {
+      port = Number.parseInt(new URL(targetUrl).port, 10);
+    } catch {
+      return { ok: false, error: "The canonical local server URL is invalid." };
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return { ok: false, error: "The canonical local server URL has no valid port." };
+    }
   }
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return { ok: false, error: "The canonical local server URL has no valid port." };
-  }
-  // Reuse a server that's already running — but health-verify it (pidfile +
-  // pid + /health), not just pid-liveness, since we're about to navigate the
-  // window to this URL: a stale pidfile (dead/reused pid, hung server) must NOT
-  // be reused or we'd send the window to a dead URL. Still far faster than
-  // `omnigent server status` (a Python cold start). We didn't start it, so no
-  // ownership claim.
   const existing = await cli.localServerHealthy();
   if (existing) {
-    if (cli.sameLoopbackServer(existing.url, targetUrl)) {
-      return { ok: true, url: targetUrl, alreadyRunning: true };
+    if (!targetUrl || cli.sameLoopbackServer(existing.url, targetUrl)) {
+      if (onLine) onLine("Server already running — connecting…");
+      return { ok: true, url: targetUrl ?? existing.url, alreadyRunning: true };
     }
     const stopped = await cli.stopLocalServer(cliPath);
     if (!stopped.ok) {
-      return {
-        ok: false,
-        error: `Could not stop the managed local server at ${existing.url}.`,
-      };
+      return { ok: false, error: `Could not stop the managed local server at ${existing.url}.` };
     }
   }
-  const res = await cli.startLocalServer(cliPath, port);
-  if (res.ok && cli.sameLoopbackServer(res.url, targetUrl)) {
-    ownedLocalServer = { url: res.url, port: res.port, pid: res.pid };
-    return { ok: true, url: targetUrl };
+  const startedAtMs = Date.now();
+  const controller = onLine ? new AbortController() : null;
+  const tail = controller
+    ? cli.tailLocalServerLog(onLine, { signal: controller.signal, startedAtMs }).catch(() => {})
+    : Promise.resolve();
+  try {
+    const res = await cli.startLocalServer(cliPath, port);
+    if (res.ok && targetUrl && !cli.sameLoopbackServer(res.url, targetUrl)) {
+      return {
+        ok: false,
+        error: `The CLI started ${res.url || "an unknown URL"}, not the required ${targetUrl}.`,
+      };
+    }
+    if (res.ok) {
+      ownedLocalServer = { url: res.url, port: res.port, pid: res.pid };
+      return { ok: true, url: targetUrl ?? res.url };
+    }
+    return { ok: false, error: res.error };
+  } finally {
+    controller?.abort();
+    await tail;
   }
-  if (res.ok) {
-    return {
-      ok: false,
-      error: `The CLI started ${res.url || "an unknown URL"}, not the required ${targetUrl}.`,
-    };
-  }
-  return { ok: false, error: res.error };
 }
 
 /**

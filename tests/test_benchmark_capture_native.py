@@ -3,7 +3,7 @@ import json
 import pytest
 
 from omnigent.benchmark_capture_native import begin_native, close_native, finish_native
-from omnigent.codex_native_bridge import CodexNativeBridgeState, write_bridge_state
+from omnigent.harnesses.codex_native.bridge import CodexNativeBridgeState, write_bridge_state
 from tests.test_benchmark_capture import _init_repo
 
 

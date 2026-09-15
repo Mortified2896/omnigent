@@ -123,7 +123,7 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
             "omnigent.fork.source_id": "conv_source",
             "omnigent.fork.source_external_session_id": "thread_src",
             "omnigent.fork.carry_history": "1",
-            "omnigent.codex_native.bypass_sandbox": "1",
+            "omnigent.harnesses.codex_native.main.bypass_sandbox": "1",
             "omnigent.access_lane": "codex-direct",
         },
     }
@@ -149,9 +149,9 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
     [
         None,  # no labels at all
         {},  # labels present but no bypass key
-        {"omnigent.codex_native.bypass_sandbox": "0"},  # explicit off
-        {"omnigent.codex_native.bypass_sandbox": "true"},  # only "1" arms it
-        {"omnigent.codex_native.bypass_sandbox": ""},  # empty string
+        {"omnigent.harnesses.codex_native.main.bypass_sandbox": "0"},  # explicit off
+        {"omnigent.harnesses.codex_native.main.bypass_sandbox": "true"},  # only "1" arms it
+        {"omnigent.harnesses.codex_native.main.bypass_sandbox": ""},  # empty string
     ],
 )
 async def test_bypass_sandbox_defaults_off_unless_label_is_one(
@@ -201,7 +201,7 @@ async def test_deployment_trust_composes_with_session_label(
     monkeypatch.setenv("OMNIGENT_CODEX_NATIVE_TRUSTED", deployment_value)
     labels = {"omnigent.access_lane": "codex-direct"}
     if label_value is not None:
-        labels["omnigent.codex_native.bypass_sandbox"] = label_value
+        labels["omnigent.harnesses.codex_native.main.bypass_sandbox"] = label_value
     snapshot: dict[str, Any] = {
         "workspace": "/tmp/repo",
         "model_override": "gpt-5.5",

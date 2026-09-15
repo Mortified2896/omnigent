@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
-from omnigent.json_types import JsonObject
+from omnigent.util.json_types import JsonObject
 
 _EVENTS = {
     "preToolUse": ("PreToolUse", "pre_tool_use"),
