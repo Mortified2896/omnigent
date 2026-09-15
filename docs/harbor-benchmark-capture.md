@@ -329,3 +329,64 @@ Next action: **A — read-only live RTX inspection**. Verify actual harness/vers
 hook payloads/trust, rollout persistence, available correlation evidence and `/srv`
 headroom before deciding whether an externally controlled opt-in canary is ready.
 No deployment, restart, merge or live mutation is part of this source task.
+
+## RTX canary evidence — 2026-09-15
+
+**Capture acceptance failed; original release restored.** Exactly one model task
+completed through RTX Omnigent's wrapped Codex app-server. The arithmetic repair
+and verifier passed, but no capture manifest or capture ID was produced.
+
+The host service had both capture variables set. `_build_runner_env` filtered
+both out before the harness started, leaving capture disabled. This PR now
+allowlists those two operator settings and tests the daemon -> runner -> harness
+chain for unset, disabled and enabled values while retaining secret filtering.
+This correction is source-tested, not deployed or accepted by a second canary.
+
+| Evidence | Observed result |
+| --- | --- |
+| Controller / target | Codex Mac app / RTX O1, VM100 on pve-gpu |
+| SSH verification | Tailscale 100.88.23.2 key matched trusted Proxmox guest-agent key; ED25519 SHA256:r/eh4+4Nehvi1/j+XAoYgdATzV0ik0ZnvwTRTm5mwpE |
+| Original and final release | `ec53fdba8f857def7823bf3c11573646ed023876` |
+| Tested candidate | `ab088f612eca873c8480bfffe03a682edf87002e`, verified wheel/build identity |
+| Capture root | `/srv/omnigent/benchmark-captures`, empty; capture disabled afterward |
+| Storage | `/srv` ext4 on 256 GiB `rtx-data`; 251 GiB filesystem, 206 GiB available |
+| Omnigent session | `ef6db2af0ce7430a8d009868e1b12dc1` |
+| Input turn / response | `turn_cf105ddb55e245f4bc401e0c6e3c2dc6` / `resp_5b67cdaceaa34b3690b546cc` |
+| Codex version / thread | 0.153.4 / `01a0a3ef-05b1-71d2-8939-26c81e7f6d54` |
+| Codex turn | `01a0a3ef-05be-7221-94d6-a8da41ff6414` |
+| Native salvage | 80,067 bytes, 36 valid JSONL records, explicit task start/complete, 21.665 seconds |
+| Native SHA-256 | `60f2a58e80783ea374945f8be38cfb5f9f5af5af7689d6f89b02dec444be806a` |
+| Capture ID / reconstruction | None; capture-based reconstruction NOT proven |
+| Independent fixture checks | Committed base `716b686e41fb84b082a5fba9d2342ddac87afea3` fails; separately applying salvaged final patch passes; test bytes unchanged |
+| Harbor trajectory tools | Current upstream `96a13544537e54be84c0f316f8c3156769380684`: native filename accepted, ATIF-v1.7 conversion (7 steps), native roundtrip passed |
+| SelfBench | Current upstream `8376c776c29006fe56a01f3ac882f3488db8b6dc` parser recovered original prompt; static audit rejects 2 changed lines (easy minimum: 20) |
+| Harbor task | Not constructed or run; fixture verification is NOT Harbor base/oracle acceptance |
+| Routing / OTel | REQUEST-ONLY / NONE; requested `codex/gpt-5.5`, no deterministic capture-to-gateway join |
+
+The native file originally lived under the fixture's
+`.codex-tmp/omnigent-codex-home-5gkp3u7q/sessions/2026/09/15/` and was copied to
+`/srv/omnigent/diagnostics/harbor-canary-20260915/native/` before process cleanup.
+It is diagnostic salvage, not a synthesized capture. Raw private trajectory and
+credentials are not committed. The fixture Git bundle and final patch are retained
+alongside it. The corrected enabled path should avoid this workspace-local home.
+
+The release-switch transaction `3c34918192744ad3ad6b0b74f2c243b2` preserved
+`/srv/backups/guest-20260915T071459Z.tar.gz` (SHA-256
+`9089e7362527e90eba3b5eb3154236ffd462975123c072ef2c1fe93f7f05fe13`).
+The reverse transaction `380141a3064f4cebb4497afeb8439881` restored the exact
+original release without restoring/overwriting the database. All three normal
+services were active afterward; no Codex or canary runner processes remained.
+
+Existing rollout footprint: 7 files, 460,050 bytes total, median 56,304 bytes,
+maximum 122,685 bytes. These short sessions do not predict large-workload growth.
+A planning allowance of 10–100 MiB per task including Git deltas gives approximately
+1–10 GiB for 100 tasks and 10–100 GiB for 1,000; no quota or retention policy is
+implemented by this estimate.
+
+Before another canary, deploy the tested environment propagation correction and
+verify the effective runner/harness environment before sending the task. A full
+SelfBench proof also needs a suitable completed change meeting its minimum size,
+a reachable GitHub base/reference association, and its isolated construction stack.
+The current local-only tiny fixture cannot satisfy those requirements. No custom
+converter, fake manifest, benchmark task, extra model attempt, PR merge, O2 revival,
+or OmniRoute behavior change was used to work around these failures.
