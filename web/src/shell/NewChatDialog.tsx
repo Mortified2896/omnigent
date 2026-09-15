@@ -4998,8 +4998,7 @@ export function NewChatLandingScreen() {
                 {selectedAgent &&
                   selectedNativeHarness === "codex-native" &&
                   !o3RoutingSelected &&
-                  costControlMode !== "on" &&
-                  codexEffortLevels.length > 0 && (
+                  costControlMode !== "on" && (
                     <Select
                       value={pickedEffort || EFFORT_SELECT_NONE}
                       disabled={creating}

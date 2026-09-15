@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 from unittest.mock import AsyncMock
 
 import pytest
@@ -99,7 +100,7 @@ async def test_real_dispatch_snapshot_order_and_terminal_paths(tmp_path, monkeyp
         return {"result": {"turn": {"id": "native-turn"}}}
 
     session._request = request
-    executor = CodexExecutor(model="requested", cwd=str(repo))
+    executor = CodexExecutor(model="requested", cwd=str(repo), codex_path=sys.executable)
     executor._ensure_app_session = AsyncMock(return_value=session)
     events = [
         event
@@ -173,7 +174,7 @@ async def test_cancelled_executor_finalizes_before_cleanup(tmp_path, monkeypatch
         async def close(self):
             await capture_io(self.capture.finish, "cancelled")
 
-    executor = CodexExecutor(model="requested", cwd=str(repo))
+    executor = CodexExecutor(model="requested", cwd=str(repo), codex_path=sys.executable)
     executor._ensure_app_session = AsyncMock(return_value=Session())
 
     async def run():
@@ -209,7 +210,7 @@ async def test_snapshot_failure_still_completes_codex(tmp_path, monkeypatch):
         async def run_turn(self, **kwargs):
             yield TurnComplete(response="done")
 
-    executor = CodexExecutor(model="requested", cwd=str(repo))
+    executor = CodexExecutor(model="requested", cwd=str(repo), codex_path=sys.executable)
     executor._ensure_app_session = AsyncMock(return_value=Session())
     events = [
         event async for event in executor.run_turn([{"role": "user", "content": "work"}], [], "")

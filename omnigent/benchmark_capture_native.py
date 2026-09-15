@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from omnigent.benchmark_capture import TurnCapture, _git_text, capture_enabled, capture_root
-from omnigent.codex_native_bridge import read_bridge_state
+from omnigent.harnesses.codex_native.bridge import read_bridge_state
 
 
 def _key(session_id: str, thread_id: str, turn_id: str) -> str:

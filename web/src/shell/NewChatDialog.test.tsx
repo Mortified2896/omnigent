@@ -770,6 +770,8 @@ function renderLanding(infoOverrides: Partial<ServerInfo> = {}, route = "/") {
     defaultOptions: { queries: { retry: false } },
   });
   const info: ServerInfo = {
+    enabled_connections: [],
+    features: { harness_install: infoOverrides.harness_install_enabled === true },
     accounts_enabled: false,
     single_user: false,
     login_url: null,

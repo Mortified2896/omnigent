@@ -227,12 +227,17 @@ class ZygoteManager:
             tty_kwargs = stack.enter_context(child_logging_popen_kwargs(env))
             pass_fds = (child_fd, *tty_kwargs.get("pass_fds", ()))
             return subprocess.Popen(
-                [self._python, "-m", "omnigent.runner._zygote"],
+                # -P keeps the daemon's cwd off sys.path, so a daemon started
+                # inside an omnigent checkout can't hand forked runners a
+                # different omnigent than the installed one.
+                [self._python, "-P", "-m", "omnigent.runner._zygote"],
                 env=env,
                 pass_fds=pass_fds,
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh,
                 stderr=log_fh,
+                # Avoid pinning the daemon's potentially transient cwd.
+                cwd="/",
             )
 
     def fork_runner(self, env: dict[str, str], log_path: str, workspace: str) -> ZygoteRunnerProc:
