@@ -56,10 +56,10 @@ def read_gateway_evidence(root: Path, call_id: str) -> dict[str, Any] | None:
         if path.is_symlink() or path.stat().st_size > 256 * 1024:
             return None
         data = json.loads(path.read_text())
-        if (
-            data.get("gateway_call_id") != call_id
-            or data.get("evidence_source") != "omniroute_executor_fetch"
-        ):
+        if data.get("gateway_call_id") != call_id or data.get("evidence_source") not in {
+            "omniroute_executor_fetch",
+            "omniroute_executor",
+        }:
             return None
         request_id = str(uuid.UUID(data["omniroute_request_id"]))
         attempts = data.get("attempts")
@@ -112,7 +112,7 @@ def read_gateway_evidence(root: Path, call_id: str) -> dict[str, Any] | None:
             )
             clean.append(attempt)
         return {
-            "evidence_source": "omniroute_executor_fetch",
+            "evidence_source": data["evidence_source"],
             "gateway_call_id": call_id,
             "omniroute_request_id": request_id,
             "upstream_correlation_id": _identifier(data.get("upstream_correlation_id")),
