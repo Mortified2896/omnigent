@@ -8,26 +8,24 @@ repository. See `CONTRIBUTING.md` for the full contributor workflow.
 This section applies to the `Mortified2896/omnigent` HomeLab deployment. Other
 upstream contributors may use their normal development environments.
 
-For HomeLab work, implementation, validation, and deployment are server-first
-on `ai-control-hub`. Read
-`/home/hermes/workspace/repos/HomeLab/docs/codex-server-workflow.md` before
-resolving a branch or changing live state.
+Source inspection and changes require verification of the intended repository,
+branch/base, worktree status, and resolved fetch/push URLs, not a particular
+production hostname. Use an isolated task worktree and preserve unrelated state.
+Verify the exact remote ref when the user names an existing branch; never
+substitute another branch or repository on a mismatch.
 
-Before the first mutation, fetch, commit, push, merge, build, or deployment,
-verify all of these identities:
+For read-only live diagnosis, verify the host actually being inspected. A stale
+historical hostname in documentation is not by itself a reason to abort.
+Before live mutation or deployment, resolve the authoritative current topology
+and verify the intended host and O1/O2 identities. Read HomeLab
+`docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md` from the
+active deployment branch; default-branch runbooks may lag a migration.
 
-- remote hostname: `ai-control-hub`;
-- canonical source: `/home/hermes/workspace/repos/omnigent`;
-- origin fetch and push target: `Mortified2896/omnigent`;
-- worktree status and current branch; and
-- the exact remote ref when the user names an existing branch.
-
-Stop on any mismatch. Do not silently repair a branch typo, substitute a
-similarly named branch from another repository, or treat a branch name or
-commit message as proof of product identity.
-
-Use an isolated Omnigent task worktree on `ai-control-hub`. A local Mac clone
-is read-only orientation, not the implementation or deployment source.
+As of 2026-09-16, the authoritative live host is `rtx-omnigent`: O1 is exposed
+on HTTPS :1111 and O2 on HTTPS :2222. The old `ai-control-hub` O1/O2 deployment
+is retired and must not be reactivated or treated as current. Historical hostnames
+are not permanent universal identity gates. Stop on a mismatch with the intended
+current target, and correct stale guidance using verified topology evidence.
 
 The default branch, commit, pull-request, and merge target is the customized
 fork `Mortified2896/omnigent`. The official `omnigent-ai/omnigent` repository
