@@ -31,7 +31,7 @@ serializes promotions; stale nonterminal transactions require explicit recovery.
 A durable journal records ownership and the mutation boundary BEFORE stopping any
 target service. Pre-boundary rollback is forbidden. A stopped-target SQLite backup
 and saved-state archive are retained before switching. A failed startup restores
-the target DB/release; state archives remain available for manual recovery. The
+the target DB/release; DB and state archives remain available as rollback evidence. The
 supervisor identity/PIDs and rollback release must remain intact throughout.
 
 Run focused regressions on RTX:
@@ -54,3 +54,13 @@ Gateway Codex deployments must supply a provider-qualified `model_catalog_json`.
 Minimal probe homes preserve that catalog and the configured default; changing
 the file invalidates the discovery cache. Disabling O3 does not enable bare
 subscription model IDs on a gateway that requires qualified routes.
+
+## Verified initial rollout (2026-09-16)
+
+RTX O1 and O2 both run accepted artifact
+`1496332611ffb301e7217c7cc66674f29e23e8db` after deep task/UI/auth/state acceptance.
+O2's task supervised O1 adoption; O1's task supervised a one-shot candidate-start
+failure on O2, which restored the exact prior release and DB/state while keeping
+O1 PIDs unchanged. The fault was removed and O2 resumed a saved session afterward.
+HomeLab records full evidence, endpoints, screenshots and service persistence.
+This proves the tested same-schema startup-failure path, not arbitrary migrations.

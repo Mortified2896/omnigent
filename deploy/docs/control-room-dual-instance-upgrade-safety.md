@@ -5,31 +5,20 @@ Control Room two-peer `peer_deployer` mechanism when two distinct Omnigent
 instances have deliberately been provisioned and that mechanism has explicitly
 been selected**.
 
-It is **not** the current HomeLab deployment policy for the RTX Omnigent
-runtime. The current HomeLab topology has one active RTX O1 for ordinary
-tasks and no standing live O2 peer. Release switching requires an explicitly
-selected external controller, such as the Mac Codex app. Old O1/O2 on
-`ai-control-hub` are
-retired from active service and archived.
+It is **not** the RTX v2 deployment contract. The authorized RTX O1/O2 v2
+rollout uses [the RTX peer contract](rtx-peer-v2.md) and the single
+`python -m peer_deployer.rtx` transaction owner. The old ai-control-hub O1/O2
+services remain retired. Do not start them or invoke historical promotion
+scripts to satisfy a current deployment preflight.
 
-Therefore:
+Current observed state and the operational procedure are tracked in HomeLab
+`docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md`.
+The former single-primary/external-controller exception applied during the
+RTX migration; it is not a second ongoing deployment mechanism. Mac Codex
+remains an authorized external controller, with actual peer supervision.
 
-- do not start, restore, recreate, or otherwise reactivate old O2 merely to
-  satisfy this document or `peer_deployer` preflight;
-- do not fabricate or relabel a supervisor identity;
-- if `peer_deployer` is selected while no deliberately provisioned second peer
-  exists, treat that deployment mechanism as inapplicable and refuse it rather
-  than changing topology to make it pass;
-- reintroducing a second Omnigent peer requires explicit owner authorization;
-- current RTX deployment decisions are governed by the current HomeLab
-  [HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md),
-  using an explicitly selected external controller for O1 release switching
-  and the rollback-preserving RTX release path.
-
-Historical migration text that says RTX O1 "must" use O2 supervision is
-superseded for present-state deployment decisions. This document overrides
-less-specific wording only **inside its scoped legacy two-peer mechanism**; it
-does not override the current topology authority above.
+Legacy RTX promotion entrypoints are deprecated for removal in v0.14.0 and
+refuse RTX execution. This document is retained only for historical evidence.
 
 ## Hard invariant within the legacy two-peer mechanism
 
@@ -40,8 +29,8 @@ does not override the current topology authority above.
 This is the core invariant when a real two-peer topology exists. An instance
 never upgrades itself, and the healthy peer supervises the operation.
 
-For the current single-primary RTX topology, preserve the corresponding safety
-properties without fabricating a peer: external control, exact tested artifact
+For the historical single-primary RTX transition, the corresponding safety
+properties were external control, exact tested artifact
 identity, consistent backups, reversible release switching, runtime/health
 verification, and rollback preservation. The running O1 must not autonomously
 replace itself from inside its own task context.
