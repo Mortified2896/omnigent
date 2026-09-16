@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Protocol, cast
 
 from sqlalchemy import (
@@ -37,6 +38,7 @@ from omnigent.db.db_models import (
     SqlConversationMetadata,
     SqlPolicy,
     SqlProject,
+    SqlResponseFeedback,
     SqlSessionPermission,
     SqlUserDailyCost,
     current_workspace_id,
@@ -72,10 +74,12 @@ from omnigent.db.utils import (
 from omnigent.entities import (
     Conversation,
     ConversationItem,
+    MessageData,
     NewConversationItem,
     PagedList,
     parse_item_data,
 )
+from omnigent.entities.response_feedback import ResponseFeedback
 from omnigent.native.native_coding_agents import native_coding_agent_for_wrapper_label
 from omnigent.session_import.models import (
     IMPORT_EXTERNAL_SESSION_ID_LABEL_KEY,
@@ -96,6 +100,7 @@ from omnigent.stores.conversation_store import (
     ConversationNotFoundError,
     ConversationStore,
     CreatedSession,
+    InvalidFeedbackTargetError,
     SessionConnectivity,
     pinned_label_key,
 )
@@ -821,6 +826,108 @@ class SqlAlchemyConversationStore(ConversationStore):
             else cast(ColumnElement[Any], SqlConversation.id)
         )
         ensure_fts_table(self._conv_engine)
+
+    @staticmethod
+    def _feedback_entity(row: SqlResponseFeedback) -> ResponseFeedback:
+        return ResponseFeedback(
+            conversation_id=row.conversation_id,
+            response_id=row.response_id,
+            user_id=row.user_id,
+            rating=row.rating,
+            comment=row.comment,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    def list_response_feedback(self, conversation_id: str, user_id: str) -> list[ResponseFeedback]:
+        with self._conv_session("list_response_feedback") as session:
+            rows = session.scalars(
+                select(SqlResponseFeedback).where(
+                    SqlResponseFeedback.workspace_id == current_workspace_id(),
+                    SqlResponseFeedback.conversation_id == conversation_id,
+                    SqlResponseFeedback.user_id == user_id,
+                )
+            )
+            return [self._feedback_entity(row) for row in rows]
+
+    def _validate_feedback_target(
+        self, session: Session, conversation_id: str, response_id: str
+    ) -> None:
+        rows = session.scalars(
+            select(SqlConversationItem).where(
+                SqlConversationItem.workspace_id == current_workspace_id(),
+                SqlConversationItem.conversation_id == conversation_id,
+                SqlConversationItem.response_id == response_id,
+                SqlConversationItem.type == encode_item_type("message"),
+                SqlConversationItem.status == encode_item_status("completed"),
+            )
+        )
+        for row in rows:
+            data = parse_item_data("message", json.loads(row.data))
+            if (
+                isinstance(data, MessageData)
+                and data.role == "assistant"
+                and not data.is_meta
+                and not data.interrupted
+            ):
+                return
+        raise InvalidFeedbackTargetError(
+            "Response is not a completed assistant answer in this session"
+        )
+
+    def put_response_feedback(
+        self,
+        conversation_id: str,
+        response_id: str,
+        user_id: str,
+        rating: int,
+        *,
+        comment: str | None = None,
+        update_comment: bool = False,
+    ) -> ResponseFeedback:
+        if type(rating) is not int or rating not in (-1, 1):
+            raise ValueError("Rating must be +1 or -1")
+        if not user_id:
+            raise ValueError("Feedback requires a non-empty caller identity")
+        with self._conv_session_immediate("save_response_feedback") as session:
+            self._lock_conversation(session, conversation_id)
+            self._validate_feedback_target(session, conversation_id, response_id)
+            key = (current_workspace_id(), conversation_id, response_id, user_id)
+            row = session.get(SqlResponseFeedback, key)
+            now = time.time_ns() // 1000
+            if row is None:
+                row = SqlResponseFeedback(
+                    workspace_id=key[0],
+                    conversation_id=conversation_id,
+                    response_id=response_id,
+                    user_id=user_id,
+                    rating=rating,
+                    comment=comment if update_comment else None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+            elif row.rating != rating or (update_comment and row.comment != comment):
+                row.rating = rating
+                if update_comment:
+                    row.comment = comment
+                row.updated_at = max(now, row.updated_at + 1)
+            return self._feedback_entity(row)
+
+    def delete_response_feedback(
+        self, conversation_id: str, response_id: str, user_id: str
+    ) -> None:
+        with self._conv_session_immediate("clear_response_feedback") as session:
+            self._lock_conversation(session, conversation_id)
+            self._validate_feedback_target(session, conversation_id, response_id)
+            session.execute(
+                delete(SqlResponseFeedback).where(
+                    SqlResponseFeedback.workspace_id == current_workspace_id(),
+                    SqlResponseFeedback.conversation_id == conversation_id,
+                    SqlResponseFeedback.response_id == response_id,
+                    SqlResponseFeedback.user_id == user_id,
+                )
+            )
 
     def _get_meta(self, conversation_id: str) -> SqlConversationMetadata | None:
         """
@@ -4431,6 +4538,12 @@ class SqlAlchemyConversationStore(ConversationStore):
             )
             bound_agent_ids = candidate_agent_ids - surviving_refs
             delete_fts_by_conversation_ids(ap_sess, list(subtree_ids))
+            ap_sess.execute(
+                delete(SqlResponseFeedback).where(
+                    SqlResponseFeedback.workspace_id == current_workspace_id(),
+                    SqlResponseFeedback.conversation_id.in_(subtree_ids),
+                )
+            )
             ap_sess.execute(
                 delete(SqlConversationItem).where(
                     SqlConversationItem.workspace_id == current_workspace_id(),

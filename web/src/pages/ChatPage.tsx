@@ -1,3 +1,4 @@
+import { ResponseFeedbackProvider } from "@/components/ResponseFeedbackActions";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -1096,7 +1097,9 @@ export function ChatPage() {
 
   return (
     <SessionSharedContext.Provider value={isSessionShared}>
-      <SessionLayout mainAgent={mainAgent} />
+      <ResponseFeedbackProvider key={urlConvId} sessionId={urlConvId}>
+        <SessionLayout mainAgent={mainAgent} />
+      </ResponseFeedbackProvider>
       <ReconnectSessionDialog
         open={reconnectDialogOpen}
         onOpenChange={setReconnectDialogOpen}

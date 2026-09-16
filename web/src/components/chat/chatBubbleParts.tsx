@@ -1,3 +1,4 @@
+import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
 // Bubble rendering, scroll helpers, and the working-indicator cluster for the
 // chat transcript. Extracted from ChatPage.tsx so <Transcript> can import them
 // without the ChatPage ↔ Transcript module cycle. ChatPage re-exports these for
@@ -876,12 +877,12 @@ function AssistantBubble({
         {!foldOnly && !errorOnly && (ts || markdownText) && (
           <div
             className={cn(
-              "flex items-center gap-3 py-1 opacity-40 transition-opacity md:group-hover:opacity-100 md:group-focus-within:opacity-100",
+              "flex max-w-full flex-wrap items-center gap-3 py-1 opacity-70 transition-opacity md:group-hover:opacity-100 md:group-focus-within:opacity-100 has-[textarea]:opacity-100",
               !actionsPersistent && "md:opacity-0",
             )}
           >
             {markdownText && (
-              <MessageActions>
+              <MessageActions className="max-w-full flex-wrap">
                 <MessageAction
                   tooltip="Copy"
                   size="icon-xxs"
@@ -890,6 +891,9 @@ function AssistantBubble({
                 >
                   {isCopied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
                 </MessageAction>
+                {canRateResponse(bubble) && (
+                  <ResponseFeedbackActions responseId={bubble.responseId} />
+                )}
                 {/* Fork from this response: clone the session with history
                     truncated after this turn. Hidden while streaming and when
                     the session can't be forked. */}

@@ -14,6 +14,7 @@ from omnigent.entities import (
     NewConversationItem,
     PagedList,
 )
+from omnigent.entities.response_feedback import ResponseFeedback
 from omnigent.session_import import IMPORT_PROVENANCE_LABEL_KEYS
 
 # Label set on a fork of a session that had a working directory, or a
@@ -355,6 +356,10 @@ def apply_session_usage_delta(current: dict[str, Any], delta: dict[str, Any]) ->
             current[key] = current.get(key, 0) + value
 
 
+class InvalidFeedbackTargetError(ValueError):
+    """The target is not a completed assistant answer in this conversation."""
+
+
 class ConversationStore(ABC):
     """
     Abstract base for conversation persistence.
@@ -378,6 +383,29 @@ class ConversationStore(ABC):
         """
         self.storage_location = storage_location
         self.conversation_storage_location = conversation_storage_location
+
+    def list_response_feedback(self, conversation_id: str, user_id: str) -> list[ResponseFeedback]:
+        """Read the caller's feedback for a conversation."""
+        raise NotImplementedError
+
+    def put_response_feedback(
+        self,
+        conversation_id: str,
+        response_id: str,
+        user_id: str,
+        rating: int,
+        *,
+        comment: str | None = None,
+        update_comment: bool = False,
+    ) -> ResponseFeedback:
+        """Upsert a rating, preserving the comment when omitted."""
+        raise NotImplementedError
+
+    def delete_response_feedback(
+        self, conversation_id: str, response_id: str, user_id: str
+    ) -> None:
+        """Clear the caller's feedback after validating the target."""
+        raise NotImplementedError
 
     @abstractmethod
     def create_conversation(
