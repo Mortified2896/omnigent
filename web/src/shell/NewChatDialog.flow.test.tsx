@@ -2123,3 +2123,24 @@ it("preserves benchmark routing on an unrelated gear save and clears it for an e
   expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("Default");
   expect(screen.queryByTestId("o3-estimator-settings")).toBeNull();
 });
+
+it("hides disabled O3 while retaining Smart Routing and Default", async () => {
+  setAgents([
+    agent({
+      id: "ag_codex",
+      name: "codex-native-ui",
+      display_name: "Codex",
+      harness: "codex-native",
+    }),
+  ]);
+  renderLanding([], {
+    ...O3_SERVER_INFO,
+    o3_routing_review_enabled: false,
+    smart_routing_enabled: true,
+  });
+  await waitForWorkspaceSeed();
+  openSelect("new-chat-landing-inline-model");
+  expect(screen.queryByRole("option", { name: /Benchmark Routing/ })).toBeNull();
+  expect(screen.getByRole("option", { name: /Omnigent Smart Routing/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /^Default/ })).toBeInTheDocument();
+});

@@ -1143,8 +1143,20 @@ def codex_catalog_fingerprint(launch: NativeCodexLaunch, *, codex_path: str | No
     """
     from omnigent.models.model_catalog_store import binary_identity, fingerprint_of
 
+    source = _codex_home_config_source_from_env() / "config.toml"
+    catalog = None
+    try:
+        import tomllib
+
+        configured = tomllib.loads(source.read_text()).get("model_catalog_json")
+        if isinstance(configured, str):
+            catalog = binary_identity(str(Path(configured).expanduser()))
+    except (OSError, ValueError):
+        pass
     return fingerprint_of(
         "codex-native",
+        binary_identity(str(source)),
+        catalog,
         launch.profile,
         launch.model,
         tuple(launch.config_overrides),

@@ -226,3 +226,50 @@ def test_wrong_or_fresh_database_refused(fixture):
     target.db.unlink()
     with pytest.raises(Refused, match="missing"):
         database_evidence(target)
+
+
+def test_recovery_after_state_rename_before_journal_save(fixture, monkeypatch):
+    target, supervisor, _, artifact = fixture
+    directory = target.root.parent / "interrupted-restore"
+    directory.mkdir()
+    tx = Journal.create(
+        directory / "transaction.json",
+        target=target,
+        supervisor=supervisor,
+        expected=OLD,
+        old=str(target.current.resolve()),
+        accepted=artifact["runtime"],
+        artifact_digest="c" * 64,
+    )
+    tx.save(mutation_boundary=True, database_mutated=True, backup=rtx.backup(target, directory))
+    original_save = tx.save
+
+    def interrupt(**changes):
+        if changes.get("state_restore") == "restored":
+            raise RuntimeError("simulated crash after rename")
+        original_save(**changes)
+
+    monkeypatch.setattr(tx, "save", interrupt)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        rtx.restore_state(target, tx)
+    assert tx.record["state_restore"] == "staged"
+    monkeypatch.setattr(tx, "save", original_save)
+    rtx.restore_state(target, tx)
+    assert tx.record["state_restore"] == "restored"
+    assert (directory / "failed-state/chat.db").exists()
+    assert database_evidence(target)["counts"]["response_feedback"] == 1
+
+
+def test_legacy_supervisor_wrong_direction_refused(fixture, monkeypatch):
+    target, supervisor, events, _ = fixture
+    with pytest.raises(Refused, match="only update O2"):
+        rtx.promote(
+            target,
+            supervisor,
+            OLD,
+            Path("unused"),
+            "c" * 64,
+            "legacy-direction-001",
+            legacy_supervisor_sha=OLD,
+        )
+    assert events == []

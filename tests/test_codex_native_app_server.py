@@ -2593,7 +2593,9 @@ async def test_probe_codex_model_options_uses_launch_config_and_marks_default(
             host="https://ws.example",
         ),
     )
-    monkeypatch.setattr(codex_native_app_server, "_clean_codex_env", lambda: {"PATH": "/bin"})
+    monkeypatch.setattr(
+        codex_native_app_server, "_clean_codex_env", lambda passthrough=(): {"PATH": "/bin"}
+    )
 
     captured: dict[str, object] = {}
 
@@ -2721,7 +2723,9 @@ async def test_probe_codex_model_options_probes_every_launch_shape(
         return ambient
 
     monkeypatch.setattr(codex_native_app_server, "resolve_native_codex_launch", _resolve)
-    monkeypatch.setattr(codex_native_app_server, "_clean_codex_env", lambda: {"PATH": "/bin"})
+    monkeypatch.setattr(
+        codex_native_app_server, "_clean_codex_env", lambda passthrough=(): {"PATH": "/bin"}
+    )
     captured: dict[str, object] = {}
 
     class _FakeProcess:
@@ -3001,3 +3005,16 @@ async def test_discovery_early_exit_without_stderr_keeps_plain_error() -> None:
     )
     with pytest.raises(RuntimeError, match=r"^Codex model discovery exited early \(1\)$"):
         await codex_native_app_server._wait_for_discovery_listener(discovery, port=1)
+
+
+def test_catalog_fingerprint_tracks_configured_catalog(tmp_path, monkeypatch):
+    from omnigent.harnesses.codex_native import app_server as native
+
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text('{"models": []}')
+    (tmp_path / "config.toml").write_text(f'model_catalog_json = "{catalog}"\n')
+    monkeypatch.setattr(native, "_codex_home_config_source_from_env", lambda: tmp_path)
+    launch = native.NativeCodexLaunch(config_overrides=[], model=None, profile=None)
+    before = native.codex_catalog_fingerprint(launch, codex_path="/missing/codex")
+    catalog.write_text('{"models": [{"slug": "codex/test"}]}')
+    assert native.codex_catalog_fingerprint(launch, codex_path="/missing/codex") != before

@@ -4928,18 +4928,21 @@ export function NewChatLandingScreen() {
                             "Native routing chooses the model; reasoning uses the harness default.",
                           disabledReason: smartRoutingEligible ? undefined : nativeRoutingReason,
                         },
-                        {
-                          id: O3_ROUTING_MODEL_ID,
-                          displayName: "Benchmark Routing (O3)",
-                          groupLabel: "Routing",
-                          description:
-                            "Review a benchmark floor and approve eligible configurations.",
-                          disabledReason: !o3RoutingReviewEnabled
-                            ? "The O3 service is not configured."
-                            : selectedNativeHarness !== "codex-native"
-                              ? "Requires the Codex harness."
-                              : undefined,
-                        },
+                        ...(o3RoutingReviewEnabled
+                          ? [
+                              {
+                                id: O3_ROUTING_MODEL_ID,
+                                displayName: "Benchmark Routing (O3)",
+                                groupLabel: "Routing",
+                                description:
+                                  "Review a benchmark floor and approve eligible configurations.",
+                                disabledReason:
+                                  selectedNativeHarness !== "codex-native"
+                                    ? "Requires the Codex harness."
+                                    : undefined,
+                              },
+                            ]
+                          : []),
                         ...(selectedNativeHarness === "codex-native"
                           ? codexModelOptions
                           : piModelOptions),

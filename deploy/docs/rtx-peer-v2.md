@@ -42,3 +42,15 @@ Run focused regressions on RTX:
 
 Current live topology is recorded in HomeLab `docs/omnigent-current-topology.md`.
 This contract is a desired architecture, not evidence that either peer is accepted.
+
+During initial migration only, `--legacy-supervisor-sha` binds the existing
+O1 on port 4098 and its exact candidate services as supervisor for O2 updates.
+This mode uses the same transaction owner and rollback path. It refuses any
+other direction and becomes unavailable once the v2 O1 manifest exists.
+The legacy O1 is never relabeled as a v2 peer. `--adopt-legacy-primary` is the
+separate, explicit O2-supervised transition of O1 after deep O2 acceptance.
+
+Gateway Codex deployments must supply a provider-qualified `model_catalog_json`.
+Minimal probe homes preserve that catalog and the configured default; changing
+the file invalidates the discovery cache. Disabling O3 does not enable bare
+subscription model IDs on a gateway that requires qualified routes.

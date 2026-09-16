@@ -2924,6 +2924,7 @@ def test_populate_codex_home_config_minimal_mode_keeps_routing_and_telemetry(
     (source / "auth.json").write_text('{"auth_mode": "chatgpt"}')
     (source / "AGENTS.md").write_text("global guidance")
     (source / "config.toml").write_text(
+        'model = "codex/gpt-5.5"\nmodel_catalog_json = "/catalog.json"\n'
         'model_provider = "Databricks"\n'
         '[model_providers.Databricks]\nname = "Databricks"\nbase_url = "https://example"\n'
         "[plugins.example]\nenabled = true\n"
@@ -2941,6 +2942,8 @@ def test_populate_codex_home_config_minimal_mode_keeps_routing_and_telemetry(
     assert not (target / "AGENTS.md").exists()
     config_text = (target / "config.toml").read_text()
     assert 'model_provider = "Databricks"' in config_text
+    assert 'model = "codex/gpt-5.5"' in config_text
+    assert 'model_catalog_json = "/catalog.json"' in config_text
     assert "[model_providers.Databricks]" in config_text
     assert "plugins" not in config_text
     assert "mcp_servers" not in config_text

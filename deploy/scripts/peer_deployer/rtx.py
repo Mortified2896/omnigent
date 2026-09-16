@@ -324,8 +324,12 @@ def restore_state(peer: Peer, tx: Journal) -> None:
         require(not state.is_symlink() and not failed.is_symlink(), "rollback root is indirect")
         if not failed.exists():
             os.replace(state, failed)
-        require(not state.exists(), "unexpected state after rollback rename")
-        os.replace(stage, state)
+        if stage.exists():
+            require(not state.exists(), "unexpected state after rollback rename")
+            os.replace(stage, state)
+        else:
+            require(state.is_dir(), "restored state is missing")
+            require(digest(state / "chat.db") == saved["sha256"], "restored DB drift")
         tx.save(state_restore="restored")
     require(tx.record["state_restore"] == "restored", "unknown restore phase")
     database_evidence(peer)
@@ -349,6 +353,8 @@ def promote(
     acceptance_path: Path,
     acceptance_digest: str,
     tx_id: str,
+    *,
+    legacy_supervisor_sha: str | None = None,
 ) -> dict:
     distinct(target, supervisor)
     require(os.environ.get("OMNIGENT_INSTANCE_ID") != target.instance, "self-upgrade refused")
@@ -356,9 +362,20 @@ def promote(
     with locked(TRANSACTIONS):
         candidate = accepted(acceptance_path, acceptance_digest)
         old = snapshot(target, expected_sha)
-        supervisor_sha = info(supervisor).get("build_sha")
-        require(isinstance(supervisor_sha, str), "supervisor build missing")
-        before = snapshot(supervisor, supervisor_sha)
+        if legacy_supervisor_sha is not None:
+            require(target.instance == "O2", "legacy supervisor may only update O2")
+            require(supervisor == legacy_primary(), "wrong legacy supervisor identity")
+            supervisor_sha = legacy_supervisor_sha
+        else:
+            supervisor_sha = info(supervisor).get("build_sha")
+            require(isinstance(supervisor_sha, str), "supervisor build missing")
+
+        def observe_supervisor():
+            if legacy_supervisor_sha is not None:
+                return legacy_snapshot(supervisor_sha)
+            return snapshot(supervisor, supervisor_sha)
+
+        before = observe_supervisor()
         require(old["database"]["schema"] == candidate["schema"], "DB schema mismatch")
         # Both peers must already run a proven baseline; bootstrap is a separate gated operation.
         directory = TRANSACTIONS / tx_id
@@ -372,9 +389,13 @@ def promote(
             accepted=candidate["runtime"],
             artifact_digest=acceptance_digest,
         )
-        tx.save(supervisor_before=before, target_before=old)
+        tx.save(
+            supervisor_before=before,
+            target_before=old,
+            legacy_supervisor_sha=legacy_supervisor_sha,
+        )
         try:
-            require(snapshot(supervisor, supervisor_sha) == before, "supervisor drift")
+            require(observe_supervisor() == before, "supervisor drift")
             require(snapshot(target, expected_sha) == old, "target drift")
             # This durable boundary precedes even the first service stop.
             tx.save(mutation_boundary=True, status="stopping")
@@ -384,19 +405,30 @@ def promote(
             switch(target, Path(candidate["runtime"]), tx)
             tx.save(database_mutated=True, status="starting")
             after = start(target, candidate["source_sha"])
-            require(snapshot(supervisor, supervisor_sha) == before, "supervisor drift")
+            require(observe_supervisor() == before, "supervisor drift")
             tx.save(status="committed", target_after=after)
         except BaseException as exc:
             tx.save(error=type(exc).__name__ + ": " + str(exc))
             if tx.record["mutation_boundary"]:
                 rollback(target, tx)
-                require(
-                    snapshot(supervisor, supervisor_sha) == before, "supervisor drift on rollback"
-                )
+                require(observe_supervisor() == before, "supervisor drift on rollback")
             else:
                 tx.save(status="refused")
             raise
         return tx.record
+
+
+def legacy_primary() -> Peer:
+    """Exact temporary supervisor identity during migration, never a v2 peer."""
+    require(not (CONFIG / "o1.json").exists(), "legacy supervision ends when v2 O1 is prepared")
+    return Peer(
+        "O1",
+        Path("/srv/omnigent/candidate"),
+        4098,
+        443,
+        "0c28633609414e1c9e12314fcbf97d23",
+        "legacy-primary-sqlite",
+    )
 
 
 def legacy_snapshot(expected_sha: str) -> dict:
@@ -587,8 +619,13 @@ def recover(target: Peer, supervisor: Peer, tx_id: str) -> dict:
         record = json.loads(path.read_text())
         require(record["target"] == target.document(), "recovery target identity mismatch")
         require(record["supervisor"] == supervisor.document(), "recovery supervisor mismatch")
-        sha = record["supervisor_before"]["info"]["build_sha"]
-        require(snapshot(supervisor, sha) == record["supervisor_before"], "supervisor drift")
+        if record.get("legacy_supervisor_sha"):
+            require(supervisor == legacy_primary(), "wrong legacy supervisor")
+            observed = legacy_snapshot(record["legacy_supervisor_sha"])
+        else:
+            sha = record["supervisor_before"]["info"]["build_sha"]
+            observed = snapshot(supervisor, sha)
+        require(observed == record["supervisor_before"], "supervisor drift")
         for key in ("old_release", "accepted_release"):
             release = Path(record[key])
             require(release.parent == Path("/srv/omnigent/releases"), "unowned release path")
@@ -637,17 +674,32 @@ def main() -> None:
     parser.add_argument("--acceptance-sha256")
     parser.add_argument("--recover", action="store_true")
     parser.add_argument("--adopt-legacy-primary", action="store_true")
+    parser.add_argument("--legacy-supervisor-sha")
     parser.add_argument("--transaction", required=True)
     args = parser.parse_args()
     require(
         socket.gethostname() == "rtx-omnigent" and os.geteuid() == 0,
         "RTX root controller required",
     )
+    require(
+        not (args.adopt_legacy_primary and args.legacy_supervisor_sha),
+        "conflicting migration modes",
+    )
+    if args.legacy_supervisor_sha:
+        require(
+            args.target == "O2" and args.supervisor == "O1", "legacy supervision requires O1 to O2"
+        )
+        require(
+            bool(re.fullmatch(r"[a-f0-9]{40}", args.legacy_supervisor_sha)), "invalid legacy SHA"
+        )
+        supervisor = legacy_primary()
+    else:
+        supervisor = load_peer(args.supervisor)
     caller_guard(load_peer(args.target))
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: (_ for _ in ()).throw(Refused("deployment interrupted")))
     if args.recover:
-        result = recover(load_peer(args.target), load_peer(args.supervisor), args.transaction)
+        result = recover(load_peer(args.target), supervisor, args.transaction)
         print(json.dumps({"status": result["status"], "transaction": args.transaction}))
         return
     require(
@@ -657,11 +709,16 @@ def main() -> None:
     operation = adopt_legacy_o1 if args.adopt_legacy_primary else promote
     result = operation(
         load_peer(args.target),
-        load_peer(args.supervisor),
+        supervisor,
         args.expected_current_sha,
         args.acceptance,
         args.acceptance_sha256,
         args.transaction,
+        **(
+            {"legacy_supervisor_sha": args.legacy_supervisor_sha}
+            if args.legacy_supervisor_sha
+            else {}
+        ),
     )
     print(json.dumps({"status": result["status"], "transaction": args.transaction}))
 
