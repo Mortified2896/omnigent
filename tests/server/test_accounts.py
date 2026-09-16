@@ -137,7 +137,7 @@ def _set_required_accounts_env(
 ) -> None:
     """Populate every required env var so from_env() doesn't fail loud."""
     monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", secrets.token_hex(32))
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", base_url)
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", "http://localhost:8000")
 
 
 def test_accounts_config_round_trips_required_env(
@@ -954,6 +954,7 @@ def _build_accounts_app(
     monkeypatch: pytest.MonkeyPatch,
     *,
     init_admin_password: str | None,
+    base_url: str = "http://localhost:8000",
 ) -> Iterator[TestClient]:
     """Build a production-shaped accounts-mode app + TestClient.
 
@@ -974,7 +975,7 @@ def _build_accounts_app(
     # so this fixture doesn't depend on the global default.
     monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "accounts")
     monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", secrets.token_hex(32))
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", base_url)
     if init_admin_password is not None:
         monkeypatch.setenv("OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD", init_admin_password)
     else:
@@ -2074,3 +2075,45 @@ def test_cli_login_with_issue_refresh_issues_grant(accounts_app: TestClient) -> 
     assert "access_token" in refresh_body
     # Login grants don't rotate — same token is returned.
     assert refresh_body["refresh_token"] == refresh_token
+
+
+def test_instance_logout_preserves_other_peer_cookie(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        clients = []
+        for peer, port in [("O1", 1111), ("O2", 2222)]:
+            monkeypatch.setenv("OMNIGENT_SESSION_COOKIE_SUFFIX", peer)
+            root = tmp_path / peer
+            root.mkdir()
+            generator = _build_accounts_app(
+                root,
+                monkeypatch,
+                init_admin_password="admin-pw-12345",
+                base_url=f"https://localhost:{port}",
+            )
+            client = next(generator)
+            stack.callback(lambda g=generator: next(g, None))
+            client.base_url = f"https://localhost:{port}"
+            clients.append(client)
+        first, second = clients
+        assert (
+            first.post(
+                "/auth/login", json={"username": "admin", "password": "admin-pw-12345"}
+            ).status_code
+            == 200
+        )
+        second.cookies.update(first.cookies)
+        assert (
+            second.post(
+                "/auth/login", json={"username": "admin", "password": "admin-pw-12345"}
+            ).status_code
+            == 200
+        )
+        first.cookies.update(second.cookies)
+        assert first.get("/auth/me").status_code == 200
+        assert second.get("/auth/me").status_code == 200
+        assert first.post("/auth/logout").status_code == 204
+        second.cookies = first.cookies
+        assert first.get("/auth/me").status_code == 401
+        assert second.get("/auth/me").status_code == 200

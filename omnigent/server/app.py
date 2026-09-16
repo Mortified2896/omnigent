@@ -156,6 +156,8 @@ class ServerInfoResponse(BaseModel):
     sharing_mode: Literal["on", "read_only", "restricted_read_only", "off"]
     public_sharing_enabled: bool
     server_version: str
+    instance_id: str | None = None
+    build_sha: str | None = None
     smart_routing_enabled: bool
     o3_routing_review_enabled: bool = False
     smart_routing_sources: SmartRoutingSourcesInfo
@@ -2458,6 +2460,11 @@ def create_app(
         from omnigent.server.dictation import engine_availability
 
         dictation_available, _ = engine_availability()
+        try:
+            from omnigent._build_info import COMMIT_SHA
+        except ImportError:
+            COMMIT_SHA = None
+
         return ServerInfoResponse.model_validate(
             {
                 "accounts_enabled": accounts_enabled,
@@ -2472,6 +2479,8 @@ def create_app(
                 "sharing_mode": sharing_mode.value,
                 "public_sharing_enabled": public_sharing_enabled,
                 "server_version": _server_version(),
+                "instance_id": os.environ.get("OMNIGENT_INSTANCE_ID"),
+                "build_sha": COMMIT_SHA,
                 "smart_routing_enabled": smart_routing_enabled,
                 "smart_routing_sources": smart_routing_sources,
                 "o3_routing_review_enabled": o3_routing_review_enabled(),

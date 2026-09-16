@@ -47,7 +47,9 @@ Env vars (all start with ``OMNIGENT_ACCOUNTS_``):
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from omnigent.server.session_cookie import cookie_suffix_from_env, session_cookie_name
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,7 @@ class AccountsConfig:
     init_admin_password: str | None
     invite_ttl_seconds: int
     magic_ttl_seconds: int
+    session_cookie_suffix: str = field(default_factory=cookie_suffix_from_env)
 
     @property
     def secure_cookies(self) -> bool:
@@ -95,7 +98,7 @@ class AccountsConfig:
         Uses the ``__Host-`` prefix on HTTPS (prevents subdomain
         cookie-tossing attacks) and a plain name on HTTP local dev.
         """
-        return "__Host-ap_session" if self.secure_cookies else "ap_session"
+        return session_cookie_name(self.secure_cookies, self.session_cookie_suffix)
 
     @staticmethod
     def from_env() -> AccountsConfig:

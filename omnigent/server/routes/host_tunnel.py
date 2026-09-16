@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 
@@ -304,6 +305,13 @@ def create_host_tunnel_router(
                 )
                 return
 
+            if os.environ.get("OMNIGENT_STRICT_HOST_IDENTITY") == "1":
+                try:
+                    conn = host_registry.register(host_id, ws, frame, owner=tunnel_owner)
+                except ValueError:
+                    await ws.close(code=4009, reason="Duplicate host identity is still connected")
+                    return
+
             stage = "registration"
             await asyncio.to_thread(
                 host_store.upsert_on_connect,
@@ -317,12 +325,8 @@ def create_host_tunnel_router(
             host_persisted = True
 
             stage = "registry"
-            conn = host_registry.register(
-                host_id,
-                ws,
-                frame,
-                owner=tunnel_owner,
-            )
+            if conn is None:
+                conn = host_registry.register(host_id, ws, frame, owner=tunnel_owner)
             # Delivered on the handshake, never persisted: a replica that just
             # started learns the host's gateway backing here, so a server
             # restart converges as soon as each host reconnects.

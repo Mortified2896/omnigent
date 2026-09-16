@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from collections.abc import Mapping
@@ -394,6 +395,16 @@ class HostRegistry:
         with self._lock:
             key = (ws_id, host_id)
             old = self._hosts.get(key)
+            if os.environ.get("OMNIGENT_STRICT_HOST_IDENTITY") == "1":
+                for existing in self._hosts.values():
+                    if (
+                        existing.workspace_id == ws_id
+                        and existing.owner == owner
+                        and existing.hello.name == hello.name
+                    ):
+                        raise ValueError("Duplicate host identity is still connected")
+            if old is not None and os.environ.get("OMNIGENT_STRICT_HOST_IDENTITY") == "1":
+                raise ValueError("Duplicate host ID is still connected; stop the old daemon first")
             if old is not None:
                 _logger.info(
                     "replacing stale host connection: ws=%s host=%s",
