@@ -1583,3 +1583,20 @@ class SqlScheduledTaskRun(OmnigentBase):
             "conversation_id",
         ),
     )
+
+
+class SqlResponseFeedback(ConversationBase):
+    """Mutable feedback joined to transcript and routing data by response id."""
+
+    __tablename__ = "response_feedback"
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, default=current_workspace_id, server_default="0"
+    )
+    conversation_id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
+    response_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    rating: Mapped[int] = mapped_column(SmallInteger)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[int] = mapped_column(BigInteger)
+    __table_args__ = (CheckConstraint("rating IN (-1, 1)", name="ck_response_feedback_rating"),)
