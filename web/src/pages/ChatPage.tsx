@@ -1,3 +1,8 @@
+import {
+  ResponseFeedbackProvider,
+  ResponseFeedbackActions,
+  canRateResponse,
+} from "@/components/ResponseFeedbackActions";
 import { O3SessionReview } from "@/components/O3SessionReview";
 import {
   type DragEvent,
@@ -1295,7 +1300,9 @@ export function ChatPage() {
 
   return (
     <SessionSharedContext.Provider value={isSessionShared}>
-      <SessionLayout mainAgent={mainAgent} />
+      <ResponseFeedbackProvider key={urlConvId} sessionId={urlConvId}>
+        <SessionLayout mainAgent={mainAgent} />
+      </ResponseFeedbackProvider>
       <ReconnectSessionDialog
         open={reconnectDialogOpen}
         onOpenChange={setReconnectDialogOpen}
@@ -3706,10 +3713,11 @@ function AssistantBubble({
             the user can see, and hanging them off a collapsed row spaced
             consecutive rows unevenly depending on hidden narration. */}
         {markdownText && !foldOnly && (
-          <MessageActions className="opacity-40 transition-opacity md:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
+          <MessageActions className="max-w-full flex-wrap opacity-70 transition-opacity md:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 has-[textarea]:opacity-100">
             <MessageAction tooltip="Copy" size="icon-xxs" onClick={handleCopy}>
               {isCopied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
             </MessageAction>
+            {canRateResponse(bubble) && <ResponseFeedbackActions responseId={bubble.responseId} />}
             {/* Fork from this response: clone the session with history
                 truncated after this turn. Hidden while the response is
                 still streaming (its items aren't committed yet) and when
