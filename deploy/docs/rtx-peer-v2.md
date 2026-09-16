@@ -46,7 +46,7 @@ This contract is a desired architecture, not evidence that either peer is accept
 During initial migration only, `--legacy-supervisor-sha` binds the existing
 O1 on port 4098 and its exact candidate services as supervisor for O2 updates.
 This mode uses the same transaction owner and rollback path. It refuses any
-other direction and becomes unavailable once the v2 O1 manifest exists.
+other direction and becomes unavailable once the v2 O1 database exists or either of its services is running.
 The legacy O1 is never relabeled as a v2 peer. `--adopt-legacy-primary` is the
 separate, explicit O2-supervised transition of O1 after deep O2 acceptance.
 

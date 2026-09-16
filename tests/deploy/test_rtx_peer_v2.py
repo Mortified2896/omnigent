@@ -273,3 +273,32 @@ def test_legacy_supervisor_wrong_direction_refused(fixture, monkeypatch):
             legacy_supervisor_sha=OLD,
         )
     assert events == []
+
+
+def test_runtime_snapshot_allows_supervisor_conversation_activity(fixture, monkeypatch):
+    peer, _, _, _ = fixture
+    # Exercise the actual snapshot rather than the fixture's service double.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("peer_deployer.snapshot_test", rtx.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        module,
+        "info",
+        lambda _: {
+            "instance_id": peer.instance,
+            "build_sha": OLD,
+            "smart_routing_enabled": True,
+            "o3_routing_review_enabled": False,
+        },
+    )
+    monkeypatch.setattr(module, "process", lambda *args: {"pid": "123", "sha": OLD})
+    before = module.snapshot(peer, OLD)
+    with sqlite3.connect(peer.db) as db:
+        db.execute("insert into conversation_items values ('supervising task progress')")
+    assert module.snapshot(peer, OLD) == before
+    with sqlite3.connect(peer.db) as db:
+        db.execute("update rtx_instance_identity set identity='foreign'")
+    with pytest.raises(Refused, match="binding"):
+        module.snapshot(peer, OLD)

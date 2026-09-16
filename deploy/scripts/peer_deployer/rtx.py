@@ -143,10 +143,13 @@ def snapshot(peer: Peer, expected_sha: str) -> dict:
     require(observed.get("build_sha") == expected_sha, "wrong expected-current SHA")
     require(observed.get("smart_routing_enabled") is True, "Smart Routing unavailable")
     require(observed.get("o3_routing_review_enabled") is False, "O3 must be disabled")
+    database = database_evidence(peer)
+    # The supervising task may append messages while the target is stopped.
+    database.pop("counts")
     return {
         "server": process(peer, peer.unit, "server", expected_sha),
         "host": process(peer, peer.host_unit, "host", expected_sha),
-        "database": database_evidence(peer),
+        "database": database,
         "info": observed,
     }
 
@@ -420,7 +423,14 @@ def promote(
 
 def legacy_primary() -> Peer:
     """Exact temporary supervisor identity during migration, never a v2 peer."""
-    require(not (CONFIG / "o1.json").exists(), "legacy supervision ends when v2 O1 is prepared")
+    if (CONFIG / "o1.json").exists():
+        prepared = load_peer("O1")
+        require(not prepared.db.exists(), "legacy supervision ends after v2 O1 adoption")
+        for unit in (prepared.unit, prepared.host_unit):
+            require(
+                run(["systemctl", "show", unit, "-p", "MainPID", "--value"]) == "0",
+                "v2 O1 is already running",
+            )
     return Peer(
         "O1",
         Path("/srv/omnigent/candidate"),
