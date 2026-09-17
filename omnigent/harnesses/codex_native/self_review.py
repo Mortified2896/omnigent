@@ -1,17 +1,22 @@
 """Ephemeral, read-only self-review for completed native Codex turns.
 
 The reviewer forks the exact completed turn instead of steering the user's
-thread.  That preserves the parent transcript and gives Codex/provider caches
-the largest possible identical prefix.  Cache reuse is observed from Codex's
-usage notification; missing counters remain ``None`` rather than being inferred.
+thread. That preserves the parent transcript and gives Codex/provider caches the
+largest possible identical prefix. When the primary task ran through an owned
+OmniRoute O3 Combo, the reviewer best-effort pins the fork to the direct route
+that actually served the primary call and then verifies the observed review
+backend from fresh call logs. Cache reuse is observed only from Codex's usage
+notification; missing counters remain ``None`` rather than being inferred.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from omnigent.entities.conversation import ResourceEventData
 from omnigent.harnesses.codex_native.app_server import CodexAppServerClient, client_for_transport
 from omnigent.harnesses.codex_native.bridge import read_bridge_state, read_policy_hook_config
+from omnigent.server.o3_routing_review.omniroute import OmniRouteClient, OmniRouteError
 from omnigent.server.task_experiment import RESOURCE_TYPE, normalize_tags
 
 _logger = logging.getLogger(__name__)
@@ -29,6 +35,8 @@ SELF_REVIEW_ENV = "OMNIGENT_TASK_SELF_REVIEW"
 SELF_REVIEW_PROMPT_VERSION = "codex-ephemeral-self-review-v1"
 SELF_REVIEW_TIMEOUT_SECONDS = 120.0
 PRIMARY_TERMINAL_TIMEOUT_SECONDS = 60 * 60.0
+_OMNIROUTE_LOOKBACK = timedelta(hours=2)
+_OWNED_ROUTE_PREFIX = "custom/o3-route-"
 
 _REVIEW_TAGS = (
     "AGENTS instructions",
@@ -77,6 +85,25 @@ class ReviewUsage(_StrictModel):
     cache_write_tokens: int | None = None
 
 
+class ReviewBackendAffinity(_StrictModel):
+    """Measured primary/review backend identity for cache-affinity analysis."""
+
+    attempted: bool = False
+    parent_route: str | None = None
+    primary_call_log_id: str | None = None
+    primary_provider: str | None = None
+    primary_model: str | None = None
+    primary_connection_id: str | None = None
+    pinned_route: str | None = None
+    review_call_log_id: str | None = None
+    review_provider: str | None = None
+    review_model: str | None = None
+    review_connection_id: str | None = None
+    model_provider_match: bool | None = None
+    connection_match: bool | None = None
+    note: str | None = None
+
+
 class CompletedSelfReview(_StrictModel):
     review: CodexSelfReview
     fork_thread_id: str
@@ -85,6 +112,7 @@ class CompletedSelfReview(_StrictModel):
     model_provider: str | None = None
     reasoning_effort: str | None = None
     usage: ReviewUsage = Field(default_factory=ReviewUsage)
+    backend_affinity: ReviewBackendAffinity = Field(default_factory=ReviewBackendAffinity)
 
 
 def self_review_enabled() -> bool:
@@ -131,6 +159,27 @@ def _usage_from_params(params: dict[str, object]) -> ReviewUsage | None:
     )
 
 
+def _cache_provenance(usage: ReviewUsage) -> dict[str, object | None]:
+    ratio: float | None = None
+    if (
+        usage.input_tokens is not None
+        and usage.input_tokens > 0
+        and usage.cache_read_tokens is not None
+    ):
+        ratio = usage.cache_read_tokens / usage.input_tokens
+    return {
+        "reuse_observed": (
+            None if usage.cache_read_tokens is None else usage.cache_read_tokens > 0
+        ),
+        "cache_read_ratio": ratio,
+        "measurement_source": "codex thread/tokenUsage/updated",
+        # A fork gives the backend an identical-prefix opportunity, but the
+        # installed Codex/app-server version must be acceptance-tested before
+        # claiming that it preserves the parent's prompt_cache_key lineage.
+        "prompt_cache_lineage_verified": None,
+    }
+
+
 def _review_prompt() -> str:
     tags = ", ".join(_REVIEW_TAGS)
     return (
@@ -143,6 +192,211 @@ def _review_prompt() -> str:
         "the existing evidence cannot reliably establish the outcome. Give one concise comment, up "
         "to three short evidence statements, and up to three relevant tags. Prefer these tags when "
         f"applicable: {tags}. Judge the completed attempt, not this review instruction."
+    )
+
+
+def _claim_self_review_once(bridge_dir: Path, *, session_id: str, primary_turn_id: str) -> bool:
+    """Atomically claim one evaluator call for a primary turn across both scheduling paths."""
+    digest = hashlib.sha256(f"{session_id}:{primary_turn_id}".encode()).hexdigest()[:24]
+    path = bridge_dir / f"self-review-{digest}.claim"
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(f"{session_id}\n{primary_turn_id}\n")
+    return True
+
+
+def _bare_model(provider: str, model: str) -> str:
+    prefix = f"{provider}/"
+    if model.startswith(prefix):
+        return model[len(prefix) :]
+    return model.rsplit("/", 1)[-1]
+
+
+def _select_affinity_target(
+    combo: dict[str, object],
+    *,
+    provider: str,
+    model: str,
+    connection_id: str | None,
+) -> str | None:
+    """Return the unique direct model route matching an observed Combo target."""
+    raw_models = combo.get("models")
+    if not isinstance(raw_models, list):
+        return None
+    matches: list[dict[str, object]] = []
+    for item in raw_models:
+        if not isinstance(item, dict) or item.get("providerId") != provider:
+            continue
+        candidate = item.get("model")
+        if not isinstance(candidate, str) or not candidate:
+            continue
+        if _bare_model(provider, candidate) != _bare_model(provider, model):
+            continue
+        matches.append(item)
+    if connection_id:
+        exact = [item for item in matches if item.get("connectionId") == connection_id]
+        if len(exact) == 1:
+            candidate = exact[0].get("model")
+            return candidate if isinstance(candidate, str) else None
+    if len(matches) != 1:
+        return None
+    candidate = matches[0].get("model")
+    return candidate if isinstance(candidate, str) else None
+
+
+async def _latest_route_call(
+    client: OmniRouteClient,
+    route: str,
+    *,
+    not_before: datetime,
+    not_after: datetime,
+) -> dict[str, object] | None:
+    """Return the latest successful Responses call for one route in a bounded window."""
+    rows = await client.list_call_logs(limit=100, offset=0)
+    matches: list[tuple[datetime, dict[str, object]]] = []
+    for row in rows:
+        if row.get("path") != "/v1/responses" or row.get("method") != "POST":
+            continue
+        if row.get("status") != 200:
+            continue
+        if route not in {row.get("comboName"), row.get("requestedModel")}:
+            continue
+        timestamp = client._parse_timestamp(row.get("timestamp"))  # noqa: SLF001
+        if timestamp is None or timestamp < not_before or timestamp > not_after:
+            continue
+        provider = _string(row.get("provider"))
+        model = _string(row.get("model"))
+        call_log_id = _string(row.get("id"))
+        if provider is None or model is None or call_log_id is None:
+            continue
+        matches.append((timestamp, row))
+    if not matches:
+        return None
+    timestamp, row = max(matches, key=lambda item: (item[0], str(item[1].get("id", ""))))
+    return {
+        "call_log_id": row["id"],
+        "provider": row["provider"],
+        "model": row["model"],
+        "connection_id": _string(row.get("connectionId")),
+        "timestamp": timestamp,
+    }
+
+
+async def _prepare_backend_affinity(
+    *,
+    parent_route: str | None,
+    now: datetime,
+) -> tuple[OmniRouteClient | None, ReviewBackendAffinity]:
+    affinity = ReviewBackendAffinity(parent_route=parent_route)
+    if parent_route is None or not parent_route.startswith(_OWNED_ROUTE_PREFIX):
+        return None, affinity.model_copy(
+            update={"note": "primary thread is not using an owned O3 OmniRoute Combo"}
+        )
+    try:
+        omniroute = OmniRouteClient.from_env()
+        primary = await _latest_route_call(
+            omniroute,
+            parent_route,
+            not_before=now - _OMNIROUTE_LOOKBACK,
+            not_after=now,
+        )
+        if primary is None:
+            return omniroute, affinity.model_copy(
+                update={
+                    "attempted": True,
+                    "note": "no recent successful primary OmniRoute call could be correlated",
+                }
+            )
+        combo = await omniroute.get_combo(parent_route)
+        if combo is None:
+            return omniroute, affinity.model_copy(
+                update={
+                    "attempted": True,
+                    "primary_call_log_id": primary["call_log_id"],
+                    "primary_provider": primary["provider"],
+                    "primary_model": primary["model"],
+                    "primary_connection_id": primary["connection_id"],
+                    "note": "owned primary Combo disappeared before review",
+                }
+            )
+        pinned_route = _select_affinity_target(
+            combo,
+            provider=str(primary["provider"]),
+            model=str(primary["model"]),
+            connection_id=(
+                str(primary["connection_id"]) if primary["connection_id"] is not None else None
+            ),
+        )
+        note = (
+            "fork will request the direct route that served the primary call; "
+            "connection equality is verified after review"
+            if pinned_route
+            else "primary backend could not be mapped unambiguously to one direct Combo target"
+        )
+        return omniroute, ReviewBackendAffinity(
+            attempted=True,
+            parent_route=parent_route,
+            primary_call_log_id=str(primary["call_log_id"]),
+            primary_provider=str(primary["provider"]),
+            primary_model=str(primary["model"]),
+            primary_connection_id=(
+                str(primary["connection_id"]) if primary["connection_id"] is not None else None
+            ),
+            pinned_route=pinned_route,
+            note=note,
+        )
+    except (OmniRouteError, OSError, ValueError, TypeError) as exc:
+        return None, affinity.model_copy(
+            update={"attempted": True, "note": f"backend affinity unavailable: {exc}"}
+        )
+
+
+async def _verify_backend_affinity(
+    client: OmniRouteClient | None,
+    affinity: ReviewBackendAffinity,
+    *,
+    route_used: str | None,
+    not_before: datetime,
+    not_after: datetime,
+) -> ReviewBackendAffinity:
+    if client is None or route_used is None:
+        return affinity
+    try:
+        observed = await _latest_route_call(
+            client,
+            route_used,
+            not_before=not_before,
+            not_after=not_after,
+        )
+    except (OmniRouteError, OSError, ValueError, TypeError):
+        return affinity
+    if observed is None:
+        return affinity.model_copy(
+            update={"note": f"{affinity.note or ''}; review backend call was not observable".strip("; ")}
+        )
+    provider_match = (
+        affinity.primary_provider == observed["provider"]
+        and affinity.primary_model is not None
+        and _bare_model(str(observed["provider"]), affinity.primary_model)
+        == _bare_model(str(observed["provider"]), str(observed["model"]))
+    )
+    connection_match: bool | None = None
+    if affinity.primary_connection_id is not None and observed["connection_id"] is not None:
+        connection_match = affinity.primary_connection_id == observed["connection_id"]
+    return affinity.model_copy(
+        update={
+            "review_call_log_id": str(observed["call_log_id"]),
+            "review_provider": str(observed["provider"]),
+            "review_model": str(observed["model"]),
+            "review_connection_id": (
+                str(observed["connection_id"]) if observed["connection_id"] is not None else None
+            ),
+            "model_provider_match": provider_match,
+            "connection_match": connection_match,
+        }
     )
 
 
@@ -197,6 +451,28 @@ async def run_self_review(
         if fork_thread_id is None:
             raise ValueError("Codex thread/fork returned no thread id")
 
+        parent_route = _string(fork_result.get("model")) if fork_result else None
+        omniroute, affinity = await _prepare_backend_affinity(
+            parent_route=parent_route,
+            now=datetime.now(timezone.utc),
+        )
+        route_used = parent_route
+        if affinity.pinned_route is not None:
+            try:
+                await client.request(
+                    "thread/settings/update",
+                    {"threadId": fork_thread_id, "model": affinity.pinned_route},
+                )
+                route_used = affinity.pinned_route
+            except Exception as exc:  # noqa: BLE001 - affinity is best-effort, review is optional.
+                affinity = affinity.model_copy(
+                    update={
+                        "pinned_route": None,
+                        "note": f"direct-route pin failed; review used inherited route: {exc}",
+                    }
+                )
+
+        review_started_at = datetime.now(timezone.utc)
         start_response = await client.request(
             "turn/start",
             {
@@ -245,6 +521,10 @@ async def run_self_review(
                             final_text = text
                     continue
                 if method == "turn/completed" and event_turn_id == review_turn_id:
+                    turn_data = _object(params.get("turn"))
+                    status = _string(turn_data.get("status")) if turn_data else None
+                    if status not in {None, "completed"}:
+                        return None
                     completed = True
                     break
                 if method in {"turn/failed", "error"} and event_turn_id in {
@@ -270,16 +550,26 @@ async def run_self_review(
                 "comment": review.comment.strip(),
             }
         )
+        affinity = await _verify_backend_affinity(
+            omniroute,
+            affinity,
+            route_used=route_used,
+            not_before=review_started_at - timedelta(seconds=2),
+            not_after=datetime.now(timezone.utc) + timedelta(seconds=2),
+        )
         return CompletedSelfReview(
             review=review,
             fork_thread_id=fork_thread_id,
             review_turn_id=review_turn_id,
-            model=_string(fork_result.get("model")) if fork_result else None,
-            model_provider=_string(fork_result.get("modelProvider")) if fork_result else None,
+            model=affinity.review_model
+            or (_string(fork_result.get("model")) if fork_result else None),
+            model_provider=affinity.review_provider
+            or (_string(fork_result.get("modelProvider")) if fork_result else None),
             reasoning_effort=(
                 _string(fork_result.get("reasoningEffort")) if fork_result else None
             ),
             usage=usage,
+            backend_affinity=affinity,
         )
     finally:
         await client.close()
@@ -332,6 +622,8 @@ async def persist_self_review(
             "model_provider": completed.model_provider,
             "reasoning_effort": completed.reasoning_effort,
             "token_usage": completed.usage.model_dump(mode="json"),
+            "cache": _cache_provenance(completed.usage),
+            "backend_affinity": completed.backend_affinity.model_dump(mode="json"),
         },
     }
     item_data = ResourceEventData(
@@ -375,9 +667,18 @@ async def review_completed_turn(
     parent_thread_id: str,
     primary_turn_id: str,
 ) -> bool:
-    """Non-blocking task body used by the native executor after turn acceptance."""
+    """Non-blocking task body used by native terminal schedulers."""
     try:
         if not await wait_for_primary_terminal(
+            bridge_dir,
+            session_id=session_id,
+            primary_turn_id=primary_turn_id,
+        ):
+            return False
+        # Both the native executor and terminal hook can observe the same edge in
+        # the current draft. Claim the evaluator durably before any model call so
+        # retries or duplicate schedulers cannot charge/run it twice.
+        if not _claim_self_review_once(
             bridge_dir,
             session_id=session_id,
             primary_turn_id=primary_turn_id,
