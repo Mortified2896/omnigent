@@ -255,7 +255,15 @@ def filter_execution_set_for_tb4(
                     f"TB4 baseline {score:.6g} is below exact floor {floor_score:.6g}"
                 )
         updated = decision.model_copy(
-            update={"metadata": metadata, "exclusions": reasons}
+            update={
+                "metadata": metadata,
+                "exclusions": reasons,
+                **(
+                    {"capability_score_lower": float(baseline["baseline_score"]) * 100.0}
+                    if baseline is not None
+                    else {}
+                ),
+            }
         )
         if reasons:
             excluded.append(updated)
@@ -286,8 +294,6 @@ async def apply_floor_experiment(
     service: O3RoutingReviewService,
     *,
     proposal_id: str,
-    prompt: str,
-    workspace_summary: str,
     user_floor_percent: float,
     experiment_key: str,
 ) -> RoutingProposal:
@@ -296,6 +302,21 @@ async def apply_floor_experiment(
 
     proposal = service.get_proposal(proposal_id)
     audit = dict(proposal.audit or {})
+    input_record = audit.get("input")
+    if not isinstance(input_record, dict):
+        raise RoutingReviewError(
+            "the original task input is unavailable for independent TB4 floor review",
+            status_code=409,
+            code="tb4_original_input_unavailable",
+        )
+    prompt = input_record.get("prompt")
+    workspace_summary = input_record.get("workspace_summary", "")
+    if not isinstance(prompt, str) or not prompt.strip() or not isinstance(workspace_summary, str):
+        raise RoutingReviewError(
+            "the original task input is unavailable for independent TB4 floor review",
+            status_code=409,
+            code="tb4_original_input_unavailable",
+        )
     existing = audit.get("tb4_floor_experiment")
     key_sha = _key_digest(experiment_key)
     if isinstance(existing, dict):
@@ -354,9 +375,22 @@ async def apply_floor_experiment(
         proposal = proposal.model_copy(update={"audit": audit})
         service.store.put(snapshot(proposal, "TB4 floor assigned"))
 
+    tb4_slice = next(
+        (item for item in service.registry.slices if item.slice_id == "tb4.overall"),
+        None,
+    )
+    if tb4_slice is None:
+        raise RoutingReviewError(
+            "TB4 overall is not available in the benchmark registry",
+            status_code=409,
+            code="tb4_slice_unavailable",
+        )
     adjusted = await service.adjust_proposal(
         proposal_id,
         ProposalAdjustmentRequest(
+            benchmark_id=tb4_slice.benchmark_id,
+            version=tb4_slice.version,
+            slice_id=tb4_slice.slice_id,
             minimum_score=executed_floor / 100.0,
             difficulty="easy",
         ),
@@ -381,7 +415,12 @@ async def apply_floor_experiment(
             code="tb4_baseline_unavailable",
         ) from exc
 
-    recommendation = recommendation.model_copy(update={"execution_set": filtered})
+    recommendation = recommendation.model_copy(
+        update={
+            "execution_set": filtered,
+            "common_capability_floor": 0.0,
+        }
+    )
     resource_snapshot = await service.omniroute.resource_snapshot(filtered.eligible)
     resource_advice = ResourceAdvice(
         action="start_now" if resource_snapshot.usable_routes else "wait",
