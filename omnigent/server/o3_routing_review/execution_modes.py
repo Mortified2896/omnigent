@@ -125,6 +125,9 @@ def options_from_audit(
     if recommendation is None or recommendation.execution_set is None:
         return options
     registry = read_capabilities()
+    eligible_route_ids = {item.route_id for item in recommendation.execution_set.eligible}
+    experiment = proposal.audit.get("tb4_floor_experiment") if isinstance(proposal.audit, dict) else None
+    tb4_floor_applied = isinstance(experiment, dict) and experiment.get("status") == "applied"
     for item in recommendation.execution_set.eligible:
         if registry is not None and qualified_route(registry, item.provider_id, item.route_id):
             options.append(
@@ -155,6 +158,11 @@ def options_from_audit(
             or row.get("cost_class") not in {"free_label", "zero_priced"}
         ):
             continue
+        # Under the exact-TB4 experiment the already-filtered execution set is
+        # authoritative. Never let the legacy capability forecast re-introduce
+        # a free route that failed or lacked the model+effort TB4 baseline.
+        if tb4_floor_applied and route not in eligible_route_ids:
+            continue
         # A cached answer or an unattributed response cannot prove live availability.
         if row.get("actual_provider") != row.get("provider") or row.get("cache") != "MISS":
             continue
@@ -169,7 +177,7 @@ def options_from_audit(
         lower = forecast.get("capability_score_lower")
         if not forecast.get("adviser_applicable") or not isinstance(lower, (int, float)):
             continue
-        if lower < recommendation.common_capability_floor:
+        if not tb4_floor_applied and lower < recommendation.common_capability_floor:
             continue
         if forecast.get("reasoning_mode", "default") not in {
             "default",
@@ -187,14 +195,26 @@ def options_from_audit(
         )
         if tool_free_exclusions(qualification, proposal.effective_requirements):
             continue
+        exact_score = next(
+            (
+                item.capability_score_lower
+                for item in recommendation.execution_set.eligible
+                if item.route_id == route
+            ),
+            None,
+        )
         options.append(
             ExecutionOption(
                 mode=ExecutionMode.HARD_TOOL_FREE,
                 route=route,
                 provider=row["provider"],
                 cost_class="free",
-                capability_score_lower=lower,
-                reason="Tools not required; meets floor; free route preserves subscription",
+                capability_score_lower=(exact_score if exact_score is not None else lower),
+                reason=(
+                    "Tools not required; meets exact TB4 floor; free route preserves subscription"
+                    if tb4_floor_applied
+                    else "Tools not required; meets floor; free route preserves subscription"
+                ),
             )
         )
     return options
