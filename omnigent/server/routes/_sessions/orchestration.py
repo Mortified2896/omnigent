@@ -5789,10 +5789,11 @@ async def _dispatch_session_event_to_runner_impl(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
-    from omnigent.server.o3_success_forecast import commit_attempt
+    from omnigent.server.task_experiment import commit_forecast
 
     try:
-        await commit_attempt(
+        await asyncio.to_thread(
+            commit_forecast,
             conversation_store,
             conv,
             body,

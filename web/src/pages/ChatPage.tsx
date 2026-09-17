@@ -4089,38 +4089,13 @@ export function shouldSendInitialPrompt(params: {
 export function dispatchInitialPrompt(
   prompt: PendingInitialPrompt,
   agentId: string,
-  send: (
-    text: string,
-    agentId: string,
-    files: File[],
-    opts?: { successForecast?: { probability: number | null } },
-  ) => Promise<void>,
-  sendSlashCommand: (
-    name: string,
-    args: string,
-    agentId: string,
-    opts?: { successForecast?: { probability: number | null } },
-  ) => Promise<void>,
+  send: (text: string, agentId: string, files: File[]) => Promise<void>,
+  sendSlashCommand: (name: string, args: string, agentId: string) => Promise<void>,
 ): void {
-  if (!prompt.successForecast) {
-    if (prompt.skill) void sendSlashCommand(prompt.skill.name, prompt.skill.args, agentId);
-    else void send(prompt.text, agentId, prompt.files ?? []);
-    return;
-  }
   if (prompt.skill) {
-    void sendSlashCommand(
-      prompt.skill.name,
-      prompt.skill.args,
-      agentId,
-      prompt.successForecast ? { successForecast: prompt.successForecast } : undefined,
-    );
+    void sendSlashCommand(prompt.skill.name, prompt.skill.args, agentId);
   } else {
-    void send(
-      prompt.text,
-      agentId,
-      prompt.files ?? [],
-      prompt.successForecast ? { successForecast: prompt.successForecast } : undefined,
-    );
+    void send(prompt.text, agentId, prompt.files ?? []);
   }
 }
 

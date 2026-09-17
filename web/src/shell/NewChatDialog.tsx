@@ -2420,7 +2420,6 @@ export function NewChatLandingScreen() {
   const [pickedCodexAccessLane, setPickedCodexAccessLane] = useState<CodexAccessLane | null>(
     () => landingDraft?.pickedCodexAccessLane ?? null,
   );
-  const [successProbability, setSuccessProbability] = useState("");
   const [pickedEffort, setPickedEffort] = useState<string>(() => landingDraft?.pickedEffort ?? "");
   // Per-session cost-control switch ("Cost Optimized" pill). Unset
   // (null) defers to the agent spec's default and is omitted from
@@ -4467,9 +4466,6 @@ export function NewChatLandingScreen() {
       // terminal agents keep plain text — their CLI owns slash commands.
       setPendingInitialPrompt(data.id, {
         text: initialPrompt,
-        successForecast: {
-          probability: successProbability === "" ? null : Number(successProbability),
-        },
         skill:
           o3Approved || isNativeTerminalAgent
             ? null
@@ -4907,30 +4903,6 @@ export function NewChatLandingScreen() {
                     </>
                   )}
                 </div>
-                <label
-                  className="flex min-w-0 flex-wrap items-center gap-2 text-xs"
-                  title="Probability this model/configuration accomplishes the requested task on this attempt without a material correction or retry. Optional; leave blank to skip."
-                >
-                  How likely is this model/configuration to accomplish this task on this attempt?
-                  <span className="inline-flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="any"
-                      inputMode="decimal"
-                      aria-label="Success probability (optional)"
-                      value={successProbability}
-                      className="h-9 w-20 rounded border bg-background px-2"
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        if (value === "" || (Number(value) >= 0 && Number(value) <= 100))
-                          setSuccessProbability(value);
-                      }}
-                    />
-                    %
-                  </span>
-                </label>
                 {selectedAgent &&
                   (supportsModelPicker || selectedNativeHarness === "codex-native") &&
                   !sandboxSelected &&

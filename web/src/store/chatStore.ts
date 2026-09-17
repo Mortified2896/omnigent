@@ -144,7 +144,6 @@ import { isSystemUserContent } from "@/lib/systemMessage";
 import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
 
 export interface SendOptions {
-  successForecast?: { probability: number | null };
   /**
    * Fires synchronously after `createSession` returns for a brand-new
    * session (before the first message is posted). Callers use this
@@ -1518,7 +1517,6 @@ function scheduleWorkspaceFilesystemInvalidation(sessionId: string): void {
  * the vendor CLI interprets slash commands itself.
  */
 export interface PendingInitialPrompt {
-  successForecast?: { probability: number | null };
   /** Sanitized full text the user typed, e.g. `"/review-pr 123"`. */
   text: string;
   /** Matched bundled-skill invocation, or `null` for a plain message. */
@@ -2009,7 +2007,6 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
 
       const postResult = await postEvent(sessionId, {
         type: "message",
-        ...(opts?.successForecast ? { success_forecast: opts.successForecast } : {}),
         data: {
           role: "user",
           content: serverContent,
@@ -2186,13 +2183,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
       // message, and forwards the meta to the runner.
       const postResult = await postEvent(sessionId, {
         type: "slash_command",
-        ...(opts?.successForecast ? { success_forecast: opts.successForecast } : {}),
-        data: {
-          kind: "skill",
-          name,
-          arguments: args,
-          stable_id: opts?.stableId ?? crypto.randomUUID().replaceAll("-", ""),
-        },
+        data: { kind: "skill", name, arguments: args },
       });
       if (postResult.denied) {
         // Denied commands publish no receipt, so nothing will pop the

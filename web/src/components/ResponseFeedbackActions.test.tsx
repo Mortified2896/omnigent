@@ -66,67 +66,6 @@ function mount() {
     </QueryClientProvider>,
   );
 }
-it("round trips rating, comment edits, polarity and clear across a fresh query cache", async () => {
-  const view = mount();
-  const good = await screen.findByRole("button", { name: "Good response" });
-  await waitFor(() => expect(good).toBeEnabled());
-  good.focus();
-  expect(document.activeElement).toBe(good);
-  expect(good.tagName).toBe("BUTTON");
-  fireEvent.click(good);
-  await waitFor(() => expect(good).toHaveAttribute("aria-pressed", "true"));
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Useful detail" } });
-  expect(api.mock.calls.filter((call) => call[1]?.method === "PUT")).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
-  await waitFor(() => expect(stored[0]?.comment).toBe("Useful detail"));
-  view.unmount();
-  mount();
-  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Useful detail"));
-  fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Bad response" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    ),
-  );
-  expect(stored).toHaveLength(1);
-  expect(stored[0]?.comment).toBe("Useful detail");
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Revised" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
-  await waitFor(() => expect(stored[0]?.comment).toBe("Revised"));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Clear feedback" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Clear feedback" }));
-  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
-});
-it("keeps confirmed state on failed rating, comment and delete", async () => {
-  stored = [
-    {
-      conversation_id: "session",
-      response_id: "answer",
-      rating: 1,
-      comment: "Saved",
-      created_at: 1,
-      updated_at: 1,
-    },
-  ];
-  mount();
-  await screen.findByRole("textbox");
-  fail = true;
-  fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
-  await screen.findByRole("alert");
-  expect(screen.getByRole("button", { name: "Good response" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Unsaved draft" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save comment" })).toBeEnabled());
-  expect(stored[0]?.comment).toBe("Saved");
-  expect(screen.getByRole("textbox")).toHaveValue("Unsaved draft");
-  fireEvent.click(screen.getByRole("button", { name: "Clear feedback" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Clear feedback" })).toBeEnabled());
-  expect(stored).toHaveLength(1);
-});
 it("only offers feedback for durable completed visible answers", () => {
   const bubble: Bubble = {
     kind: "assistant",
@@ -176,8 +115,6 @@ it("preserves all outcome revisions independently of thumbs across reload", asyn
   }
   /* eslint-enable no-await-in-loop */
   expect(stored).toEqual([]);
-  fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
-  await waitFor(() => expect(stored[0]?.rating).toBe(-1));
   fireEvent.click(screen.getByRole("button", { name: "Success" }));
   await waitFor(() => expect(outcomes.at(-1)?.outcome).toBe("success"));
   expect(outcomes.map((row) => row.outcome)).toEqual([
@@ -187,36 +124,19 @@ it("preserves all outcome revisions independently of thumbs across reload", asyn
     "not_sure",
     "success",
   ]);
-  expect(stored[0].rating).toBe(-1);
+  expect(stored).toEqual([]);
+  expect(screen.queryByRole("button", { name: "Good response" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Bad response" })).toBeNull();
 });
 
-it("reveals only the linked committed forecast in a collapsed audit", async () => {
-  outcomes = [
-    {
-      id: "f",
-      kind: "forecast",
-      attempt_id: "attempt",
-      human_probability: 78,
-      selected_model: "example",
-      selected_reasoning_effort: "low",
-      experiment_source: "synthetic-acceptance",
-    },
-    {
-      id: "s",
-      kind: "o3_shadow",
-      attempt_id: "attempt",
-      forecaster_id: "o3-success-forecast-v1",
-      probability: 65,
-      status: "completed",
-      alternative: { canonical_model: "other", compute_profile: "high", probability: 80 },
-    },
-    { id: "l", kind: "response_link", attempt_id: "attempt", response_id: "answer" },
-  ];
+it("keeps the saved outcome when a revision fails", async () => {
+  outcomes = [{ id: "1", kind: "outcome", response_id: "answer", outcome: "not_sure" }];
   mount();
-  const audit = await screen.findByLabelText("Task experiment audit");
-  expect(audit).not.toHaveAttribute("open");
-  expect(screen.getByText("Human P(success): 78%")).toBeInTheDocument();
-  expect(screen.getByText("O3 P(success): 65%")).toBeInTheDocument();
-  expect(screen.getByText(/other \/ high/)).toBeInTheDocument();
-  expect(screen.getByText(/not a human forecast/)).toBeInTheDocument();
+  const success = screen.getByRole("button", { name: "Success" });
+  await waitFor(() => expect(success).toBeEnabled());
+  fail = true;
+  fireEvent.click(success);
+  await screen.findByRole("alert");
+  expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute("aria-pressed", "true");
+  expect(outcomes).toHaveLength(1);
 });
