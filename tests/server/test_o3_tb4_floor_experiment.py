@@ -89,6 +89,7 @@ def test_exact_tb4_gate_replaces_only_legacy_capability_floor() -> None:
     assert result.eligible_count == 1
     assert result.eligible[0].exclusions == []
     assert result.eligible[0].metadata["tb4_baseline"]["baseline_score"] == 0.40
+    assert result.eligible[0].capability_score_lower == 40.0
 
 
 def test_exact_tb4_floor_excludes_model_below_floor() -> None:
