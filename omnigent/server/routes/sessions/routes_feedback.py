@@ -17,6 +17,8 @@ from omnigent.stores.permission_store import PermissionStore
 
 class OutcomeInput(BaseModel):
     outcome: Outcome
+    comment: str | None = Field(default=None, max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=8)
 
 
 class FeedbackInput(BaseModel):
@@ -93,7 +95,13 @@ def register_feedback_routes(
     async def get_experiment(request: Request, session_id: str) -> list[dict]:
         user = await caller(request, session_id, LEVEL_READ)
         rows = await asyncio.to_thread(list_experiment_events, conversation_store, session_id)
-        return [row for row in rows if row["created_by"] == user]
+        # Human revisions are caller-scoped. Model self-reviews are session-owned
+        # evaluation records and are visible to every caller with READ access.
+        return [
+            row
+            for row in rows
+            if row["created_by"] == user or row.get("kind") == "model_review"
+        ]
 
     @router.put("/sessions/{session_id}/task-outcomes/{response_id}")
     async def put_outcome(
@@ -102,7 +110,16 @@ def register_feedback_routes(
         user = await caller(request, session_id, LEVEL_EDIT)
         try:
             return await asyncio.to_thread(
-                save_outcome, conversation_store, session_id, response_id, user, body.outcome
+                save_outcome,
+                conversation_store,
+                session_id,
+                response_id,
+                user,
+                body.outcome,
+                comment=body.comment,
+                tags=body.tags,
             )
         except InvalidFeedbackTargetError as exc:
             raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
