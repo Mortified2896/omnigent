@@ -107,9 +107,7 @@ const REVIEW_TAGS = [
 ] as const;
 
 function titleCaseOutcome(value: TaskOutcome): string {
-  return value === "not_sure"
-    ? "Not sure"
-    : value.charAt(0).toUpperCase() + value.slice(1);
+  return value === "not_sure" ? "Not sure" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function OutcomeEditor({
@@ -152,7 +150,8 @@ function OutcomeEditor({
 
   const detailsChanged =
     outcome !== undefined &&
-    (comment !== (human?.comment ?? "") || JSON.stringify(tags) !== JSON.stringify(human?.tags ?? []));
+    (comment !== (human?.comment ?? "") ||
+      JSON.stringify(tags) !== JSON.stringify(human?.tags ?? []));
 
   return (
     <div className="order-last flex w-full basis-full flex-col gap-2 py-1" aria-label="Task review">
@@ -200,8 +199,8 @@ function OutcomeEditor({
             onClick={() =>
               mutation.mutate({
                 outcome: option.value,
-                comment: human?.comment ?? null,
-                tags: human?.tags ?? [],
+                comment: comment.trim() || null,
+                tags,
               })
             }
           >
@@ -211,7 +210,10 @@ function OutcomeEditor({
       </div>
 
       {outcome && (
-        <div className="space-y-2 rounded-md border border-border/70 p-2" data-testid="human-review-details">
+        <div
+          className="space-y-2 rounded-md border border-border/70 p-2"
+          data-testid="human-review-details"
+        >
           <textarea
             value={comment}
             maxLength={4000}
@@ -294,9 +296,7 @@ function OutcomeEditor({
               size="sm"
               className="h-8"
               disabled={!detailsChanged || mutation.isPending}
-              onClick={() =>
-                mutation.mutate({ outcome, comment: comment.trim() || null, tags })
-              }
+              onClick={() => mutation.mutate({ outcome, comment: comment.trim() || null, tags })}
             >
               Save details
             </Button>

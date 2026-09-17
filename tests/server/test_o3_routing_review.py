@@ -1935,3 +1935,147 @@ async def test_catalogue_combo_preserves_provider_and_vendor_namespace(
     )
     assert saved[name]["models"][0]["model"] == route
     assert definition["models"][0]["providerId"] == "openrouter"
+
+
+@pytest.mark.parametrize("action", [DecisionAction.APPROVE, DecisionAction.RUN_ANYWAY])
+@pytest.mark.parametrize("score", [None, 0.1])
+async def test_tb4_approval_cannot_reintroduce_legacy_candidate(
+    tmp_path, monkeypatch, action, score
+):
+    from omnigent.server.o3_routing_review import tb4_floor_experiment as tb4
+
+    candidate = _candidate()
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[_evidence(candidate)], candidates=[])
+    service, omni = _service(tmp_path, registry, [candidate], _analysis())
+    proposal = await service.create_proposal(ProposalCreateRequest(prompt="Exact gate"))
+    service.recommendation_catalogue = _recommendation_catalogue()
+
+    async def live():
+        return {"free/model-a"}
+
+    monkeypatch.setattr(omni, "model_ids", live)
+    record = tb4.TB4FloorExperimentResult(
+        experiment_key_sha256="test",
+        user_floor_percent=50,
+        adviser_floor_percent=50,
+        assigned_arm="same",
+        assignment_propensity=1,
+        executed_floor_percent=50,
+        adviser_confidence=1,
+        adviser_rationale="fixture",
+        adviser_requested_model="fixture",
+        adviser_reasoning_effort="low",
+        status="applied",
+    ).model_dump(mode="json")
+    proposal = proposal.model_copy(
+        update={"audit": {**(proposal.audit or {}), "tb4_floor_experiment": record}}
+    )
+    service.store.put(proposal)
+    monkeypatch.setattr(
+        tb4,
+        "_load_baseline",
+        lambda: (
+            {}
+            if score is None
+            else {
+                ("free/model-a", "low"): {"baseline_score": score},
+            }
+        ),
+    )
+    with pytest.raises(RoutingReviewError, match="no structurally usable"):
+        await service.decide_proposal(
+            proposal.proposal_id,
+            ProposalDecisionRequest(
+                action=action,
+                acknowledge_provisional=True,
+                confirm_run_anyway=True,
+                reason="Explicit fixture override",
+            ),
+        )
+    assert omni.created == []
+
+
+async def test_payload_image_requirement_survives_adviser_and_override(tmp_path):
+    candidate = _candidate()
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[_evidence(candidate)], candidates=[])
+    service, _ = _service(
+        tmp_path, registry, [candidate], _analysis(requirements=RoutingRequirements(vision=False))
+    )
+    proposal = await service.create_proposal(
+        ProposalCreateRequest(
+            prompt="Describe this",
+            input_content=[{"type": "input_image", "file_id": "fixture"}],
+        )
+    )
+    assert proposal.adviser.requirements.vision is True
+    from omnigent.server.o3_routing_review.models import RequirementOverrides
+
+    updated = proposal.model_copy(
+        update={"requirement_overrides": RequirementOverrides(image_input=False)}
+    )
+    assert updated.effective_requirements.vision is True
+    assert "image" in updated.effective_requirements.input_modalities
+
+
+async def test_concurrent_floor_requests_run_adviser_once_and_resume(tmp_path, monkeypatch):
+    import asyncio
+
+    from omnigent.server.o3_routing_review import tb4_floor_experiment as tb4
+    from omnigent.server.o3_routing_review.recommendation import recommend
+
+    candidate = _candidate()
+    registry = BenchmarkRegistry(slices=[_SLICE], evidence=[_evidence(candidate)], candidates=[])
+    service, _ = _service(tmp_path, registry, [candidate], _analysis())
+    proposal = await service.create_proposal(ProposalCreateRequest(prompt="One logical task"))
+    recommendation = recommend(
+        _recommendation_catalogue(),
+        difficulty="normal",
+        raw_floor=0.4,
+        live_route_ids={"free/model-a"},
+        requirements=proposal.effective_requirements,
+        reasoning_effort="low",
+    )
+    proposal = proposal.model_copy(update={"recommendation": recommendation})
+    service.store.put(proposal)
+    service.registry.slices.append(_SLICE.model_copy(update={"slice_id": "tb4.overall"}))
+    calls = 0
+
+    async def advice(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.1)
+        return tb4.TB4FloorAdvice(floor_percent=40, confidence=1, rationale="fixture"), {
+            "requested_model": "fixture",
+            "actual_model": "fixture",
+            "actual_provider": "fixture",
+        }
+
+    async def adjust(proposal_id, request):
+        return service.get_proposal(proposal_id)
+
+    monkeypatch.setattr(tb4, "advise_tb4_floor", advice)
+    monkeypatch.setattr(tb4, "_load_baseline", dict)
+    monkeypatch.setattr(service, "adjust_proposal", adjust)
+
+    async def apply():
+        return await tb4.apply_floor_experiment(
+            service,
+            proposal_id=proposal.proposal_id,
+            user_floor_percent=40,
+            experiment_key="logical-task",
+        )
+
+    results = await asyncio.gather(apply(), apply())
+    assert calls == 1
+    assert results[0].audit["tb4_floor_experiment"] == results[1].audit["tb4_floor_experiment"]
+    assert results[0].audit["tb4_floor_experiment"]["assigned_arm"] == "same"
+    assert results[0].audit["tb4_floor_experiment"]["assignment_propensity"] == 1
+    await apply()
+    assert calls == 1
+    with pytest.raises(RoutingReviewError, match="different"):
+        await tb4.apply_floor_experiment(
+            service,
+            proposal_id=proposal.proposal_id,
+            user_floor_percent=41,
+            experiment_key="logical-task",
+        )

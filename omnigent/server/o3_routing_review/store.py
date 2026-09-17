@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +27,16 @@ class ProposalStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or data_dir() / STATE_DIRECTORY_NAME / "state.json"
         self._lock = threading.RLock()
+
+    @contextmanager
+    def _transaction(self) -> Iterator[None]:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, self.path.with_suffix(".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _read(self) -> dict[str, object]:
         if not self.path.exists():
@@ -62,12 +75,38 @@ class ProposalStore:
                 temp.unlink()
 
     def put(self, proposal: RoutingProposal) -> None:
-        with self._lock:
+        with self._transaction():
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
             from .audit import redact
 
+            previous = proposals.get(proposal.proposal_id)
+            if isinstance(previous, dict):
+                old_audit = self._restore(previous, state).get("audit")
+                old = (
+                    old_audit.get("tb4_floor_experiment") if isinstance(old_audit, dict) else None
+                )
+                new = (proposal.audit or {}).get("tb4_floor_experiment")
+                if isinstance(old, dict):
+                    immutable = {
+                        "experiment_key_sha256",
+                        "user_floor_percent",
+                        "adviser_floor_percent",
+                        "assigned_arm",
+                        "assignment_propensity",
+                        "executed_floor_percent",
+                        "policy_version",
+                    }
+                    if not isinstance(new, dict) or any(
+                        key in old and old[key] != new.get(key) for key in immutable
+                    ):
+                        raise ValueError("TB4 treatment is immutable")
+                    ranks = {"pending": 0, "assigned": 1, "applied": 2}
+                    if ranks.get(str(old.get("status")), -1) > ranks.get(
+                        str(new.get("status")), -1
+                    ):
+                        return
             payload = redact(proposal.model_dump(mode="json", exclude={"effective_requirements"}))
             extensions: list[dict[str, object]] = []
 
@@ -144,7 +183,7 @@ class ProposalStore:
     def put_failed_review(self, review_id: str, record: dict[str, object]) -> None:
         from .audit import redact
 
-        with self._lock:
+        with self._transaction():
             state = self._read()
             failed = state.setdefault("failed_reviews", {})
             assert isinstance(failed, dict)
@@ -152,7 +191,7 @@ class ProposalStore:
             self._write(state)
 
     def get_failed_review(self, review_id: str) -> object:
-        with self._lock:
+        with self._transaction():
             failed = self._read().get("failed_reviews", {})
             return failed.get(review_id) if isinstance(failed, dict) else None
 
@@ -185,7 +224,7 @@ class ProposalStore:
         return RoutingProposal.model_validate(adapted)
 
     def get(self, proposal_id: str) -> RoutingProposal | None:
-        with self._lock:
+        with self._transaction():
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)
@@ -193,7 +232,7 @@ class ProposalStore:
             return self._parse(self._restore(raw, state)) if isinstance(raw, dict) else None
 
     def list(self) -> list[RoutingProposal]:
-        with self._lock:
+        with self._transaction():
             state = self._read()
             proposals = state["proposals"]
             assert isinstance(proposals, dict)

@@ -83,9 +83,7 @@ def test_equal_floors_are_not_reported_as_randomized() -> None:
 
 
 def test_exact_tb4_gate_replaces_only_legacy_capability_floor() -> None:
-    row = decision(
-        exclusions=["conservative capability score 61 is below floor 80"]
-    )
+    row = decision(exclusions=["conservative capability score 61 is below floor 80"])
     result = filter_execution_set_for_tb4(
         execution_set(row),
         floor_score=0.35,
@@ -107,9 +105,7 @@ def test_exact_tb4_floor_excludes_model_below_floor() -> None:
         baseline_index={("openai/gpt-test", "high"): baseline(0.40)},
     )
     assert result.eligible_count == 0
-    assert result.excluded[0].exclusions == [
-        "TB4 baseline 0.4 is below exact floor 0.45"
-    ]
+    assert result.excluded[0].exclusions == ["TB4 baseline 0.4 is below exact floor 0.45"]
 
 
 def test_structural_exclusions_are_never_removed_by_tb4_gate() -> None:
@@ -291,3 +287,33 @@ def test_loader_does_not_invent_a_reasoning_configuration(
     row["reasoning_effort"] = effort
     _write_baseline_document(tmp_path, monkeypatch, baselines=[row])
     assert floor_module._load_baseline() == {}
+
+
+def test_concurrent_assignment_reservations_have_one_owner(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from omnigent.server.o3_routing_review.floor_assignment import FloorAssignmentLedger
+
+    path = tmp_path / "assignment.sqlite"
+
+    def reserve(_):
+        return FloorAssignmentLedger(path).reserve("logical-attempt", "same-input")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(reserve, range(16)))
+    assert sum(owner for owner, _ in results) == 1
+    ledger = FloorAssignmentLedger(path)
+    ledger.complete("logical-attempt", "same-input", {"floor": 40})
+    assert ledger.reserve("logical-attempt", "same-input") == (False, {"floor": 40})
+    with pytest.raises(ValueError, match="different treatment"):
+        ledger.reserve("logical-attempt", "changed-input")
+    with pytest.raises(ValueError, match="immutable"):
+        ledger.complete("logical-attempt", "same-input", {"floor": 50})
+
+
+def test_interrupted_assignment_is_not_reowned_after_restart(tmp_path):
+    from omnigent.server.o3_routing_review.floor_assignment import FloorAssignmentLedger
+
+    path = tmp_path / "assignment.sqlite"
+    assert FloorAssignmentLedger(path).reserve("attempt", "input") == (True, None)
+    assert FloorAssignmentLedger(path).reserve("attempt", "input") == (False, None)

@@ -439,12 +439,17 @@ export function createO3RoutingProposal(
   prompt: string,
   workspaceSummary: string,
   estimatorPolicy?: O3EstimatorPolicy,
+  requestFacts?: {
+    logical_attempt_id: string;
+    input_content: { type: string; mime_type: string }[];
+  },
 ): Promise<O3RoutingProposal> {
   return routingRequest(
     "/v1/o3/routing-review/proposals",
     jsonMutation("POST", {
       prompt,
       workspace_summary: workspaceSummary,
+      ...requestFacts,
       ...(estimatorPolicy ? { estimator_policy: estimatorPolicy } : {}),
     }),
   );

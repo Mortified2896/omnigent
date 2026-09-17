@@ -96,7 +96,8 @@ def create_o3_routing_review_router(
             )
         except OmniRouteError as exc:
             raise RoutingReviewError(
-                "OmniRoute is temporarily unavailable while preparing the route review; try again.",
+                "OmniRoute is temporarily unavailable while preparing the route review; "
+                "try again.",
                 status_code=503,
                 code="omniroute_unavailable",
             ) from exc
@@ -121,7 +122,7 @@ def create_o3_routing_review_router(
         service = service_for(request)
         proposal = service.get_proposal(proposal_id)
         experiment = (proposal.audit or {}).get("tb4_floor_experiment")
-        if isinstance(experiment, dict) and experiment.get("status") == "applied":
+        if isinstance(experiment, dict):
             raise RoutingReviewError(
                 "exact TB4 floor assignments are immutable; create a new routing review",
                 status_code=409,
@@ -140,12 +141,18 @@ def create_o3_routing_review_router(
         body: TB4FloorExperimentRequest,
     ) -> RoutingProposal:
         service = service_for(request)
+        original = (service.get_proposal(proposal_id).audit or {}).get("input", {})
+        logical_id = original.get("logical_attempt_id") if isinstance(original, dict) else None
+        if not isinstance(logical_id, str) or not logical_id:
+            raise RoutingReviewError(
+                "Create a new proposal with a stable logical attempt identity", status_code=409
+            )
         try:
             return await apply_floor_experiment(
                 service,
                 proposal_id=proposal_id,
                 user_floor_percent=body.user_floor_percent,
-                experiment_key=proposal_id,
+                experiment_key=logical_id,
             )
         except OmniRouteError as exc:
             raise RoutingReviewError(

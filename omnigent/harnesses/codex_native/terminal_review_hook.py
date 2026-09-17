@@ -12,7 +12,12 @@ import asyncio
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
+
+
+class _ClearTurn(Protocol):
+    def __call__(self, bridge_dir: Path, completed_turn_id: str | None) -> bool: ...
+
 
 _logger = logging.getLogger(__name__)
 _review_tasks: set[asyncio.Task[bool]] = set()
@@ -108,4 +113,4 @@ def uninstall_self_review_hook_for_tests() -> None:
     current: Any = bridge.clear_active_turn_id_if_matches
     original = getattr(current, _ORIGINAL_ATTR, None)
     if callable(original):
-        bridge.clear_active_turn_id_if_matches = original
+        bridge.clear_active_turn_id_if_matches = cast(_ClearTurn, original)

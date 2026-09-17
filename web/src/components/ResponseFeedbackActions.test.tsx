@@ -82,10 +82,11 @@ it("preserves all outcome revisions across reload", async () => {
   let view = mount();
   /* eslint-disable no-await-in-loop */
   for (const name of ["Success", "Partial", "Failed", "Not sure"]) {
-    const button = screen.getByRole("button", { name });
-    await waitFor(() => expect(button).toBeEnabled());
-    fireEvent.click(button);
-    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true"),
+    );
     view.unmount();
     view = mount();
     await waitFor(() =>
@@ -164,20 +165,45 @@ it("shows model self-review separately from the human outcome", async () => {
   expect(model).toHaveTextContent("Model self-review");
   expect(model).toHaveTextContent("Success");
   expect(model).toHaveTextContent("86%");
-  expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute("aria-pressed", "true");
 });
 
 it("keeps the saved outcome when a revision fails", async () => {
   outcomes = [{ id: "1", kind: "outcome", response_id: "answer", outcome: "not_sure" }];
   mount();
-  const success = screen.getByRole("button", { name: "Success" });
-  await waitFor(() => expect(success).toBeEnabled());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Success" })).toBeEnabled());
   fail = true;
-  fireEvent.click(success);
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute("aria-pressed", "true");
   expect(outcomes).toHaveLength(1);
+});
+
+it("keeps unsaved comment and tags when changing the outcome", async () => {
+  outcomes = [
+    {
+      id: "initial",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "Old",
+      tags: [],
+    },
+  ];
+  mount();
+  const comment = await screen.findByRole("textbox", { name: "Task review comment" });
+  fireEvent.change(comment, { target: { value: "Unsaved detail" } });
+  fireEvent.click(screen.getByRole("button", { name: "Tests/verification" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Custom task review tag" }), {
+    target: { value: "Custom" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
+  await waitFor(() =>
+    expect(outcomes.at(-1)).toMatchObject({
+      outcome: "success",
+      comment: "Unsaved detail",
+      tags: ["Tests/verification", "Custom"],
+    }),
+  );
 });

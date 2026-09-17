@@ -484,7 +484,10 @@ class RoutingProposal(StrictModel):
     @computed_field
     @property
     def effective_requirements(self) -> RoutingRequirements:
-        return self.requirement_overrides.resolve(self.adviser.requirements)
+        requirements = self.requirement_overrides.resolve(self.adviser.requirements)
+        original = (self.audit or {}).get("input", {})
+        content = original.get("input_content", []) if isinstance(original, dict) else []
+        return requirements_with_input_facts(requirements, content)
 
     adviser_exchanges: list[AdviserExchange] = Field(default_factory=list)
     adviser_mode: Literal["model", "local_rule", "unknown"] = "unknown"
@@ -512,10 +515,32 @@ class RoutingProposal(StrictModel):
     resource_advice: ResourceAdvice | None = None
 
 
+def requirements_with_input_facts(
+    requirements: RoutingRequirements,
+    content: list[dict[str, object]],
+) -> RoutingRequirements:
+    """Payload facts survive both adviser inference and manual overrides."""
+    has_image = any(
+        block.get("type") in {"image", "input_image"}
+        or str(block.get("mime_type", "")).startswith("image/")
+        for block in content
+    )
+    if not has_image:
+        return requirements
+    return requirements.model_copy(
+        update={
+            "vision": True,
+            "input_modalities": list(dict.fromkeys([*requirements.input_modalities, "image"])),
+        }
+    )
+
+
 class ProposalCreateRequest(StrictModel):
     prompt: str = Field(min_length=1, max_length=200_000)
     workspace_summary: str = Field(default="", max_length=20_000)
     estimator_policy: EstimatorPolicy | None = None
+    logical_attempt_id: str | None = Field(default=None, min_length=1, max_length=256)
+    input_content: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ProposalAdjustmentRequest(StrictModel):

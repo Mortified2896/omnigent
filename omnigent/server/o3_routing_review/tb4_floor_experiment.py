@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -23,6 +24,7 @@ from .models import (
     RoutingProposal,
 )
 from .recommendation import CATALOG_DIR_ENV
+from .registry import ADVISER_COMBO_NAME
 
 if TYPE_CHECKING:
     from .service import O3RoutingReviewService
@@ -69,12 +71,12 @@ def _key_digest(experiment_key: str) -> str:
 
 def choose_arm(
     experiment_key: str, user_floor_percent: float, adviser_floor_percent: float
-) -> tuple[str, float, float]:
+) -> tuple[Literal["user", "adviser", "same"], float, float]:
     """Return a deterministic 50/50 assignment for a stable logical task identity."""
     if user_floor_percent == adviser_floor_percent:
         return "same", 1.0, user_floor_percent
     digest = hashlib.sha256(f"{POLICY_VERSION}:{experiment_key}".encode()).digest()
-    arm = "user" if digest[0] < 128 else "adviser"
+    arm: Literal["user", "adviser", "same"] = "user" if digest[0] < 128 else "adviser"
     chosen = user_floor_percent if arm == "user" else adviser_floor_percent
     return arm, 0.5, chosen
 
@@ -223,11 +225,7 @@ def _load_baseline() -> dict[tuple[str, str], dict[str, Any]]:
         if not isinstance(effort_value, str):
             continue
         effort = effort_value.strip().lower()
-        if (
-            not model
-            or effort in {"", "default", "unknown"}
-            or _baseline_score(row) is None
-        ):
+        if not model or effort in {"", "default", "unknown"} or _baseline_score(row) is None:
             continue
         for key in {model, model.split("/")[-1]}:
             lookup = (key, effort)
@@ -252,7 +250,11 @@ def _baseline_for(
     forecast = metadata.get("forecast") if isinstance(metadata.get("forecast"), dict) else {}
     if forecast.get("estimate_method") == "opaque_alias_hypothesis":
         return None
-    route_effort = str(forecast.get("reasoning_mode") or decision.reasoning_mode or "default").lower()
+    route_effort = str(
+        forecast.get("reasoning_mode") or decision.reasoning_mode or "default"
+    ).lower()
+    if route_effort != "default" and route_effort != requested_effort.lower():
+        return None
     effort = requested_effort.lower() if route_effort == "default" else route_effort
     matched: dict[str, Any] | None = None
     for key in _model_keys(decision):
@@ -286,13 +288,9 @@ def filter_execution_set_for_tb4(
 
     for decision in all_rows:
         reasons = [
-            reason
-            for reason in decision.exclusions
-            if not reason.startswith(LEGACY_FLOOR_PREFIX)
+            reason for reason in decision.exclusions if not reason.startswith(LEGACY_FLOOR_PREFIX)
         ]
-        baseline = _baseline_for(
-            decision, requested_effort=requested_effort, index=index
-        )
+        baseline = _baseline_for(decision, requested_effort=requested_effort, index=index)
         metadata = dict(decision.metadata or {})
         if baseline is None:
             reasons.append("TB4 model/effort baseline is unavailable")
@@ -302,9 +300,7 @@ def filter_execution_set_for_tb4(
             metadata["tb4_baseline"] = redact(baseline)
             metadata["tb4_floor_score"] = floor_score
             if score < floor_score:
-                reasons.append(
-                    f"TB4 baseline {score:.6g} is below exact floor {floor_score:.6g}"
-                )
+                reasons.append(f"TB4 baseline {score:.6g} is below exact floor {floor_score:.6g}")
         updated = decision.model_copy(
             update={
                 "metadata": metadata,
@@ -341,6 +337,53 @@ def filter_execution_set_for_tb4(
     )
 
 
+def enforce_assigned_floor(proposal: RoutingProposal) -> RoutingProposal:
+    """Reapply immutable treatment after refresh and at execution admission."""
+    from .service import RoutingReviewError
+
+    record = (proposal.audit or {}).get("tb4_floor_experiment")
+    if record is None:
+        return proposal
+    if not isinstance(record, dict) or record.get("status") != "applied":
+        raise RoutingReviewError("TB4 treatment is not fully applied", status_code=409)
+    recommendation = proposal.recommendation
+    if recommendation is None or recommendation.execution_set is None:
+        raise RoutingReviewError("TB4 execution evidence is unavailable", status_code=409)
+    try:
+        treatment = TB4FloorExperimentResult.model_validate(
+            {
+                key: value
+                for key, value in record.items()
+                if key in TB4FloorExperimentResult.model_fields
+            }
+        )
+        filtered = filter_execution_set_for_tb4(
+            recommendation.execution_set,
+            floor_score=treatment.executed_floor_percent / 100,
+            requested_effort=proposal.approved_constraints.reasoning_effort,
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        raise RoutingReviewError("TB4 execution evidence is unavailable", status_code=409) from exc
+    eligible = {item.route_id for item in filtered.eligible}
+    selected = proposal.selected_execution
+    return proposal.model_copy(
+        update={
+            "recommendation": recommendation.model_copy(
+                update={
+                    "execution_set": filtered,
+                    "common_capability_floor": 0.0,
+                }
+            ),
+            "execution_options": [
+                item for item in proposal.execution_options if item.route in eligible
+            ],
+            "selected_execution": selected
+            if selected is not None and selected.route in eligible
+            else None,
+        }
+    )
+
+
 async def apply_floor_experiment(
     service: O3RoutingReviewService,
     *,
@@ -352,6 +395,10 @@ async def apply_floor_experiment(
     from .service import RoutingReviewError
 
     proposal = service.get_proposal(proposal_id)
+    if proposal.decision is not None and proposal.decision.value != "wait":
+        raise RoutingReviewError(
+            "Cannot assign treatment after an execution decision", status_code=409
+        )
     audit = dict(proposal.audit or {})
     input_record = audit.get("input")
     if not isinstance(input_record, dict):
@@ -371,10 +418,9 @@ async def apply_floor_experiment(
     existing = audit.get("tb4_floor_experiment")
     key_sha = _key_digest(experiment_key)
     if isinstance(existing, dict):
-        if (
-            existing.get("experiment_key_sha256") != key_sha
-            or float(existing.get("user_floor_percent", -1)) != float(user_floor_percent)
-        ):
+        if existing.get("experiment_key_sha256") != key_sha or float(
+            existing.get("user_floor_percent", -1)
+        ) != float(user_floor_percent):
             raise RoutingReviewError(
                 "this proposal already has a different TB4 floor experiment",
                 status_code=409,
@@ -382,28 +428,77 @@ async def apply_floor_experiment(
             )
         if existing.get("status") == "applied":
             return proposal
+        if existing.get("status") == "pending":
+            existing = None
+    if isinstance(existing, dict):
         adviser_floor = float(existing["adviser_floor_percent"])
-        assigned_arm = str(existing["assigned_arm"])
+        assigned_arm = TB4FloorExperimentResult.model_validate(
+            {
+                key: value
+                for key, value in existing.items()
+                if key in TB4FloorExperimentResult.model_fields
+            }
+        ).assigned_arm
         propensity = float(existing["assignment_propensity"])
         executed_floor = float(existing["executed_floor_percent"])
     else:
         model = (
             proposal.estimator.combo_name
             if proposal.estimator is not None and proposal.estimator.combo_name
-            else os.environ.get(ADVISER_MODEL_ENV, "custom/o3-routing-adviser")
+            else os.environ.get(ADVISER_MODEL_ENV, ADVISER_COMBO_NAME)
         )
         effort = (
-            proposal.estimator.policy.reasoning_effort
-            if proposal.estimator is not None
-            else "low"
+            proposal.estimator.policy.reasoning_effort if proposal.estimator is not None else "low"
         )
-        advice, attribution = await advise_tb4_floor(
-            service,
-            prompt=prompt,
-            workspace_summary=workspace_summary,
-            model=model,
-            reasoning_effort=effort,
+        audit["tb4_floor_experiment"] = {
+            "experiment_key_sha256": key_sha,
+            "user_floor_percent": user_floor_percent,
+            "status": "pending",
+        }
+        service.store.put(
+            snapshot(proposal.model_copy(update={"audit": audit}), "TB4 assignment pending")
         )
+        from .floor_assignment import FloorAssignmentLedger
+
+        ledger = FloorAssignmentLedger(service.store.path.with_suffix(".tb4.sqlite"))
+        fingerprint = _key_digest(
+            json.dumps(
+                {
+                    "input": input_record,
+                    "user_floor_percent": user_floor_percent,
+                    "effort": effort,
+                },
+                sort_keys=True,
+            )
+        )
+        # Reserve before inference. An interrupted owner is never rerun implicitly.
+        deadline = asyncio.get_running_loop().time() + 60
+        while True:
+            try:
+                owner, saved = await asyncio.to_thread(ledger.reserve, key_sha, fingerprint)
+            except ValueError as exc:
+                raise RoutingReviewError(str(exc), status_code=409) from exc
+            if owner or saved is not None:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RoutingReviewError(
+                    "TB4 assignment is pending or interrupted; no second adviser call was made",
+                    status_code=409,
+                )
+            await asyncio.sleep(0.05)
+        if saved is None:
+            advice, attribution = await advise_tb4_floor(
+                service,
+                prompt=prompt,
+                workspace_summary=workspace_summary,
+                model=model,
+                reasoning_effort=effort,
+            )
+            saved = {"advice": advice.model_dump(mode="json"), "attribution": attribution}
+            await asyncio.to_thread(ledger.complete, key_sha, fingerprint, saved)
+        else:
+            advice = TB4FloorAdvice.model_validate(saved["advice"])
+            attribution = saved["attribution"]
         adviser_floor = advice.floor_percent
         assigned_arm, propensity, executed_floor = choose_arm(
             experiment_key, user_floor_percent, adviser_floor
@@ -417,7 +512,7 @@ async def apply_floor_experiment(
             executed_floor_percent=executed_floor,
             adviser_confidence=advice.confidence,
             adviser_rationale=advice.rationale,
-            adviser_requested_model=model,
+            adviser_requested_model=attribution["requested_model"] or model,
             adviser_actual_model=attribution["actual_model"],
             adviser_actual_provider=attribution["actual_provider"],
             adviser_reasoning_effort=effort,
@@ -486,11 +581,13 @@ async def apply_floor_experiment(
     )
     disposition = Disposition.ROUTE if filtered.eligible_count else Disposition.DEFER
     final_audit = dict(adjusted.audit or {})
-    record = dict(final_audit.get("tb4_floor_experiment") or audit["tb4_floor_experiment"])
-    record["status"] = "applied"
-    record["eligible_count"] = filtered.eligible_count
-    record["baseline_policy_version"] = "tb4-model-effort-baseline-v1"
-    final_audit["tb4_floor_experiment"] = record
+    raw_record = final_audit.get("tb4_floor_experiment") or audit["tb4_floor_experiment"]
+    assert isinstance(raw_record, dict)
+    final_record: dict[str, object] = dict(raw_record)
+    final_record["status"] = "applied"
+    final_record["eligible_count"] = filtered.eligible_count
+    final_record["baseline_policy_version"] = "tb4-model-effort-baseline-v1"
+    final_audit["tb4_floor_experiment"] = final_record
     updated = adjusted.model_copy(
         update={
             "audit": final_audit,

@@ -401,6 +401,16 @@ class O3RoutingReviewService:
                     else None,
                 }
             )
+        from .models import requirements_with_input_facts
+
+        analysis = analysis.model_copy(
+            update={
+                "requirements": requirements_with_input_facts(
+                    analysis.requirements,
+                    request.input_content,
+                )
+            }
+        )
         self._validate_analysis(analysis)
         original_analysis = analysis.model_copy(deep=True)
         selection = analysis.benchmark_requirements[0]
@@ -809,8 +819,52 @@ class O3RoutingReviewService:
         self, proposal_id: str, request: ProposalDecisionRequest
     ) -> RoutingProposal:
         proposal = self._require(proposal_id)
+        from .tb4_floor_experiment import enforce_assigned_floor
+
+        if request.action in {DecisionAction.APPROVE, DecisionAction.RUN_ANYWAY} and (
+            (proposal.audit or {}).get("tb4_floor_experiment") is not None
+        ):
+            if self.recommendation_catalogue is not None:
+                proposal = proposal.model_copy(
+                    update={
+                        "recommendation": recommend(
+                            self.recommendation_catalogue,
+                            difficulty=proposal.approved_constraints.difficulty,
+                            raw_floor=proposal.approved_constraints.benchmark.minimum_score,
+                            live_route_ids=await self.omniroute.model_ids(),
+                            requirements=proposal.effective_requirements,
+                            reasoning_effort=proposal.approved_constraints.reasoning_effort,
+                        )
+                    }
+                )
+            proposal = enforce_assigned_floor(proposal)
         if proposal.decision is not None and proposal.decision is not DecisionAction.WAIT:
             if proposal.decision is request.action:
+                if request.action in {DecisionAction.APPROVE, DecisionAction.RUN_ANYWAY} and (
+                    (proposal.audit or {}).get("tb4_floor_experiment") is not None
+                ):
+                    assert proposal.recommendation is not None
+                    assert proposal.recommendation.execution_set is not None
+                    allowed = {
+                        item.route_id for item in proposal.recommendation.execution_set.eligible
+                    }
+                    definition = proposal.derived_combo_definition or {}
+                    targets = definition.get("models", [])
+                    if proposal.derived_combo_name is not None and (
+                        not isinstance(targets, list)
+                        or not targets
+                        or any(
+                            not isinstance(item, dict) or item.get("model") not in allowed
+                            for item in targets
+                        )
+                    ):
+                        raise RoutingReviewError(
+                            "Approved Combo no longer meets TB4 admission", status_code=409
+                        )
+                    if proposal.derived_combo_name is None and proposal.selected_execution is None:
+                        raise RoutingReviewError(
+                            "Approved route no longer meets TB4 admission", status_code=409
+                        )
                 return proposal
             raise RoutingReviewError("proposal already has a different decision", status_code=409)
         if request.action in {DecisionAction.DECLINE, DecisionAction.DEFER, DecisionAction.WAIT}:
@@ -828,6 +882,7 @@ class O3RoutingReviewService:
             return updated
 
         proposal = await self._with_execution_options(proposal)
+        proposal = enforce_assigned_floor(proposal)
         execution = proposal.selected_execution
         if execution is not None and execution.mode is ExecutionMode.HARD_TOOL_FREE:
             if request.action is DecisionAction.RUN_ANYWAY:
@@ -876,6 +931,11 @@ class O3RoutingReviewService:
                         preference=proposal.approved_constraints.cost_quota_preference,
                     )
                     continue
+                proposal = enforce_assigned_floor(proposal)
+                if proposal.selected_execution is None:
+                    raise RoutingReviewError(
+                        "Selected route no longer meets TB4 admission", status_code=409
+                    )
                 updated = proposal.model_copy(
                     update={
                         "decision": request.action,
@@ -931,6 +991,10 @@ class O3RoutingReviewService:
                 reasoning_effort=proposal.approved_constraints.reasoning_effort,
             )
             proposal = proposal.model_copy(update={"recommendation": refreshed})
+        proposal = enforce_assigned_floor(proposal)
+        if (proposal.audit or {}).get("tb4_floor_experiment") is not None:
+            # Legacy evaluations cannot substitute for exact model/effort evidence.
+            selected = []
         catalogue_set = proposal.recommendation.execution_set if proposal.recommendation else None
         catalogue_selected = catalogue_set.eligible if catalogue_set is not None else []
         from .tool_search import qualified_route, read_capabilities
@@ -1008,6 +1072,20 @@ class O3RoutingReviewService:
                     if proposal.audit is not None:
                         proposal.audit["approval_route_checks"] = getattr(
                             checked_route, "checks", None
+                        )
+                proposal = enforce_assigned_floor(proposal)
+                if (proposal.audit or {}).get("tb4_floor_experiment") is not None:
+                    assert proposal.recommendation is not None
+                    assert proposal.recommendation.execution_set is not None
+                    allowed = {
+                        item.route_id for item in proposal.recommendation.execution_set.eligible
+                    }
+                    catalogue_selected = [
+                        item for item in catalogue_selected if item.route_id in allowed
+                    ]
+                    if not catalogue_selected:
+                        raise RoutingReviewError(
+                            "No route meets the exact TB4 floor", status_code=409
                         )
                 combo_name, combo_definition = await self.omniroute.create_catalogue_combo(
                     proposal.proposal_id,

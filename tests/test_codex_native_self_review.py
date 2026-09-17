@@ -106,62 +106,23 @@ def _successful_events(*, include_tool: bool = False) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_self_review_forks_exact_turn_read_only_and_reports_cache(monkeypatch) -> None:
-    fake = _FakeCodexClient(_successful_events())
-    monkeypatch.setattr(sr, "client_for_transport", lambda *_args, **_kwargs: fake)
+@pytest.mark.parametrize("include_tool", [False, True])
+async def test_self_review_fails_before_connect_or_fork(monkeypatch, include_tool) -> None:
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unsafe reviewer must not connect or issue any protocol request")
 
+    monkeypatch.setattr(sr, "client_for_transport", forbidden, raising=False)
     result = await sr.run_self_review(
         socket_path="/tmp/app-server.sock",
         parent_thread_id="thread_primary",
         primary_turn_id="turn_primary",
         timeout_seconds=1,
     )
-
-    assert result is not None
-    assert result.review.outcome == "success"
-    assert result.review.confidence == pytest.approx(0.86)
-    assert result.usage.input_tokens == 1200
-    assert result.usage.cache_read_tokens == 1100
-    assert result.usage.cache_write_tokens == 25
-    assert result.model == "gpt-5.6-sol"
-    assert result.reasoning_effort == "high"
-
-    fork_method, fork = fake.requests[0]
-    assert fork_method == "thread/fork"
-    assert fork == {
-        "threadId": "thread_primary",
-        "lastTurnId": "turn_primary",
-        "ephemeral": True,
-        "sandbox": "read-only",
-        "approvalPolicy": "never",
-        "excludeTurns": True,
-    }
-    start_method, start = fake.requests[1]
-    assert start_method == "turn/start"
-    assert start["threadId"] == "thread_review"
-    assert start["approvalPolicy"] == "never"
-    assert "outputSchema" in start
-    assert fake.closed is True
-
-
-@pytest.mark.asyncio
-async def test_self_review_discards_tool_using_evaluator(monkeypatch) -> None:
-    fake = _FakeCodexClient(_successful_events(include_tool=True))
-    monkeypatch.setattr(sr, "client_for_transport", lambda *_args, **_kwargs: fake)
-
-    result = await sr.run_self_review(
-        socket_path="/tmp/app-server.sock",
-        parent_thread_id="thread_primary",
-        primary_turn_id="turn_primary",
-        timeout_seconds=1,
-    )
-
     assert result is None
-    assert fake.closed is True
 
 
 def test_missing_usage_stays_unknown_not_zero() -> None:
-    usage = sr._usage_from_params(  # noqa: SLF001 - focused protocol regression.
+    usage = sr._usage_from_params(
         {
             "threadId": "thread_review",
             "turnId": "turn_review",

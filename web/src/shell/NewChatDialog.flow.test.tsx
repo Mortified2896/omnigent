@@ -193,6 +193,16 @@ function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingPr
     updated_at: "2026-09-04T00:00:00Z",
     expires_at: "2026-09-04T01:00:00Z",
     prompt_fingerprint: `sha256:${"0".repeat(64)}`,
+    audit: {
+      tb4_floor_experiment: {
+        status: "applied",
+        user_floor_percent: 40,
+        adviser_floor_percent: 40,
+        executed_floor_percent: 40,
+        assigned_arm: "same",
+        assignment_propensity: 1,
+      },
+    },
     workspace_summary: `Workspace: ${SEEDED_WORKSPACE}`,
     adviser: {
       task_summary: "Inspect the repository",
@@ -524,6 +534,13 @@ describe("NewChatLandingScreen create flow", () => {
       expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
       fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
       expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
+      if (lane === "native") {
+        const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+        expect(input).not.toBeNull();
+        fireEvent.change(input!, {
+          target: { files: [new File(["fixture"], "image.png", { type: "image/png" })] },
+        });
+      }
       typeMessage("inspect the repo without changing it");
       fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -538,7 +555,12 @@ describe("NewChatLandingScreen create flow", () => {
       expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
         "inspect the repo without changing it",
       );
-      expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
+      const proposalBody = JSON.parse(proposalCall?.[1]?.body as string);
+      expect(proposalBody.estimator_policy).toBeUndefined();
+      expect(proposalBody.logical_attempt_id).toEqual(expect.any(String));
+      expect(proposalBody.input_content).toEqual(
+        lane === "native" ? [{ type: "input_image", mime_type: "image/png" }] : [],
+      );
 
       fireEvent.click(screen.getByTestId("o3-approve"));
 
@@ -569,7 +591,7 @@ describe("NewChatLandingScreen create flow", () => {
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
         text: "inspect the repo without changing it",
         skill: null,
-        files: [],
+        files: lane === "native" ? [expect.any(File)] : [],
       });
       const linkCall = vi
         .mocked(authenticatedFetch)
