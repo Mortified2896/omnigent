@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections import Counter
 from pathlib import Path
@@ -70,7 +71,7 @@ def choose_arm(
     experiment_key: str, user_floor_percent: float, adviser_floor_percent: float
 ) -> tuple[str, float, float]:
     """Return a deterministic 50/50 assignment for a stable logical task identity."""
-    if abs(user_floor_percent - adviser_floor_percent) < 1e-9:
+    if user_floor_percent == adviser_floor_percent:
         return "same", 1.0, user_floor_percent
     digest = hashlib.sha256(f"{POLICY_VERSION}:{experiment_key}".encode()).digest()
     arm = "user" if digest[0] < 128 else "adviser"
@@ -153,7 +154,6 @@ def _model_keys(decision: CatalogueExecutionDecision) -> list[str]:
     forecast = metadata.get("forecast") if isinstance(metadata.get("forecast"), dict) else {}
     values = [
         forecast.get("canonical_live_model"),
-        forecast.get("inferred_base_checkpoint"),
         forecast.get("display_model_alias"),
         decision.displayed_model,
         decision.route_id,
@@ -169,24 +169,65 @@ def _model_keys(decision: CatalogueExecutionDecision) -> list[str]:
     return result
 
 
+def _unit_score(value: object) -> float | None:
+    """Reject percentages, booleans and non-finite values at the admission boundary."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    score = float(value)
+    return score if math.isfinite(score) and 0.0 <= score <= 1.0 else None
+
+
+def _baseline_score(row: dict[str, Any]) -> float | None:
+    score = _unit_score(row.get("baseline_score"))
+    if score is None:
+        return None
+    if "baseline_percent" in row:
+        percent = row["baseline_percent"]
+        if (
+            isinstance(percent, bool)
+            or not isinstance(percent, (int, float))
+            or not math.isfinite(percent)
+            or not math.isclose(percent, score * 100.0, rel_tol=0.0, abs_tol=1e-4)
+        ):
+            return None
+    return score
+
+
 def _load_baseline() -> dict[tuple[str, str], dict[str, Any]]:
     directory = os.environ.get(CATALOG_DIR_ENV)
     if not directory:
         raise ValueError(f"{CATALOG_DIR_ENV} is required for TB4 floor routing")
     path = Path(directory) / BASELINE_FILENAME
     document = json.loads(path.read_text())
-    if document.get("schema_version") != 1 or document.get("policy_version") != (
-        "tb4-model-effort-baseline-v1"
+    expected = {
+        "schema_version": 1,
+        "policy_version": "tb4-model-effort-baseline-v1",
+        "benchmark_id": "terminal-bench",
+        "benchmark_version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "score_scale": "0..1",
+    }
+    if not isinstance(document, dict) or any(
+        document.get(key) != value for key, value in expected.items()
     ):
-        raise ValueError("unsupported TB4 model/effort baseline")
+        raise ValueError("unsupported TB4 model/effort baseline or score scale")
+    if not isinstance(document.get("baselines"), list):
+        raise ValueError("TB4 model/effort baselines must be an array")
     index: dict[tuple[str, str], dict[str, Any]] = {}
     ambiguous: set[tuple[str, str]] = set()
     for row in document.get("baselines", []):
         if not isinstance(row, dict):
             continue
         model = _normalise_model(row.get("canonical_model"))
-        effort = str(row.get("reasoning_effort") or "default").lower()
-        if not model or not isinstance(row.get("baseline_score"), (int, float)):
+        effort_value = row.get("reasoning_effort")
+        if not isinstance(effort_value, str):
+            continue
+        effort = effort_value.strip().lower()
+        if (
+            not model
+            or effort in {"", "default", "unknown"}
+            or _baseline_score(row) is None
+        ):
             continue
         for key in {model, model.split("/")[-1]}:
             lookup = (key, effort)
@@ -209,13 +250,22 @@ def _baseline_for(
 ) -> dict[str, Any] | None:
     metadata = decision.metadata if isinstance(decision.metadata, dict) else {}
     forecast = metadata.get("forecast") if isinstance(metadata.get("forecast"), dict) else {}
+    if forecast.get("estimate_method") == "opaque_alias_hypothesis":
+        return None
     route_effort = str(forecast.get("reasoning_mode") or decision.reasoning_mode or "default").lower()
     effort = requested_effort.lower() if route_effort == "default" else route_effort
+    matched: dict[str, Any] | None = None
     for key in _model_keys(decision):
         row = index.get((key, effort))
-        if row is not None:
-            return row
-    return None
+        if row is None:
+            continue
+        if _baseline_score(row) is None:
+            return None
+        if matched is not None and matched != row:
+            # Conflicting canonical/alias matches are not interchangeable evidence.
+            return None
+        matched = row
+    return matched
 
 
 def filter_execution_set_for_tb4(
@@ -226,7 +276,9 @@ def filter_execution_set_for_tb4(
     baseline_index: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> CatalogueExecutionSet:
     """Replace the legacy normalized floor exclusion with exact TB4 baseline admission."""
-    index = baseline_index or _load_baseline()
+    if _unit_score(floor_score) is None:
+        raise ValueError("TB4 floor must be a finite number on the 0..1 scale")
+    index = _load_baseline() if baseline_index is None else baseline_index
     eligible: list[CatalogueExecutionDecision] = []
     excluded: list[CatalogueExecutionDecision] = []
     counts: Counter[str] = Counter()
