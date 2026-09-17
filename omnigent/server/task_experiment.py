@@ -15,6 +15,9 @@ from omnigent.stores.conversation_store import ConversationStore
 
 RESOURCE_TYPE = "task-success-experiment"
 Outcome = Literal["success", "partial", "failed", "not_sure"]
+MAX_COMMENT_LENGTH = 4000
+MAX_TAGS = 8
+MAX_TAG_LENGTH = 64
 
 
 class HumanForecast(BaseModel):
@@ -28,6 +31,28 @@ class HumanForecast(BaseModel):
 
 def first_attempt_success(outcome: Outcome) -> int | None:
     return None if outcome == "not_sure" else int(outcome == "success")
+
+
+def normalize_tags(tags: list[str] | None) -> list[str]:
+    """Normalize small human/model tag sets while preserving display spelling."""
+    if tags is None:
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in tags:
+        tag = " ".join(value.split()).strip()
+        if not tag:
+            continue
+        if len(tag) > MAX_TAG_LENGTH:
+            raise ValueError(f"Task outcome tags may be at most {MAX_TAG_LENGTH} characters")
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(tag)
+        if len(result) > MAX_TAGS:
+            raise ValueError(f"Task outcomes may contain at most {MAX_TAGS} tags")
+    return result
 
 
 def experiment_item(
@@ -98,11 +123,23 @@ def content_digest(content: list[dict]) -> str:
 
 
 def save_outcome(
-    store: ConversationStore, conversation_id: str, response_id: str, actor: str, outcome: Outcome
+    store: ConversationStore,
+    conversation_id: str,
+    response_id: str,
+    actor: str,
+    outcome: Outcome,
+    *,
+    comment: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict:
-    """Append a revision independently of subjective response feedback."""
+    """Append a complete human-review revision independently of subjective feedback."""
     from omnigent.entities.conversation import MessageData
     from omnigent.stores.conversation_store import InvalidFeedbackTargetError
+
+    if comment is not None and len(comment) > MAX_COMMENT_LENGTH:
+        raise ValueError(f"Task outcome comments may be at most {MAX_COMMENT_LENGTH} characters")
+    normalized_comment = comment.strip() if isinstance(comment, str) else None
+    normalized_tags = normalize_tags(tags)
 
     after = None
     eligible = False
@@ -144,6 +181,9 @@ def save_outcome(
                 payload={
                     "outcome": outcome,
                     "first_attempt_success": first_attempt_success(outcome),
+                    "comment": normalized_comment,
+                    "tags": normalized_tags,
+                    "review_source": "human",
                 },
             )
         ],
@@ -155,6 +195,64 @@ def save_outcome(
         "response_id": response_id,
         "created_at": item.created_at,
         "created_by": actor,
+    }
+
+
+def save_model_review(
+    store: ConversationStore,
+    conversation_id: str,
+    response_id: str,
+    *,
+    outcome: Outcome,
+    confidence: float,
+    comment: str,
+    tags: list[str],
+    evidence: list[str],
+    provenance: dict,
+) -> dict:
+    """Persist one model self-review without changing the human outcome."""
+    if not 0 <= confidence <= 1:
+        raise ValueError("Model-review confidence must be between 0 and 1")
+    if len(comment) > MAX_COMMENT_LENGTH:
+        raise ValueError(f"Model-review comments may be at most {MAX_COMMENT_LENGTH} characters")
+    normalized_tags = normalize_tags(tags[:3])
+    normalized_evidence = [" ".join(str(value).split())[:500] for value in evidence[:3] if str(value).strip()]
+    rows = list_experiment_events(store, conversation_id)
+    links = [
+        row
+        for row in rows
+        if row["kind"] == "response_link" and row["response_id"] == response_id
+    ]
+    attempt_id = links[-1]["attempt_id"] if links else response_id
+    item = store.append(
+        conversation_id,
+        [
+            experiment_item(
+                conversation_id=conversation_id,
+                attempt_id=attempt_id,
+                response_id=response_id,
+                kind="model_review",
+                actor=None,
+                payload={
+                    "outcome": outcome,
+                    "confidence": confidence,
+                    "comment": comment.strip(),
+                    "tags": normalized_tags,
+                    "evidence": normalized_evidence,
+                    "review_source": "model",
+                    "provenance": provenance,
+                },
+                idempotency_key=f"model-review:{response_id}",
+            )
+        ],
+    )[0]
+    assert isinstance(item.data, ResourceEventData)
+    return {
+        **(item.data.resource or {}),
+        "id": item.id,
+        "response_id": response_id,
+        "created_at": item.created_at,
+        "created_by": item.created_by,
     }
 
 
