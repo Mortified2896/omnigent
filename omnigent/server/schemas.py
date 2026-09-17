@@ -30,6 +30,7 @@ from omnigent.entities import (
     USER_SESSION_TITLE_MAX_CHARS,
     ConversationItem,
 )
+from omnigent.server.task_experiment import HumanForecast
 
 # ── Shared ──────────────────────────────────────────────────────
 
@@ -1270,6 +1271,8 @@ class SessionEventInput(BaseModel):
     :param created_by: Optional internal attribution actor for runner-
         originated events that are triggered by a prior human turn.
     """
+
+    success_forecast: HumanForecast | None = None
 
     type: str
     # Heterogeneous payload; route layer validates the shape per ``type``.
@@ -4799,9 +4802,17 @@ class SubagentToolCallEvent(_SSEEventBase):
     arguments: str = ""
 
 
+class NativeResponseLinkedEvent(_SSEEventBase):
+    """Runner-only exact native response identity after input acceptance."""
+
+    type: Literal["native.response.linked"] = "native.response.linked"
+    native_response_id: str
+
+
 HarnessStreamEvent = (
     ServerStreamEvent
     | InjectionConsumedEvent
+    | NativeResponseLinkedEvent
     | PolicyEvaluationRequestEvent
     | SubagentStartedEvent
     | SubagentCompletedEvent

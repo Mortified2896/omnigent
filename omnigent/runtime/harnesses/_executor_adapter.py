@@ -48,6 +48,7 @@ from omnigent.server.schemas import (
     CreateResponseRequest,
     ElicitationRequestParams,
     InjectionConsumedEvent,
+    NativeResponseLinkedEvent,
     OutputItemDoneEvent,
     OutputTextDeltaEvent,
     ReasoningStartedEvent,
@@ -818,6 +819,8 @@ class ExecutorAdapter(HarnessApp):
                 item["arguments"] = raw_args
             ctx.emit(OutputItemDoneEvent(type="response.output_item.done", item=item))
         elif isinstance(event, TurnComplete):
+            if event.native_response_id is not None:
+                ctx.emit(NativeResponseLinkedEvent(native_response_id=event.native_response_id))
             if event.response is not None:
                 pass
             # Capture provider-reported usage for the response.completed payload.

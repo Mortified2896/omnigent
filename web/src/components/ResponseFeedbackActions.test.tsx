@@ -13,12 +13,25 @@ const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
 let stored: ResponseFeedback[];
 let fail: boolean;
+let outcomes: Record<string, unknown>[];
 beforeEach(() => {
   stored = [];
+  outcomes = [];
   fail = false;
   api.mockReset();
   api.mockImplementation(async (_url: string, options?: RequestInit) => {
     if (options?.method && fail) return new Response(null, { status: 500 });
+    if (_url.endsWith("/task-experiment")) return Response.json(outcomes);
+    if (_url.includes("/task-outcomes/")) {
+      const row = {
+        id: String(outcomes.length),
+        kind: "outcome",
+        response_id: "answer",
+        ...JSON.parse(options!.body as string),
+      };
+      outcomes.push(row);
+      return Response.json(row);
+    }
     if (options?.method === "DELETE") {
       stored = [];
       return new Response(null, { status: 204 });
@@ -144,4 +157,35 @@ it("only offers feedback for durable completed visible answers", () => {
       rationale: "routing",
     }),
   ).toBe(false);
+});
+
+it("preserves all outcome revisions independently of thumbs across reload", async () => {
+  let view = mount();
+  // Revisions must be verified sequentially across independent query caches.
+  /* eslint-disable no-await-in-loop */
+  for (const name of ["Success", "Partial", "Failed", "Not sure"]) {
+    const button = screen.getByRole("button", { name });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+    view.unmount();
+    view = mount();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true"),
+    );
+  }
+  /* eslint-enable no-await-in-loop */
+  expect(stored).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
+  await waitFor(() => expect(stored[0]?.rating).toBe(-1));
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
+  await waitFor(() => expect(outcomes.at(-1)?.outcome).toBe("success"));
+  expect(outcomes.map((row) => row.outcome)).toEqual([
+    "success",
+    "partial",
+    "failed",
+    "not_sure",
+    "success",
+  ]);
+  expect(stored[0].rating).toBe(-1);
 });

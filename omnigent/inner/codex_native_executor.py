@@ -74,7 +74,7 @@ async def _start_codex_turn(
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
     settings_overrides: Mapping[str, object],
-) -> None:
+) -> str | None:
     """Apply optional settings and start one Codex turn on an idle thread."""
     if settings_overrides:
         await client.request(
@@ -110,6 +110,8 @@ async def _start_codex_turn(
     if isinstance(turn_id, str) and turn_id:
         update_active_turn_id(bridge_dir, turn_id)
         _logger.info("Codex native started turn: turn_id=%s", turn_id)
+        return turn_id
+    return None
 
 
 async def _steer_codex_turn(
@@ -118,7 +120,7 @@ async def _steer_codex_turn(
     bridge_dir: Path,
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
-) -> None:
+) -> str | None:
     """Steer one bridge-recorded active Codex turn."""
     assert state.active_turn_id is not None
     response = await client.request(
@@ -134,6 +136,8 @@ async def _steer_codex_turn(
     if isinstance(turn_id, str) and turn_id:
         update_active_turn_id(bridge_dir, turn_id)
         _logger.info("Codex native steered active turn: turn_id=%s", turn_id)
+        return turn_id
+    return None
 
 
 async def _inject_codex_turn(
@@ -143,27 +147,25 @@ async def _inject_codex_turn(
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
     settings_overrides: Mapping[str, object],
-) -> None:
+) -> str | None:
     """Steer an active turn or start one, recovering one proven stale steer."""
     if state.active_turn_id is None:
-        await _start_codex_turn(
+        return await _start_codex_turn(
             client,
             bridge_dir=bridge_dir,
             state=state,
             input_items=input_items,
             settings_overrides=settings_overrides,
         )
-        return
 
     expected_turn_id = state.active_turn_id
     try:
-        await _steer_codex_turn(
+        return await _steer_codex_turn(
             client,
             bridge_dir=bridge_dir,
             state=state,
             input_items=input_items,
         )
-        return
     except CodexAppServerResponseError as error:
         if not _is_no_active_turn_to_steer(error):
             raise
@@ -179,15 +181,14 @@ async def _inject_codex_turn(
             "Codex native stale steer raced with a newer turn; steering turn_id=%s",
             recovered_state.active_turn_id,
         )
-        await _steer_codex_turn(
+        return await _steer_codex_turn(
             client,
             bridge_dir=bridge_dir,
             state=recovered_state,
             input_items=input_items,
         )
-        return
     _logger.info("Codex native reconciled completed stale turn: turn_id=%s", expected_turn_id)
-    await _start_codex_turn(
+    return await _start_codex_turn(
         client,
         bridge_dir=bridge_dir,
         state=recovered_state,
@@ -391,6 +392,7 @@ class CodexNativeExecutor(Executor):
         # active_turn_id write must be atomic with respect to mid-turn
         # steering. The terminal event is yielded after the lock releases.
         error_msg: str | None = None
+        accepted_response_id: str | None = None
         async with self._inject_lock:
             state = read_bridge_state(self._bridge_dir)
             if state is None:
@@ -417,13 +419,15 @@ class CodexNativeExecutor(Executor):
                                 "objective": goal_objective,
                             },
                         )
-                    await _inject_codex_turn(
+                    accepted_turn_id = await _inject_codex_turn(
                         client,
                         bridge_dir=self._bridge_dir,
                         state=state,
                         input_items=input_items,
                         settings_overrides=settings_overrides,
                     )
+                    if accepted_turn_id is not None:
+                        accepted_response_id = f"codex_{accepted_turn_id}"
                 except Exception as exc:
                     _logger.exception("Codex native turn injection failed")
                     error_msg = f"Codex native executor error: {exc}"
@@ -438,7 +442,7 @@ class CodexNativeExecutor(Executor):
         if error_msg is not None:
             yield ExecutorError(message=error_msg)
         else:
-            yield TurnComplete(response=None)
+            yield TurnComplete(response=None, native_response_id=accepted_response_id)
 
 
 def _model_effort_overrides(config: ExecutorConfig | None) -> dict[str, object]:

@@ -191,6 +191,7 @@ class TurnComplete(ExecutorEvent):
     modified_by_policy: bool = False
     continue_turn: bool = False
     usage: ExecutorUsage | None = None
+    native_response_id: str | None = None
 
 
 class ToolCallStatus(str, enum.Enum):

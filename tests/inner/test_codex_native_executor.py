@@ -184,6 +184,7 @@ def test_web_started_codex_turn_returns_without_waiting_for_terminal_event(
 
     assert [type(event) for event in events] == [TurnComplete]
     assert state is not None
+    assert events[0].native_response_id == "codex_turn_1"
     assert state.active_turn_id == "turn_1"
     assert _FakeCodexNativeClient.requests == [
         (

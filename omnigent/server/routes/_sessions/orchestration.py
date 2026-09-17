@@ -4364,7 +4364,7 @@ async def _forward_native_terminal_message(
     file_store: FileStore | None = None,
     artifact_store: ArtifactStore | None = None,
     model_override: str | None = None,
-) -> None:
+) -> str | None:
     """
     Forward one Omnigent web-chat message to the native terminal harness.
 
@@ -4428,7 +4428,8 @@ async def _forward_native_terminal_message(
             )
     try:
         resp = await runner_client.post(
-            f"/v1/sessions/{session_id}/events",
+            f"/v1/sessions/{session_id}/events"
+            + ("?stream=true" if body.success_forecast is not None else ""),
             json=event,
             timeout=_CLAUDE_NATIVE_MESSAGE_TIMEOUT_S,
         )
@@ -4495,6 +4496,17 @@ async def _forward_native_terminal_message(
             harness=harness,
         ),
     )
+
+    for frame in resp.text.split("\n\n"):
+        for line in frame.splitlines():
+            if line.startswith("data:"):
+                try:
+                    event_data = json.loads(line[5:].strip())
+                except ValueError:
+                    continue
+                if event_data.get("type") == "native.response.linked":
+                    return event_data.get("native_response_id")
+    return None
 
 
 async def _persist_session_event(
@@ -5784,6 +5796,21 @@ async def _dispatch_session_event_to_runner_impl(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
+    from omnigent.server.task_experiment import commit_forecast
+
+    try:
+        attempt_id = await asyncio.to_thread(
+            commit_forecast,
+            conversation_store,
+            conv,
+            body,
+            created_by,
+            _native_terminal_runtime(conv)[2]
+            if _is_native_terminal_session(conv)
+            else conv.harness_override,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if body.type == "message" and _is_native_terminal_session(conv):
         # Validate before touching the runner. The ensure probe is only
         # for syntactically valid user messages; assistant/system-shaped
@@ -5957,7 +5984,7 @@ async def _dispatch_session_event_to_runner_impl(
         # already-running pane.
         forwarded = False
         try:
-            await _forward_native_terminal_message(
+            native_response_id = await _forward_native_terminal_message(
                 runner_client,
                 session_id,
                 conv,
@@ -5970,6 +5997,17 @@ async def _dispatch_session_event_to_runner_impl(
                     _native_routed_model if _native_applied_model is not None else None
                 ),
             )
+            if attempt_id is not None and native_response_id is not None:
+                from omnigent.server.task_experiment import link_native_response
+
+                await asyncio.to_thread(
+                    link_native_response,
+                    conversation_store,
+                    session_id,
+                    attempt_id,
+                    native_response_id,
+                    created_by,
+                )
             forwarded = True
         finally:
             if not forwarded and pending_id is not None:

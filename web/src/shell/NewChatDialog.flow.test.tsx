@@ -567,6 +567,7 @@ describe("NewChatLandingScreen create flow", () => {
         expect(sessionBody.labels["omnigent.ui"]).toBeUndefined();
       }
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
+        successForecast: { probability: null },
         text: "inspect the repo without changing it",
         skill: null,
         files: [],
@@ -990,6 +991,7 @@ describe("NewChatLandingScreen create flow", () => {
     // text (no leading "/") carries no skill invocation.
     await waitFor(() =>
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
+        successForecast: { probability: null },
         text: "read the README and refactor",
         skill: null,
         files: [],
@@ -1018,6 +1020,7 @@ describe("NewChatLandingScreen create flow", () => {
     // body (same reason as the prompt text: initial_items never fire a turn).
     await waitFor(() =>
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
+        successForecast: { probability: null },
         text: "what is in this image?",
         skill: null,
         files: [file],
@@ -1047,6 +1050,7 @@ describe("NewChatLandingScreen create flow", () => {
     // "/review-pr 123 focus on auth" text — the original bug.
     await waitFor(() =>
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
+        successForecast: { probability: null },
         text: "/review-pr 123 focus on auth",
         skill: { name: "review-pr", args: "123 focus on auth" },
         files: [],
@@ -1075,6 +1079,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     await waitFor(() =>
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
+        successForecast: { probability: null },
         text: "/typo do something",
         skill: null,
         files: [],
@@ -1107,6 +1112,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     await waitFor(() =>
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
+        successForecast: { probability: null },
         text: "/review-pr 123",
         skill: null,
         files: [],
@@ -2143,4 +2149,24 @@ it("hides disabled O3 while retaining Smart Routing and Default", async () => {
   expect(screen.queryByRole("option", { name: /Benchmark Routing/ })).toBeNull();
   expect(screen.getByRole("option", { name: /Omnigent Smart Routing/ })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /^Default/ })).toBeInTheDocument();
+});
+
+it("leaves the human forecast blank and hands an explicit estimate to the attempt", async () => {
+  vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({ id: "conv_new" }),
+  } as Response);
+  renderLanding();
+  await waitForWorkspaceSeed();
+  const probability = screen.getByRole("spinbutton", { name: "Success probability (optional)" });
+  expect(probability).toHaveValue(null);
+  fireEvent.change(probability, { target: { value: "78" } });
+  typeMessage("inspect the repo");
+  fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+  await waitFor(() =>
+    expect(setPendingInitialPromptMock).toHaveBeenCalledWith(
+      "conv_new",
+      expect.objectContaining({ successForecast: { probability: 78 } }),
+    ),
+  );
 });
