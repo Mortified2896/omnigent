@@ -145,8 +145,7 @@ async def advise_tb4_floor(
 def _normalise_model(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
-    text = value.strip().lower()
-    return text
+    return value.strip().lower()
 
 
 def _model_keys(decision: CatalogueExecutionDecision) -> list[str]:
@@ -385,6 +384,9 @@ async def apply_floor_experiment(
             status_code=409,
             code="tb4_slice_unavailable",
         )
+    # A raw numeric floor is the experiment treatment. Preserve the adviser's
+    # original categorical task classification for analysis; do not rewrite it
+    # to an arbitrary legacy difficulty merely to pass through the old API.
     adjusted = await service.adjust_proposal(
         proposal_id,
         ProposalAdjustmentRequest(
@@ -392,7 +394,6 @@ async def apply_floor_experiment(
             version=tb4_slice.version,
             slice_id=tb4_slice.slice_id,
             minimum_score=executed_floor / 100.0,
-            difficulty="easy",
         ),
     )
     recommendation = adjusted.recommendation
