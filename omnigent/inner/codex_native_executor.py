@@ -30,6 +30,7 @@ from omnigent.harnesses.codex_native.bridge import (
     update_active_turn_id,
     write_codex_config_model,
 )
+from omnigent.harnesses.codex_native.self_review import review_completed_turn, self_review_enabled
 from omnigent.inner.codex_goal_command import goal_objective_from_content
 from omnigent.inner.executor import (
     EnqueuedContent,
@@ -219,6 +220,9 @@ class CodexNativeExecutor(Executor):
         # See designs/NATIVE_INJECTION_SERIALIZATION.md. Relies on the
         # adapter caching one executor per conversation.
         self._inject_lock = asyncio.Lock()
+        # Background evaluations must not keep the user-facing turn open, but
+        # tasks need a strong reference until their non-blocking work completes.
+        self._self_review_tasks: set[asyncio.Task[bool]] = set()
 
     def supports_streaming(self) -> bool:
         """:returns: ``False`` because output is emitted by the native forwarder."""
@@ -405,6 +409,7 @@ class CodexNativeExecutor(Executor):
             elif not _session_is_active(state.session_id, self._request_session_id):
                 error_msg = "Codex native session is no longer active"
             else:
+                started_new_turn = state.active_turn_id is None
                 client = client_for_transport(
                     state.socket_path,
                     client_name="omnigent-codex-native",
@@ -428,6 +433,18 @@ class CodexNativeExecutor(Executor):
                     )
                     if accepted_turn_id is not None:
                         accepted_response_id = f"codex_{accepted_turn_id}"
+                        if started_new_turn and self_review_enabled():
+                            review_task = asyncio.create_task(
+                                review_completed_turn(
+                                    self._bridge_dir,
+                                    session_id=state.session_id,
+                                    parent_thread_id=state.thread_id,
+                                    primary_turn_id=accepted_turn_id,
+                                ),
+                                name=f"codex-self-review:{accepted_turn_id}",
+                            )
+                            self._self_review_tasks.add(review_task)
+                            review_task.add_done_callback(self._self_review_tasks.discard)
                 except Exception as exc:
                     _logger.exception("Codex native turn injection failed")
                     error_msg = f"Codex native executor error: {exc}"
