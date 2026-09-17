@@ -21,8 +21,9 @@ class HumanForecast(BaseModel):
     """A pre-execution estimate; absence is distinct from zero percent."""
 
     model_config = ConfigDict(extra="forbid")
-    probability: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    probability: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False, strict=True)
     exposure: Literal["independent", "after-recommendation"] = "independent"
+    source: Literal["normal-composer", "synthetic-acceptance"] = "normal-composer"
 
 
 def first_attempt_success(outcome: Outcome) -> int | None:
@@ -201,7 +202,7 @@ def commit_forecast(
         "candidate_set": None,
         "policy_version": None,
         "selection_propensity": None,
-        "experiment_source": "normal-composer",
+        "experiment_source": body.success_forecast.source,
         "controlled_exploration": None,
     }
     item = experiment_item(
