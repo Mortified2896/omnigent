@@ -28,7 +28,7 @@ Copied events in a fork retain source provenance and are excluded from the new
 conversation's experiment projection.
 
 Nullable fields reserve candidate set, policy version, selection propensity,
-experiment source, and controlled exploration. Initial O3 fields remain null.
+experiment source, and controlled exploration. O3 results append a separate event.
 No calibration or model-quality advantage is asserted.
 
 ## Verification
@@ -47,6 +47,30 @@ outcomes, revise Not sure, and verify independent thumbs/comments. Repeat on bot
 peers after the supervised same-artifact rollout. Preserve prior histories,
 cookies, state roots and rollback data.
 
-Phase 2 shadow forecasting and optional experimental execution are not yet
-implemented. Non-Codex response correlation and structured skill-invocation
-forecast transport require additional coverage before broad harness acceptance.
+## Independent O3 shadow
+
+`OMNIGENT_O3_SUCCESS_FORECAST=1` opts a peer into `o3-success-forecast-v1`.
+The original benchmark-floor feature flag remains off. The candidate manifest is
+supplied in `OMNIGENT_O3_SUCCESS_CANDIDATES`; the bounded adviser route is explicit
+in `OMNIGENT_O3_SUCCESS_ADVISER_MODEL`. No route is hard-coded.
+HomeLab generates the manifest from the discovered peer Codex catalog.
+
+The human record commits first. The adviser receives only task text, selected
+canonical model plus compute profile, candidate identities and matching existing
+benchmark evidence. It never receives the human probability or session metadata.
+The input digests, candidate/evidence snapshot, adviser identity, usage, method
+version and result persist before dispatch. No confidence interval is invented.
+With no evidence, this is explicitly an uncalibrated LLM estimate.
+Provider failure or unsupported configuration records unavailable/null and
+continues the original manual execution. O3 cannot change that choice.
+
+The collapsed response audit shows committed human and O3 forecasts after
+completion. Synthetic acceptance estimates are labelled separately.
+No O3 recommendation appears in the pre-task composer. Shadow mode never activates
+automatic routing or the old benchmark-floor selector.
+
+The first scope is explicit text-only Codex model/effort configurations.
+Unresolved Default/Smart choices and skill or multimodal inputs retain human
+instrumentation but produce unavailable O3 estimates. Non-Codex response correlation
+needs additional acceptance. Optional O3 execution still needs a separately
+qualified recommendation-to-harness path; the shadow flag does not enable it.

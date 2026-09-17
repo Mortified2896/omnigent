@@ -4,6 +4,16 @@ import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
 export type TaskOutcome = "success" | "partial" | "failed" | "not_sure";
 export interface ExperimentEvent {
   id: string;
+  attempt_id: string;
+  human_probability?: number | null;
+  selected_model?: string | null;
+  selected_reasoning_effort?: string | null;
+  experiment_source?: string;
+  probability?: number | null;
+  forecaster_id?: string;
+  status?: string;
+  rationale?: string;
+  alternative?: { canonical_model: string; compute_profile: string; probability: number } | null;
   kind: string;
   response_id: string;
   outcome?: TaskOutcome;

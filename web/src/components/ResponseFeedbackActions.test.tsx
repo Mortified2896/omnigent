@@ -189,3 +189,34 @@ it("preserves all outcome revisions independently of thumbs across reload", asyn
   ]);
   expect(stored[0].rating).toBe(-1);
 });
+
+it("reveals only the linked committed forecast in a collapsed audit", async () => {
+  outcomes = [
+    {
+      id: "f",
+      kind: "forecast",
+      attempt_id: "attempt",
+      human_probability: 78,
+      selected_model: "example",
+      selected_reasoning_effort: "low",
+      experiment_source: "synthetic-acceptance",
+    },
+    {
+      id: "s",
+      kind: "o3_shadow",
+      attempt_id: "attempt",
+      forecaster_id: "o3-success-forecast-v1",
+      probability: 65,
+      status: "completed",
+      alternative: { canonical_model: "other", compute_profile: "high", probability: 80 },
+    },
+    { id: "l", kind: "response_link", attempt_id: "attempt", response_id: "answer" },
+  ];
+  mount();
+  const audit = await screen.findByLabelText("Task experiment audit");
+  expect(audit).not.toHaveAttribute("open");
+  expect(screen.getByText("Human P(success): 78%")).toBeInTheDocument();
+  expect(screen.getByText("O3 P(success): 65%")).toBeInTheDocument();
+  expect(screen.getByText(/other \/ high/)).toBeInTheDocument();
+  expect(screen.getByText(/not a human forecast/)).toBeInTheDocument();
+});

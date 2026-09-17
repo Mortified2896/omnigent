@@ -1,4 +1,4 @@
-import { createContext, useContext, useId, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useState } from "react";
 import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,13 +9,20 @@ import {
 import type { Bubble } from "@/lib/renderItems";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
 
-import { useTaskExperiment, useSaveTaskOutcome, type TaskOutcome } from "@/hooks/useTaskExperiment";
+import {
+  useTaskExperiment,
+  useSaveTaskOutcome,
+  type TaskOutcome,
+  type ExperimentEvent,
+} from "@/hooks/useTaskExperiment";
 
 const FeedbackContext = createContext<{
   sessionId: string;
   rows: Map<string, ResponseFeedback>;
   outcomes: Map<string, TaskOutcome>;
   outcomesReady: boolean;
+  experiments: ExperimentEvent[];
+  refreshExperiment: () => unknown;
   ready: boolean;
 } | null>(null);
 
@@ -39,8 +46,17 @@ export function ResponseFeedbackProvider({
           .map((row) => [row.response_id, row.outcome!]),
       ),
       outcomesReady: experiment.isSuccess,
+      experiments: experiment.data ?? [],
+      refreshExperiment: experiment.refetch,
     }),
-    [sessionId, query.data, query.isSuccess, experiment.data, experiment.isSuccess],
+    [
+      sessionId,
+      query.data,
+      query.isSuccess,
+      experiment.data,
+      experiment.isSuccess,
+      experiment.refetch,
+    ],
   );
   return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;
 }
@@ -63,6 +79,10 @@ export function canRateResponse(bubble: Bubble): boolean {
 
 export function ResponseFeedbackActions({ responseId }: { responseId: string }) {
   const context = useContext(FeedbackContext);
+  const refreshExperiment = context?.refreshExperiment;
+  useEffect(() => {
+    void refreshExperiment?.();
+  }, [refreshExperiment, responseId]);
   if (!context) return null;
   return (
     <>
@@ -72,6 +92,7 @@ export function ResponseFeedbackActions({ responseId }: { responseId: string }) 
         outcome={context.outcomes.get(responseId)}
         ready={context.outcomesReady}
       />
+      <ExperimentAudit responseId={responseId} events={context.experiments} />
       <FeedbackEditor
         key={`${context.sessionId}:${responseId}`}
         sessionId={context.sessionId}
@@ -238,5 +259,62 @@ function OutcomeEditor({
         </span>
       )}
     </div>
+  );
+}
+
+function ExperimentAudit({
+  responseId,
+  events,
+}: {
+  responseId: string;
+  events: ExperimentEvent[];
+}) {
+  const link = events.find((row) => row.kind === "response_link" && row.response_id === responseId);
+  if (!link) return null;
+  const forecast = events.find(
+    (row) => row.kind === "forecast" && row.attempt_id === link.attempt_id,
+  );
+  const shadow = events.find(
+    (row) => row.kind === "o3_shadow" && row.attempt_id === link.attempt_id,
+  );
+  if (!forecast) return null;
+  return (
+    <details
+      className="order-last w-full min-w-0 basis-full text-xs"
+      aria-label="Task experiment audit"
+    >
+      <summary className="cursor-pointer py-2">
+        Task experiment{shadow ? " · O3 shadow (Experimental)" : ""}
+      </summary>
+      <div className="space-y-1 break-words rounded border p-2">
+        <p>
+          Human choice: {forecast.selected_model ?? "Default (unresolved)"} /{" "}
+          {forecast.selected_reasoning_effort ?? "default effort"}
+        </p>
+        <p>
+          Human P(success):{" "}
+          {forecast.human_probability == null ? "Skipped" : `${forecast.human_probability}%`}
+        </p>
+        {forecast.experiment_source === "synthetic-acceptance" && (
+          <p>Synthetic acceptance estimate; not a human forecast.</p>
+        )}
+        {shadow && (
+          <>
+            <p>
+              O3 P(success):{" "}
+              {shadow.status === "completed" ? `${shadow.probability}%` : "Unavailable"}
+            </p>
+            <p>{shadow.forecaster_id} · Uncalibrated estimate · Manual choice unchanged</p>
+            {shadow.alternative && (
+              <p>
+                Suggested configuration: {shadow.alternative.canonical_model} /{" "}
+                {shadow.alternative.compute_profile} ({shadow.alternative.probability}%)
+              </p>
+            )}
+            {shadow.rationale && <p>{shadow.rationale}</p>}
+          </>
+        )}
+      </div>
+    </details>
   );
 }

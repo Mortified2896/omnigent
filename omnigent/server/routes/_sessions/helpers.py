@@ -6572,9 +6572,9 @@ async def _dispatch_skill_slash_command_to_runner(
     """
     import uuid
 
-    from omnigent.server.task_experiment import commit_forecast
+    from omnigent.server.o3_success_forecast import commit_attempt
 
-    await asyncio.to_thread(commit_forecast, conversation_store, conv, body, created_by)
+    await commit_attempt(conversation_store, conv, body, created_by)
     skill_name, arguments = _parse_skill_slash_command(body)
     meta_text = await _resolve_skill_meta_text_via_runner(
         session_id,
