@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
@@ -26,11 +27,21 @@ from .models import (
 from .omniroute import OmniRouteError
 from .registry import SOURCE_POOL_NAME
 from .service import O3RoutingReviewService, RoutingReviewError, get_o3_routing_review_service
+from .tb4_floor_experiment import apply_floor_experiment
 
 _JSON_MUTATION_GUARDS = [
     Depends(require_json_content_type),
     Depends(require_trusted_origin),
 ]
+
+
+class TB4FloorExperimentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=200_000)
+    workspace_summary: str = Field(default="", max_length=20_000)
+    user_floor_percent: float = Field(ge=0, le=100)
+    experiment_key: str = Field(min_length=1, max_length=256)
 
 
 def create_o3_routing_review_router(
@@ -99,6 +110,35 @@ def create_o3_routing_review_router(
     )
     async def get_proposal(request: Request, proposal_id: str) -> RoutingProposal:
         return service_for(request).get_proposal(proposal_id)
+
+    @router.post(
+        "/o3/routing-review/proposals/{proposal_id}/floor-experiment",
+        response_model=RoutingProposal,
+        dependencies=_JSON_MUTATION_GUARDS,
+    )
+    async def apply_tb4_floor(
+        request: Request,
+        proposal_id: str,
+        body: TB4FloorExperimentRequest,
+    ) -> RoutingProposal:
+        service = service_for(request)
+        try:
+            return await apply_floor_experiment(
+                service,
+                proposal_id=proposal_id,
+                prompt=body.prompt,
+                workspace_summary=body.workspace_summary,
+                user_floor_percent=body.user_floor_percent,
+                experiment_key=body.experiment_key,
+            )
+        except OmniRouteError as exc:
+            raise RoutingReviewError(
+                "OmniRoute is temporarily unavailable while assigning the TB4 floor; try again.",
+                status_code=503,
+                code="omniroute_unavailable",
+            ) from exc
+        except ValueError as exc:
+            raise RoutingReviewError(str(exc), code="invalid_tb4_floor_experiment") from exc
 
     @router.patch(
         "/o3/routing-review/proposals/{proposal_id}",
