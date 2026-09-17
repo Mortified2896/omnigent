@@ -6,16 +6,13 @@ import {
   ResponseFeedbackProvider,
   canRateResponse,
 } from "./ResponseFeedbackActions";
-import type { ResponseFeedback } from "@/hooks/useResponseFeedback";
 import type { Bubble } from "@/lib/renderItems";
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
-let stored: ResponseFeedback[];
 let fail: boolean;
 let outcomes: Record<string, unknown>[];
 beforeEach(() => {
-  stored = [];
   outcomes = [];
   fail = false;
   api.mockReset();
@@ -27,30 +24,13 @@ beforeEach(() => {
         id: String(outcomes.length),
         kind: "outcome",
         response_id: "answer",
+        review_source: "human",
         ...JSON.parse(options!.body as string),
       };
       outcomes.push(row);
       return Response.json(row);
     }
-    if (options?.method === "DELETE") {
-      stored = [];
-      return new Response(null, { status: 204 });
-    }
-    if (options?.method === "PUT") {
-      stored = [
-        {
-          conversation_id: "session",
-          response_id: "answer",
-          comment: null,
-          created_at: 1,
-          updated_at: 2,
-          ...(stored.at(0) ?? {}),
-          ...JSON.parse(options.body as string),
-        },
-      ];
-      return Response.json(stored[0]);
-    }
-    return Response.json(stored);
+    return Response.json([]);
   });
 });
 afterEach(cleanup);
@@ -98,9 +78,8 @@ it("only offers feedback for durable completed visible answers", () => {
   ).toBe(false);
 });
 
-it("preserves all outcome revisions independently of thumbs across reload", async () => {
+it("preserves all outcome revisions across reload", async () => {
   let view = mount();
-  // Revisions must be verified sequentially across independent query caches.
   /* eslint-disable no-await-in-loop */
   for (const name of ["Success", "Partial", "Failed", "Not sure"]) {
     const button = screen.getByRole("button", { name });
@@ -114,7 +93,6 @@ it("preserves all outcome revisions independently of thumbs across reload", asyn
     );
   }
   /* eslint-enable no-await-in-loop */
-  expect(stored).toEqual([]);
   fireEvent.click(screen.getByRole("button", { name: "Success" }));
   await waitFor(() => expect(outcomes.at(-1)?.outcome).toBe("success"));
   expect(outcomes.map((row) => row.outcome)).toEqual([
@@ -124,9 +102,72 @@ it("preserves all outcome revisions independently of thumbs across reload", asyn
     "not_sure",
     "success",
   ]);
-  expect(stored).toEqual([]);
   expect(screen.queryByRole("button", { name: "Good response" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Bad response" })).toBeNull();
+});
+
+it("appends human comment and tag revisions", async () => {
+  outcomes = [
+    {
+      id: "1",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: null,
+      tags: [],
+      review_source: "human",
+    },
+  ];
+  mount();
+  await screen.findByTestId("human-review-details");
+  fireEvent.change(screen.getByLabelText("Task review comment"), {
+    target: { value: "Tests still need to pass." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Tests/verification" }));
+  fireEvent.change(screen.getByLabelText("Custom task review tag"), {
+    target: { value: "Regression" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+  await waitFor(() => expect(outcomes).toHaveLength(2));
+  expect(outcomes.at(-1)).toMatchObject({
+    outcome: "partial",
+    comment: "Tests still need to pass.",
+    tags: ["Tests/verification", "Regression"],
+  });
+});
+
+it("shows model self-review separately from the human outcome", async () => {
+  outcomes = [
+    {
+      id: "model-1",
+      kind: "model_review",
+      response_id: "answer",
+      outcome: "success",
+      confidence: 0.86,
+      comment: "The requested implementation and verification completed.",
+      tags: ["Tests/verification"],
+      review_source: "model",
+    },
+    {
+      id: "human-1",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "not_sure",
+      comment: null,
+      tags: [],
+      review_source: "human",
+    },
+  ];
+  mount();
+  const model = await screen.findByTestId("model-self-review");
+  expect(model).toHaveTextContent("Model self-review");
+  expect(model).toHaveTextContent("Success");
+  expect(model).toHaveTextContent("86%");
+  expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 });
 
 it("keeps the saved outcome when a revision fails", async () => {
