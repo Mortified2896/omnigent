@@ -4095,10 +4095,25 @@ export function dispatchInitialPrompt(
     files: File[],
     opts?: { successForecast?: { probability: number | null } },
   ) => Promise<void>,
-  sendSlashCommand: (name: string, args: string, agentId: string) => Promise<void>,
+  sendSlashCommand: (
+    name: string,
+    args: string,
+    agentId: string,
+    opts?: { successForecast?: { probability: number | null } },
+  ) => Promise<void>,
 ): void {
+  if (!prompt.successForecast) {
+    if (prompt.skill) void sendSlashCommand(prompt.skill.name, prompt.skill.args, agentId);
+    else void send(prompt.text, agentId, prompt.files ?? []);
+    return;
+  }
   if (prompt.skill) {
-    void sendSlashCommand(prompt.skill.name, prompt.skill.args, agentId);
+    void sendSlashCommand(
+      prompt.skill.name,
+      prompt.skill.args,
+      agentId,
+      prompt.successForecast ? { successForecast: prompt.successForecast } : undefined,
+    );
   } else {
     void send(
       prompt.text,

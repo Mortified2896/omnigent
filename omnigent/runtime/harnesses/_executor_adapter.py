@@ -293,7 +293,9 @@ class ExecutorAdapter(HarnessApp):
 
                                 record_llm_usage(agent_span, event.usage)
                     # --- End tracing ---
-                    self._translate_event(event, ctx)
+                    self._translate_event(
+                        event, ctx, request.experiment_attempt_id, request.native_terminal_input
+                    )
                     if isinstance(event, TurnComplete):
                         if tctx is not None and agent_span is not None:
                             tctx.end_agent_span(agent_span, response=response_text)
@@ -706,7 +708,13 @@ class ExecutorAdapter(HarnessApp):
             self._executor = self._executor_factory()
         return self._executor
 
-    def _translate_event(self, event: ExecutorEvent, ctx: TurnContext) -> None:
+    def _translate_event(
+        self,
+        event: ExecutorEvent,
+        ctx: TurnContext,
+        attempt_id: str | None = None,
+        native_terminal_input: bool = False,
+    ) -> None:
         """Translate one inner ExecutorEvent into Omnigent SSE events via ``ctx.emit``."""
         if isinstance(event, TextChunk):
             ctx.emit(
@@ -819,8 +827,15 @@ class ExecutorAdapter(HarnessApp):
                 item["arguments"] = raw_args
             ctx.emit(OutputItemDoneEvent(type="response.output_item.done", item=item))
         elif isinstance(event, TurnComplete):
-            if event.native_response_id is not None:
-                ctx.emit(NativeResponseLinkedEvent(native_response_id=event.native_response_id))
+            if attempt_id is not None and (
+                event.native_response_id is not None or not native_terminal_input
+            ):
+                ctx.emit(
+                    NativeResponseLinkedEvent(
+                        attempt_id=attempt_id,
+                        native_response_id=event.native_response_id or ctx.response_id,
+                    )
+                )
             if event.response is not None:
                 pass
             # Capture provider-reported usage for the response.completed payload.

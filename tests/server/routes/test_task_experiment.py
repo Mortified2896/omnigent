@@ -45,7 +45,17 @@ def test_forecast_commits_before_native_inference(conversation_store, monkeypatc
         event = flow._build_native_terminal_message_event(conv, body)
         assert "success_forecast" not in str(event)
         assert "probability" not in str(event)
-        return "codex_exact-rpc-turn"
+        assert event["experiment_attempt_id"] == rows[0]["attempt_id"]
+        from omnigent.server.task_experiment import accept_response_link
+
+        accept_response_link(
+            store,
+            conv.id,
+            {
+                "attempt_id": event["experiment_attempt_id"],
+                "native_response_id": "codex_exact-rpc-turn",
+            },
+        )
 
     monkeypatch.setattr(flow, "_forward_native_terminal_message", inference)
 

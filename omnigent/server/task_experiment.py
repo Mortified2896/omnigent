@@ -163,7 +163,9 @@ def commit_forecast(
     """Commit before dispatch; the original record wins on transport retries."""
     if body.success_forecast is None:
         return None
-    if body.type != "message" or body.data.get("role") != "user":
+    if body.type not in ("message", "slash_command") or (
+        body.type == "message" and body.data.get("role") != "user"
+    ):
         raise ValueError("Success forecasts require a user message")
     stable_id = body.data.get("stable_id")
     if not isinstance(stable_id, str) or re.fullmatch(r"[0-9a-f]{32}", stable_id) is None:
@@ -177,7 +179,18 @@ def commit_forecast(
         "human_probability": body.success_forecast.probability,
         "human_exposure": body.success_forecast.exposure,
         "input_stable_id": stable_id,
-        "input_digest": content_digest(body.data.get("content", [])),
+        "input_digest": content_digest(
+            body.data.get(
+                "content",
+                [
+                    {
+                        "type": "skill",
+                        "name": body.data.get("name"),
+                        "arguments": body.data.get("arguments"),
+                    }
+                ],
+            )
+        ),
         "selected_harness": harness or conversation.harness_override,
         "selected_model": model,
         "canonical_model": model.removeprefix("codex/") if model else None,
@@ -229,3 +242,19 @@ def link_native_response(
             )
         ],
     )
+
+
+def accept_response_link(store: ConversationStore, conversation_id: str, event: dict) -> None:
+    """Bind only an existing forecast from the same conversation, using runner evidence."""
+    attempt_id = event.get("attempt_id")
+    response_id = event.get("native_response_id")
+    if not isinstance(attempt_id, str) or not isinstance(response_id, str) or not response_id:
+        return
+    rows = list_experiment_events(store, conversation_id)
+    forecast = next(
+        (row for row in rows if row["kind"] == "forecast" and row["attempt_id"] == attempt_id),
+        None,
+    )
+    if forecast is None:
+        return
+    link_native_response(store, conversation_id, attempt_id, response_id, forecast["created_by"])

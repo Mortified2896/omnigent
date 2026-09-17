@@ -2186,7 +2186,13 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
       // message, and forwards the meta to the runner.
       const postResult = await postEvent(sessionId, {
         type: "slash_command",
-        data: { kind: "skill", name, arguments: args },
+        ...(opts?.successForecast ? { success_forecast: opts.successForecast } : {}),
+        data: {
+          kind: "skill",
+          name,
+          arguments: args,
+          stable_id: opts?.stableId ?? crypto.randomUUID().replaceAll("-", ""),
+        },
       });
       if (postResult.denied) {
         // Denied commands publish no receipt, so nothing will pop the

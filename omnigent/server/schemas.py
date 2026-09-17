@@ -1016,6 +1016,8 @@ class CreateResponseRequest(BaseModel):
 
     # Optional when previous_response_id is set; server resolves the agent
     # from the prior task. Required for fresh conversations (no prior task).
+    experiment_attempt_id: str | None = None
+    native_terminal_input: bool = False
     model: str | None = None
     # Heterogeneous content blocks (input_text, input_image, input_file)
     # or a plain string shorthand; shape varies by block type.
@@ -4806,6 +4808,7 @@ class NativeResponseLinkedEvent(_SSEEventBase):
     """Runner-only exact native response identity after input acceptance."""
 
     type: Literal["native.response.linked"] = "native.response.linked"
+    attempt_id: str
     native_response_id: str
 
 
