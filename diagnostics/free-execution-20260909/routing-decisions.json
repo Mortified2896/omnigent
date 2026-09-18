@@ -1,0 +1,815 @@
+{
+  "text": {
+    "proposal_id": "2e134d0b-951e-4516-bfe3-657a4493d9f5",
+    "estimator": {
+      "policy": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "minimum_common_capability": 20.0,
+        "evidence_policy": "provisional",
+        "reasoning_effort": "low"
+      },
+      "evidence_label": "approximate common-capability proxy",
+      "eligible_count": 11,
+      "combo_name": "custom/o3-estimator-2e134d0b951e",
+      "actual_provider": "oc",
+      "actual_model": "big-pickle"
+    },
+    "classification": {
+      "terminal": true,
+      "tools": true,
+      "minimum_context_tokens": 0,
+      "vision": false,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "minimum_input_tokens": 0,
+      "minimum_output_tokens": 0,
+      "structured_output": false,
+      "client_endpoint": "responses"
+    },
+    "approved_constraints": {
+      "benchmark": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "reason": "Terminal and agentic execution on simple text transformation.",
+        "minimum_score": 0.06448,
+        "difficulty": "easy",
+        "calibration_version": "o3-benchmark-difficulty-calibration-v1"
+      },
+      "difficulty": "easy",
+      "calibration_version": "o3-benchmark-difficulty-calibration-v1",
+      "reasoning_effort": "low",
+      "risk": "low",
+      "evidence_policy": "provisional",
+      "cost_quota_preference": "preserve_subscription"
+    },
+    "common_floor": 20.0,
+    "before_filters": 3177,
+    "before_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra",
+      "cx/gpt-5.5-low",
+      "cx/gpt-5.6-luna-low",
+      "cx/gpt-5.6-sol-low",
+      "cx/gpt-5.6-terra-low",
+      "cx/gpt-5.6-sol",
+      "cx/gpt-5.6-terra",
+      "cx/gpt-5.6-luna",
+      "openrouter/minimax/minimax-m3:free"
+    ],
+    "after_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra",
+      "cx/gpt-5.5-low",
+      "cx/gpt-5.6-luna-low",
+      "cx/gpt-5.6-sol-low",
+      "cx/gpt-5.6-terra-low",
+      "cx/gpt-5.6-sol",
+      "cx/gpt-5.6-terra",
+      "cx/gpt-5.6-luna"
+    ],
+    "combo": {
+      "name": "custom/o3-route-2e134d0b951e",
+      "displayName": "O3 approved route 2e134d0b951e",
+      "type": "auto",
+      "strategy": "auto",
+      "description": "Ephemeral O3 route owned by proposal 2e134d0b-951e-4516-bfe3-657a4493d9f5; approved effort low. Targets come from the full capability execution set.",
+      "explorationRate": 0,
+      "fallbackEnabled": true,
+      "useLkgp": false,
+      "models": [
+        {
+          "id": "o3-route-2e134d0b951e-1",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.3-codex-spark",
+          "label": "cx/GPT 5.3 Codex Spark (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-2",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.5",
+          "label": "cx/GPT 5.5 (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-3",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.5-low",
+          "label": "cx/GPT 5.5 (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-4",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-luna",
+          "label": "cx/GPT 5.6 Luna (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-5",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-luna-low",
+          "label": "cx/GPT 5.6 Luna (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-6",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol",
+          "label": "cx/GPT 5.6 Sol (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-7",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol-low",
+          "label": "cx/GPT 5.6 Sol (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-8",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-9",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra",
+          "label": "cx/GPT 5.6 Terra (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-10",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra-low",
+          "label": "cx/GPT 5.6 Terra (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-11",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-2e134d0b951e-12",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "gpt-5.5",
+          "label": "codex/GPT 5.5 (default)",
+          "weight": 0
+        }
+      ],
+      "config": {
+        "auto": {
+          "routerStrategy": "rules",
+          "explorationRate": 0,
+          "candidatePool": [
+            "codex"
+          ],
+          "weights": {
+            "taskFit": 0.0,
+            "health": 0.3,
+            "stability": 0.2,
+            "quota": 0.2,
+            "costInv": 0.15,
+            "latencyInv": 0.1,
+            "tierPriority": 0.0,
+            "tierAffinity": 0.0,
+            "specificityMatch": 0.0,
+            "contextAffinity": 0.0,
+            "cacheAffinity": 0.0,
+            "sessionAvailability": 0.05,
+            "resetWindowAffinity": 0.0
+          }
+        }
+      }
+    },
+    "resource_advice": {
+      "action": "wait",
+      "reason": "No approved route is currently confirmed usable; preserve the floor.",
+      "proposed_common_floor": null,
+      "source": "deterministic_fallback"
+    }
+  },
+  "coding": {
+    "proposal_id": "5a83f9cf-273a-47f7-806f-d5c5536ef06f",
+    "estimator": {
+      "policy": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "minimum_common_capability": 20.0,
+        "evidence_policy": "provisional",
+        "reasoning_effort": "low"
+      },
+      "evidence_label": "approximate common-capability proxy",
+      "eligible_count": 11,
+      "combo_name": "custom/o3-estimator-5a83f9cf273a",
+      "actual_provider": "nvidia",
+      "actual_model": "nvidia/nemotron-3-super-120b-a12b"
+    },
+    "classification": {
+      "terminal": true,
+      "tools": true,
+      "minimum_context_tokens": 0,
+      "vision": false,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "minimum_input_tokens": 0,
+      "minimum_output_tokens": 0,
+      "structured_output": false,
+      "client_endpoint": "responses"
+    },
+    "approved_constraints": {
+      "benchmark": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "reason": "Task involves terminal file read and explanation; fits terminal\u2011bench overall slice.",
+        "minimum_score": 0.06448,
+        "difficulty": "easy",
+        "calibration_version": "o3-benchmark-difficulty-calibration-v1"
+      },
+      "difficulty": "easy",
+      "calibration_version": "o3-benchmark-difficulty-calibration-v1",
+      "reasoning_effort": "low",
+      "risk": "low",
+      "evidence_policy": "provisional",
+      "cost_quota_preference": "preserve_subscription"
+    },
+    "common_floor": 20.0,
+    "before_filters": 3178,
+    "before_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra",
+      "cx/gpt-5.5-low",
+      "cx/gpt-5.6-luna-low",
+      "cx/gpt-5.6-sol-low",
+      "cx/gpt-5.6-terra-low",
+      "cx/gpt-5.6-sol",
+      "cx/gpt-5.6-terra",
+      "cx/gpt-5.6-luna",
+      "openrouter/minimax/minimax-m3:free"
+    ],
+    "after_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra",
+      "cx/gpt-5.5-low",
+      "cx/gpt-5.6-luna-low",
+      "cx/gpt-5.6-sol-low",
+      "cx/gpt-5.6-terra-low",
+      "cx/gpt-5.6-sol",
+      "cx/gpt-5.6-terra",
+      "cx/gpt-5.6-luna"
+    ],
+    "combo": {
+      "name": "custom/o3-route-5a83f9cf273a",
+      "displayName": "O3 approved route 5a83f9cf273a",
+      "type": "auto",
+      "strategy": "auto",
+      "description": "Ephemeral O3 route owned by proposal 5a83f9cf-273a-47f7-806f-d5c5536ef06f; approved effort low. Targets come from the full capability execution set.",
+      "explorationRate": 0,
+      "fallbackEnabled": true,
+      "useLkgp": false,
+      "models": [
+        {
+          "id": "o3-route-5a83f9cf273a-1",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.3-codex-spark",
+          "label": "cx/GPT 5.3 Codex Spark (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-2",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.5",
+          "label": "cx/GPT 5.5 (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-3",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.5-low",
+          "label": "cx/GPT 5.5 (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-4",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-luna",
+          "label": "cx/GPT 5.6 Luna (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-5",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-luna-low",
+          "label": "cx/GPT 5.6 Luna (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-6",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol",
+          "label": "cx/GPT 5.6 Sol (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-7",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol-low",
+          "label": "cx/GPT 5.6 Sol (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-8",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-9",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra",
+          "label": "cx/GPT 5.6 Terra (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-10",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra-low",
+          "label": "cx/GPT 5.6 Terra (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-11",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-12",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "gpt-5.5",
+          "label": "codex/GPT 5.5 (default)",
+          "weight": 0
+        }
+      ],
+      "config": {
+        "auto": {
+          "routerStrategy": "rules",
+          "explorationRate": 0,
+          "candidatePool": [
+            "codex"
+          ],
+          "weights": {
+            "taskFit": 0.0,
+            "health": 0.3,
+            "stability": 0.2,
+            "quota": 0.2,
+            "costInv": 0.15,
+            "latencyInv": 0.1,
+            "tierPriority": 0.0,
+            "tierAffinity": 0.0,
+            "specificityMatch": 0.0,
+            "contextAffinity": 0.0,
+            "cacheAffinity": 0.0,
+            "sessionAvailability": 0.05,
+            "resetWindowAffinity": 0.0
+          }
+        }
+      }
+    },
+    "resource_advice": {
+      "action": "wait",
+      "reason": "No approved route is currently confirmed usable; preserve the floor.",
+      "proposed_common_floor": null,
+      "source": "deterministic_fallback"
+    }
+  },
+  "discovery": {
+    "proposal_id": "47a16066-b232-4ddf-ae5d-3753eaa534cd",
+    "estimator": {
+      "policy": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "minimum_common_capability": 20.0,
+        "evidence_policy": "provisional",
+        "reasoning_effort": "low"
+      },
+      "evidence_label": "approximate common-capability proxy",
+      "eligible_count": 11,
+      "combo_name": "custom/o3-estimator-47a16066b232",
+      "actual_provider": "nvidia",
+      "actual_model": "nvidia/nemotron-3-super-120b-a12b"
+    },
+    "classification": {
+      "terminal": true,
+      "tools": true,
+      "minimum_context_tokens": 0,
+      "vision": false,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "minimum_input_tokens": 0,
+      "minimum_output_tokens": 0,
+      "structured_output": false,
+      "client_endpoint": "responses"
+    },
+    "approved_constraints": {
+      "benchmark": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "reason": "The task involves terminal execution to discover and invoke a local health inspection tool, aligning with the terminal-bench benchmark's focus on terminal and agentic execution.",
+        "minimum_score": 0.06448,
+        "difficulty": "easy",
+        "calibration_version": "o3-benchmark-difficulty-calibration-v1"
+      },
+      "difficulty": "easy",
+      "calibration_version": "o3-benchmark-difficulty-calibration-v1",
+      "reasoning_effort": "low",
+      "risk": "low",
+      "evidence_policy": "provisional",
+      "cost_quota_preference": "preserve_subscription"
+    },
+    "common_floor": 20.0,
+    "before_filters": 3179,
+    "before_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra",
+      "cx/gpt-5.5-low",
+      "cx/gpt-5.6-luna-low",
+      "cx/gpt-5.6-sol-low",
+      "cx/gpt-5.6-terra-low",
+      "cx/gpt-5.6-sol",
+      "cx/gpt-5.6-terra",
+      "cx/gpt-5.6-luna",
+      "openrouter/minimax/minimax-m3:free"
+    ],
+    "after_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra",
+      "cx/gpt-5.5-low",
+      "cx/gpt-5.6-luna-low",
+      "cx/gpt-5.6-sol-low",
+      "cx/gpt-5.6-terra-low",
+      "cx/gpt-5.6-sol",
+      "cx/gpt-5.6-terra",
+      "cx/gpt-5.6-luna"
+    ],
+    "combo": {
+      "name": "custom/o3-route-47a16066b232",
+      "displayName": "O3 approved route 47a16066b232",
+      "type": "auto",
+      "strategy": "auto",
+      "description": "Ephemeral O3 route owned by proposal 47a16066-b232-4ddf-ae5d-3753eaa534cd; approved effort low. Targets come from the full capability execution set.",
+      "explorationRate": 0,
+      "fallbackEnabled": true,
+      "useLkgp": false,
+      "models": [
+        {
+          "id": "o3-route-47a16066b232-1",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.3-codex-spark",
+          "label": "cx/GPT 5.3 Codex Spark (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-2",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.5",
+          "label": "cx/GPT 5.5 (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-3",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.5-low",
+          "label": "cx/GPT 5.5 (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-4",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-luna",
+          "label": "cx/GPT 5.6 Luna (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-5",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-luna-low",
+          "label": "cx/GPT 5.6 Luna (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-6",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol",
+          "label": "cx/GPT 5.6 Sol (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-7",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol-low",
+          "label": "cx/GPT 5.6 Sol (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-8",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-9",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra",
+          "label": "cx/GPT 5.6 Terra (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-10",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra-low",
+          "label": "cx/GPT 5.6 Terra (Low) (low)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-11",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-47a16066b232-12",
+          "kind": "model",
+          "providerId": "codex",
+          "model": "gpt-5.5",
+          "label": "codex/GPT 5.5 (default)",
+          "weight": 0
+        }
+      ],
+      "config": {
+        "auto": {
+          "routerStrategy": "rules",
+          "explorationRate": 0,
+          "candidatePool": [
+            "codex"
+          ],
+          "weights": {
+            "taskFit": 0.0,
+            "health": 0.3,
+            "stability": 0.2,
+            "quota": 0.2,
+            "costInv": 0.15,
+            "latencyInv": 0.1,
+            "tierPriority": 0.0,
+            "tierAffinity": 0.0,
+            "specificityMatch": 0.0,
+            "contextAffinity": 0.0,
+            "cacheAffinity": 0.0,
+            "sessionAvailability": 0.05,
+            "resetWindowAffinity": 0.0
+          }
+        }
+      }
+    },
+    "resource_advice": {
+      "action": "wait",
+      "reason": "No approved route is currently confirmed usable; preserve the floor.",
+      "proposed_common_floor": null,
+      "source": "deterministic_fallback"
+    }
+  },
+  "demanding": {
+    "proposal_id": "6b8bddda-4883-4c4f-929b-39c2e88de5f9",
+    "estimator": {
+      "policy": {
+        "benchmark_id": "terminal-bench",
+        "version": "4.0.0",
+        "slice_id": "tb4.overall",
+        "minimum_common_capability": 20.0,
+        "evidence_policy": "provisional",
+        "reasoning_effort": "low"
+      },
+      "evidence_label": "approximate common-capability proxy",
+      "eligible_count": 11,
+      "combo_name": "custom/o3-estimator-6b8bddda4883",
+      "actual_provider": "nvidia",
+      "actual_model": "nvidia/nemotron-3-super-120b-a12b"
+    },
+    "classification": {
+      "terminal": true,
+      "tools": true,
+      "minimum_context_tokens": 0,
+      "vision": false,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "minimum_input_tokens": 0,
+      "minimum_output_tokens": 0,
+      "structured_output": false,
+      "client_endpoint": "responses"
+    },
+    "approved_constraints": {
+      "benchmark": {
+        "benchmark_id": "swe-bench-pro",
+        "version": "public-leaderboard-2026-09-04",
+        "slice_id": "swe-bench-pro.public.resolve-rate",
+        "reason": "The task involves long-horizon repository software engineering (designing, implementing, and testing a complex distributed transaction protocol), which aligns with the SWE-Bench Pro benchmark's focus on end-to-end software engineering capability.",
+        "minimum_score": 0.37,
+        "difficulty": "hard",
+        "calibration_version": "o3-benchmark-difficulty-calibration-v1"
+      },
+      "difficulty": "hard",
+      "calibration_version": "o3-benchmark-difficulty-calibration-v1",
+      "reasoning_effort": "high",
+      "risk": "medium",
+      "evidence_policy": "provisional",
+      "cost_quota_preference": "preserve_subscription"
+    },
+    "common_floor": 80.0,
+    "before_filters": 3181,
+    "before_qualification": [
+      "cx/gpt-5.5-high",
+      "cx/gpt-5.6-luna-high",
+      "cx/gpt-5.6-sol-high",
+      "cx/gpt-5.6-terra-high",
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra"
+    ],
+    "after_qualification": [
+      "codex/gpt-5.5",
+      "cx/gpt-5.3-codex-spark",
+      "cx/gpt-5.5",
+      "cx/gpt-5.6-sol-ultra",
+      "cx/gpt-5.6-terra-ultra"
+    ],
+    "combo": {
+      "config": {
+        "auto": {
+          "candidatePool": [
+            "codex"
+          ],
+          "explorationRate": 0,
+          "routerStrategy": "rules",
+          "weights": {
+            "cacheAffinity": 0.0,
+            "contextAffinity": 0.0,
+            "costInv": 0.15,
+            "health": 0.3,
+            "latencyInv": 0.1,
+            "quota": 0.2,
+            "resetWindowAffinity": 0.0,
+            "sessionAvailability": 0.05,
+            "specificityMatch": 0.0,
+            "stability": 0.2,
+            "taskFit": 0.0,
+            "tierAffinity": 0.0,
+            "tierPriority": 0.0
+          }
+        }
+      },
+      "description": "Ephemeral O3 route owned by proposal 6b8bddda-4883-4c4f-929b-39c2e88de5f9; approved effort high. Targets come from the full capability execution set.",
+      "displayName": "O3 approved route 6b8bddda4883",
+      "explorationRate": 0,
+      "fallbackEnabled": true,
+      "models": [
+        {
+          "id": "o3-route-6b8bddda4883-1",
+          "kind": "model",
+          "label": "cx/GPT 5.3 Codex Spark (default)",
+          "model": "cx/gpt-5.3-codex-spark",
+          "providerId": "codex",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-6b8bddda4883-2",
+          "kind": "model",
+          "label": "cx/GPT 5.5 (default)",
+          "model": "cx/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-6b8bddda4883-3",
+          "kind": "model",
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "providerId": "codex",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-6b8bddda4883-4",
+          "kind": "model",
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "providerId": "codex",
+          "weight": 0
+        },
+        {
+          "id": "o3-route-6b8bddda4883-5",
+          "kind": "model",
+          "label": "codex/GPT 5.5 (default)",
+          "model": "gpt-5.5",
+          "providerId": "codex",
+          "weight": 0
+        }
+      ],
+      "name": "custom/o3-route-6b8bddda4883",
+      "strategy": "auto",
+      "type": "auto",
+      "useLkgp": false
+    },
+    "resource_advice": {
+      "action": "wait",
+      "reason": "No approved route is currently confirmed usable; preserve the floor.",
+      "proposed_common_floor": null,
+      "source": "deterministic_fallback"
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "live_model_ids": 3174,
+  "matrix_routes": 3107,
+  "providers": {
+    "codex": 81,
+    "devin-cli-agentic": 137,
+    "opencode": 218,
+    "duckduckgo-web": 6,
+    "cloudflare-playground": 20,
+    "felo-web": 5,
+    "theoldllm": 26,
+    "chipotle": 1,
+    "veoaifree-web": 4,
+    "auggie": 28,
+    "zcode": 13,
+    "codex-app-server": 26,
+    "uncloseai": 3,
+    "aihorde": 240,
+    "openrouter": 1053,
+    "requesty": 1099,
+    "zylo-api": 2,
+    "groq": 18,
+    "mistral": 50,
+    "nvidia": 59,
+    "cloudflare-ai": 18
+  },
+  "cost_counts": {
+    "subscription": 81,
+    "unknown": 2636,
+    "free-labelled": 34,
+    "provider-labelled-free": 202,
+    "priced": 128,
+    "zero_cost": 26
+  },
+  "probe_count": 66,
+  "text_pass": 8,
+  "search_pass": 0,
+  "pre_qualification_eligible": [
+    "codex/gpt-5.5",
+    "cx/gpt-5.3-codex-spark",
+    "cx/gpt-5.5",
+    "cx/gpt-5.6-sol-ultra",
+    "cx/gpt-5.6-terra-ultra",
+    "cx/gpt-5.5-low",
+    "cx/gpt-5.6-luna-low",
+    "cx/gpt-5.6-sol-low",
+    "cx/gpt-5.6-terra-low",
+    "cx/gpt-5.6-sol",
+    "cx/gpt-5.6-terra",
+    "cx/gpt-5.6-luna",
+    "openrouter/minimax/minimax-m3:free"
+  ],
+  "native_qualified": [
+    "cx/gpt-5.6-sol-low",
+    "cx/gpt-5.6-terra-low",
+    "cx/gpt-5.6-luna-low",
+    "cx/gpt-5.5-low",
+    "cx/gpt-5.6-sol",
+    "cx/gpt-5.6-sol-ultra",
+    "cx/gpt-5.6-terra",
+    "cx/gpt-5.6-terra-ultra",
+    "cx/gpt-5.6-luna",
+    "cx/gpt-5.5",
+    "codex/gpt-5.5",
+    "cx/gpt-5.3-codex-spark"
+  ],
+  "catalogue_hashes": {
+    "model-capability-estimation-policy-v1.json": "54acd6f3192d155702669023deef31c35e4656e6861e51ef6c3e0dde115f4519",
+    "model-capability-forecasts-v1.json": "e80ec3c0ff8450f604db78cdeda96f58bfe4a34f9cdc3b762c3bafad44d22d4e",
+    "o3-route-readiness-v1.json": "e1ec1e7980886f7c6f1b71cb43a8fbd3aece1e863a366f3f8f4b10352920c976",
+    "o3-route-readiness-manifest-v1.json": "ebbbb084cb157a4a1615caf55037b46245945890d77a56bb1923f749a80ce2f5"
+  }
+}

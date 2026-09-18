@@ -1,0 +1,584 @@
+{
+  "text": {
+    "session_id": "10ec8157415b415482dd0e8acdd5abcd",
+    "native_thread": "01a0853c-8600-7361-ab1a-de741dc30dd0",
+    "status": "idle",
+    "error": null,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 16468,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16475
+      },
+      "last_token_usage": {
+        "input_tokens": 16468,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16475
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 16468,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16475
+      },
+      "last_token_usage": {
+        "input_tokens": 16468,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16475
+      },
+      "model_context_window": 258400
+    },
+    "calls": [],
+    "search_metadata": {
+      "alias": "custom/o3-route-2e134d0b951e",
+      "supports_search_tool": true,
+      "targets": [
+        {
+          "id": "o3-route-2e134d0b951e-1",
+          "kind": "model",
+          "model": "cx/gpt-5.3-codex-spark",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.3 Codex Spark (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-2",
+          "kind": "model",
+          "model": "cx/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-3",
+          "kind": "model",
+          "model": "cx/gpt-5.5-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (Low) (low)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-4",
+          "kind": "model",
+          "model": "cx/gpt-5.6-luna",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Luna (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-5",
+          "kind": "model",
+          "model": "cx/gpt-5.6-luna-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Luna (Low) (low)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-6",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-7",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Low) (low)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-8",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-9",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-10",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Low) (low)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-11",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-2e134d0b951e-12",
+          "kind": "model",
+          "model": "codex/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "codex/GPT 5.5 (default)"
+        }
+      ],
+      "context_window": 272000,
+      "qualification_sha256": "74c1af35eb2f22d3c3c9133d89a027697d3980f7132b053adfb820b47a42d92f"
+    },
+    "registered_tools": 539,
+    "registry_sha256": "af77a08d5d0a50c212ec707c0b545371117a94977e76430962efdf1da02f386b",
+    "first_request_provenance": [
+      {
+        "id": "1788941746486-bf8b4e",
+        "status": 200,
+        "model": "gpt-5.6-terra",
+        "provider": "codex",
+        "tokens": {
+          "in": 16468,
+          "out": 7,
+          "cacheRead": 3328,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        }
+      }
+    ]
+  },
+  "coding": {
+    "session_id": "5d322d7d3a0b4eca82d7718dea487f7b",
+    "native_thread": "01a0853d-1335-7052-8400-2777d4ca664d",
+    "status": "idle",
+    "error": null,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 16480,
+        "cached_input_tokens": 9472,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 80,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16560
+      },
+      "last_token_usage": {
+        "input_tokens": 16480,
+        "cached_input_tokens": 9472,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 80,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 16560
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 34580,
+        "cached_input_tokens": 12800,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 124,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 34704
+      },
+      "last_token_usage": {
+        "input_tokens": 18100,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 44,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 18144
+      },
+      "model_context_window": 258400
+    },
+    "calls": [
+      {
+        "type": "function_call",
+        "name": "exec_command"
+      }
+    ],
+    "search_metadata": {
+      "alias": "custom/o3-route-5a83f9cf273a",
+      "supports_search_tool": true,
+      "targets": [
+        {
+          "id": "o3-route-5a83f9cf273a-1",
+          "kind": "model",
+          "model": "cx/gpt-5.3-codex-spark",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.3 Codex Spark (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-2",
+          "kind": "model",
+          "model": "cx/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-3",
+          "kind": "model",
+          "model": "cx/gpt-5.5-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (Low) (low)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-4",
+          "kind": "model",
+          "model": "cx/gpt-5.6-luna",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Luna (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-5",
+          "kind": "model",
+          "model": "cx/gpt-5.6-luna-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Luna (Low) (low)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-6",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-7",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Low) (low)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-8",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-9",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-10",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Low) (low)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-11",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-5a83f9cf273a-12",
+          "kind": "model",
+          "model": "codex/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "codex/GPT 5.5 (default)"
+        }
+      ],
+      "context_window": 272000,
+      "qualification_sha256": "74c1af35eb2f22d3c3c9133d89a027697d3980f7132b053adfb820b47a42d92f"
+    },
+    "registered_tools": 539,
+    "registry_sha256": "af77a08d5d0a50c212ec707c0b545371117a94977e76430962efdf1da02f386b",
+    "first_request_provenance": [
+      {
+        "id": "1788941781723-ff5880",
+        "status": 200,
+        "model": "gpt-5.6-terra",
+        "provider": "codex",
+        "tokens": {
+          "in": 16480,
+          "out": 80,
+          "cacheRead": 9472,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        }
+      }
+    ]
+  },
+  "discovery": {
+    "session_id": "4b5f2df2e6b94ed6aea3e30da5dee86c",
+    "native_thread": "01a0853e-5b56-71e1-9ae5-c6b35acf1151",
+    "status": "idle",
+    "error": null,
+    "first_usage": {
+      "total_token_usage": {
+        "input_tokens": 16483,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 131,
+        "reasoning_output_tokens": 35,
+        "total_tokens": 16614
+      },
+      "last_token_usage": {
+        "input_tokens": 16483,
+        "cached_input_tokens": 3328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 131,
+        "reasoning_output_tokens": 35,
+        "total_tokens": 16614
+      },
+      "model_context_window": 258400
+    },
+    "last_usage": {
+      "total_token_usage": {
+        "input_tokens": 74868,
+        "cached_input_tokens": 43008,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 347,
+        "reasoning_output_tokens": 52,
+        "total_tokens": 75215
+      },
+      "last_token_usage": {
+        "input_tokens": 20079,
+        "cached_input_tokens": 18688,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 83,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 20162
+      },
+      "model_context_window": 258400
+    },
+    "calls": [
+      {
+        "type": "function_call",
+        "name": "exec_command"
+      },
+      {
+        "type": "tool_search_call",
+        "name": null
+      },
+      {
+        "type": "function_call",
+        "name": "omniroute_get_health"
+      }
+    ],
+    "search_metadata": {
+      "alias": "custom/o3-route-47a16066b232",
+      "supports_search_tool": true,
+      "targets": [
+        {
+          "id": "o3-route-47a16066b232-1",
+          "kind": "model",
+          "model": "cx/gpt-5.3-codex-spark",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.3 Codex Spark (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-2",
+          "kind": "model",
+          "model": "cx/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-3",
+          "kind": "model",
+          "model": "cx/gpt-5.5-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (Low) (low)"
+        },
+        {
+          "id": "o3-route-47a16066b232-4",
+          "kind": "model",
+          "model": "cx/gpt-5.6-luna",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Luna (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-5",
+          "kind": "model",
+          "model": "cx/gpt-5.6-luna-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Luna (Low) (low)"
+        },
+        {
+          "id": "o3-route-47a16066b232-6",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-7",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Low) (low)"
+        },
+        {
+          "id": "o3-route-47a16066b232-8",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-9",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-10",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-low",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Low) (low)"
+        },
+        {
+          "id": "o3-route-47a16066b232-11",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-47a16066b232-12",
+          "kind": "model",
+          "model": "codex/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "codex/GPT 5.5 (default)"
+        }
+      ],
+      "context_window": 272000,
+      "qualification_sha256": "74c1af35eb2f22d3c3c9133d89a027697d3980f7132b053adfb820b47a42d92f"
+    },
+    "registered_tools": 539,
+    "registry_sha256": "af77a08d5d0a50c212ec707c0b545371117a94977e76430962efdf1da02f386b",
+    "first_request_provenance": [
+      {
+        "id": "1788941879310-0b3649",
+        "status": 200,
+        "model": "gpt-5.6-terra",
+        "provider": "codex",
+        "tokens": {
+          "in": 16483,
+          "out": 131,
+          "cacheRead": 3328,
+          "cacheWrite": null,
+          "reasoning": 35,
+          "compressed": null
+        }
+      }
+    ]
+  },
+  "demanding": {
+    "session_id": "4f9e320275a7496999ee6096c548bf58",
+    "native_thread": "01a08540-91bf-7893-aa40-77f375df991d",
+    "status": "failed",
+    "error": {
+      "code": "codex_turn_error",
+      "message": "stream disconnected before completion: stream closed before response.completed"
+    },
+    "first_usage": null,
+    "last_usage": null,
+    "calls": [],
+    "search_metadata": {
+      "alias": "custom/o3-route-6b8bddda4883",
+      "supports_search_tool": true,
+      "targets": [
+        {
+          "id": "o3-route-6b8bddda4883-1",
+          "kind": "model",
+          "model": "cx/gpt-5.3-codex-spark",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.3 Codex Spark (default)"
+        },
+        {
+          "id": "o3-route-6b8bddda4883-2",
+          "kind": "model",
+          "model": "cx/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.5 (default)"
+        },
+        {
+          "id": "o3-route-6b8bddda4883-3",
+          "kind": "model",
+          "model": "cx/gpt-5.6-sol-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Sol (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-6b8bddda4883-4",
+          "kind": "model",
+          "model": "cx/gpt-5.6-terra-ultra",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "cx/GPT 5.6 Terra (Ultra) (default)"
+        },
+        {
+          "id": "o3-route-6b8bddda4883-5",
+          "kind": "model",
+          "model": "codex/gpt-5.5",
+          "providerId": "codex",
+          "weight": 0,
+          "label": "codex/GPT 5.5 (default)"
+        }
+      ],
+      "context_window": 272000,
+      "qualification_sha256": "74c1af35eb2f22d3c3c9133d89a027697d3980f7132b053adfb820b47a42d92f"
+    },
+    "registered_tools": 539,
+    "registry_sha256": "af77a08d5d0a50c212ec707c0b545371117a94977e76430962efdf1da02f386b",
+    "first_request_provenance": []
+  }
+}

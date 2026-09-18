@@ -1,0 +1,1775 @@
+[
+  {
+    "route": "cfp/mistralai/mistral-small-3.1-24b-instruct",
+    "observed_at": "2026-09-09T08:12:40.358173+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "6294361adf552553"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/nemotron-3-ultra-free",
+    "observed_at": "2026-09-09T08:11:44.677681+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=opencode-zen; latency_ms=12732",
+      "x-omniroute-latency-ms": "12732",
+      "x-omniroute-model": "nemotron-3-ultra-free",
+      "x-omniroute-provider": "opencode-zen",
+      "x-omniroute-request-id": "9f573130-d7c5-4c2e-86b4-208d98a779e5",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "bbd91a0c49697bb6",
+      "x-omniroute-tokens-in": "20",
+      "x-omniroute-tokens-out": "14",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941505-7gH6Wmpg78jf0bOwLXLM",
+      "object": "response",
+      "created_at": 1788941505,
+      "model": "nemotron-3-ultra-free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941505-7gH6Wmpg78jf0bOwLXLM_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "The user wants me to reply with exactly \"OK\"."
+            }
+          ]
+        },
+        {
+          "id": "msg_resp_gen-1788941505-7gH6Wmpg78jf0bOwLXLM_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "OK",
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 14,
+        "total_tokens": 34,
+        "input_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "audio_tokens": 0,
+          "reasoning_tokens": 12
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": true
+  },
+  {
+    "route": "opencode/ling-3.0-flash-fin-free",
+    "observed_at": "2026-09-09T08:11:33.262499+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=opencode-zen; latency_ms=1457",
+      "x-omniroute-latency-ms": "1457",
+      "x-omniroute-model": "ling-3.0-flash-fin-free",
+      "x-omniroute-provider": "opencode-zen",
+      "x-omniroute-request-id": "fa759d92-d894-4984-885c-22c7f3f9eb18",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "d69f26ad5f261f6b",
+      "x-omniroute-tokens-in": "24",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941493-Lhb0Fj0Spqyng6mR4vV0",
+      "object": "response",
+      "created_at": 1788941493,
+      "model": "ling-3.0-flash-fin-free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941493-Lhb0Fj0Spqyng6mR4vV0_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "1.  **Analyze the Request:**\n    *   Input: \"Reply exactly OK.\"\n    *   Instruction"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 24,
+        "total_tokens": 48,
+        "input_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "audio_tokens": 0,
+          "reasoning_tokens": 22
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/z-ai/glm-5.2:free",
+    "observed_at": "2026-09-09T08:13:25.649882+00:00",
+    "http_status": 404,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "cd687d7d-d91a-480f-aa2e-4b9c6a6005f7",
+      "x-omniroute-session-id": "9dfebfd7ac78845d"
+    },
+    "error": "{\"error\":{\"message\":\"[openrouter/z-ai/glm-5.2:free] [404]: This model is unavailable for free. The paid version is available now - use this slug instead: z-ai/glm-5.2 (reset after 2m)\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/mimo-v2.5-free",
+    "observed_at": "2026-09-09T08:11:29.339652+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=opencode-zen; latency_ms=3513",
+      "x-omniroute-latency-ms": "3513",
+      "x-omniroute-model": "mimo-v2.5-free",
+      "x-omniroute-provider": "opencode-zen",
+      "x-omniroute-request-id": "0ac179dc-2e9e-4af3-b1df-9d10153ff92d",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "4454e9a18a0c2b61",
+      "x-omniroute-tokens-in": "251",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941489-660fxrBxy4tKYaQtAfLc",
+      "object": "response",
+      "created_at": 1788941489,
+      "model": "mimo-v2.5-free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941489-660fxrBxy4tKYaQtAfLc_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "Hmm, the user's instruction is extremely simple: \"Reply exactly OK.\" This is likely a test or a minimal"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 251,
+        "output_tokens": 24,
+        "total_tokens": 275,
+        "input_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 192,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "audio_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/aisingapore/gemma-sea-lion-v4-27b-it",
+    "observed_at": "2026-09-09T08:12:42.206871+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "25fccab02d2f40e5"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "observed_at": "2026-09-09T08:13:33.585117+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "cd687d7d-d91a-480f-aa2e-4b9c6a6005f7",
+      "x-omniroute-session-id": "5c0b27c51c111c50"
+    },
+    "error": "{\"error\":{\"message\":\"[openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free] upstream returned an empty response without usable output\",\"type\":\"upstream_response_error\",\"code\":\"upstream_empty_response\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    "observed_at": "2026-09-09T08:12:37.850255+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "032188abebc2aa1e"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/poolside/laguna-s-2.1:free",
+    "observed_at": "2026-09-09T08:12:58.008723+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=7197",
+      "x-omniroute-latency-ms": "7197",
+      "x-omniroute-model": "poolside/laguna-s-2.1:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "69c4d145-9364-4f97-9d61-09f1b314a04a",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "524bfeee3098c4ad",
+      "x-omniroute-tokens-in": "47",
+      "x-omniroute-tokens-out": "3",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941583-YdmSV10JQ4mQ8NJG69Ov",
+      "object": "response",
+      "created_at": 1788941583,
+      "model": "poolside/laguna-s-2.1:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "msg_resp_gen-1788941583-YdmSV10JQ4mQ8NJG69Ov_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK.",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "OK.",
+      "usage": {
+        "input_tokens": 47,
+        "output_tokens": 3,
+        "total_tokens": 50,
+        "input_tokens_details": {
+          "cached_tokens": 32,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/zai-org/glm-5.2",
+    "observed_at": "2026-09-09T08:12:19.971464+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "1c9b771ad2c33880"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/minimax/minimax-m3:free",
+    "observed_at": "2026-09-09T08:13:32.357292+00:00",
+    "http_status": 404,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "cd687d7d-d91a-480f-aa2e-4b9c6a6005f7",
+      "x-omniroute-session-id": "48fc7eaf35090797"
+    },
+    "error": "{\"error\":{\"message\":\"[openrouter/minimax/minimax-m3:free] [404]: This model is unavailable for free. The paid version is available now - use this slug instead: minimax/minimax-m3 (reset after 2m)\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/openai/gpt-oss-20b",
+    "observed_at": "2026-09-09T08:12:31.596383+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "2625735f87a175ac"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/google/gemma-4-26b-a4b-it",
+    "observed_at": "2026-09-09T08:12:39.414044+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "9c57ab9b2792d616"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/openai/gpt-oss-120b",
+    "observed_at": "2026-09-09T08:12:29.469965+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "e3313c6b59423d02"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/dots-studio/dots-3-note-preview:free",
+    "observed_at": "2026-09-09T08:12:52.600394+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=2108",
+      "x-omniroute-latency-ms": "2108",
+      "x-omniroute-model": "dots-studio/dots-3-note-preview:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "9bafb5db-bda4-4db0-bf5f-901d04232813",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "41462fe2c3488735",
+      "x-omniroute-tokens-in": "17",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941573-bwP7C3h7W4kwfYy84SJZ",
+      "object": "response",
+      "created_at": 1788941573,
+      "model": "dots-studio/dots-3-note-preview:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941573-bwP7C3h7W4kwfYy84SJZ_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "The user says \"Reply exactly OK.\" I need to reply with exactly \"OK\". No extra punctuation, no extra words"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 17,
+        "output_tokens": 24,
+        "total_tokens": 41,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 27,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/qwen/qwq-32b",
+    "observed_at": "2026-09-09T08:12:37.229567+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "7add157df883d88e"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/nvidia/nemotron-3.5-lightning:free",
+    "observed_at": "2026-09-09T08:12:55.871855+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=2010",
+      "x-omniroute-latency-ms": "2010",
+      "x-omniroute-model": "nvidia/nemotron-3.5-lightning:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "8386ce93-9046-4129-9937-89f96461db00",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "2a4c7d5168df5c14",
+      "x-omniroute-tokens-in": "20",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941576-LIc6qIqXwSrpWVpMSIcW",
+      "object": "response",
+      "created_at": 1788941576,
+      "model": "nvidia/nemotron-3.5-lightning:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941576-LIc6qIqXwSrpWVpMSIcW_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply exactly OK.\"\n2"
+            }
+          ]
+        },
+        {
+          "id": "msg_resp_gen-1788941576-LIc6qIqXwSrpWVpMSIcW_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply exactly OK.\"\n2",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "Here's a thinking process:\n\n1.  **Analyze User Input:** The user says \"Reply exactly OK.\"\n2",
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 24,
+        "total_tokens": 44,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 24,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/muse-spark-1.2-contributor-free",
+    "observed_at": "2026-09-09T08:11:25.894592+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "9d9d258a-8867-4f62-b142-e02721f49087",
+      "x-omniroute-session-id": "c037397ca9a3a00f"
+    },
+    "error": "{\"error\":{\"message\":\"[opencode-zen/muse-spark-1.2-contributor-free] upstream returned an empty response without usable output\",\"type\":\"upstream_response_error\",\"code\":\"upstream_empty_response\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/deepseek-ai/deepseek-v4-flash-0731",
+    "observed_at": "2026-09-09T08:12:29.244176+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "36d2225edb1b7a13"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/inclusionai/ling-3.0-flash-fin:free",
+    "observed_at": "2026-09-09T08:12:52.344974+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=1655",
+      "x-omniroute-latency-ms": "1655",
+      "x-omniroute-model": "inclusionai/ling-3.0-flash-fin:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "fe7172e8-50a1-4d03-9bf7-e5f9b0a6e302",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "2bd50e2bef2c5a61",
+      "x-omniroute-tokens-in": "24",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941573-sCxqR5JSEdYlxcfu76px",
+      "object": "response",
+      "created_at": 1788941573,
+      "model": "inclusionai/ling-3.0-flash-fin:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941573-sCxqR5JSEdYlxcfu76px_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "1.  **Analyze the Request:**\n    *   Input: \"Reply exactly OK.\"\n    *   Constraint"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 24,
+        "total_tokens": 48,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 21,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/ling-3.0-flash-fin-free",
+    "observed_at": "2026-09-09T08:11:30.824701+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=oc; latency_ms=1032",
+      "x-omniroute-latency-ms": "1032",
+      "x-omniroute-model": "ling-3.0-flash-fin-free",
+      "x-omniroute-provider": "oc",
+      "x-omniroute-request-id": "030a43e3-84b0-447b-8262-7989b6f3a674",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "814395b2a209b921",
+      "x-omniroute-tokens-in": "24",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941491-IdWwnugcRgOKQO0rcukz",
+      "object": "response",
+      "created_at": 1788941491,
+      "model": "ling-3.0-flash-fin-free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941491-IdWwnugcRgOKQO0rcukz_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "1.  **Analyze the Request:**\n    *   Input: \"Reply exactly OK.\"\n    *   Goal"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 24,
+        "total_tokens": 48,
+        "input_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "audio_tokens": 0,
+          "reasoning_tokens": 20
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/cohere/north-mini-code:free",
+    "observed_at": "2026-09-09T08:13:19.334024+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=2554",
+      "x-omniroute-latency-ms": "2554",
+      "x-omniroute-model": "cohere/north-mini-code:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "5fbee976-87dd-4b39-ad64-815ad8c04f23",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "20ea23f102db9472",
+      "x-omniroute-tokens-in": "4",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941601-jQT04YQlsmpM5wcUYEMH",
+      "object": "response",
+      "created_at": 1788941601,
+      "model": "cohere/north-mini-code:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941601-jQT04YQlsmpM5wcUYEMH_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "The user says: \"Reply exactly OK.\"\n\nWe need to comply. The instruction: reply exactly \"OK\". Probably just"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 4,
+        "output_tokens": 24,
+        "total_tokens": 28,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 27,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/nvidia/nemotron-3.5-content-safety:free",
+    "observed_at": "2026-09-09T08:13:28.657840+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=2220",
+      "x-omniroute-latency-ms": "2220",
+      "x-omniroute-model": "nvidia/nemotron-3.5-content-safety:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "7b3505cf-8bba-4584-ad89-97175acc134e",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "7da2c27280c05485",
+      "x-omniroute-tokens-in": "466",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941610-xyHoyo9TpmQtvZM2JX22",
+      "object": "response",
+      "created_at": 1788941610,
+      "model": "nvidia/nemotron-3.5-content-safety:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941610-xyHoyo9TpmQtvZM2JX22_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "\nWe need to classify user input: \"Reply exactly OK.\" It's a request to reply exactly"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 466,
+        "output_tokens": 24,
+        "total_tokens": 490,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 22,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "Client error '404 Not Found' for url 'http://127.0.0.1:20128/v1/responses'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/deepseek-ai/deepseek-v4-pro-0813",
+    "observed_at": "2026-09-09T08:12:26.366734+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "ee343c5926809eec"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "nvidia/openai/gpt-oss-120b",
+    "observed_at": "2026-09-09T08:14:46.323852+00:00",
+    "http_status": 410,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "1bab7f0a-21ad-4515-be6d-3386df20eded",
+      "x-omniroute-session-id": "fffc5dfecf696d3c"
+    },
+    "error": "{\"error\":{\"message\":\"[410]: {\\\"type\\\":\\\"about:blank\\\",\\\"title\\\":\\\"Gone\\\",\\\"status\\\":410,\\\"detail\\\":\\\"The model 'openai/gpt-oss-120b' has reached its end of life on 2026-09-03T08:00:00Z and is no longer available.\\\"}\",\"type\":\"invalid_request_error\",\"c",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/laguna-s-2.1-free",
+    "observed_at": "2026-09-09T08:12:07.979461+00:00",
+    "http_status": 401,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "da5ba90357d27f42"
+    },
+    "error": "{\"error\":{\"message\":\"[401]: Model laguna-s-2.1-free is not supported\",\"type\":\"authentication_error\",\"code\":\"invalid_api_key\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/meta/llama-3.1-8b-instruct-fp8",
+    "observed_at": "2026-09-09T08:12:31.944462+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "ba1edb48580d5c91"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "ddgw/tinfoil/gpt-oss-120b",
+    "observed_at": "2026-09-09T08:12:47.993774+00:00",
+    "http_status": 418,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "3fa781040afdce12"
+    },
+    "error": "{\"error\":{\"message\":\"[418]: DuckDuckGo AI Chat anti-abuse challenge failed: ERR_BN_LIMIT (7b08). Retry later or from a less rate-limited IP; DuckDuckGo is rejecting this anonymous session.\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "observed_at": "2026-09-09T08:13:29.007859+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "ddgw/tinfoil/gemma4-31b",
+    "observed_at": "2026-09-09T08:12:48.782563+00:00",
+    "http_status": 418,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "95f87d168f0a5e34"
+    },
+    "error": "{\"error\":{\"message\":\"[418]: DuckDuckGo AI Chat anti-abuse challenge failed: ERR_BN_LIMIT (7b08). Retry later or from a less rate-limited IP; DuckDuckGo is rejecting this anonymous session.\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    "observed_at": "2026-09-09T08:13:52.452259+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=1609",
+      "x-omniroute-latency-ms": "1609",
+      "x-omniroute-model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "bfb9331d-0c45-472a-88a0-b4e414e5b7fd",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "cf253298cf126124",
+      "x-omniroute-tokens-in": "20",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941633-WfrvlN5jIFyevZaQZc7H",
+      "object": "response",
+      "created_at": 1788941633,
+      "model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941633-WfrvlN5jIFyevZaQZc7H_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "User says: \"Reply exactly OK.\" So we need to output exactly \"OK\". No extra spaces, no newline?"
+            }
+          ]
+        },
+        {
+          "id": "msg_resp_gen-1788941633-WfrvlN5jIFyevZaQZc7H_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "User says: \"Reply exactly OK.\" So we need to output exactly \"OK\". No extra spaces, no newline?",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "User says: \"Reply exactly OK.\" So we need to output exactly \"OK\". No extra spaces, no newline?",
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 24,
+        "total_tokens": 44,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 24,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/nemotron-3.5-lightning-free",
+    "observed_at": "2026-09-09T08:11:45.952861+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "ddgw/mistral-small-2603",
+    "observed_at": "2026-09-09T08:12:47.710795+00:00",
+    "http_status": 418,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "92239b2fccd4a294"
+    },
+    "error": "{\"error\":{\"message\":\"[418]: DuckDuckGo AI Chat anti-abuse challenge failed: ERR_BN_LIMIT (7b08). Retry later or from a less rate-limited IP; DuckDuckGo is rejecting this anonymous session.\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/muse-spark-1.2-contributor-free",
+    "observed_at": "2026-09-09T08:11:24.766488+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "688ee7f16c09f996"
+    },
+    "error": "{\"error\":{\"message\":\"[opencode/muse-spark-1.2-contributor-free] upstream returned an empty response without usable output\",\"type\":\"upstream_response_error\",\"code\":\"upstream_empty_response\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "ddgw/gpt-5.4-mini",
+    "observed_at": "2026-09-09T08:12:42.682278+00:00",
+    "http_status": 418,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "e9ad7e8b0abe48f0"
+    },
+    "error": "{\"error\":{\"message\":\"[418]: DuckDuckGo AI Chat anti-abuse challenge failed: ERR_BN_LIMIT (7b08). Retry later or from a less rate-limited IP; DuckDuckGo is rejecting this anonymous session.\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/moonshotai/kimi-k2.7-code",
+    "observed_at": "2026-09-09T08:12:22.299441+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "ead04428d3037db0"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/nvidia/nemotron-3-120b-a12b",
+    "observed_at": "2026-09-09T08:12:34.548955+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "a36fcb410799b111"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/qwen/qwen3-30b-a3b-fp8",
+    "observed_at": "2026-09-09T08:12:36.791550+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "ef79db04a9a92aa4"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/north-mini-code-free",
+    "observed_at": "2026-09-09T08:11:21.990449+00:00",
+    "http_status": 400,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-session-id": "a86564c0a6ddaa45"
+    },
+    "error": "{\"error\":{\"message\":\"Model 'north-mini-code-free' is not available in the active live catalog for provider 'opencode'.\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/mimo-v2.5-free",
+    "observed_at": "2026-09-09T08:11:27.987629+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=oc; latency_ms=13050",
+      "x-omniroute-latency-ms": "13050",
+      "x-omniroute-model": "mimo-v2.5-free",
+      "x-omniroute-provider": "oc",
+      "x-omniroute-request-id": "0e3d7f44-f62a-4c64-9164-9f0fdf3f0856",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "9da758a2b66f8c72",
+      "x-omniroute-tokens-in": "251",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941488-LHTOLvDsIEcXuycQBypO",
+      "object": "response",
+      "created_at": 1788941488,
+      "model": "mimo-v2.5-free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941488-LHTOLvDsIEcXuycQBypO_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "Hmm, the user wants a minimal response with just \"OK\". This is straightforward - no need for elaboration or"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 251,
+        "output_tokens": 24,
+        "total_tokens": 275,
+        "input_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 192,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "audio_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "nvidia/meta/llama-4-maverick-17b-128e-instruct",
+    "observed_at": "2026-09-09T08:14:46.268247+00:00",
+    "http_status": 400,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-session-id": "1d032e58bc3f6e8f"
+    },
+    "error": "{\"error\":{\"message\":\"Model 'meta/llama-4-maverick-17b-128e-instruct' is not available in the active live catalog for provider 'nvidia'.\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/google/gemma-4-31b-it:free",
+    "observed_at": "2026-09-09T08:13:43.150931+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=2418",
+      "x-omniroute-latency-ms": "2418",
+      "x-omniroute-model": "google/gemma-4-31b-it:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "50747b93-d0f7-47ff-bc7a-8d08227902a3",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "beb1fd8606243ecf",
+      "x-omniroute-tokens-in": "5",
+      "x-omniroute-tokens-out": "1",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941637-19pExsIbixkIIo3d16tN",
+      "object": "response",
+      "created_at": 1788941637,
+      "model": "google/gemma-4-31b-it:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "msg_resp_gen-1788941637-19pExsIbixkIIo3d16tN_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "OK",
+      "usage": {
+        "input_tokens": 5,
+        "output_tokens": 1,
+        "total_tokens": 6,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": true
+  },
+  {
+    "route": "cfp/moonshotai/kimi-k2.6",
+    "observed_at": "2026-09-09T08:12:25.413371+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "9dd4e56047640c4b"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "mistral/labs-leanstral-1-5",
+    "observed_at": "2026-09-09T08:14:47.316192+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/big-pickle",
+    "observed_at": "2026-09-09T08:11:22.003296+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=oc; latency_ms=1683",
+      "x-omniroute-latency-ms": "1683",
+      "x-omniroute-model": "big-pickle",
+      "x-omniroute-provider": "oc",
+      "x-omniroute-request-id": "8b0998ae-c038-4fb1-8364-747648d020d9",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "41e2bed3f787bab4",
+      "x-omniroute-tokens-in": "8",
+      "x-omniroute-tokens-out": "3",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_chatcmpl-RDccwLpAo4zAnFHOjljpaICv",
+      "object": "response",
+      "created_at": 1788941483,
+      "model": "big-pickle",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "msg_resp_chatcmpl-RDccwLpAo4zAnFHOjljpaICv_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK.",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "OK.",
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": 3,
+        "total_tokens": 11,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/deepseek-v4-flash-free",
+    "observed_at": "2026-09-09T08:11:23.760839+00:00",
+    "http_status": 400,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "9d9d258a-8867-4f62-b142-e02721f49087",
+      "x-omniroute-session-id": "65d7fdb8449c5951"
+    },
+    "error": "{\"error\":{\"message\":\"[400]: Error from provider (Console): Upstream request failed: Model is unavailable.\",\"type\":\"server_error\",\"code\":\"bad_request\"},\"upstream_details\":{\"error\":{\"type\":\"server_error\",\"message\":\"Error from provider (Console): Upstre",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/minimax/minimax-m2.7:free",
+    "observed_at": "2026-09-09T08:13:51.037513+00:00",
+    "http_status": 404,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "cd687d7d-d91a-480f-aa2e-4b9c6a6005f7",
+      "x-omniroute-session-id": "67642b8b28913e70"
+    },
+    "error": "{\"error\":{\"message\":\"[openrouter/minimax/minimax-m2.7:free] [404]: This model is unavailable for free. The paid version is available now - use this slug instead: minimax/minimax-m2.7 (reset after 2m)\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/laguna-s-2.1-free",
+    "observed_at": "2026-09-09T08:12:12.221941+00:00",
+    "http_status": 401,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "b923af1a-a79f-48f9-83b0-afec450845bc",
+      "x-omniroute-session-id": "fec811e7937c3bf0"
+    },
+    "error": "{\"error\":{\"message\":\"[opencode-zen/laguna-s-2.1-free] [401]: Model laguna-s-2.1-free is not supported (reset after 1m 48s)\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/meta-llama/llama-3.3-70b-instruct-fp8-fast",
+    "observed_at": "2026-09-09T08:12:31.917688+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "c10fe1c68da48ba1"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/liquid/lfm-2.5-2.6b:free",
+    "observed_at": "2026-09-09T08:12:53.528950+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=2041",
+      "x-omniroute-latency-ms": "2041",
+      "x-omniroute-model": "liquid/lfm-2.5-2.6b:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "adc47d07-e8a1-4e57-912f-5c10fefebe4f",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "979f4bd756cbcbd6",
+      "x-omniroute-tokens-in": "14",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941574-8qwEdKCsJvxg9pDnARw9",
+      "object": "response",
+      "created_at": 1788941574,
+      "model": "liquid/lfm-2.5-2.6b:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941574-8qwEdKCsJvxg9pDnARw9_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "The user wants me to reply exactly with the word \"OK\". This is a straightforward instruction that requires no additional text,"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 14,
+        "output_tokens": 24,
+        "total_tokens": 38,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 24,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/poolside/laguna-xs-2.1:free",
+    "observed_at": "2026-09-09T08:13:11.082731+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=9932",
+      "x-omniroute-latency-ms": "9932",
+      "x-omniroute-model": "poolside/laguna-xs-2.1:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "a84e13c8-63a1-4bd3-aebd-11331dc2d0dc",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "8ff84548e2c23cec",
+      "x-omniroute-tokens-in": "47",
+      "x-omniroute-tokens-out": "24",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941596-TCrxkQoePtC4jDSizLVt",
+      "object": "response",
+      "created_at": 1788941596,
+      "model": "poolside/laguna-xs-2.1:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "rs_resp_gen-1788941596-TCrxkQoePtC4jDSizLVt_0",
+          "type": "reasoning",
+          "summary": [
+            {
+              "type": "summary_text",
+              "text": "Okay, the user wants me to reply exactly with \"OK\". Let me make sure I understand what they're asking for"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 47,
+        "output_tokens": 24,
+        "total_tokens": 71,
+        "input_tokens_details": {
+          "cached_tokens": 32,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 24,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": false,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "ddgw/claude-haiku-4-5",
+    "observed_at": "2026-09-09T08:12:44.448520+00:00",
+    "http_status": 418,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "6b91ec7cdf931ca8"
+    },
+    "error": "{\"error\":{\"message\":\"[418]: DuckDuckGo AI Chat anti-abuse challenge failed: ERR_BN_LIMIT (7b08). Retry later or from a less rate-limited IP; DuckDuckGo is rejecting this anonymous session.\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "mistral/labs-leanstral-1-5-1",
+    "observed_at": "2026-09-09T08:15:09.347742+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/ibm-granite/granite-4.0-h-micro",
+    "observed_at": "2026-09-09T08:12:40.509695+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "2015b45e8222f7ce"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/nemotron-3-ultra-free",
+    "observed_at": "2026-09-09T08:11:35.960569+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "5f79f41c30fe4a5e"
+    },
+    "error": "{\"error\":{\"message\":\"[opencode/nemotron-3-ultra-free] upstream returned an empty response without usable output\",\"type\":\"upstream_response_error\",\"code\":\"upstream_empty_response\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/nemotron-3.5-lightning-free",
+    "observed_at": "2026-09-09T08:11:57.944415+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/zai-org/glm-4.7-flash",
+    "observed_at": "2026-09-09T08:12:29.415148+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "2f197a5d091811bc"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/thinkingmachines/inkling:free",
+    "observed_at": "2026-09-09T08:13:03.619700+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/deepseek-v4-flash-free",
+    "observed_at": "2026-09-09T08:11:22.079544+00:00",
+    "http_status": 400,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "401c7bfc93914281"
+    },
+    "error": "{\"error\":{\"message\":\"[400]: Error from provider (Console): Upstream request failed: Model is unavailable.\",\"type\":\"server_error\",\"code\":\"bad_request\"},\"upstream_details\":{\"error\":{\"type\":\"server_error\",\"message\":\"Error from provider (Console): Upstre",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/thinkingmachines/inkling-small:free",
+    "observed_at": "2026-09-09T08:12:57.304919+00:00",
+    "error": "ReadTimeout",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "oc/hy3-free",
+    "observed_at": "2026-09-09T08:11:21.955976+00:00",
+    "http_status": 400,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-session-id": "aa0c2c56ff61b58a"
+    },
+    "error": "{\"error\":{\"message\":\"Model 'hy3-free' is not available in the active live catalog for provider 'opencode'.\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "opencode/big-pickle",
+    "observed_at": "2026-09-09T08:11:22.058765+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=opencode-zen; latency_ms=1878",
+      "x-omniroute-latency-ms": "1878",
+      "x-omniroute-model": "big-pickle",
+      "x-omniroute-provider": "opencode-zen",
+      "x-omniroute-request-id": "76137bad-6d8d-4ddb-8d6a-52fcdd8414d0",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "ac415472103b65cc",
+      "x-omniroute-tokens-in": "8",
+      "x-omniroute-tokens-out": "3",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_chatcmpl-RTZ3jG8Iyyd6eLU122Rqigws",
+      "object": "response",
+      "created_at": 1788941483,
+      "model": "big-pickle",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "msg_resp_chatcmpl-RTZ3jG8Iyyd6eLU122Rqigws_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK.",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "OK.",
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": 3,
+        "total_tokens": 11,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": null
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider did not invoke client tool search",
+    "response_envelope_present": true,
+    "exact_ok": false
+  },
+  {
+    "route": "openrouter/google/gemma-4-26b-a4b-it:free",
+    "observed_at": "2026-09-09T08:13:36.736578+00:00",
+    "http_status": 200,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-cache": "MISS",
+      "x-omniroute-cache-hit": "false",
+      "x-omniroute-compression": "off; source=off",
+      "x-omniroute-decision": "strategy=single; provider=openrouter; latency_ms=3631",
+      "x-omniroute-latency-ms": "3631",
+      "x-omniroute-model": "google/gemma-4-26b-a4b-it:free",
+      "x-omniroute-provider": "openrouter",
+      "x-omniroute-request-id": "384dc474-d728-4514-9e80-440267d82992",
+      "x-omniroute-response-cost": "0.0000000000",
+      "x-omniroute-session-id": "175ec4e336a366a4",
+      "x-omniroute-tokens-in": "5",
+      "x-omniroute-tokens-out": "1",
+      "x-omniroute-version": "3.8.50"
+    },
+    "text_response": {
+      "id": "resp_gen-1788941634-xTOqhXNdH3gA3h4N5kwq",
+      "object": "response",
+      "created_at": 1788941634,
+      "model": "google/gemma-4-26b-a4b-it:free",
+      "status": "completed",
+      "background": false,
+      "error": null,
+      "output": [
+        {
+          "id": "msg_resp_gen-1788941634-xTOqhXNdH3gA3h4N5kwq_0",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "output_text": "OK",
+      "usage": {
+        "input_tokens": 5,
+        "output_tokens": 1,
+        "total_tokens": 6,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      }
+    },
+    "text_callable": true,
+    "search_error": "provider omitted a completed Responses event",
+    "response_envelope_present": true,
+    "exact_ok": true
+  },
+  {
+    "route": "cfp/qwen/qwen2.5-coder-32b-instruct",
+    "observed_at": "2026-09-09T08:12:34.833773+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "25139d36d4004b85"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "ddgw/gpt-5.4-nano",
+    "observed_at": "2026-09-09T08:12:43.516213+00:00",
+    "http_status": 418,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "fd2212d9491befea"
+    },
+    "error": "{\"error\":{\"message\":\"[418]: DuckDuckGo AI Chat anti-abuse challenge failed: ERR_BN_LIMIT (7b08). Retry later or from a less rate-limited IP; DuckDuckGo is rejecting this anonymous session.\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  },
+  {
+    "route": "cfp/meta/llama-4-scout-17b-16e-instruct",
+    "observed_at": "2026-09-09T08:12:34.412302+00:00",
+    "http_status": 502,
+    "provenance": {
+      "x-omniroute-route-class": "CLIENT_API",
+      "x-omniroute-selected-connection-id": "noauth",
+      "x-omniroute-session-id": "ae30e95568939dc8"
+    },
+    "error": "{\"error\":{\"message\":\"[502]: Cloudflare Playground browser session failed: browserType.launch: Executable doesn't exist at /Users/Jo/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell\",\"type",
+    "response_envelope_present": false,
+    "text_callable": false,
+    "exact_ok": false
+  }
+]
