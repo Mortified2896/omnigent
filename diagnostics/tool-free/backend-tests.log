@@ -1,0 +1,27 @@
+2026-09-10T06:13:10.170828Z [info     ] structlog output capture disabled, no output directory specified [structlog_config.pytest]
+Running 150 items in this shard
+........................................................................ [ 48%]
+........................................................................ [ 96%]
+......                                                                   [100%]
+========================= Top tests by peak-RSS delta ==========================
++  147.4 MB  (now    147.4 MB)  tests/server/test_o3_tool_free.py::test_tool_calls_rejected_even_after_text[function_call]
++    1.3 MB  (now    149.8 MB)  tests/server/test_o3_routing_review.py::test_mutating_routes_require_auth_json_and_trusted_origin
++    0.3 MB  (now    150.1 MB)  tests/server/test_o3_routing_review.py::test_create_route_returns_recoverable_error_when_omniroute_is_unavailable
++    0.3 MB  (now    148.1 MB)  tests/server/test_o3_tool_free.py::test_approved_harness_binds_prompt_and_consumes_approval
++    0.2 MB  (now    147.8 MB)  tests/server/test_o3_tool_free.py::test_executor_ignores_tools_and_refuses_followup
++    0.2 MB  (now    148.2 MB)  tests/server/test_o3_tool_free.py::test_builtin_agent_bundle_loads_with_no_tools
++    0.1 MB  (now    150.3 MB)  tests/server/test_o3_routing_review.py::test_execution_overrides_persist_reset_and_recompute
++    0.1 MB  (now    148.3 MB)  tests/server/test_o3_routing_review.py::test_forecast_output_accepts_single_json_markdown_fence
++    0.0 MB  (now    147.5 MB)  tests/server/test_o3_tool_free.py::test_tools_off_preserves_both_lanes_and_price_never_lowers_floor
++    0.0 MB  (now    148.4 MB)  tests/server/test_o3_routing_review.py::test_recommendation_only_create_and_adjust_skip_execution_side_effects
++    0.0 MB  (now    150.2 MB)  tests/server/test_o3_routing_review.py::test_adviser_transcripts_are_request_scoped
++    0.0 MB  (now    150.4 MB)  tests/server/test_o3_catalogue_recommendation.py::test_execution_set_is_uncapped_and_checks_effective_io_per_route
++    0.0 MB  (now    148.3 MB)  tests/server/test_o3_routing_review.py::test_schema_v1_numeric_floor_remains_readable_without_rewriting_history
++    0.0 MB  (now    148.4 MB)  tests/server/test_o3_routing_review.py::test_adviser_repairs_schema_invalid_provider_output_once
++    0.0 MB  (now    148.5 MB)  tests/server/test_o3_routing_review.py::test_wait_is_resumable_and_adjustment_versions_constraints
++    0.0 MB  (now    148.5 MB)  tests/server/test_o3_routing_review.py::test_ttl_cleanup_deletes_abandoned_combo_but_retains_active_session
++    0.0 MB  (now    150.2 MB)  tests/server/test_o3_routing_review.py::test_readiness_uses_latest_exact_route_outcome
++    0.0 MB  (now    150.6 MB)  tests/runner/test_codex_native_launch_config.py::test_deployment_trust_composes_with_session_label[ YES -None-True]
++    0.0 MB  (now    147.4 MB)  tests/server/test_o3_tool_free.py::test_legacy_tool_call_rejected[tool_calls]
++    0.0 MB  (now    147.5 MB)  tests/server/test_o3_tool_free.py::test_no_combo_or_implicit_route[]
+150 passed in 0.53s

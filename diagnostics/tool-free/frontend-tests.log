@@ -1,0 +1,10 @@
+[dev-proxy] target=http://localhost:6767
+
+ RUN  v4.1.10 /Users/Jo/GitHub/_worktrees/omnigent/mac-tool-free-execution/web
+
+
+ Test Files  2 passed (2)
+      Tests  83 passed (83)
+   Start at  12:26:40
+   Duration  4.21s (transform 680ms, setup 180ms, import 1.27s, tests 2.81s, environment 1.76s)
+

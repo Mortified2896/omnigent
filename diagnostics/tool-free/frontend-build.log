@@ -1,0 +1,529 @@
+$ vite build
+[dev-proxy] target=http://localhost:6767
+vite v8.1.0 building client environment for production...
+[2Ktransforming...Found 2 warnings while optimizing generated CSS:
+
+Issue #1:
+[2m│   }[22m
+[2m│ }[22m
+[2m│[22m ::highlight(md-preview-search) {
+[2m┆[22m             [33m[2m^--[22m 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?[39m
+[2m┆[22m
+[2m│   background-color: var(--warning);[22m
+[2m│   @supports (color: color-mix(in lab, red, red)) {[22m
+
+Issue #2:
+[2m│   }[22m
+[2m│ }[22m
+[2m│[22m ::highlight(md-preview-search-current) {
+[2m┆[22m             [33m[2m^--[22m 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?[39m
+[2m┆[22m
+[2m│   background-color: var(--warning);[22m
+[2m│   @supports (color: color-mix(in lab, red, red)) {[22m
+
+✓ 6669 modules transformed.
+[lightningcss minify] 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?
+321 |  }
+322 |  /*! tailwindcss v4.3.1 | MIT License | https://tailwindcss.com */
+323 |  ...mix(in oklch, var(--warning) 70%, transparent)}}::highlight(md-preview-search){background-color:var(--warning)}@su...
+    |                                                                 ^
+[lightningcss minify] 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?
+321 |  }
+322 |  /*! tailwindcss v4.3.1 | MIT License | https://tailwindcss.com */
+323 |  ...)}@supports (color:color-mix(in lab, red, red)){::highlight(md-preview-search){background-color:color-mix(in oklch...
+    |                                                                 ^
+[lightningcss minify] 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?
+321 |  }
+322 |  /*! tailwindcss v4.3.1 | MIT License | https://tailwindcss.com */
+323 |  ...mix(in oklch, var(--warning) 30%, transparent)}}::highlight(md-preview-search-current){background-color:var(--warn...
+    |                                                                 ^
+[lightningcss minify] 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?
+321 |  }
+322 |  /*! tailwindcss v4.3.1 | MIT License | https://tailwindcss.com */
+323 |  ...)}@supports (color:color-mix(in lab, red, red)){::highlight(md-preview-search-current){background-color:color-mix(...
+    |                                                                 ^
+rendering chunks...
+computing gzip size...
+../omnigent/server/static/web-ui/version.json                                                   0.02 kB │ gzip:   0.04 kB
+../omnigent/server/static/web-ui/manifest.webmanifest                                           0.46 kB
+../omnigent/server/static/web-ui/sw.js                                                          2.51 kB
+../omnigent/server/static/web-ui/index.html                                                     4.17 kB │ gzip:   1.02 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size3-Regular-CTq5MqoE.woff                       4.42 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2                      4.92 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size2-Regular-Dy4dx90m.woff2                      5.20 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size1-Regular-mCD8mA8B.woff2                      5.46 kB
+../omnigent/server/static/web-ui/assets/geist-mono-symbols2-wght-normal-CO5SzqOn.woff2          5.81 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size4-Regular-BF-4gkZK.woff                       5.98 kB
+../omnigent/server/static/web-ui/assets/geist-mono-cyrillic-ext-wght-normal-X_5orZeX.woff2      6.17 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size2-Regular-oD1tc_U0.woff                       6.18 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size1-Regular-C195tn64.woff                       6.49 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2                6.90 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2                   6.91 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size3-Regular-DgpXs0kz.ttf                        7.58 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff                 7.65 kB
+../omnigent/server/static/web-ui/assets/geist-mono-vietnamese-wght-normal-DadHysG0.woff2        7.69 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff                    7.71 kB
+../omnigent/server/static/web-ui/assets/omnigent-wordmark-D_DVXRIO.svg                          7.93 kB │ gzip:   3.35 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Script-Regular-D3wIWfF6.woff2                     9.64 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2                 10.34 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size4-Regular-DWFBv043.ttf                       10.36 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Script-Regular-D5yQViql.woff                     10.58 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2                   11.31 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2                      11.34 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size2-Regular-B7gKUWhC.ttf                       11.50 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2                  12.02 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2                    12.21 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Size1-Regular-Dbsnue_I.ttf                       12.22 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff                  12.31 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf                 12.34 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf                    12.36 kB
+../omnigent/server/static/web-ui/assets/geist-mono-cyrillic-wght-normal-DiZS0aHC.woff2         12.94 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff                    13.20 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Fraktur-Bold-BsDP51OF.woff                       13.29 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2                13.56 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Italic-DN2j7dab.woff                   14.11 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff                     14.40 kB
+../omnigent/server/static/web-ui/assets/geist-mono-latin-ext-wght-normal-Bwz-egvJ.woff2        14.69 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff                 16.02 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2                   16.40 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Math-Italic-t53AETM-.woff2                       16.44 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Script-Regular-C5JkGWo-.ttf                      16.64 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2                   16.78 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Italic-NWA7e6Wa.woff2                       16.98 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff                    18.66 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Math-Italic-DA0__PXp.woff                        18.74 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-BoldItalic-SpSLRI95.woff                    19.41 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf                   19.43 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Fraktur-Regular-CB_wures.ttf                     19.57 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf                        19.58 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Italic-BMLOBm91.woff                        19.67 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf                    22.36 kB
+../omnigent/server/static/web-ui/assets/geist-mono-latin-wght-normal-XN7g48iV.woff2            23.12 kB
+../omnigent/server/static/web-ui/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf                      24.50 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Bold-Cx986IdX.woff2                         25.32 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Regular-B22Nviop.woff2                      26.27 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf                  27.55 kB
+../omnigent/server/static/web-ui/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2                       28.07 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Bold-Jm3AIy58.woff                          29.91 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Regular-Dr94JaBh.woff                       30.77 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf                     31.19 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Math-Italic-flOr_0UB.ttf                         31.30 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf                     32.96 kB
+../omnigent/server/static/web-ui/assets/KaTeX_AMS-Regular-DMm9YOAa.woff                        33.51 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Italic-3WenGoN9.ttf                         33.58 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Bold-waoOVXN0.ttf                           51.33 kB
+../omnigent/server/static/web-ui/assets/KaTeX_Main-Regular-ypZvNtVU.ttf                        53.58 kB
+../omnigent/server/static/web-ui/assets/KaTeX_AMS-Regular-DRggAlZN.ttf                         63.63 kB
+../omnigent/server/static/web-ui/assets/codicon-ngg6Pgfi.ttf                                  121.97 kB
+../omnigent/server/static/web-ui/assets/editor.worker-5vSJxVeD.js                             279.95 kB
+../omnigent/server/static/web-ui/assets/pdf.worker.min-GB3t0DcA.mjs                         1,369.80 kB
+../omnigent/server/static/web-ui/assets/PdfViewer-_0iA6BSH.css                                  9.51 kB │ gzip:   2.05 kB
+../omnigent/server/static/web-ui/assets/SubagentsGraphView-CtuNohLw.css                        15.51 kB │ gzip:   2.58 kB
+../omnigent/server/static/web-ui/assets/monacoCodeEditor-CmI1nROs.css                         146.35 kB │ gzip:  22.71 kB
+../omnigent/server/static/web-ui/assets/index-3L18EUbt.css                                    275.91 kB │ gzip:  47.37 kB
+../omnigent/server/static/web-ui/assets/mermaid-GHXKKRXX-CgdIBWCO.js                            0.06 kB │ gzip:   0.07 kB
+../omnigent/server/static/web-ui/assets/__vite-browser-external-BC3DPJE5.js                     0.10 kB │ gzip:   0.11 kB
+../omnigent/server/static/web-ui/assets/array-BifhSqXX.js                                       0.10 kB │ gzip:   0.11 kB
+../omnigent/server/static/web-ui/assets/channel-Co_RIlj4.js                                     0.11 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/minus-u779vpSv.js                                       0.11 kB │ gzip:   0.13 kB
+../omnigent/server/static/web-ui/assets/pie-RZYD4A2V-gAQZ99Li.js                                0.11 kB │ gzip:   0.11 kB
+../omnigent/server/static/web-ui/assets/info-DKCQHKI2-jz7Fj3oU.js                               0.11 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/radar-I7S5WNFK-DNRcRQoS.js                              0.11 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/packet-7NZHBO7P-BGYdy60o.js                             0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/cynefin-VYW2F7L2-CYszNcJI.js                            0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/treemap-6X3UGDF4-upd8Dt_o.js                            0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/wardley-OPB4EBWU-jp-W8pk8.js                            0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/gitGraph-TEB2WS4Q-C-xMvLqv.js                           0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/railroad-3IZDKUUU-DFXMk-A8.js                           0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/treeView-QDETBFTQ-BLrOWjCf.js                           0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/check-F5pIimL9.js                                       0.12 kB │ gzip:   0.14 kB
+../omnigent/server/static/web-ui/assets/railroad-peg-LSFZ7HO6-aA030o2K.js                       0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/architecture-TIHT7OUA-l3cpiMGZ.js                       0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/railroad-abnf-AHOZXSZD-B4H--l62.js                      0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/railroad-ebnf-EBAXGLYW-Da25rqFr.js                      0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/eventmodeling-45OFAUF4-DfEhunlU.js                      0.12 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/init-D6jRqBbL.js                                        0.14 kB │ gzip:   0.12 kB
+../omnigent/server/static/web-ui/assets/x-DxOki1j8.js                                           0.15 kB │ gzip:   0.15 kB
+../omnigent/server/static/web-ui/assets/chunk-Y2CYZVJY-DsF7k-Jl.js                              0.15 kB │ gzip:   0.14 kB
+../omnigent/server/static/web-ui/assets/themeMode-C-Agx8_9.js                                   0.16 kB │ gzip:   0.11 kB
+../omnigent/server/static/web-ui/assets/chunk-2Q5K7J3B-DgAnkgRf.js                              0.19 kB │ gzip:   0.16 kB
+../omnigent/server/static/web-ui/assets/chunk-JWPE2WC7-DVXcaiue.js                              0.22 kB │ gzip:   0.17 kB
+../omnigent/server/static/web-ui/assets/triangle-alert-D7QWDz2l.js                              0.26 kB │ gzip:   0.21 kB
+../omnigent/server/static/web-ui/assets/claudeNativeModels-BfGHCNah.js                          0.28 kB │ gzip:   0.19 kB
+../omnigent/server/static/web-ui/assets/chunk-XXDRQBXY-B8l0u5z-.js                              0.28 kB │ gzip:   0.23 kB
+../omnigent/server/static/web-ui/assets/refresh-cw-DK5DZLeP.js                                  0.32 kB │ gzip:   0.22 kB
+../omnigent/server/static/web-ui/assets/chunk-5VM5RSS4-ZNzvKenW.js                              0.36 kB │ gzip:   0.27 kB
+../omnigent/server/static/web-ui/assets/chunk-EMLP6XTP-D_3PyjdN.js                              0.45 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/chunk-QBLGF6JB-BXK4OKmy.js                              0.45 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/chunk-BIQX33UG-8jCkClJ9.js                              0.45 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/chunk-CYSBUYHQ-CLqIYwdw.js                              0.46 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/chunk-OSBZ3O6U-DoJf4AFJ.js                              0.46 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/chunk-5FCAYU7R-DmAycIQP.js                              0.49 kB │ gzip:   0.35 kB
+../omnigent/server/static/web-ui/assets/host-jo2-1D3m.js                                        0.51 kB │ gzip:   0.28 kB
+../omnigent/server/static/web-ui/assets/codeowners-C8r90Shi.js                                  0.54 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/highlighted-body-OFNGDK62-1I6WLgTp.js                   0.56 kB │ gzip:   0.37 kB
+../omnigent/server/static/web-ui/assets/flowDiagram-23GEKE2U-1bXq48nQ.js                        0.56 kB │ gzip:   0.31 kB
+../omnigent/server/static/web-ui/assets/chunk-VR4S4FIN-CYOhHX61.js                              0.56 kB │ gzip:   0.39 kB
+../omnigent/server/static/web-ui/assets/chunk-YOTPTUD7-C9oDHOcD.js                              0.59 kB │ gzip:   0.40 kB
+../omnigent/server/static/web-ui/assets/dist-DJnxdOqm.js                                        0.60 kB │ gzip:   0.38 kB
+../omnigent/server/static/web-ui/assets/infoDiagram-FWYZ7A6U-C40zvTMq.js                        0.64 kB │ gzip:   0.42 kB
+../omnigent/server/static/web-ui/assets/PageScroll-DAW9pFzq.js                                  0.65 kB │ gzip:   0.39 kB
+../omnigent/server/static/web-ui/assets/shellsession-o4Zr-oXZ.js                                0.71 kB │ gzip:   0.42 kB
+../omnigent/server/static/web-ui/assets/tsv-sltzmVWM.js                                         0.73 kB │ gzip:   0.33 kB
+../omnigent/server/static/web-ui/assets/classDiagram-OUVF2IWQ-cwIBSgv6.js                       0.77 kB │ gzip:   0.44 kB
+../omnigent/server/static/web-ui/assets/classDiagram-v2-EOCWNBFH-cwIBSgv6.js                    0.77 kB │ gzip:   0.44 kB
+../omnigent/server/static/web-ui/assets/useSession-DwXD4OKw.js                                  0.77 kB │ gzip:   0.42 kB
+../omnigent/server/static/web-ui/assets/stateDiagram-v2-6OUMAXLB-BwArh-VJ.js                    0.77 kB │ gzip:   0.44 kB
+../omnigent/server/static/web-ui/assets/dist-Bg9D_XPZ.js                                        0.77 kB │ gzip:   0.48 kB
+../omnigent/server/static/web-ui/assets/swimlanesDiagram-G3AALYLV-DkuNI2AV.js                   0.82 kB │ gzip:   0.48 kB
+../omnigent/server/static/web-ui/assets/chunk-5HE753X5-1inA0Cs-.js                              0.83 kB │ gzip:   0.47 kB
+../omnigent/server/static/web-ui/assets/html-derivative-BOvCxnBt.js                             0.84 kB │ gzip:   0.45 kB
+../omnigent/server/static/web-ui/assets/sizeCapture-X5ZJPWSS-B0uUizjq.js                        0.87 kB │ gzip:   0.51 kB
+../omnigent/server/static/web-ui/assets/rolldown-runtime-CNC7AqOf.js                            0.87 kB │ gzip:   0.50 kB
+../omnigent/server/static/web-ui/assets/chunk-MOZMSUNE-CPFb1yYV.js                              0.89 kB │ gzip:   0.49 kB
+../omnigent/server/static/web-ui/assets/chunk-CQNSW5MT-CMiPHTxX.js                              0.92 kB │ gzip:   0.50 kB
+../omnigent/server/static/web-ui/assets/line-CePxHAzv.js                                        0.94 kB │ gzip:   0.47 kB
+../omnigent/server/static/web-ui/assets/chunk-OGEWGWER-Czky1261.js                              0.96 kB │ gzip:   0.59 kB
+../omnigent/server/static/web-ui/assets/git-rebase-09-F-Xjy.js                                  0.98 kB │ gzip:   0.44 kB
+../omnigent/server/static/web-ui/assets/qmldir-DCQb3MpD.js                                      0.99 kB │ gzip:   0.44 kB
+../omnigent/server/static/web-ui/assets/chunk-5TONJI2A-Bae1kxZZ.js                              1.04 kB │ gzip:   0.59 kB
+../omnigent/server/static/web-ui/assets/value-B8Mig86R.js                                       1.04 kB │ gzip:   0.55 kB
+../omnigent/server/static/web-ui/assets/chunk-JG7HCLWE-BKwC4BC0.js                              1.05 kB │ gzip:   0.60 kB
+../omnigent/server/static/web-ui/assets/chunk-U6XO7XAA-0XU_G6sH.js                              1.12 kB │ gzip:   0.62 kB
+../omnigent/server/static/web-ui/assets/csv-Dx-8-gkx.js                                         1.13 kB │ gzip:   0.36 kB
+../omnigent/server/static/web-ui/assets/ordinal-hYBb2elL.js                                     1.17 kB │ gzip:   0.56 kB
+../omnigent/server/static/web-ui/assets/git-commit-BSykSTBG.js                                  1.22 kB │ gzip:   0.52 kB
+../omnigent/server/static/web-ui/assets/dist-Dc_CXOqn.js                                        1.28 kB │ gzip:   0.75 kB
+../omnigent/server/static/web-ui/assets/xsl-Cfl5-n_a.js                                         1.36 kB │ gzip:   0.50 kB
+../omnigent/server/static/web-ui/assets/dotenv-_5a1GRtc.js                                      1.41 kB │ gzip:   0.52 kB
+../omnigent/server/static/web-ui/assets/createLucideIcon-sPZ8jq2x.js                            1.42 kB │ gzip:   0.80 kB
+../omnigent/server/static/web-ui/assets/chunk-R7FJI6CG-D3cFFkBK.js                              1.45 kB │ gzip:   0.80 kB
+../omnigent/server/static/web-ui/assets/sparql-D_iOobhT.js                                      1.47 kB │ gzip:   0.81 kB
+../omnigent/server/static/web-ui/assets/ini-B5eOa1yu.js                                         1.51 kB │ gzip:   0.49 kB
+../omnigent/server/static/web-ui/assets/fortran-fixed-form-DEKoE2YW.js                          1.66 kB │ gzip:   0.68 kB
+../omnigent/server/static/web-ui/assets/chunk-5JV3BV7I-qD80aW2A.js                              1.67 kB │ gzip:   0.74 kB
+../omnigent/server/static/web-ui/assets/railroadDiagram-RFXS5EU6-DqBx5xLa.js                    1.69 kB │ gzip:   0.78 kB
+../omnigent/server/static/web-ui/assets/docker-IyjqRm3v.js                                      1.73 kB │ gzip:   0.59 kB
+../omnigent/server/static/web-ui/assets/hxml-B0Qn7Nwc.js                                        1.74 kB │ gzip:   0.87 kB
+../omnigent/server/static/web-ui/assets/desktop-Dlh5hvp9.js                                     1.82 kB │ gzip:   0.75 kB
+../omnigent/server/static/web-ui/assets/chunk-C7G6YPKG-DbMil7y5.js                              1.84 kB │ gzip:   0.90 kB
+../omnigent/server/static/web-ui/assets/abnfDiagram-VRR7QNED-C50dUFc5.js                        1.88 kB │ gzip:   0.91 kB
+../omnigent/server/static/web-ui/assets/chunk-32BRIVSS-CeBDVqzH.js                              1.99 kB │ gzip:   0.91 kB
+../omnigent/server/static/web-ui/assets/pegDiagram-2B236MQR-B8G6IwS6.js                         2.04 kB │ gzip:   0.95 kB
+../omnigent/server/static/web-ui/assets/ebnfDiagram-CCIWWBDH-DwDpQucI.js                        2.09 kB │ gzip:   0.90 kB
+../omnigent/server/static/web-ui/assets/chunk-7BUUIJ7U-Bb538aSH.js                              2.10 kB │ gzip:   0.82 kB
+../omnigent/server/static/web-ui/assets/erb-CLZwFRoF.js                                         2.13 kB │ gzip:   0.62 kB
+../omnigent/server/static/web-ui/assets/wenyan-C8pVoKbM.js                                      2.15 kB │ gzip:   1.08 kB
+../omnigent/server/static/web-ui/assets/dist-BH9bKIvu.js                                        2.17 kB │ gzip:   0.97 kB
+../omnigent/server/static/web-ui/assets/jssm-DXw9l8Rf.js                                        2.23 kB │ gzip:   0.61 kB
+../omnigent/server/static/web-ui/assets/MonacoDiffViewer-B_tU0xMy.js                            2.24 kB │ gzip:   1.17 kB
+../omnigent/server/static/web-ui/assets/edge-C4InrwRS.js                                        2.30 kB │ gzip:   0.67 kB
+../omnigent/server/static/web-ui/assets/path-BWPyau1x.js                                        2.31 kB │ gzip:   0.99 kB
+../omnigent/server/static/web-ui/assets/reg-CRGYupPL.js                                         2.33 kB │ gzip:   0.69 kB
+../omnigent/server/static/web-ui/assets/diff-woXpYk--.js                                        2.56 kB │ gzip:   0.68 kB
+../omnigent/server/static/web-ui/assets/gleam-CSRkHgEL.js                                       2.57 kB │ gzip:   0.81 kB
+../omnigent/server/static/web-ui/assets/utils-D8RoXHyA.js                                       2.63 kB │ gzip:   1.20 kB
+../omnigent/server/static/web-ui/assets/hy-CZbG8q4J.js                                          2.64 kB │ gzip:   1.17 kB
+../omnigent/server/static/web-ui/assets/openscad-BUDT5pXO.js                                    2.81 kB │ gzip:   1.00 kB
+../omnigent/server/static/web-ui/assets/RunnerHealthProvider-DrGztUkL.js                        2.82 kB │ gzip:   1.12 kB
+../omnigent/server/static/web-ui/assets/log-BNLmms1o.js                                         2.84 kB │ gzip:   0.89 kB
+../omnigent/server/static/web-ui/assets/json-BNRlFZ-5.js                                        2.89 kB │ gzip:   0.82 kB
+../omnigent/server/static/web-ui/assets/cairo-DLTphjLi.js                                       2.93 kB │ gzip:   0.80 kB
+../omnigent/server/static/web-ui/assets/berry-DKpUyyne.js                                       2.99 kB │ gzip:   0.80 kB
+../omnigent/server/static/web-ui/assets/SetupPage-BKKyiL0_.js                                   3.00 kB │ gzip:   1.22 kB
+../omnigent/server/static/web-ui/assets/jsonl-CmCQp5Yx.js                                       3.00 kB │ gzip:   0.78 kB
+../omnigent/server/static/web-ui/assets/identity-CqZDMZaN.js                                    3.08 kB │ gzip:   1.19 kB
+../omnigent/server/static/web-ui/assets/jsonc-CYpm1nAK.js                                       3.10 kB │ gzip:   0.78 kB
+../omnigent/server/static/web-ui/assets/logo-Cluzi2Zq.js                                        3.12 kB │ gzip:   1.46 kB
+../omnigent/server/static/web-ui/assets/po-BiJDBrnU.js                                          3.23 kB │ gzip:   0.90 kB
+../omnigent/server/static/web-ui/assets/json5-BR5RXkoi.js                                       3.24 kB │ gzip:   0.82 kB
+../omnigent/server/static/web-ui/assets/mipsasm-BMqwQI7S.js                                     3.25 kB │ gzip:   1.17 kB
+../omnigent/server/static/web-ui/assets/tasl-DMoTqEGO.js                                        3.28 kB │ gzip:   0.84 kB
+../omnigent/server/static/web-ui/assets/RegisterPage-B0yN8Knb.js                                3.33 kB │ gzip:   1.32 kB
+../omnigent/server/static/web-ui/assets/genie-CV2tkWYe.js                                       3.34 kB │ gzip:   1.20 kB
+../omnigent/server/static/web-ui/assets/rel-BtDbiS_P.js                                         3.36 kB │ gzip:   1.10 kB
+../omnigent/server/static/web-ui/assets/vala-zf12oZj6.js                                        3.36 kB │ gzip:   1.18 kB
+../omnigent/server/static/web-ui/assets/splunk-BC2Px7Mm.js                                      3.42 kB │ gzip:   1.51 kB
+../omnigent/server/static/web-ui/assets/accountsApi-VtuIIfDq.js                                 3.43 kB │ gzip:   0.87 kB
+../omnigent/server/static/web-ui/assets/arc-C6pGbJrV.js                                         3.47 kB │ gzip:   1.46 kB
+../omnigent/server/static/web-ui/assets/hurl-14JhHsIH.js                                        3.51 kB │ gzip:   1.09 kB
+../omnigent/server/static/web-ui/assets/LoginPage-CcnkhUnt.js                                   3.59 kB │ gzip:   1.57 kB
+../omnigent/server/static/web-ui/assets/fluent-C03EYrpw.js                                      3.60 kB │ gzip:   0.89 kB
+../omnigent/server/static/web-ui/assets/ssh-config-BgfXC-Er.js                                  3.61 kB │ gzip:   1.59 kB
+../omnigent/server/static/web-ui/assets/jsonnet-CJTPZ8u_.js                                     3.61 kB │ gzip:   1.03 kB
+../omnigent/server/static/web-ui/assets/kdl-CsD5j6eV.js                                         3.62 kB │ gzip:   1.03 kB
+../omnigent/server/static/web-ui/assets/narrat-_X_XdTYD.js                                      3.66 kB │ gzip:   1.09 kB
+../omnigent/server/static/web-ui/assets/turtle-ByJddavk.js                                      3.69 kB │ gzip:   0.96 kB
+../omnigent/server/static/web-ui/assets/glsl-CNFhMZ3o.js                                        3.69 kB │ gzip:   1.46 kB
+../omnigent/server/static/web-ui/assets/ApprovePage-D6lWghFQ.js                                 3.76 kB │ gzip:   1.39 kB
+../omnigent/server/static/web-ui/assets/zenscript-BnlCZFoB.js                                   3.90 kB │ gzip:   1.28 kB
+../omnigent/server/static/web-ui/assets/ron-VUp2lXgN.js                                         3.90 kB │ gzip:   0.97 kB
+../omnigent/server/static/web-ui/assets/gn-ilITqXS6.js                                          3.99 kB │ gzip:   1.47 kB
+../omnigent/server/static/web-ui/assets/button-l5NCafem.js                                      4.00 kB │ gzip:   1.56 kB
+../omnigent/server/static/web-ui/assets/dist-NVmPyUqZ.js                                        4.09 kB │ gzip:   1.88 kB
+../omnigent/server/static/web-ui/assets/nativeBridge-CwvkFDaj.js                                4.13 kB │ gzip:   1.08 kB
+../omnigent/server/static/web-ui/assets/pascal-4ZHwLPI5.js                                      4.14 kB │ gzip:   1.67 kB
+../omnigent/server/static/web-ui/assets/diagram-NH7WQ7WH-Deyet9i4.js                            4.26 kB │ gzip:   1.84 kB
+../omnigent/server/static/web-ui/assets/http-D8fCFQUQ.js                                        4.41 kB │ gzip:   1.06 kB
+../omnigent/server/static/web-ui/assets/tcl-CZd0xW_V.js                                         4.42 kB │ gzip:   1.50 kB
+../omnigent/server/static/web-ui/assets/nextflow-BJtWHP5T.js                                    4.50 kB │ gzip:   1.16 kB
+../omnigent/server/static/web-ui/assets/rosmsg-CAekHB0j.js                                      4.51 kB │ gzip:   1.05 kB
+../omnigent/server/static/web-ui/assets/linear-BOLaQb82.js                                      4.57 kB │ gzip:   1.85 kB
+../omnigent/server/static/web-ui/assets/defaultLocale-C8Fc0cco.js                               4.64 kB │ gzip:   2.12 kB
+../omnigent/server/static/web-ui/assets/polar-C7UOKdEL.js                                       4.66 kB │ gzip:   1.12 kB
+../omnigent/server/static/web-ui/assets/sdbl-bTVj8UrX.js                                        4.69 kB │ gzip:   2.00 kB
+../omnigent/server/static/web-ui/assets/fennel-DQxkIbk2.js                                      4.76 kB │ gzip:   1.53 kB
+../omnigent/server/static/web-ui/assets/bibtex-Ci_nEsc7.js                                      4.78 kB │ gzip:   0.83 kB
+../omnigent/server/static/web-ui/assets/map-BaFkSB1l.js                                         5.03 kB │ gzip:   2.05 kB
+../omnigent/server/static/web-ui/assets/llvm-Cm23YOpf.js                                        5.04 kB │ gzip:   2.01 kB
+../omnigent/server/static/web-ui/assets/SharingPage-DFJGDXmx.js                                 5.12 kB │ gzip:   2.07 kB
+../omnigent/server/static/web-ui/assets/wgsl-BsKzXJz4.js                                        5.13 kB │ gzip:   1.38 kB
+../omnigent/server/static/web-ui/assets/gdresource-C0sCabJj.js                                  5.28 kB │ gzip:   1.33 kB
+../omnigent/server/static/web-ui/assets/zig-CMLA9XwU.js                                         5.33 kB │ gzip:   1.55 kB
+../omnigent/server/static/web-ui/assets/qml-DGFlbsc_.js                                         5.33 kB │ gzip:   1.38 kB
+../omnigent/server/static/web-ui/assets/dax-BkyTk9wS.js                                         5.35 kB │ gzip:   2.21 kB
+../omnigent/server/static/web-ui/assets/bicep-CUHmPFLl.js                                       5.37 kB │ gzip:   1.14 kB
+../omnigent/server/static/web-ui/assets/xml-Dt-VRNGg.js                                         5.44 kB │ gzip:   1.25 kB
+../omnigent/server/static/web-ui/assets/awk-BWXHIvNe.js                                         5.45 kB │ gzip:   1.37 kB
+../omnigent/server/static/web-ui/assets/coq-BrsZFFmf.js                                         5.54 kB │ gzip:   1.91 kB
+../omnigent/server/static/web-ui/assets/MonacoCodeEditor-CxCeoAXD.js                            5.58 kB │ gzip:   2.25 kB
+../omnigent/server/static/web-ui/assets/jinja-BB8I8LH4.js                                       5.62 kB │ gzip:   1.36 kB
+../omnigent/server/static/web-ui/assets/lean-CewbzKMR.js                                        5.77 kB │ gzip:   1.91 kB
+../omnigent/server/static/web-ui/assets/chunk-HOUHSVGY-B8ZFkNFo.js                              5.83 kB │ gzip:   2.68 kB
+../omnigent/server/static/web-ui/assets/moonbit-CaWjb8XO.js                                     5.89 kB │ gzip:   1.67 kB
+../omnigent/server/static/web-ui/assets/powerquery-DNMTfnFr.js                                  5.89 kB │ gzip:   1.51 kB
+../omnigent/server/static/web-ui/assets/diagram-WEI45ONY-C1dbe2gv.js                            5.90 kB │ gzip:   2.48 kB
+../omnigent/server/static/web-ui/assets/shaderlab-TOUzSsQk.js                                   5.91 kB │ gzip:   2.08 kB
+../omnigent/server/static/web-ui/assets/verilog-CiiDBU1e.js                                     5.92 kB │ gzip:   1.89 kB
+../omnigent/server/static/web-ui/assets/cypher-ClKdZ_lG.js                                      5.94 kB │ gzip:   1.71 kB
+../omnigent/server/static/web-ui/assets/vb-Djn5o6TS.js                                          6.08 kB │ gzip:   2.33 kB
+../omnigent/server/static/web-ui/assets/pieDiagram-ENE6RG2P-Bds7SEAc.js                         6.21 kB │ gzip:   2.59 kB
+../omnigent/server/static/web-ui/assets/useMutation-C-ezoRnY.js                                 6.26 kB │ gzip:   1.99 kB
+../omnigent/server/static/web-ui/assets/gdshader-CBce3t8t.js                                    6.31 kB │ gzip:   1.72 kB
+../omnigent/server/static/web-ui/assets/prisma-BsRQq5mF.js                                      6.32 kB │ gzip:   1.38 kB
+../omnigent/server/static/web-ui/assets/ara-4CJ0cIlV.js                                         6.35 kB │ gzip:   1.80 kB
+../omnigent/server/static/web-ui/assets/clojure-DqKBuwfJ.js                                     6.40 kB │ gzip:   1.41 kB
+../omnigent/server/static/web-ui/assets/postcss-BXeXVLqQ.js                                     6.41 kB │ gzip:   1.90 kB
+../omnigent/server/static/web-ui/assets/toml-CcmNWLt0.js                                        6.41 kB │ gzip:   1.28 kB
+../omnigent/server/static/web-ui/assets/proto-DB4EqR-F.js                                       6.54 kB │ gzip:   1.41 kB
+../omnigent/server/static/web-ui/assets/smalltalk-B16xEiuN.js                                   6.58 kB │ gzip:   1.61 kB
+../omnigent/server/static/web-ui/assets/r-BrtO6otC.js                                           6.60 kB │ gzip:   1.83 kB
+../omnigent/server/static/web-ui/assets/talonscript-CohzipZa.js                                 6.75 kB │ gzip:   1.48 kB
+../omnigent/server/static/web-ui/assets/mermaid-parser.core-BOujQBKf.js                         6.83 kB │ gzip:   1.88 kB
+../omnigent/server/static/web-ui/assets/riscv-Ckw8ddFX.js                                       6.90 kB │ gzip:   1.97 kB
+../omnigent/server/static/web-ui/assets/soy-DviXHfWL.js                                         6.92 kB │ gzip:   1.62 kB
+../omnigent/server/static/web-ui/assets/chunk-RYQCIY6F-mtX51m-J.js                              7.01 kB │ gzip:   2.68 kB
+../omnigent/server/static/web-ui/assets/scheme-DQCgrYNe.js                                      7.16 kB │ gzip:   2.04 kB
+../omnigent/server/static/web-ui/assets/hlsl-Cvrh5tZx.js                                        7.25 kB │ gzip:   2.18 kB
+../omnigent/server/static/web-ui/assets/InboxPage-riGH3dIk.js                                   7.31 kB │ gzip:   2.63 kB
+../omnigent/server/static/web-ui/assets/qss-Fe1Jh2GI.js                                         7.46 kB │ gzip:   2.57 kB
+../omnigent/server/static/web-ui/assets/systemd-BxMlprV5.js                                     7.86 kB │ gzip:   2.54 kB
+../omnigent/server/static/web-ui/assets/regexp-DNT4mv-6.js                                      8.05 kB │ gzip:   1.47 kB
+../omnigent/server/static/web-ui/assets/MembersPage-JvMwdL3r.js                                 8.20 kB │ gzip:   2.68 kB
+../omnigent/server/static/web-ui/assets/diagram-OA4YK3LP-Cw340xQZ.js                            8.30 kB │ gzip:   3.70 kB
+../omnigent/server/static/web-ui/assets/haml-BffKgPjF.js                                        8.33 kB │ gzip:   1.85 kB
+../omnigent/server/static/web-ui/assets/typst-DI99ib-x.js                                       8.38 kB │ gzip:   1.66 kB
+../omnigent/server/static/web-ui/assets/vue-html-Bcgt8jrn.js                                    8.47 kB │ gzip:   1.68 kB
+../omnigent/server/static/web-ui/assets/plsql-DGHpHOYJ.js                                       8.50 kB │ gzip:   2.99 kB
+../omnigent/server/static/web-ui/assets/dart-CnvKMtbv.js                                        8.61 kB │ gzip:   1.99 kB
+../omnigent/server/static/web-ui/assets/dist-D4n52vAn.js                                        8.63 kB │ gzip:   3.06 kB
+../omnigent/server/static/web-ui/assets/src-B5BnGiaQ.js                                         8.75 kB │ gzip:   3.64 kB
+../omnigent/server/static/web-ui/assets/kotlin-DhhofPvG.js                                      8.77 kB │ gzip:   2.12 kB
+../omnigent/server/static/web-ui/assets/dagre-VKFMJZFB-D_lFFEDP.js                              8.80 kB │ gzip:   3.41 kB
+../omnigent/server/static/web-ui/assets/make-Dixweg8N.js                                        8.95 kB │ gzip:   1.76 kB
+../omnigent/server/static/web-ui/assets/sas-DUYNvyuO.js                                         9.06 kB │ gzip:   3.82 kB
+../omnigent/server/static/web-ui/assets/sass-DXrisJhu.js                                        9.28 kB │ gzip:   2.48 kB
+../omnigent/server/static/web-ui/assets/tex-DtyfcXbs.js                                         9.67 kB │ gzip:   3.06 kB
+../omnigent/server/static/web-ui/assets/jison-DsrzMHSA.js                                       9.69 kB │ gzip:   1.86 kB
+../omnigent/server/static/web-ui/assets/cmake-Bj61d0ZC.js                                       9.84 kB │ gzip:   3.37 kB
+../omnigent/server/static/web-ui/assets/cynefinDiagram-TSTJHNR4-DgtEhyfu.js                     9.89 kB │ gzip:   3.50 kB
+../omnigent/server/static/web-ui/assets/hcl-Dh228itO.js                                        10.04 kB │ gzip:   1.93 kB
+../omnigent/server/static/web-ui/assets/rst-CeXSQXAP.js                                        10.31 kB │ gzip:   2.24 kB
+../omnigent/server/static/web-ui/assets/pkl-ot-7Btpt.js                                        10.36 kB │ gzip:   1.37 kB
+../omnigent/server/static/web-ui/assets/beancount-D-usSTwE.js                                  10.36 kB │ gzip:   1.43 kB
+../omnigent/server/static/web-ui/assets/nextflow-groovy-DJMQeKeT.js                            10.43 kB │ gzip:   2.13 kB
+../omnigent/server/static/web-ui/assets/dream-maker-DW3nJb8Q.js                                10.46 kB │ gzip:   2.25 kB
+../omnigent/server/static/web-ui/assets/raku-B3gFvitq.js                                       10.46 kB │ gzip:   2.94 kB
+../omnigent/server/static/web-ui/assets/yaml-BFRNvut5.js                                       10.57 kB │ gzip:   2.32 kB
+../omnigent/server/static/web-ui/assets/stateDiagram-2N3HPSRC-BM1rRgkU.js                      10.65 kB │ gzip:   3.74 kB
+../omnigent/server/static/web-ui/assets/diagram-FQU43EPY-RQZDwPx6.js                           10.69 kB │ gzip:   4.13 kB
+../omnigent/server/static/web-ui/assets/just-CPBBCI7q.js                                       10.81 kB │ gzip:   2.61 kB
+../omnigent/server/static/web-ui/assets/elm-BfHi1MFa.js                                        10.94 kB │ gzip:   2.10 kB
+../omnigent/server/static/web-ui/assets/nativeCodingAgents-CYKpQ9Ny.js                         11.02 kB │ gzip:   3.69 kB
+../omnigent/server/static/web-ui/assets/prolog-iXnhIJG7.js                                     11.34 kB │ gzip:   3.84 kB
+../omnigent/server/static/web-ui/assets/terraform-DswuEJGm.js                                  11.38 kB │ gzip:   2.51 kB
+../omnigent/server/static/web-ui/assets/puppet-CDv2pdJW.js                                     11.43 kB │ gzip:   2.10 kB
+../omnigent/server/static/web-ui/assets/gherkin-DExj1W_8.js                                    11.93 kB │ gzip:   5.04 kB
+../omnigent/server/static/web-ui/assets/wasm-ByWQv1Qj.js                                       12.00 kB │ gzip:   2.17 kB
+../omnigent/server/static/web-ui/assets/hjson-CxZEssPk.js                                      12.04 kB │ gzip:   1.64 kB
+../omnigent/server/static/web-ui/assets/handlebars-CnPxLQN8.js                                 12.16 kB │ gzip:   2.38 kB
+../omnigent/server/static/web-ui/assets/apache-U0d_L8uA.js                                     12.44 kB │ gzip:   3.71 kB
+../omnigent/server/static/web-ui/assets/PoliciesPage-eEzLj50g.js                               12.72 kB │ gzip:   3.75 kB
+../omnigent/server/static/web-ui/assets/bat-Bo4NYOV-.js                                        12.88 kB │ gzip:   3.22 kB
+../omnigent/server/static/web-ui/assets/fish-BJitypiv.js                                       13.03 kB │ gzip:   1.73 kB
+../omnigent/server/static/web-ui/assets/v-DETTlOr0.js                                          13.20 kB │ gzip:   2.73 kB
+../omnigent/server/static/web-ui/assets/pug-DIfIg5aG.js                                        13.84 kB │ gzip:   2.58 kB
+../omnigent/server/static/web-ui/assets/clarity-SemFz856.js                                    14.26 kB │ gzip:   2.46 kB
+../omnigent/server/static/web-ui/assets/gnuplot-7GGW24-e.js                                    14.77 kB │ gzip:   3.27 kB
+../omnigent/server/static/web-ui/assets/rust-Cfkwpbl8.js                                       15.06 kB │ gzip:   2.71 kB
+../omnigent/server/static/web-ui/assets/kusto-C7mF5XQf.js                                      15.16 kB │ gzip:   3.92 kB
+../omnigent/server/static/web-ui/assets/actionscript-3--17pq3dv.js                             15.19 kB │ gzip:   2.67 kB
+../omnigent/server/static/web-ui/assets/nix-IvuFDN5E.js                                        15.50 kB │ gzip:   2.47 kB
+../omnigent/server/static/web-ui/assets/lua-Bc0cVuDM.js                                        15.60 kB │ gzip:   3.19 kB
+../omnigent/server/static/web-ui/assets/luau-FMPmPwt6.js                                       15.62 kB │ gzip:   3.39 kB
+../omnigent/server/static/web-ui/assets/chunk-MOJQB5TN-CboIyPjg.js                             15.62 kB │ gzip:   4.35 kB
+../omnigent/server/static/web-ui/assets/diagram-G47NLZAW-Dpn_mQir.js                           15.75 kB │ gzip:   5.51 kB
+../omnigent/server/static/web-ui/assets/abap-CLvhMVsD.js                                       15.84 kB │ gzip:   5.93 kB
+../omnigent/server/static/web-ui/assets/solidity-CKzVLygQ.js                                   16.06 kB │ gzip:   3.09 kB
+../omnigent/server/static/web-ui/assets/matlab-D7qyCx1q.js                                     16.07 kB │ gzip:   3.06 kB
+../omnigent/server/static/web-ui/assets/cue-CE9AQfxI.js                                        16.19 kB │ gzip:   2.04 kB
+../omnigent/server/static/web-ui/assets/elixir-BlYHe8Un.js                                     16.26 kB │ gzip:   2.76 kB
+../omnigent/server/static/web-ui/assets/odin-B1RWQWA5.js                                       16.50 kB │ gzip:   2.92 kB
+../omnigent/server/static/web-ui/assets/ts-tags-Dl7VxY0i.js                                    16.54 kB │ gzip:   2.06 kB
+../omnigent/server/static/web-ui/assets/ishikawaDiagram-FXEZZL3T-BGjluYxo.js                   17.33 kB │ gzip:   6.53 kB
+../omnigent/server/static/web-ui/assets/move-B1IS1UjX.js                                       17.49 kB │ gzip:   3.06 kB
+../omnigent/server/static/web-ui/assets/graphql-Bs_icwQf.js                                    18.08 kB │ gzip:   2.54 kB
+../omnigent/server/static/web-ui/assets/liquid-Cv-R79y_.js                                     18.10 kB │ gzip:   3.14 kB
+../omnigent/server/static/web-ui/assets/svelte-CcZEQ_B_.js                                     18.24 kB │ gzip:   3.14 kB
+../omnigent/server/static/web-ui/assets/gdscript-Cp2uCuqX.js                                   18.98 kB │ gzip:   3.75 kB
+../omnigent/server/static/web-ui/assets/groovy-CacY0gHj.js                                     19.17 kB │ gzip:   3.59 kB
+../omnigent/server/static/web-ui/assets/mdc-zEVUShoo.js                                        19.54 kB │ gzip:   6.66 kB
+../omnigent/server/static/web-ui/assets/glimmer-js-Ckf0CfcS.js                                 20.08 kB │ gzip:   2.94 kB
+../omnigent/server/static/web-ui/assets/glimmer-ts-DmrA1uPz.js                                 20.08 kB │ gzip:   2.93 kB
+../omnigent/server/static/web-ui/assets/powershell-DshXNtvi.js                                 20.14 kB │ gzip:   4.05 kB
+../omnigent/server/static/web-ui/assets/kanban-definition-HUTT4EX6-D1bYPnSO.js                 20.25 kB │ gzip:   7.14 kB
+../omnigent/server/static/web-ui/assets/viml-DvXPmvsu.js                                       20.35 kB │ gzip:   6.73 kB
+../omnigent/server/static/web-ui/assets/nushell-DcLAeLz5.js                                    20.40 kB │ gzip:   5.21 kB
+../omnigent/server/static/web-ui/assets/twig-TIwAW_ii.js                                       20.90 kB │ gzip:   3.66 kB
+../omnigent/server/static/web-ui/assets/wit-DdvCle-K.js                                        21.46 kB │ gzip:   2.87 kB
+../omnigent/server/static/web-ui/assets/nim-Cr3LyLLK.js                                        22.45 kB │ gzip:   3.15 kB
+../omnigent/server/static/web-ui/assets/common-lisp-Cv5bFMCO.js                                22.57 kB │ gzip:   6.07 kB
+../omnigent/server/static/web-ui/assets/surrealql-DZFWP0QQ.js                                  22.58 kB │ gzip:   4.31 kB
+../omnigent/server/static/web-ui/assets/sankeyDiagram-HTMAVEWB-DOi98SYR.js                     22.82 kB │ gzip:   8.29 kB
+../omnigent/server/static/web-ui/assets/bird2-C6vDhewU.js                                      22.93 kB │ gzip:   4.65 kB
+../omnigent/server/static/web-ui/assets/routing-Cwf4tDYE.js                                    23.10 kB │ gzip:   8.54 kB
+../omnigent/server/static/web-ui/assets/journeyDiagram-5HDEW3XC-CJhy0uiP.js                    23.23 kB │ gzip:   8.18 kB
+../omnigent/server/static/web-ui/assets/mindmap-definition-LN4V7U3C-DGlk3FjS.js                23.47 kB │ gzip:   8.02 kB
+../omnigent/server/static/web-ui/assets/sql-DsTevJ9n.js                                        23.49 kB │ gzip:   7.51 kB
+../omnigent/server/static/web-ui/assets/cadence-CQ2zXKGN.js                                    23.66 kB │ gzip:   3.65 kB
+../omnigent/server/static/web-ui/assets/graphlib-DS17s2tU.js                                   23.90 kB │ gzip:   8.31 kB
+../omnigent/server/static/web-ui/assets/astro-jpUVYlDr.js                                      24.02 kB │ gzip:   7.59 kB
+../omnigent/server/static/web-ui/assets/apl-BZnWYwl_.js                                        24.02 kB │ gzip:   4.17 kB
+../omnigent/server/static/web-ui/assets/templ-DEr9KWft.js                                      24.06 kB │ gzip:   5.41 kB
+../omnigent/server/static/web-ui/assets/angular-html-GDUx1il_.js                               24.24 kB │ gzip:   3.99 kB
+../omnigent/server/static/web-ui/assets/vhdl-BroJfC0k.js                                       24.25 kB │ gzip:   3.86 kB
+../omnigent/server/static/web-ui/assets/vue-D32I3tfM.js                                        24.48 kB │ gzip:   2.96 kB
+../omnigent/server/static/web-ui/assets/purescript-9MfHhQsQ.js                                 24.67 kB │ gzip:   3.24 kB
+../omnigent/server/static/web-ui/assets/typespec-BRdr0IET.js                                   25.03 kB │ gzip:   2.62 kB
+../omnigent/server/static/web-ui/assets/wardleyDiagram-EHGQE667-C7FoTTOP.js                    25.20 kB │ gzip:   6.54 kB
+../omnigent/server/static/web-ui/assets/fsharp-D13ZGOAj.js                                     25.30 kB │ gzip:   4.12 kB
+../omnigent/server/static/web-ui/assets/marko-Cydystb1.js                                      25.48 kB │ gzip:   3.59 kB
+../omnigent/server/static/web-ui/assets/useQuery-BmX0aMOu.js                                   25.99 kB │ gzip:   8.48 kB
+../omnigent/server/static/web-ui/assets/dist-CLf9X6Ry.js                                       26.13 kB │ gzip:  10.16 kB
+../omnigent/server/static/web-ui/assets/system-verilog-DJ5XKQeo.js                             26.19 kB │ gzip:   4.82 kB
+../omnigent/server/static/web-ui/assets/codeql-oeQT6MSM.js                                     26.87 kB │ gzip:   3.79 kB
+../omnigent/server/static/web-ui/assets/c3-BFHwR3_K.js                                         26.96 kB │ gzip:   3.92 kB
+../omnigent/server/static/web-ui/assets/rough.esm-CSKSodPl.js                                  27.10 kB │ gzip:   8.85 kB
+../omnigent/server/static/web-ui/assets/erDiagram-Q63AITRT-N_GI1N1z.js                         27.15 kB │ gzip:   9.44 kB
+../omnigent/server/static/web-ui/assets/scss-uCvqxuFc.js                                       27.26 kB │ gzip:   4.23 kB
+../omnigent/server/static/web-ui/assets/java-MBw7zHAA.js                                       27.28 kB │ gzip:   4.31 kB
+../omnigent/server/static/web-ui/assets/coffee-CC-CTfG5.js                                     27.42 kB │ gzip:   6.35 kB
+../omnigent/server/static/web-ui/assets/razor-DYw8eU8D.js                                      27.45 kB │ gzip:   3.54 kB
+../omnigent/server/static/web-ui/assets/bundle-mjs-rHxsej31.js                                 28.20 kB │ gzip:   8.95 kB
+../omnigent/server/static/web-ui/assets/scala-DKOlJaKm.js                                      28.87 kB │ gzip:   3.92 kB
+../omnigent/server/static/web-ui/assets/gitGraphDiagram-IHSO6WYX-B658bv7v.js                   29.04 kB │ gzip:   8.58 kB
+../omnigent/server/static/web-ui/assets/crystal-Dl4-x17T.js                                    29.41 kB │ gzip:   4.44 kB
+../omnigent/server/static/web-ui/assets/mermaid-Bk4SNUv9.js                                    29.50 kB │ gzip:   3.64 kB
+../omnigent/server/static/web-ui/assets/applescript-CCn79oCD.js                                29.56 kB │ gzip:   5.94 kB
+../omnigent/server/static/web-ui/assets/timeline-definition-FHXFAJF6-CAfb1NZH.js               30.44 kB │ gzip:   9.96 kB
+../omnigent/server/static/web-ui/assets/chunk-ICXQ74PX-BuQSOm6I.js                             30.90 kB │ gzip:   8.53 kB
+../omnigent/server/static/web-ui/assets/julia-BFXv4sM2.js                                      31.00 kB │ gzip:   4.30 kB
+../omnigent/server/static/web-ui/assets/requirementDiagram-TGXJPOKE-BW02LEDx.js                31.02 kB │ gzip:   9.78 kB
+../omnigent/server/static/web-ui/assets/stylus-B6D30XZt.js                                     31.06 kB │ gzip:   8.01 kB
+../omnigent/server/static/web-ui/assets/dagre-dpRSp0QF.js                                      32.05 kB │ gzip:  11.58 kB
+../omnigent/server/static/web-ui/assets/quadrantDiagram-ABIIQ3AL-B2IuAZek.js                   33.57 kB │ gzip:   9.76 kB
+../omnigent/server/static/web-ui/assets/bsl-BkkzgIyY.js                                        33.86 kB │ gzip:   8.34 kB
+../omnigent/server/static/web-ui/assets/chunk-52WLFC77-D18iMDcx.js                             33.98 kB │ gzip:   7.31 kB
+../omnigent/server/static/web-ui/assets/haxe-OTjmBuCE.js                                       35.15 kB │ gzip:   5.90 kB
+../omnigent/server/static/web-ui/assets/nginx-BDAkFTs4.js                                      35.35 kB │ gzip:   4.45 kB
+../omnigent/server/static/web-ui/assets/erlang-Cphh6RMH.js                                     37.47 kB │ gzip:   4.36 kB
+../omnigent/server/static/web-ui/assets/chunk-EX3LRPZG-CFRFkmKN.js                             37.76 kB │ gzip:  12.30 kB
+../omnigent/server/static/web-ui/assets/cobol-XL-wCgBL.js                                      39.07 kB │ gzip:  10.89 kB
+../omnigent/server/static/web-ui/assets/asm-Cmm7eHzH.js                                        40.71 kB │ gzip:   8.16 kB
+../omnigent/server/static/web-ui/assets/vennDiagram-L72KCM5P-sRPb2gWo.js                       41.21 kB │ gzip:  15.12 kB
+../omnigent/server/static/web-ui/assets/haskell-D8IpX4py.js                                    41.48 kB │ gzip:   6.41 kB
+../omnigent/server/static/web-ui/assets/shellscript-CoI_i11P.js                                41.54 kB │ gzip:   6.13 kB
+../omnigent/server/static/web-ui/assets/xychartDiagram-FW5EYKEG-BeCpz8jj.js                    41.63 kB │ gzip:  11.74 kB
+../omnigent/server/static/web-ui/assets/perl-CIkRV9Rv.js                                       43.14 kB │ gzip:   4.64 kB
+../omnigent/server/static/web-ui/assets/SettingsPage-DqP-gYfm.js                               43.36 kB │ gzip:  12.13 kB
+../omnigent/server/static/web-ui/assets/d-qD-0Kul2.js                                          43.78 kB │ gzip:   8.43 kB
+../omnigent/server/static/web-ui/assets/ruby-CGbPXxQs.js                                       46.60 kB │ gzip:   5.70 kB
+../omnigent/server/static/web-ui/assets/go-rLFTqkRN.js                                         46.81 kB │ gzip:   5.14 kB
+../omnigent/server/static/web-ui/assets/src-BAYS5Rki.js                                        47.13 kB │ gzip:  15.91 kB
+../omnigent/server/static/web-ui/assets/chunk-Q4XR5HBZ-5mjT-7tg.js                             47.35 kB │ gzip:  14.85 kB
+../omnigent/server/static/web-ui/assets/apex-VAyPSnFM.js                                       47.76 kB │ gzip:   6.81 kB
+../omnigent/server/static/web-ui/assets/ada-C5qYipkI.js                                        48.07 kB │ gzip:   5.96 kB
+../omnigent/server/static/web-ui/assets/chunk-V7JOEXUC-DDuog4dk.js                             48.86 kB │ gzip:  15.77 kB
+../omnigent/server/static/web-ui/assets/css-oq4KMCBk.js                                        49.10 kB │ gzip:  11.96 kB
+../omnigent/server/static/web-ui/assets/imba-DsUTQ-LC.js                                       49.92 kB │ gzip:   9.47 kB
+../omnigent/server/static/web-ui/assets/wikitext-ClFFjSW2.js                                   55.87 kB │ gzip:   4.81 kB
+../omnigent/server/static/web-ui/assets/stata-BoeeGEJN.js                                      56.99 kB │ gzip:  12.39 kB
+../omnigent/server/static/web-ui/assets/html-BBwwBXFu.js                                       57.32 kB │ gzip:  11.78 kB
+../omnigent/server/static/web-ui/assets/ballerina-B7ZEbQpA.js                                  58.68 kB │ gzip:   8.10 kB
+../omnigent/server/static/web-ui/assets/markdown-BYOwaDjH.js                                   59.32 kB │ gzip:   5.66 kB
+../omnigent/server/static/web-ui/assets/chunk-PUDLZKDR-Bj98lJQ_.js                             60.18 kB │ gzip:  19.54 kB
+../omnigent/server/static/web-ui/assets/ocaml-O90oeIOV.js                                      62.44 kB │ gzip:   5.04 kB
+../omnigent/server/static/web-ui/assets/c4Diagram-LMCZKHZV-CmPvoAYS.js                         69.23 kB │ gzip:  19.37 kB
+../omnigent/server/static/web-ui/assets/ganttDiagram-NO4QXBWP-DYzRo7eS.js                      69.46 kB │ gzip:  22.81 kB
+../omnigent/server/static/web-ui/assets/mojo-BgCJLMeH.js                                       69.79 kB │ gzip:   9.21 kB
+../omnigent/server/static/web-ui/assets/python-gzcpVVnB.js                                     69.94 kB │ gzip:   9.09 kB
+../omnigent/server/static/web-ui/assets/c-Blw65jlH.js                                          72.17 kB │ gzip:  10.55 kB
+../omnigent/server/static/web-ui/assets/blockDiagram-677ZJIJ3-DY_TtWIf.js                      72.80 kB │ gzip:  20.71 kB
+../omnigent/server/static/web-ui/assets/latex-DRm4Enns.js                                      72.87 kB │ gzip:   6.73 kB
+../omnigent/server/static/web-ui/assets/vyper-CgoNMtux.js                                      74.64 kB │ gzip:  10.69 kB
+../omnigent/server/static/web-ui/assets/hack-DDVusiAf.js                                       81.05 kB │ gzip:  26.43 kB
+../omnigent/server/static/web-ui/assets/cose-bilkent-JH36ORCC-CzDdqSgx.js                      81.47 kB │ gzip:  21.59 kB
+../omnigent/server/static/web-ui/assets/TasksPage-Dpxh-4uo.js                                  81.84 kB │ gzip:  25.39 kB
+../omnigent/server/static/web-ui/assets/swift-DonLKvLd.js                                      86.68 kB │ gzip:  14.69 kB
+../omnigent/server/static/web-ui/assets/fortran-free-form-CYNrtFtB.js                          88.96 kB │ gzip:  11.18 kB
+../omnigent/server/static/web-ui/assets/csharp-oqKa8noW.js                                     90.18 kB │ gzip:  10.71 kB
+../omnigent/server/static/web-ui/assets/racket-DcIDlBhZ.js                                     92.38 kB │ gzip:  15.07 kB
+../omnigent/server/static/web-ui/assets/less-DVTAwKKz.js                                       97.62 kB │ gzip:  14.84 kB
+../omnigent/server/static/web-ui/assets/chunk-ZGVPDNZ5-BqEZjG6h.js                            101.91 kB │ gzip:  24.81 kB
+../omnigent/server/static/web-ui/assets/blade-BMb1G2Rn.js                                     104.97 kB │ gzip:  28.30 kB
+../omnigent/server/static/web-ui/assets/useConversations-tUXjV8V7.js                          105.30 kB │ gzip:  27.91 kB
+../omnigent/server/static/web-ui/assets/objective-c-D1A_Heim.js                               105.40 kB │ gzip:  23.63 kB
+../omnigent/server/static/web-ui/assets/php-Lo_cJrZw.js                                       113.08 kB │ gzip:  28.85 kB
+../omnigent/server/static/web-ui/assets/swimlanes-5IMT3BWC-D_kmn3LG.js                        114.10 kB │ gzip:  39.16 kB
+../omnigent/server/static/web-ui/assets/sequenceDiagram-DBY2YBRQ-D4yerDCl.js                  115.88 kB │ gzip:  30.62 kB
+../omnigent/server/static/web-ui/assets/asciidoc-DE70LPWp.js                                  131.52 kB │ gzip:   9.31 kB
+../omnigent/server/static/web-ui/assets/SubagentsGraphView-g4W2jb17.js                        133.06 kB │ gzip:  42.83 kB
+../omnigent/server/static/web-ui/assets/mdx-DQZ5AkYe.js                                       136.10 kB │ gzip:  23.54 kB
+../omnigent/server/static/web-ui/assets/react-dom-zTxdCqxJ.js                                 139.80 kB │ gzip:  45.27 kB
+../omnigent/server/static/web-ui/assets/architectureDiagram-ZJ3FMSHR-DGVArfaR.js              148.93 kB │ gzip:  41.11 kB
+../omnigent/server/static/web-ui/assets/objective-cpp-BsSzOQcm.js                             171.96 kB │ gzip:  30.98 kB
+../omnigent/server/static/web-ui/assets/javascript-BttINa8q.js                                174.89 kB │ gzip:  16.68 kB
+../omnigent/server/static/web-ui/assets/tsx-HeIVaWJk.js                                       175.60 kB │ gzip:  16.68 kB
+../omnigent/server/static/web-ui/assets/jsx-UEmBU27c.js                                       177.85 kB │ gzip:  16.77 kB
+../omnigent/server/static/web-ui/assets/typescript-CKFhM_78.js                                181.14 kB │ gzip:  16.29 kB
+../omnigent/server/static/web-ui/assets/angular-ts-DxeeMHNV.js                                183.73 kB │ gzip:  16.78 kB
+../omnigent/server/static/web-ui/assets/vue-vine-B2mBexcZ.js                                  190.05 kB │ gzip:  18.07 kB
+../omnigent/server/static/web-ui/assets/chunk-WYO6CB5R-D69syiA6.js                            234.83 kB │ gzip:  38.03 kB
+../omnigent/server/static/web-ui/assets/katex-CgY4bQap.js                                     259.23 kB │ gzip:  77.48 kB
+../omnigent/server/static/web-ui/assets/wolfram-DLL8P-h_.js                                   262.38 kB │ gzip:  77.63 kB
+../omnigent/server/static/web-ui/assets/PdfViewer-C-sN8P6g.js                                 367.94 kB │ gzip: 107.81 kB
+../omnigent/server/static/web-ui/assets/cytoscape.esm-CQFVGiJu.js                             435.27 kB │ gzip: 137.88 kB
+../omnigent/server/static/web-ui/assets/ModelViewer-DZ52DGgn.js                               586.52 kB │ gzip: 149.05 kB
+../omnigent/server/static/web-ui/assets/cpp-ClrH8BDm.js                                       626.13 kB │ gzip:  48.10 kB
+../omnigent/server/static/web-ui/assets/chunk-KEIR6QF5-Bf7q2uPm.js                            663.15 kB │ gzip: 145.26 kB
+../omnigent/server/static/web-ui/assets/emacs-lisp-B4R74twV.js                                779.87 kB │ gzip: 197.55 kB
+../omnigent/server/static/web-ui/assets/shiki-CC844lCe.js                                   2,150.89 kB │ gzip: 465.76 kB
+../omnigent/server/static/web-ui/assets/monacoCodeEditor-BqWzvj0P.js                        3,644.51 kB │ gzip: 933.91 kB
+../omnigent/server/static/web-ui/assets/index-CNT72OaD.js                                   3,862.10 kB │ gzip: 978.99 kB
+
+✓ built in 2.27s
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.

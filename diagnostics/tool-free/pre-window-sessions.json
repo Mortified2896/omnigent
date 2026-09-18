@@ -1,0 +1,142 @@
+[
+  {
+    "id": "693f4ae2711a45f89fadcc11b00406f6",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "d0da0a8ac20c411aaa56ecfee7c288a9",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "42cb0a6ffb694923b89d5a18a2a1ad99",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "4f9e320275a7496999ee6096c548bf58",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "4b5f2df2e6b94ed6aea3e30da5dee86c",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "5d322d7d3a0b4eca82d7718dea487f7b",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "10ec8157415b415482dd0e8acdd5abcd",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "d109c2815f094c0ba6477ebb2fea9190",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "54352b43f66d4fd5ae98d23eb7a17e06",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "26a3c24f36474694ba5ab434c30f5a0f",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "ebe0f7b56483468eacd6fab82efbdcde",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "57d3e5ddbd924f02b7ff3ca6956313c2",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "6d1b37c618ef464f8e10b2a1ef61a15d",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "bc8e8feefac54f4b95f5d0eb73648e2a",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "5cfd81063c304ebaa0d02141fc64c3ec",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "9b684296d72449caa463380dab2807a5",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "5795a82d95fe44beb62c2d90a9655298",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "77ec807ef024432194dea3db397a0fe9",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "17710fe778f0480b9bb646b3e2233d3f",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "f2e4cddf1a114f3caf1f66bb70249593",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "36f128317a4140ac8dbba8e573fbca71",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "5560120006d8420eae82451cd1fbc70b",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "3cc39b2c2bed48758e052f9235cc0579",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "46346de47d744632a39baeacacaaf0fc",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "d0456b0bcab64665a7c31a37e99d6939",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "8d2835b035144b85bf24056510cfb568",
+    "status": "idle",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "a40cf38436084978ae02dbc5fb6221f7",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  },
+  {
+    "id": "abc1da2d6e954e1798f266c76e46a1ad",
+    "status": "failed",
+    "agent_name": "codex-native-ui"
+  }
+]
