@@ -4,7 +4,7 @@ This is the application peer-v2 transaction contract, selected through HomeLab
 environment configuration rather than the development machine's hostname.
 The supported promotion/recovery owner is `python -m peer_deployer.rtx`.
 Legacy promotion scripts are refused on RTX and deprecated for removal in v0.14.0.
-No legacy deployment daemon is installed. HomeLab owns the one-time bootstrap,
+This transaction contract does not use a legacy deployment daemon. HomeLab owns the one-time bootstrap,
 systemd units, environment files, snapshots and Tailscale mappings.
 
 O1 is primary; O2 is the warm maintenance peer. Neither upgrades itself.
