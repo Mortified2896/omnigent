@@ -592,9 +592,11 @@ export interface NativeModelOption {
   /** Whether the native catalog marks this as the default model. */
   isDefault?: boolean;
   /** Persisted transport lane selected with this model. */
-  accessLane?: "omniroute" | "codex-direct";
+  accessLane?: "omniroute" | "codex-direct" | "glm-direct";
   /** User-facing group heading for lane-aware model pickers. */
   groupLabel?: string;
+  /** Optional explanation shown below the model label. */
+  description?: string;
   /** Configuration that supplies this model; never includes credentials. */
   source?: ModelConfigurationSource;
 }

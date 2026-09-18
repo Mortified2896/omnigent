@@ -982,6 +982,47 @@ def _codex_options_for_access_lane(
     return normalized
 
 
+def _split_glm_access_lane_options(
+    options: Iterable[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Turn live OmniRoute GLM rows into explicit standard/fallback rows."""
+    from omnigent.models.glm_model_vocabulary import GLM_OMNIROUTE_TO_DIRECT, glm_display_name
+
+    remaining: list[dict[str, object]] = []
+    glm_options: list[dict[str, object]] = []
+    for option in options:
+        raw_id = option.get("model") or option.get("id")
+        if not isinstance(raw_id, str) or raw_id not in GLM_OMNIROUTE_TO_DIRECT:
+            remaining.append(option)
+            continue
+        direct_id = GLM_OMNIROUTE_TO_DIRECT[raw_id]
+        display_name = glm_display_name(direct_id)
+        standard: dict[str, object] = {
+            "id": raw_id,
+            "model": raw_id,
+            "displayName": f"{display_name} · OmniRoute",
+            "accessLane": "omniroute",
+            "groupLabel": "GLM",
+            "description": "Standard GLM lane through OmniRoute.",
+        }
+        if option.get("isDefault") is True:
+            standard["isDefault"] = True
+        glm_options.extend(
+            [
+                standard,
+                {
+                    "id": raw_id,
+                    "model": raw_id,
+                    "displayName": f"{display_name} · Direct Provider — fallback",
+                    "accessLane": "glm-direct",
+                    "groupLabel": "GLM",
+                    "description": "Explicit Z.ai fallback; lane failures never switch providers.",
+                },
+            ]
+        )
+    return remaining, glm_options
+
+
 @dataclass(frozen=True)
 class ModelOptionsResult:
     """One resolved model listing: picker rows + the settable-but-unlisted ids.
@@ -1018,6 +1059,11 @@ def _with_model_configuration_source(
     lane_sources = {
         "omniroute": {"kind": "gateway", "label": "AI Gateway", "name": "OmniRoute"},
         "codex-direct": {"kind": "subscription", "label": "Subscription", "name": "codex"},
+        "glm-direct": {
+            "kind": "key",
+            "label": "Direct Provider · fallback",
+            "name": "Z.ai",
+        },
     }
     return [
         {**model, "source": lane_sources.get(str(model.get("accessLane")), source)}
@@ -2888,6 +2934,7 @@ class HostProcess:
 
             if o3_routing_review_enabled():
                 rows = []
+                glm_rows: list[dict[str, object]] = []
                 for lane, label in (
                     ("omniroute", "OmniRoute"),
                     ("codex-direct", "Codex Subscription — Direct"),
@@ -2900,14 +2947,18 @@ class HostProcess:
                     except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
                         _logger.warning("Codex %s catalog unavailable", lane, exc_info=True)
                         continue
+                    regular_rows, lane_glm_rows = _split_glm_access_lane_options(lane_rows or ())
                     rows.extend(
                         _codex_options_for_access_lane(
-                            lane_rows or (),
+                            regular_rows,
                             access_lane=lane,
                             group_label=label,
                             preserve_default=not rows,
                         )
                     )
+                    if lane == "omniroute":
+                        glm_rows.extend(lane_glm_rows)
+                rows.extend(glm_rows)
                 if not rows:
                     return None
             else:
@@ -2917,6 +2968,8 @@ class HostProcess:
             return None
         if rows is None:
             return None
+        regular_rows, glm_rows = _split_glm_access_lane_options(rows)
+        rows = [*regular_rows, *glm_rows]
         routable = [row["id"] for row in rows if isinstance(row.get("id"), str) and row["id"]]
         return ModelOptionsResult(models=rows, routable_models=routable)
 

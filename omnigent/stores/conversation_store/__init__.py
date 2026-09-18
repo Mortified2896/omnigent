@@ -86,7 +86,13 @@ CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.harnesses.codex_native.main.by
 CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane"
 CODEX_ACCESS_LANE_OMNIROUTE = "omniroute"
 CODEX_ACCESS_LANE_DIRECT = "codex-direct"
-CODEX_ACCESS_LANES = frozenset({CODEX_ACCESS_LANE_OMNIROUTE, CODEX_ACCESS_LANE_DIRECT})
+# Explicit direct-provider lanes remain distinct from the Codex subscription
+# lane. A selected lane is durable session metadata; the runner must never
+# reinterpret a failed provider lane as another lane.
+CODEX_ACCESS_LANE_GLM_DIRECT = "glm-direct"
+CODEX_ACCESS_LANES = frozenset(
+    {CODEX_ACCESS_LANE_OMNIROUTE, CODEX_ACCESS_LANE_DIRECT, CODEX_ACCESS_LANE_GLM_DIRECT}
+)
 
 # Reserved label key that stores a session's sidebar "project" membership
 # (implicit collections — a project exists while ≥1 session carries this key).

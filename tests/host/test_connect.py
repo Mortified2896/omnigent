@@ -5800,3 +5800,46 @@ async def test_o3_catalog_preserves_explicit_lanes_and_native_efforts(monkeypatc
     )
     sourced = _with_model_configuration_source(result.models, "codex-native")
     assert [row["source"]["kind"] for row in sourced] == ["gateway", "subscription"]
+
+
+async def test_live_omniroute_glm_rows_get_explicit_standard_and_fallback_lanes(
+    monkeypatch,
+) -> None:
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: False
+    )
+
+    async def catalog():
+        return [
+            {"id": "codex/gpt-5.6-luna", "displayName": "GPT-5.6 Luna"},
+            {"id": "glm/glm-5.3"},
+            {"id": "glm/glm-5.3-flash"},
+        ]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    assert [row["displayName"] for row in result.models] == [
+        "GPT-5.6 Luna",
+        "GLM 5.3 · OmniRoute",
+        "GLM 5.3 · Direct Provider — fallback",
+        "GLM 5.3 Flash · OmniRoute",
+        "GLM 5.3 Flash · Direct Provider — fallback",
+    ]
+    glm_rows = [row for row in result.models if row.get("groupLabel") == "GLM"]
+    assert [row["accessLane"] for row in glm_rows] == [
+        "omniroute",
+        "glm-direct",
+        "omniroute",
+        "glm-direct",
+    ]
+    assert [row["id"] for row in glm_rows] == [
+        "glm/glm-5.3",
+        "glm/glm-5.3",
+        "glm/glm-5.3-flash",
+        "glm/glm-5.3-flash",
+    ]
+    assert result.routable_models.count("glm/glm-5.3") == 2

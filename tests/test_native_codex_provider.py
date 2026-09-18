@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from omnigent.errors import OmnigentError
+from omnigent.harnesses.codex_native import app_server
 from omnigent.harnesses.codex_native.app_server import resolve_native_codex_launch
 from omnigent.inner.codex_executor import _provider_codex_config_overrides
 from omnigent.spec.types import AgentSpec, ExecutorSpec, ProviderAuth
@@ -28,7 +29,13 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
     monkeypatch.setenv("HOME", str(tmp_path))
-    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "CODEX_HOME"):
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ZAI_API_KEY",
+        "CODEX_HOME",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
     return tmp_path
@@ -131,6 +138,78 @@ def test_explicit_codex_direct_lane_fails_without_login(
 
     with pytest.raises(OmnigentError, match=r"^Codex Subscription — Direct is not authenticated$"):
         resolve_native_codex_launch(model="gpt-5.5", access_lane="codex-direct")
+
+
+def test_explicit_glm_direct_lane_requires_zai_credential(_isolated: Path) -> None:
+    with pytest.raises(OmnigentError, match=r"^GLM Direct Provider is not configured"):
+        resolve_native_codex_launch(model="glm/glm-5.3", access_lane="glm-direct")
+
+
+def test_explicit_glm_direct_lane_uses_zai_adapter_without_cross_lane_fallback(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+
+    launch = resolve_native_codex_launch(
+        model="glm/glm-5.3",
+        access_lane="glm-direct",
+    )
+
+    assert launch.model == "glm-5.3"
+    assert launch.profile is None
+    assert launch.response_proxy is not None
+    assert launch.response_proxy.api_key == "zai-test-placeholder"
+    assert "api.z.ai/api/coding/paas/v4" in "\n".join(launch.config_overrides)
+    assert 'wire_api="responses"' in "\n".join(launch.config_overrides)
+    assert launch.env_passthrough == ("ZAI_API_KEY",)
+    assert launch.credential_env == {"ZAI_API_KEY": "zai-test-placeholder"}
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "glm-direct"
+    assert launch.trace_provenance.provider == "z.ai"
+    assert launch.trace_provenance.provider_fallback is True
+
+
+def test_explicit_glm_direct_lane_rejects_unlisted_model(_isolated: Path) -> None:
+    with pytest.raises(OmnigentError, match=r"^GLM Direct Provider does not support model"):
+        resolve_native_codex_launch(model="glm/glm-5.3-high", access_lane="glm-direct")
+
+
+def test_omniroute_glm_discovery_uses_only_live_provider_models(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "omniroute-test-placeholder")
+    launch = app_server.NativeCodexLaunch(
+        config_overrides=[
+            'model_provider="omnigent_provider"',
+            'model_providers.omnigent_provider={base_url="http://127.0.0.1:20128/v1"}',
+        ],
+        model=None,
+        profile=None,
+        env_passthrough=("OMNIROUTE_O3_KEY",),
+    )
+
+    class _Model:
+        def __init__(self, model_id: str) -> None:
+            self.id = model_id
+
+    monkeypatch.setattr(
+        app_server.model_catalog,
+        "listing_for_provider",
+        lambda _provider: type(
+            "_Listing", (), {"verified": True, "models": (_Model("glm/glm-5.3"),)}
+        )(),
+    )
+
+    rows = app_server._omniroute_glm_model_rows(launch)
+
+    assert rows == [
+        {
+            "id": "glm/glm-5.3",
+            "model": "glm/glm-5.3",
+            "displayName": "GLM 5.3",
+        }
+    ]
 
 
 def test_explicit_lane_rejects_missing_model(_isolated: Path) -> None:
