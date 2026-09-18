@@ -1,0 +1,2666 @@
+{
+  "native_cases": {
+    "minimal": {
+      "id": "46346de47d744632a39baeacacaaf0fc",
+      "external_session_id": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+      "created_at": 1788922746,
+      "workspace": "/private/tmp/o3-context-investigation/minimal",
+      "status": "idle",
+      "model_override": "custom/o3-route-cf4f3181b533",
+      "context_window": 258400,
+      "last_total_tokens": 89061,
+      "parent_session_id": null,
+      "root_conversation_id": "46346de47d744632a39baeacacaaf0fc",
+      "rollout": "/Users/Jo/.omnigent/codex-native/4bdb79d702a889d3e31eb4023d5b5b2f/codex-home/sessions/2026/09/09/rollout-2026-09-09T10-59-08-01a0841a-def2-78a2-a3c9-eaca9474bc63.jsonl",
+      "rollout_sha256": "19c248a60987e6985f8dcd10a84b567801cd545903f458102d81fb90e0e354c2",
+      "native_meta": {
+        "id": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+        "timestamp": "2026-09-09T02:59:08.660Z",
+        "cwd": "/private/tmp/o3-context-investigation/minimal",
+        "cli_version": "0.153.4",
+        "model_provider": "omnigent_provider",
+        "forked_from_id": null
+      },
+      "first_authoritative_usage": {
+        "total_token_usage": {
+          "input_tokens": 89061,
+          "cached_input_tokens": 3328,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 89072
+        },
+        "last_token_usage": {
+          "input_tokens": 89061,
+          "cached_input_tokens": 3328,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 89072
+        },
+        "model_context_window": 258400
+      },
+      "uncached_first_input": 85733,
+      "route": {
+        "id": "1788922772014-3269ba",
+        "timestamp": "2026-09-09T02:59:53.306Z",
+        "model": "gpt-5.6-luna",
+        "requestedModel": "codex/gpt-5.6-luna",
+        "provider": "codex",
+        "comboName": "custom/o3-route-cf4f3181b533",
+        "tokens": {
+          "in": 89061,
+          "out": 11,
+          "cacheRead": 3328,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        },
+        "correlationId": "edbec784-dd6f-4e1b-9388-2c56937a6eff"
+      },
+      "initial_items_count": 0,
+      "previous_response_id_present": false,
+      "prompt_cache_key": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+      "request_fields": {
+        "model": {
+          "characters": 20,
+          "sha256": "fd4c989d13ca7a901a4c29a43111926d5954ab4a061178277d454d1a00cbd670"
+        },
+        "instructions": {
+          "characters": 21057,
+          "sha256": "ca8f958932a9d9c22a617c95f719cb81f4447484f011714e83e72ae731be69f7"
+        },
+        "input": {
+          "characters": 26620,
+          "sha256": "9bf3cb0af02137a343c2b5af7e55bd671d4aed91b8a98ca41b32cf2d3409d8e2"
+        },
+        "tools": {
+          "characters": 436613,
+          "sha256": "156d0533768c6c19206efc16812f46250fe5b0234ccaf055f97123232e22f7ee"
+        },
+        "tool_choice": {
+          "characters": 6,
+          "sha256": "634635a2166efa2ae765abd31d4ae807082287e329a8a7fff42b1fb30f65087e"
+        },
+        "parallel_tool_calls": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "reasoning": {
+          "characters": 33,
+          "sha256": "ed0bb1832c192bb5c7a3cf4ea60b9c8679775279790471fc3eed7d43288095d2"
+        },
+        "store": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "stream": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "include": {
+          "characters": 31,
+          "sha256": "8643f1d4b5f052f078b3253c4cb19903608e006182bf268ace443298908f3e05"
+        },
+        "prompt_cache_key": {
+          "characters": 38,
+          "sha256": "3306d487272e7c655cef235bea431ac4b869a62adc1745bc653014b127acdcd6"
+        },
+        "client_metadata": {
+          "characters": 1065,
+          "sha256": "f938fda5a4606265d1559d8bf1426e77a3daa2a83a5696f565f114dd9bc93e6c"
+        }
+      },
+      "request_input_summary": [
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 17193,
+              "sha256": "2492c60768ea80834d92987c7e0814f8ea0eda812781b468d46bff947c74af2d"
+            },
+            {
+              "characters": 4430,
+              "sha256": "3f37c7ac97e6bed014e8568b3121c8c60edbe4df91b8e0a28abca1c5816d8bb8"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 3031,
+              "sha256": "64f7fc253ec4e8e31923fbc3e51a515d05f9e2aa5041407384fdd65bbe8599c2"
+            },
+            {
+              "characters": 417,
+              "sha256": "5f3cd9e66a2fa1078a97dfa241837186da0e95277833e0ebb39d8e5a444415eb"
+            },
+            {
+              "characters": 963,
+              "sha256": "39632d96f24bb1fce53a69eeacfed5b107318c2b0267dba0db020503682d6cc5"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 2,
+              "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+            }
+          ]
+        }
+      ]
+    },
+    "project": {
+      "id": "3cc39b2c2bed48758e052f9235cc0579",
+      "external_session_id": "01a0841d-106a-7bb3-bfda-1c3868d05445",
+      "created_at": 1788922890,
+      "workspace": "/Users/Jo/GitHub/_worktrees/omnigent/mac-next",
+      "status": "idle",
+      "model_override": "custom/o3-route-cf4f3181b533",
+      "context_window": 258400,
+      "last_total_tokens": 92293,
+      "parent_session_id": null,
+      "root_conversation_id": "3cc39b2c2bed48758e052f9235cc0579",
+      "rollout": "/Users/Jo/.omnigent/codex-native/9f2aa126971468accb247353755f989a/codex-home/sessions/2026/09/09/rollout-2026-09-09T11-01-32-01a0841d-106a-7bb3-bfda-1c3868d05445.jsonl",
+      "rollout_sha256": "6e6facc0eaf3358a1d6c0ff45501dfe62f7437b2d57b8d07257c23382d9062ff",
+      "native_meta": {
+        "id": "01a0841d-106a-7bb3-bfda-1c3868d05445",
+        "timestamp": "2026-09-09T03:01:32.433Z",
+        "cwd": "/Users/Jo/GitHub/_worktrees/omnigent/mac-next",
+        "cli_version": "0.153.4",
+        "model_provider": "omnigent_provider",
+        "forked_from_id": null
+      },
+      "first_authoritative_usage": {
+        "total_token_usage": {
+          "input_tokens": 92293,
+          "cached_input_tokens": 82176,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 92307
+        },
+        "last_token_usage": {
+          "input_tokens": 92293,
+          "cached_input_tokens": 82176,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 92307
+        },
+        "model_context_window": 258400
+      },
+      "uncached_first_input": 10117,
+      "route": {
+        "id": "1788922927916-a9efa3",
+        "timestamp": "2026-09-09T03:03:32.726Z",
+        "model": "gpt-5.6-luna-low",
+        "requestedModel": "codex/gpt-5.6-luna-low",
+        "provider": "codex",
+        "comboName": "custom/o3-route-cf4f3181b533",
+        "tokens": {
+          "in": 92293,
+          "out": 14,
+          "cacheRead": 82176,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        },
+        "correlationId": "75e40136-92d7-47e8-95b5-bdbc80b36bc1"
+      },
+      "initial_items_count": 0,
+      "previous_response_id_present": false,
+      "prompt_cache_key": "01a0841d-106a-7bb3-bfda-1c3868d05445",
+      "request_fields": {
+        "model": {
+          "characters": 24,
+          "sha256": "3146972b343cdb210dd02de7b3f2a09545aba6254e43c2615bca2c746c0fb124"
+        },
+        "instructions": {
+          "characters": 21057,
+          "sha256": "ca8f958932a9d9c22a617c95f719cb81f4447484f011714e83e72ae731be69f7"
+        },
+        "input": {
+          "characters": 40591,
+          "sha256": "7a1e1bbdfc6f9281b459366e772fffe6ec046f8e6876c3586e1acd819245bda1"
+        },
+        "tools": {
+          "characters": 436613,
+          "sha256": "156d0533768c6c19206efc16812f46250fe5b0234ccaf055f97123232e22f7ee"
+        },
+        "tool_choice": {
+          "characters": 6,
+          "sha256": "634635a2166efa2ae765abd31d4ae807082287e329a8a7fff42b1fb30f65087e"
+        },
+        "parallel_tool_calls": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "reasoning": {
+          "characters": 33,
+          "sha256": "ed0bb1832c192bb5c7a3cf4ea60b9c8679775279790471fc3eed7d43288095d2"
+        },
+        "store": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "stream": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "include": {
+          "characters": 31,
+          "sha256": "8643f1d4b5f052f078b3253c4cb19903608e006182bf268ace443298908f3e05"
+        },
+        "prompt_cache_key": {
+          "characters": 38,
+          "sha256": "65268a2aefb97b331e16c735ee1db89eef0b3158b0d847438f3c7f6566ca3138"
+        },
+        "client_metadata": {
+          "characters": 1374,
+          "sha256": "01b04e1d9a30348aef1aa85b5a8efcf6b7098f86a3936779361e83059af1d7c1"
+        }
+      },
+      "request_input_summary": [
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 22131,
+              "sha256": "c01ae550099f7a461577f0dbbb8619df8d9605be99f7208c4186daaef6d05dec"
+            },
+            {
+              "characters": 4430,
+              "sha256": "c77ade0677683e415056c1d26feefffeeaa14e063d7bd695b0fd61dc0644e63a"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 3031,
+              "sha256": "64f7fc253ec4e8e31923fbc3e51a515d05f9e2aa5041407384fdd65bbe8599c2"
+            },
+            {
+              "characters": 9233,
+              "sha256": "4e6aa7fad5ebe4faf2d3837d18181682f6e32d79f4e4ba140e6d1380cae9b981"
+            },
+            {
+              "characters": 963,
+              "sha256": "bd71f0fb512d3b1eba646b8d3f301d0f1d2113438e0cc26ad06f14a64b70f219"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 2,
+              "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+            }
+          ]
+        }
+      ]
+    },
+    "catalog": {
+      "id": "5560120006d8420eae82451cd1fbc70b",
+      "external_session_id": "01a0842e-199e-7532-a394-d314e0b3a810",
+      "created_at": 1788924006,
+      "workspace": "/private/tmp/o3-context-investigation/minimal",
+      "status": "idle",
+      "model_override": "custom/o3-route-cf4f3181b533",
+      "context_window": 258400,
+      "last_total_tokens": 15237,
+      "parent_session_id": null,
+      "root_conversation_id": "5560120006d8420eae82451cd1fbc70b",
+      "rollout": "/Users/Jo/.omnigent/codex-native/d6a6a9e60e5d8761a3f5903732ebcd67/codex-home/sessions/2026/09/09/rollout-2026-09-09T11-20-08-01a0842e-199e-7532-a394-d314e0b3a810.jsonl",
+      "rollout_sha256": "7877a2ecc97a68b63596df17c9f5e2e0b8665fb3f798048bf0ea826f8f6b1772",
+      "native_meta": {
+        "id": "01a0842e-199e-7532-a394-d314e0b3a810",
+        "timestamp": "2026-09-09T03:20:08.864Z",
+        "cwd": "/private/tmp/o3-context-investigation/minimal",
+        "cli_version": "0.153.4",
+        "model_provider": "omnigent_provider",
+        "forked_from_id": null
+      },
+      "first_authoritative_usage": {
+        "total_token_usage": {
+          "input_tokens": 15237,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 13,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 15250
+        },
+        "last_token_usage": {
+          "input_tokens": 15237,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 13,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 15250
+        },
+        "model_context_window": 258400
+      },
+      "uncached_first_input": 15237,
+      "route": {
+        "id": "1788924021038-64f7fb",
+        "timestamp": "2026-09-09T03:20:35.972Z",
+        "model": "gpt-5.6-terra-low",
+        "requestedModel": "codex/gpt-5.6-terra-low",
+        "provider": "codex",
+        "comboName": "custom/o3-route-cf4f3181b533",
+        "tokens": {
+          "in": 15237,
+          "out": 13,
+          "cacheRead": 0,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        },
+        "correlationId": "b2f993ea-b45a-41d8-93c6-66f811b45f46"
+      },
+      "initial_items_count": 0,
+      "previous_response_id_present": false,
+      "prompt_cache_key": "01a0842e-199e-7532-a394-d314e0b3a810",
+      "request_fields": {
+        "model": {
+          "characters": 25,
+          "sha256": "34986972a54ff30a04d4ac521756c0502c46abafa432b7171c6881a457e80f9d"
+        },
+        "input": {
+          "characters": 67446,
+          "sha256": "7b6e4c5a7b284b968ab8e6fe13b750b2428626271b1d9099c585bfa5f12a70c9"
+        },
+        "tool_choice": {
+          "characters": 6,
+          "sha256": "634635a2166efa2ae765abd31d4ae807082287e329a8a7fff42b1fb30f65087e"
+        },
+        "parallel_tool_calls": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "reasoning": {
+          "characters": 38,
+          "sha256": "09670ebf2abbfb89d9368c76061b2e0b2cb7538a0092d225498dd2906b3af617"
+        },
+        "store": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "stream": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "include": {
+          "characters": 31,
+          "sha256": "8643f1d4b5f052f078b3253c4cb19903608e006182bf268ace443298908f3e05"
+        },
+        "prompt_cache_key": {
+          "characters": 38,
+          "sha256": "c93f8242b31cec2cc17bd709e5fd1b9dc638de94948471af02c8d534b62d97c3"
+        },
+        "text": {
+          "characters": 19,
+          "sha256": "ea2f7b2aec9b8322dfc4147fc30009def7ae33633895485ca85dadbcde2e0eef"
+        },
+        "client_metadata": {
+          "characters": 1065,
+          "sha256": "ffd5e50846dd370ef732513334274fee4a9a1f15d956a7420903d6df2a3a30bc"
+        }
+      },
+      "request_input_summary": [
+        {
+          "type": "additional_tools",
+          "role": "developer",
+          "content": []
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 20751,
+              "sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 17193,
+              "sha256": "a555ddea3b53d141c88bcb31f400b38633347a0a2382e385e0c7e7622458f661"
+            },
+            {
+              "characters": 4430,
+              "sha256": "3f37c7ac97e6bed014e8568b3121c8c60edbe4df91b8e0a28abca1c5816d8bb8"
+            },
+            {
+              "characters": 646,
+              "sha256": "b4536c3dbcedfee06f46c2230eb1080dc225b45187715f41095289bacba3759a"
+            },
+            {
+              "characters": 1014,
+              "sha256": "81d37acb6feff552b562f712b1e854339d90a0b19aa9f271047cca787f77a51a"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 3031,
+              "sha256": "64f7fc253ec4e8e31923fbc3e51a515d05f9e2aa5041407384fdd65bbe8599c2"
+            },
+            {
+              "characters": 417,
+              "sha256": "5f3cd9e66a2fa1078a97dfa241837186da0e95277833e0ebb39d8e5a444415eb"
+            },
+            {
+              "characters": 963,
+              "sha256": "39632d96f24bb1fce53a69eeacfed5b107318c2b0267dba0db020503682d6cc5"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 2,
+              "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+            }
+          ]
+        }
+      ]
+    },
+    "search_only": {
+      "id": "36f128317a4140ac8dbba8e573fbca71",
+      "external_session_id": "01a0842f-fdf9-7341-a3f6-a15e16423238",
+      "created_at": 1788924130,
+      "workspace": "/private/tmp/o3-context-investigation/minimal",
+      "status": "idle",
+      "model_override": "custom/o3-route-cf4f3181b533",
+      "context_window": 258400,
+      "last_total_tokens": 14483,
+      "parent_session_id": null,
+      "root_conversation_id": "36f128317a4140ac8dbba8e573fbca71",
+      "rollout": "/Users/Jo/.omnigent/codex-native/65029945357bfa99360277101821b0f3/codex-home/sessions/2026/09/09/rollout-2026-09-09T11-22-12-01a0842f-fdf9-7341-a3f6-a15e16423238.jsonl",
+      "rollout_sha256": "8c43fbf801aa7729e7293a96c537be81756f3e3605fdd960c0b68ea5a7bfe75b",
+      "native_meta": {
+        "id": "01a0842f-fdf9-7341-a3f6-a15e16423238",
+        "timestamp": "2026-09-09T03:22:12.858Z",
+        "cwd": "/private/tmp/o3-context-investigation/minimal",
+        "cli_version": "0.153.4",
+        "model_provider": "omnigent_provider",
+        "forked_from_id": null
+      },
+      "first_authoritative_usage": {
+        "total_token_usage": {
+          "input_tokens": 14483,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 14497
+        },
+        "last_token_usage": {
+          "input_tokens": 14483,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 14497
+        },
+        "model_context_window": 258400
+      },
+      "uncached_first_input": 14483,
+      "route": {
+        "id": "1788924144089-a74e61",
+        "timestamp": "2026-09-09T03:22:41.489Z",
+        "model": "gpt-5.6-terra-low",
+        "requestedModel": "codex/gpt-5.6-terra-low",
+        "provider": "codex",
+        "comboName": "custom/o3-route-cf4f3181b533",
+        "tokens": {
+          "in": 14483,
+          "out": 14,
+          "cacheRead": 0,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        },
+        "correlationId": "96fcc387-4a2e-480e-bbe7-edf1cc6ee5b9"
+      },
+      "initial_items_count": 0,
+      "previous_response_id_present": false,
+      "prompt_cache_key": "01a0842f-fdf9-7341-a3f6-a15e16423238",
+      "request_fields": {
+        "model": {
+          "characters": 25,
+          "sha256": "34986972a54ff30a04d4ac521756c0502c46abafa432b7171c6881a457e80f9d"
+        },
+        "input": {
+          "characters": 66192,
+          "sha256": "4459e08ba9c20e1dfb38550647b4f2afdaf60dd0e3c47df5df1f806ce0fe5d8b"
+        },
+        "tool_choice": {
+          "characters": 6,
+          "sha256": "634635a2166efa2ae765abd31d4ae807082287e329a8a7fff42b1fb30f65087e"
+        },
+        "parallel_tool_calls": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "reasoning": {
+          "characters": 38,
+          "sha256": "09670ebf2abbfb89d9368c76061b2e0b2cb7538a0092d225498dd2906b3af617"
+        },
+        "store": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "stream": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "include": {
+          "characters": 31,
+          "sha256": "8643f1d4b5f052f078b3253c4cb19903608e006182bf268ace443298908f3e05"
+        },
+        "prompt_cache_key": {
+          "characters": 38,
+          "sha256": "ed6f45972ab9a99946ac50355d811c70fd17999198638fff14e6e1b20643af35"
+        },
+        "text": {
+          "characters": 19,
+          "sha256": "ea2f7b2aec9b8322dfc4147fc30009def7ae33633895485ca85dadbcde2e0eef"
+        },
+        "client_metadata": {
+          "characters": 1065,
+          "sha256": "9ab170da38b538a504dad6e77c20becc5ad1da105792f732cc4568004b78e2d8"
+        }
+      },
+      "request_input_summary": [
+        {
+          "type": "additional_tools",
+          "role": "developer",
+          "content": []
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 20751,
+              "sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 17193,
+              "sha256": "f9af12d00dbfd4b4a9fbfa4d54715615b632c52331305f11e01749d68b75b2dd"
+            },
+            {
+              "characters": 4430,
+              "sha256": "3f37c7ac97e6bed014e8568b3121c8c60edbe4df91b8e0a28abca1c5816d8bb8"
+            },
+            {
+              "characters": 646,
+              "sha256": "b4536c3dbcedfee06f46c2230eb1080dc225b45187715f41095289bacba3759a"
+            },
+            {
+              "characters": 1014,
+              "sha256": "81d37acb6feff552b562f712b1e854339d90a0b19aa9f271047cca787f77a51a"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 3031,
+              "sha256": "64f7fc253ec4e8e31923fbc3e51a515d05f9e2aa5041407384fdd65bbe8599c2"
+            },
+            {
+              "characters": 417,
+              "sha256": "5f3cd9e66a2fa1078a97dfa241837186da0e95277833e0ebb39d8e5a444415eb"
+            },
+            {
+              "characters": 963,
+              "sha256": "39632d96f24bb1fce53a69eeacfed5b107318c2b0267dba0db020503682d6cc5"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 2,
+              "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+            }
+          ]
+        }
+      ]
+    },
+    "search_off": {
+      "id": "f2e4cddf1a114f3caf1f66bb70249593",
+      "external_session_id": "01a08432-273a-78f2-856d-4e43ff42991b",
+      "created_at": 1788924272,
+      "workspace": "/private/tmp/o3-context-investigation/minimal",
+      "status": "idle",
+      "model_override": "custom/o3-route-cf4f3181b533",
+      "context_window": 258400,
+      "last_total_tokens": 86297,
+      "parent_session_id": null,
+      "root_conversation_id": "f2e4cddf1a114f3caf1f66bb70249593",
+      "rollout": "/Users/Jo/.omnigent/codex-native/efd10b93a41bdc2366f167a0ad9cc042/codex-home/sessions/2026/09/09/rollout-2026-09-09T11-24-34-01a08432-273a-78f2-856d-4e43ff42991b.jsonl",
+      "rollout_sha256": "13a00ab83263c631082ba3746aab0550cf05fa53f43f8ed430228f0c57df5fe0",
+      "native_meta": {
+        "id": "01a08432-273a-78f2-856d-4e43ff42991b",
+        "timestamp": "2026-09-09T03:24:34.491Z",
+        "cwd": "/private/tmp/o3-context-investigation/minimal",
+        "cli_version": "0.153.4",
+        "model_provider": "omnigent_provider",
+        "forked_from_id": null
+      },
+      "first_authoritative_usage": {
+        "total_token_usage": {
+          "input_tokens": 86297,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 86308
+        },
+        "last_token_usage": {
+          "input_tokens": 86297,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 86308
+        },
+        "model_context_window": 258400
+      },
+      "uncached_first_input": 86297,
+      "route": {
+        "id": "1788924300737-990d83",
+        "timestamp": "2026-09-09T03:25:23.645Z",
+        "model": "gpt-5.6-sol",
+        "requestedModel": "codex/gpt-5.6-sol",
+        "provider": "codex",
+        "comboName": "custom/o3-route-cf4f3181b533",
+        "tokens": {
+          "in": 86297,
+          "out": 11,
+          "cacheRead": 0,
+          "cacheWrite": null,
+          "reasoning": 0,
+          "compressed": null
+        },
+        "correlationId": "0b9f0a80-9ac0-4684-9c12-7aa14da5e930"
+      },
+      "initial_items_count": 0,
+      "previous_response_id_present": false,
+      "prompt_cache_key": "01a08432-273a-78f2-856d-4e43ff42991b",
+      "request_fields": {
+        "model": {
+          "characters": 19,
+          "sha256": "28d2115982d68f21ee8aad5ca639e2c88cf7a16f8ff9339edfbefac3442b39ce"
+        },
+        "input": {
+          "characters": 487116,
+          "sha256": "27cb457a7f8d058990a0791b930b30a212ed4a33e5d7c3cdb3c9bc1aa4d61602"
+        },
+        "tool_choice": {
+          "characters": 6,
+          "sha256": "634635a2166efa2ae765abd31d4ae807082287e329a8a7fff42b1fb30f65087e"
+        },
+        "parallel_tool_calls": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "reasoning": {
+          "characters": 38,
+          "sha256": "09670ebf2abbfb89d9368c76061b2e0b2cb7538a0092d225498dd2906b3af617"
+        },
+        "store": {
+          "characters": 5,
+          "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+        },
+        "stream": {
+          "characters": 4,
+          "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+        },
+        "include": {
+          "characters": 31,
+          "sha256": "8643f1d4b5f052f078b3253c4cb19903608e006182bf268ace443298908f3e05"
+        },
+        "prompt_cache_key": {
+          "characters": 38,
+          "sha256": "a228208c86490dcddf5482e3ad1028e0dbcdb9aecd7eb5fc3185b5ad3a451914"
+        },
+        "text": {
+          "characters": 19,
+          "sha256": "ea2f7b2aec9b8322dfc4147fc30009def7ae33633895485ca85dadbcde2e0eef"
+        },
+        "client_metadata": {
+          "characters": 1065,
+          "sha256": "4fd932130b1eaeb50602a9ea50329f5322d864cc42938b91c04f70bc3c6cb944"
+        }
+      },
+      "request_input_summary": [
+        {
+          "type": "additional_tools",
+          "role": "developer",
+          "content": []
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 20751,
+              "sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "characters": 17193,
+              "sha256": "eb5f49bbb668a48b57c79fd57b934aaf7e735b42966186beb9f253128145c5b2"
+            },
+            {
+              "characters": 4430,
+              "sha256": "3f37c7ac97e6bed014e8568b3121c8c60edbe4df91b8e0a28abca1c5816d8bb8"
+            },
+            {
+              "characters": 646,
+              "sha256": "b4536c3dbcedfee06f46c2230eb1080dc225b45187715f41095289bacba3759a"
+            },
+            {
+              "characters": 1014,
+              "sha256": "81d37acb6feff552b562f712b1e854339d90a0b19aa9f271047cca787f77a51a"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 3031,
+              "sha256": "64f7fc253ec4e8e31923fbc3e51a515d05f9e2aa5041407384fdd65bbe8599c2"
+            },
+            {
+              "characters": 417,
+              "sha256": "5f3cd9e66a2fa1078a97dfa241837186da0e95277833e0ebb39d8e5a444415eb"
+            },
+            {
+              "characters": 963,
+              "sha256": "39632d96f24bb1fce53a69eeacfed5b107318c2b0267dba0db020503682d6cc5"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "characters": 2,
+              "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "payload_ab": {
+    "full": {
+      "variant": "full",
+      "session_id": "83c91b15-8a3f-47b2-b6ce-4158466e6597",
+      "source_session_id": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+      "tools_count": 29,
+      "removed_names": [],
+      "instructions_sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807",
+      "input_sha256": "de82f1b2dc1d296347db2781ccec546987d57e8a7011f217e61a9bea62cc122f",
+      "started_at": 1788923415.057363,
+      "events": [
+        {
+          "type": "response.created",
+          "id": "resp_0bde010b88b9cdce016aa0ce23868087d2bb168b1852d1d915",
+          "model": "gpt-5.6-terra",
+          "usage": null,
+          "error": null
+        },
+        {
+          "type": "response.completed",
+          "id": "resp_0bde010b88b9cdce016aa0ce23868087d2bb168b1852d1d915",
+          "model": "gpt-5.6-terra",
+          "usage": {
+            "attribution": {
+              "items": {
+                "msg_0bde010b88b9cdce016aa0ce24d74087d2aba799b7eb4e6c9c": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 4137,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 929,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5066,
+                  "output_tokens": 0
+                },
+                "msg_0bde010b88b9cdce016aa0ce24d75087d29c3c74fa065ecbae": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 1245,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 81,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 238,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 1564,
+                  "output_tokens": 0
+                },
+                "msg_0bde010b88b9cdce016aa0ce24d75887d290df888c288930d5": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 5,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5,
+                  "output_tokens": 0
+                },
+                "msg_0bde010b88b9cdce016aa0ce28648087d2bb38170b745caff4": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 2,
+                      "output_tokens": 15
+                    }
+                  ],
+                  "input_tokens": 2,
+                  "output_tokens": 15
+                }
+              },
+              "request_fields": {
+                "tools": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 3328,
+                  "input_tokens": 78055,
+                  "output_tokens": 0
+                },
+                "instructions": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "input_tokens": 4369,
+                  "output_tokens": 0
+                }
+              }
+            },
+            "input_tokens": 89061,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 15,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 89076
+          },
+          "error": null
+        }
+      ],
+      "http_status": 200,
+      "output_text": "Hi! What can I help you build or fix?",
+      "finished_at": 1788923461.496563
+    },
+    "no_apps": {
+      "variant": "no_apps",
+      "session_id": "ce931010-c5e1-40c6-8583-2d545a441a3f",
+      "source_session_id": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+      "tools_count": 18,
+      "removed_names": [
+        "mcp__codex_apps__apple_music",
+        "mcp__codex_apps__codex_document_control",
+        "mcp__codex_apps__github",
+        "mcp__codex_apps__gmail",
+        "mcp__codex_apps__google_calendar",
+        "mcp__codex_apps__google_drive",
+        "mcp__codex_apps__hotline",
+        "mcp__codex_apps__plugin_management",
+        "mcp__codex_apps__safety_settings",
+        "mcp__codex_apps__sites",
+        "mcp__codex_apps__todoist__to_do_list___calendar"
+      ],
+      "instructions_sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807",
+      "input_sha256": "de82f1b2dc1d296347db2781ccec546987d57e8a7011f217e61a9bea62cc122f",
+      "started_at": 1788923323.566099,
+      "events": [
+        {
+          "type": "response.created",
+          "id": "resp_02e679a9f057a9b2016aa0cdcd3b4487d2b66ec8e42e9f57ff",
+          "model": "gpt-5.6-terra",
+          "usage": null,
+          "error": null
+        },
+        {
+          "type": "response.completed",
+          "id": "resp_02e679a9f057a9b2016aa0cdcd3b4487d2b66ec8e42e9f57ff",
+          "model": "gpt-5.6-terra",
+          "usage": {
+            "attribution": {
+              "items": {
+                "msg_02e679a9f057a9b2016aa0cdcda51887d2a963c76ed2093caf": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 4137,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 929,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5066,
+                  "output_tokens": 0
+                },
+                "msg_02e679a9f057a9b2016aa0cdcda52887d28f22040229ef083a": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 1245,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 81,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 238,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 1564,
+                  "output_tokens": 0
+                },
+                "msg_02e679a9f057a9b2016aa0cdcda53487d2b130bcb7f62e4a32": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 5,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5,
+                  "output_tokens": 0
+                },
+                "msg_02e679a9f057a9b2016aa0cdcfa2b087d2b4de5afe3125e0f8": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 2,
+                      "output_tokens": 15
+                    }
+                  ],
+                  "input_tokens": 2,
+                  "output_tokens": 15
+                }
+              },
+              "request_fields": {
+                "tools": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 3328,
+                  "input_tokens": 27166,
+                  "output_tokens": 0
+                },
+                "instructions": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "input_tokens": 4369,
+                  "output_tokens": 0
+                }
+              }
+            },
+            "input_tokens": 38172,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 15,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 38187
+          },
+          "error": null
+        }
+      ],
+      "http_status": 200,
+      "output_text": "Hi! What can I help you build or fix?",
+      "finished_at": 1788923343.908782
+    },
+    "no_mcp": {
+      "variant": "no_mcp",
+      "session_id": "17f7e644-6d28-434b-8dfc-d43dc3664e8f",
+      "source_session_id": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+      "tools_count": 13,
+      "removed_names": [
+        "mcp__anki",
+        "mcp__node_repl",
+        "mcp__omnigent",
+        "mcp__omniroute",
+        "mcp__shadcn",
+        "mcp__codex_apps__apple_music",
+        "mcp__codex_apps__codex_document_control",
+        "mcp__codex_apps__github",
+        "mcp__codex_apps__gmail",
+        "mcp__codex_apps__google_calendar",
+        "mcp__codex_apps__google_drive",
+        "mcp__codex_apps__hotline",
+        "mcp__codex_apps__plugin_management",
+        "mcp__codex_apps__safety_settings",
+        "mcp__codex_apps__sites",
+        "mcp__codex_apps__todoist__to_do_list___calendar"
+      ],
+      "instructions_sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807",
+      "input_sha256": "de82f1b2dc1d296347db2781ccec546987d57e8a7011f217e61a9bea62cc122f",
+      "started_at": 1788923463.684993,
+      "events": [
+        {
+          "type": "response.created",
+          "id": "resp_07794b66de0a4d3e016aa0ce4fbbbc87d2b1de1f11b7e8cac1",
+          "model": "gpt-5.6-sol",
+          "usage": null,
+          "error": null
+        },
+        {
+          "type": "response.completed",
+          "id": "resp_07794b66de0a4d3e016aa0ce4fbbbc87d2b1de1f11b7e8cac1",
+          "model": "gpt-5.6-sol",
+          "usage": {
+            "attribution": {
+              "items": {
+                "msg_07794b66de0a4d3e016aa0ce4fce7c87d2a2301c3d7928f3c9": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 4137,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 929,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5066,
+                  "output_tokens": 0
+                },
+                "msg_07794b66de0a4d3e016aa0ce4fce8c87d28b90734cb126778a": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 1245,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 81,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 238,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 1564,
+                  "output_tokens": 0
+                },
+                "msg_07794b66de0a4d3e016aa0ce4fce9887d2bf497e14362fd1a7": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 5,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5,
+                  "output_tokens": 0
+                },
+                "msg_07794b66de0a4d3e016aa0ce50abc087d2911402cd5c6ff810": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 2,
+                      "output_tokens": 12
+                    }
+                  ],
+                  "input_tokens": 2,
+                  "output_tokens": 12
+                }
+              },
+              "request_fields": {
+                "tools": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 3712,
+                  "input_tokens": 7790,
+                  "output_tokens": 0
+                },
+                "instructions": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "input_tokens": 4369,
+                  "output_tokens": 0
+                }
+              }
+            },
+            "input_tokens": 18796,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3712
+            },
+            "output_tokens": 12,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 18808
+          },
+          "error": null
+        }
+      ],
+      "http_status": 200,
+      "output_text": "Hi! How can I help today?",
+      "finished_at": 1788923476.4877682
+    },
+    "no_omnigent": {
+      "variant": "no_omnigent",
+      "session_id": "2dba9908-5da0-4684-a547-76316c5ef34a",
+      "source_session_id": "01a0841a-def2-78a2-a3c9-eaca9474bc63",
+      "tools_count": 28,
+      "removed_names": [
+        "mcp__omnigent"
+      ],
+      "instructions_sha256": "ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807",
+      "input_sha256": "de82f1b2dc1d296347db2781ccec546987d57e8a7011f217e61a9bea62cc122f",
+      "started_at": 1788923540.714221,
+      "events": [
+        {
+          "type": "response.created",
+          "id": "resp_07d680252018e5e4016aa0cea8563087d280045378e635eebb",
+          "model": "gpt-5.3-codex-spark",
+          "usage": null,
+          "error": null
+        },
+        {
+          "type": "response.completed",
+          "id": "resp_07d680252018e5e4016aa0cea8563087d280045378e635eebb",
+          "model": "gpt-5.3-codex-spark",
+          "usage": {
+            "attribution": {
+              "items": {
+                "msg_07d680252018e5e4016aa0cea9642487d29dca060480e3f052": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 4137,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 929,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5066,
+                  "output_tokens": 0
+                },
+                "msg_07d680252018e5e4016aa0cea9643487d2bf9ab40212ebbbb5": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 1245,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 81,
+                      "output_tokens": 0
+                    },
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 238,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 1564,
+                  "output_tokens": 0
+                },
+                "msg_07d680252018e5e4016aa0cea9644087d2be5c114b269ca129": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 5,
+                      "output_tokens": 0
+                    }
+                  ],
+                  "input_tokens": 5,
+                  "output_tokens": 0
+                },
+                "rs_07d680252018e5e4016aa0ceae408c87d2945f21e8599f249f": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "input_tokens": 2,
+                  "output_tokens": 19
+                },
+                "msg_07d680252018e5e4016aa0ceae445c87d2a1dcf24d3c23ce5e": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "content": [
+                    {
+                      "cache_write_tokens": 0,
+                      "cached_tokens": 0,
+                      "input_tokens": 0,
+                      "output_tokens": 31
+                    }
+                  ],
+                  "input_tokens": 0,
+                  "output_tokens": 31
+                }
+              },
+              "request_fields": {
+                "tools": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 4480,
+                  "input_tokens": 71176,
+                  "output_tokens": 0
+                },
+                "instructions": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0,
+                  "input_tokens": 4369,
+                  "output_tokens": 0
+                }
+              }
+            },
+            "input_tokens": 82182,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 4480
+            },
+            "output_tokens": 50,
+            "output_tokens_details": {
+              "reasoning_tokens": 19
+            },
+            "total_tokens": 82232
+          },
+          "error": null
+        }
+      ],
+      "http_status": 200,
+      "output_text": "Hi! \ud83d\udc4b\nI can help with anything from checking your repo to making edits. What would you like to do?",
+      "finished_at": 1788923589.718057
+    }
+  },
+  "registry_comparison": {
+    "minimal": [
+      {
+        "server": "anki",
+        "tool_count": 48,
+        "tool_names": [
+          "listDecks",
+          "addNote",
+          "notesInfo",
+          "present_card",
+          "storeMediaFile",
+          "clearUnusedTags",
+          "findNotes",
+          "getMediaFilesNames",
+          "guiDeckBrowser",
+          "get_cards",
+          "updateModelTemplates",
+          "retrieveMediaFile",
+          "guiAddCards",
+          "changeDeck",
+          "createModel",
+          "guiSelectedNotes",
+          "modelTemplates",
+          "guiSelectCard",
+          "sync",
+          "guiUndo",
+          "guiCurrentCard",
+          "getTags",
+          "guiShowQuestion",
+          "modelStyling",
+          "review_stats",
+          "addTags",
+          "get_due_cards",
+          "renameModelField",
+          "repositionModelField",
+          "replaceTags",
+          "guiBrowse",
+          "deleteMediaFile",
+          "modelNames",
+          "addNotes",
+          "guiEditNote",
+          "rate_card",
+          "modelFieldNames",
+          "deleteNotes",
+          "deckStats",
+          "updateModelStyling",
+          "updateNoteFields",
+          "guiDeckOverview",
+          "removeTags",
+          "guiShowAnswer",
+          "removeModelField",
+          "createDeck",
+          "addModelField",
+          "collection_stats"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "bitwarden",
+        "tool_count": 59,
+        "tool_names": [
+          "device_approval_list",
+          "create_org_collection",
+          "edit_folder",
+          "update_org_collection",
+          "get_org_group",
+          "list_org_collections",
+          "get_send",
+          "update_org_group_members",
+          "delete_send",
+          "create_file_send",
+          "sync",
+          "update_org_subscription",
+          "get_org_member_groups",
+          "get_org_subscription",
+          "remove_send_password",
+          "create_attachment",
+          "lock",
+          "get_org_collection",
+          "get_org_policy",
+          "update_org_group",
+          "edit_send",
+          "edit_org_collection",
+          "revoke_org_member",
+          "import_org_users_and_groups",
+          "status",
+          "update_org_member",
+          "device_approval_approve_all",
+          "delete_org_collection",
+          "get_org_group_members",
+          "get",
+          "create_folder",
+          "generate",
+          "unlock",
+          "device_approval_approve",
+          "create_text_send",
+          "create_org_group",
+          "get_org_events",
+          "list",
+          "invite_org_member",
+          "restore_org_member",
+          "list_org_members",
+          "list_org_groups",
+          "move",
+          "device_approval_deny_all",
+          "remove_org_member",
+          "edit_item",
+          "update_org_member_groups",
+          "edit_item_collections",
+          "delete_org_group",
+          "create_item",
+          "list_org_policies",
+          "get_org_member",
+          "reinvite_org_member",
+          "update_org_policy",
+          "list_send",
+          "delete",
+          "restore",
+          "device_approval_deny",
+          "confirm"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "codex_apps",
+        "tool_count": 269,
+        "tool_names": [
+          "github.fetch_blob",
+          "github.fetch_file",
+          "github.fetch_issue_comments",
+          "todoist_to_do_list_calendar.find-tasks-by-date",
+          "sites.get_environment",
+          "github.fetch_commit_workflow_runs",
+          "github.unresolve_review_thread",
+          "google_calendar.get_colors",
+          "github.update_ref",
+          "codex_document_control.get_document_tool_schemas",
+          "google_drive.search_spreadsheet_rows",
+          "github.rerun_workflow_job",
+          "google_drive.list_folder",
+          "google_drive.get_presentation_tables",
+          "github.rerun_failed_workflow_run_jobs",
+          "github.search_installed_repositories_v2",
+          "gmail.send_draft",
+          "google_calendar.batch_read_event",
+          "google_calendar.respond_event",
+          "sites.get_site_analytics_overview",
+          "github.create_pull_request",
+          "sites.refresh_custom_domain_status",
+          "todoist_to_do_list_calendar.add-sections",
+          "todoist_to_do_list_calendar.get-workspace-insights",
+          "sites.get_project",
+          "sites.update_access",
+          "github.fetch_pr_patch",
+          "github.fetch_workflow_job_steps",
+          "github.add_reaction_to_pr_review_comment",
+          "github.mark_pull_request_ready_for_review",
+          "google_calendar.read_event",
+          "github.list_pull_request_reviews",
+          "todoist_to_do_list_calendar.search",
+          "plugin_management.update_app_permissions",
+          "github.update_review_comment",
+          "github.fetch_commit",
+          "github.get_issue_comment_reactions",
+          "github.get_repo",
+          "google_drive.find_document_text_range",
+          "google_drive.upload_file",
+          "google_drive.copy_file",
+          "sites.change_site_slug",
+          "todoist_to_do_list_calendar.update-labels",
+          "google_drive.get_document_paragraph_range",
+          "todoist_to_do_list_calendar.find-completed-tasks",
+          "sites.update_environment",
+          "github.add_comment_to_issue",
+          "google_drive.fetch_file_revision",
+          "google_drive.update_file",
+          "github.list_user_orgs",
+          "github.fetch_pr",
+          "google_drive.get_spreadsheet_range",
+          "github.fetch_issue",
+          "google_drive.search",
+          "github.download_workflow_artifact",
+          "todoist_to_do_list_calendar.view-attachment",
+          "google_calendar.set_event_label_silently",
+          "github.remove_issue_label",
+          "github.list_recent_issues",
+          "gmail.delete_emails",
+          "sites.list_custom_domains",
+          "todoist_to_do_list_calendar.import-project-template",
+          "todoist_to_do_list_calendar.add-comments",
+          "github.list_repositories",
+          "todoist_to_do_list_calendar.project-move",
+          "github.list_pr_changed_filenames",
+          "google_drive.get_spreadsheet_comments",
+          "google_drive.get_spreadsheet_metadata",
+          "todoist_to_do_list_calendar.update-tasks",
+          "google_drive.share_file",
+          "sites.query_site_analytics_event",
+          "sites.update_site_metadata",
+          "todoist_to_do_list_calendar.list-workspaces",
+          "gmail.batch_modify_email",
+          "gmail.batch_read_email",
+          "todoist_to_do_list_calendar.manage-assignments",
+          "google_drive.create_presentation_from_template",
+          "gmail.create_draft",
+          "todoist_to_do_list_calendar.update-reminders",
+          "safety_settings.get_trusted_contact",
+          "sites.create_site",
+          "sites.list_site_analytics_events",
+          "todoist_to_do_list_calendar.add-tasks",
+          "github.add_review_to_pr",
+          "github.update_pull_request",
+          "gmail.read_attachment",
+          "todoist_to_do_list_calendar.get-project-activity-stats",
+          "google_drive.bulk_update_file_comments",
+          "github.unlock_issue_conversation",
+          "sites.get_environment_variables",
+          "google_drive.get_profile",
+          "google_drive.duplicate_sheet_in_new_spreadsheet",
+          "sites.get_site_version",
+          "todoist_to_do_list_calendar.update-comments",
+          "github.remove_reaction_from_pr",
+          "google_drive.delete_file",
+          "sites.remove_custom_domain",
+          "github.get_pr_info",
+          "sites.list_projects",
+          "github.fetch",
+          "plugin_management.uninstall_app",
+          "gmail.apply_labels_to_emails",
+          "gmail.search_emails",
+          "todoist_to_do_list_calendar.find-reminders",
+          "google_drive.import_spreadsheet",
+          "sites.deploy_private_site_version",
+          "sites.list_site_versions",
+          "todoist_to_do_list_calendar.find-activity",
+          "google_drive.get_presentation",
+          "github.add_reaction_to_pr",
+          "github.list_user_org_memberships",
+          "plugin_management.get_app_permissions",
+          "github.create_tree",
+          "gmail.get_profile",
+          "todoist_to_do_list_calendar.uncomplete-tasks",
+          "sites.list_sites_creator_control_panel_projects",
+          "todoist_to_do_list_calendar.project-management",
+          "google_drive.batch_update_document",
+          "github.create_branch",
+          "google_calendar.fetch",
+          "safety_settings.update_parental_control",
+          "sites.check_slug_availability",
+          "github.create_blob",
+          "sites.create_source_repository_write_credential",
+          "github.search_branches",
+          "safety_settings.get_family_info",
+          "google_drive.batch_update_presentation",
+          "github.compare_commits",
+          "github.search",
+          "todoist_to_do_list_calendar.fetch-object",
+          "github.add_issue_assignees",
+          "github.resolve_review_thread",
+          "gmail.search_email_ids",
+          "todoist_to_do_list_calendar.add-reminders",
+          "gmail.update_draft",
+          "todoist_to_do_list_calendar.add-projects",
+          "gmail.send_email",
+          "google_calendar.create_event",
+          "google_drive.get_file_comments",
+          "github.list_pull_request_review_threads",
+          "github.list_installed_accounts",
+          "todoist_to_do_list_calendar.find-filters",
+          "gmail.list_labels",
+          "github.lock_issue_conversation",
+          "google_calendar.search_events",
+          "github.label_pr",
+          "sites.get_database_table_rows",
+          "github.remove_issue_assignees",
+          "github.enable_auto_merge",
+          "todoist_to_do_list_calendar.update-filters",
+          "gmail.read_email_thread",
+          "github.fetch_workflow_job_logs",
+          "github.remove_pull_request_reviewers",
+          "github.get_pr_review_comment_reactions",
+          "github.add_issue_labels",
+          "github.get_pr_reactions",
+          "apple_music.get-track-details-batch",
+          "google_drive.import_document",
+          "github.request_pull_request_reviewers",
+          "gmail.batch_read_email_threads",
+          "google_drive.create_file",
+          "sites.get_deployment_status",
+          "google_calendar.delete_event",
+          "todoist_to_do_list_calendar.export-project-template",
+          "todoist_to_do_list_calendar.complete-tasks",
+          "todoist_to_do_list_calendar.find-projects",
+          "sites.generate_siwc_bypass_token",
+          "github.dismiss_pull_request_review",
+          "github.add_reaction_to_issue_comment",
+          "github.delete_file",
+          "gmail.create_label",
+          "google_drive.batch_update_spreadsheet",
+          "sites.read_database_overview",
+          "github.update_file",
+          "google_calendar.get_availability",
+          "todoist_to_do_list_calendar.reschedule-tasks",
+          "github.fetch_workflow_run_jobs",
+          "google_drive.list_drives",
+          "todoist_to_do_list_calendar.update-sections",
+          "gmail.bulk_label_matching_emails",
+          "google_calendar.get_profile",
+          "todoist_to_do_list_calendar.update-projects",
+          "github.fetch_workflow_run_artifacts",
+          "todoist_to_do_list_calendar.delete-object",
+          "safety_settings.prepare_parental_control_update",
+          "google_drive.get_document_comments",
+          "sites.update_environment_variables",
+          "google_drive.get_presentation_text",
+          "google_drive.list_file_revisions",
+          "todoist_to_do_list_calendar.user-info",
+          "google_drive.import_presentation",
+          "todoist_to_do_list_calendar.fetch",
+          "sites.get_site_worker_logs",
+          "google_drive.get_slide_thumbnail",
+          "github.get_commit_combined_status",
+          "github.list_installations",
+          "google_drive.get_presentation_outline",
+          "todoist_to_do_list_calendar.find-sections",
+          "github.get_pr_diff",
+          "github.fetch_pr_file_patch",
+          "sites.save_site_version",
+          "gmail.archive_emails",
+          "todoist_to_do_list_calendar.add-labels",
+          "hotline.get_local_hotline",
+          "google_calendar.list_event_labels",
+          "sites.get_site",
+          "google_drive.recent_documents",
+          "safety_settings.get_parental_controls",
+          "todoist_to_do_list_calendar.find-tasks",
+          "github.get_users_recent_prs_in_repo",
+          "github.search_repositories",
+          "gmail.forward_emails",
+          "gmail.list_drafts",
+          "todoist_to_do_list_calendar.reorder-objects",
+          "plugin_management.get_plugin_dependencies",
+          "todoist_to_do_list_calendar.get-productivity-stats",
+          "todoist_to_do_list_calendar.find-labels",
+          "google_drive.get_document",
+          "github.create_file",
+          "google_drive.get_document_tables",
+          "apple_music.search",
+          "github.get_user_login",
+          "google_drive.get_spreadsheet_cells",
+          "github.list_repositories_by_affiliation",
+          "github.download_user_content",
+          "google_calendar.search",
+          "github.remove_reaction_from_issue_comment",
+          "google_drive.get_file_metadata",
+          "github.search_issues",
+          "github.fetch_pr_comments",
+          "sites.list_sites",
+          "todoist_to_do_list_calendar.find-comments",
+          "gmail.read_email",
+          "google_calendar.update_event",
+          "github.create_commit",
+          "google_drive.create_folder",
+          "github.get_repo_collaborator_permission",
+          "github.reply_to_review_comment",
+          "github.list_repositories_by_installation",
+          "github.search_commits",
+          "google_drive.fetch",
+          "sites.deploy_site_version",
+          "todoist_to_do_list_calendar.get-overview",
+          "sites.get_database_overview",
+          "codex_document_control.execute_document_command",
+          "sites.add_custom_domain",
+          "google_drive.get_slide",
+          "google_calendar.list_calendars",
+          "github.update_issue_comment",
+          "github.convert_pull_request_to_draft",
+          "github.search_installed_repositories_streaming",
+          "github.search_prs",
+          "codex_document_control.list_document_sessions",
+          "todoist_to_do_list_calendar.analyze-project-health",
+          "google_drive.export_file",
+          "sites.delete_site",
+          "todoist_to_do_list_calendar.get-project-health",
+          "github.remove_reaction_from_pr_review_comment",
+          "sites.read_database_table_rows",
+          "todoist_to_do_list_calendar.add-filters",
+          "github.merge_pull_request",
+          "sites.update_site_access",
+          "google_drive.get_document_text",
+          "github.get_pr_statuses",
+          "github.create_issue",
+          "todoist_to_do_list_calendar.find-project-collaborators",
+          "github.get_profile",
+          "google_drive.get_presentation_comments",
+          "github.update_issue"
+        ],
+        "auth_status": "bearerToken"
+      },
+      {
+        "server": "computer-use",
+        "tool_count": 0,
+        "tool_names": [],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "dataAnalyticsWidgets",
+        "tool_count": 5,
+        "tool_names": [
+          "render_artifact",
+          "export_artifact_package",
+          "render_table",
+          "validate_artifact",
+          "render_chart"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "node_repl",
+        "tool_count": 4,
+        "tool_names": [
+          "js_reset",
+          "js",
+          "turn_ended",
+          "js_add_node_module_dir"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "omnigent",
+        "tool_count": 37,
+        "tool_names": [
+          "sys_scheduled_task_update",
+          "sys_session_list",
+          "sys_session_send",
+          "sys_policy_registry",
+          "update_comment",
+          "sys_terminal_send",
+          "sys_session_close",
+          "sys_session_get_info",
+          "sys_session_create",
+          "sys_scheduled_task_delete",
+          "sys_cancel_task",
+          "sys_agent_download",
+          "sys_session_get_history",
+          "list_comments",
+          "browser_navigate",
+          "sys_terminal_launch",
+          "sys_os_read",
+          "sys_session_rename",
+          "sys_call_async",
+          "sys_terminal_close",
+          "sys_os_shell",
+          "sys_cancel_async",
+          "browser_snapshot",
+          "browser_click",
+          "sys_agent_list",
+          "browser_screenshot",
+          "sys_add_policy",
+          "sys_os_write",
+          "sys_read_inbox",
+          "sys_list_models",
+          "sys_scheduled_task_list",
+          "sys_terminal_read",
+          "browser_type",
+          "sys_os_edit",
+          "sys_scheduled_task_create",
+          "sys_terminal_list",
+          "sys_agent_get"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "omniroute",
+        "tool_count": 110,
+        "tool_names": [
+          "omniroute_x_search",
+          "obsidian_list_vault",
+          "gamification_servers",
+          "obsidian_delete_note",
+          "omniroute_compression_status",
+          "obsidian_search_structured",
+          "omniroute_ccr_store",
+          "omniroute_get_health",
+          "omniroute_ccr_retrieve",
+          "omniroute_get_session_snapshot",
+          "notion_query_database",
+          "obsidian_check_status",
+          "omniroute_list_combos",
+          "omniroute_check_quota",
+          "omniroute_rtk_discover",
+          "omniroute_ccr_list",
+          "omniroute_oneproxy_rotate",
+          "omniroute_rtk_learn",
+          "omniroute_web_search",
+          "omniroute_memory_clear",
+          "obsidian_search_simple",
+          "omniroute_pool_warm",
+          "omniroute_memory_add",
+          "omniroute_set_resilience_profile",
+          "omniroute_switch_combo",
+          "plugin_configure",
+          "omniroute_pick_fastest_model",
+          "omniroute_get_provider_metrics",
+          "omniroute_browser_pool_status",
+          "omniroute_skills_list",
+          "omniroute_github_skills_search",
+          "plugin_scan",
+          "omniroute_create_combo",
+          "omniroute_explain_route",
+          "omniroute_agent_skills_get",
+          "omniroute_best_combo_for_task",
+          "omniroute_ccr_stats",
+          "omniroute_ccr_delete",
+          "obsidian_patch_note",
+          "omniroute_skills_enable",
+          "plugin_uninstall",
+          "omniroute_get_combo_metrics",
+          "omniroute_agent_skills_coverage",
+          "obsidian_move_note",
+          "gamification_anomalies",
+          "obsidian_get_document_map",
+          "local_corpus_read",
+          "obsidian_sync_resolve_conflict",
+          "gamification_transfer",
+          "omniroute_cache_flush",
+          "omniroute_memory_search",
+          "omniroute_oneproxy_fetch",
+          "omniroute_pool_health",
+          "obsidian_read_note",
+          "obsidian_sync_conflicts",
+          "omniroute_set_compression_engine",
+          "obsidian_append_note",
+          "omniroute_compression_configure",
+          "notion_append_blocks",
+          "omniroute_set_routing_strategy",
+          "omniroute_skills_executions",
+          "omniroute_tool_search",
+          "omniroute_web_fetch",
+          "gamification_rank",
+          "notion_search",
+          "obsidian_get_active_file",
+          "omniroute_cost_report",
+          "omniroute_list_compression_combos",
+          "omniroute_pool_status",
+          "gamification_profile",
+          "omniroute_cache_stats",
+          "omniroute_set_budget_guard",
+          "omniroute_sync_pricing",
+          "notion_get_database",
+          "plugin_deactivate",
+          "plugin_install",
+          "obsidian_get_tags",
+          "obsidian_list_commands",
+          "local_corpus_status",
+          "local_corpus_search",
+          "notion_list_block_children",
+          "gamification_badges",
+          "omniroute_github_skills_install",
+          "omniroute_simulate_route",
+          "plugin_activate",
+          "omniroute_github_skills_scan",
+          "omniroute_list_models_catalog",
+          "obsidian_sync_status",
+          "omniroute_route_request",
+          "plugin_executions",
+          "plugin_list",
+          "omniroute_radar_catalog",
+          "obsidian_open_file",
+          "gamification_invite",
+          "obsidian_execute_command",
+          "gamification_leaderboard",
+          "obsidian_sync_trigger",
+          "obsidian_get_periodic_note",
+          "omniroute_agent_skills_list",
+          "omniroute_ccr_inspect",
+          "omniroute_oneproxy_stats",
+          "omniroute_compression_combo_stats",
+          "obsidian_write_note",
+          "omniroute_pool_reset",
+          "notion_get_page",
+          "omniroute_pool_sessions",
+          "omniroute_skills_execute",
+          "omniroute_test_combo",
+          "omniroute_db_health_check",
+          "obsidian_get_note_metadata"
+        ],
+        "auth_status": "bearerToken"
+      },
+      {
+        "server": "shadcn",
+        "tool_count": 7,
+        "tool_names": [
+          "view_items_in_registries",
+          "get_add_command_for_items",
+          "get_audit_checklist",
+          "get_project_registries",
+          "get_item_examples_from_registries",
+          "list_items_in_registries",
+          "search_items_in_registries"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "unity-mcp",
+        "tool_count": 0,
+        "tool_names": [],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "unity_mcp",
+        "tool_count": 0,
+        "tool_names": [],
+        "auth_status": "unsupported"
+      }
+    ],
+    "search_only": [
+      {
+        "server": "anki",
+        "tool_count": 48,
+        "tool_names": [
+          "modelTemplates",
+          "guiShowAnswer",
+          "findNotes",
+          "replaceTags",
+          "storeMediaFile",
+          "collection_stats",
+          "modelNames",
+          "getMediaFilesNames",
+          "guiDeckBrowser",
+          "rate_card",
+          "removeModelField",
+          "changeDeck",
+          "createDeck",
+          "guiBrowse",
+          "get_cards",
+          "addNotes",
+          "deleteNotes",
+          "guiAddCards",
+          "guiCurrentCard",
+          "guiShowQuestion",
+          "createModel",
+          "clearUnusedTags",
+          "notesInfo",
+          "present_card",
+          "removeTags",
+          "renameModelField",
+          "repositionModelField",
+          "updateModelStyling",
+          "retrieveMediaFile",
+          "getTags",
+          "modelStyling",
+          "sync",
+          "deleteMediaFile",
+          "guiUndo",
+          "review_stats",
+          "updateNoteFields",
+          "addTags",
+          "deckStats",
+          "guiSelectedNotes",
+          "get_due_cards",
+          "updateModelTemplates",
+          "listDecks",
+          "addNote",
+          "guiDeckOverview",
+          "guiEditNote",
+          "addModelField",
+          "guiSelectCard",
+          "modelFieldNames"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "bitwarden",
+        "tool_count": 59,
+        "tool_names": [
+          "get_org_member",
+          "delete_org_collection",
+          "update_org_group_members",
+          "get_org_group",
+          "generate",
+          "get_org_subscription",
+          "list_org_collections",
+          "update_org_subscription",
+          "get",
+          "list_org_members",
+          "remove_send_password",
+          "list_org_groups",
+          "sync",
+          "confirm",
+          "create_org_group",
+          "delete_send",
+          "device_approval_approve",
+          "get_org_member_groups",
+          "create_attachment",
+          "device_approval_deny_all",
+          "edit_folder",
+          "list_send",
+          "create_org_collection",
+          "device_approval_list",
+          "restore_org_member",
+          "create_file_send",
+          "create_item",
+          "update_org_member_groups",
+          "edit_send",
+          "get_org_policy",
+          "get_org_collection",
+          "device_approval_deny",
+          "edit_item",
+          "create_text_send",
+          "reinvite_org_member",
+          "update_org_group",
+          "unlock",
+          "restore",
+          "update_org_policy",
+          "status",
+          "list",
+          "get_org_events",
+          "edit_item_collections",
+          "delete_org_group",
+          "invite_org_member",
+          "update_org_member",
+          "delete",
+          "device_approval_approve_all",
+          "move",
+          "edit_org_collection",
+          "create_folder",
+          "get_org_group_members",
+          "import_org_users_and_groups",
+          "update_org_collection",
+          "list_org_policies",
+          "remove_org_member",
+          "get_send",
+          "revoke_org_member",
+          "lock"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "codex_apps",
+        "tool_count": 269,
+        "tool_names": [
+          "github.search_issues",
+          "github.rerun_workflow_job",
+          "github.remove_pull_request_reviewers",
+          "google_drive.get_presentation_tables",
+          "google_calendar.create_event",
+          "todoist_to_do_list_calendar.fetch-object",
+          "todoist_to_do_list_calendar.update-reminders",
+          "github.fetch_commit",
+          "google_calendar.delete_event",
+          "gmail.batch_modify_email",
+          "todoist_to_do_list_calendar.update-sections",
+          "codex_document_control.execute_document_command",
+          "google_drive.duplicate_sheet_in_new_spreadsheet",
+          "google_calendar.read_event",
+          "sites.list_sites",
+          "todoist_to_do_list_calendar.delete-object",
+          "github.enable_auto_merge",
+          "github.delete_file",
+          "google_drive.copy_file",
+          "google_calendar.respond_event",
+          "sites.generate_siwc_bypass_token",
+          "github.update_issue",
+          "google_drive.create_presentation_from_template",
+          "google_drive.get_spreadsheet_range",
+          "github.fetch_commit_workflow_runs",
+          "gmail.send_email",
+          "github.remove_reaction_from_issue_comment",
+          "github.fetch",
+          "google_drive.batch_update_presentation",
+          "safety_settings.get_family_info",
+          "github.list_user_orgs",
+          "github.fetch_issue_comments",
+          "github.search",
+          "sites.save_site_version",
+          "google_drive.search_spreadsheet_rows",
+          "github.fetch_issue",
+          "google_calendar.fetch",
+          "codex_document_control.get_document_tool_schemas",
+          "google_calendar.search",
+          "todoist_to_do_list_calendar.fetch",
+          "todoist_to_do_list_calendar.project-move",
+          "todoist_to_do_list_calendar.user-info",
+          "github.reply_to_review_comment",
+          "github.get_repo_collaborator_permission",
+          "github.list_installed_accounts",
+          "google_drive.update_file",
+          "safety_settings.get_parental_controls",
+          "todoist_to_do_list_calendar.project-management",
+          "gmail.list_labels",
+          "google_drive.get_document",
+          "sites.add_custom_domain",
+          "gmail.get_profile",
+          "github.get_issue_comment_reactions",
+          "github.create_tree",
+          "google_drive.get_presentation_text",
+          "google_calendar.list_event_labels",
+          "github.list_repositories_by_affiliation",
+          "plugin_management.update_app_permissions",
+          "github.list_recent_issues",
+          "safety_settings.update_parental_control",
+          "sites.get_deployment_status",
+          "sites.get_site_analytics_overview",
+          "sites.get_database_table_rows",
+          "sites.update_site_access",
+          "todoist_to_do_list_calendar.find-reminders",
+          "todoist_to_do_list_calendar.import-project-template",
+          "todoist_to_do_list_calendar.search",
+          "sites.get_environment_variables",
+          "github.get_pr_info",
+          "codex_document_control.list_document_sessions",
+          "google_calendar.update_event",
+          "sites.change_site_slug",
+          "google_calendar.set_event_label_silently",
+          "google_drive.get_file_comments",
+          "github.list_user_org_memberships",
+          "sites.list_sites_creator_control_panel_projects",
+          "todoist_to_do_list_calendar.get-workspace-insights",
+          "gmail.create_label",
+          "github.create_blob",
+          "google_drive.get_document_comments",
+          "todoist_to_do_list_calendar.get-project-health",
+          "github.update_file",
+          "sites.deploy_private_site_version",
+          "github.label_pr",
+          "todoist_to_do_list_calendar.uncomplete-tasks",
+          "github.fetch_workflow_run_artifacts",
+          "sites.read_database_table_rows",
+          "google_drive.find_document_text_range",
+          "todoist_to_do_list_calendar.find-sections",
+          "google_drive.get_slide_thumbnail",
+          "sites.list_custom_domains",
+          "todoist_to_do_list_calendar.find-tasks-by-date",
+          "todoist_to_do_list_calendar.find-filters",
+          "todoist_to_do_list_calendar.add-projects",
+          "todoist_to_do_list_calendar.add-sections",
+          "sites.delete_site",
+          "github.unresolve_review_thread",
+          "google_drive.list_file_revisions",
+          "github.get_repo",
+          "sites.update_environment",
+          "gmail.send_draft",
+          "github.search_branches",
+          "plugin_management.get_app_permissions",
+          "github.search_installed_repositories_streaming",
+          "todoist_to_do_list_calendar.add-comments",
+          "todoist_to_do_list_calendar.add-tasks",
+          "github.rerun_failed_workflow_run_jobs",
+          "google_drive.import_document",
+          "google_drive.batch_update_document",
+          "todoist_to_do_list_calendar.find-activity",
+          "gmail.apply_labels_to_emails",
+          "todoist_to_do_list_calendar.find-projects",
+          "google_calendar.list_calendars",
+          "google_drive.recent_documents",
+          "google_drive.search",
+          "gmail.search_emails",
+          "todoist_to_do_list_calendar.add-reminders",
+          "sites.read_database_overview",
+          "sites.deploy_site_version",
+          "todoist_to_do_list_calendar.get-project-activity-stats",
+          "github.list_installations",
+          "github.update_ref",
+          "github.fetch_pr_file_patch",
+          "github.download_workflow_artifact",
+          "gmail.search_email_ids",
+          "google_drive.get_presentation",
+          "hotline.get_local_hotline",
+          "github.create_file",
+          "sites.get_site",
+          "github.mark_pull_request_ready_for_review",
+          "todoist_to_do_list_calendar.update-comments",
+          "google_drive.get_spreadsheet_metadata",
+          "google_calendar.get_availability",
+          "github.convert_pull_request_to_draft",
+          "google_drive.export_file",
+          "google_drive.batch_update_spreadsheet",
+          "github.request_pull_request_reviewers",
+          "plugin_management.get_plugin_dependencies",
+          "github.dismiss_pull_request_review",
+          "github.download_user_content",
+          "todoist_to_do_list_calendar.find-comments",
+          "google_drive.get_slide",
+          "sites.list_site_versions",
+          "google_calendar.batch_read_event",
+          "github.update_review_comment",
+          "gmail.update_draft",
+          "github.create_issue",
+          "gmail.batch_read_email_threads",
+          "github.merge_pull_request",
+          "google_drive.get_document_text",
+          "github.remove_issue_label",
+          "github.resolve_review_thread",
+          "github.list_pull_request_review_threads",
+          "sites.remove_custom_domain",
+          "safety_settings.prepare_parental_control_update",
+          "github.fetch_file",
+          "apple_music.get-track-details-batch",
+          "gmail.bulk_label_matching_emails",
+          "google_drive.get_spreadsheet_comments",
+          "google_drive.import_spreadsheet",
+          "google_drive.import_presentation",
+          "plugin_management.uninstall_app",
+          "google_drive.get_presentation_outline",
+          "google_drive.fetch_file_revision",
+          "todoist_to_do_list_calendar.complete-tasks",
+          "todoist_to_do_list_calendar.manage-assignments",
+          "todoist_to_do_list_calendar.update-projects",
+          "google_drive.create_folder",
+          "github.update_issue_comment",
+          "google_drive.fetch",
+          "google_drive.get_document_paragraph_range",
+          "github.get_pr_reactions",
+          "gmail.forward_emails",
+          "github.fetch_workflow_run_jobs",
+          "github.add_comment_to_issue",
+          "github.lock_issue_conversation",
+          "todoist_to_do_list_calendar.view-attachment",
+          "github.compare_commits",
+          "sites.query_site_analytics_event",
+          "todoist_to_do_list_calendar.list-workspaces",
+          "github.get_users_recent_prs_in_repo",
+          "google_drive.get_document_tables",
+          "sites.get_site_worker_logs",
+          "todoist_to_do_list_calendar.update-tasks",
+          "github.update_pull_request",
+          "todoist_to_do_list_calendar.analyze-project-health",
+          "google_drive.create_file",
+          "github.add_review_to_pr",
+          "github.create_commit",
+          "github.search_commits",
+          "google_drive.list_folder",
+          "sites.create_site",
+          "google_drive.get_file_metadata",
+          "github.list_pull_request_reviews",
+          "github.add_issue_labels",
+          "google_drive.list_drives",
+          "safety_settings.get_trusted_contact",
+          "github.search_repositories",
+          "gmail.archive_emails",
+          "gmail.create_draft",
+          "sites.create_source_repository_write_credential",
+          "todoist_to_do_list_calendar.get-overview",
+          "github.fetch_workflow_job_steps",
+          "github.search_prs",
+          "sites.check_slug_availability",
+          "todoist_to_do_list_calendar.find-tasks",
+          "github.fetch_pr_patch",
+          "github.get_commit_combined_status",
+          "google_drive.share_file",
+          "todoist_to_do_list_calendar.get-productivity-stats",
+          "todoist_to_do_list_calendar.update-filters",
+          "gmail.read_attachment",
+          "gmail.read_email",
+          "sites.refresh_custom_domain_status",
+          "github.create_pull_request",
+          "github.search_installed_repositories_v2",
+          "gmail.delete_emails",
+          "gmail.read_email_thread",
+          "todoist_to_do_list_calendar.export-project-template",
+          "todoist_to_do_list_calendar.find-completed-tasks",
+          "github.fetch_blob",
+          "sites.update_site_metadata",
+          "github.unlock_issue_conversation",
+          "gmail.batch_read_email",
+          "google_drive.delete_file",
+          "sites.get_site_version",
+          "github.add_reaction_to_pr_review_comment",
+          "google_drive.bulk_update_file_comments",
+          "google_drive.upload_file",
+          "sites.get_database_overview",
+          "github.list_repositories_by_installation",
+          "google_drive.get_presentation_comments",
+          "todoist_to_do_list_calendar.reorder-objects",
+          "todoist_to_do_list_calendar.reschedule-tasks",
+          "google_drive.get_spreadsheet_cells",
+          "sites.get_environment",
+          "github.remove_reaction_from_pr_review_comment",
+          "github.remove_reaction_from_pr",
+          "github.fetch_pr",
+          "github.add_issue_assignees",
+          "sites.list_site_analytics_events",
+          "github.remove_issue_assignees",
+          "google_calendar.get_profile",
+          "github.add_reaction_to_issue_comment",
+          "google_calendar.search_events",
+          "github.fetch_workflow_job_logs",
+          "github.fetch_pr_comments",
+          "github.list_pr_changed_filenames",
+          "github.list_repositories",
+          "github.get_pr_diff",
+          "google_drive.get_profile",
+          "sites.update_environment_variables",
+          "github.add_reaction_to_pr",
+          "todoist_to_do_list_calendar.add-labels",
+          "sites.get_project",
+          "todoist_to_do_list_calendar.find-labels",
+          "todoist_to_do_list_calendar.find-project-collaborators",
+          "github.get_pr_review_comment_reactions",
+          "google_calendar.get_colors",
+          "github.get_user_login",
+          "apple_music.search",
+          "sites.list_projects",
+          "sites.update_access",
+          "todoist_to_do_list_calendar.add-filters",
+          "github.get_profile",
+          "github.get_pr_statuses",
+          "todoist_to_do_list_calendar.update-labels",
+          "github.create_branch",
+          "gmail.list_drafts"
+        ],
+        "auth_status": "bearerToken"
+      },
+      {
+        "server": "computer-use",
+        "tool_count": 0,
+        "tool_names": [],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "dataAnalyticsWidgets",
+        "tool_count": 5,
+        "tool_names": [
+          "render_table",
+          "export_artifact_package",
+          "render_chart",
+          "validate_artifact",
+          "render_artifact"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "node_repl",
+        "tool_count": 4,
+        "tool_names": [
+          "js_add_node_module_dir",
+          "turn_ended",
+          "js",
+          "js_reset"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "omnigent",
+        "tool_count": 37,
+        "tool_names": [
+          "browser_snapshot",
+          "sys_cancel_task",
+          "sys_session_get_history",
+          "update_comment",
+          "sys_policy_registry",
+          "sys_agent_download",
+          "sys_agent_list",
+          "sys_session_close",
+          "sys_terminal_list",
+          "sys_scheduled_task_update",
+          "sys_add_policy",
+          "browser_navigate",
+          "sys_session_send",
+          "sys_read_inbox",
+          "sys_list_models",
+          "browser_click",
+          "sys_scheduled_task_list",
+          "sys_os_read",
+          "sys_os_shell",
+          "sys_session_list",
+          "sys_session_create",
+          "browser_type",
+          "sys_terminal_launch",
+          "sys_terminal_read",
+          "sys_session_get_info",
+          "sys_terminal_send",
+          "sys_terminal_close",
+          "sys_session_rename",
+          "sys_scheduled_task_delete",
+          "sys_call_async",
+          "sys_scheduled_task_create",
+          "sys_os_edit",
+          "sys_os_write",
+          "sys_cancel_async",
+          "browser_screenshot",
+          "list_comments",
+          "sys_agent_get"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "omniroute",
+        "tool_count": 110,
+        "tool_names": [
+          "obsidian_append_note",
+          "omniroute_set_compression_engine",
+          "omniroute_ccr_inspect",
+          "omniroute_set_resilience_profile",
+          "omniroute_x_search",
+          "plugin_list",
+          "obsidian_get_tags",
+          "omniroute_create_combo",
+          "obsidian_write_note",
+          "local_corpus_status",
+          "omniroute_pool_reset",
+          "omniroute_skills_executions",
+          "omniroute_oneproxy_rotate",
+          "omniroute_best_combo_for_task",
+          "obsidian_sync_status",
+          "obsidian_list_commands",
+          "omniroute_compression_combo_stats",
+          "omniroute_github_skills_search",
+          "omniroute_ccr_retrieve",
+          "gamification_anomalies",
+          "obsidian_sync_resolve_conflict",
+          "omniroute_compression_configure",
+          "omniroute_memory_add",
+          "omniroute_db_health_check",
+          "omniroute_memory_clear",
+          "omniroute_oneproxy_stats",
+          "omniroute_route_request",
+          "notion_query_database",
+          "gamification_invite",
+          "omniroute_agent_skills_list",
+          "omniroute_get_session_snapshot",
+          "omniroute_simulate_route",
+          "omniroute_web_fetch",
+          "plugin_install",
+          "omniroute_github_skills_scan",
+          "omniroute_browser_pool_status",
+          "gamification_rank",
+          "plugin_activate",
+          "plugin_configure",
+          "plugin_scan",
+          "omniroute_ccr_stats",
+          "omniroute_pool_health",
+          "obsidian_get_note_metadata",
+          "obsidian_sync_conflicts",
+          "omniroute_compression_status",
+          "omniroute_cost_report",
+          "obsidian_list_vault",
+          "omniroute_github_skills_install",
+          "omniroute_rtk_discover",
+          "omniroute_set_routing_strategy",
+          "obsidian_get_document_map",
+          "gamification_profile",
+          "omniroute_skills_execute",
+          "omniroute_skills_list",
+          "plugin_executions",
+          "obsidian_open_file",
+          "notion_search",
+          "gamification_transfer",
+          "gamification_badges",
+          "omniroute_memory_search",
+          "gamification_leaderboard",
+          "notion_append_blocks",
+          "obsidian_delete_note",
+          "omniroute_cache_flush",
+          "omniroute_ccr_delete",
+          "omniroute_list_combos",
+          "omniroute_radar_catalog",
+          "omniroute_get_provider_metrics",
+          "obsidian_sync_trigger",
+          "omniroute_check_quota",
+          "obsidian_search_structured",
+          "omniroute_oneproxy_fetch",
+          "omniroute_pick_fastest_model",
+          "omniroute_pool_sessions",
+          "omniroute_explain_route",
+          "omniroute_web_search",
+          "plugin_deactivate",
+          "omniroute_list_models_catalog",
+          "omniroute_get_combo_metrics",
+          "omniroute_switch_combo",
+          "omniroute_get_health",
+          "plugin_uninstall",
+          "notion_list_block_children",
+          "obsidian_get_active_file",
+          "obsidian_search_simple",
+          "omniroute_agent_skills_coverage",
+          "obsidian_get_periodic_note",
+          "omniroute_set_budget_guard",
+          "obsidian_patch_note",
+          "omniroute_tool_search",
+          "omniroute_list_compression_combos",
+          "omniroute_skills_enable",
+          "notion_get_database",
+          "omniroute_cache_stats",
+          "omniroute_agent_skills_get",
+          "notion_get_page",
+          "omniroute_pool_status",
+          "obsidian_execute_command",
+          "omniroute_pool_warm",
+          "local_corpus_read",
+          "obsidian_read_note",
+          "omniroute_ccr_store",
+          "omniroute_sync_pricing",
+          "local_corpus_search",
+          "obsidian_move_note",
+          "omniroute_test_combo",
+          "omniroute_ccr_list",
+          "gamification_servers",
+          "obsidian_check_status",
+          "omniroute_rtk_learn"
+        ],
+        "auth_status": "bearerToken"
+      },
+      {
+        "server": "shadcn",
+        "tool_count": 7,
+        "tool_names": [
+          "view_items_in_registries",
+          "get_add_command_for_items",
+          "get_audit_checklist",
+          "get_project_registries",
+          "list_items_in_registries",
+          "search_items_in_registries",
+          "get_item_examples_from_registries"
+        ],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "unity-mcp",
+        "tool_count": 0,
+        "tool_names": [],
+        "auth_status": "unsupported"
+      },
+      {
+        "server": "unity_mcp",
+        "tool_count": 0,
+        "tool_names": [],
+        "auth_status": "unsupported"
+      }
+    ]
+  },
+  "native_cli_version": "0.153.4",
+  "normal_alias": "custom/o3-route-cf4f3181b533",
+  "normal_catalogue_contains_alias": false,
+  "classification": "LOCAL BUG",
+  "registry_tool_count": 539,
+  "one_flag_delta": 71814,
+  "project_delta": 3232,
+  "checks": {
+    "telemetry_and_identity_assertions": "passed",
+    "metadata_catalogues_differ_in_only_supports_search_tool": "passed",
+    "MCP_registries_identical": "passed",
+    "focused_pytest": {
+      "passed": 18,
+      "failed": 1,
+      "deselected": 207,
+      "failure": "test_forwarder_posts_codex_usage_live_per_frame expects context_tokens from a total-only fixture; existing assertion conflicts with preserved no-cumulative-fallback fix"
+    },
+    "pytest_initial_environment_error": "pytest-rerunfailures localhost socket blocked; reran with -p no:rerunfailures",
+    "code_changes_this_investigation": false,
+    "production_config_changes": false
+  },
+  "git": {
+    "head": "585ca6d16231bda45c02a3d2b9d3407b1309b5a4",
+    "preexisting_diff_stat": "2 files changed, 60 insertions(+), 23 deletions(-)",
+    "accounting_source_sha256": "67e4b6729dbba149d3e7832e758fc58900af959634c2a6eac7ff7183c16b5ff3"
+  }
+}

@@ -6389,9 +6389,11 @@ def _session_usage_data_from_params(params: _JsonObject) -> dict[str, int] | Non
         return None
     total = token_usage.get("total")
     if not isinstance(total, dict):
-        return None
+        total = {}
     cumulative_input_tokens = total.get("inputTokens")
-    context_window = total.get("contextWindow")
+    context_window = token_usage.get("modelContextWindow")
+    if not (type(context_window) is int and context_window > 0):
+        context_window = total.get("contextWindow")
     output_tokens = total.get("outputTokens")
     cached_input_tokens = total.get("cachedInputTokens")
     data: dict[str, int] = {}
@@ -6411,21 +6413,15 @@ def _session_usage_data_from_params(params: _JsonObject) -> dict[str, int] | Non
         # cumulative (SET) semantics as ``cumulative_input_tokens``.
         if isinstance(cached_input_tokens, int) and cached_input_tokens >= 0:
             data["cumulative_cache_read_input_tokens"] = cached_input_tokens
-    # ``context_tokens`` drives the context-window ring in the web UI. It
-    # must reflect the CURRENT context occupancy (how much of the window
-    # the latest turn consumed), NOT the cumulative total across all turns.
-    # Codex's ``tokenUsage.last`` carries the per-turn breakdown; fall back
-    # to ``total.inputTokens`` only when ``last`` is unavailable (first
-    # frame before a turn completes).
+    # Latest input measures occupancy; cumulative input counts repeated context
+    # across requests and must never substitute for a missing latest reading.
     last = token_usage.get("last")
     last_input = last.get("inputTokens") if isinstance(last, dict) else None
-    if isinstance(last_input, int) and last_input >= 0:
+    if type(last_input) is int and last_input >= 0:
         data["context_tokens"] = last_input
-    elif isinstance(cumulative_input_tokens, int) and cumulative_input_tokens >= 0:
-        data["context_tokens"] = cumulative_input_tokens
     if isinstance(output_tokens, int) and output_tokens >= 0:
         data["cumulative_output_tokens"] = output_tokens
-    if isinstance(context_window, int) and context_window > 0:
+    if type(context_window) is int and context_window > 0:
         data["context_window"] = context_window
     if not data:
         return None
