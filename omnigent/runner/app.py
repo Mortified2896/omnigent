@@ -7458,6 +7458,11 @@ def create_runner_app(
             "role": "user",
             "model": msg_body.get("model", ""),
         }
+        # Carry only correlation metadata; human probabilities stay server-side.
+        _attempt_id = msg_body.get("experiment_attempt_id")
+        if isinstance(_attempt_id, str):
+            harness_body["experiment_attempt_id"] = _attempt_id
+            harness_body["native_terminal_input"] = msg_body.get("native_terminal_input") is True
         # The routed model rides in-band on the forwarded message. This body is
         # built field by field (not copied), so it must be threaded explicitly:
         # the harness forwards it onto CreateResponseRequest.model_override and

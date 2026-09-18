@@ -4334,6 +4334,7 @@ def _build_native_terminal_message_event(
         )
     event: dict[str, Any] = {
         "type": "message",
+        "native_terminal_input": True,
         "role": "user",
         "content": data.content,
         "model": model,
@@ -4353,6 +4354,8 @@ def _build_native_terminal_message_event(
     # inject as ONE locked step, so the switch can't race the message.
     if model_override is not None:
         event["model_override"] = model_override
+    if body.success_forecast is not None:
+        event["experiment_attempt_id"] = "attempt_" + body.data["stable_id"]
     return event
 
 
@@ -5056,6 +5059,8 @@ async def _forward_event_to_runner(
         # resolved copy — id-based dedup, not a role/content guess.
         "persisted_item_id": persisted_items[0].id,
     }
+    if body.success_forecast is not None:
+        runner_body["experiment_attempt_id"] = "attempt_" + body.data["stable_id"]
     # Persist the turn-initiating actor so /policies/evaluate and MCP
     # tools/call can read it back on any server replica.  Skip system-driven
     # forwards (sub-agent results, parent-wake carry created_by=None) — they
@@ -5784,6 +5789,21 @@ async def _dispatch_session_event_to_runner_impl(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
+    from omnigent.server.task_experiment import commit_forecast
+
+    try:
+        await asyncio.to_thread(
+            commit_forecast,
+            conversation_store,
+            conv,
+            body,
+            created_by,
+            _native_terminal_runtime(conv)[2]
+            if _is_native_terminal_session(conv)
+            else conv.harness_override,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if body.type == "message" and _is_native_terminal_session(conv):
         # Validate before touching the runner. The ensure probe is only
         # for syntactically valid user messages; assistant/system-shaped
@@ -6417,6 +6437,13 @@ async def _relay_runner_stream_once(
                         )
                         continue
 
+                    if event.get("type") == "native.response.linked":
+                        from omnigent.server.task_experiment import accept_response_link
+
+                        await asyncio.to_thread(
+                            accept_response_link, conversation_store, session_id, event
+                        )
+                        continue
                     # Track the turn's response_id from lifecycle
                     # events so persisted items share one id.
                     if evt_type == "response.in_progress":

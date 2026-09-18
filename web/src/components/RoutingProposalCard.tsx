@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { authenticatedFetch } from "@/lib/identity";
 import type {
   O3BenchmarkSlice,
   O3Difficulty,
@@ -38,6 +39,20 @@ interface RoutingProposalCardProps {
   onReset: () => void;
 }
 
+interface TB4FloorExperiment {
+  policy_version: string;
+  user_floor_percent: number;
+  adviser_floor_percent: number;
+  assigned_arm: "user" | "adviser" | "same";
+  assignment_propensity: number;
+  executed_floor_percent: number;
+  adviser_confidence: number;
+  adviser_rationale: string;
+  status: "assigned" | "applied";
+  eligible_count?: number;
+  baseline_policy_version?: string;
+}
+
 const fieldClass =
   "h-9 rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus-visible:border-ring";
 
@@ -46,6 +61,36 @@ function titleCase(value: string): string {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function tb4Experiment(proposal: O3RoutingProposal): TB4FloorExperiment | null {
+  const raw = proposal.audit?.tb4_floor_experiment;
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Partial<TB4FloorExperiment>;
+  return typeof row.user_floor_percent === "number" &&
+    typeof row.adviser_floor_percent === "number" &&
+    typeof row.executed_floor_percent === "number" &&
+    (row.assigned_arm === "user" || row.assigned_arm === "adviser" || row.assigned_arm === "same") &&
+    (row.status === "assigned" || row.status === "applied")
+    ? (row as TB4FloorExperiment)
+    : null;
+}
+
+async function responseError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as {
+      detail?: string;
+      error?: string | { message?: string };
+    };
+    if (typeof body.detail === "string") return body.detail;
+    if (typeof body.error === "string") return body.error;
+    if (body.error && typeof body.error === "object" && typeof body.error.message === "string") {
+      return body.error.message;
+    }
+  } catch {
+    // Fall through to HTTP status.
+  }
+  return `${response.status} ${response.statusText}`.trim() || "TB4 floor assignment failed";
 }
 
 export function RoutingProposalCard({
@@ -63,8 +108,11 @@ export function RoutingProposalCard({
   const [overrideReason, setOverrideReason] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [userTB4Floor, setUserTB4Floor] = useState("");
   const constraints = proposal.approved_constraints;
   const benchmark = constraints.benchmark;
+  const experiment = tb4Experiment(proposal);
+  const tb4Locked = experiment?.status === "applied";
   const [sliceKey, setSliceKey] = useState(
     `${benchmark.benchmark_id}|${benchmark.version}|${benchmark.slice_id}`,
   );
@@ -114,6 +162,7 @@ export function RoutingProposalCard({
     ]),
   ).filter((value) => ["low", "medium", "high", "xhigh"].includes(value));
   const canApprove =
+    tb4Locked &&
     (eligible.length > 0 ||
       catalogueEligible > 0 ||
       (proposal.execution_options?.length ?? 0) > 0) &&
@@ -125,6 +174,32 @@ export function RoutingProposalCard({
   const hasProvisional =
     eligible.some((item) => item.status === "provisional") ||
     proposal.selected_execution?.mode === "hard_tool_free";
+
+  async function applyTB4Floor(): Promise<void> {
+    const floor = Number(userTB4Floor);
+    if (!Number.isFinite(floor) || floor < 0 || floor > 100) {
+      setError("Enter a TB4 floor between 0 and 100.");
+      return;
+    }
+    setBusy("tb4-floor");
+    setError(null);
+    try {
+      const response = await authenticatedFetch(
+        `/v1/o3/routing-review/proposals/${encodeURIComponent(proposal.proposal_id)}/floor-experiment`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_floor_percent: floor }),
+        },
+      );
+      if (!response.ok) throw new Error(await responseError(response));
+      onProposalChange((await response.json()) as O3RoutingProposal);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "TB4 floor assignment failed");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function decide(decision: O3ProposalDecision, launch: boolean): Promise<void> {
     setBusy(decision.action);
@@ -141,6 +216,10 @@ export function RoutingProposalCard({
   }
 
   async function saveAdjustment(): Promise<void> {
+    if (tb4Locked) {
+      setError("This TB4 assignment is locked. Start a new routing review to change it.");
+      return;
+    }
     const chosen = slices.find(
       (slice) => `${slice.benchmark_id}|${slice.version}|${slice.slice_id}` === sliceKey,
     );
@@ -175,6 +254,10 @@ export function RoutingProposalCard({
   }
 
   async function adjustRequirements(adjustment: O3ProposalAdjustment): Promise<void> {
+    if (tb4Locked) {
+      setError("This TB4 assignment is locked. Start a new routing review to change it.");
+      return;
+    }
     setBusy("capabilities");
     setError(null);
     try {
@@ -219,6 +302,62 @@ export function RoutingProposalCard({
     );
   }
 
+  if (!tb4Locked) {
+    return (
+      <section
+        className="rounded-xl border border-border bg-card px-4 py-4 text-card-foreground shadow-sm"
+        data-testid="o3-tb4-floor-gate"
+      >
+        <div className="space-y-3">
+          <div>
+            <p className="text-sm font-semibold">Choose your TB4 floor</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Enter the minimum Terminal-Bench 4 pass@1 score you want for this coding task. The
+              adviser ran independently and did not see this value; its floor stays hidden until
+              you submit yours.
+            </p>
+          </div>
+          <label className="flex max-w-xs flex-col gap-1 text-xs text-muted-foreground">
+            TB4 minimum (%)
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.1}
+              inputMode="decimal"
+              className={fieldClass}
+              value={userTB4Floor}
+              onChange={(event) => setUserTB4Floor(event.target.value)}
+              placeholder="e.g. 38.5"
+              autoFocus
+              data-testid="o3-user-tb4-floor"
+            />
+          </label>
+          {error && (
+            <p className="text-sm text-destructive" role="alert" data-testid="o3-routing-error">
+              {error}
+            </p>
+          )}
+          <div className="flex flex-wrap justify-between gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={onReset} disabled={busy !== null}>
+              Back
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void applyTB4Floor()}
+              disabled={busy !== null || userTB4Floor.trim() === ""}
+              data-testid="o3-apply-tb4-floor"
+            >
+              {busy === "tb4-floor" && <Loader2Icon className="mr-1 size-3.5 animate-spin" />}
+              Compare and route
+            </Button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       className={cn(
@@ -230,6 +369,20 @@ export function RoutingProposalCard({
       data-testid="o3-routing-proposal-card"
     >
       <div className="flex flex-col gap-1 px-3 py-2">
+        {experiment && (
+          <div className="mb-1 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs" data-testid="o3-tb4-floor-summary">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span>Your floor: {experiment.user_floor_percent.toFixed(1)}%</span>
+              <span>Adviser: {experiment.adviser_floor_percent.toFixed(1)}%</span>
+              <span className="font-medium">
+                Executed: {titleCase(experiment.assigned_arm)} · {experiment.executed_floor_percent.toFixed(1)}%
+              </span>
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              Exact TB4 model+effort baseline · assignment propensity {experiment.assignment_propensity}
+            </p>
+          </div>
+        )}
         <O3DecisionSummary proposal={proposal} />
         <details className="text-sm" data-testid="o3-execution-reasoning">
           <summary className="min-h-11 cursor-pointer py-3">Execution settings</summary>
@@ -237,7 +390,7 @@ export function RoutingProposalCard({
             <span>Execution effort</span>
             <Select
               value={constraints.reasoning_effort}
-              disabled={busy !== null || terminal || approved}
+              disabled={busy !== null || terminal || approved || tb4Locked}
               onValueChange={(value) => void adjustRequirements({ reasoning_effort: value })}
             >
               <SelectTrigger className="h-11 w-32" aria-label="Execution reasoning">
@@ -254,7 +407,7 @@ export function RoutingProposalCard({
             <Button
               variant="outline"
               size="sm"
-              disabled={busy !== null || approved || originalAdviser === null}
+              disabled={busy !== null || approved || originalAdviser === null || tb4Locked}
               onClick={() => void adjustRequirements({ reset_reasoning_effort: true })}
               data-testid="o3-reset-reasoning"
             >
@@ -267,10 +420,16 @@ export function RoutingProposalCard({
               ? titleCase(originalAdviser.proposed_reasoning_effort)
               : "unavailable for this older review"}
           </p>
+          {tb4Locked && (
+            <p className="text-xs text-muted-foreground">
+              The model/effort treatment is locked for this floor experiment. Start a fresh review
+              to change routing requirements.
+            </p>
+          )}
           <ExecutionProfile
             key={`${proposal.proposal_id}-${proposal.constraint_version ?? 1}`}
             proposal={proposal}
-            disabled={busy !== null || !(proposal.decision === null || waiting)}
+            disabled={tb4Locked || busy !== null || !(proposal.decision === null || waiting)}
             onAdjust={adjustRequirements}
           />
         </details>
@@ -292,7 +451,7 @@ export function RoutingProposalCard({
             {JSON.stringify(proposal.adviser.decomposition, null, 2)}
           </pre>
         )}
-        {adjusting && (proposal.decision === null || waiting) && (
+        {adjusting && !tb4Locked && (proposal.decision === null || waiting) && (
           <div className="grid gap-3 rounded-lg border border-border bg-muted/30 p-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               Benchmark slice
@@ -507,16 +666,18 @@ export function RoutingProposalCard({
                   {reviewingSplit ? "Hide split" : "Review split"}
                 </Button>
               )}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setAdjusting((value) => !value)}
-                disabled={busy !== null}
-                data-testid="o3-adjust"
-              >
-                <SlidersHorizontalIcon className="mr-1 size-3.5" /> Adjust
-              </Button>
+              {!tb4Locked && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdjusting((value) => !value)}
+                  disabled={busy !== null}
+                  data-testid="o3-adjust"
+                >
+                  <SlidersHorizontalIcon className="mr-1 size-3.5" /> Adjust
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"

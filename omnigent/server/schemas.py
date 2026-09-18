@@ -30,6 +30,7 @@ from omnigent.entities import (
     USER_SESSION_TITLE_MAX_CHARS,
     ConversationItem,
 )
+from omnigent.server.task_experiment import HumanForecast
 
 # ── Shared ──────────────────────────────────────────────────────
 
@@ -1015,6 +1016,8 @@ class CreateResponseRequest(BaseModel):
 
     # Optional when previous_response_id is set; server resolves the agent
     # from the prior task. Required for fresh conversations (no prior task).
+    experiment_attempt_id: str | None = None
+    native_terminal_input: bool = False
     model: str | None = None
     # Heterogeneous content blocks (input_text, input_image, input_file)
     # or a plain string shorthand; shape varies by block type.
@@ -1270,6 +1273,8 @@ class SessionEventInput(BaseModel):
     :param created_by: Optional internal attribution actor for runner-
         originated events that are triggered by a prior human turn.
     """
+
+    success_forecast: HumanForecast | None = None
 
     type: str
     # Heterogeneous payload; route layer validates the shape per ``type``.
@@ -4799,9 +4804,35 @@ class SubagentToolCallEvent(_SSEEventBase):
     arguments: str = ""
 
 
+class NativeResponseLinkedEvent(_SSEEventBase):
+    """Runner-only exact native response identity after input acceptance."""
+
+    type: Literal["native.response.linked"] = "native.response.linked"
+    attempt_id: str
+    native_response_id: str
+    session_id: str | None = None
+    native_thread_id: str | None = None
+    native_turn_id: str | None = None
+    terminal_status: str | None = None
+    terminal_error: str | None = None
+    experiment_attempt_id: str | None = None
+    # Nullable because native harnesses may not expose provider usage or
+    # cache counters. A present zero remains meaningful; absence is unknown.
+    token_usage: dict[str, Any] | None = None
+    provider: str | None = None
+    model: str | None = None
+    connection_id: str | None = None
+    reasoning_effort: str | None = None
+    requested_model: str | None = None
+    requested_reasoning_effort: str | None = None
+    call_log_id: str | None = None
+    gateway_call_id: str | None = None
+
+
 HarnessStreamEvent = (
     ServerStreamEvent
     | InjectionConsumedEvent
+    | NativeResponseLinkedEvent
     | PolicyEvaluationRequestEvent
     | SubagentStartedEvent
     | SubagentCompletedEvent

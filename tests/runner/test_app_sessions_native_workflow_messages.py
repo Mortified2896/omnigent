@@ -2230,3 +2230,40 @@ async def test_interrupt_forwards_to_harness_before_cancelling() -> None:
         f"interrupt must forward to the harness then finalize the turn with one "
         f"marker; got {len(markers)}."
     )
+
+
+@pytest.mark.asyncio
+async def test_experiment_identity_survives_background_dispatch() -> None:
+    """The runner carries correlation, without carrying a human probability."""
+    hc = _ScriptedHarnessClient(
+        [
+            _sse({"type": "response.created", "response": {"id": "resp_1"}}),
+            _sse({"type": "response.completed", "response": {"id": "resp_1"}}),
+        ]
+    )
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(hc),  # type: ignore[arg-type]
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    async with _runner_client(app) as client:
+        response = await client.post(
+            "/v1/sessions/dd0f1b1a7e3f4a6c8f2b5c9d0e1f2a3b/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "model": "test-agent",
+                "content": [{"type": "input_text", "text": "hi"}],
+                "harness": "codex-native",
+                "experiment_attempt_id": "attempt_exact",
+                "native_terminal_input": True,
+            },
+        )
+        assert response.status_code == 202
+        for _ in range(200):
+            if hc.posted_bodies:
+                break
+            await asyncio.sleep(0.01)
+    assert hc.posted_bodies[0]["experiment_attempt_id"] == "attempt_exact"
+    assert hc.posted_bodies[0]["native_terminal_input"] is True
+    assert "success_forecast" not in hc.posted_bodies[0]
+    assert "probability" not in str(hc.posted_bodies[0])

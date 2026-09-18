@@ -1281,6 +1281,7 @@ async def _prepare_codex_terminal(
                         thread_id=thread_id,
                         codex_home=str(codex_home),
                         cwd=str(Path.cwd()),
+                        experiment_attempt_id=None,
                     ),
                 )
             if runner_id is not None:
@@ -1503,6 +1504,7 @@ async def _initialize_fresh_terminal_thread(
             thread_id=thread_id,
             codex_home=str(codex_home_for_bridge_dir(prepared.bridge_dir)),
             cwd=str(Path.cwd()),
+            experiment_attempt_id=None,
         ),
     )
     return thread_id

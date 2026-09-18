@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
@@ -26,11 +27,20 @@ from .models import (
 from .omniroute import OmniRouteError
 from .registry import SOURCE_POOL_NAME
 from .service import O3RoutingReviewService, RoutingReviewError, get_o3_routing_review_service
+from .tb4_floor_experiment import apply_floor_experiment
 
 _JSON_MUTATION_GUARDS = [
     Depends(require_json_content_type),
     Depends(require_trusted_origin),
 ]
+
+
+class TB4FloorExperimentRequest(BaseModel):
+    """Commit the user's floor before revealing the independent adviser floor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_floor_percent: float = Field(ge=0, le=100)
 
 
 def create_o3_routing_review_router(
@@ -39,7 +49,6 @@ def create_o3_routing_review_router(
     service_factory: Callable[[], O3RoutingReviewService] = get_o3_routing_review_service,
 ) -> APIRouter:
     """Create the feature-gated O3 routing-review router."""
-    # Complete catalogue evidence and revisions can span megabytes of JSON.
     router = APIRouter(route_class=GZipFileContentRoute)
 
     def service_for(request: Request) -> O3RoutingReviewService:
@@ -110,7 +119,49 @@ def create_o3_routing_review_router(
         proposal_id: str,
         body: ProposalAdjustmentRequest,
     ) -> RoutingProposal:
-        return await service_for(request).adjust_proposal(proposal_id, body)
+        service = service_for(request)
+        proposal = service.get_proposal(proposal_id)
+        experiment = (proposal.audit or {}).get("tb4_floor_experiment")
+        if isinstance(experiment, dict):
+            raise RoutingReviewError(
+                "exact TB4 floor assignments are immutable; create a new routing review",
+                status_code=409,
+                code="tb4_floor_assignment_locked",
+            )
+        return await service.adjust_proposal(proposal_id, body)
+
+    @router.post(
+        "/o3/routing-review/proposals/{proposal_id}/floor-experiment",
+        response_model=RoutingProposal,
+        dependencies=_JSON_MUTATION_GUARDS,
+    )
+    async def apply_exact_tb4_floor(
+        request: Request,
+        proposal_id: str,
+        body: TB4FloorExperimentRequest,
+    ) -> RoutingProposal:
+        service = service_for(request)
+        original = (service.get_proposal(proposal_id).audit or {}).get("input", {})
+        logical_id = original.get("logical_attempt_id") if isinstance(original, dict) else None
+        if not isinstance(logical_id, str) or not logical_id:
+            raise RoutingReviewError(
+                "Create a new proposal with a stable logical attempt identity", status_code=409
+            )
+        try:
+            return await apply_floor_experiment(
+                service,
+                proposal_id=proposal_id,
+                user_floor_percent=body.user_floor_percent,
+                experiment_key=logical_id,
+            )
+        except OmniRouteError as exc:
+            raise RoutingReviewError(
+                "OmniRoute is temporarily unavailable while estimating the TB4 floor; try again.",
+                status_code=503,
+                code="omniroute_unavailable",
+            ) from exc
+        except ValueError as exc:
+            raise RoutingReviewError(str(exc), code="invalid_tb4_floor_experiment") from exc
 
     @router.post(
         "/o3/routing-review/proposals/{proposal_id}/decision",

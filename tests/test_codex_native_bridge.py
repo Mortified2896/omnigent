@@ -11,6 +11,7 @@ import pytest
 from omnigent.harnesses.codex_native import bridge as codex_native_bridge
 from omnigent.harnesses.codex_native.bridge import (
     CodexNativeBridgeState,
+    CodexNativeTerminalRecord,
     cancel_pending_mcp_startup,
     clear_active_turn_id_if_matches,
     clear_bridge_state,
@@ -25,6 +26,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_codex_home_config_model,
     read_mcp_startup,
     read_policy_hook_config,
+    read_terminal_record,
     settle_pending_mcp_startup,
     update_active_turn_id,
     update_mcp_server_startup,
@@ -32,6 +34,7 @@ from omnigent.harnesses.codex_native.bridge import (
     write_bridge_state,
     write_codex_config_model,
     write_policy_hook_config,
+    write_terminal_record,
 )
 
 
@@ -91,6 +94,51 @@ def test_bridge_state_preserves_native_working_directory(tmp_path: Path) -> None
     updated = read_bridge_state(tmp_path)
     assert updated is not None
     assert updated.cwd == str(tmp_path)
+
+
+def test_terminal_record_is_exact_and_failed_result_is_not_downgraded(tmp_path: Path) -> None:
+    """The executor can correlate a terminal failure after active state clears."""
+    failed = CodexNativeTerminalRecord(
+        session_id="conv_1",
+        thread_id="thread_1",
+        turn_id="turn_1",
+        status="failed",
+        source="error",
+        error_message="quota exhausted",
+        error_kind="generic",
+        experiment_attempt_id="attempt_1",
+    )
+    write_terminal_record(tmp_path, failed)
+    write_terminal_record(
+        tmp_path,
+        CodexNativeTerminalRecord(
+            session_id="conv_1",
+            thread_id="thread_1",
+            turn_id="turn_1",
+            status="idle",
+            source="turn/completed",
+        ),
+    )
+
+    record = read_terminal_record(
+        tmp_path,
+        session_id="conv_1",
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+    assert record is not None
+    assert record.status == "failed"
+    assert record.error_message == "quota exhausted"
+    assert record.experiment_attempt_id == "attempt_1"
+    assert (
+        read_terminal_record(
+            tmp_path,
+            session_id="conv_1",
+            thread_id="thread_other",
+            turn_id="turn_1",
+        )
+        is None
+    )
 
 
 @pytest.fixture

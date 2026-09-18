@@ -28,6 +28,7 @@ from omnigent.harnesses.codex_native.bridge import (
     CodexNativeBridgeState,
     codex_home_for_bridge_dir,
     read_bridge_state,
+    read_terminal_record,
     write_bridge_state,
 )
 from omnigent.harnesses.codex_native.forwarder import _persist_codex_compaction_item
@@ -1233,6 +1234,15 @@ async def test_handle_event_deduplicates_error_then_terminal_boundary(tmp_path: 
             },
         )
     ]
+    record = read_terminal_record(
+        tmp_path,
+        session_id="conv_x",
+        thread_id="thread_123",
+        turn_id="turn_123",
+    )
+    assert record is not None
+    assert record.status == "failed"
+    assert record.error_message == "You've hit your usage limit."
     state = read_bridge_state(tmp_path)
     assert state is not None
     assert state.active_turn_id is None

@@ -3985,6 +3985,27 @@ export function NewChatLandingScreen() {
     return decideO3RoutingProposal(o3Proposal.proposal_id, decision);
   }
 
+  function o3LogicalAttemptId(
+    prompt: string,
+    workspaceSummary: string,
+    attachments: File[],
+  ): string {
+    const key = "omnigent:o3-pending-attempt";
+    const fingerprint = JSON.stringify([prompt, workspaceSummary, attachments.map(attachmentKey)]);
+    const saved = sessionStorage.getItem(key);
+    if (saved) {
+      try {
+        const previous = JSON.parse(saved) as { fingerprint: string; id: string };
+        if (previous.fingerprint === fingerprint && previous.id) return previous.id;
+      } catch {
+        /* Replace an invalid local draft. */
+      }
+    }
+    const id = crypto.randomUUID();
+    sessionStorage.setItem(key, JSON.stringify({ fingerprint, id }));
+    return id;
+  }
+
   async function handleCreate(approvedProposal?: O3RoutingProposal) {
     // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
     // and form-submit paths that call this directly can't create a session with
@@ -4051,6 +4072,13 @@ export function NewChatLandingScreen() {
           initialPrompt,
           workspaceSummary,
           estimatorPolicy,
+          {
+            logical_attempt_id: o3LogicalAttemptId(initialPrompt, workspaceSummary, files),
+            input_content: files.map((file) => ({
+              type: file.type.startsWith("image/") ? "input_image" : "input_file",
+              mime_type: file.type,
+            })),
+          },
         );
         if (generation !== o3ReviewGenerationRef.current) return;
         setO3ReviewTiming(finishReviewTiming(timing));
@@ -4421,6 +4449,7 @@ export function NewChatLandingScreen() {
         writeO3RoutingDraft(draftWithSession);
         setO3Draft(draftWithSession);
         await linkO3RoutingProposalSession(approvedProposal.proposal_id, data.id);
+        sessionStorage.removeItem("omnigent:o3-pending-attempt");
       }
       // Promote the born-filed session to first-class project membership. The
       // create above already stamped the `omni_project` label (so the row

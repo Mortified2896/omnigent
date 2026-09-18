@@ -6572,6 +6572,9 @@ async def _dispatch_skill_slash_command_to_runner(
     """
     import uuid
 
+    from omnigent.server.task_experiment import commit_forecast
+
+    await asyncio.to_thread(commit_forecast, conversation_store, conv, body, created_by)
     skill_name, arguments = _parse_skill_slash_command(body)
     meta_text = await _resolve_skill_meta_text_via_runner(
         session_id,
@@ -6638,6 +6641,9 @@ async def _dispatch_skill_slash_command_to_runner(
         # right persisted copy (see _forward_event_to_runner).
         "persisted_item_id": persisted_items[1].id,
     }
+    if body.success_forecast is not None:
+        runner_body["experiment_attempt_id"] = "attempt_" + body.data["stable_id"]
+
     effective_runner_override = (
         body.model_override if body.model_override is not None else conv.model_override
     )

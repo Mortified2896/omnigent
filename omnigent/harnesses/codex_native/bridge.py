@@ -10,6 +10,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -32,6 +33,13 @@ _STARTUP_ERROR_FILE = "startup_error.json"
 # events), read by the executor's first-turn gate and the runner's
 # Stop handler.
 _MCP_STARTUP_FILE = "mcp_startup.json"
+# One durable terminal record per accepted Codex turn.  The executor waits on
+# this exact record rather than inferring completion from ``active_turn_id``;
+# the latter is intentionally mutable and can already refer to a newer turn.
+_TERMINAL_RECORD_PREFIX = "terminal-"
+_TERMINAL_RECORD_SUFFIX = ".json"
+_TERMINAL_RECORD_WAIT_TIMEOUT_ENV_VAR = "OMNIGENT_CODEX_NATIVE_TERMINAL_WAIT_SECONDS"
+_TERMINAL_RECORD_WAIT_DEFAULT_SECONDS = 300.0
 
 # Startup states mirrored from Codex's ``McpServerStartupState`` enum.
 MCP_STARTUP_STARTING = "starting"
@@ -86,6 +94,9 @@ class CodexNativeBridgeState:
         ``"/home/user/project"``.
     :param active_turn_id: Current Codex turn id, if one is running,
         e.g. ``"turn_abc123"``.
+    :param experiment_attempt_id: Durable TB4 attempt identity associated
+        with the accepted turn, or ``None`` when the turn is not an
+        experiment attempt.
     """
 
     session_id: str
@@ -94,6 +105,22 @@ class CodexNativeBridgeState:
     codex_home: str
     active_turn_id: str | None = None
     cwd: str | None = None
+    experiment_attempt_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CodexNativeTerminalRecord:
+    """Durable terminal result for one exact native Codex turn."""
+
+    session_id: str
+    thread_id: str
+    turn_id: str
+    status: str
+    source: str
+    error_message: str | None = None
+    error_kind: str | None = None
+    experiment_attempt_id: str | None = None
+    recorded_at: float = 0.0
 
 
 def bridge_dir_for_bridge_id(bridge_id: str) -> Path:
@@ -629,6 +656,7 @@ def _write_bridge_state_unlocked(bridge_dir: Path, state: CodexNativeBridgeState
                     "codex_home": state.codex_home,
                     "active_turn_id": state.active_turn_id,
                     "cwd": state.cwd,
+                    "experiment_attempt_id": state.experiment_attempt_id,
                 },
                 handle,
                 sort_keys=True,
@@ -650,6 +678,157 @@ def write_bridge_state(bridge_dir: Path, state: CodexNativeBridgeState) -> None:
     """
     with _bridge_state_lock(bridge_dir):
         _write_bridge_state_unlocked(bridge_dir, state)
+
+
+def _terminal_record_filename(session_id: str, thread_id: str, turn_id: str) -> str:
+    """Return a private, bounded filename for one terminal identity."""
+    key = "\0".join((session_id, thread_id, turn_id)).encode("utf-8")
+    digest = hashlib.sha256(key).hexdigest()[:32]
+    return f"{_TERMINAL_RECORD_PREFIX}{digest}{_TERMINAL_RECORD_SUFFIX}"
+
+
+def terminal_record_path(
+    bridge_dir: Path, *, session_id: str, thread_id: str, turn_id: str
+) -> Path:
+    """Return the durable path for an exact ``(session, thread, turn)``."""
+    return bridge_dir / _terminal_record_filename(session_id, thread_id, turn_id)
+
+
+def read_terminal_record(
+    bridge_dir: Path, *, session_id: str, thread_id: str, turn_id: str
+) -> CodexNativeTerminalRecord | None:
+    """Read one exact terminal result, returning ``None`` when unavailable."""
+    path = terminal_record_path(
+        bridge_dir, session_id=session_id, thread_id=thread_id, turn_id=turn_id
+    )
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    required = ("session_id", "thread_id", "turn_id", "status", "source")
+    if any(not isinstance(raw.get(key), str) or not raw[key] for key in required):
+        return None
+    if (
+        raw["session_id"] != session_id
+        or raw["thread_id"] != thread_id
+        or raw["turn_id"] != turn_id
+    ):
+        return None
+    status = raw["status"]
+    if status not in {"idle", "failed"}:
+        return None
+    recorded_at = raw.get("recorded_at", 0.0)
+    if not isinstance(recorded_at, (int, float)):
+        recorded_at = 0.0
+    return CodexNativeTerminalRecord(
+        session_id=raw["session_id"],
+        thread_id=raw["thread_id"],
+        turn_id=raw["turn_id"],
+        status=status,
+        source=raw["source"],
+        error_message=(
+            raw["error_message"] if isinstance(raw.get("error_message"), str) else None
+        ),
+        error_kind=(raw["error_kind"] if isinstance(raw.get("error_kind"), str) else None),
+        experiment_attempt_id=(
+            raw["experiment_attempt_id"]
+            if isinstance(raw.get("experiment_attempt_id"), str)
+            else None
+        ),
+        recorded_at=float(recorded_at),
+    )
+
+
+def write_terminal_record(bridge_dir: Path, record: CodexNativeTerminalRecord) -> None:
+    """Atomically persist one terminal result and never downgrade a failure."""
+    path = terminal_record_path(
+        bridge_dir,
+        session_id=record.session_id,
+        thread_id=record.thread_id,
+        turn_id=record.turn_id,
+    )
+    existing = read_terminal_record(
+        bridge_dir,
+        session_id=record.session_id,
+        thread_id=record.thread_id,
+        turn_id=record.turn_id,
+    )
+    # A standalone error may be followed by a normal terminal boundary. Keep
+    # the authoritative failed result while filling any identity fields that
+    # the later boundary makes available.
+    if existing is not None and existing.status == "failed":
+        record = CodexNativeTerminalRecord(
+            session_id=existing.session_id,
+            thread_id=existing.thread_id,
+            turn_id=existing.turn_id,
+            status=existing.status,
+            source=existing.source if record.status == "idle" else record.source,
+            error_message=record.error_message or existing.error_message,
+            error_kind=record.error_kind or existing.error_kind,
+            experiment_attempt_id=existing.experiment_attempt_id or record.experiment_attempt_id,
+            recorded_at=existing.recorded_at,
+        )
+    bridge_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", dir=str(bridge_dir))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "session_id": record.session_id,
+                    "thread_id": record.thread_id,
+                    "turn_id": record.turn_id,
+                    "status": record.status,
+                    "source": record.source,
+                    "error_message": record.error_message,
+                    "error_kind": record.error_kind,
+                    "experiment_attempt_id": record.experiment_attempt_id,
+                    "recorded_at": record.recorded_at or time.time(),
+                },
+                handle,
+                sort_keys=True,
+            )
+            handle.write("\n")
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+async def wait_for_terminal_record(
+    bridge_dir: Path,
+    *,
+    session_id: str,
+    thread_id: str,
+    turn_id: str,
+    timeout_seconds: float | None = None,
+) -> CodexNativeTerminalRecord | None:
+    """Wait for the exact terminal result with a bounded, testable timeout."""
+    import asyncio
+
+    if timeout_seconds is None:
+        raw_timeout = os.environ.get(_TERMINAL_RECORD_WAIT_TIMEOUT_ENV_VAR)
+        try:
+            timeout_seconds = (
+                float(raw_timeout)
+                if raw_timeout is not None
+                else _TERMINAL_RECORD_WAIT_DEFAULT_SECONDS
+            )
+        except ValueError:
+            timeout_seconds = _TERMINAL_RECORD_WAIT_DEFAULT_SECONDS
+    timeout_seconds = max(0.0, timeout_seconds)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        record = read_terminal_record(
+            bridge_dir, session_id=session_id, thread_id=thread_id, turn_id=turn_id
+        )
+        if record is not None:
+            return record
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(0.05, remaining))
 
 
 def clear_bridge_state(bridge_dir: Path) -> None:
@@ -919,6 +1098,7 @@ def read_bridge_state(bridge_dir: Path) -> CodexNativeBridgeState | None:
     codex_home = raw.get("codex_home")
     active_turn_id = raw.get("active_turn_id")
     cwd = raw.get("cwd")
+    experiment_attempt_id = raw.get("experiment_attempt_id")
     if (
         not isinstance(session_id, str)
         or not session_id
@@ -940,6 +1120,11 @@ def read_bridge_state(bridge_dir: Path) -> CodexNativeBridgeState | None:
         codex_home=codex_home,
         active_turn_id=parsed_active_turn_id,
         cwd=cwd if isinstance(cwd, str) and cwd else None,
+        experiment_attempt_id=(
+            experiment_attempt_id
+            if isinstance(experiment_attempt_id, str) and experiment_attempt_id
+            else None
+        ),
     )
 
 
@@ -965,6 +1150,27 @@ def update_active_turn_id(bridge_dir: Path, active_turn_id: str | None) -> None:
                 codex_home=state.codex_home,
                 active_turn_id=active_turn_id,
                 cwd=state.cwd,
+                experiment_attempt_id=state.experiment_attempt_id,
+            ),
+        )
+
+
+def update_experiment_attempt_id(bridge_dir: Path, experiment_attempt_id: str | None) -> None:
+    """Associate the next native turn with one durable TB4 attempt."""
+    with _bridge_state_lock(bridge_dir):
+        state = read_bridge_state(bridge_dir)
+        if state is None:
+            return
+        _write_bridge_state_unlocked(
+            bridge_dir,
+            CodexNativeBridgeState(
+                session_id=state.session_id,
+                socket_path=state.socket_path,
+                thread_id=state.thread_id,
+                codex_home=state.codex_home,
+                active_turn_id=state.active_turn_id,
+                cwd=state.cwd,
+                experiment_attempt_id=experiment_attempt_id,
             ),
         )
 
@@ -995,6 +1201,7 @@ def update_thread_id(bridge_dir: Path, thread_id: str, active_turn_id: str | Non
                 codex_home=state.codex_home,
                 active_turn_id=active_turn_id,
                 cwd=state.cwd,
+                experiment_attempt_id=state.experiment_attempt_id,
             ),
         )
 
@@ -1042,6 +1249,7 @@ def clear_active_turn_id_if_matches(bridge_dir: Path, completed_turn_id: str | N
                 codex_home=state.codex_home,
                 active_turn_id=None,
                 cwd=state.cwd,
+                experiment_attempt_id=state.experiment_attempt_id,
             ),
         )
         return True
