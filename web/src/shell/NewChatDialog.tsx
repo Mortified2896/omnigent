@@ -1415,6 +1415,28 @@ function SearchableModelPicker({
   searchTestId?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobileViewport();
+  const [collisionTop, setCollisionTop] = useState(16);
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const sync = () => {
+      const header = document.querySelector(".chat-header");
+      const viewportTop = window.visualViewport?.offsetTop ?? 0;
+      setCollisionTop(
+        Math.max(16, (header?.getBoundingClientRect().bottom ?? 0) - viewportTop + 8),
+      );
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("scroll", sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("scroll", sync);
+    };
+  }, [open, isMobile]);
+
   const selectedLabel =
     value === MODEL_SELECT_DEFAULT
       ? "Default"
@@ -1447,11 +1469,23 @@ function SearchableModelPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        collisionPadding={16}
-        className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-hidden p-0"
+        collisionPadding={{ top: isMobile ? collisionTop : 16, right: 16, bottom: 16, left: 16 }}
+        onOpenAutoFocus={(event) => {
+          // Opening a touch picker should not summon the keyboard.
+          if (isMobile) {
+            event.preventDefault();
+            if (event.target instanceof HTMLElement) event.target.focus();
+          }
+        }}
+        className="max-h-[min(20rem,var(--radix-popover-content-available-height))] w-[min(20rem,calc(100vw-2rem))] overflow-hidden p-0 md:w-96"
       >
         <Command className="h-auto min-h-0">
-          <CommandInput placeholder="Search models…" data-testid={searchTestId} />
+          <CommandInput
+            placeholder="Search models…"
+            aria-label="Search models"
+            className="text-base md:text-ui"
+            data-testid={searchTestId}
+          />
           <CommandList
             className="max-h-72 min-h-0 overflow-y-auto overscroll-contain"
             onWheel={(event) => event.stopPropagation()}
@@ -4480,8 +4514,7 @@ export function NewChatLandingScreen() {
   );
 
   return (
-    // pb-12 lifts the content slightly above the geometric center, where
-    // the hero reads better optically.
+    // Center the landing while allowing tall content to scroll on small screens.
     <div
       ref={setLandingSurface}
       className="min-h-0 flex-1 overflow-y-auto"
@@ -4491,7 +4524,7 @@ export function NewChatLandingScreen() {
           840 − 80 = 760px max on desktop. px-4 on phones (16px gutters)
           keeps the composer from feeling cramped against the viewport
           edges; widens to the full px-10 at the md breakpoint and up. */}
-      <div className="mx-auto flex min-h-full w-full max-w-[840px] flex-col items-center justify-center gap-6 px-4 pt-8 pb-16 md:select-none md:px-10">
+      <div className="mx-auto flex min-h-full w-full max-w-[840px] flex-col items-center justify-center gap-5 px-4 pt-8 pb-8 md:gap-6 md:pb-16 md:select-none md:px-10">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
           {selectedProject ? (
             // Landing inside a project: swap Otto's eyes for the same folder
@@ -4658,14 +4691,8 @@ export function NewChatLandingScreen() {
               rows={1}
               autoFocus
               data-testid="new-chat-landing-input"
-              // Compose-pill text spec: SF Pro Text system stack at
-              // 14px/20px. (Note: sub-16px inputs make mobile Safari
-              // auto-zoom on focus — accepted tradeoff per the design.)
-              // Heights are border-box (12px top + 8px bottom padding lives
-              // inside them): max 200px = the spec's 180px of content.
-              // A 60px floor holds two 20px lines plus that padding;
-              // useAutoGrowTextarea expands from there to the unchanged cap.
-              className="min-h-[60px] max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 pb-2 font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-ui leading-5 text-foreground outline-none placeholder:text-muted-foreground md:select-text"
+              // A 16px phone input avoids Safari focus zoom; desktop stays compact.
+              className="min-h-[60px] max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 pb-2 font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground md:text-ui md:leading-5 md:select-text"
             />
             {/* Gated on an empty draft so it reads as the placeholder.
                 pointer-events-none lets clicks fall through to focus the
@@ -4755,11 +4782,11 @@ export function NewChatLandingScreen() {
                 here would also catch the .dark .bg-card glass rule (border +
                 shadow) and visually split the pill in half. */}
             <div
-              className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-2 pb-2"
+              className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-2 pb-2"
               data-testid="new-chat-landing-actions"
             >
               {/* Attach + dictate — left side, mirroring the in-session composer. */}
-              <div className="flex shrink-0 items-center gap-0.5">
+              <div className="col-start-1 row-start-2 flex shrink-0 items-center gap-0.5 md:row-start-1">
                 <Button
                   type="button"
                   size="icon"
@@ -4785,7 +4812,7 @@ export function NewChatLandingScreen() {
                 />
               </div>
               <div
-                className="flex min-w-0 flex-wrap items-center justify-end gap-0.5 md:gap-2"
+                className="col-span-3 col-start-1 row-start-1 flex min-w-0 flex-wrap items-center gap-1 border-b border-border pb-1 md:col-span-1 md:col-start-2 md:justify-end md:gap-2 md:border-0 md:pb-0"
                 data-testid="new-chat-landing-primary-actions"
               >
                 <div className="flex min-w-0 max-w-full items-center rounded-lg transition-colors has-[button:not(:disabled)]:hover:bg-muted dark:has-[button:not(:disabled)]:hover:bg-muted/50 has-aria-expanded:bg-muted dark:has-aria-expanded:bg-muted/50 [&>button]:bg-transparent!">
@@ -4817,7 +4844,7 @@ export function NewChatLandingScreen() {
                     // the shared pill; pr-2 equals the gear icon's own centering
                     // inset (8px) so the divider sits evenly between them.
                     triggerClassName="h-9 min-w-0 max-w-full shrink pr-2 md:h-8 md:max-w-none md:shrink-0"
-                    triggerLabelClassName="max-w-20 sm:max-w-[12rem]"
+                    triggerLabelClassName="max-w-[12rem]"
                   />
                   {/* Gear — opens the selected agent's run-config modal, behind
                     a hairline divider. Both are hidden when the selected agent
@@ -5055,55 +5082,55 @@ export function NewChatLandingScreen() {
                 {/* Routing is not a standalone composer toggle — it folds into
                   the gear modal's Model dropdown as an "Smart Routing"
                   option (see HarnessConfigModal). */}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex">
-                        <Button
-                          type="submit"
-                          size={o3RoutingReviewEnabled && o3RoutingSelected ? "sm" : "icon"}
-                          disabled={!canSubmit}
-                          aria-label={
-                            creating
-                              ? "Starting session"
-                              : o3ReviewLoading
-                                ? "Reviewing route"
-                                : o3RoutingReviewEnabled && o3RoutingSelected
-                                  ? "Review route"
-                                  : "Start session"
-                          }
-                          aria-busy={creating || o3ReviewLoading}
-                          data-testid="new-chat-landing-submit"
-                          className={
-                            o3RoutingReviewEnabled && o3RoutingSelected
-                              ? "h-8 gap-1.5 rounded-lg bg-foreground px-3 disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
-                              : "size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
-                          }
-                        >
-                          {creating || o3ReviewLoading ? (
-                            <>
-                              <Loader2Icon className="size-4 animate-spin" />
-                              {o3RoutingReviewEnabled && o3RoutingSelected && (
-                                <span>Reviewing route</span>
-                              )}
-                            </>
-                          ) : o3RoutingReviewEnabled && o3RoutingSelected ? (
-                            <>
-                              <ShuffleIcon className="size-4" aria-hidden />
-                              <span>Review route</span>
-                            </>
-                          ) : (
-                            <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
-                          )}
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {submitDisabledReason != null && (
-                      <TooltipContent>{submitDisabledReason}</TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
               </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="col-start-3 row-start-2 inline-flex justify-self-end md:row-start-1">
+                      <Button
+                        type="submit"
+                        size={o3RoutingReviewEnabled && o3RoutingSelected ? "sm" : "icon"}
+                        disabled={!canSubmit}
+                        aria-label={
+                          creating
+                            ? "Starting session"
+                            : o3ReviewLoading
+                              ? "Reviewing route"
+                              : o3RoutingReviewEnabled && o3RoutingSelected
+                                ? "Review route"
+                                : "Start session"
+                        }
+                        aria-busy={creating || o3ReviewLoading}
+                        data-testid="new-chat-landing-submit"
+                        className={
+                          o3RoutingReviewEnabled && o3RoutingSelected
+                            ? "h-10 md:h-8 gap-1.5 rounded-lg bg-foreground px-3 disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                            : "size-10 md:size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                        }
+                      >
+                        {creating || o3ReviewLoading ? (
+                          <>
+                            <Loader2Icon className="size-4 animate-spin" />
+                            {o3RoutingReviewEnabled && o3RoutingSelected && (
+                              <span>Reviewing route</span>
+                            )}
+                          </>
+                        ) : o3RoutingReviewEnabled && o3RoutingSelected ? (
+                          <>
+                            <ShuffleIcon className="size-4" aria-hidden />
+                            <span>Review route</span>
+                          </>
+                        ) : (
+                          <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
+                        )}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {submitDisabledReason != null && (
+                    <TooltipContent>{submitDisabledReason}</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </form>
           {/* Footer tray (host / cwd / worktree). Sits below the composer with
