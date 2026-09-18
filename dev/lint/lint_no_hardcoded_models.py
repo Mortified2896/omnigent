@@ -52,7 +52,7 @@ SKIP_PARTS = {
     "node_modules",
     "tests",
 }
-OWNED_FALLBACK_PATH = Path("omnigent/model_fallbacks.py")
+OWNED_FALLBACK_PATH = Path("omnigent/models/model_fallbacks.py")
 FALLBACK_METADATA_FIELDS = frozenset({"owner", "provenance", "discovery_gap"})
 AUDITED_CANDIDATE_MODEL_FIELDS = frozenset({"candidate_id", "model", "catalogue_model_id"})
 AUDITED_CANDIDATE_STRING_FIELDS = frozenset(
@@ -321,6 +321,7 @@ def scan(path: Path) -> list[Hit]:
         not path.is_file()
         or path.suffix not in SOURCE_EXTENSIONS
         or Path(_repo_relative(path)) in GENERATED_PATHS
+        or (path.suffix == ".json" and _repo_relative(path).startswith("diagnostics/"))
         or any(part in SKIP_PARTS for part in path.parts)
     ):
         return []

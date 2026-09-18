@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Deprecated; remove in v0.14.0. RTX uses peer_deployer.rtx.
+if [ "$(hostname)" = rtx-omnigent ]; then
+  echo "Retired on RTX; use peer_deployer.rtx" >&2
+  exit 2
+fi
 set -euo pipefail
 
 cat >&2 <<'EOF'

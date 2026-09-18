@@ -137,7 +137,7 @@ def _set_required_accounts_env(
 ) -> None:
     """Populate every required env var so from_env() doesn't fail loud."""
     monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", secrets.token_hex(32))
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", base_url)
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", "http://localhost:8000")
 
 
 def test_accounts_config_round_trips_required_env(
@@ -954,6 +954,7 @@ def _build_accounts_app(
     monkeypatch: pytest.MonkeyPatch,
     *,
     init_admin_password: str | None,
+    base_url: str = "http://localhost:8000",
 ) -> Iterator[TestClient]:
     """Build a production-shaped accounts-mode app + TestClient.
 
@@ -969,11 +970,12 @@ def _build_accounts_app(
         admin is created and ``/v1/info`` reports ``needs_setup``.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("OMNIGENT_DATA_DIR", str(tmp_path / ".omnigent"))
     # Accounts is the default provider now, but pin it explicitly
     # so this fixture doesn't depend on the global default.
     monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "accounts")
     monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", secrets.token_hex(32))
-    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", base_url)
     if init_admin_password is not None:
         monkeypatch.setenv("OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD", init_admin_password)
     else:
@@ -1807,13 +1809,18 @@ def test_cli_accounts_login_happy_path_stores_token(
         calls["n"] += 1
         assert url.endswith("/auth/login")
         body = kw["json"]
-        assert body == {"username": "alice", "password": "alice-pw-1234"}
+        assert body == {
+            "username": "alice",
+            "password": "alice-pw-1234",
+            "issue_refresh": True,
+        }
         return _FakeResponse(
             200,
             {
                 "token": "fake.jwt.token",
                 "user": {"id": "alice", "is_admin": False},
                 "expires_in": 8 * 3600,
+                "refresh_token": "fake.refresh.token",
             },
         )
 
@@ -1832,6 +1839,9 @@ def test_cli_accounts_login_happy_path_stores_token(
     assert "Logged in as alice" in result.output
     # The store_token side effect lands in ~/.omnigent/auth_tokens.json.
     assert cli_auth.load_token("http://localhost:8000") == "fake.jwt.token"
+    # The refresh token from /auth/login must also be persisted when present.
+    entry = cli_auth._load_entry("http://localhost:8000")
+    assert entry is not None and entry.get("refresh_token") == "fake.refresh.token"
 
 
 def test_cli_accounts_login_wrong_password_surfaces_clean_error(
@@ -2021,3 +2031,89 @@ def test_setup_is_single_use(accounts_app_needs_setup: TestClient) -> None:
     user_ids = {u["id"] for u in client.get("/auth/users").json()["users"]}
     assert "alice" in user_ids
     assert "bob" not in user_ids
+
+
+def test_browser_login_never_issues_refresh_token(accounts_app: TestClient) -> None:
+    """Regression: browser /auth/login (no issue_refresh) must never return a
+    refresh_token. Gating is on the request field so the web form, which never
+    sends it, cannot receive long-lived unattended credentials under XSS or
+    form-hijack.
+    """
+    resp = accounts_app.post(
+        "/auth/login",
+        json={"username": "admin", "password": "admin-pw-12345"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "refresh_token" not in resp.json()
+
+
+def test_cli_login_with_issue_refresh_issues_grant(accounts_app: TestClient) -> None:
+    """``POST /auth/login`` with ``issue_refresh=True`` returns a usable refresh_token.
+
+    The CLI sends this flag; unattended hosts can renew past session-JWT expiry
+    via /oauth/token without a human re-running ``omnigent login``.
+    """
+    resp = accounts_app.post(
+        "/auth/login",
+        json={"username": "admin", "password": "admin-pw-12345", "issue_refresh": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert "token" in body
+    assert "refresh_token" in body
+    refresh_token = body["refresh_token"]
+    assert isinstance(refresh_token, str) and len(refresh_token) > 10
+
+    # The refresh token must be immediately usable at /oauth/token.
+    refresh_resp = accounts_app.post(
+        "/oauth/token",
+        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+    )
+    assert refresh_resp.status_code == 200, refresh_resp.text
+    refresh_body = refresh_resp.json()
+    assert "access_token" in refresh_body
+    # Login grants don't rotate — same token is returned.
+    assert refresh_body["refresh_token"] == refresh_token
+
+
+def test_instance_logout_preserves_other_peer_cookie(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        clients = []
+        for peer, port in [("O1", 1111), ("O2", 2222)]:
+            monkeypatch.setenv("OMNIGENT_SESSION_COOKIE_SUFFIX", peer)
+            root = tmp_path / peer
+            root.mkdir()
+            generator = _build_accounts_app(
+                root,
+                monkeypatch,
+                init_admin_password="admin-pw-12345",
+                base_url=f"https://localhost:{port}",
+            )
+            client = next(generator)
+            stack.callback(lambda g=generator: next(g, None))
+            client.base_url = f"https://localhost:{port}"
+            clients.append(client)
+        first, second = clients
+        assert (
+            first.post(
+                "/auth/login", json={"username": "admin", "password": "admin-pw-12345"}
+            ).status_code
+            == 200
+        )
+        second.cookies.update(first.cookies)
+        assert (
+            second.post(
+                "/auth/login", json={"username": "admin", "password": "admin-pw-12345"}
+            ).status_code
+            == 200
+        )
+        first.cookies.update(second.cookies)
+        assert first.get("/auth/me").status_code == 200
+        assert second.get("/auth/me").status_code == 200
+        assert first.post("/auth/logout").status_code == 204
+        second.cookies = first.cookies
+        assert first.get("/auth/me").status_code == 401
+        assert second.get("/auth/me").status_code == 200

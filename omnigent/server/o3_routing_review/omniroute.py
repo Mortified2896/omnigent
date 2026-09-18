@@ -70,11 +70,24 @@ def _target_pair(provider_id: str, model: str) -> tuple[str, str]:
 class OmniRouteError(RuntimeError):
     """Sanitized error at the OmniRoute boundary."""
 
+    response: OmniRouteResponse | None = None
+    route_checks: list[dict[str, object]] | None = None
+
 
 @dataclass(frozen=True)
 class OmniRouteResponse:
     body: dict[str, object]
     headers: dict[str, str]
+    raw_text: str | None = None
+
+
+class CheckedRoute(str):
+    checks: list[dict[str, object]]
+
+    def __new__(cls, route: str, checks: list[dict[str, object]]) -> CheckedRoute:
+        value = super().__new__(cls, route)
+        value.checks = checks
+        return value
 
 
 class OmniRouteClient:
@@ -187,6 +200,7 @@ class OmniRouteClient:
 
     async def recheck_routes(self, route_ids: list[str], *, reasoning_effort: str) -> str:
         """Confirm a bounded shortlist without transmitting the user's task."""
+        checks: list[dict[str, object]] = []
         shortlist = list(dict.fromkeys(route_ids))[:3]
         try:
             async with asyncio.timeout(3):
@@ -207,8 +221,16 @@ class OmniRouteClient:
                     recent.append((timestamp, row))
             if recent:
                 latest = max(recent, key=lambda item: item[0])[1]
+                checks.append(
+                    {
+                        "route": route_id,
+                        "source": "recent call log",
+                        "status": latest.get("status"),
+                        "call_log_id": latest.get("id"),
+                    }
+                )
                 if latest.get("status") == 200:
-                    return route_id
+                    return CheckedRoute(route_id, checks)
         for route_id in shortlist:
             try:
                 async with asyncio.timeout(10):
@@ -227,6 +249,13 @@ class OmniRouteClient:
                 body = response.body
                 output = body.get("output")
                 if body.get("status") == "failed" or body.get("error"):
+                    checks.append(
+                        {
+                            "route": route_id,
+                            "source": "probe",
+                            "result": "provider reported failure",
+                        }
+                    )
                     continue
                 if body.get("output_text") or (
                     isinstance(output, list)
@@ -237,13 +266,24 @@ class OmniRouteClient:
                         for item in output
                     )
                 ):
-                    return route_id
+                    checks.append(
+                        {"route": route_id, "source": "probe", "result": "output returned"}
+                    )
+                    return CheckedRoute(route_id, checks)
+                checks.append(
+                    {"route": route_id, "source": "probe", "result": "no output returned"}
+                )
             except (OmniRouteError, TimeoutError):
+                checks.append(
+                    {"route": route_id, "source": "probe", "result": "request failed or timed out"}
+                )
                 continue
-        raise OmniRouteError(
+        error = OmniRouteError(
             "No route in the preferred shortlist could be verified. "
             "Wait or revalidate before continuing."
         )
+        error.route_checks = checks
+        raise error
 
     async def resource_snapshot(
         self, decisions: list[CatalogueExecutionDecision]
@@ -462,7 +502,8 @@ class OmniRouteClient:
                     "id": f"o3-route-{short_id}-{index}",
                     "kind": "model",
                     "providerId": pair[0],
-                    "model": pair[1],
+                    # Keep the provider qualifier when the model has a vendor namespace.
+                    "model": decision.route_id,
                     "label": f"{decision.displayed_model} ({decision.reasoning_mode})",
                     "weight": 0,
                 }
@@ -726,7 +767,43 @@ class OmniRouteClient:
             value = row.get(source)
             return value if isinstance(value, str) and value else None
 
+        from .audit import redact
+
+        response_body = detail.get("responseBody")
+        response_reasoning = (
+            response_body.get("reasoning") if isinstance(response_body, dict) else None
+        )
+        observed_effort = (
+            response_reasoning.get("effort") if isinstance(response_reasoning, dict) else None
+        )
         return ExecutionProvenance(
+            transport=redact(
+                {
+                    "requested_model": optional_string("requestedModel"),
+                    "requested_effort": effort,
+                    "observed_model": model,
+                    "observed_provider": provider,
+                    "observed_effort": observed_effort,
+                    **{
+                        key: source[key]
+                        for source in (row, detail)
+                        for key in (
+                            "transmittedModel",
+                            "transmittedProvider",
+                            "transmittedEffort",
+                            "requestedProvider",
+                            "fallbackReason",
+                            "failoverReason",
+                            "overrideReason",
+                            "fallback",
+                            "fallbackChain",
+                            "selectionReason",
+                            "quotaReason",
+                        )
+                        if key in source
+                    },
+                }
+            ),
             call_log_id=call_log_id,
             path=path,
             method=method,
@@ -752,4 +829,31 @@ class OmniRouteClient:
         )
 
     async def create_response(self, body: dict[str, object]) -> OmniRouteResponse:
-        return await self._request("POST", "/v1/responses", body=body, timeout=120.0)
+        from .audit import redact
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+                response = await client.post(
+                    self.base_url + "/v1/responses",
+                    headers={"Authorization": self._authorization, "Accept": "application/json"},
+                    json=body,
+                )
+        except httpx.HTTPError as exc:
+            raise OmniRouteError("OmniRoute reviewer request failed") from exc
+        secrets = (self._authorization, self._authorization.removeprefix("Bearer "))
+        try:
+            decoded = response.json()
+        except ValueError:
+            decoded = {}
+        captured = OmniRouteResponse(
+            body=redact(
+                decoded if isinstance(decoded, dict) else {"raw_value": decoded}, secrets=secrets
+            ),
+            headers=redact(dict(response.headers), secrets=secrets),
+            raw_text=redact(response.text, secrets=secrets),
+        )
+        if not response.is_success:
+            error = OmniRouteError(f"OmniRoute reviewer returned HTTP {response.status_code}")
+            error.response = captured
+            raise error
+        return captured

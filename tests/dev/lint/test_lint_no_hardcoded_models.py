@@ -86,8 +86,8 @@ def test_scan_allows_complete_central_fallback_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    fallback_module = Path("omnigent/model_fallbacks.py")
-    fallback_module.parent.mkdir()
+    fallback_module = Path("omnigent/models/model_fallbacks.py")
+    fallback_module.parent.mkdir(parents=True)
     fallback_module.write_text(
         '_MODELS = ("gpt-5.5", "gpt-5.4")\n'
         'FIRST = StaticModelFallback(model_ids=_MODELS, owner="one", '
@@ -110,8 +110,8 @@ def test_scan_flags_incomplete_central_fallback_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    fallback_module = Path("omnigent/model_fallbacks.py")
-    fallback_module.parent.mkdir()
+    fallback_module = Path("omnigent/models/model_fallbacks.py")
+    fallback_module.parent.mkdir(parents=True)
     fallback_module.write_text(
         '_MODELS = ("gpt-5.5",)\n'
         'FALLBACK = StaticModelFallback(model_ids=_MODELS, owner="one", '
@@ -126,8 +126,8 @@ def test_scan_flags_fallback_model_tuple_used_outside_owned_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    fallback_module = Path("omnigent/model_fallbacks.py")
-    fallback_module.parent.mkdir()
+    fallback_module = Path("omnigent/models/model_fallbacks.py")
+    fallback_module.parent.mkdir(parents=True)
     fallback_module.write_text(
         '_MODELS = ("gpt-5.5",)\n'
         'FALLBACK = StaticModelFallback(model_ids=_MODELS, owner="one", '
@@ -251,3 +251,17 @@ def test_scan_distinguishes_o3_metadata_from_model_selection(tmp_path: Path) -> 
         'model = "o3"\n'
     )
     assert [hit.model for hit in scan(source)] == ["o3"]
+
+
+def test_audit_observations_are_not_runtime_model_choices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "diagnostics" / "audit"
+    directory.mkdir(parents=True)
+    observation = directory / "routes.json"
+    observation.write_text('{"observed_model": "gpt-5.5"}')
+    assert scan(observation) == []
+    executable = directory / "probe.py"
+    executable.write_text('model = "gpt-5.5"')
+    assert [hit.model for hit in scan(executable)] == ["gpt-5.5"]

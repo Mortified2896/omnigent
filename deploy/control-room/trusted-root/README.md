@@ -1,5 +1,16 @@
 # Control Room trusted-root policy
 
+> **Legacy scope / superseded RTX assumptions (2026-09-14).**
+> This is the opt-in policy for the historical ai-control-hub peers. It neither
+> establishes RTX privileges nor authorizes installation or activation on the
+> current runtime.
+> Present-state decisions follow the [HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md).
+> Active O1 is on RTX VM 100; no live O2 peer is required or available.
+> Do not start, restore or recreate retired O2 to satisfy preflight.
+> Recovery/installation text requires explicit owner authorization to
+> reactivate retired services. Distinct-peer and rollback safety rules remain
+> intact for an explicitly reintroduced two-peer topology.
+
 This directory is the repository-managed source of truth for the opt-in
 trusted-agent host policy used by the Control Room's O1 and O2 Omnigent host
 services. It is intentionally separate from generic Omnigent installation and
@@ -45,7 +56,9 @@ Install or reconcile the Control Room host policy from a clean checkout:
 sudo deploy/control-room/trusted-root/install.sh --install
 ```
 
-The installer reloads systemd but never restarts O1 or O2. After merge and the
-planned deployment window, activate the two instances sequentially, with O1/O2
-health checks between changes. Do not run the installer as part of a generic
+The installer reloads systemd but never restarts O1 or O2. The historical
+rollout instructions called for sequential peer activation with health checks.
+Do not repeat that activation without explicit owner authorization to
+reintroduce a two-peer topology and a reviewed deployment plan. Do not run the
+installer as part of a generic
 Omnigent deployment.

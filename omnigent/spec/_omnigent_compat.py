@@ -105,6 +105,7 @@ OMNIGENT_HARNESSES = frozenset(
         "hermes-native",
         "openai-agents",
         "open-responses",
+        "local-tool-free",
         "opencode-native",
         "pi",
         "pi-native",

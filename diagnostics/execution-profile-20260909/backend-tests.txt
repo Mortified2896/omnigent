@@ -1,0 +1,26 @@
+2026-09-09T09:47:36.670161Z [info     ] structlog output capture disabled, no output directory specified [structlog_config.pytest]
+Running 89 items in this shard
+........................................................................ [ 80%]
+.................                                                        [100%]
+========================= Top tests by peak-RSS delta ==========================
++  144.9 MB  (now    144.9 MB)  tests/server/test_o3_routing_review.py::test_forecast_output_accepts_single_json_markdown_fence
++    0.5 MB  (now    146.6 MB)  tests/server/test_o3_routing_review.py::test_mutating_routes_require_auth_json_and_trusted_origin
++    0.2 MB  (now    145.5 MB)  tests/server/test_o3_routing_review.py::test_forecast_uses_plausible_lower_and_cannot_satisfy_strict_policy
++    0.1 MB  (now    145.1 MB)  tests/server/test_o3_routing_review.py::test_adviser_repairs_schema_invalid_provider_output_once
++    0.1 MB  (now    145.2 MB)  tests/server/test_o3_routing_review.py::test_lower_bound_failure_is_not_rescued_by_point_estimate
++    0.1 MB  (now    145.7 MB)  tests/server/test_o3_routing_review.py::test_structural_incompatibilities_are_hard_exclusions[candidate_updates3-requirements3-low-quota is exhausted]
++    0.1 MB  (now    146.0 MB)  tests/server/test_o3_routing_review.py::test_catalogue_approval_routes_the_uncapped_execution_set[False-False]
++    0.1 MB  (now    146.8 MB)  tests/server/test_o3_routing_review.py::test_execution_overrides_persist_reset_and_recompute
++    0.1 MB  (now    145.0 MB)  tests/server/test_o3_routing_review.py::test_schema_v1_numeric_floor_remains_readable_without_rewriting_history
++    0.1 MB  (now    145.8 MB)  tests/server/test_o3_routing_review.py::test_adequate_non_codex_candidate_survives_codex_quota_exhaustion
++    0.1 MB  (now    146.7 MB)  tests/server/test_o3_routing_review.py::test_create_route_returns_recoverable_error_when_omniroute_is_unavailable
++    0.1 MB  (now    145.3 MB)  tests/server/test_o3_routing_review.py::test_missing_evidence_is_unknown_not_zero
++    0.0 MB  (now    146.0 MB)  tests/server/test_o3_routing_review.py::test_ttl_cleanup_deletes_abandoned_combo_but_retains_active_session
++    0.0 MB  (now    146.9 MB)  tests/server/test_o3_catalogue_recommendation.py::test_execution_set_is_uncapped_and_checks_effective_io_per_route
++    0.0 MB  (now    145.8 MB)  tests/server/test_o3_routing_review.py::test_recommendation_only_create_and_adjust_skip_execution_side_effects
++    0.0 MB  (now    144.9 MB)  tests/server/test_o3_routing_review.py::test_o3_client_refuses_codex_mcp_credential_for_a_different_endpoint
++    0.0 MB  (now    145.6 MB)  tests/server/test_o3_routing_review.py::test_published_exact_evidence_supersedes_forecast
++    0.0 MB  (now    145.6 MB)  tests/server/test_o3_routing_review.py::test_provisional_evidence_must_still_meet_the_approved_floor
++    0.0 MB  (now    145.6 MB)  tests/server/test_o3_routing_review.py::test_structural_incompatibilities_are_hard_exclusions[candidate_updates2-requirements2-high-reasoning effort]
++    0.0 MB  (now    145.8 MB)  tests/server/test_o3_routing_review.py::test_catalogue_approval_routes_the_uncapped_execution_set[False-None]
+89 passed in 1.09s

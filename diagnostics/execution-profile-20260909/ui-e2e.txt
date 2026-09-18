@@ -1,0 +1,1 @@
+PASS: fake-backed browser adjust, reload, reset, quality adjustment, approve once

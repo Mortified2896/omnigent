@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from omnigent.process_logging import env_truthy
 
-from .adviser import OmniRouteRoutingAdviser, RoutingAdviser
+from .adviser import OmniRouteRoutingAdviser, ReviewerCaptureError, RoutingAdviser
+from .audit import redact, snapshot
 from .evaluator import evaluate_candidates, hard_capable_candidates
 from .forecaster import ModelScoreForecaster
 from .models import (
@@ -29,6 +33,7 @@ from .models import (
     EstimatorPolicy,
     EstimatorSelection,
     EvidencePolicy,
+    ExecutionMode,
     ProposalAdjustmentRequest,
     ProposalCreateRequest,
     ProposalDecisionRequest,
@@ -93,6 +98,7 @@ class O3RoutingReviewService:
         self.ttl_seconds = ttl_seconds
         self.forecaster = forecaster
         self.recommendation_catalogue = recommendation_catalogue
+        self._tool_free_audits: dict[tuple[float, str], tuple[datetime, dict[str, object]]] = {}
 
     @classmethod
     def from_env(cls) -> O3RoutingReviewService:
@@ -130,6 +136,70 @@ class O3RoutingReviewService:
     def get_proposal(self, proposal_id: str) -> RoutingProposal:
         """Return a persisted proposal or raise the public not-found error."""
         return self._require(proposal_id)
+
+    async def _with_execution_options(self, proposal: RoutingProposal) -> RoutingProposal:
+        path = os.environ.get("OMNIGENT_O3_TOOL_FREE_QUALIFICATIONS")
+        enabled = env_truthy(os.environ.get("OMNIGENT_O3_HARD_TOOL_FREE"))
+        if (not path and not enabled) or self.recommendation_catalogue is None:
+            return proposal
+        from .execution_modes import options_from_audit, select_execution
+
+        audit: dict[str, object] = {}
+        try:
+            if path:
+                audit = json.loads(Path(path).read_text())
+            elif not proposal.effective_requirements.tools:
+                from .tool_free_qualification import qualify_current_catalogue
+
+                key = (
+                    proposal.recommendation.common_capability_floor
+                    if proposal.recommendation
+                    else 100,
+                    proposal.approved_constraints.reasoning_effort,
+                )
+                cached = self._tool_free_audits.get(key)
+                if cached and (datetime.now(timezone.utc) - cached[0]).total_seconds() < 300:
+                    audit = cached[1]
+                else:
+                    audit = await qualify_current_catalogue(
+                        self.omniroute, self.recommendation_catalogue, proposal
+                    )
+                    self._tool_free_audits[key] = (datetime.now(timezone.utc), audit)
+            else:
+                audit = {"rows": []}
+            options = options_from_audit(
+                proposal,
+                self.recommendation_catalogue,
+                audit,
+                await self.omniroute.model_ids(),
+            )
+        except (OSError, ValueError, TypeError, KeyError, OmniRouteError):
+            options = []
+        selected = select_execution(
+            options,
+            requirements=proposal.effective_requirements,
+            floor=proposal.recommendation.common_capability_floor
+            if proposal.recommendation
+            else 100,
+            preference=proposal.approved_constraints.cost_quota_preference,
+        )
+        selected_routes = {item.route for item in options}
+        rows = audit.get("rows", [])
+        rows = rows if isinstance(rows, list) else []
+        exclusions = {
+            str(row["route"]): str(
+                row.get("exclusion") or "Does not satisfy tool-free evidence or requirements"
+            )
+            for row in rows
+            if isinstance(row, dict) and row.get("route") and row["route"] not in selected_routes
+        }
+        return proposal.model_copy(
+            update={
+                "execution_options": options,
+                "selected_execution": selected,
+                "execution_exclusions": exclusions,
+            }
+        )
 
     def _validate_analysis(self, analysis: AdviserAnalysis) -> None:
         if len(analysis.benchmark_requirements) != 1:
@@ -195,6 +265,7 @@ class O3RoutingReviewService:
         estimator: EstimatorSelection | None = None
         adviser_model: str | None = None
         adviser_effort: str | None = None
+        reviewer_route_checks: list[dict[str, object]] | None = None
         analysis = self._greeting_analysis(request)
         adviser_mode = "local_rule" if analysis is not None else "model"
         if self.recommendation_catalogue is None:
@@ -286,6 +357,7 @@ class O3RoutingReviewService:
                 [item.route_id for item in eligible],
                 reasoning_effort=policy.reasoning_effort,
             )
+            reviewer_route_checks = getattr(verified_estimator, "checks", None)
             adviser_model, _definition = await self.omniroute.create_estimator_combo(
                 proposal_id,
                 [item for item in eligible if item.route_id == verified_estimator],
@@ -297,14 +369,27 @@ class O3RoutingReviewService:
                 eligible_count=len(eligible),
                 combo_name=adviser_model,
             )
-        analysis = analysis or await self.adviser.analyse(
-            prompt=prompt,
-            workspace_summary=request.workspace_summary,
-            registry=self.registry,
-            candidates=[],
-            model=adviser_model,
-            reasoning_effort=adviser_effort,
-        )
+        try:
+            analysis = analysis or await self.adviser.analyse(
+                prompt=prompt,
+                workspace_summary=request.workspace_summary,
+                registry=self.registry,
+                candidates=[],
+                model=adviser_model,
+                reasoning_effort=adviser_effort,
+            )
+        except ReviewerCaptureError as exc:
+            self.store.put_failed_review(
+                proposal_id,
+                {
+                    "review_id": proposal_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "input": request.model_dump(mode="json"),
+                    "exchanges": [item.model_dump(mode="json") for item in exc.exchanges],
+                },
+            )
+            exc.review_id = proposal_id
+            raise
         if estimator is not None:
             estimator = estimator.model_copy(
                 update={
@@ -317,6 +402,7 @@ class O3RoutingReviewService:
                 }
             )
         self._validate_analysis(analysis)
+        original_analysis = analysis.model_copy(deep=True)
         selection = analysis.benchmark_requirements[0]
         try:
             requirement = self.registry.calibrated_requirement(selection, analysis.difficulty)
@@ -431,6 +517,43 @@ class O3RoutingReviewService:
             prompt_fingerprint="sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
             workspace_summary=request.workspace_summary,
             adviser=analysis,
+            original_adviser=original_analysis,
+            audit=redact(
+                {
+                    "version": 1,
+                    "reviewer_route_checks": reviewer_route_checks,
+                    "input": request.model_dump(mode="json"),
+                    "rule": "standalone-greeting-v1" if adviser_mode == "local_rule" else None,
+                    "initial_constraints": constraints.model_dump(mode="json"),
+                    "requirement_sources": {
+                        key: "local rule"
+                        if adviser_mode == "local_rule"
+                        else "reviewer"
+                        if key in original_analysis.requirements.model_fields_set
+                        else "schema default"
+                        for key in original_analysis.requirements.model_fields
+                    },
+                    "calibration_rule": "benchmark/version/slice + difficulty -> threshold",
+                    "selection_policy": {
+                        "eligibility": "capability, effort, I/O and Responses contract",
+                        "approval_recheck_order": (
+                            "callable non-Codex first; "
+                            "descending conservative capability; route ID"
+                        ),
+                        "selection": "O3 set -> OmniRoute auto Combo; weights in Combo definition",
+                        "resource_policy": constraints.cost_quota_preference,
+                    },
+                    "calibration": self.registry.calibration._rows.get(
+                        (selection.benchmark_id, selection.version, selection.slice_id)
+                    )
+                    if self.registry.calibration
+                    else None,
+                    "normalization": self.recommendation_catalogue.policy.get("normalization")
+                    if self.recommendation_catalogue
+                    else None,
+                    "history": [],
+                }
+            ),
             adviser_exchanges=analysis._exchanges,
             adviser_mode=adviser_mode,
             approved_constraints=constraints,
@@ -442,7 +565,8 @@ class O3RoutingReviewService:
             resource_snapshot=resource_snapshot,
             resource_advice=resource_advice,
         )
-        self.store.put(proposal)
+        proposal = await self._with_execution_options(proposal)
+        self.store.put(snapshot(proposal, "review completed"))
         return proposal
 
     def _validate_decomposition(
@@ -519,6 +643,25 @@ class O3RoutingReviewService:
         proposal = self._require(proposal_id)
         if proposal.decision is not None and proposal.decision is not DecisionAction.WAIT:
             raise RoutingReviewError("a decided proposal cannot be adjusted", status_code=409)
+        original = proposal.original_adviser
+        if original is None and proposal.constraint_version == 1:
+            original = proposal.adviser.model_copy(deep=True)
+        if request.reset_reasoning_effort and request.reasoning_effort is not None:
+            raise RoutingReviewError("choose a reasoning override or reset, not both")
+        effort = request.reasoning_effort
+        if request.reset_reasoning_effort:
+            if original is None:
+                raise RoutingReviewError(
+                    "the original reasoning recommendation is unavailable; create a new review",
+                    status_code=409,
+                )
+            effort = original.proposed_reasoning_effort
+        overrides = proposal.requirement_overrides
+        if request.requirement_overrides is not None:
+            overrides = overrides.adjusted(
+                request.requirement_overrides, proposal.adviser.requirements
+            )
+        effective = overrides.resolve(proposal.adviser.requirements)
         current = proposal.approved_constraints
         selection = current.benchmark.model_copy(
             update={
@@ -545,6 +688,11 @@ class O3RoutingReviewService:
                 }
             )
             calibration_version = "manual-raw-score-override"
+        elif not any(
+            (request.benchmark_id, request.version, request.slice_id, request.difficulty)
+        ):
+            benchmark = current.benchmark
+            calibration_version = current.calibration_version
         else:
             benchmark = self.registry.calibrated_requirement(selection, difficulty)
             assert self.registry.calibration is not None
@@ -554,11 +702,7 @@ class O3RoutingReviewService:
                 "benchmark": benchmark,
                 "difficulty": difficulty,
                 "calibration_version": calibration_version,
-                **(
-                    {"reasoning_effort": request.reasoning_effort}
-                    if request.reasoning_effort
-                    else {}
-                ),
+                **({"reasoning_effort": effort} if effort else {}),
                 **({"risk": request.risk} if request.risk else {}),
                 **(
                     {"evidence_policy": request.evidence_policy} if request.evidence_policy else {}
@@ -579,12 +723,12 @@ class O3RoutingReviewService:
         analysis = proposal.adviser.model_copy(
             update={
                 "benchmark_requirements": [
-                    {
-                        "benchmark_id": benchmark.benchmark_id,
-                        "version": benchmark.version,
-                        "slice_id": benchmark.slice_id,
-                        "reason": benchmark.reason,
-                    }
+                    BenchmarkSelection(
+                        benchmark_id=benchmark.benchmark_id,
+                        version=benchmark.version,
+                        slice_id=benchmark.slice_id,
+                        reason=benchmark.reason,
+                    )
                 ],
                 "difficulty": difficulty,
                 "proposed_reasoning_effort": constraints.reasoning_effort,
@@ -593,7 +737,12 @@ class O3RoutingReviewService:
                 "decomposition": [],
             }
         )
-        result = evaluate_candidates(self.registry, analysis, candidates, constraints)
+        result = evaluate_candidates(
+            self.registry,
+            analysis.model_copy(update={"requirements": effective}),
+            candidates,
+            constraints,
+        )
         live_ids = await self.omniroute.model_ids()
         recommendation = (
             recommend(
@@ -601,11 +750,30 @@ class O3RoutingReviewService:
                 difficulty=difficulty,
                 raw_floor=benchmark.minimum_score,
                 live_route_ids=live_ids,
-                requirements=analysis.requirements,
+                requirements=effective,
                 reasoning_effort=constraints.reasoning_effort,
             )
             if self.recommendation_catalogue is not None
             else proposal.recommendation
+        )
+        execution_set = recommendation.execution_set if recommendation else None
+        resource_snapshot = (
+            await self.omniroute.resource_snapshot(execution_set.eligible)
+            if execution_set is not None
+            else None
+        )
+        resource_advice = (
+            ResourceAdvice(
+                action="start_now" if resource_snapshot.usable_routes else "wait",
+                reason=(
+                    "At least one eligible route is currently reported usable."
+                    if resource_snapshot.usable_routes
+                    else "No eligible route is confirmed usable; preserve the requirements."
+                ),
+                source="deterministic_fallback",
+            )
+            if resource_snapshot is not None
+            else None
         )
         has_match = bool(
             recommendation
@@ -618,6 +786,10 @@ class O3RoutingReviewService:
             update={
                 "updated_at": datetime.now(timezone.utc),
                 "adviser": analysis,
+                "original_adviser": original,
+                "requirement_overrides": overrides,
+                "resource_snapshot": resource_snapshot,
+                "resource_advice": resource_advice,
                 "approved_constraints": constraints,
                 "evaluations": result.evaluations,
                 "frontier": result.frontier,
@@ -629,7 +801,8 @@ class O3RoutingReviewService:
                 "constraint_version": proposal.constraint_version + 1,
             }
         )
-        self.store.put(updated)
+        updated = await self._with_execution_options(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     async def decide_proposal(
@@ -651,8 +824,77 @@ class O3RoutingReviewService:
                     ),
                 }
             )
-            self.store.put(updated)
+            self.store.put(snapshot(updated, "decision/execution state updated"))
             return updated
+
+        proposal = await self._with_execution_options(proposal)
+        execution = proposal.selected_execution
+        if execution is not None and execution.mode is ExecutionMode.HARD_TOOL_FREE:
+            if request.action is DecisionAction.RUN_ANYWAY:
+                raise RoutingReviewError(
+                    "Tool-free execution requires normal floor approval", status_code=409
+                )
+            if not request.acknowledge_provisional:
+                raise RoutingReviewError(
+                    "provisional evidence requires deliberate acknowledgement", status_code=409
+                )
+            from .execution_modes import select_execution
+            from .tool_free import execute
+
+            remaining = list(proposal.execution_options)
+            exclusions = dict(proposal.execution_exclusions)
+            while execution is not None and execution.mode is ExecutionMode.HARD_TOOL_FREE:
+                try:
+                    async with asyncio.timeout(60):
+                        result = await execute(
+                            self.omniroute,
+                            route=execution.route,
+                            prompt=f"Reply OK only. Check {uuid.uuid4().hex}",
+                            max_output_tokens=1024,
+                            reasoning_effort=proposal.approved_constraints.reasoning_effort,
+                        )
+                    if (
+                        result.provider != execution.provider
+                        or result.model
+                        not in {
+                            execution.route,
+                            execution.route.split("/", 1)[-1],
+                        }
+                        or float(result.cost_usd or "nan") != 0
+                    ):
+                        raise OmniRouteError("tool-free route or zero cost could not be verified")
+                except (OmniRouteError, ValueError, TimeoutError) as exc:
+                    exclusions[execution.route] = str(exc) or "Approval recheck timed out"
+                    self._tool_free_audits.clear()
+                    remaining = [item for item in remaining if item != execution]
+                    execution = select_execution(
+                        remaining,
+                        requirements=proposal.effective_requirements,
+                        floor=proposal.recommendation.common_capability_floor
+                        if proposal.recommendation
+                        else 100,
+                        preference=proposal.approved_constraints.cost_quota_preference,
+                    )
+                    continue
+                updated = proposal.model_copy(
+                    update={
+                        "decision": request.action,
+                        "decision_reason": request.reason,
+                        "execution_options": remaining,
+                        "execution_exclusions": exclusions,
+                        "selected_execution": execution,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+                self.store.put(snapshot(updated, "decision/execution state updated"))
+                return updated
+            proposal = proposal.model_copy(
+                update={
+                    "execution_options": remaining,
+                    "execution_exclusions": exclusions,
+                    "selected_execution": execution,
+                }
+            )
 
         selected: list[CandidateEvaluation]
         decision_reason = request.reason
@@ -685,12 +927,58 @@ class O3RoutingReviewService:
                 difficulty=proposal.approved_constraints.difficulty,
                 raw_floor=proposal.approved_constraints.benchmark.minimum_score,
                 live_route_ids=await self.omniroute.model_ids(),
-                requirements=proposal.adviser.requirements,
+                requirements=proposal.effective_requirements,
                 reasoning_effort=proposal.approved_constraints.reasoning_effort,
             )
             proposal = proposal.model_copy(update={"recommendation": refreshed})
         catalogue_set = proposal.recommendation.execution_set if proposal.recommendation else None
         catalogue_selected = catalogue_set.eligible if catalogue_set is not None else []
+        from .tool_search import qualified_route, read_capabilities
+
+        search_registry = read_capabilities()
+        if search_registry is not None:
+            # Adviser rankings remain intact; this is the native execution contract.
+            catalogue_selected = [
+                item
+                for item in catalogue_selected
+                if qualified_route(search_registry, item.provider_id, item.route_id)
+            ]
+            if catalogue_set is not None and proposal.recommendation is not None:
+                retained = {item.route_id for item in catalogue_selected}
+                reason = "client tool-search continuation is not qualified for this destination"
+                excluded = [
+                    item.model_copy(update={"exclusions": [*item.exclusions, reason]})
+                    for item in catalogue_set.eligible
+                    if item.route_id not in retained
+                ]
+                counts = dict(catalogue_set.exclusion_counts)
+                if excluded:
+                    counts[reason] = len(excluded)
+                proposal = proposal.model_copy(
+                    update={
+                        "recommendation": proposal.recommendation.model_copy(
+                            update={
+                                "execution_set": catalogue_set.model_copy(
+                                    update={
+                                        "eligible": catalogue_selected,
+                                        "eligible_count": len(catalogue_selected),
+                                        "excluded": [*catalogue_set.excluded, *excluded],
+                                        "exclusion_counts": counts,
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            selected = [
+                item
+                for item in selected
+                if qualified_route(
+                    search_registry,
+                    item.candidate.provider_id,
+                    item.candidate.catalogue_model_id,
+                )
+            ]
         if not selected and not catalogue_selected:
             raise RoutingReviewError(
                 "no structurally usable candidate exists for the approved effort",
@@ -713,10 +1001,14 @@ class O3RoutingReviewService:
                     ),
                 )
                 if request.action is not DecisionAction.RUN_ANYWAY:
-                    await self.omniroute.recheck_routes(
+                    checked_route = await self.omniroute.recheck_routes(
                         [item.route_id for item in shortlist],
                         reasoning_effort=proposal.approved_constraints.reasoning_effort,
                     )
+                    if proposal.audit is not None:
+                        proposal.audit["approval_route_checks"] = getattr(
+                            checked_route, "checks", None
+                        )
                 combo_name, combo_definition = await self.omniroute.create_catalogue_combo(
                     proposal.proposal_id,
                     catalogue_selected,
@@ -729,6 +1021,9 @@ class O3RoutingReviewService:
                     reasoning_effort=proposal.approved_constraints.reasoning_effort,
                 )
         except OmniRouteError as exc:
+            if proposal.audit is not None:
+                proposal.audit["approval_route_checks"] = exc.route_checks
+                self.store.put(snapshot(proposal, "approval recheck failed"))
             raise RoutingReviewError(
                 str(exc),
                 status_code=502,
@@ -743,7 +1038,7 @@ class O3RoutingReviewService:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     def link_session(
@@ -755,8 +1050,11 @@ class O3RoutingReviewService:
                 "only an approved proposal can link a session",
                 status_code=409,
             )
-        if proposal.derived_combo_name is None:
-            raise RoutingReviewError("approved proposal has no derived Combo", status_code=409)
+        if proposal.derived_combo_name is None and not (
+            proposal.selected_execution is not None
+            and proposal.selected_execution.mode is ExecutionMode.HARD_TOOL_FREE
+        ):
+            raise RoutingReviewError("approved proposal has no executable route", status_code=409)
         if proposal.session_id is not None and proposal.session_id != request.session_id:
             raise RoutingReviewError(
                 "proposal is already linked to another session",
@@ -765,7 +1063,7 @@ class O3RoutingReviewService:
         updated = proposal.model_copy(
             update={"session_id": request.session_id, "updated_at": datetime.now(timezone.utc)}
         )
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     def record_outcome(self, proposal_id: str, request: ProposalOutcomeRequest) -> RoutingProposal:
@@ -787,7 +1085,7 @@ class O3RoutingReviewService:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self.store.put(updated)
+        self.store.put(snapshot(updated, "decision/execution state updated"))
         return updated
 
     async def sync_execution_provenance(
@@ -820,9 +1118,9 @@ class O3RoutingReviewService:
             latest = provenance[-1] if provenance else None
             latest_effort = next(
                 (
-                    item.reasoning_effort
+                    item.transport.get("observed_effort")
                     for item in reversed(provenance)
-                    if item.reasoning_effort is not None
+                    if item.transport and isinstance(item.transport.get("observed_effort"), str)
                 ),
                 None,
             )
@@ -850,7 +1148,7 @@ class O3RoutingReviewService:
                     }
                 )
             updated = proposal.model_copy(update=update)
-            self.store.put(updated)
+            self.store.put(snapshot(updated, "decision/execution state updated"))
             updated_proposals.append(updated)
         return updated_proposals
 
@@ -877,7 +1175,7 @@ class O3RoutingReviewService:
                         "updated_at": current,
                     }
                 )
-                self.store.put(updated)
+                self.store.put(snapshot(updated, "decision/execution state updated"))
             except OmniRouteError as exc:
                 result.failures[name] = str(exc)
         return result

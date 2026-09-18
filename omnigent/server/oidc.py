@@ -16,10 +16,12 @@ import logging
 import os
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 import jwt
+
+from omnigent.server.session_cookie import cookie_suffix_from_env, session_cookie_name
 
 _logger = logging.getLogger(__name__)
 
@@ -186,6 +188,7 @@ class OIDCConfig:
     allow_invites: bool
     skip_email_verification: bool = False
     email_claim: str = "email"
+    session_cookie_suffix: str = field(default_factory=cookie_suffix_from_env)
 
     @property
     def base_url(self) -> str:
@@ -226,7 +229,7 @@ class OIDCConfig:
 
         :returns: Cookie name string.
         """
-        return "__Host-ap_session" if self.secure_cookies else "ap_session"
+        return session_cookie_name(self.secure_cookies, self.session_cookie_suffix)
 
     @staticmethod
     def from_env() -> OIDCConfig:

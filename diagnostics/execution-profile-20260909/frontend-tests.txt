@@ -1,0 +1,9 @@
+[dev-proxy] target=http://localhost:6767
+
+ RUN  v4.1.10 /Users/Jo/GitHub/_worktrees/omnigent/mac-execution-profile-overrides/web
+
+
+ Test Files  4 passed (4)
+      Tests  204 passed (204)
+   Start at  17:47:35
+   Duration  20.31s (transform 1.89s, setup 522ms, import 2.89s, tests 18.07s, environment 5.56s)

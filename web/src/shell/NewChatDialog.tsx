@@ -1,3 +1,4 @@
+import { O3FailedReview } from "@/components/O3SessionReview";
 import { O3ReviewTimingStatus } from "@/components/O3ReviewTimingStatus";
 import { startReviewTiming, finishReviewTiming, type O3ReviewTiming } from "@/lib/o3ReviewTiming";
 import {
@@ -370,11 +371,12 @@ const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sand
 const CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane";
 const O3_ROUTING_PROPOSAL_LABEL_KEY = "o3.routing.proposal_id";
 const O3_ROUTING_MODEL_ID = "__omniroute_o3__";
+const NATIVE_ROUTING_MODEL_ID = "__omnigent_smart_routing__";
 type CodexAccessLane = NonNullable<NativeModelOption["accessLane"]>;
 type ModelPickerOption = Pick<
   NativeModelOption,
   "id" | "displayName" | "accessLane" | "groupLabel"
-> & { displayName: string };
+> & { displayName: string; disabledReason?: string; description?: string };
 
 /** Return the lane-aware UI identity without changing the launch model id. */
 function modelOptionSelectionIdentity(
@@ -1400,6 +1402,7 @@ function SearchableModelPicker({
   loading,
   onValueChange,
   compact = false,
+  disabled = false,
   testId = "new-chat-landing-config-model",
   searchTestId = "new-chat-landing-config-model-search",
 }: {
@@ -1408,10 +1411,33 @@ function SearchableModelPicker({
   loading: boolean;
   onValueChange: (value: string) => void;
   compact?: boolean;
+  disabled?: boolean;
   testId?: string;
   searchTestId?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobileViewport();
+  const [collisionTop, setCollisionTop] = useState(16);
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const sync = () => {
+      const header = document.querySelector(".chat-header");
+      const viewportTop = window.visualViewport?.offsetTop ?? 0;
+      setCollisionTop(
+        Math.max(16, (header?.getBoundingClientRect().bottom ?? 0) - viewportTop + 8),
+      );
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("scroll", sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("scroll", sync);
+    };
+  }, [open, isMobile]);
+
   const selectedLabel =
     value === MODEL_SELECT_DEFAULT
       ? "Default"
@@ -1431,6 +1457,7 @@ function SearchableModelPicker({
           role="combobox"
           aria-expanded={open}
           aria-label="Model"
+          disabled={disabled}
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
             compact ? "w-40 max-w-full sm:w-60" : "w-full",
@@ -1443,11 +1470,23 @@ function SearchableModelPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        collisionPadding={16}
-        className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-hidden p-0"
+        collisionPadding={{ top: isMobile ? collisionTop : 16, right: 16, bottom: 16, left: 16 }}
+        onOpenAutoFocus={(event) => {
+          // Opening a touch picker should not summon the keyboard.
+          if (isMobile) {
+            event.preventDefault();
+            if (event.target instanceof HTMLElement) event.target.focus();
+          }
+        }}
+        className="max-h-[min(20rem,var(--radix-popover-content-available-height))] w-[min(20rem,calc(100vw-2rem))] overflow-hidden p-0 md:w-96"
       >
         <Command className="h-auto min-h-0">
-          <CommandInput placeholder="Search models…" data-testid={searchTestId} />
+          <CommandInput
+            placeholder="Search models…"
+            aria-label="Search models"
+            className="text-base md:text-ui"
+            data-testid={searchTestId}
+          />
           <CommandList
             className="max-h-72 min-h-0 overflow-y-auto overscroll-contain"
             onWheel={(event) => event.stopPropagation()}
@@ -1476,13 +1515,21 @@ function SearchableModelPicker({
                     key={`${option.accessLane ?? "legacy"}:${option.id}`}
                     value={modelOptionSelectionIdentity(option)}
                     keywords={[option.displayName, option.id, option.groupLabel ?? ""]}
-                    title={option.displayName}
+                    title={option.disabledReason ?? option.description ?? option.displayName}
+                    disabled={Boolean(option.disabledReason)}
                     data-model-id={option.id}
                     data-access-lane={option.accessLane}
                     data-checked={value === modelOptionSelectionIdentity(option)}
                     onSelect={() => select(modelOptionSelectionIdentity(option))}
                   >
-                    <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block">{option.displayName}</span>
+                      {(option.disabledReason || option.description) && (
+                        <span className="block text-xs text-muted-foreground whitespace-normal">
+                          {option.disabledReason ?? option.description}
+                        </span>
+                      )}
+                    </span>
                   </CommandItem>
                 ))}
               </CommandGroup>
@@ -1538,6 +1585,7 @@ function HarnessConfigModal({
   pickedEffort,
   pickedHarness,
   costControlMode,
+  benchmarkRoutingSelected,
   setPermissionMode,
   setApprovalMode,
   setCursorExecMode,
@@ -1546,7 +1594,7 @@ function HarnessConfigModal({
   setPickedCodexModel,
   setPickedEffort,
   setPickedHarness,
-  setCostControlMode,
+  onRoutingSelectionChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1570,6 +1618,7 @@ function HarnessConfigModal({
   pickedEffort: string;
   pickedHarness: string | null;
   costControlMode: CostControlMode;
+  benchmarkRoutingSelected: boolean;
   setPermissionMode: (mode: string) => void;
   setApprovalMode: (mode: string) => void;
   setCursorExecMode: (mode: string) => void;
@@ -1578,7 +1627,7 @@ function HarnessConfigModal({
   setPickedCodexModel: (model: string, accessLane: CodexAccessLane | null) => void;
   setPickedEffort: (effort: string) => void;
   setPickedHarness: (harness: string | null, agentId?: string) => void;
-  setCostControlMode: (mode: CostControlMode) => void;
+  onRoutingSelectionChange: (mode: CostControlMode, benchmark: boolean) => void;
 }) {
   const info = useServerInfo();
   // Feature ON → single "needs setup" badge; OFF → per-reason original text.
@@ -1605,6 +1654,8 @@ function HarnessConfigModal({
   const [draftBypass, setDraftBypass] = useState(bypassSandbox);
   const [draftHarness, setDraftHarness] = useState<string | null>(pickedHarness);
   const [draftRouting, setDraftRouting] = useState<CostControlMode>(costControlMode);
+  const [draftBenchmarkRouting, setDraftBenchmarkRouting] = useState(benchmarkRoutingSelected);
+  const [routingSelectionChanged, setRoutingSelectionChanged] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -1617,6 +1668,8 @@ function HarnessConfigModal({
     setDraftBypass(bypassSandbox);
     setDraftHarness(pickedHarness);
     setDraftRouting(costControlMode);
+    setDraftBenchmarkRouting(benchmarkRoutingSelected);
+    setRoutingSelectionChanged(false);
     // Seed once per open from the current live values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -1638,13 +1691,15 @@ function HarnessConfigModal({
   // bundle agent's routed brain is a knob on that agent, so the modal keeps its
   // name: "Configure Debby", not "Configure Smart Routing".
   const configTitleName = autoNative ? SMART_ROUTING_LABEL : agent.display_name;
-  const modelValue = smartRoutingOn
-    ? MODEL_SELECT_SMART
-    : !draftModel
-      ? MODEL_SELECT_DEFAULT
-      : isCodex
-        ? codexSelectionIdentity(draftModel, draftCodexAccessLane)
-        : draftModel;
+  const modelValue = draftBenchmarkRouting
+    ? O3_ROUTING_MODEL_ID
+    : smartRoutingOn
+      ? MODEL_SELECT_SMART
+      : !draftModel
+        ? MODEL_SELECT_DEFAULT
+        : isCodex
+          ? codexSelectionIdentity(draftModel, draftCodexAccessLane)
+          : draftModel;
   const claudeModelSelectOptions = useMemo(
     () => claudeModelOptions.map((m) => ({ id: m.id, label: displayModelName(m) })),
     [claudeModelOptions],
@@ -1659,7 +1714,14 @@ function HarnessConfigModal({
     [codexModelOptions],
   );
   const onModelChange = (value: string) => {
-    if (value === MODEL_SELECT_SMART) {
+    setRoutingSelectionChanged(true);
+    setDraftBenchmarkRouting(value === O3_ROUTING_MODEL_ID);
+    if (value === O3_ROUTING_MODEL_ID) {
+      setDraftRouting("off");
+      setDraftModel("");
+      setDraftCodexAccessLane(null);
+      setDraftEffort("");
+    } else if (value === MODEL_SELECT_SMART) {
       setDraftRouting("on");
       setDraftModel("");
       setDraftCodexAccessLane(null);
@@ -1728,8 +1790,8 @@ function HarnessConfigModal({
     // (Claude Code and Codex), so commit it outside the per-capability branches.
     // Remembered per harness like the model pick, so the next new session with
     // this harness starts on it again.
-    if (smartRoutingEligible) {
-      setCostControlMode(draftRouting);
+    if (routingSelectionChanged) {
+      onRoutingSelectionChange(draftRouting, draftBenchmarkRouting);
       if (draftRouting === "on") {
         // Routing owns the model and its effort, so clear both — live state AND
         // the harness's remembered pick. A harness whose modal has no model
@@ -1860,7 +1922,12 @@ function HarnessConfigModal({
                   onValueChange={onModelChange}
                   offerSmartRouting={smartRoutingEligible}
                   testId="new-chat-landing-config-model"
-                  models={codexModelSelectOptions}
+                  models={[
+                    ...(info !== "loading" && info.o3_routing_review_enabled
+                      ? [{ id: O3_ROUTING_MODEL_ID, label: "Benchmark Routing (O3)" }]
+                      : []),
+                    ...codexModelSelectOptions,
+                  ]}
                   defaultLabel={defaultModelLabel(codexModelOptions, displayModelId)}
                   contentClassName="[&_[data-slot=select-item]]:pl-2.5"
                 >
@@ -2406,10 +2473,49 @@ export function NewChatLandingScreen() {
   const [o3EstimatorOverrideOpen, setO3EstimatorOverrideOpen] = useState(false);
   const [o3ReviewLoading, setO3ReviewLoading] = useState(false);
   const [o3ReviewTiming, setO3ReviewTiming] = useState<O3ReviewTiming | null>(null);
-  const [o3RoutingSelected, setO3RoutingSelected] = useState(true);
+  const [o3RoutingSelected, setO3RoutingSelected] = useState(
+    () =>
+      readO3RoutingDraft() !== null ||
+      readHarnessOptions("codex-native").routingPolicy === "benchmark",
+  );
+  const [failedReviewId, setFailedReviewId] = useState<string | null>(() =>
+    localStorage.getItem("o3-last-failed-review"),
+  );
   const [o3ReviewError, setO3ReviewError] = useState<string | null>(null);
   const [o3Draft, setO3Draft] = useState<O3RoutingDraft | null>(() => readO3RoutingDraft());
   const o3RestoreAttemptedRef = useRef(false);
+  const o3ReviewGenerationRef = useRef(0);
+  const resetO3Review = useCallback(() => {
+    o3ReviewGenerationRef.current += 1;
+    setO3ReviewTiming(null);
+    clearO3RoutingDraft();
+    setO3Draft(null);
+    setO3Proposal(null);
+    setO3ReviewError(null);
+    setO3ReviewLoading(false);
+  }, []);
+  const reviewContextRef = useRef({
+    selectedHostId,
+    workspace,
+    pickedAgentId,
+    pickedHarness,
+    branchName,
+    files,
+  });
+  useEffect(() => {
+    const next = { selectedHostId, workspace, pickedAgentId, pickedHarness, branchName, files };
+    const previous = reviewContextRef.current;
+    reviewContextRef.current = next;
+    if (
+      previous.workspace.trim() !== "" &&
+      previous.selectedHostId !== null &&
+      Object.keys(next).some(
+        (key) => next[key as keyof typeof next] !== previous[key as keyof typeof next],
+      )
+    ) {
+      resetO3Review();
+    }
+  }, [selectedHostId, workspace, pickedAgentId, pickedHarness, branchName, files, resetO3Review]);
   // "Connect a host" instructions modal, opened from the host dropdown.
   const [connectOpen, setConnectOpen] = useState(false);
   // Harness "Set up" dialog target, opened from the composer notice or a picker
@@ -2464,17 +2570,26 @@ export function NewChatLandingScreen() {
   }, []);
 
   useEffect(() => {
-    if (!o3RoutingReviewEnabled || o3Draft === null || o3RestoreAttemptedRef.current) return;
+    if (
+      !o3RoutingReviewEnabled ||
+      !o3RoutingSelected ||
+      o3Draft === null ||
+      o3RestoreAttemptedRef.current
+    )
+      return;
     o3RestoreAttemptedRef.current = true;
+    const generation = o3ReviewGenerationRef.current;
     setMessage(o3Draft.composerMessage);
     setO3ReviewLoading(true);
     setO3ReviewError(null);
     void Promise.all([getO3RoutingProposal(o3Draft.proposalId), getO3RoutingRegistry()])
       .then(([proposal, registry]) => {
+        if (generation !== o3ReviewGenerationRef.current) return;
         setO3Proposal(proposal);
         setO3Slices(registry.slices ?? []);
       })
       .catch((cause: unknown) => {
+        if (generation !== o3ReviewGenerationRef.current) return;
         if (
           cause instanceof O3RoutingReviewRequestError &&
           cause.status === 404 &&
@@ -2492,8 +2607,10 @@ export function NewChatLandingScreen() {
             : "The saved O3 route review could not be restored.",
         );
       })
-      .finally(() => setO3ReviewLoading(false));
-  }, [o3Draft, o3RoutingReviewEnabled]);
+      .finally(() => {
+        if (generation === o3ReviewGenerationRef.current) setO3ReviewLoading(false);
+      });
+  }, [o3Draft, o3RoutingReviewEnabled, o3RoutingSelected]);
 
   useEffect(() => {
     if (!o3RoutingReviewEnabled || o3Draft !== null || o3Slices.length > 0) return;
@@ -2859,6 +2976,13 @@ export function NewChatLandingScreen() {
     [agentList, effectiveAgentId, pendingAgent],
   );
   const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  useEffect(() => {
+    setO3RoutingSelected(
+      selectedNativeHarness === "codex-native" &&
+        (readO3RoutingDraft() !== null ||
+          readHarnessOptions(selectedNativeHarness).routingPolicy === "benchmark"),
+    );
+  }, [selectedNativeHarness, effectiveAgentId]);
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
@@ -3077,7 +3201,9 @@ export function NewChatLandingScreen() {
     // session as model-pinned and never route. Read from storage (not state) so
     // this holds on every run of this effect — including the re-run when the
     // model catalog resolves, which lands after the routing seed below.
-    const storedRoutingOn = stored.routing === "on";
+    const storedRoutingOn =
+      stored.routingPolicy === "native" ||
+      (stored.routingPolicy === undefined && stored.routing === "on");
     if (selectedNativeHarness === "pi-native") {
       setPickedModel(
         stored.model != null && piModelOptions.some((model) => model.id === stored.model)
@@ -3123,7 +3249,15 @@ export function NewChatLandingScreen() {
             )
           : undefined;
       setPickedCodexModel(storedCodexOption?.id ?? "", storedCodexOption?.accessLane ?? null);
-      if (storedRoutingOn) setPickedEffort("");
+      setPickedEffort(
+        !storedRoutingOn &&
+          stored.effort &&
+          codexEffortLevelsForModel(codexModelOptions, storedCodexOption?.id ?? null).includes(
+            stored.effort,
+          )
+          ? stored.effort
+          : "",
+      );
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
     }
@@ -3143,9 +3277,16 @@ export function NewChatLandingScreen() {
   // switch itself (the router always routes), so it's left alone.
   useEffect(() => {
     if (!selectedNativeHarness || autoRoutingSelected) return;
-    const storedRouting = readHarnessOptions(selectedNativeHarness).routing;
-    if (storedRouting === undefined) return;
-    setCostControlMode(smartRoutingEligible && storedRouting === "on" ? "on" : null);
+    const stored = readHarnessOptions(selectedNativeHarness);
+    if (stored.routingPolicy === "benchmark" || stored.routingPolicy === "manual") {
+      setCostControlMode("off");
+      return;
+    }
+    if (stored.routingPolicy === "native" || stored.routing === "on") {
+      setCostControlMode("on");
+    } else if (stored.routing !== undefined) {
+      setCostControlMode(null);
+    }
   }, [
     selectedNativeHarness,
     smartRoutingEligible,
@@ -3612,7 +3753,22 @@ export function NewChatLandingScreen() {
     textareaRef,
   });
 
+  const nativeRoutingReason = !smartRoutingEnabled
+    ? "Omnigent Smart Routing is disabled on this server."
+    : !ossRoutingConfigured && !externalRoutingConfigured
+      ? "No built-in or external native routing backend is configured."
+      : "This host and harness cannot use the configured native routing backend.";
+  const routingUnavailableReason = o3RoutingSelected
+    ? !o3RoutingReviewEnabled
+      ? "Benchmark Routing (O3) is not configured on this server."
+      : selectedNativeHarness !== "codex-native"
+        ? "Benchmark Routing (O3) requires the Codex harness."
+        : null
+    : costControlMode === "on" && !autoRoutingSelected && !smartRoutingEligible
+      ? nativeRoutingReason
+      : null;
   const canSubmit =
+    routingUnavailableReason === null &&
     message.trim().length > 0 &&
     selectedAgent != null &&
     (sandboxSelected ? sandboxRepoValid : !!selectedHostId && workspaceValid) &&
@@ -3625,13 +3781,14 @@ export function NewChatLandingScreen() {
   // actionable (submitting, or mid-create).
   const submitDisabledReason = canSubmit
     ? null
-    : sandboxSelected && !sandboxRepoValid
-      ? "Please enter a valid repository URL"
-      : !sandboxSelected && (!selectedHostId || !workspaceValid)
-        ? "Please choose a host and working directory"
-        : message.trim().length === 0
-          ? "Enter a message to get started"
-          : null;
+    : (routingUnavailableReason ??
+      (sandboxSelected && !sandboxRepoValid
+        ? "Please enter a valid repository URL"
+        : !sandboxSelected && (!selectedHostId || !workspaceValid)
+          ? "Please choose a host and working directory"
+          : message.trim().length === 0
+            ? "Enter a message to get started"
+            : null));
 
   // Chip display labels.
   const workspaceLabel = workspaceTrimmed
@@ -3813,14 +3970,6 @@ export function NewChatLandingScreen() {
     setO3Draft(updated);
   }
 
-  function resetO3Review(): void {
-    setO3ReviewTiming(null);
-    clearO3RoutingDraft();
-    setO3Draft(null);
-    setO3Proposal(null);
-    setO3ReviewError(null);
-  }
-
   function changeComposerMessage(value: string): void {
     if (value !== message && (o3Proposal !== null || o3Draft !== null)) resetO3Review();
     setMessage(value);
@@ -3842,11 +3991,12 @@ export function NewChatLandingScreen() {
     // a blank message, host, agent, or workspace.
     if (!canSubmit) return;
     const o3Approved = approvedProposal !== undefined;
+    if (o3Approved && !o3RoutingSelected) return;
     const storedDraft = readO3RoutingDraft() ?? o3Draft;
     const computedInitialPrompt =
       buildMentionPreamble(
         mentionedItems,
-        o3RoutingReviewEnabled ? "codex-native" : (selectedAgent?.harness ?? null),
+        o3RoutingSelected ? "codex-native" : (selectedAgent?.harness ?? null),
       ) + sanitizeInitialPrompt(message);
     const initialPrompt =
       o3Approved && storedDraft?.proposalId === approvedProposal.proposal_id
@@ -3859,6 +4009,7 @@ export function NewChatLandingScreen() {
         setO3ReviewError("The local O3 server is enabled, but no Codex harness is available.");
         return;
       }
+      const generation = ++o3ReviewGenerationRef.current;
       setO3ReviewLoading(true);
       setO3ReviewTiming(null);
       setO3ReviewError(null);
@@ -3901,25 +4052,37 @@ export function NewChatLandingScreen() {
           workspaceSummary,
           estimatorPolicy,
         );
+        if (generation !== o3ReviewGenerationRef.current) return;
         setO3ReviewTiming(finishReviewTiming(timing));
         const draft = routingDraftForProposal(proposal, initialPrompt, message, workspaceSummary);
         writeO3RoutingDraft(draft);
         setO3Draft(draft);
+        if (generation !== o3ReviewGenerationRef.current) return;
         setO3Proposal(proposal);
+        setFailedReviewId(null);
+        localStorage.removeItem("o3-last-failed-review");
       } catch (cause) {
+        if (generation !== o3ReviewGenerationRef.current) return;
+        if (cause instanceof O3RoutingReviewRequestError && cause.auditId) {
+          setFailedReviewId(cause.auditId);
+          localStorage.setItem("o3-last-failed-review", cause.auditId);
+        }
         setO3ReviewError(
           cause instanceof Error ? cause.message : "The O3 route review could not be created.",
         );
       } finally {
-        setO3ReviewTiming((timing) => (timing?.actualMs === undefined ? null : timing));
-        setO3ReviewLoading(false);
+        if (generation === o3ReviewGenerationRef.current) {
+          setO3ReviewTiming((timing) => (timing?.actualMs === undefined ? null : timing));
+          setO3ReviewLoading(false);
+        }
       }
       return;
     }
 
     if (
       o3Approved &&
-      (approvedProposal.derived_combo_name === null ||
+      ((approvedProposal.derived_combo_name === null &&
+        approvedProposal.selected_execution?.mode !== "hard_tool_free") ||
         (approvedProposal.decision !== "approve" && approvedProposal.decision !== "run_anyway"))
     ) {
       setO3ReviewError("The proposal must create an approved derived route before launch.");
@@ -3959,13 +4122,19 @@ export function NewChatLandingScreen() {
       // in an existing worktree sends no git opts — the workspace is bound
       // straight to that dir, which also sidesteps the "branch already
       // exists" guard.
-      const launchAgentId = o3Approved ? o3CodexAgent?.id : effectiveAgentId;
+      const toolFree = o3Approved && approvedProposal.selected_execution?.mode === "hard_tool_free";
+      const launchAgentId = toolFree
+        ? agentList.find((item) => item.name === "local-tool-free")?.id
+        : o3Approved
+          ? o3CodexAgent?.id
+          : effectiveAgentId;
       if (!launchAgentId) throw new Error("The Codex harness is unavailable for this O3 route.");
       const agent = agentList.find((a) => a.id === launchAgentId);
       const nativeAgent = nativeCodingAgentForAvailableAgent(agent);
-      const nativeLabels = nativeWrapperLabelsForAgent(agent);
+      const nativeLabels = toolFree ? undefined : nativeWrapperLabelsForAgent(agent);
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
-      const agentSupportsApprovalMode = nativeAgentHasCapability(agent, "approvalMode");
+      const agentSupportsApprovalMode =
+        !toolFree && nativeAgentHasCapability(agent, "approvalMode");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
       const agentSupportsModelPicker = nativeAgentHasCapability(agent, "modelPicker");
       // Smart Routing — server-side. The fully-auto harness always routes
@@ -4006,7 +4175,7 @@ export function NewChatLandingScreen() {
       // survives reload.
       const codexLaneLabel = o3Approved
         ? {
-            [CODEX_ACCESS_LANE_LABEL_KEY]: "omniroute",
+            ...(!toolFree ? { [CODEX_ACCESS_LANE_LABEL_KEY]: "omniroute" } : {}),
             [O3_ROUTING_PROPOSAL_LABEL_KEY]: approvedProposal.proposal_id,
           }
         : nativeAgent?.harness === "codex-native" && selectedCodexOption?.accessLane
@@ -4030,9 +4199,30 @@ export function NewChatLandingScreen() {
       // move sets, so the row groups under its project from its very first
       // sidebar appearance instead of flashing through the ungrouped "Sessions"
       // section while the search-indexed session list catches up to the move.
-      const createLabels = selectedProject
-        ? { ...(baseLabels ?? {}), [PROJECT_LABEL_KEY]: selectedProject }
-        : baseLabels;
+      const routingLabels = {
+        "omnigent.routing_policy": o3Approved
+          ? "benchmark"
+          : routingOwnsModel
+            ? "native"
+            : "manual",
+        ...(routingOwnsModel
+          ? {
+              "omnigent.routing_backend":
+                smartRoutingSourceFor({
+                  externalConfigured: externalRoutingConfigured,
+                  ossConfigured: ossRoutingConfigured,
+                  gatewayBacked: nativeAgent?.harness
+                    ? hostBacksHarnessWithGateway(harnessWarningHost, nativeAgent.harness)
+                    : false,
+                }) ?? "unavailable",
+            }
+          : {}),
+      };
+      const createLabels = {
+        ...baseLabels,
+        ...routingLabels,
+        ...(selectedProject ? { [PROJECT_LABEL_KEY]: selectedProject } : {}),
+      };
 
       let data: { id: string };
 
@@ -4124,7 +4314,7 @@ export function NewChatLandingScreen() {
             // placeholder, so the placeholder's wrapper labels, launch args and
             // model would all describe a CLI the router may not pick. The
             // server stamps the routed wrapper's labels once it has rebound.
-            labels: smartRoutingHarnessSelected && !o3Approved ? undefined : createLabels,
+            labels: smartRoutingHarnessSelected && !o3Approved ? routingLabels : createLabels,
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
             terminal_launch_args:
@@ -4145,7 +4335,9 @@ export function NewChatLandingScreen() {
             // terminal launch; an unselected ("") knob is omitted so the
             // harness keeps its own configured/default model.
             model_override: o3Approved
-              ? approvedProposal.derived_combo_name
+              ? toolFree
+                ? `local-tool-free/${approvedProposal.proposal_id}`
+                : approvedProposal.derived_combo_name
               : !smartRoutingHarnessSelected &&
                   !routingOwnsModel &&
                   (agentSupportsModelPicker || nativeAgent?.harness === "codex-native") &&
@@ -4161,6 +4353,7 @@ export function NewChatLandingScreen() {
                 ? pickedEffort
                 : undefined,
             cost_control_mode_override: costControlOverride,
+            ...(o3Approved ? { subagent_routing_override: "off" } : {}),
             // Top-level Smart Routing sends the same "auto" sentinel the bundle
             // path does; the server tells them apart by the bound agent being a
             // native wrapper, and routes at create time (the terminal launches
@@ -4168,7 +4361,9 @@ export function NewChatLandingScreen() {
             // message text rides along for routing only — the client still
             // delivers the real message after navigation.
             harness_override: o3Approved
-              ? "codex-native"
+              ? toolFree
+                ? "local-tool-free"
+                : "codex-native"
               : smartRoutingHarnessSelected
                 ? AUTO_HARNESS_ID
                 : (pickedHarness ?? undefined),
@@ -4329,8 +4524,7 @@ export function NewChatLandingScreen() {
   );
 
   return (
-    // pb-12 lifts the content slightly above the geometric center, where
-    // the hero reads better optically.
+    // Center the landing while allowing tall content to scroll on small screens.
     <div
       ref={setLandingSurface}
       className="min-h-0 flex-1 overflow-y-auto"
@@ -4340,7 +4534,7 @@ export function NewChatLandingScreen() {
           840 − 80 = 760px max on desktop. px-4 on phones (16px gutters)
           keeps the composer from feeling cramped against the viewport
           edges; widens to the full px-10 at the md breakpoint and up. */}
-      <div className="mx-auto flex min-h-full w-full max-w-[840px] flex-col items-center justify-center gap-6 px-4 pt-8 pb-16 md:select-none md:px-10">
+      <div className="mx-auto flex min-h-full w-full max-w-[840px] flex-col items-center justify-center gap-5 px-4 pt-8 pb-8 md:gap-6 md:pb-16 md:select-none md:px-10">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
           {selectedProject ? (
             // Landing inside a project: swap Otto's eyes for the same folder
@@ -4507,14 +4701,8 @@ export function NewChatLandingScreen() {
               rows={1}
               autoFocus
               data-testid="new-chat-landing-input"
-              // Compose-pill text spec: SF Pro Text system stack at
-              // 14px/20px. (Note: sub-16px inputs make mobile Safari
-              // auto-zoom on focus — accepted tradeoff per the design.)
-              // Heights are border-box (12px top + 8px bottom padding lives
-              // inside them): max 200px = the spec's 180px of content.
-              // A 60px floor holds two 20px lines plus that padding;
-              // useAutoGrowTextarea expands from there to the unchanged cap.
-              className="min-h-[60px] max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 pb-2 font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-ui leading-5 text-foreground outline-none placeholder:text-muted-foreground md:select-text"
+              // A 16px phone input avoids Safari focus zoom; desktop stays compact.
+              className="min-h-[60px] max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 pb-2 font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground md:text-ui md:leading-5 md:select-text"
             />
             {/* Gated on an empty draft so it reads as the placeholder.
                 pointer-events-none lets clicks fall through to focus the
@@ -4604,11 +4792,11 @@ export function NewChatLandingScreen() {
                 here would also catch the .dark .bg-card glass rule (border +
                 shadow) and visually split the pill in half. */}
             <div
-              className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-2 pb-2"
+              className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-2 pb-2"
               data-testid="new-chat-landing-actions"
             >
               {/* Attach + dictate — left side, mirroring the in-session composer. */}
-              <div className="flex shrink-0 items-center gap-0.5">
+              <div className="col-start-1 row-start-2 flex shrink-0 items-center gap-0.5 md:row-start-1">
                 <Button
                   type="button"
                   size="icon"
@@ -4634,7 +4822,7 @@ export function NewChatLandingScreen() {
                 />
               </div>
               <div
-                className="flex min-w-0 flex-wrap items-center justify-end gap-0.5 md:gap-2"
+                className="col-span-3 col-start-1 row-start-1 flex min-w-0 flex-wrap items-center gap-1 border-b border-border pb-1 md:col-span-1 md:col-start-2 md:justify-end md:gap-2 md:border-0 md:pb-0"
                 data-testid="new-chat-landing-primary-actions"
               >
                 <div className="flex min-w-0 max-w-full items-center rounded-lg transition-colors has-[button:not(:disabled)]:hover:bg-muted dark:has-[button:not(:disabled)]:hover:bg-muted/50 has-aria-expanded:bg-muted dark:has-aria-expanded:bg-muted/50 [&>button]:bg-transparent!">
@@ -4666,7 +4854,7 @@ export function NewChatLandingScreen() {
                     // the shared pill; pr-2 equals the gear icon's own centering
                     // inset (8px) so the divider sits evenly between them.
                     triggerClassName="h-9 min-w-0 max-w-full shrink pr-2 md:h-8 md:max-w-none md:shrink-0"
-                    triggerLabelClassName="max-w-20 sm:max-w-[12rem]"
+                    triggerLabelClassName="max-w-[12rem]"
                   />
                   {/* Gear — opens the selected agent's run-config modal, behind
                     a hairline divider. Both are hidden when the selected agent
@@ -4721,54 +4909,87 @@ export function NewChatLandingScreen() {
                   selectedHostId !== null && (
                     <SearchableModelPicker
                       value={
-                        o3RoutingReviewEnabled &&
-                        selectedNativeHarness === "codex-native" &&
                         o3RoutingSelected
                           ? O3_ROUTING_MODEL_ID
-                          : !pickedModel
-                            ? MODEL_SELECT_DEFAULT
-                            : selectedNativeHarness === "codex-native"
-                              ? codexSelectionIdentity(pickedModel, pickedCodexAccessLane)
-                              : pickedModel
+                          : costControlMode === "on"
+                            ? NATIVE_ROUTING_MODEL_ID
+                            : !pickedModel
+                              ? MODEL_SELECT_DEFAULT
+                              : selectedNativeHarness === "codex-native"
+                                ? codexSelectionIdentity(pickedModel, pickedCodexAccessLane)
+                                : pickedModel
                       }
-                      options={
-                        selectedNativeHarness === "codex-native"
-                          ? o3RoutingReviewEnabled
-                            ? [
-                                {
-                                  id: O3_ROUTING_MODEL_ID,
-                                  displayName: "OmniRoute O3 · Local",
-                                  groupLabel: "Routing",
-                                },
-                                ...codexModelOptions,
-                              ]
-                            : codexModelOptions
-                          : piModelOptions
-                      }
+                      options={[
+                        {
+                          id: NATIVE_ROUTING_MODEL_ID,
+                          displayName: "Omnigent Smart Routing",
+                          groupLabel: "Routing",
+                          description:
+                            "Native routing chooses the model; reasoning uses the harness default.",
+                          disabledReason: smartRoutingEligible ? undefined : nativeRoutingReason,
+                        },
+                        ...(o3RoutingReviewEnabled
+                          ? [
+                              {
+                                id: O3_ROUTING_MODEL_ID,
+                                displayName: "Benchmark Routing (O3)",
+                                groupLabel: "Routing",
+                                description:
+                                  "Review a benchmark floor and approve eligible configurations.",
+                                disabledReason:
+                                  selectedNativeHarness !== "codex-native"
+                                    ? "Requires the Codex harness."
+                                    : undefined,
+                              },
+                            ]
+                          : []),
+                        ...(selectedNativeHarness === "codex-native"
+                          ? codexModelOptions
+                          : piModelOptions),
+                      ]}
+                      disabled={creating}
                       loading={
                         selectedNativeHarness === "codex-native"
                           ? hostCodexModelsLoading
                           : hostPiModelsLoading
                       }
                       onValueChange={(value) => {
-                        if (selectedNativeHarness !== "codex-native") {
-                          setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value);
-                          return;
-                        }
-                        if (value === O3_ROUTING_MODEL_ID) {
-                          setO3RoutingSelected(true);
-                          setPickedCodexModel("", null);
-                          resetO3Review();
-                          return;
-                        }
-                        setO3RoutingSelected(false);
                         resetO3Review();
+                        const policy =
+                          value === O3_ROUTING_MODEL_ID
+                            ? "benchmark"
+                            : value === NATIVE_ROUTING_MODEL_ID
+                              ? "native"
+                              : "manual";
+                        setO3RoutingSelected(policy === "benchmark");
+                        if (policy !== "manual") {
+                          setPickedCodexModel("", null);
+                          setPickedEffort("");
+                          setCostControlMode(policy === "native" ? "on" : "off");
+                          writeHarnessOption(selectedNativeHarness, {
+                            routingPolicy: policy,
+                            routing: policy === "native" ? "on" : "off",
+                          });
+                          return;
+                        }
                         const option = codexModelOptions.find(
                           (candidate) => modelOptionSelectionIdentity(candidate) === value,
                         );
-                        setPickedCodexModel(option?.id ?? "", option?.accessLane ?? null);
-                        writeHarnessOption("codex-native", {
-                          model: option?.id ?? "",
+                        if (selectedNativeHarness === "codex-native") {
+                          setPickedCodexModel(option?.id ?? "", option?.accessLane ?? null);
+                        } else {
+                          setPickedModel(value === MODEL_SELECT_DEFAULT ? "" : value);
+                        }
+                        setCostControlMode("off");
+                        writeHarnessOption(selectedNativeHarness, {
+                          routingPolicy: "manual",
+                          routing: "off",
+                          model:
+                            selectedNativeHarness === "codex-native"
+                              ? (option?.id ?? "")
+                              : value === MODEL_SELECT_DEFAULT
+                                ? ""
+                                : value,
                           accessLane: option?.accessLane ?? "",
                         });
                       }}
@@ -4779,12 +5000,16 @@ export function NewChatLandingScreen() {
                   )}
                 {selectedAgent &&
                   selectedNativeHarness === "codex-native" &&
-                  codexEffortLevels.length > 0 && (
+                  !o3RoutingSelected &&
+                  costControlMode !== "on" && (
                     <Select
                       value={pickedEffort || EFFORT_SELECT_NONE}
-                      onValueChange={(value) =>
-                        setPickedEffort(value === EFFORT_SELECT_NONE ? "" : value)
-                      }
+                      disabled={creating}
+                      onValueChange={(value) => {
+                        const effort = value === EFFORT_SELECT_NONE ? "" : value;
+                        setPickedEffort(effort);
+                        writeHarnessOption(selectedNativeHarness, { effort });
+                      }}
                     >
                       <SelectTrigger
                         className="h-9 w-auto min-w-24 md:h-8"
@@ -4805,6 +5030,14 @@ export function NewChatLandingScreen() {
                       </SelectContent>
                     </Select>
                   )}
+                {(o3RoutingSelected || costControlMode === "on") && (
+                  <p className="text-xs text-muted-foreground" data-testid="routing-policy-summary">
+                    {routingUnavailableReason ??
+                      (o3RoutingSelected
+                        ? "Benchmark Routing (O3) · Review required before execution."
+                        : "Omnigent Smart Routing · Native model selection, harness reasoning default.")}
+                  </p>
+                )}
                 {selectedAgent && selectedAgentHasKnobs && (
                   <HarnessConfigModal
                     open={configOpen}
@@ -4835,6 +5068,7 @@ export function NewChatLandingScreen() {
                     pickedEffort={pickedEffort}
                     pickedHarness={pickedHarness}
                     costControlMode={costControlMode}
+                    benchmarkRoutingSelected={o3RoutingSelected}
                     setPermissionMode={setPermissionMode}
                     setApprovalMode={setApprovalMode}
                     setCursorExecMode={setCursorExecMode}
@@ -4843,61 +5077,72 @@ export function NewChatLandingScreen() {
                     setPickedCodexModel={setPickedCodexModel}
                     setPickedEffort={setPickedEffort}
                     setPickedHarness={handleSetPickedHarness}
-                    setCostControlMode={setCostControlMode}
+                    onRoutingSelectionChange={(mode, benchmark) => {
+                      resetO3Review();
+                      setO3RoutingSelected(benchmark);
+                      setCostControlMode(mode);
+                      writeHarnessOption(selectedNativeHarness, {
+                        routingPolicy: benchmark
+                          ? "benchmark"
+                          : mode === "on"
+                            ? "native"
+                            : "manual",
+                      });
+                    }}
                   />
                 )}
                 {/* Routing is not a standalone composer toggle — it folds into
                   the gear modal's Model dropdown as an "Smart Routing"
                   option (see HarnessConfigModal). */}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex">
-                        <Button
-                          type="submit"
-                          size={o3RoutingReviewEnabled && o3RoutingSelected ? "sm" : "icon"}
-                          disabled={!canSubmit}
-                          aria-label={
-                            creating
-                              ? "Starting session"
-                              : o3ReviewLoading
-                                ? "Reviewing route"
-                                : o3RoutingReviewEnabled && o3RoutingSelected
-                                  ? "Review route"
-                                  : "Start session"
-                          }
-                          aria-busy={creating || o3ReviewLoading}
-                          data-testid="new-chat-landing-submit"
-                          className={
-                            o3RoutingReviewEnabled && o3RoutingSelected
-                              ? "h-8 gap-1.5 rounded-lg bg-foreground px-3 disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
-                              : "size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
-                          }
-                        >
-                          {creating || o3ReviewLoading ? (
-                            <>
-                              <Loader2Icon className="size-4 animate-spin" />
-                              {o3RoutingReviewEnabled && o3RoutingSelected && (
-                                <span>Reviewing route</span>
-                              )}
-                            </>
-                          ) : o3RoutingReviewEnabled && o3RoutingSelected ? (
-                            <>
-                              <ShuffleIcon className="size-4" aria-hidden />
-                              <span>Review route</span>
-                            </>
-                          ) : (
-                            <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
-                          )}
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {submitDisabledReason != null && (
-                      <TooltipContent>{submitDisabledReason}</TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
               </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="col-start-3 row-start-2 inline-flex justify-self-end md:row-start-1">
+                      <Button
+                        type="submit"
+                        size={o3RoutingReviewEnabled && o3RoutingSelected ? "sm" : "icon"}
+                        disabled={!canSubmit}
+                        aria-label={
+                          creating
+                            ? "Starting session"
+                            : o3ReviewLoading
+                              ? "Reviewing route"
+                              : o3RoutingReviewEnabled && o3RoutingSelected
+                                ? "Review route"
+                                : "Start session"
+                        }
+                        aria-busy={creating || o3ReviewLoading}
+                        data-testid="new-chat-landing-submit"
+                        className={
+                          o3RoutingReviewEnabled && o3RoutingSelected
+                            ? "h-10 md:h-8 gap-1.5 rounded-lg bg-foreground px-3 disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                            : "size-10 md:size-8 rounded-lg bg-foreground disabled:bg-muted disabled:text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-100"
+                        }
+                      >
+                        {creating || o3ReviewLoading ? (
+                          <>
+                            <Loader2Icon className="size-4 animate-spin" />
+                            {o3RoutingReviewEnabled && o3RoutingSelected && (
+                              <span>Reviewing route</span>
+                            )}
+                          </>
+                        ) : o3RoutingReviewEnabled && o3RoutingSelected ? (
+                          <>
+                            <ShuffleIcon className="size-4" aria-hidden />
+                            <span>Review route</span>
+                          </>
+                        ) : (
+                          <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
+                        )}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {submitDisabledReason != null && (
+                    <TooltipContent>{submitDisabledReason}</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </form>
           {/* Footer tray (host / cwd / worktree). Sits below the composer with
@@ -5374,99 +5619,91 @@ export function NewChatLandingScreen() {
 
           {o3ReviewTiming && <O3ReviewTimingStatus timing={o3ReviewTiming} />}
 
-          {o3ReviewLoading && (
-            <div
-              className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
-              role="status"
-              data-testid="o3-routing-loading"
-            >
-              <Loader2Icon className="size-4 animate-spin" /> Waiting for the route review. Advisor
-              requests and availability checks can take time.
-            </div>
-          )}
-
-          {o3RoutingReviewEnabled && o3Proposal === null && !o3ReviewLoading && (
-            <div
-              className="grid w-full gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2"
-              data-testid="o3-estimator-settings"
-            >
-              <div className="flex items-start justify-between gap-4 sm:col-span-2">
-                <div>
-                  <p className="text-sm font-semibold">Benchmark selection</p>
-                  <p className="text-xs text-muted-foreground">
-                    Automatic — the estimator chooses the task benchmark. Override only when its
-                    choice needs correction.
-                  </p>
+          {o3RoutingReviewEnabled &&
+            o3RoutingSelected &&
+            o3Proposal === null &&
+            !o3ReviewLoading && (
+              <div
+                className="grid w-full gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-2"
+                data-testid="o3-estimator-settings"
+              >
+                <div className="flex items-start justify-between gap-4 sm:col-span-2">
+                  <div>
+                    <p className="text-sm font-semibold">Benchmark selection</p>
+                    <p className="text-xs text-muted-foreground">
+                      Automatic — the estimator chooses the task benchmark. Override only when its
+                      choice needs correction.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (o3EstimatorOverrideOpen) setO3ReviewError(null);
+                      setO3EstimatorOverrideOpen((open) => !open);
+                    }}
+                    aria-expanded={o3EstimatorOverrideOpen}
+                    data-testid="o3-estimator-override-toggle"
+                  >
+                    {o3EstimatorOverrideOpen ? "Use automatic" : "Adjust"}
+                  </Button>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (o3EstimatorOverrideOpen) setO3ReviewError(null);
-                    setO3EstimatorOverrideOpen((open) => !open);
-                  }}
-                  aria-expanded={o3EstimatorOverrideOpen}
-                  data-testid="o3-estimator-override-toggle"
-                >
-                  {o3EstimatorOverrideOpen ? "Use automatic" : "Adjust"}
-                </Button>
+                {o3EstimatorOverrideOpen && (
+                  <>
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                      value={o3EstimatorSlice}
+                      onChange={(event) => setO3EstimatorSlice(event.target.value)}
+                      data-testid="o3-estimator-slice"
+                    >
+                      <option value="">Choose estimator benchmark…</option>
+                      {o3Slices.map((slice) => (
+                        <option
+                          key={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+                          value={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
+                        >
+                          {slice.label} ({slice.slice_id})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={o3EstimatorThreshold}
+                      onChange={(event) => setO3EstimatorThreshold(event.target.value)}
+                      placeholder="Minimum proxy score (0–100)"
+                      data-testid="o3-estimator-threshold"
+                    />
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                      value={o3EstimatorEvidence}
+                      onChange={(event) =>
+                        setO3EstimatorEvidence(
+                          event.target.value as O3EstimatorPolicy["evidence_policy"],
+                        )
+                      }
+                    >
+                      <option value="provisional">Allow approximate proxy evidence</option>
+                      <option value="strict">Strict measured evidence only</option>
+                    </select>
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
+                      value={o3EstimatorEffort}
+                      onChange={(event) => setO3EstimatorEffort(event.target.value)}
+                    >
+                      {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
+                        <option key={effort} value={effort}>
+                          {effort} reasoning
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
               </div>
-              {o3EstimatorOverrideOpen && (
-                <>
-                  <select
-                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                    value={o3EstimatorSlice}
-                    onChange={(event) => setO3EstimatorSlice(event.target.value)}
-                    data-testid="o3-estimator-slice"
-                  >
-                    <option value="">Choose estimator benchmark…</option>
-                    {o3Slices.map((slice) => (
-                      <option
-                        key={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
-                        value={`${slice.benchmark_id}|${slice.version}|${slice.slice_id}`}
-                      >
-                        {slice.label} ({slice.slice_id})
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={o3EstimatorThreshold}
-                    onChange={(event) => setO3EstimatorThreshold(event.target.value)}
-                    placeholder="Minimum proxy score (0–100)"
-                    data-testid="o3-estimator-threshold"
-                  />
-                  <select
-                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                    value={o3EstimatorEvidence}
-                    onChange={(event) =>
-                      setO3EstimatorEvidence(
-                        event.target.value as O3EstimatorPolicy["evidence_policy"],
-                      )
-                    }
-                  >
-                    <option value="provisional">Allow approximate proxy evidence</option>
-                    <option value="strict">Strict measured evidence only</option>
-                  </select>
-                  <select
-                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-                    value={o3EstimatorEffort}
-                    onChange={(event) => setO3EstimatorEffort(event.target.value)}
-                  >
-                    {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
-                      <option key={effort} value={effort}>
-                        {effort} reasoning
-                      </option>
-                    ))}
-                  </select>
-                </>
-              )}
-            </div>
-          )}
+            )}
 
           {o3Proposal && !o3ReviewLoading && (
             <RoutingProposalCard
@@ -5480,6 +5717,7 @@ export function NewChatLandingScreen() {
             />
           )}
 
+          {failedReviewId && <O3FailedReview id={failedReviewId} />}
           {o3ReviewError && (
             <p className="text-sm text-destructive" role="alert" data-testid="o3-review-error">
               {o3ReviewError}

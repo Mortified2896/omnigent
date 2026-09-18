@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-16",
+  "harness": "codex-native-ui",
+  "real_native_response": true,
+  "after_fresh_server_process": {
+    "conversation_id": "116ec341c1b64e4a867088715aa65acb",
+    "response_id": "codex_01a0a8e2-9d94-7eb1-ad8f-6c10d8ba96c2",
+    "user_id": "local",
+    "rating": -1,
+    "comment": "More explanation would help.",
+    "created_at": 1789539827180726,
+    "updated_at": 1789540198043857
+  },
+  "browser": {
+    "desktop": [
+      1280,
+      800
+    ],
+    "mobile": [
+      390,
+      844
+    ],
+    "keyboard_comment_save": "Tab then Enter",
+    "reload_retained_rating_and_comment": true
+  },
+  "join": {
+    "assistant_item_id": "2776e289c6534750a491a8c65bb7abb4",
+    "assistant_agent": "codex-native-ui",
+    "usage_scope": "session aggregate, not per-response telemetry",
+    "session_usage_model_count": 1
+  },
+  "smart_routing_o3": "Not exercised: no configured routing lane in the disposable acceptance server."
+}

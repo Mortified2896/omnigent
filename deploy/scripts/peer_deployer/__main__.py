@@ -431,6 +431,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import socket
+
+    if socket.gethostname() == "rtx-omnigent":
+        raise SystemExit("Legacy deployment is retired on RTX; use peer_deployer.rtx")
     try:
         args = _parser().parse_args(argv)
         return args.func(args)

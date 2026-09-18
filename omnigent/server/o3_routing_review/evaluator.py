@@ -201,7 +201,7 @@ def _hard_exclusions(candidate: CandidateSnapshot, analysis: AdviserAnalysis) ->
         exclusions.append("terminal execution is required")
     if requirements.tools and not candidate.tools:
         exclusions.append("a complete tool-call round trip is required")
-    if requirements.vision and not candidate.vision:
+    if (requirements.vision or "image" in requirements.input_modalities) and not candidate.vision:
         exclusions.append("vision is required")
     if requirements.minimum_context_tokens > 0:
         if candidate.context_tokens is None:
@@ -211,6 +211,16 @@ def _hard_exclusions(candidate: CandidateSnapshot, analysis: AdviserAnalysis) ->
                 f"context capacity {candidate.context_tokens} is below "
                 f"{requirements.minimum_context_tokens}"
             )
+    if set(requirements.input_modalities) - {"text", "image"}:
+        exclusions.append("required input modalities are not qualified")
+    if set(requirements.output_modalities) - {"text"}:
+        exclusions.append("required output modalities are not qualified")
+    if requirements.structured_output:
+        exclusions.append("structured output support is not qualified")
+    if requirements.minimum_output_tokens:
+        exclusions.append("output capacity is unknown")
+    if requirements.minimum_input_tokens > (candidate.context_tokens or 0):
+        exclusions.append("required input capacity is not qualified")
     if analysis.proposed_reasoning_effort not in candidate.supported_reasoning_efforts:
         exclusions.append(
             f"reasoning effort {analysis.proposed_reasoning_effort!r} was not fully qualified"

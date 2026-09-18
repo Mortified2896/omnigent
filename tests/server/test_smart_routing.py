@@ -275,7 +275,7 @@ def test_model_family_agrees_with_the_shared_token_rule(model: str, expected: st
     :param model: Model id under test.
     :param expected: The family it must land in.
     """
-    from omnigent.model_override import model_family_mismatch
+    from omnigent.models.model_override import model_family_mismatch
     from omnigent.server.smart_routing import _model_family
 
     assert _model_family(model) == expected
@@ -2413,8 +2413,8 @@ def test_task_v1_claude_arms_follows_a_configured_menu() -> None:
 
 
 def test_parse_routing_tables_reads_every_table() -> None:
-    from omnigent.reasoning_effort import ModelEffortCaps
     from omnigent.server.smart_routing import parse_routing_tables
+    from omnigent.util.reasoning_effort import ModelEffortCaps
 
     tables = parse_routing_tables(
         {
@@ -3452,3 +3452,48 @@ async def test_a_runner_rebind_invalidates_the_routing_catalog() -> None:
     await fetch_runner_models("conv_overlay", client)
 
     assert client.get.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_reads_verdict_after_reasoning_output() -> None:
+    from omnigent.llms.types import MessageOutput, NativeToolOutput, OutputText, Response
+
+    llm = AsyncMock()
+    llm.create.return_value = Response(
+        model="judge",
+        output=[
+            NativeToolOutput(data={"type": "reasoning", "summary": []}),
+            MessageOutput(
+                content=[
+                    OutputText(
+                        text=json.dumps(
+                            {
+                                "model": "gpt-5.5",
+                                "harness": "codex-native",
+                                "rationale": "read-only task",
+                            }
+                        )
+                    )
+                ]
+            ),
+        ],
+    )
+    client = LLMRoutingClient(llm)
+    result = await client.route("Read the fixture", {"codex-native": ["gpt-5.5"]})
+    assert result is not None
+    assert result.model == "gpt-5.5"
+    assert result.harness == "codex-native"
+    assert client.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_declines_response_without_verdict_message() -> None:
+    from omnigent.llms.types import NativeToolOutput, Response
+
+    llm = AsyncMock()
+    llm.create.return_value = Response(
+        model="judge", output=[NativeToolOutput(data={"type": "reasoning", "summary": []})]
+    )
+    client = LLMRoutingClient(llm)
+    assert await client.route("Read the fixture", {"codex-native": ["gpt-5.5"]}) is None
+    assert client.last_error is not None

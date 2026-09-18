@@ -10,8 +10,14 @@ from __future__ import annotations
 
 import argparse
 import json
+
+# Deprecated; remove in v0.14.0. RTX uses peer_deployer.rtx.
+import socket
 import sys
 from pathlib import Path
+
+if socket.gethostname() == "rtx-omnigent":
+    raise SystemExit("Retired on RTX; use peer_deployer.rtx")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:

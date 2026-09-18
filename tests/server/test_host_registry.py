@@ -491,3 +491,16 @@ def test_legacy_prefixed_id_resolves_to_bare_registration() -> None:
     # Deregistering by any spelling removes the entry.
     registry.deregister(prefixed)
     assert registry.get(bare) is None
+
+
+def test_strict_identity_refuses_duplicate_without_evicting(monkeypatch):
+    monkeypatch.setenv("OMNIGENT_STRICT_HOST_IDENTITY", "1")
+    registry = HostRegistry()
+    original = registry.register("host_aaa", FakeWebSocket(), _make_hello(), owner="alice")
+    with pytest.raises(ValueError, match="Duplicate host identity"):
+        registry.register("host_aaa", FakeWebSocket(), _make_hello(), owner="alice")
+    assert registry.get("host_aaa") is original
+    assert original.outbound_queue.empty()
+    registry.deregister("host_aaa")
+    replacement = registry.register("host_aaa", FakeWebSocket(), _make_hello(), owner="alice")
+    assert registry.get("host_aaa") is replacement

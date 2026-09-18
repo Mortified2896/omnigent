@@ -144,7 +144,21 @@ export interface O3ExecutionProvenance {
   estimated_cost_usd: number | null;
 }
 
+export interface O3RequirementOverrides {
+  tools?: boolean | null;
+  image_input?: boolean | null;
+  image_output?: boolean | null;
+  structured_output?: boolean | null;
+  minimum_context_tokens?: number | null;
+  minimum_output_tokens?: number | null;
+}
+
 export interface O3RoutingProposal {
+  audit?: Record<string, unknown> | null;
+  execution_exclusions?: Record<string, string>;
+  tool_free_provenance?: Record<string, unknown> | null;
+  requirement_overrides?: O3RequirementOverrides;
+  effective_requirements?: O3RoutingProposal["adviser"]["requirements"];
   schema_version: number;
   proposal_id: string;
   created_at: string;
@@ -162,7 +176,18 @@ export interface O3RoutingProposal {
     explanation: string;
     reasoning_summary: string | null;
     attempt: number;
+    transmitted_model?: string | null;
+    transmitted_effort?: string | null;
+    observed_effort?: string | null;
+    harness?: string | null;
+    duration_ms?: number | null;
+    response?: Record<string, unknown> | null;
+    response_text?: string | null;
+    response_headers?: Record<string, unknown> | null;
+    parse_error?: string | null;
+    parsed?: Record<string, unknown> | null;
   }[];
+  original_adviser?: O3RoutingProposal["adviser"] | null;
   adviser: {
     task_summary: string;
     task_classification: string;
@@ -210,6 +235,8 @@ export interface O3RoutingProposal {
   disposition: O3Disposition;
   decision: O3DecisionAction | null;
   decision_reason: string | null;
+  execution_options?: O3ExecutionOption[];
+  selected_execution?: O3ExecutionOption | null;
   derived_combo_name: string | null;
   derived_combo_definition: Record<string, unknown> | null;
   session_id: string | null;
@@ -304,6 +331,7 @@ export interface O3CatalogueRecommendation {
 }
 
 export interface O3CatalogueExecutionDecision {
+  metadata?: Record<string, unknown> | null;
   route_id: string;
   provider_id: string;
   displayed_model: string;
@@ -323,6 +351,8 @@ export interface O3CatalogueExecutionSet {
 }
 
 export interface O3ProposalAdjustment {
+  reset_reasoning_effort?: boolean;
+  requirement_overrides?: O3RequirementOverrides;
   benchmark_id?: string;
   version?: string;
   slice_id?: string;
@@ -358,6 +388,7 @@ export interface O3RoutingRegistry {
 export class O3RoutingReviewRequestError extends Error {
   readonly status: number;
   readonly code: string | null;
+  auditId: string | null = null;
 
   constructor(message: string, status: number, code: string | null) {
     super(message);
@@ -372,24 +403,28 @@ async function routingRequest<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.ok) return (await response.json()) as T;
   let message = `${response.status} ${response.statusText}`.trim();
   let code: string | null = null;
+  let auditId: string | null = null;
   try {
     const body = (await response.json()) as {
-      error?: string | { code?: string; message?: string };
+      error?: string | { code?: string; message?: string; audit_id?: string };
       detail?: string;
     };
     if (typeof body.error === "string") message = body.error;
     else if (typeof body.error === "object" && body.error !== null) {
       if (typeof body.error.message === "string") message = body.error.message;
       if (typeof body.error.code === "string") code = body.error.code;
+      if (typeof body.error.audit_id === "string") auditId = body.error.audit_id;
     } else if (typeof body.detail === "string") message = body.detail;
   } catch {
     // Preserve the status fallback for non-JSON errors.
   }
-  throw new O3RoutingReviewRequestError(
+  const error = new O3RoutingReviewRequestError(
     message || "Routing review request failed",
     response.status,
     code,
   );
+  error.auditId = auditId;
+  throw error;
 }
 
 function jsonMutation(method: "POST" | "PATCH", body: object): RequestInit {
@@ -550,4 +585,20 @@ export function routingDraftForProposal(
     workspaceSummary,
     sessionId,
   };
+}
+
+export interface O3ExecutionOption {
+  mode: "tool_capable_native" | "hard_tool_free";
+  route: string;
+  provider: string;
+  cost_class: string;
+  capability_score_lower: number;
+  reason: string;
+}
+
+export function getO3SessionReviews(sessionId: string): Promise<O3RoutingProposal[]> {
+  return routingRequest(`/v1/o3/routing-review/session/${encodeURIComponent(sessionId)}`);
+}
+export function getO3FailedReview(id: string): Promise<unknown> {
+  return routingRequest(`/v1/o3/routing-review/failed/${encodeURIComponent(id)}`);
 }

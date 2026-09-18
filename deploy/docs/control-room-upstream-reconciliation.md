@@ -1,5 +1,16 @@
 # Control Room upstream 0.9 reconciliation
 
+> **Legacy scope / superseded RTX assumptions (2026-09-14).**
+> This is the historical upstream 0.9 reconciliation plan. Its O2-first
+> soak/promotion architecture is superseded for present RTX operations; source
+> ancestry and acceptance criteria remain historical evidence.
+> Present-state decisions follow the [HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md).
+> Active O1 is on RTX VM 100; no live O2 peer is required or available.
+> Do not start, restore or recreate retired O2 to satisfy preflight.
+> Recovery/installation text requires explicit owner authorization to
+> reactivate retired services. Distinct-peer and rollback safety rules remain
+> intact for an explicitly reintroduced two-peer topology.
+
 This document defines how the Control Room fork is rebuilt on current upstream
 Omnigent instead of carrying the historical v0.8 branch topology forward.
 

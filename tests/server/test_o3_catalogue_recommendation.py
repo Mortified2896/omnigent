@@ -382,3 +382,46 @@ def test_readiness_expiry_and_unknown_identity_are_conservative() -> None:
         "inferred_base_checkpoint": "famous-model",
     }
     assert model_identity(row, {}) == "provider/opaque"
+
+
+@pytest.mark.parametrize(
+    ("requirement", "metadata", "count"),
+    [
+        ({"tools": True}, {"tool_calling": False}, 0),
+        ({"tools": False}, {"tool_calling": True}, 1),
+        ({"tools": False}, {"tool_calling": False}, 1),
+        ({"tools": True}, {"tool_calling": None}, 0),
+        ({"vision": True}, {"input_modalities": ["text"]}, 0),
+        ({"vision": True}, {"input_modalities": ["text", "image"]}, 1),
+        ({"vision": True}, {"input_modalities": None}, 0),
+        ({"output_modalities": ["text", "image"]}, {"input_modalities": ["text", "image"]}, 0),
+        ({"output_modalities": ["image"]}, {"output_modalities": ["image"]}, 1),
+        ({"structured_output": True}, {"structured_output": None}, 0),
+        ({"structured_output": True}, {"structured_output": True}, 1),
+        ({"minimum_context_tokens": 128_000}, {"context_window": 64_000}, 0),
+        ({"minimum_context_tokens": 128_000}, {"context_window": 128_000}, 1),
+        ({"minimum_output_tokens": 8000}, {"max_output_tokens": None}, 0),
+        ({"minimum_output_tokens": 8000}, {"max_output_tokens": 8000}, 1),
+    ],
+)
+def test_execution_requirement_capability_matrix(requirement, metadata, count) -> None:
+    row = {
+        "provider_model_route_id": "test/model",
+        "capability_score_lower": 90,
+        "adviser_applicable": True,
+        "tool_calling": True,
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "responses_compatibility": "proven",
+        **metadata,
+    }
+    from omnigent.server.o3_routing_review.eligibility import build_execution_set
+
+    result = build_execution_set(
+        RecommendationCatalogue(policy={}, forecasts=(row,), readiness={}, manifest={}, hashes={}),
+        common_floor=20,
+        requirements=RoutingRequirements(**requirement),
+        reasoning_effort="low",
+        live_route_ids={"test/model"},
+    )
+    assert result.eligible_count == count

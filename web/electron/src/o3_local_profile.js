@@ -74,6 +74,7 @@ function applyO3ServerEnvironment(env = process.env, homeDir = os.homedir()) {
       ? relocatedCatalogDir
       : legacyCatalogDir;
   env.OMNIGENT_O3_ROUTING_REVIEW = "1";
+  env.OMNIGENT_O3_HARD_TOOL_FREE = "1";
   env.OMNIGENT_O3_OMNIROUTE_BASE_URL = "http://127.0.0.1:20128";
   env.OMNIGENT_O3_RECOMMENDATION_CATALOG_DIR = catalogDir;
   env.OMNIGENT_O3_BENCHMARK_REGISTRY = path.join(
