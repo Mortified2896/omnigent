@@ -6,38 +6,31 @@ import {
   ResponseFeedbackProvider,
   canRateResponse,
 } from "./ResponseFeedbackActions";
-import type { ResponseFeedback } from "@/hooks/useResponseFeedback";
 import type { Bubble } from "@/lib/renderItems";
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
-let stored: ResponseFeedback[];
 let fail: boolean;
+let outcomes: Record<string, unknown>[];
 beforeEach(() => {
-  stored = [];
+  outcomes = [];
   fail = false;
   api.mockReset();
   api.mockImplementation(async (_url: string, options?: RequestInit) => {
     if (options?.method && fail) return new Response(null, { status: 500 });
-    if (options?.method === "DELETE") {
-      stored = [];
-      return new Response(null, { status: 204 });
+    if (_url.endsWith("/task-experiment")) return Response.json(outcomes);
+    if (_url.includes("/task-outcomes/")) {
+      const row = {
+        id: String(outcomes.length),
+        kind: "outcome",
+        response_id: "answer",
+        review_source: "human",
+        ...JSON.parse(options!.body as string),
+      };
+      outcomes.push(row);
+      return Response.json(row);
     }
-    if (options?.method === "PUT") {
-      stored = [
-        {
-          conversation_id: "session",
-          response_id: "answer",
-          comment: null,
-          created_at: 1,
-          updated_at: 2,
-          ...(stored.at(0) ?? {}),
-          ...JSON.parse(options.body as string),
-        },
-      ];
-      return Response.json(stored[0]);
-    }
-    return Response.json(stored);
+    return Response.json([]);
   });
 });
 afterEach(cleanup);
@@ -53,67 +46,6 @@ function mount() {
     </QueryClientProvider>,
   );
 }
-it("round trips rating, comment edits, polarity and clear across a fresh query cache", async () => {
-  const view = mount();
-  const good = await screen.findByRole("button", { name: "Good response" });
-  await waitFor(() => expect(good).toBeEnabled());
-  good.focus();
-  expect(document.activeElement).toBe(good);
-  expect(good.tagName).toBe("BUTTON");
-  fireEvent.click(good);
-  await waitFor(() => expect(good).toHaveAttribute("aria-pressed", "true"));
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Useful detail" } });
-  expect(api.mock.calls.filter((call) => call[1]?.method === "PUT")).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
-  await waitFor(() => expect(stored[0]?.comment).toBe("Useful detail"));
-  view.unmount();
-  mount();
-  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Useful detail"));
-  fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Bad response" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    ),
-  );
-  expect(stored).toHaveLength(1);
-  expect(stored[0]?.comment).toBe("Useful detail");
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Revised" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
-  await waitFor(() => expect(stored[0]?.comment).toBe("Revised"));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Clear feedback" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Clear feedback" }));
-  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
-});
-it("keeps confirmed state on failed rating, comment and delete", async () => {
-  stored = [
-    {
-      conversation_id: "session",
-      response_id: "answer",
-      rating: 1,
-      comment: "Saved",
-      created_at: 1,
-      updated_at: 1,
-    },
-  ];
-  mount();
-  await screen.findByRole("textbox");
-  fail = true;
-  fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
-  await screen.findByRole("alert");
-  expect(screen.getByRole("button", { name: "Good response" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Unsaved draft" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save comment" })).toBeEnabled());
-  expect(stored[0]?.comment).toBe("Saved");
-  expect(screen.getByRole("textbox")).toHaveValue("Unsaved draft");
-  fireEvent.click(screen.getByRole("button", { name: "Clear feedback" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Clear feedback" })).toBeEnabled());
-  expect(stored).toHaveLength(1);
-});
 it("only offers feedback for durable completed visible answers", () => {
   const bubble: Bubble = {
     kind: "assistant",
@@ -144,4 +76,104 @@ it("only offers feedback for durable completed visible answers", () => {
       rationale: "routing",
     }),
   ).toBe(false);
+});
+
+it("preserves all outcome revisions across reload", async () => {
+  let view = mount();
+  /* eslint-disable no-await-in-loop */
+  for (const name of ["Success", "Partial", "Failed", "Not sure"]) {
+    await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true"),
+    );
+    view.unmount();
+    view = mount();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true"),
+    );
+  }
+  /* eslint-enable no-await-in-loop */
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
+  await waitFor(() => expect(outcomes.at(-1)?.outcome).toBe("success"));
+  expect(outcomes.map((row) => row.outcome)).toEqual([
+    "success",
+    "partial",
+    "failed",
+    "not_sure",
+    "success",
+  ]);
+  expect(screen.queryByRole("button", { name: "Good response" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Bad response" })).toBeNull();
+});
+
+it("appends human comment and tag revisions", async () => {
+  outcomes = [
+    {
+      id: "1",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: null,
+      tags: [],
+      review_source: "human",
+    },
+  ];
+  mount();
+  await screen.findByTestId("human-review-details");
+  fireEvent.change(screen.getByLabelText("Task review comment"), {
+    target: { value: "Tests still need to pass." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Tests/verification" }));
+  fireEvent.change(screen.getByLabelText("Custom task review tag"), {
+    target: { value: "Regression" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+  await waitFor(() => expect(outcomes).toHaveLength(2));
+  expect(outcomes.at(-1)).toMatchObject({
+    outcome: "partial",
+    comment: "Tests still need to pass.",
+    tags: ["Tests/verification", "Regression"],
+  });
+});
+
+it("keeps the saved outcome when a revision fails", async () => {
+  outcomes = [{ id: "1", kind: "outcome", response_id: "answer", outcome: "not_sure" }];
+  mount();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Success" })).toBeEnabled());
+  fail = true;
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
+  await screen.findByRole("alert");
+  expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute("aria-pressed", "true");
+  expect(outcomes).toHaveLength(1);
+});
+
+it("keeps unsaved comment and tags when changing the outcome", async () => {
+  outcomes = [
+    {
+      id: "initial",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "Old",
+      tags: [],
+    },
+  ];
+  mount();
+  const comment = await screen.findByRole("textbox", { name: "Task review comment" });
+  fireEvent.change(comment, { target: { value: "Unsaved detail" } });
+  fireEvent.click(screen.getByRole("button", { name: "Tests/verification" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Custom task review tag" }), {
+    target: { value: "Custom" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
+  await waitFor(() =>
+    expect(outcomes.at(-1)).toMatchObject({
+      outcome: "success",
+      comment: "Unsaved detail",
+      tags: ["Tests/verification", "Custom"],
+    }),
+  );
 });
