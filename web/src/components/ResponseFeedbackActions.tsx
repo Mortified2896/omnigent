@@ -1,17 +1,17 @@
-import { createContext, useContext, useId, useMemo, useState } from "react";
-import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { createContext, useContext, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  useResponseFeedback,
-  useSaveResponseFeedback,
-  type ResponseFeedback,
-} from "@/hooks/useResponseFeedback";
 import type { Bubble } from "@/lib/renderItems";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
+import {
+  useTaskExperiment,
+  useSaveTaskOutcome,
+  type ExperimentEvent,
+  type TaskOutcome,
+} from "@/hooks/useTaskExperiment";
 
 const FeedbackContext = createContext<{
   sessionId: string;
-  rows: Map<string, ResponseFeedback>;
+  human: Map<string, ExperimentEvent>;
   ready: boolean;
 } | null>(null);
 
@@ -22,15 +22,14 @@ export function ResponseFeedbackProvider({
   sessionId: string;
   children: React.ReactNode;
 }) {
-  const query = useResponseFeedback(sessionId);
-  const value = useMemo(
-    () => ({
-      sessionId,
-      rows: new Map((query.data ?? []).map((row) => [row.response_id, row])),
-      ready: query.isSuccess,
-    }),
-    [sessionId, query.data, query.isSuccess],
-  );
+  const experiment = useTaskExperiment(sessionId);
+  const value = useMemo(() => {
+    const human = new Map<string, ExperimentEvent>();
+    for (const row of experiment.data ?? []) {
+      if (row.kind === "outcome" && row.outcome) human.set(row.response_id, row);
+    }
+    return { sessionId, human, ready: experiment.isSuccess };
+  }, [sessionId, experiment.data, experiment.isSuccess]);
   return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;
 }
 
@@ -53,105 +52,222 @@ export function canRateResponse(bubble: Bubble): boolean {
 export function ResponseFeedbackActions({ responseId }: { responseId: string }) {
   const context = useContext(FeedbackContext);
   if (!context) return null;
+  const human = context.human.get(responseId);
   return (
-    <FeedbackEditor
-      key={`${context.sessionId}:${responseId}`}
+    <OutcomeEditor
+      key={`${context.sessionId}:${responseId}:${human?.id ?? "new"}`}
       sessionId={context.sessionId}
       responseId={responseId}
-      feedback={context.rows.get(responseId)}
+      human={human}
       ready={context.ready}
     />
   );
 }
 
-function FeedbackEditor({
+const OUTCOMES: { value: TaskOutcome; label: string; definition: string }[] = [
+  {
+    value: "success",
+    label: "Success",
+    definition:
+      "The requested task was accomplished on this attempt without a material correction or retry.",
+  },
+  {
+    value: "partial",
+    label: "Partial",
+    definition:
+      "Meaningful correct progress was made, but a material follow-up, correction, or additional implementation is required.",
+  },
+  {
+    value: "failed",
+    label: "Failed",
+    definition:
+      "The attempt did not accomplish the task or make sufficient correct progress to count as partial.",
+  },
+  {
+    value: "not_sure",
+    label: "Not sure",
+    definition:
+      "The outcome cannot yet be judged reliably. You can revise this after verification.",
+  },
+];
+
+const REVIEW_TAGS = [
+  "AGENTS instructions",
+  "Documentation",
+  "Task specification",
+  "Routing/floor",
+  "Model capability",
+  "Tool/harness",
+  "Environment/dependency",
+  "Tests/verification",
+] as const;
+
+function OutcomeEditor({
   sessionId,
   responseId,
-  feedback,
+  human,
   ready,
 }: {
   sessionId: string;
   responseId: string;
-  feedback?: ResponseFeedback;
+  human?: ExperimentEvent;
   ready: boolean;
 }) {
-  const mutation = useSaveResponseFeedback(sessionId, responseId);
-  const [draft, setDraft] = useState<string | null>(null);
-  const id = useId();
-  const comment = draft ?? feedback?.comment ?? "";
-  const disabled = !ready || mutation.isPending;
+  const mutation = useSaveTaskOutcome(sessionId, responseId);
+  const outcome = human?.outcome;
+  const [comment, setComment] = useState(human?.comment ?? "");
+  const [tags, setTags] = useState<string[]>(human?.tags ?? []);
+  const [customTag, setCustomTag] = useState("");
+
+  function toggleTag(tag: string): void {
+    setTags((current) =>
+      current.some((value) => value.toLocaleLowerCase() === tag.toLocaleLowerCase())
+        ? current.filter((value) => value.toLocaleLowerCase() !== tag.toLocaleLowerCase())
+        : current.length < 8
+          ? [...current, tag]
+          : current,
+    );
+  }
+
+  function addCustomTag(): void {
+    const tag = customTag.trim().replace(/\s+/g, " ");
+    if (!tag || tag.length > 64 || tags.length >= 8) return;
+    if (!tags.some((value) => value.toLocaleLowerCase() === tag.toLocaleLowerCase())) {
+      setTags((current) => [...current, tag]);
+    }
+    setCustomTag("");
+  }
+
+  const detailsChanged =
+    outcome !== undefined &&
+    (comment !== (human?.comment ?? "") ||
+      JSON.stringify(tags) !== JSON.stringify(human?.tags ?? []));
+
   return (
-    <div className="contents" aria-label="Response feedback">
-      {([1, -1] as const).map((rating) => (
-        <Button
-          key={rating}
-          type="button"
-          size="icon-sm"
-          variant={feedback?.rating === rating ? "secondary" : "ghost"}
-          className="min-h-10 min-w-10 md:min-h-7 md:min-w-7"
-          aria-label={rating === 1 ? "Good response" : "Bad response"}
-          aria-pressed={feedback?.rating === rating}
-          disabled={disabled}
-          onClick={() => mutation.mutate({ rating })}
+    <div className="order-last flex w-full basis-full flex-col gap-2 py-1" aria-label="Task review">
+      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Task outcome">
+        <span className="mr-1 text-xs font-medium">Your outcome</span>
+        {OUTCOMES.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            size="sm"
+            variant={outcome === option.value ? "secondary" : "ghost"}
+            className="min-h-10 text-xs md:min-h-7"
+            title={option.definition}
+            aria-pressed={outcome === option.value}
+            disabled={!ready || mutation.isPending}
+            onClick={() =>
+              mutation.mutate({
+                outcome: option.value,
+                comment: comment.trim() || null,
+                tags,
+              })
+            }
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+
+      {outcome && (
+        <div
+          className="space-y-2 rounded-md border border-border/70 p-2"
+          data-testid="human-review-details"
         >
-          {rating === 1 ? (
-            <ThumbsUp aria-hidden="true" size={14} />
-          ) : (
-            <ThumbsDown aria-hidden="true" size={14} />
-          )}
-        </Button>
-      ))}
-      {feedback && (
-        <div className="order-last flex w-full min-w-0 basis-full flex-wrap items-end gap-2">
-          <label htmlFor={id} className="w-full text-xs">
-            Why was this {feedback.rating === 1 ? "good" : "bad"}? (optional)
-          </label>
           <textarea
-            id={id}
             value={comment}
             maxLength={4000}
             rows={2}
             disabled={mutation.isPending}
             className="min-w-0 w-full rounded-md border bg-background p-2 text-sm"
-            onChange={(event) => setDraft(event.target.value)}
+            placeholder="Optional comment — what worked or what needs correction?"
+            aria-label="Task review comment"
+            onChange={(event) => setComment(event.target.value)}
           />
-          <Button
-            type="button"
-            size="sm"
-            disabled={disabled || comment === (feedback.comment ?? "")}
-            onClick={() =>
-              mutation.mutate(
-                { rating: feedback.rating, comment: comment || null },
-                { onSuccess: () => setDraft(null) },
+          <div className="flex flex-wrap gap-1" aria-label="Task review tags">
+            {REVIEW_TAGS.map((tag) => {
+              const active = tags.some(
+                (value) => value.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+              );
+              return (
+                <Button
+                  key={tag}
+                  type="button"
+                  size="sm"
+                  variant={active ? "secondary" : "outline"}
+                  className="h-7 px-2 text-[11px]"
+                  aria-pressed={active}
+                  disabled={mutation.isPending}
+                  onClick={() => toggleTag(tag)}
+                >
+                  {tag}
+                </Button>
+              );
+            })}
+            {tags
+              .filter(
+                (tag) =>
+                  !REVIEW_TAGS.some(
+                    (known) => known.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+                  ),
               )
-            }
-          >
-            Save comment
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={disabled}
-            onClick={() => mutation.mutate(null, { onSuccess: () => setDraft(null) })}
-          >
-            Clear feedback
-          </Button>
+              .map((tag) => (
+                <Button
+                  key={tag}
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-2 text-[11px]"
+                  aria-pressed="true"
+                  disabled={mutation.isPending}
+                  onClick={() => toggleTag(tag)}
+                >
+                  {tag} ×
+                </Button>
+              ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <input
+              value={customTag}
+              maxLength={64}
+              className="h-8 min-w-36 flex-1 rounded-md border bg-background px-2 text-xs"
+              placeholder="Custom tag"
+              aria-label="Custom task review tag"
+              onChange={(event) => setCustomTag(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addCustomTag();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8"
+              disabled={!customTag.trim() || tags.length >= 8 || mutation.isPending}
+              onClick={addCustomTag}
+            >
+              Add tag
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8"
+              disabled={!detailsChanged || mutation.isPending}
+              onClick={() => mutation.mutate({ outcome, comment: comment.trim() || null, tags })}
+            >
+              Save details
+            </Button>
+          </div>
         </div>
       )}
-      {mutation.isPending && (
-        <span role="status" className="text-xs">
-          Saving…
-        </span>
-      )}
+
       {mutation.isError && (
-        <span role="alert" className="order-last w-full text-xs text-destructive">
-          Feedback was not saved. Please try again.
-        </span>
-      )}
-      {!ready && (
-        <span role="status" className="text-xs">
-          Feedback unavailable
+        <span role="alert" className="text-xs text-destructive">
+          Task review was not saved. Please try again.
         </span>
       )}
     </div>

@@ -10,8 +10,15 @@ from pydantic import BaseModel, Field, StrictInt
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.routes._auth_helpers import get_user_id, require_access_and_level
 from omnigent.server.routes._errors import session_not_found
+from omnigent.server.task_experiment import Outcome, list_experiment_events, save_outcome
 from omnigent.stores.conversation_store import ConversationStore, InvalidFeedbackTargetError
 from omnigent.stores.permission_store import PermissionStore
+
+
+class OutcomeInput(BaseModel):
+    outcome: Outcome
+    comment: str | None = Field(default=None, max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=8)
 
 
 class FeedbackInput(BaseModel):
@@ -83,3 +90,31 @@ def register_feedback_routes(
         except InvalidFeedbackTargetError as exc:
             raise HTTPException(404, str(exc)) from exc
         return Response(status_code=204)
+
+    @router.get("/sessions/{session_id}/task-experiment")
+    async def get_experiment(request: Request, session_id: str) -> list[dict]:
+        user = await caller(request, session_id, LEVEL_READ)
+        rows = await asyncio.to_thread(list_experiment_events, conversation_store, session_id)
+        # Human revisions are caller-scoped and visible only to their author.
+        return [row for row in rows if row["created_by"] == user]
+
+    @router.put("/sessions/{session_id}/task-outcomes/{response_id}")
+    async def put_outcome(
+        request: Request, session_id: str, response_id: str, body: OutcomeInput
+    ) -> dict:
+        user = await caller(request, session_id, LEVEL_EDIT)
+        try:
+            return await asyncio.to_thread(
+                save_outcome,
+                conversation_store,
+                session_id,
+                response_id,
+                user,
+                body.outcome,
+                comment=body.comment,
+                tags=body.tags,
+            )
+        except InvalidFeedbackTargetError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
