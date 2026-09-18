@@ -192,6 +192,11 @@ class TurnComplete(ExecutorEvent):
     continue_turn: bool = False
     usage: ExecutorUsage | None = None
     native_response_id: str | None = None
+    native_thread_id: str | None = None
+    native_turn_id: str | None = None
+    terminal_status: str | None = None
+    terminal_error: str | None = None
+    experiment_attempt_id: str | None = None
 
 
 class ToolCallStatus(str, enum.Enum):

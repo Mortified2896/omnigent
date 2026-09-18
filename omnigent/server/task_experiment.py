@@ -216,12 +216,12 @@ def save_model_review(
     if len(comment) > MAX_COMMENT_LENGTH:
         raise ValueError(f"Model-review comments may be at most {MAX_COMMENT_LENGTH} characters")
     normalized_tags = normalize_tags(tags[:3])
-    normalized_evidence = [" ".join(str(value).split())[:500] for value in evidence[:3] if str(value).strip()]
+    normalized_evidence = [
+        " ".join(str(value).split())[:500] for value in evidence[:3] if str(value).strip()
+    ]
     rows = list_experiment_events(store, conversation_id)
     links = [
-        row
-        for row in rows
-        if row["kind"] == "response_link" and row["response_id"] == response_id
+        row for row in rows if row["kind"] == "response_link" and row["response_id"] == response_id
     ]
     attempt_id = links[-1]["attempt_id"] if links else response_id
     item = store.append(
@@ -323,10 +323,22 @@ def link_native_response(
     attempt_id: str,
     response_id: str,
     actor: str | None,
+    provenance: dict | None = None,
 ) -> None:
     from omnigent.server.auth import RESERVED_USER_LOCAL
 
     actor = actor or RESERVED_USER_LOCAL
+    payload = {"native_response_id": response_id}
+    if provenance:
+        # Keep only JSON-shaped, non-null evidence supplied by the runner.
+        # Unknown backend fields remain absent/null rather than inferred.
+        payload.update(
+            {
+                str(key): value
+                for key, value in provenance.items()
+                if value is not None and key not in {"attempt_id", "native_response_id"}
+            }
+        )
     store.append(
         conversation_id,
         [
@@ -336,7 +348,7 @@ def link_native_response(
                 kind="response_link",
                 response_id=response_id,
                 actor=actor,
-                payload={"native_response_id": response_id},
+                payload=payload,
                 idempotency_key=f"link:{attempt_id}",
             )
         ],
@@ -356,4 +368,11 @@ def accept_response_link(store: ConversationStore, conversation_id: str, event: 
     )
     if forecast is None:
         return
-    link_native_response(store, conversation_id, attempt_id, response_id, forecast["created_by"])
+    link_native_response(
+        store,
+        conversation_id,
+        attempt_id,
+        response_id,
+        forecast["created_by"],
+        provenance=event,
+    )

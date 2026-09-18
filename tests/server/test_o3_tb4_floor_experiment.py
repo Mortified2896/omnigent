@@ -315,5 +315,14 @@ def test_interrupted_assignment_is_not_reowned_after_restart(tmp_path):
     from omnigent.server.o3_routing_review.floor_assignment import FloorAssignmentLedger
 
     path = tmp_path / "assignment.sqlite"
-    assert FloorAssignmentLedger(path).reserve("attempt", "input") == (True, None)
-    assert FloorAssignmentLedger(path).reserve("attempt", "input") == (False, None)
+    ledger = FloorAssignmentLedger(path)
+    assert ledger.reserve("attempt", "input") == (True, None)
+    assert ledger.reserve("attempt", "input") == (False, None)
+    assert ledger.block("attempt", "input", reason="owner exited") == {
+        "status": "blocked",
+        "reason": "owner exited",
+    }
+    assert ledger.reserve("attempt", "input") == (
+        False,
+        {"status": "blocked", "reason": "owner exited"},
+    )

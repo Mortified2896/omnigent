@@ -28,6 +28,8 @@ from omnigent.harnesses.codex_native.bridge import (
     read_bridge_state,
     read_mcp_startup,
     update_active_turn_id,
+    update_experiment_attempt_id,
+    wait_for_terminal_record,
     write_codex_config_model,
 )
 from omnigent.inner.codex_goal_command import goal_objective_from_content
@@ -384,8 +386,9 @@ class CodexNativeExecutor(Executor):
 
         # No client-side wait for Codex MCP startup: the app-server accepts
         # ``turn/start`` mid-startup and defers execution until the round
-        # settles (verified against codex 0.142.5), so sending immediately
-        # is safe. The web UI's MCP-startup band explains the wait.
+        # settles (verified against the resolved codex-cli 0.153.4), so
+        # sending immediately is safe. The web UI's MCP-startup band explains
+        # the wait.
 
         # Serialized against enqueue_session_message: the
         # turn/start-vs-turn/steer decision, the RPC, and the
@@ -393,6 +396,14 @@ class CodexNativeExecutor(Executor):
         # steering. The terminal event is yielded after the lock releases.
         error_msg: str | None = None
         accepted_response_id: str | None = None
+        accepted_turn_id: str | None = None
+        accepted_session_id: str | None = None
+        accepted_thread_id: str | None = None
+        experiment_attempt_id = None
+        if config is not None and isinstance(config.extra, Mapping):
+            candidate_attempt_id = config.extra.get("experiment_attempt_id")
+            if isinstance(candidate_attempt_id, str) and candidate_attempt_id:
+                experiment_attempt_id = candidate_attempt_id
         async with self._inject_lock:
             state = read_bridge_state(self._bridge_dir)
             if state is None:
@@ -405,6 +416,13 @@ class CodexNativeExecutor(Executor):
             elif not _session_is_active(state.session_id, self._request_session_id):
                 error_msg = "Codex native session is no longer active"
             else:
+                # Persist the attempt before the RPC so the forwarder can
+                # attach it to the exact terminal boundary even if the
+                # boundary races the executor's return path.
+                update_experiment_attempt_id(self._bridge_dir, experiment_attempt_id)
+                state = read_bridge_state(self._bridge_dir) or state
+                accepted_session_id = state.session_id
+                accepted_thread_id = state.thread_id
                 client = client_for_transport(
                     state.socket_path,
                     client_name="omnigent-codex-native",
@@ -428,6 +446,8 @@ class CodexNativeExecutor(Executor):
                     )
                     if accepted_turn_id is not None:
                         accepted_response_id = f"codex_{accepted_turn_id}"
+                    else:
+                        error_msg = "Codex native app-server accepted no turn id"
                 except Exception as exc:
                     _logger.exception("Codex native turn injection failed")
                     error_msg = f"Codex native executor error: {exc}"
@@ -441,8 +461,38 @@ class CodexNativeExecutor(Executor):
                     await client.close()
         if error_msg is not None:
             yield ExecutorError(message=error_msg)
-        else:
-            yield TurnComplete(response=None, native_response_id=accepted_response_id)
+            return
+        if accepted_turn_id is None or accepted_session_id is None or accepted_thread_id is None:
+            yield ExecutorError(message="Codex native turn identity was not established")
+            return
+        terminal = await wait_for_terminal_record(
+            self._bridge_dir,
+            session_id=accepted_session_id,
+            thread_id=accepted_thread_id,
+            turn_id=accepted_turn_id,
+        )
+        if terminal is None:
+            yield ExecutorError(
+                message=(
+                    "Timed out waiting for Codex native terminal boundary "
+                    f"(turn_id={accepted_turn_id})"
+                ),
+                retryable=True,
+            )
+            return
+        if terminal.status == "failed":
+            detail = terminal.error_message or "Codex native turn failed"
+            yield ExecutorError(message=detail, retryable=True)
+            return
+        yield TurnComplete(
+            response=None,
+            native_response_id=accepted_response_id,
+            native_thread_id=terminal.thread_id,
+            native_turn_id=terminal.turn_id,
+            terminal_status=terminal.status,
+            terminal_error=terminal.error_message,
+            experiment_attempt_id=terminal.experiment_attempt_id,
+        )
 
 
 def _model_effort_overrides(config: ExecutorConfig | None) -> dict[str, object]:

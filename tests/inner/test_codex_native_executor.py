@@ -12,10 +12,12 @@ import pytest
 from omnigent.harnesses.codex_native.app_server import CodexAppServerResponseError
 from omnigent.harnesses.codex_native.bridge import (
     CodexNativeBridgeState,
+    CodexNativeTerminalRecord,
     read_bridge_state,
     read_codex_config_model,
     write_bridge_startup_error,
     write_bridge_state,
+    write_terminal_record,
 )
 from omnigent.inner.codex_native_executor import CodexNativeExecutor
 from omnigent.inner.executor import ExecutorConfig, ExecutorError, TurnComplete
@@ -50,6 +52,9 @@ class _FakeCodexNativeClient:
     requests: list[tuple[str, dict[str, Any]]] = []
     created: list[tuple[Path | None, str | None, str]] = []
     next_turn = 1
+    bridge_dir: Path | None = None
+    terminal_status = "idle"
+    terminal_error = None
 
     def __init__(
         self,
@@ -70,6 +75,8 @@ class _FakeCodexNativeClient:
         self.client_name = client_name
         self.connected = False
         self.closed = False
+        if socket_path is not None:
+            type(self).bridge_dir = socket_path.parent
         type(self).created.append((socket_path, ws_url, client_name))
 
     async def connect(self) -> None:
@@ -100,17 +107,38 @@ class _FakeCodexNativeClient:
         if method == "turn/start":
             turn_id = f"turn_{type(self).next_turn}"
             type(self).next_turn += 1
+            self._write_terminal_record(turn_id)
             return {"result": {"turn": {"id": turn_id}}}
         if method == "turn/steer":
-            return {"result": {"turnId": "turn_steered"}}
+            turn_id = "turn_steered"
+            self._write_terminal_record(turn_id)
+            return {"result": {"turnId": turn_id}}
         return {"result": {}}
+
+    @classmethod
+    def _write_terminal_record(cls, turn_id: str) -> None:
+        if cls.bridge_dir is None:
+            return
+        state = read_bridge_state(cls.bridge_dir)
+        assert state is not None
+        write_terminal_record(
+            cls.bridge_dir,
+            CodexNativeTerminalRecord(
+                session_id=state.session_id,
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                status=cls.terminal_status,
+                source="test",
+                error_message=cls.terminal_error,
+            ),
+        )
 
     async def iter_events(self) -> Any:
         """
-        Fail if the executor waits on Codex terminal notifications.
+        Fail if the executor tries to consume the app-server event stream.
 
-        The native executor is only an injection bridge. The
-        separate forwarder owns Codex status and transcript events.
+        The forwarder owns that stream; the test publishes the durable
+        terminal record directly to model its cross-process handoff.
 
         :returns: Async iterator that raises on first consumption.
         """
@@ -126,6 +154,8 @@ def _collect_turn_events(executor: CodexNativeExecutor, text: str) -> list[Any]:
     :param text: User text to send, e.g. ``"hello"``.
     :returns: Events yielded by :meth:`CodexNativeExecutor.run_turn`.
     """
+
+    _FakeCodexNativeClient.bridge_dir = executor._bridge_dir  # type: ignore[attr-defined]
 
     async def run() -> list[Any]:
         """
@@ -145,21 +175,19 @@ def _collect_turn_events(executor: CodexNativeExecutor, text: str) -> list[Any]:
     return asyncio.run(run())
 
 
-def test_web_started_codex_turn_returns_without_waiting_for_terminal_event(
+def test_web_started_codex_turn_waits_for_matching_terminal_record(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """
-    A web-started Codex turn returns after app-server accepts it.
-
-    The terminal forwarder mirrors Codex completion/status events.
-    Waiting for those events inside the harness turn can leave the
-    runner permanently active after the first web message, so later
-    web messages never reach the local Codex TUI as new dispatches.
+    A web-started Codex turn completes only after its exact terminal record.
     """
     _FakeCodexNativeClient.requests = []
     _FakeCodexNativeClient.created = []
     _FakeCodexNativeClient.next_turn = 1
+    _FakeCodexNativeClient.bridge_dir = tmp_path
+    _FakeCodexNativeClient.terminal_status = "idle"
+    _FakeCodexNativeClient.terminal_error = None
     # Patch at the source so the executor's client_for_transport builds
     # the fake for either transport (ws:// or unix path).
     monkeypatch.setattr(
@@ -196,6 +224,41 @@ def test_web_started_codex_turn_returns_without_waiting_for_terminal_event(
             },
         )
     ]
+
+
+def test_failed_terminal_record_propagates_error_and_attempt_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed exact terminal record reaches the runner as a retryable error."""
+    _FakeCodexNativeClient.requests = []
+    _FakeCodexNativeClient.created = []
+    _FakeCodexNativeClient.next_turn = 1
+    _FakeCodexNativeClient.terminal_status = "failed"
+    _FakeCodexNativeClient.terminal_error = "provider quota exhausted"
+    monkeypatch.setattr(
+        "omnigent.harnesses.codex_native.app_server.CodexAppServerClient",
+        _FakeCodexNativeClient,
+    )
+    write_bridge_state(
+        tmp_path,
+        CodexNativeBridgeState(
+            session_id="conv_123",
+            socket_path=str(tmp_path / "app-server.sock"),
+            thread_id="thread_123",
+            codex_home=str(tmp_path / "codex-home"),
+            cwd=str(tmp_path),
+        ),
+    )
+    executor = CodexNativeExecutor(bridge_dir=tmp_path)
+    events = _collect_turn_events(executor, "failed")
+
+    assert len(events) == 1
+    assert isinstance(events[0], ExecutorError)
+    assert events[0].message == "provider quota exhausted"
+    assert events[0].retryable is True
+    _FakeCodexNativeClient.terminal_status = "idle"
+    _FakeCodexNativeClient.terminal_error = None
 
 
 def test_goal_command_sets_goal_before_starting_objective_turn(
@@ -730,6 +793,7 @@ def test_stale_steer_recovery_preserves_and_steers_concurrent_new_turn(
                     {"code": -32600, "message": "no active turn to steer"}
                 )
             if method == "turn/steer":
+                self._write_terminal_record("turn_b")
                 return {"result": {"turnId": "turn_b"}}
             raise AssertionError(f"recovery must not double-start: {method}")
 
@@ -1231,7 +1295,7 @@ def test_turn_start_is_not_gated_on_pending_mcp_startup(
 
     The Codex app-server accepts a mid-startup ``turn/start`` and defers
     its execution until the startup round settles (verified against codex
-    0.142.5), so a client-side wait would only add latency — up to its
+    0.153.4), so a client-side wait would only add latency — up to its
     full bound when a server hangs. The bounded ``asyncio.timeout`` fails
     this test if a gate sneaks back in.
     """

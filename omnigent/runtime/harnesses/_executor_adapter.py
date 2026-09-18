@@ -173,6 +173,8 @@ class ExecutorAdapter(HarnessApp):
             "omnigent_turn_id": ctx.response_id,
             "omnigent_session_id": ctx.session_id,
         }
+        if request.experiment_attempt_id:
+            extra["experiment_attempt_id"] = request.experiment_attempt_id
         if request.reasoning is not None:
             effort = request.reasoning.get("effort")
             if effort:
@@ -294,7 +296,16 @@ class ExecutorAdapter(HarnessApp):
                                 record_llm_usage(agent_span, event.usage)
                     # --- End tracing ---
                     self._translate_event(
-                        event, ctx, request.experiment_attempt_id, request.native_terminal_input
+                        event,
+                        ctx,
+                        request.experiment_attempt_id,
+                        request.native_terminal_input,
+                        request.model_override or request.model,
+                        (
+                            request.reasoning.get("effort")
+                            if isinstance(request.reasoning, dict)
+                            else None
+                        ),
                     )
                     if isinstance(event, TurnComplete):
                         if tctx is not None and agent_span is not None:
@@ -714,6 +725,8 @@ class ExecutorAdapter(HarnessApp):
         ctx: TurnContext,
         attempt_id: str | None = None,
         native_terminal_input: bool = False,
+        requested_model: str | None = None,
+        requested_reasoning_effort: str | None = None,
     ) -> None:
         """Translate one inner ExecutorEvent into Omnigent SSE events via ``ctx.emit``."""
         if isinstance(event, TextChunk):
@@ -834,6 +847,15 @@ class ExecutorAdapter(HarnessApp):
                     NativeResponseLinkedEvent(
                         attempt_id=attempt_id,
                         native_response_id=event.native_response_id or ctx.response_id,
+                        session_id=ctx.session_id,
+                        native_thread_id=event.native_thread_id,
+                        native_turn_id=event.native_turn_id,
+                        terminal_status=event.terminal_status,
+                        terminal_error=event.terminal_error,
+                        experiment_attempt_id=event.experiment_attempt_id or attempt_id,
+                        token_usage=event.usage,
+                        requested_model=requested_model,
+                        requested_reasoning_effort=requested_reasoning_effort,
                     )
                 )
             if event.response is not None:

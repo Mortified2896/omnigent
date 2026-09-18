@@ -28,6 +28,7 @@ from omnigent.harnesses.codex_native.bridge import (
     MCP_STARTUP_STARTING,
     MCP_STARTUP_STATES,
     CodexNativeBridgeState,
+    CodexNativeTerminalRecord,
     DeveloperInstructionsReadState,
     clear_active_turn_id_if_matches,
     codex_home_for_bridge_dir,
@@ -41,6 +42,7 @@ from omnigent.harnesses.codex_native.bridge import (
     update_mcp_server_startup,
     update_thread_id,
     write_bridge_state,
+    write_terminal_record,
 )
 from omnigent.harnesses.codex_native.elicitation import (
     codex_elicitation_id,
@@ -132,8 +134,9 @@ _CODEX_MCP_ELICITATION_REQUEST_METHOD = "mcpServer/elicitation/request"
 # Per-server MCP startup progress (issue #2058). Codex runs an MCP
 # startup round when a thread starts, but delivers the per-server
 # ``mcpServer/startupStatus/updated`` edges ONLY to the connection that
-# owns the thread (the TUI) — verified against codex 0.142.5 — so this
-# observer connection cannot passively mirror them. Instead the round is
+# owns the thread (the TUI) — verified against the resolved codex-cli 0.153.4
+# — so this observer connection cannot passively mirror them. Instead the
+# round is
 # SYNTHESIZED: at forwarder start the config-declared servers are
 # recorded as ``starting`` (true — codex boots them all at thread start)
 # in the bridge dir and posted to Omnigent as ``external_mcp_startup``; the
@@ -422,6 +425,7 @@ class _CodexForwarderState:
     subscribed_child_threads: set[str] = field(default_factory=set)
     synced_item_keys: set[str] = field(default_factory=set)
     surfaced_terminal_error_turns: set[str] = field(default_factory=set)
+    scheduled_terminal_review_turns: set[str] = field(default_factory=set)
     posted_user_turns: set[str] = field(default_factory=set)
     posted_tool_calls: set[str] = field(default_factory=set)
     partial_text_by_turn: dict[str, list[_PartialTextBuffer]] = field(default_factory=dict)
@@ -1100,6 +1104,83 @@ class _PreparedTerminalTurn:
 
     handled: bool
     edge: _CodexTurnStatusEdge | None
+
+
+def _persist_terminal_record(
+    bridge_dir: Path,
+    edge: _CodexTurnStatusEdge,
+    *,
+    thread_id: str | None = None,
+) -> None:
+    """Persist one terminal edge for the executor's exact-turn wait."""
+    if edge.turn_id is None:
+        # An id-less terminal notification cannot be correlated safely to a
+        # native executor request, so it remains a UI status edge only.
+        return
+    state = read_bridge_state(bridge_dir)
+    if state is None:
+        return
+    write_terminal_record(
+        bridge_dir,
+        CodexNativeTerminalRecord(
+            session_id=state.session_id,
+            thread_id=thread_id or state.thread_id,
+            turn_id=edge.turn_id,
+            status="failed" if edge.status == "failed" else "idle",
+            source=edge.source,
+            error_message=edge.error.message if edge.error is not None else None,
+            error_kind=edge.error.kind if edge.error is not None else None,
+            experiment_attempt_id=state.experiment_attempt_id,
+        ),
+    )
+
+
+_terminal_review_tasks: set[asyncio.Task[bool]] = set()
+
+
+def _reap_terminal_review_task(task: asyncio.Task[bool]) -> None:
+    _terminal_review_tasks.discard(task)
+    if not task.cancelled():
+        try:
+            task.exception()
+        except Exception:  # noqa: BLE001 - review is non-fatal to the turn.
+            _logger.warning("Codex self-review task failed", exc_info=True)
+
+
+def _schedule_terminal_review(
+    bridge_dir: Path,
+    *,
+    session_id: str,
+    thread_id: str,
+    turn_id: str | None,
+    forwarder_state: _CodexForwarderState | None = None,
+) -> None:
+    """Schedule exactly one review after this forwarder owns terminal state."""
+    if turn_id is None or not thread_id:
+        return
+    try:
+        from .self_review import review_completed_turn, self_review_enabled
+
+        if not self_review_enabled():
+            return
+        loop = asyncio.get_running_loop()
+    except Exception:  # noqa: BLE001 - optional review is non-fatal.
+        return
+    if forwarder_state is not None:
+        if turn_id in forwarder_state.scheduled_terminal_review_turns:
+            return
+        forwarder_state.scheduled_terminal_review_turns.add(turn_id)
+    task = loop.create_task(
+        review_completed_turn(
+            bridge_dir,
+            session_id=session_id,
+            parent_thread_id=thread_id,
+            primary_turn_id=turn_id,
+        ),
+        name=f"codex-self-review:{turn_id}",
+    )
+    _terminal_review_tasks.add(task)
+    task.add_done_callback(_reap_terminal_review_task)
 
 
 # Codex ``item/completed`` item types that represent a built-in tool call.
@@ -2189,6 +2270,7 @@ async def _create_thread_replacement_session(
             # Carry the workspace across the rotation, or the executor
             # falls back to the harness process's own cwd for new turns.
             cwd=state.cwd if state is not None else None,
+            experiment_attempt_id=state.experiment_attempt_id if state is not None else None,
         ),
     )
 
@@ -2515,16 +2597,24 @@ def _resume_terminal_status_edge_for_latest_turn(
         status = _omnigent_status_from_resume_turn(turn)
         if status is None:
             return None
-        update_active_turn_id(bridge_dir, None)
         # Parity with the live path — surface ``turn.error`` (if any) that
         # forced this resume turn to ``failed``.
         error = _terminal_error_from_turn({"turn": turn})
-        return _CodexTurnStatusEdge(
+        edge = _CodexTurnStatusEdge(
             status=status,
             turn_id=turn_id,
             source="thread/resume:turn-error" if error is not None else "thread/resume",
             error=error,
         )
+        _persist_terminal_record(bridge_dir, edge, thread_id=thread_id)
+        _schedule_terminal_review(
+            bridge_dir,
+            session_id=state.session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        update_active_turn_id(bridge_dir, None)
+        return edge
     return None
 
 
@@ -3157,16 +3247,23 @@ async def _maybe_handle_turn_event(
                 return True
             forwarder_state.surfaced_terminal_error_turns.add(turn_id)
             clear_active_turn_id_if_matches(bridge_dir, turn_id)
-        await _post_turn_status_edge(
-            client,
-            session_id,
-            _CodexTurnStatusEdge(
-                status="failed",
-                turn_id=turn_id,
-                source="error",
-                error=error,
-            ),
+        edge = _CodexTurnStatusEdge(
+            status="failed",
+            turn_id=turn_id,
+            source="error",
+            error=error,
         )
+        _persist_terminal_record(bridge_dir, edge, thread_id=_thread_id_from_params(params))
+        state = read_bridge_state(bridge_dir)
+        _schedule_terminal_review(
+            bridge_dir,
+            session_id=session_id,
+            thread_id=_thread_id_from_params(params)
+            or (state.thread_id if state is not None else ""),
+            turn_id=turn_id,
+            forwarder_state=forwarder_state,
+        )
+        await _post_turn_status_edge(client, session_id, edge)
         await usage_coalescer.flush()
         return True
     if method == "turn/started":
@@ -4437,6 +4534,28 @@ def _prepare_terminal_turn_event(
         and terminal_turn_id in forwarder_state.surfaced_terminal_error_turns
     ):
         clear_active_turn_id_if_matches(bridge_dir, terminal_turn_id)
+        # The standalone error already owns the failed status edge. Still
+        # pass the later boundary through the same durable terminal-record
+        # path so resume/reconnect and usage draining remain idempotent.
+        _persist_terminal_record(
+            bridge_dir,
+            _CodexTurnStatusEdge(
+                status="failed",
+                turn_id=terminal_turn_id,
+                source="error:terminal-boundary",
+                error=_terminal_error_from_turn(params),
+            ),
+            thread_id=_thread_id_from_params(params),
+        )
+        state = read_bridge_state(bridge_dir)
+        _schedule_terminal_review(
+            bridge_dir,
+            session_id=state.session_id if state is not None else "",
+            thread_id=_thread_id_from_params(params)
+            or (state.thread_id if state is not None else ""),
+            turn_id=terminal_turn_id,
+            forwarder_state=forwarder_state,
+        )
         _logger.info(
             "Codex forwarder suppressed terminal boundary after standalone error: "
             "method=%s turn_id=%s",
@@ -4452,6 +4571,19 @@ def _prepare_terminal_turn_event(
             terminal_turn_id,
         )
         return _PreparedTerminalTurn(handled=False, edge=None)
+    _persist_terminal_record(
+        bridge_dir,
+        edge,
+        thread_id=_thread_id_from_params(params),
+    )
+    state = read_bridge_state(bridge_dir)
+    _schedule_terminal_review(
+        bridge_dir,
+        session_id=state.session_id if state is not None else "",
+        thread_id=_thread_id_from_params(params) or (state.thread_id if state is not None else ""),
+        turn_id=edge.turn_id,
+        forwarder_state=forwarder_state,
+    )
     return _PreparedTerminalTurn(handled=True, edge=edge)
 
 

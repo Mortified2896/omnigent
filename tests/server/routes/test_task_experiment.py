@@ -54,6 +54,19 @@ def test_forecast_commits_before_native_inference(conversation_store, monkeypatc
             {
                 "attempt_id": event["experiment_attempt_id"],
                 "native_response_id": "codex_exact-rpc-turn",
+                "session_id": conv.id,
+                "native_thread_id": "thread_primary",
+                "native_turn_id": "turn_primary",
+                "call_log_id": "call_exact",
+                "provider": "openai",
+                "model": "gpt-5.6-codex",
+                "connection_id": "conn_1",
+                "reasoning_effort": "high",
+                "token_usage": {
+                    "input_tokens": 11,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 7,
+                },
             },
         )
 
@@ -79,6 +92,11 @@ def test_forecast_commits_before_native_inference(conversation_store, monkeypatc
     assert len(rows) == 2
     assert rows[1]["native_response_id"] == "codex_exact-rpc-turn"
     assert rows[1]["attempt_id"] == rows[0]["attempt_id"]
+    assert rows[1]["session_id"] == conv.id
+    assert rows[1]["native_thread_id"] == "thread_primary"
+    assert rows[1]["native_turn_id"] == "turn_primary"
+    assert rows[1]["call_log_id"] == "call_exact"
+    assert rows[1]["token_usage"]["cached_input_tokens"] == 0
 
 
 def test_outcome_api_reload_and_validation(conversation_store):

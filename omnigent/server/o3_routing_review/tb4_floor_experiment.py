@@ -481,10 +481,20 @@ async def apply_floor_experiment(
             if owner or saved is not None:
                 break
             if asyncio.get_running_loop().time() >= deadline:
-                raise RoutingReviewError(
-                    "TB4 assignment is pending or interrupted; no second adviser call was made",
-                    status_code=409,
+                blocked = await asyncio.to_thread(
+                    ledger.block,
+                    key_sha,
+                    fingerprint,
+                    reason="reservation owner did not complete before recovery deadline",
                 )
+                if blocked.get("status") == "blocked":
+                    raise RoutingReviewError(
+                        "TB4 assignment is permanently blocked after an interrupted reservation",
+                        status_code=409,
+                        code="tb4_assignment_blocked",
+                    )
+                saved = blocked
+                break
             await asyncio.sleep(0.05)
         if saved is None:
             advice, attribution = await advise_tb4_floor(
@@ -497,6 +507,12 @@ async def apply_floor_experiment(
             saved = {"advice": advice.model_dump(mode="json"), "attribution": attribution}
             await asyncio.to_thread(ledger.complete, key_sha, fingerprint, saved)
         else:
+            if saved.get("status") == "blocked":
+                raise RoutingReviewError(
+                    "TB4 assignment is permanently blocked after an interrupted reservation",
+                    status_code=409,
+                    code="tb4_assignment_blocked",
+                )
             advice = TB4FloorAdvice.model_validate(saved["advice"])
             attribution = saved["attribution"]
         adviser_floor = advice.floor_percent

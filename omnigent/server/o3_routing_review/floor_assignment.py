@@ -48,3 +48,26 @@ class FloorAssignmentLedger:
                 ).fetchone()
                 if row is None or row[0] != payload:
                     raise ValueError("TB4 assignment is immutable")
+
+    def block(self, key: str, fingerprint: str, *, reason: str) -> dict:
+        """Permanently close an abandoned reservation without reassigning it."""
+        payload = json.dumps(
+            {"status": "blocked", "reason": reason},
+            sort_keys=True,
+        )
+        with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+            cursor = db.execute(
+                "UPDATE assignments SET result = ? WHERE identity = ? "
+                "AND fingerprint = ? AND result IS NULL",
+                (payload, key, fingerprint),
+            )
+            if cursor.rowcount == 1:
+                return json.loads(payload)
+            row = db.execute(
+                "SELECT fingerprint, result FROM assignments WHERE identity = ?", (key,)
+            ).fetchone()
+            if row is None or row[0] != fingerprint:
+                raise ValueError("TB4 assignment is immutable")
+            if row[1] is None:
+                raise ValueError("TB4 assignment could not be blocked")
+            return json.loads(row[1])

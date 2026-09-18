@@ -19,7 +19,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.conversation import ResourceEventData
-from omnigent.harnesses.codex_native.bridge import read_bridge_state, read_policy_hook_config
+from omnigent.harnesses.codex_native.bridge import (
+    read_bridge_state,
+    read_policy_hook_config,
+    read_terminal_record,
+)
 from omnigent.server.o3_routing_review.omniroute import OmniRouteClient, OmniRouteError
 from omnigent.server.task_experiment import RESOURCE_TYPE
 
@@ -406,12 +410,26 @@ async def wait_for_primary_terminal(
     *,
     session_id: str,
     primary_turn_id: str,
+    primary_thread_id: str | None = None,
     timeout_seconds: float = PRIMARY_TERMINAL_TIMEOUT_SECONDS,
 ) -> bool:
-    """Wait until the forwarder no longer records *primary_turn_id* as active."""
+    """Wait for the durable terminal record for one exact native turn."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
+        if primary_thread_id is not None:
+            record = read_terminal_record(
+                bridge_dir,
+                session_id=session_id,
+                thread_id=primary_thread_id,
+                turn_id=primary_turn_id,
+            )
+            if record is not None:
+                return True
+            await asyncio.sleep(0.2)
+            continue
+        # Compatibility for older internal callers that did not retain the
+        # thread identity. New scheduling paths always use the exact record.
         state = read_bridge_state(bridge_dir)
         if state is None or state.session_id != session_id:
             return False
@@ -535,6 +553,7 @@ async def review_completed_turn(
             bridge_dir,
             session_id=session_id,
             primary_turn_id=primary_turn_id,
+            primary_thread_id=parent_thread_id,
         ):
             return False
         # Claim durably before any evaluator call so duplicate terminal edges
