@@ -1,5 +1,11 @@
 # Legacy Control Room dual-instance upgrade safety
 
+> **Historical mechanism and migration record.** Present-state selection belongs
+> to the [HomeLab environment guide](https://github.com/Mortified2896/HomeLab/tree/main/docs/environments).
+> Any single-primary or missing-peer statements below describe the recorded
+> transition, not the current topology. Use [the peer-v2 contract](rtx-peer-v2.md)
+> for the selected peer deployment; never revive old services for a preflight.
+
 This document is the authoritative safety contract **only for the legacy
 Control Room two-peer `peer_deployer` mechanism when two distinct Omnigent
 instances have deliberately been provisioned and that mechanism has explicitly

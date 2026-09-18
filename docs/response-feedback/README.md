@@ -68,18 +68,9 @@ OMNIGENT_E2E_CODEX_NATIVE=1 uv run pytest tests/e2e/test_response_feedback_nativ
 
 In an isolated development UI, generate an answer, select either thumb, edit and save the comment, switch polarity, and reload. Confirm the same selection/comment returns. Clear feedback and reload to confirm removal. Repeat at a narrow mobile viewport and activate the buttons with Tab/Enter/Space. User messages, streaming answers and routing cards should have no thumbs.
 
-## RTX 0.13.0 forward-port validation
+## Historical validation
 
-Source validation runs on VM 100 `rtx-omnigent`, in
-`/home/hermes/workspace/worktrees/omnigent/response-feedback-162-rtx`, based on
-`b124220d9bc8ee39bbf31e29520661936b6166cf`. The existing implementation and
-resolved forward-port were transferred intact; installed release trees are not
-source workspaces. Deployment is paused and the active release is unchanged.
-
-Backend/store validation has 310 passes and one existing skip.
-The real native-answer feedback test passes against a disposable RTX test
-server/database. Frontend regression validation has 685 passes and one existing
-routing-eligibility failure (`ChatPage.test.ts:1740`), reproduced on the exact
-unchanged baseline (174 passes and the same failure). Scoped pre-commit,
-including Ruff, Pyrefly, oxlint and TypeScript, and the production web build pass.
-This is source validation, not live deployment or physical-phone acceptance.
+The [forward-port record](../evidence/response-feedback-forward-port.md) preserves
+its original revision, workspace and results. New source validation follows
+[CONTRIBUTING](../../CONTRIBUTING.md) in any suitable isolated worktree; live
+acceptance requires fresh evidence under the HomeLab environment gate.

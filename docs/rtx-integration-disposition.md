@@ -4,9 +4,10 @@ Status (2026-09-14): RTX O1 on VM 100 `rtx-omnigent` is the active runtime.
 This document preserves integration provenance and acceptance checkpoints;
 source publication and historical peer-promotion acceptance are distinct
 from current runtime status. For present-state decisions, defer to the
-[HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md).
+[HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/main/docs/environments/current.json) and [operational workflow](https://github.com/Mortified2896/HomeLab/tree/main/docs/environments).
 Old O1/O2, OpenCode Web and old OmniRoute on `ai-control-hub` are retired.
-Do not start, restore or recreate O2 to satisfy legacy deployer preflight.
+Do not start, restore or recreate the retired installation to satisfy legacy
+deployer preflight. This record does not describe later peer installations.
 
 Historical integration baseline: origin/main 28095733f87dc50b3bf4e73adee39ad4a7e72c1d.
 The historical O1/O2 release ba50146e9bd4512ec345feb7e9bc483421a04104 is

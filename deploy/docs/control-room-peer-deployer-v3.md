@@ -1,5 +1,11 @@
 # Control Room peer deployer v3
 
+> **Historical mechanism and migration record.** Present-state selection belongs
+> to the [HomeLab environment guide](https://github.com/Mortified2896/HomeLab/tree/main/docs/environments).
+> Any single-primary or missing-peer statements below describe the recorded
+> transition, not the current topology. Use [the peer-v2 contract](rtx-peer-v2.md)
+> for the selected peer deployment; never revive old services for a preflight.
+
 > **Legacy scope / superseded RTX assumptions (2026-09-14).**
 > This wrapper applies only when two distinct peers have deliberately been
 > provisioned and the legacy peer-deployer mechanism is explicitly selected.

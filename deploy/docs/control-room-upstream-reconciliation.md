@@ -1,5 +1,11 @@
 # Control Room upstream 0.9 reconciliation
 
+> **Historical mechanism and migration record.** Present-state selection belongs
+> to the [HomeLab environment guide](https://github.com/Mortified2896/HomeLab/tree/main/docs/environments).
+> Any single-primary or missing-peer statements below describe the recorded
+> transition, not the current topology. Use [the peer-v2 contract](rtx-peer-v2.md)
+> for the selected peer deployment; never revive old services for a preflight.
+
 > **Legacy scope / superseded RTX assumptions (2026-09-14).**
 > This is the historical upstream 0.9 reconciliation plan. Its O2-first
 > soak/promotion architecture is superseded for present RTX operations; source
