@@ -4,12 +4,11 @@
 > This is the opt-in policy for the historical ai-control-hub peers. It neither
 > establishes RTX privileges nor authorizes installation or activation on the
 > current runtime.
-> Present-state decisions follow the [HomeLab current topology](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/omnigent-current-topology.md) and [operational workflow](https://github.com/Mortified2896/HomeLab/blob/codex/rtx-o1-migration/docs/codex-server-workflow.md).
-> Active O1 is on RTX VM 100; no live O2 peer is required or available.
-> Do not start, restore or recreate retired O2 to satisfy preflight.
-> Recovery/installation text requires explicit owner authorization to
-> reactivate retired services. Distinct-peer and rollback safety rules remain
-> intact for an explicitly reintroduced two-peer topology.
+> Present-state selection follows the [HomeLab environment guide](https://github.com/Mortified2896/HomeLab/tree/main/docs/environments).
+> This historical opt-in bundle does not establish current runtime topology or
+> privileges. Never start, restore or recreate retired services to satisfy a
+> preflight. Installation/reactivation requires explicit owner authorization and
+> the selected application's distinct-peer and rollback safety contract.
 
 This directory is the repository-managed source of truth for the opt-in
 trusted-agent host policy used by the Control Room's O1 and O2 Omnigent host

@@ -1,5 +1,10 @@
 # Control Room forward-port compatibility assessment
 
+> **Historical source-integration assessment.** The identities, revisions and
+> validation status below describe the recorded integration checkpoint, not the
+> current development environment or live acceptance. For current selection use
+> the [HomeLab environment guide](https://github.com/Mortified2896/HomeLab/tree/main/docs/environments).
+
 Status: source integration in progress; no deployment or routing acceptance.
 
 ## Verified source identities
