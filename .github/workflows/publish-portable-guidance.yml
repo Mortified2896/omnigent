@@ -1,0 +1,77 @@
+name: Publish validated portable documentation tree
+on:
+  push:
+    branches: [docs/portable-agent-guidance, docs/portable-environment-guidance]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: contains(github.event.head_commit.message, '[publish-portable-guidance]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 4
+          persist-credentials: false
+      - name: Verify exact source objects and publish only the task branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64, hashlib, os, pathlib, subprocess
+          specifications = {
+              'Mortified2896/HomeLab': ('docs/portable-environment-guidance', '40d16094f2bb8891ebc6d364f09e1aca98bd03ca', '21d042e69d8606858c2f79fff894d68034184216', '6cb3bbccd3ca7d4040dfa71fb4dc95f3f615c3b25fa131fbebc8e1c70622cd49', 55),
+              'Mortified2896/omnigent': ('docs/portable-agent-guidance', '6f7b7c8bb5166d7f2737ecf27609fdecd727a339', '88e807b7473d457807fa8cb0d4075efd3545a3cd', 'f057265fb27e6fc264e5997865359fa11fcf9effb1f5226215ab5bbe49a487ce', 12),
+              'Mortified2896/omniroute-customizations': ('docs/portable-agent-guidance', '3d35209b95e58aba7cfad778efb87517a148ede9', 'e34d622e65ae7f26ec2483863f878a44138302bb', '0819e7b003f62ed45400fd9d8f46e2df785d3f53a9258a9903cff55bfac89601', 14),
+          }
+          repository = os.environ['GITHUB_REPOSITORY']
+          branch, base, tree, digest, count = specifications[repository]
+          assert os.environ['GITHUB_REF'] == 'refs/heads/' + branch
+          def git(*args, data=None):
+              return subprocess.check_output(['git', *args], input=data).decode().strip()
+          origin = git('remote', 'get-url', 'origin')
+          assert origin in (f'https://github.com/{repository}', f'https://github.com/{repository}.git')
+          auth = base64.b64encode(('x-access-token:' + os.environ['GH_TOKEN']).encode()).decode()
+          autharg = 'http.https://github.com/.extraheader=AUTHORIZATION: basic ' + auth
+          def remote(ref):
+              result = git('-c', autharg, 'ls-remote', '--exit-code', 'origin', ref)
+              return result.split()[0]
+          head = git('rev-parse', 'HEAD')
+          assert head == os.environ['GITHUB_SHA']
+          assert remote('refs/heads/main') == base, 'main advanced; review required'
+          assert remote('refs/heads/' + branch) == head, 'task branch advanced; refusing overwrite'
+          git('cat-file', '-e', base + '^{commit}')
+          pack = base64.b64decode(pathlib.Path('.portable-guidance.pack.b64').read_text().strip(), validate=True)
+          assert hashlib.sha256(pack).hexdigest() == digest, 'source transfer checksum mismatch'
+          git('index-pack', '--stdin', '--fix-thin', data=pack)
+          assert git('cat-file', '-t', tree) == 'tree'
+          changes = git('diff', '--name-status', base, tree).splitlines()
+          assert len(changes) == count, 'unexpected changed-file count'
+          for change in changes:
+              status, path = change.split('\t')
+              assert status in ('A', 'M'), 'no source deletion authorized'
+              allowed = path in ('AGENTS.md', 'README.md', 'README.historical-20260918.md') or path.startswith('docs/')
+              if repository.endswith('/HomeLab'):
+                  allowed |= path in ('scripts/environment.py', 'scripts/tests/test_environment.py')
+              if repository.endswith('/omnigent'):
+                  allowed |= path.startswith('deploy/docs/') or path == 'deploy/control-room/trusted-root/README.md'
+              assert allowed and '..' not in pathlib.PurePosixPath(path).parts, path
+          for transient in ('.portable-guidance.pack.b64', '.github/workflows/publish-portable-guidance.yml', '.github/workflows/documentation-source-snapshot.yml'):
+              found = subprocess.run(['git', 'cat-file', '-e', tree + ':' + transient], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              assert found.returncode != 0, 'temporary publication file in final tree'
+          git('diff', '--check', base, tree)
+          message = ('docs: separate portable policy from environment inventory\n\n'
+                     'Publish the exact source tree validated in isolated task worktrees.\n'
+                     'Preserve historical evidence, trusted fallback and strict live gates.\n'
+                     'Temporary source transfer and publication files are absent.\n\n'
+                     'Signed-off-by: Mortified2896 <hello@moneymattersmedia.com>\n')
+          commit = git('-c', 'user.name=Mortified2896', '-c', 'user.email=hello@moneymattersmedia.com', 'commit-tree', tree, '-p', head, data=message.encode())
+          assert git('rev-parse', commit + '^{tree}') == tree
+          assert remote('refs/heads/' + branch) == head
+          git('-c', autharg, 'push', 'origin', commit + ':refs/heads/' + branch)
+          assert remote('refs/heads/' + branch) == commit
+          print('Published source commit:', commit)
+          print('Verified final tree:', tree)
+          print('Reviewed changed files:', count)
+          print('No main update, live connection, runtime operation or repository script executed.')
