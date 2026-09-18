@@ -960,6 +960,14 @@ class CodexNativeAppServer:
             inject_hooks=self.router_hooks_registered,
             extend_model_catalog=codex_extended_catalog_requested(self.env),
         )
+        if self.pinned_model and self.pinned_model.startswith("custom/o3-route-"):
+            from omnigent.server.o3_routing_review.tool_search import prepare_alias_catalog
+
+            catalog_path = await prepare_alias_catalog(
+                self.codex_home, self.pinned_model, self.codex_path
+            )
+            if catalog_path is not None:
+                self.config_overrides.append(f"model_catalog_json={json.dumps(str(catalog_path))}")
         if self.trust_project:
             _trust_codex_project(self.codex_home, self.cwd)
         # Write the MCP server config into config.toml so the app-server
@@ -1115,6 +1123,17 @@ class CodexNativeAppServer:
             )
         await client.connect()
         try:
+            from omnigent.inner.codex_hook_ownership import reconcile_inherited_provenance_hooks
+
+            try:
+                await reconcile_inherited_provenance_hooks(
+                    client.request,
+                    cwd=str(self.cwd),
+                    codex_home=self.codex_home,
+                    source_path=_codex_home_config_source_from_env() / _CODEX_HOOKS_FILE,
+                )
+            except Exception:  # noqa: BLE001 - optional provenance never disables policy hooks
+                _logger.warning("could not reconcile inherited provenance hooks", exc_info=True)
             await trust_native_policy_hooks(client, cwd=str(self.cwd))
             # Routing hooks live in the same generated file but under a
             # different module, so they need their own trust pass. Best
