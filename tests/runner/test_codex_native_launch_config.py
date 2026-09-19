@@ -144,6 +144,28 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_glm_direct_lane_is_an_allowed_persisted_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    cfg = await _run(
+        _Client(
+            _Resp(
+                200,
+                {
+                    "workspace": "/tmp/repo",
+                    "model_override": "glm/glm-5.3",
+                    "labels": {"omnigent.access_lane": "glm-direct"},
+                },
+            )
+        )
+    )
+
+    assert cfg.model_override == "glm/glm-5.3"
+    assert cfg.access_lane == "glm-direct"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "labels",
     [

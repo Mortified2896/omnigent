@@ -25,7 +25,18 @@ from cachetools import TTLCache
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
+from omnigent.harnesses.codex_native.zai_responses_proxy import (
+    ZaiResponsesProxy,
+    ZaiResponsesProxyConfig,
+    start_zai_responses_proxy,
+)
 from omnigent.models import model_catalog
+from omnigent.models.glm_model_vocabulary import (
+    GLM_CODING_BASE_URL,
+    GLM_DIRECT_API_KEY_ENV,
+    GLM_OMNIROUTE_TO_DIRECT,
+    glm_display_name,
+)
 from omnigent.util.json_types import JsonObject as _JsonObject
 
 if TYPE_CHECKING:
@@ -1194,6 +1205,80 @@ async def _codex_launch_catalog(
     return await read("codex-native", fingerprint, _probe)
 
 
+def _launch_bearer_token(launch: NativeCodexLaunch) -> str | None:
+    """Resolve a launch credential for a local, read-only model probe."""
+    for name in launch.env_passthrough:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value.removeprefix("Bearer ").strip()
+    for value in launch.credential_env.values():
+        if isinstance(value, str) and value.strip():
+            return value.removeprefix("Bearer ").strip()
+    return None
+
+
+def _omniroute_glm_model_rows(launch: NativeCodexLaunch) -> list[_JsonObject]:
+    """Discover provider-confirmed GLM rows from the active OmniRoute lane."""
+    base_url = native_codex_launch_base_url(launch)
+    if not base_url:
+        return []
+    omniroute_root = os.environ.get(
+        "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+    ).rstrip("/")
+    if omniroute_root.endswith("/v1"):
+        omniroute_root = omniroute_root.removesuffix("/v1")
+    if base_url.rstrip("/") != f"{omniroute_root}/v1":
+        return []
+    token = _launch_bearer_token(launch) or os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+    if not token:
+        return []
+    try:
+        listing = model_catalog.listing_for_provider(
+            model_catalog.ResolvedModelProvider(
+                kind="gateway",
+                family="openai",
+                base_url=base_url,
+                api_key=token,
+                detail="OmniRoute GLM model discovery",
+            )
+        )
+    except Exception:  # noqa: BLE001 — discovery is best-effort
+        _logger.debug("native-codex: OmniRoute GLM discovery failed", exc_info=True)
+        return []
+    if not listing.verified:
+        return []
+    available = {model.id for model in listing.models}
+    rows: list[_JsonObject] = []
+    for route_id, direct_id in GLM_OMNIROUTE_TO_DIRECT.items():
+        if route_id not in available:
+            continue
+        rows.append(
+            {
+                "id": route_id,
+                "model": route_id,
+                "displayName": glm_display_name(direct_id),
+            }
+        )
+    return rows
+
+
+def _append_omniroute_glm_model_rows(
+    rows: list[_JsonObject] | None, launch: NativeCodexLaunch | None
+) -> list[_JsonObject] | None:
+    """Add live GLM rows without turning a failed probe into a fake catalog."""
+    if rows is None or launch is None:
+        return rows
+    existing = {
+        str(row.get("id") or row.get("model"))
+        for row in rows
+        if isinstance(row.get("id") or row.get("model"), str)
+    }
+    return [
+        *rows,
+        *[row for row in _omniroute_glm_model_rows(launch) if row["id"] not in existing],
+    ]
+
+
 async def codex_launch_catalog(
     *, codex_path: str | None = None, launch: NativeCodexLaunch | None = None
 ) -> list[_JsonObject] | None:
@@ -1209,7 +1294,11 @@ async def codex_launch_catalog(
         omitted, resolve the host's default shape.
     :returns: Catalog rows, or ``None`` when no catalog could be obtained.
     """
-    return await _codex_launch_catalog(codex_path=codex_path, launch=launch, reprobe=False)
+    rows = await _codex_launch_catalog(codex_path=codex_path, launch=launch, reprobe=False)
+    if launch is None:
+        with contextlib.suppress(Exception):
+            launch = await asyncio.to_thread(resolve_native_codex_launch, model=None)
+    return _append_omniroute_glm_model_rows(rows, launch)
 
 
 async def codex_reprobed_launch_catalog(
@@ -1226,7 +1315,11 @@ async def codex_reprobed_launch_catalog(
         omitted, resolve the host's default shape.
     :returns: Fresh probe rows, or ``None`` when the probe failed.
     """
-    return await _codex_launch_catalog(codex_path=codex_path, launch=launch, reprobe=True)
+    rows = await _codex_launch_catalog(codex_path=codex_path, launch=launch, reprobe=True)
+    if launch is None:
+        with contextlib.suppress(Exception):
+            launch = await asyncio.to_thread(resolve_native_codex_launch, model=None)
+    return _append_omniroute_glm_model_rows(rows, launch)
 
 
 async def codex_launch_catalog_is_stale(
@@ -1351,6 +1444,7 @@ class CodexNativeAppServer:
     trust_project: bool = False
     trust_all_hooks: bool = False
     router_hooks_registered: bool = False
+    response_proxy: ZaiResponsesProxy | None = field(default=None, repr=False)
 
     async def start(self) -> None:
         """
@@ -1731,6 +1825,9 @@ class CodexNativeAppServer:
             self.stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.stderr_task
+        if self.response_proxy is not None:
+            self.response_proxy.close()
+            self.response_proxy = None
         from omnigent.benchmark_capture import capture_enabled, capture_io
         from omnigent.benchmark_capture_native import close_native
 
@@ -2451,6 +2548,35 @@ def _resolve_databricks_codex_model(host: str, profile: str, requested: str | No
     return model_catalog.resolve_catalog_model("databricks", family="openai").model_id
 
 
+def _replace_model_provider_base_url(overrides: Sequence[str], base_url: str) -> list[str]:
+    """Rewrite the generated provider table to a session-local endpoint."""
+    rewritten: list[str] = []
+    replaced = False
+    for override in overrides:
+        if not override.startswith("model_providers."):
+            rewritten.append(override)
+            continue
+        head, separator, table = override.partition("=")
+        marker = "base_url="
+        marker_index = table.find(marker)
+        if not separator or marker_index < 0:
+            rewritten.append(override)
+            continue
+        value_start = marker_index + len(marker)
+        try:
+            _, consumed = json.JSONDecoder().raw_decode(table[value_start:])
+        except ValueError:
+            rewritten.append(override)
+            continue
+        rewritten.append(
+            f"{head}={table[:value_start]}{json.dumps(base_url)}{table[value_start + consumed :]}"
+        )
+        replaced = True
+    if not replaced:
+        raise ValueError("GLM direct provider override has no model-provider base_url")
+    return rewritten
+
+
 def build_codex_native_server(
     *,
     socket_path: Path,
@@ -2471,6 +2597,7 @@ def build_codex_native_server(
     env_passthrough: Sequence[str] = (),
     credential_env: Mapping[str, str] | None = None,
     trust_all_hooks: bool = False,
+    response_proxy_config: ZaiResponsesProxyConfig | None = None,
 ) -> CodexNativeAppServer:
     """
     Build a configured native Codex app-server process wrapper.
@@ -2518,6 +2645,9 @@ def build_codex_native_server(
         startup hook-review screen on a persistent ``resume`` attach (see
         :func:`trust_all_codex_hooks`). Interactive CLI sessions leave it
         disabled so a human reviews their own new or changed hooks.
+    :param response_proxy_config: Optional direct Z.ai adapter configuration.
+        When present, the adapter is started on an ephemeral loopback port and
+        the generated Codex provider table is rewritten to use it.
     :returns: Configured app-server process wrapper.
     :raises ImportError: If no Codex CLI is available.
     :raises OSError: If Databricks routing was requested but no
@@ -2547,6 +2677,16 @@ def build_codex_native_server(
         pinned_model = codex_spawn_model(databricks.model) or databricks.model
     if extra_config_overrides:
         config_overrides.extend(extra_config_overrides)
+    response_proxy: ZaiResponsesProxy | None = None
+    if response_proxy_config is not None:
+        response_proxy = start_zai_responses_proxy(response_proxy_config)
+        try:
+            config_overrides = _replace_model_provider_base_url(
+                config_overrides, response_proxy.base_url
+            )
+        except Exception:
+            response_proxy.close()
+            raise
     if bypass_sandbox:
         # Mirror the --remote TUI's --dangerously-bypass-approvals-and-sandbox
         # on the app-server threads: never prompt for approval, and run
@@ -2583,6 +2723,7 @@ def build_codex_native_server(
         pinned_reasoning_effort=reasoning_effort,
         trust_project=trust_project,
         trust_all_hooks=trust_all_hooks,
+        response_proxy=response_proxy,
     )
 
 
@@ -2631,6 +2772,7 @@ class NativeCodexLaunch:
     env_passthrough: tuple[str, ...] = ()
     credential_env: Mapping[str, str] = field(default_factory=dict, repr=False)
     login_required: bool = False
+    response_proxy: ZaiResponsesProxyConfig | None = field(default=None, repr=False)
 
 
 _MODEL_PROVIDER_OVERRIDE_PREFIX = "model_provider="
@@ -3046,6 +3188,7 @@ def _resolve_native_codex_access_lane(
     from omnigent.onboarding.provider_config import default_provider_for_harness, load_config
     from omnigent.stores.conversation_store import (
         CODEX_ACCESS_LANE_DIRECT,
+        CODEX_ACCESS_LANE_GLM_DIRECT,
         CODEX_ACCESS_LANE_OMNIROUTE,
     )
 
@@ -3074,6 +3217,43 @@ def _resolve_native_codex_access_lane(
                 provider="openai-codex-subscription",
                 provider_fallback=False,
             ),
+        )
+
+    if access_lane == CODEX_ACCESS_LANE_GLM_DIRECT:
+        from omnigent.harnesses.codex_native.zai_responses_proxy import ZaiResponsesProxyConfig
+        from omnigent.models.glm_model_vocabulary import GLM_DIRECT_MODELS
+
+        direct_model = GLM_OMNIROUTE_TO_DIRECT.get(model)
+        if direct_model is None or direct_model not in GLM_DIRECT_MODELS:
+            raise OmnigentError(
+                f"GLM Direct Provider does not support model {model!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        api_key = os.environ.get(GLM_DIRECT_API_KEY_ENV, "").strip()
+        if not api_key:
+            raise OmnigentError(
+                f"GLM Direct Provider is not configured: set {GLM_DIRECT_API_KEY_ENV} "
+                "on the O1 host",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        return NativeCodexLaunch(
+            config_overrides=_provider_codex_config_overrides(
+                model=direct_model,
+                base_url=GLM_CODING_BASE_URL,
+                env_key=GLM_DIRECT_API_KEY_ENV,
+                wire_api="responses",
+            ),
+            model=direct_model,
+            profile=None,
+            summary=f"GLM Direct Provider via Z.ai (model={direct_model!r})",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=CODEX_ACCESS_LANE_GLM_DIRECT,
+                provider="z.ai",
+                provider_fallback=True,
+            ),
+            env_passthrough=(GLM_DIRECT_API_KEY_ENV,),
+            credential_env={GLM_DIRECT_API_KEY_ENV: api_key},
+            response_proxy=ZaiResponsesProxyConfig(api_key=api_key),
         )
 
     if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:

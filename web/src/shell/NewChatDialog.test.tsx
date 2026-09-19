@@ -1597,6 +1597,52 @@ describe("NewChatLandingScreen", () => {
     });
   });
 
+  it("shows GLM standard and direct fallback rows with one canonical model id", async () => {
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                {
+                  id: "glm/glm-5.3",
+                  displayName: "GLM 5.3 · OmniRoute",
+                  accessLane: "omniroute" as const,
+                  groupLabel: "GLM",
+                  description: "Standard GLM lane through OmniRoute.",
+                },
+                {
+                  id: "glm/glm-5.3",
+                  displayName: "GLM 5.3 · Direct Provider — fallback",
+                  accessLane: "glm-direct" as const,
+                  groupLabel: "GLM",
+                  description: "Explicit Z.ai fallback; lane failures never switch providers.",
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_glm_lane" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("GLM")).toBeTruthy();
+    const directOption = screen.getByRole("option", {
+      name: /^GLM 5\.3 · Direct Provider — fallback/,
+    });
+    expect(directOption).toHaveAttribute("data-access-lane", "glm-direct");
+    fireEvent.click(directOption);
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("glm/glm-5.3");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("glm-direct");
+  });
+
   it("omits model and effort launch overrides when both inline selectors are Default", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
