@@ -1860,3 +1860,41 @@ class ConversationStore(ABC):
             ``False`` otherwise.
         """
         ...
+
+    @abstractmethod
+    async def delete_conversation_if_unchanged(
+        self,
+        conversation_id: str,
+        *,
+        expected_updated_at: int,
+        expected_labels: dict[str, str],
+        expected_live_status: str | None,
+        expected_next_position: int | None,
+        expected_comments_count: int,
+        expected_comments_updated_at: int | None,
+    ) -> bool:
+        """Delete an isolated session only when its snapshot is unchanged.
+
+        The implementation must hold the conversation mutation lock while it
+        compares the version, labels, content-generation counter, comment
+        fingerprint, and child-session set, then deletes only if all guards
+        still match. Callers use this for ephemeral test-session cleanup; a
+        false result is a preservation signal, not permission to retry with an
+        unconditional delete. Implementations must fail closed when these
+        values cannot be checked in one transactional storage boundary.
+
+        :param conversation_id: Unique conversation identifier.
+        :param expected_updated_at: ``updated_at`` from the verified snapshot.
+        :param expected_labels: Complete labels from the same snapshot.
+        :param expected_live_status: Persisted activity state from the verified
+            snapshot. Implementations must compare it inside the mutation fence.
+        :param expected_next_position: Content-generation counter from the
+            verified snapshot.
+        :param expected_comments_count: Number of review comments in the
+            verified snapshot.
+        :param expected_comments_updated_at: Latest review-comment mutation
+            timestamp from the verified snapshot, or ``None`` when empty.
+        :returns: ``True`` when the guarded delete committed, ``False`` when
+            the session changed, disappeared, or gained a descendant.
+        """
+        ...

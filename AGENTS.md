@@ -10,6 +10,10 @@ Do not edit installed release trees as source. Do not reactivate retired old O1/
 
 Preserve unrelated changes. Do not merge, deploy, release, replace databases, or perform destructive cleanup unless the task explicitly authorizes it.
 
+Before continuing another agent's branch, fetch the current GitHub refs and fast-forward the correct task branch where possible. Compare its head and base to GitHub; do not work from chat SHAs alone, reset dirty work, or blindly merge another feature branch.
+
+For task scoring and live acceptance chats, follow `docs/task-scoring-and-test-sessions.md`: human tags/comments/outcomes are not scoring-AI input; keep automated reviewers disabled until their safety and outbound-input contracts are proven. Mark test chats at creation, retain inspection evidence, and never clean up unmarked or non-manifest-owned chats.
+
 ## Deployment controller scope
 
 Read `deploy/docs/deployment-controller-scope.md` before applying an O1/O2 deployment rule. The peer-supervision rule applies only to updates controlled from inside an Omnigent instance. Independent Codex (Mac app or CLI), ZCode, and operator/SSH sessions are external controllers: they may perform owner-authorized deployments of O1 and O2 directly, without an O1/O2 supervisor task, peer approval, or a TARGET/SUPERVISOR pair. Running on the same physical server does not by itself make a controller part of O1/O2.

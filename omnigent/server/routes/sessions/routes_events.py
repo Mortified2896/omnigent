@@ -12,6 +12,8 @@ from typing import Any, Literal, cast
 import httpx
 from fastapi import (
     APIRouter,
+    Header,
+    HTTPException,
     Request,
 )
 from fastapi.responses import StreamingResponse
@@ -209,8 +211,10 @@ from omnigent.server.schemas import (
     McpServerStartup,
     SessionEventInput,
 )
+from omnigent.server.session_version import SessionMutationFingerprint, session_etag
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
+from omnigent.stores.conversation_store import PINNED_LABEL_KEY
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.host_store import host_is_live
 from omnigent.stores.permission_store import PermissionStore
@@ -385,6 +389,29 @@ def register_events_routes(
     runner_tunnel_tokens: frozenset[str] | None = None,
 ) -> None:
     """Register the events, stream, and delete routes on router."""
+
+    async def _get_session_mutation_fingerprint(
+        session_id: str,
+    ) -> SessionMutationFingerprint | None:
+        """Read conditional-delete state, failing closed on uncertainty."""
+        if not getattr(conversation_store, "supports_conditional_session_delete", False):
+            return None
+        getter = getattr(conversation_store, "get_session_mutation_fingerprint", None)
+        if not callable(getter):
+            return None
+        try:
+            typed_getter = cast(
+                Callable[[str], SessionMutationFingerprint | None],
+                getter,
+            )
+            return await asyncio.to_thread(typed_getter, session_id)
+        except Exception:
+            _logger.warning(
+                "Could not read conditional-delete fingerprint for %s",
+                session_id,
+                exc_info=True,
+            )
+            return None
 
     def _has_runner_created_by_authority(request: Request, conv: Any) -> bool:
         token = (request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) or "").strip()
@@ -2238,6 +2265,7 @@ def register_events_routes(
         request: Request,
         session_id: str,
         delete_branch: bool = False,
+        if_match: str | None = Header(default=None, alias="If-Match"),
     ) -> ConversationDeleted:
         """Delete a session and all associated resources.
 
@@ -2248,6 +2276,11 @@ def register_events_routes(
         :param request: The incoming FastAPI request (for auth).
         :param session_id: Session/conversation identifier,
             e.g. ``"conv_abc123"``.
+        :param if_match: Optional session snapshot validator from
+            ``GET /v1/sessions/{id}``. When supplied, deletion is conditional:
+            the server preserves the session unless the version, complete label
+            mapping, activity state, and descendant set still match. This is
+            the only contract the test-session planner may use for cleanup.
         :param delete_branch: Opt-in git cleanup, as a query param
             (``?delete_branch=true``). When ``True`` and the session
             has a server-created worktree (``git_branch`` set), the
@@ -2285,21 +2318,119 @@ def register_events_routes(
         conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         if conv is None:
             raise _session_not_found()
-        await _best_effort_stop(session_id, conversation_store, runner_router)
+        conditional_delete = if_match is not None
+        runner_client: httpx.AsyncClient | None = None
+        if conditional_delete:
+            if delete_branch:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Conditional session deletion does not include worktree cleanup",
+                )
+            mutation = await _get_session_mutation_fingerprint(session_id)
+            if mutation is None:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Conditional session deletion is unavailable for this storage layout",
+                )
+            if if_match != session_etag(
+                conv.updated_at,
+                conv.labels or {},
+                mutation=mutation,
+            ):
+                raise HTTPException(
+                    status_code=412,
+                    detail="Session changed since the cleanup snapshot",
+                )
+            if conv.parent_conversation_id is not None:
+                raise HTTPException(
+                    status_code=412,
+                    detail="A child session cannot be conditionally deleted",
+                )
+            if conv.live_status not in {"idle", "failed"}:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Session activity is not proven quiescent",
+                )
+            if any(
+                (key == PINNED_LABEL_KEY or key.startswith(f"{PINNED_LABEL_KEY}."))
+                and value not in ("false", "0", "")
+                for key, value in (conv.labels or {}).items()
+            ):
+                raise HTTPException(
+                    status_code=412,
+                    detail="A pinned session is never conditionally deleted",
+                )
+
+            # Revalidate owner access and the complete snapshot immediately
+            # before entering the store's atomic version/label/child fence.
+            await _require_access(
+                user_id, session_id, LEVEL_OWNER, permission_store, conversation_store
+            )
+            latest_conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+            if latest_conv is None:
+                raise _session_not_found()
+            latest_mutation = await _get_session_mutation_fingerprint(session_id)
+            if latest_mutation is None:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Conditional session deletion is unavailable for this storage layout",
+                )
+            if if_match != session_etag(
+                latest_conv.updated_at,
+                latest_conv.labels or {},
+                mutation=latest_mutation,
+            ):
+                raise HTTPException(
+                    status_code=412,
+                    detail="Session changed during cleanup validation",
+                )
+            if latest_conv.live_status not in {"idle", "failed"}:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Session activity changed or is not proven quiescent",
+                )
+            try:
+                runner_client = await _get_runner_client_for_resource_access(
+                    session_id,
+                    conversation=latest_conv,
+                )
+            except OmnigentError as exc:
+                _logger.info(
+                    "Skipping runner-side cleanup for conditionally deleted %s: %s",
+                    session_id,
+                    exc,
+                )
+            deleted = await conversation_store.delete_conversation_if_unchanged(
+                session_id,
+                expected_updated_at=latest_conv.updated_at,
+                expected_labels=dict(latest_conv.labels or {}),
+                expected_live_status=latest_conv.live_status,
+                expected_next_position=latest_mutation.next_position,
+                expected_comments_count=latest_mutation.comments_count,
+                expected_comments_updated_at=latest_mutation.comments_updated_at,
+            )
+            if not deleted:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Session changed or gained a descendant during cleanup",
+                )
+            conv = latest_conv
+        else:
+            await _best_effort_stop(session_id, conversation_store, runner_router)
         # Runner-side resource cleanup is best-effort: if the bound
         # runner is offline or unbound, the session must still be
         # deletable. Server-owned records (files and conversation row
         # below) live independently of the runner, and runner-side
         # resources are gone with the runner anyway.
-        runner_client: httpx.AsyncClient | None = None
-        try:
-            runner_client = await _get_runner_client_for_resource_access(session_id)
-        except OmnigentError as exc:
-            _logger.info(
-                "Skipping runner-side cleanup for %s; proceeding with server-side delete: %s",
-                session_id,
-                exc,
-            )
+        if not conditional_delete:
+            try:
+                runner_client = await _get_runner_client_for_resource_access(session_id)
+            except OmnigentError as exc:
+                _logger.info(
+                    "Skipping runner-side cleanup for %s; proceeding with server-side delete: %s",
+                    session_id,
+                    exc,
+                )
         if runner_client is not None:
             try:
                 await runner_client.delete(
@@ -2350,9 +2481,10 @@ def register_events_routes(
                 await asyncio.to_thread(artifact_store.delete, fid)
         _interrupt_fenced_sessions.discard(session_id)
         _intentional_stop_sessions.discard(session_id)
-        deleted = await conversation_store.delete_conversation(session_id)
-        if not deleted:
-            raise _session_not_found()
+        if not conditional_delete:
+            deleted = await conversation_store.delete_conversation(session_id)
+            if not deleted:
+                raise _session_not_found()
         from omnigent.server.o3_routing_review.service import cleanup_o3_session_best_effort
 
         await cleanup_o3_session_best_effort(session_id)

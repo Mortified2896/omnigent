@@ -8,6 +8,7 @@ import {
   type ExperimentEvent,
   type TaskOutcome,
 } from "@/hooks/useTaskExperiment";
+import { ResponseScoringActions } from "./ResponseScoringActions";
 
 const FeedbackContext = createContext<{
   sessionId: string;
@@ -170,11 +171,16 @@ function OutcomeEditor({
         ))}
       </div>
 
+      <ResponseScoringActions sessionId={sessionId} responseId={responseId} />
+
       {outcome && (
         <div
           className="space-y-2 rounded-md border border-border/70 p-2"
           data-testid="human-review-details"
         >
+          <p className="text-xs text-muted-foreground">
+            Tags and comments are for your review, not scoring-AI input.
+          </p>
           <textarea
             value={comment}
             maxLength={4000}

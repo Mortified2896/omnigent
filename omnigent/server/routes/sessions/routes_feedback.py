@@ -5,12 +5,18 @@ from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.routes._auth_helpers import get_user_id, require_access_and_level
 from omnigent.server.routes._errors import session_not_found
 from omnigent.server.task_experiment import Outcome, list_experiment_events, save_outcome
+from omnigent.server.task_scoring import (
+    ExclusionReason,
+    save_scoring_eligibility,
+    scoring_policy,
+    select_scored_outcomes,
+)
 from omnigent.stores.conversation_store import ConversationStore, InvalidFeedbackTargetError
 from omnigent.stores.permission_store import PermissionStore
 
@@ -19,6 +25,13 @@ class OutcomeInput(BaseModel):
     outcome: Outcome
     comment: str | None = Field(default=None, max_length=4000)
     tags: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ScoringEligibilityInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score_eligible: StrictBool
+    exclusion_reason: ExclusionReason | None = None
 
 
 class FeedbackInput(BaseModel):
@@ -113,6 +126,45 @@ def register_feedback_routes(
                 body.outcome,
                 comment=body.comment,
                 tags=body.tags,
+            )
+        except InvalidFeedbackTargetError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.get("/sessions/{session_id}/scoring-policy")
+    async def get_scoring_policy(request: Request, session_id: str) -> dict:
+        user = await caller(request, session_id, LEVEL_READ)
+        try:
+            return await asyncio.to_thread(scoring_policy, conversation_store, session_id, user)
+        except ValueError as exc:
+            raise session_not_found() from exc
+
+    @router.get("/sessions/{session_id}/scored-outcomes")
+    async def get_scored_outcomes(request: Request, session_id: str) -> list[dict]:
+        user = await caller(request, session_id, LEVEL_READ)
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise session_not_found()
+        rows = await asyncio.to_thread(list_experiment_events, conversation_store, session_id)
+        return select_scored_outcomes(
+            rows, actor=user, conversation_id=session_id, labels=conv.labels or {}
+        )
+
+    @router.put("/sessions/{session_id}/scoring-eligibility/{response_id}")
+    async def put_scoring_eligibility(
+        request: Request, session_id: str, response_id: str, body: ScoringEligibilityInput
+    ) -> dict:
+        user = await caller(request, session_id, LEVEL_EDIT)
+        try:
+            return await asyncio.to_thread(
+                save_scoring_eligibility,
+                conversation_store,
+                session_id,
+                response_id,
+                user,
+                body.score_eligible,
+                body.exclusion_reason,
             )
         except InvalidFeedbackTargetError as exc:
             raise HTTPException(404, str(exc)) from exc

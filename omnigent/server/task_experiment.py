@@ -102,24 +102,12 @@ def list_experiment_events(store: ConversationStore, conversation_id: str) -> li
         after = page.data[-1].id
 
 
-def save_outcome(
-    store: ConversationStore,
-    conversation_id: str,
-    response_id: str,
-    actor: str,
-    outcome: Outcome,
-    *,
-    comment: str | None = None,
-    tags: list[str] | None = None,
-) -> dict:
-    """Append a complete human-review revision independently of subjective feedback."""
+def require_completed_answer(
+    store: ConversationStore, conversation_id: str, response_id: str
+) -> None:
+    """Require the same durable answer target for outcome and eligibility edits."""
     from omnigent.entities.conversation import MessageData
     from omnigent.stores.conversation_store import InvalidFeedbackTargetError
-
-    if comment is not None and len(comment) > MAX_COMMENT_LENGTH:
-        raise ValueError(f"Task outcome comments may be at most {MAX_COMMENT_LENGTH} characters")
-    normalized_comment = comment.strip() if isinstance(comment, str) else None
-    normalized_tags = normalize_tags(tags)
 
     after = None
     eligible = False
@@ -141,6 +129,26 @@ def save_outcome(
         raise InvalidFeedbackTargetError(
             "Response is not a completed assistant answer in this session"
         )
+
+
+
+def save_outcome(
+    store: ConversationStore,
+    conversation_id: str,
+    response_id: str,
+    actor: str,
+    outcome: Outcome,
+    *,
+    comment: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """Append a complete human-review revision independently of subjective feedback."""
+    if comment is not None and len(comment) > MAX_COMMENT_LENGTH:
+        raise ValueError(f"Task outcome comments may be at most {MAX_COMMENT_LENGTH} characters")
+    normalized_comment = comment.strip() if isinstance(comment, str) else None
+    normalized_tags = normalize_tags(tags)
+
+    require_completed_answer(store, conversation_id, response_id)
     links = [
         row
         for row in list_experiment_events(store, conversation_id)

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.orm import Session
 
-from omnigent.db.db_models import SqlComment, current_workspace_id
+from omnigent.db.db_models import SqlComment, SqlConversation, current_workspace_id, uuid_to_bytes
 from omnigent.db.enum_codecs import decode_comment_status, encode_comment_status
 from omnigent.db.utils import (
+    get_or_create_conversation_engine,
     get_or_create_engine,
     make_named_managed_session_maker,
     now_epoch_us,
@@ -46,17 +48,56 @@ class SqlAlchemyCommentStore(CommentStore):
     auto-commit on success.
     """
 
-    def __init__(self, storage_location: str) -> None:
+    def __init__(
+        self,
+        storage_location: str,
+        conversation_storage_location: str | None = None,
+    ) -> None:
         """Initialize the SQLAlchemy comments store.
 
         :param storage_location: SQLAlchemy database URI,
             e.g. ``"sqlite:///omnigent.db"``.
+        :param conversation_storage_location: SQLAlchemy database URI for
+            the Agent Platform conversation tables. When it is split from
+            ``storage_location``, conditional session cleanup is disabled
+            because comment writes cannot share one transaction with the
+            conversation deletion fence.
         """
         super().__init__(storage_location)
         self._engine = get_or_create_engine(storage_location)
+        conv_uri = conversation_storage_location or storage_location
+        self._conversation_engine = (
+            self._engine
+            if conv_uri == storage_location
+            else get_or_create_conversation_engine(conv_uri)
+        )
         self._session = make_named_managed_session_maker(
             self._engine,
             query_name_prefix="omnigent.comment_store",
+        )
+
+    @property
+    def supports_conditional_session_delete(self) -> bool:
+        """Whether comment writes share the conversation transaction boundary."""
+        return self._engine is self._conversation_engine
+
+    def _lock_conversation(self, session: Session, conversation_id: str) -> None:
+        """Serialize a comment write with the conditional delete fence."""
+        if not self.supports_conditional_session_delete:
+            return
+        if self._conversation_engine.dialect.name != "sqlite":
+            session.execute(
+                select(SqlConversation.id)
+                .where(
+                    SqlConversation.workspace_id == current_workspace_id(),
+                    SqlConversation.id == conversation_id,
+                )
+                .with_for_update()
+            )
+            return
+        session.execute(
+            text("UPDATE conversations SET updated_at = updated_at WHERE id = :id"),
+            {"id": uuid_to_bytes(conversation_id)},
         )
 
     def get(self, comment_id: str, conversation_id: str) -> Comment | None:
@@ -99,6 +140,7 @@ class SqlAlchemyCommentStore(CommentStore):
             created_by=created_by,
         )
         with self._session("insert_comment") as session:
+            self._lock_conversation(session, conversation_id)
             session.add(row)
             return _to_entity(row)
 
@@ -131,6 +173,7 @@ class SqlAlchemyCommentStore(CommentStore):
     ) -> Comment | None:
         """Update a comment's fields, scoped to a conversation. See base class for contract."""
         with self._session("update_comment") as session:
+            self._lock_conversation(session, conversation_id)
             row = session.get(SqlComment, (current_workspace_id(), conversation_id, comment_id))
             if row is None:
                 return None
@@ -139,12 +182,13 @@ class SqlAlchemyCommentStore(CommentStore):
             if body is not None:
                 row.body = body
             if status is not None or body is not None:
-                row.updated_at = now_epoch_us()
+                row.updated_at = max(now_epoch_us(), row.updated_at + 1)
             return _to_entity(row)
 
     def delete(self, comment_id: str, conversation_id: str) -> Comment | None:
         """Delete a single comment by id, scoped to a conversation. See base class for contract."""
         with self._session("delete_comment") as session:
+            self._lock_conversation(session, conversation_id)
             row = session.get(SqlComment, (current_workspace_id(), conversation_id, comment_id))
             if row is None:
                 return None
