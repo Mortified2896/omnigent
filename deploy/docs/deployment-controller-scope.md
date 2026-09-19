@@ -5,6 +5,21 @@ self-update restrictions. It supersedes contradictory blanket wording in
 older runbooks, historical deployment records, and agent handoffs. It does not
 grant deployments that the owner has not authorized or change installed tools.
 
+## Local host comes before remote access
+
+Before choosing any SSH/Tailscale path, run `hostname; id; pwd`. If an
+independent controller is already on `rtx-omnigent`, it is already on the RTX
+v2 live host and must inspect/deploy locally. Do not require
+`homelab-hermes`, `proxmox-home`, or Tailscale SSH to reach the machine it is
+already executing on. A Tailscale SSH policy denial is therefore not a live-host
+reachability failure in that case.
+
+The current RTX peer entrypoint explicitly requires
+`hostname == rtx-omnigent` and effective UID 0. If the controller is local but
+lacks the required privileged external interface, report that exact local
+privilege/tooling blocker after inspecting available host-local mechanisms.
+Do not replace it with a network blocker.
+
 ## Decide by the controller, not the target name
 
 **Instance-controlled update:** the controlling task/process runs inside O1 or
