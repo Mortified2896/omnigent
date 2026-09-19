@@ -1,33 +1,42 @@
 # Legacy Control Room dual-instance upgrade safety
 
+Read [deployment controller scope](deployment-controller-scope.md) first.
+**This is a historical, peer-mode contract, not a restriction on independent
+Codex/operator deployments.** External controllers do not need an O1/O2
+supervisor task, peer approval, or a TARGET/SUPERVISOR declaration. The narrow
+self-update rule applies to tasks/processes controlled from inside O1/O2.
+
 This document is the authoritative safety contract **only for the legacy
 Control Room two-peer `peer_deployer` mechanism when two distinct Omnigent
 instances have deliberately been provisioned and that mechanism has explicitly
 been selected**.
 
-It is **not** the RTX v2 deployment contract. The authorized RTX O1/O2 v2
-rollout uses [the RTX peer contract](rtx-peer-v2.md) and the single
-`python -m peer_deployer.rtx` transaction owner. The old ai-control-hub O1/O2
-services remain retired. Do not start them or invoke historical promotion
-scripts to satisfy a current deployment preflight.
+It is **not** the RTX v2 deployment contract. For RTX instance-controlled peer
+updates, see [the RTX peer contract](rtx-peer-v2.md) and its
+`python -m peer_deployer.rtx` transaction owner. Independent external deployment
+is a separate controller mode; the peer-only tool does not define its policy.
+The old ai-control-hub O1/O2 services remain retired. Do not start them or invoke
+historical promotion scripts to satisfy a current deployment preflight.
 
 Current observed state and the operational procedure are tracked in HomeLab
 `docs/omnigent-current-topology.md` and `docs/codex-server-workflow.md`.
-The former single-primary/external-controller exception applied during the
-RTX migration; it is not a second ongoing deployment mechanism. Mac Codex
-remains an authorized external controller, with actual peer supervision.
+External control is not an exception limited to the single-primary migration.
+Mac Codex remains an authorized external controller without requiring actual
+O1/O2 peer supervision. Common identity, acceptance, backup, and rollback
+safeguards still apply.
 
 Legacy RTX promotion entrypoints are deprecated for removal in v0.14.0 and
-refuse RTX execution. This document is retained only for historical evidence.
+refuse RTX execution. The remaining sections record only the historical
+peer mechanism and must not be applied as universal deployment instructions.
 
 ## Hard invariant within the legacy two-peer mechanism
 
-> Never let an Omnigent instance upgrade itself. O1 upgrades O2;
-> O2 upgrades O1. The healthy peer stays alive and supervises the
-> entire operation.
+> Never let an Omnigent instance upgrade itself from its own task runtime.
+> For an instance-controlled peer update, O1 upgrades O2; O2 upgrades O1.
+> The healthy peer stays alive and supervises that operation.
 
-This is the core invariant when a real two-peer topology exists. An instance
-never upgrades itself, and the healthy peer supervises the operation.
+This is the core invariant within the selected peer mechanism. It does not
+require an independent external Codex/operator deployment to use peer tasks.
 
 For the historical single-primary RTX transition, the corresponding safety
 properties were external control, exact tested artifact
@@ -63,7 +72,7 @@ refuse to run. The `peer_deployer` module's `identity.require_distinct()` helper
 enforces this at the API and CLI level.
 
 Absence of a peer is not an invitation to restore one. It means this mechanism
-is not currently usable.
+is not currently usable; it does not prohibit independent external deployment.
 
 ## Target / supervisor identity
 
@@ -114,8 +123,8 @@ complete record is exclusive-created and never replaced. Validation rechecks
 immutable resources, runtime identity, imports, package locations/versions,
 `uv pip check`, and boot evidence.
 
-These acceptance properties remain useful for the RTX release path even though
-the peer relationship itself is not part of the current topology.
+These acceptance properties remain useful for external RTX deployment without
+making an O1/O2 peer relationship a requirement for that controller mode.
 
 ## Deployment modes
 
@@ -130,8 +139,8 @@ The following modes belong to the legacy two-peer mechanism:
 Common, bootstrap, and peer-copy preflight checks are distinct and named. No
 mode has a force or skip-check interface.
 
-Do not select either mode for the current RTX single-primary topology merely to
-reuse its code path. Use the current RTX rollback-preserving deployment path.
+Do not select either legacy mode for a current external RTX deployment merely
+to reuse its code path. Use a verified rollback-preserving external host procedure.
 
 ## Transaction identity
 
@@ -207,9 +216,9 @@ If any check fails, the preflight MUST exit non-zero without:
 - invoking rollback
 - mutating the supervisor
 
-In the current single-primary RTX topology, expected failure on missing legacy
-peer units/health means **do not use this mechanism**. It does not authorize
-starting/restoring O2.
+Missing legacy peer units/health means **do not use this legacy mechanism**.
+It does not authorize starting/restoring old O2, nor require an external
+controller to start a peer task. Common non-peer deployment protections remain.
 
 The preflight is implemented in `deploy/scripts/peer_deployer/preflight.py`.
 
