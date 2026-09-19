@@ -3,6 +3,12 @@
 ## Controller scope: instance-driven versus external
 
 Read [deployment controller scope](deployment-controller-scope.md) first.
+
+**Local-first rule:** `peer_deployer.rtx` itself requires the controller host
+to be `rtx-omnigent`. If an independent Codex/operator process already runs
+there, do not SSH or Tailscale-SSH to another alias as a prerequisite; inspect
+the local RTX state directly. Historical `hermes-agent:9461` eval URLs are not
+O1/O2 runtime evidence.
 The TARGET/SUPERVISOR and healthy-peer requirements below describe
 **instance-controlled peer updates**, not every deployment targeting O1/O2.
 An independent Codex Mac app/CLI, ZCode, or operator/SSH session may directly
@@ -63,8 +69,12 @@ Run focused regressions on RTX:
 .venv/bin/python -m pytest tests/deploy/test_rtx_peer_v2.py tests/server/test_instance_cookie.py tests/server/test_accounts.py tests/server/test_host_registry.py
 ```
 
-Current live topology is recorded in HomeLab `docs/omnigent-current-topology.md`.
-This contract is a desired architecture, not evidence that either peer is accepted.
+Do not use the removed/nonexistent HomeLab
+`docs/omnigent-current-topology.md` path as authority. Follow HomeLab
+`docs/codex-server-workflow.md` and verify the current host, peer manifests,
+systemd units, release pointers, loopback health, and Tailscale Serve mappings
+from live state. This contract alone is not evidence that either peer is
+currently accepted.
 
 During initial migration only, `--legacy-supervisor-sha` binds the existing
 O1 on port 4098 and its exact candidate services as supervisor for O2 updates.
