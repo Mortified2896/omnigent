@@ -1893,6 +1893,112 @@ async def test_delete_conversation_with_items(
     assert conversation_store.get_conversation(conv.id) is None
 
 
+@pytest.mark.asyncio
+async def test_conditional_delete_preserves_changed_labels_and_descendants(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """Cleanup fences reject edits and session-tree changes atomically."""
+    conv = conversation_store.create_conversation()
+    conversation_store.set_labels(conv.id, {"omnigent.test.retention": "ephemeral"})
+    snapshot = conversation_store.get_conversation(conv.id)
+    assert snapshot is not None
+
+    conversation_store.set_labels(conv.id, {"omnigent.pinned.local": "true"})
+    assert (
+        await conversation_store.delete_conversation_if_unchanged(
+            conv.id,
+            expected_updated_at=snapshot.updated_at,
+            expected_labels=snapshot.labels,
+            expected_live_status=snapshot.live_status,
+        )
+        is False
+    )
+    assert conversation_store.get_conversation(conv.id) is not None
+
+    conversation_store.set_labels(conv.id, {"omnigent.pinned.local": ""})
+    refreshed = conversation_store.get_conversation(conv.id)
+    assert refreshed is not None
+    child = conversation_store.create_conversation(
+        kind="sub_agent", parent_conversation_id=conv.id, title="child"
+    )
+    assert child.parent_conversation_id == conv.id
+    assert (
+        await conversation_store.delete_conversation_if_unchanged(
+            conv.id,
+            expected_updated_at=refreshed.updated_at,
+            expected_labels=refreshed.labels,
+            expected_live_status=refreshed.live_status,
+        )
+        is False
+    )
+    assert conversation_store.get_conversation(conv.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_conditional_delete_removes_unchanged_isolated_session(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    conversation_store.set_labels(conv.id, {"omnigent.test.retention": "ephemeral"})
+    snapshot = conversation_store.get_conversation(conv.id)
+    assert snapshot is not None
+
+    assert (
+        await conversation_store.delete_conversation_if_unchanged(
+            conv.id,
+            expected_updated_at=snapshot.updated_at,
+            expected_labels=snapshot.labels,
+            expected_live_status=snapshot.live_status,
+        )
+        is True
+    )
+    assert conversation_store.get_conversation(conv.id) is None
+
+
+@pytest.mark.asyncio
+async def test_conditional_delete_rejects_response_feedback_edits(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """A human response-feedback edit invalidates a cleanup snapshot."""
+    conv = conversation_store.create_conversation()
+    conversation_store.append(
+        conv.id,
+        [
+            NewConversationItem(
+                type="message",
+                response_id="answer",
+                data=MessageData(
+                    role="assistant",
+                    agent="test-agent",
+                    content=[{"type": "output_text", "text": "Answer"}],
+                ),
+            )
+        ],
+    )
+    snapshot = conversation_store.get_conversation(conv.id)
+    assert snapshot is not None
+
+    conversation_store.put_response_feedback(
+        conv.id,
+        "answer",
+        "alice",
+        1,
+        comment="Keep",
+        update_comment=True,
+    )
+    assert (
+        await conversation_store.delete_conversation_if_unchanged(
+            conv.id,
+            expected_updated_at=snapshot.updated_at,
+            expected_labels=snapshot.labels,
+            expected_live_status=snapshot.live_status,
+        )
+        is False
+    )
+    assert conversation_store.get_conversation(conv.id) is not None
+    assert conversation_store.list_response_feedback(conv.id, "alice")[0].comment == "Keep"
+
+
 # ── List conversations pagination ────────────────────
 
 

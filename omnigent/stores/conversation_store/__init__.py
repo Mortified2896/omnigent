@@ -1860,3 +1860,30 @@ class ConversationStore(ABC):
             ``False`` otherwise.
         """
         ...
+
+    @abstractmethod
+    async def delete_conversation_if_unchanged(
+        self,
+        conversation_id: str,
+        *,
+        expected_updated_at: int,
+        expected_labels: dict[str, str],
+        expected_live_status: str | None,
+    ) -> bool:
+        """Delete an isolated session only when its snapshot is unchanged.
+
+        The implementation must hold the conversation mutation lock while it
+        compares the version, labels, and child-session set, then delete only
+        if all guards still match. Callers use this for ephemeral test-session
+        cleanup; a false result is a preservation signal, not permission to
+        retry with an unconditional delete.
+
+        :param conversation_id: Unique conversation identifier.
+        :param expected_updated_at: ``updated_at`` from the verified snapshot.
+        :param expected_labels: Complete labels from the same snapshot.
+        :param expected_live_status: Persisted activity state from the verified
+            snapshot. Implementations must compare it inside the mutation fence.
+        :returns: ``True`` when the guarded delete committed, ``False`` when
+            the session changed, disappeared, or gained a descendant.
+        """
+        ...

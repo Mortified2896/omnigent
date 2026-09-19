@@ -51,9 +51,7 @@ export function ResponseScoringActions({
           aria-pressed={excluded}
           disabled={sessionExcluded || mutation.isPending}
           title="Exclude this response from scoring without changing its outcome or notes"
-          onClick={() =>
-            mutation.mutate({ score_eligible: excluded, exclusion_reason: null })
-          }
+          onClick={() => mutation.mutate({ score_eligible: excluded, exclusion_reason: null })}
         >
           Do not score
         </Button>

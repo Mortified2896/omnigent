@@ -91,25 +91,39 @@ archive may be offered after fresh checks, but archiving can stop a runner and i
 not a harmless substitute for ownership/activity checks. Never request Git branch,
 worktree, artifact, or unrelated database cleanup as part of chat cleanup.
 
+The server-side cleanup contract is `GET /v1/sessions/{id}` followed by
+`DELETE /v1/sessions/{id}` with its `ETag` in `If-Match`. The validator covers the
+conversation version and complete label mapping. Conditional deletion rejects
+branch cleanup, child sessions, active or unknown activity, pinned sessions,
+ownership changes, and any version/label/descendant race with `412`; the store
+acquires a root-session lock and deletes only an unchanged isolated session. A failed
+conditional delete is a preservation signal, not permission to retry an
+unconditional delete. Ordinary user-initiated deletion keeps its existing
+behavior and is not the test-session planner's cleanup path.
+
 The planner does not execute cleanup. Existing unmarked chats are not automatically
 backfilled or deleted. Retention holds and uncertain sessions remain available.
 
-## Remaining integration before adoption
+## Integration and validation status
 
 1. Fetch GitHub, inspect branch/base/dirty work, and fast-forward the correct task
    branch before editing. Reconcile new main changes without resetting local work.
-2. Run the full-checkout backend, frontend, and browser tests below; regenerate
+2. The acceptance fixture stamps sessions at creation, records exact returned IDs
+   in a private server-bound manifest, and uses the planner for idempotent teardown.
+   Routine successful candidates use only the conditional `If-Match` contract;
+   failed, unexpected, or explicitly retained runs get a visible retention hold.
+   The fixture does not perform broad live cleanup. The generic legacy acceptance
+   fixture remains outside this contract until it is migrated deliberately.
+3. The scoring-consumer audit found no enabled task-scoring outbound evaluator on
+   this branch. The blind-input allowlist has a provider-free request-capture test;
+   no evaluator was enabled and no review-contaminated context/tool path was added.
+4. Run the full-checkout backend, frontend, and browser tests below; regenerate
    `openapi.json` with the repository's supported generator and inspect only the
    intentional contract changes. Capture desktop/mobile screenshots.
-3. Wire test creation and teardown in the actual acceptance scripts. Operational
-   HomeLab scripts belong in `Mortified2896/HomeLab`, with its own AGENTS/worktree.
-   Inspect current scripts before changing them. Add a manifest, visible retained
-   evidence marker, idempotent teardown, and mutation-boundary race tests. Do not
-   execute a broad live cleanup.
-4. Audit every existing/future scoring consumer for the numerical projection and
-   outbound allowlist. Add an actual outbound-payload capture test before enabling
-   any scorer; keep unrelated routing and evaluator safety work separate.
-5. Keep the PR draft until these checks pass. No merge, deployment, service restart,
+5. Operational HomeLab scripts belong in `Mortified2896/HomeLab`, with its own
+   AGENTS/worktree. Inspect current scripts before changing them. No HomeLab
+   acceptance script was found for this flow, so this task adds no HomeLab change.
+6. Keep the PR draft until these checks pass. No merge, deployment, service restart,
    provider inference, or production-data mutation is implied by this source work.
 
 Suggested focused checks (normal repository development environment):
@@ -119,11 +133,14 @@ uv run --no-sync pytest tests/server/test_task_scoring.py \
   tests/util/test_test_session_policy.py \
   tests/server/routes/test_scoring_eligibility.py \
   tests/server/routes/test_task_experiment.py \
-  tests/stores/test_task_experiment.py -q
+  tests/stores/test_task_experiment.py \
+  tests/server/routes/test_session_conditional_delete.py \
+  tests/stores/test_conversation_store.py -q
 pnpm --dir web exec vitest run src/components/ResponseScoringActions.test.tsx \
   src/components/ResponseFeedbackActions.test.tsx
 uv run --no-sync pytest tests/e2e_ui/chat/test_scoring_eligibility.py \
   tests/e2e_ui/chat/test_task_outcome_edits.py -q
+uv run --no-sync python scripts/dump_openapi.py
 pnpm --dir web run lint
 pnpm --dir web run type-check
 pnpm --dir web run build

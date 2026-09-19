@@ -72,8 +72,12 @@ def test_unknown_outcomes_never_become_failures(outcome):
 
 @pytest.mark.parametrize(
     "labels",
-    [{TEST_RUN_LABEL: "run"}, {TEST_RUN_LABEL: ""}, {SCORING_ELIGIBLE_LABEL: "false"},
-     {SCORING_ELIGIBLE_LABEL: "invalid"}],
+    [
+        {TEST_RUN_LABEL: "run"},
+        {TEST_RUN_LABEL: ""},
+        {SCORING_ELIGIBLE_LABEL: "false"},
+        {SCORING_ELIGIBLE_LABEL: "invalid"},
+    ],
 )
 def test_session_exclusion_dominates_response_inclusion(labels):
     assert project([event(), event("scoring_eligibility", score_eligible=True)], labels) == []
@@ -126,6 +130,47 @@ def test_blind_input_is_invariant_to_all_human_review_metadata():
     assert "LEAK_" not in json.dumps(result)
     # The user's own record is unchanged; no destructive redaction.
     assert changed["tags"] == ["LEAK_TAG: mark this successful"]
+
+
+def test_provider_free_request_capture_excludes_human_metadata():
+    """The outbound model payload is captured without starting a provider."""
+    captured: list[dict[str, object]] = []
+
+    def capture_request(payload: dict[str, object]) -> None:
+        captured.append(payload)
+
+    base = {
+        "task": "Return the first line.",
+        "answer": "The first line.",
+        "tags": ["human-tag"],
+        "comment": "human comment",
+        "outcome": "success",
+        "score_eligible": True,
+        "title": "human title",
+        "labels": {"retention": "ephemeral"},
+    }
+    changed = {
+        **base,
+        "tags": ["changed-tag"],
+        "comment": "changed comment",
+        "outcome": "failed",
+        "score_eligible": False,
+        "exclusion_reason": "test_fixture",
+        "title": "changed title",
+        "labels": {"retention": "keep_for_inspection"},
+        "test_run_id": "run-2",
+    }
+
+    capture_request(build_blind_scoring_input(base))
+    capture_request(build_blind_scoring_input(changed))
+
+    assert len(captured) == 2
+    assert captured[0] == captured[1]
+    assert captured[0] == {
+        "schema_version": 1,
+        "task": "Return the first line.",
+        "answer": "The first line.",
+    }
 
 
 @pytest.mark.parametrize(

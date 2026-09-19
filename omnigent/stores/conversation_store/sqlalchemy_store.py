@@ -9,7 +9,6 @@ from typing import Any, Protocol, cast
 
 from sqlalchemy import (
     ColumnElement,
-    LargeBinary,
     Select,
     and_,
     asc,
@@ -895,6 +894,7 @@ class SqlAlchemyConversationStore(ConversationStore):
             key = (current_workspace_id(), conversation_id, response_id, user_id)
             row = session.get(SqlResponseFeedback, key)
             now = time.time_ns() // 1000
+            changed = False
             if row is None:
                 row = SqlResponseFeedback(
                     workspace_id=key[0],
@@ -907,11 +907,20 @@ class SqlAlchemyConversationStore(ConversationStore):
                     updated_at=now,
                 )
                 session.add(row)
+                changed = True
             elif row.rating != rating or (update_comment and row.comment != comment):
                 row.rating = rating
                 if update_comment:
                     row.comment = comment
                 row.updated_at = max(now, row.updated_at + 1)
+                changed = True
+            if changed:
+                conversation = session.get(
+                    SqlConversation,
+                    (current_workspace_id(), conversation_id),
+                )
+                if conversation is not None:
+                    conversation.updated_at = max(now_epoch(), conversation.updated_at + 1)
             return self._feedback_entity(row)
 
     def delete_response_feedback(
@@ -920,14 +929,24 @@ class SqlAlchemyConversationStore(ConversationStore):
         with self._conv_session_immediate("clear_response_feedback") as session:
             self._lock_conversation(session, conversation_id)
             self._validate_feedback_target(session, conversation_id, response_id)
-            session.execute(
-                delete(SqlResponseFeedback).where(
-                    SqlResponseFeedback.workspace_id == current_workspace_id(),
-                    SqlResponseFeedback.conversation_id == conversation_id,
-                    SqlResponseFeedback.response_id == response_id,
-                    SqlResponseFeedback.user_id == user_id,
-                )
+            result = cast(
+                _RowCountResult,
+                session.execute(
+                    delete(SqlResponseFeedback).where(
+                        SqlResponseFeedback.workspace_id == current_workspace_id(),
+                        SqlResponseFeedback.conversation_id == conversation_id,
+                        SqlResponseFeedback.response_id == response_id,
+                        SqlResponseFeedback.user_id == user_id,
+                    )
+                ),
             )
+            if result.rowcount:
+                conversation = session.get(
+                    SqlConversation,
+                    (current_workspace_id(), conversation_id),
+                )
+                if conversation is not None:
+                    conversation.updated_at = max(now_epoch(), conversation.updated_at + 1)
 
     def _get_meta(self, conversation_id: str) -> SqlConversationMetadata | None:
         """
@@ -1099,6 +1118,21 @@ class SqlAlchemyConversationStore(ConversationStore):
             if parent_conversation_id is not None and not title:
                 title = f"untitled:{new_id}"
             with self._conv_session("insert_conversation") as ap_sess:
+                if parent_conversation_id is not None:
+                    # Child creation and conditional parent deletion share a
+                    # mutation fence. This prevents a descendant from being
+                    # inserted between the delete candidate's child check and
+                    # its root-row deletion.
+                    self._lock_conversation(ap_sess, parent_conversation_id)
+                    locked_parent = ap_sess.get(
+                        SqlConversation,
+                        (current_workspace_id(), parent_conversation_id),
+                    )
+                    if locked_parent is None:
+                        raise ConversationNotFoundError(
+                            f"parent conversation {parent_conversation_id!r} does not exist"
+                        )
+                    root_id = locked_parent.root_conversation_id
                 # Application-level (parent, title) uniqueness — there is no DB
                 # unique constraint. Only children are scoped; top-level sessions
                 # (NULL parent) may reuse titles freely. The SELECT seeks this
@@ -1451,6 +1485,11 @@ class SqlAlchemyConversationStore(ConversationStore):
             return
         stamp = updated_at if updated_at is not None else now_epoch()
         with self._conv_session("set_labels") as session:
+            # Label edits participate in the same mutation fence as
+            # conditional test-session deletion. Labels have their own table,
+            # so comparing them without the conversation lock could let an
+            # edit commit after the delete candidate's snapshot.
+            self._lock_conversation(session, conversation_id)
             _upsert_labels(session, conversation_id, updates, stamp)
 
     def set_session_state(
@@ -2256,7 +2295,15 @@ class SqlAlchemyConversationStore(ConversationStore):
             # Bump updated_at on the conversation.
             conv_row = session.get(SqlConversation, (current_workspace_id(), conversation_id))
             if conv_row is not None:
-                conv_row.updated_at = now
+                # The conditional test-session deletion fence uses this as a
+                # version.  Keep it strictly monotonic even when multiple
+                # mutations land in one epoch-second. Preserve the historical
+                # create-plus-first-append timestamp when both happen in the
+                # same second; later appends still advance the version.
+                if conv_row.next_position == 0 and conv_row.updated_at == now:
+                    conv_row.updated_at = now
+                else:
+                    conv_row.updated_at = max(now, conv_row.updated_at + 1)
 
             # Allocate item positions from the conversation's maintained
             # next_position counter instead of running a MAX(position) aggregate
@@ -2456,6 +2503,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         :param key: The label key to remove, e.g. ``"omni_project"``.
         """
         with self._conv_session("delete_label") as session:
+            self._lock_conversation(session, conversation_id)
             session.execute(
                 delete(SqlConversationLabel).where(
                     SqlConversationLabel.workspace_id == current_workspace_id(),
@@ -3035,7 +3083,8 @@ class SqlAlchemyConversationStore(ConversationStore):
         now = now_epoch()
         # Two transactions: AP (the conversation row, which carries the agent
         # binding + per-session override blob) and Omnigent (metadata).
-        with self._conv_session("update_conversation") as ap_sess:
+        with self._conv_session_immediate("update_conversation") as ap_sess:
+            self._lock_conversation(ap_sess, conversation_id)
             row = ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id))
             if not row:
                 return None
@@ -3109,7 +3158,9 @@ class SqlAlchemyConversationStore(ConversationStore):
                 row.archived = archived
                 ap_changed = True
             if ap_changed:
-                row.updated_at = now
+                # ``updated_at`` is also the conditional-mutation version;
+                # same-second edits must not reuse the previous validator.
+                row.updated_at = max(now, row.updated_at + 1)
             labels = _fetch_labels(ap_sess, conversation_id)
         if terminal_launch_args is not None:
             with self._session("update_conversation") as meta_sess:
@@ -3143,38 +3194,23 @@ class SqlAlchemyConversationStore(ConversationStore):
     ) -> bool:
         """Clear only a matching model selection with an atomic settings compare-and-swap."""
         workspace_id = current_workspace_id()
-        with self._conv_session("clear_model_override_if_matches") as session:
-            original = session.scalar(
-                select(SqlConversation.session_overrides).where(
-                    SqlConversation.workspace_id == workspace_id,
-                    SqlConversation.id == conversation_id,
-                )
-            )
+        with self._conv_session_immediate("clear_model_override_if_matches") as session:
+            self._lock_conversation(session, conversation_id)
+            conversation = session.get(SqlConversation, (workspace_id, conversation_id))
+            if conversation is None:
+                return False
+            original = conversation.session_overrides
             overrides: dict[str, Any] = json.loads(original) if original else {}
             if overrides.get("model_override") != expected_model_override:
                 return False
             del overrides["model_override"]
             encoded = json.dumps(overrides, separators=(",", ":")) if overrides else None
-            unchanged = SqlConversation.session_overrides == original
-            if self._conv_engine.dialect.name == "mysql":
-                # MySQL text collations can equate distinct, case-only model selections.
-                unchanged = SqlConversation.session_overrides.cast(LargeBinary) == (
-                    original.encode("utf-8") if original is not None else None
-                )
-            # Comparing the whole blob preserves concurrent updates to sibling settings too.
-            result = cast(
-                _RowCountResult,
-                session.execute(
-                    update(SqlConversation)
-                    .where(
-                        SqlConversation.workspace_id == workspace_id,
-                        SqlConversation.id == conversation_id,
-                        unchanged,
-                    )
-                    .values(session_overrides=encoded, updated_at=now_epoch())
-                ),
-            )
-            return result.rowcount == 1
+            # The conversation lock makes the read-modify-write atomic and
+            # preserves the mutation version even when this runs in the same
+            # epoch-second as the cleanup snapshot.
+            conversation.session_overrides = encoded
+            conversation.updated_at = max(now_epoch(), conversation.updated_at + 1)
+            return True
 
     def rename_conversation_if_title_matches(
         self,
@@ -3183,24 +3219,13 @@ class SqlAlchemyConversationStore(ConversationStore):
         title: str,
     ) -> Conversation | None:
         """Rename a conversation with an atomic title compare-and-swap."""
-        with self._conv_session("rename_conversation_if_title_matches") as session:
-            result = cast(
-                _RowCountResult,
-                session.execute(
-                    update(SqlConversation)
-                    .where(
-                        SqlConversation.workspace_id == current_workspace_id(),
-                        SqlConversation.id == conversation_id,
-                        SqlConversation.title == expected_title,
-                    )
-                    .values(
-                        title=title,
-                        updated_at=now_epoch(),
-                    )
-                ),
-            )
-            if result.rowcount != 1:
+        with self._conv_session_immediate("rename_conversation_if_title_matches") as session:
+            self._lock_conversation(session, conversation_id)
+            row = session.get(SqlConversation, (current_workspace_id(), conversation_id))
+            if row is None or row.title != expected_title:
                 return None
+            row.title = title
+            row.updated_at = max(now_epoch(), row.updated_at + 1)
         # Bulk UPDATE leaves no in-session ORM row to reuse; re-read.
         return self.get_conversation(conversation_id)
 
@@ -3316,15 +3341,35 @@ class SqlAlchemyConversationStore(ConversationStore):
         """
         from sqlalchemy import update
 
-        with self._session("set_session_live_status") as session:
-            session.execute(
-                update(SqlConversationMetadata)
-                .where(
-                    SqlConversationMetadata.workspace_id == current_workspace_id(),
-                    SqlConversationMetadata.id == conversation_id,
+        # Activity is part of the conditional test-session deletion fence.
+        # Serialize the status transition with that fence and avoid writing a
+        # metadata row after the conversation has already been removed.
+        with self._conv_session_immediate("set_session_live_status") as ap_sess:
+            self._lock_conversation(ap_sess, conversation_id)
+            if ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id)) is None:
+                return
+            if self._conv_engine is self._engine:
+                ap_sess.execute(
+                    update(SqlConversationMetadata)
+                    .where(
+                        SqlConversationMetadata.workspace_id == current_workspace_id(),
+                        SqlConversationMetadata.id == conversation_id,
+                    )
+                    .values(live_status=encode_session_live_status(status))
                 )
-                .values(live_status=encode_session_live_status(status))
-            )
+            else:
+                # In split-DB mode the AP row lock still serializes with
+                # conditional deletion; the metadata write stays on its own
+                # engine while that lock is held.
+                with self._session("set_session_live_status") as meta_sess:
+                    meta_sess.execute(
+                        update(SqlConversationMetadata)
+                        .where(
+                            SqlConversationMetadata.workspace_id == current_workspace_id(),
+                            SqlConversationMetadata.id == conversation_id,
+                        )
+                        .values(live_status=encode_session_live_status(status))
+                    )
 
     def set_pending_elicitation_count(self, conversation_id: str, count: int) -> None:
         """
@@ -3595,7 +3640,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                     f"conversation {conversation_id!r} does not exist",
                 )
             if changed:
-                ap_row.updated_at = now_epoch()
+                ap_row.updated_at = max(now_epoch(), ap_row.updated_at + 1)
             labels = _fetch_labels(ap_sess, conversation_id)
         return _to_conversation(ap_row, meta, labels)
 
@@ -3738,6 +3783,19 @@ class SqlAlchemyConversationStore(ConversationStore):
             session_overrides=_encode_session_overrides({"reasoning_effort": reasoning_effort}),
         )
         with self._conv_session("create_session_with_agent") as ap_sess:
+            if parent_conversation_id is not None:
+                # Keep this transaction serialized with the conditional
+                # deletion fence used for ephemeral test sessions.
+                self._lock_conversation(ap_sess, parent_conversation_id)
+                locked_parent = ap_sess.get(
+                    SqlConversation,
+                    (current_workspace_id(), parent_conversation_id),
+                )
+                if locked_parent is None:
+                    raise ConversationNotFoundError(
+                        f"parent conversation {parent_conversation_id!r} does not exist"
+                    )
+                conversation_row.root_conversation_id = locked_parent.root_conversation_id
             ap_sess.add(conversation_row)
             if labels:
                 _upsert_labels(ap_sess, conversation_id, labels, now)
@@ -4368,7 +4426,9 @@ class SqlAlchemyConversationStore(ConversationStore):
             # The brain-harness override never survives a rebind.
             overrides["harness_override"] = None
             row.session_overrides = _encode_session_overrides(overrides)
-            row.updated_at = now
+            # Preserve a strictly monotonic mutation version for conditional
+            # session deletion, including rapid in-place agent switches.
+            row.updated_at = max(now, row.updated_at + 1)
 
             existing = _fetch_labels(ap_sess, conversation_id)
             present_drop = [key for key in drop_keys if key in existing]
@@ -4466,6 +4526,157 @@ class SqlAlchemyConversationStore(ConversationStore):
                 )
                 is not None
             )
+
+    async def delete_conversation_if_unchanged(
+        self,
+        conversation_id: str,
+        *,
+        expected_updated_at: int,
+        expected_labels: dict[str, str],
+        expected_live_status: str | None,
+    ) -> bool:
+        """Delete one isolated conversation behind a versioned mutation fence.
+
+        The parent row is locked before checking its version, labels, and
+        descendants. Sub-agent creation takes the same parent lock, so a child
+        cannot appear between the descendant check and the delete. Label edits
+        are compared inside the same AP transaction because labels have their
+        own table and do not necessarily advance ``conversations.updated_at``.
+        The persisted live status is checked under the same root lock; its
+        writer uses that lock too, so an activity transition cannot commit
+        behind the deletion fence.
+
+        This deliberately refuses any descendant rather than recursively
+        deleting a tree. A stale or non-isolated candidate returns ``False``;
+        callers must preserve it instead of falling back to
+        :meth:`delete_conversation`.
+        """
+        with self._conv_session_immediate("delete_conversation_if_unchanged") as ap_sess:
+            self._lock_conversation(ap_sess, conversation_id)
+            row = ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id))
+            if row is None or row.updated_at != expected_updated_at:
+                return False
+            if _fetch_labels(ap_sess, conversation_id) != dict(expected_labels):
+                return False
+            if self._conv_engine is self._engine:
+                metadata_row = ap_sess.get(
+                    SqlConversationMetadata,
+                    (current_workspace_id(), conversation_id),
+                )
+                live_status = (
+                    decode_session_live_status(metadata_row.live_status)
+                    if metadata_row is not None and metadata_row.live_status is not None
+                    else None
+                )
+            else:
+                with self._session("delete_conversation_if_unchanged") as meta_sess:
+                    metadata_row = meta_sess.get(
+                        SqlConversationMetadata,
+                        (current_workspace_id(), conversation_id),
+                    )
+                    live_status = (
+                        decode_session_live_status(metadata_row.live_status)
+                        if metadata_row is not None and metadata_row.live_status is not None
+                        else None
+                    )
+            if live_status != expected_live_status:
+                return False
+            child = ap_sess.execute(
+                select(SqlConversation.id)
+                .where(
+                    SqlConversation.workspace_id == current_workspace_id(),
+                    SqlConversation.parent_conversation_id == conversation_id,
+                )
+                .limit(1)
+            ).first()
+            if child is not None:
+                return False
+
+            candidate_agent_ids = {
+                agent_id
+                for agent_id in (
+                    ap_sess.execute(
+                        select(SqlConversation.agent_id).where(
+                            SqlConversation.workspace_id == current_workspace_id(),
+                            SqlConversation.id == conversation_id,
+                            SqlConversation.agent_id.is_not(None),
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if agent_id is not None
+            }
+            surviving_refs = set()
+            if candidate_agent_ids:
+                surviving_refs = set(
+                    ap_sess.execute(
+                        select(SqlConversation.agent_id).where(
+                            SqlConversation.workspace_id == current_workspace_id(),
+                            SqlConversation.agent_id.in_(candidate_agent_ids),
+                            SqlConversation.id != conversation_id,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            bound_agent_ids = candidate_agent_ids - surviving_refs
+
+            delete_fts_by_conversation_ids(ap_sess, [conversation_id])
+            ap_sess.execute(
+                delete(SqlResponseFeedback).where(
+                    SqlResponseFeedback.workspace_id == current_workspace_id(),
+                    SqlResponseFeedback.conversation_id == conversation_id,
+                )
+            )
+            ap_sess.execute(
+                delete(SqlConversationItem).where(
+                    SqlConversationItem.workspace_id == current_workspace_id(),
+                    SqlConversationItem.conversation_id == conversation_id,
+                )
+            )
+            ap_sess.execute(
+                delete(SqlConversationLabel).where(
+                    SqlConversationLabel.workspace_id == current_workspace_id(),
+                    SqlConversationLabel.conversation_id == conversation_id,
+                )
+            )
+            ap_sess.delete(row)
+
+        with self._session("delete_conversation_if_unchanged") as session:
+            session.execute(
+                delete(SqlComment).where(
+                    SqlComment.workspace_id == current_workspace_id(),
+                    SqlComment.conversation_id == conversation_id,
+                )
+            )
+            session.execute(
+                delete(SqlPolicy).where(
+                    SqlPolicy.workspace_id == current_workspace_id(),
+                    SqlPolicy.session_id == conversation_id,
+                )
+            )
+            session.execute(
+                delete(SqlSessionPermission).where(
+                    SqlSessionPermission.workspace_id == current_workspace_id(),
+                    SqlSessionPermission.conversation_id == conversation_id,
+                )
+            )
+            session.execute(
+                delete(SqlConversationMetadata).where(
+                    SqlConversationMetadata.workspace_id == current_workspace_id(),
+                    SqlConversationMetadata.id == conversation_id,
+                )
+            )
+            if bound_agent_ids:
+                session.execute(
+                    delete(SqlAgent).where(
+                        SqlAgent.workspace_id == current_workspace_id(),
+                        SqlAgent.id.in_(bound_agent_ids),
+                        SqlAgent.kind == encode_agent_kind("session"),
+                    )
+                )
+        return True
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         """

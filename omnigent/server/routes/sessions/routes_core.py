@@ -186,6 +186,7 @@ from omnigent.server.schemas import (
     SessionSwitchAgentRequest,
     UpdateSessionRequest,
 )
+from omnigent.server.session_version import session_etag
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.comment_store import CommentStore
@@ -990,6 +991,16 @@ def register_core_routes(
         access = await _require_access_and_level(
             user_id, session_id, LEVEL_READ, permission_store, conversation_store
         )
+        etag_conversation = access.conversation
+        if etag_conversation is None:
+            etag_conversation = await asyncio.to_thread(
+                conversation_store.get_conversation, session_id
+            )
+        if etag_conversation is not None:
+            response.headers["ETag"] = session_etag(
+                etag_conversation.updated_at,
+                etag_conversation.labels or {},
+            )
         return await _get_session_snapshot(
             conversation_store,
             session_id,

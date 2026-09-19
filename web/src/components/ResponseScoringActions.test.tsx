@@ -25,8 +25,11 @@ beforeEach(() => {
     }
     if (url.includes("/task-outcomes/")) {
       const row = {
-        id: String(outcomes.length), kind: "outcome", response_id: "answer",
-        review_source: "human", ...JSON.parse(options!.body as string),
+        id: String(outcomes.length),
+        kind: "outcome",
+        response_id: "answer",
+        review_source: "human",
+        ...JSON.parse(options!.body as string),
       };
       outcomes.push(row);
       return Response.json(row);
@@ -53,7 +56,9 @@ it("excludes an unrated response, persists the reason across reload, and restore
   fireEvent.click(await screen.findByRole("button", { name: "Do not score" }));
   await screen.findByLabelText("Scoring exclusion reason");
   expect(outcomes).toHaveLength(0);
-  fireEvent.change(screen.getByLabelText("Scoring exclusion reason"), { target: { value: "test_fixture" } });
+  fireEvent.change(screen.getByLabelText("Scoring exclusion reason"), {
+    target: { value: "test_fixture" },
+  });
   await waitFor(() => expect(policy.responses.answer.exclusion_reason).toBe("test_fixture"));
   view.unmount();
   view = mount();
@@ -67,7 +72,16 @@ it("excludes an unrated response, persists the reason across reload, and restore
 });
 
 it("preserves an unsaved human comment and tags while toggling exclusion", async () => {
-  outcomes = [{ id: "original", kind: "outcome", response_id: "answer", outcome: "partial", comment: "", tags: [] }];
+  outcomes = [
+    {
+      id: "original",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "",
+      tags: [],
+    },
+  ];
   mount();
   const comment = await screen.findByLabelText("Task review comment");
   fireEvent.change(comment, { target: { value: "My unsaved note" } });
@@ -75,11 +89,18 @@ it("preserves an unsaved human comment and tags while toggling exclusion", async
   fireEvent.click(await screen.findByRole("button", { name: "Do not score" }));
   await waitFor(() => expect(policy.responses.answer.score_eligible).toBe(false));
   expect(comment).toHaveValue("My unsaved note");
-  expect(screen.getByRole("button", { name: "Tests/verification" })).toHaveAttribute("aria-pressed", "true");
-  fireEvent.click(screen.getByRole("button", { name: "Success", exact: true }));
-  await waitFor(() => expect(outcomes.at(-1)).toMatchObject({
-    outcome: "success", comment: "My unsaved note", tags: ["Tests/verification"],
-  }));
+  expect(screen.getByRole("button", { name: "Tests/verification" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Success" }));
+  await waitFor(() =>
+    expect(outcomes.at(-1)).toMatchObject({
+      outcome: "success",
+      comment: "My unsaved note",
+      tags: ["Tests/verification"],
+    }),
+  );
   expect(policy.responses.answer.score_eligible).toBe(false);
 });
 
@@ -95,7 +116,12 @@ it("keeps the previous confirmed setting after a failed mutation", async () => {
 });
 
 it("shows retained test evidence and refuses per-response re-inclusion", async () => {
-  policy = { score_eligible: false, is_test: true, retention: "keep_for_inspection", responses: {} };
+  policy = {
+    score_eligible: false,
+    is_test: true,
+    retention: "keep_for_inspection",
+    responses: {},
+  };
   mount();
   expect(await screen.findByRole("status")).toHaveTextContent("Kept for inspection");
   const exclude = screen.getByRole("button", { name: "Do not score" });

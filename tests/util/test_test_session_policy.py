@@ -10,22 +10,30 @@ from omnigent.util.test_session_policy import (
     keep_for_inspection_labels,
     plan_test_cleanup,
     session_score_eligible,
+)
+from omnigent.util.test_session_policy import (
     test_session_labels as make_test_labels,
 )
 
 
 def session(**changes):
     return {
-        "id": "mine", "title": "PONG test", "status": "idle",
-        "labels": make_test_labels("run", "codex"), "has_children": False,
+        "id": "mine",
+        "title": "PONG test",
+        "status": "idle",
+        "labels": make_test_labels("run", "codex"),
+        "has_children": False,
         **changes,
     }
 
 
 def plan(value, **changes):
     kwargs = {
-        "run_id": "run", "creator": "codex", "created_session_ids": {"mine"},
-        "verified_result": "passed", "unchanged_since_verification": True,
+        "run_id": "run",
+        "creator": "codex",
+        "created_session_ids": {"mine"},
+        "verified_result": "passed",
+        "unchanged_since_verification": True,
         **changes,
     }
     return plan_test_cleanup(value, **kwargs)

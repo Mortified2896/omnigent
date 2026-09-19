@@ -223,6 +223,12 @@ function isDotMarker(state: SessionState | null): boolean {
 }
 const SESSION_STATE_DOT_SLOT_CLASS = "w-6 justify-center";
 
+// Retained test evidence is deliberately surfaced in the session list rather
+// than only inside the review editor. A failed fixture can have no completed
+// answer, so the marker keys off the durable retention label alone.
+const TEST_RETENTION_LABEL = "omnigent.test.retention";
+const TEST_RETENTION_HOLD = "keep_for_inspection";
+
 // Match the Settings sidebar's ghost-button hover treatment across every home
 // sidebar row.
 const SIDEBAR_HOVER_HIGHLIGHT = "hover:bg-muted hover:text-foreground dark:hover:bg-muted/50";
@@ -3644,6 +3650,8 @@ function ConversationRowImpl({
   }, [conversation.title, pendingTitle, rename.isSuccess, rename.isError]);
 
   const label = pendingTitle ?? conversationDisplayLabel(conversation);
+  const hasRetainedTestEvidence =
+    conversation.labels?.[TEST_RETENTION_LABEL] === TEST_RETENTION_HOLD;
   // Subscribed so the just-recorded optimistic label flips the row
   // immediately instead of at the next conversations poll.
   const optimisticTitle = useOptimisticTitle(conversation.id);
@@ -3948,6 +3956,15 @@ function ConversationRowImpl({
           {hasUnseenMessages && <span className="sr-only"> (unread)</span>}
         </span>
       </div>
+      {hasRetainedTestEvidence && (
+        <span
+          data-testid="retained-test-evidence-marker"
+          role="status"
+          className="truncate text-[0.68rem] leading-tight text-amber-700 dark:text-amber-300"
+        >
+          Test evidence · Kept for inspection
+        </span>
+      )}
     </Link>
   );
 

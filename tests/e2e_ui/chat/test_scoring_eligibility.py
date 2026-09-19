@@ -1,9 +1,11 @@
-"""Mobile exclusion is independent of the outcome and human review tags."""
+"""Scoring exclusion preserves human review and retained evidence visibility."""
 
 from pathlib import Path
 
+import httpx
 from playwright.sync_api import Page, expect
 
+from omnigent.util.test_session_policy import keep_for_inspection_labels
 from tests.e2e_ui.conftest import seed_committed_turn
 
 
@@ -16,12 +18,22 @@ def test_unrated_exclusion_survives_review_and_reload(
     page.goto(f"{base_url}/c/{session_id}")
     exclude = page.get_by_role("button", name="Do not score", exact=True)
     expect(exclude).to_be_enabled(timeout=30_000)
-    exclude.click()
+    with page.expect_response(
+        lambda response: (
+            "/scoring-eligibility/" in response.url
+            and response.request.method == "PUT"
+            and response.status == 200
+        )
+    ):
+        exclude.click()
     reason = page.get_by_label("Scoring exclusion reason")
     expect(reason).to_be_enabled()
     with page.expect_response(
-        lambda response: "/scoring-eligibility/" in response.url
-        and response.request.method == "PUT" and response.status == 200
+        lambda response: (
+            "/scoring-eligibility/" in response.url
+            and response.request.method == "PUT"
+            and response.status == 200
+        )
     ):
         reason.select_option("test_fixture")
     # Wait for the mutation and policy read-back, not merely select.value.
@@ -41,8 +53,11 @@ def test_unrated_exclusion_survives_review_and_reload(
     tag.click()
     save = page.get_by_role("button", name="Save details", exact=True)
     with page.expect_response(
-        lambda response: "/task-outcomes/" in response.url
-        and response.request.method == "PUT" and response.status == 200
+        lambda response: (
+            "/task-outcomes/" in response.url
+            and response.request.method == "PUT"
+            and response.status == 200
+        )
     ):
         save.click()
     expect(save).to_be_disabled()
@@ -52,10 +67,66 @@ def test_unrated_exclusion_survives_review_and_reload(
     expect(comment).to_have_value("Keep this human-only note", timeout=30_000)
     expect(tag).to_have_attribute("aria-pressed", "true")
     expect(exclude).to_have_attribute("aria-pressed", "true")
-    exclude.click()
+    # Restore first so the next exclusion exercises an already-rated Success.
+    with page.expect_response(
+        lambda response: (
+            "/scoring-eligibility/" in response.url
+            and response.request.method == "PUT"
+            and response.status == 200
+        )
+    ):
+        exclude.click()
     expect(exclude).to_have_attribute("aria-pressed", "false")
     expect(page.get_by_role("button", name="Success", exact=True)).to_have_attribute(
         "aria-pressed", "true"
     )
     expect(comment).to_have_value("Keep this human-only note")
+    # These edits are intentionally not saved. Toggling eligibility must not
+    # remount the review editor or discard the user's in-progress changes.
+    comment.fill("Unsaved while toggling scoring")
+    extra_tag = page.get_by_role("button", name="Documentation", exact=True)
+    extra_tag.click()
+    with page.expect_response(
+        lambda response: (
+            "/scoring-eligibility/" in response.url
+            and response.request.method == "PUT"
+            and response.status == 200
+        )
+    ):
+        exclude.click()
+    expect(exclude).to_have_attribute("aria-pressed", "true")
+    expect(comment).to_have_value("Unsaved while toggling scoring")
+    expect(extra_tag).to_have_attribute("aria-pressed", "true")
+    with page.expect_response(
+        lambda response: (
+            "/scoring-eligibility/" in response.url
+            and response.request.method == "PUT"
+            and response.status == 200
+        )
+    ):
+        exclude.click()
+    expect(exclude).to_have_attribute("aria-pressed", "false")
+    expect(comment).to_have_value("Unsaved while toggling scoring")
+    expect(extra_tag).to_have_attribute("aria-pressed", "true")
     page.screenshot(path=str(tmp_path / "scoring-eligibility-mobile.png"), full_page=True)
+
+
+def test_retained_failure_marker_is_visible_without_completed_answer(
+    page: Page, scoring_session: tuple[str, str], tmp_path: Path
+) -> None:
+    """Retention evidence stays discoverable even when no answer exists."""
+    base_url, session_id = scoring_session
+    hold = httpx.patch(
+        f"{base_url}/v1/sessions/{session_id}",
+        json={"labels": keep_for_inspection_labels("fixture failed before an answer")},
+        timeout=10.0,
+    )
+    hold.raise_for_status()
+    page.set_viewport_size({"width": 1280, "height": 800})
+    page.goto(f"{base_url}/c/{session_id}")
+    marker = page.locator(f'a[href="/c/{session_id}"]').get_by_test_id(
+        "retained-test-evidence-marker"
+    )
+    expect(marker).to_be_visible(timeout=30_000)
+    expect(marker).to_have_text("Test evidence · Kept for inspection")
+    page.screenshot(path=str(tmp_path / "retained-test-evidence-sidebar.png"), full_page=True)

@@ -95,9 +95,7 @@ def build_blind_scoring_input(record: Mapping[str, object]) -> dict[str, object]
     return {"schema_version": 1, "task": task, "answer": answer}
 
 
-def scoring_policy(
-    store: ConversationStore, conversation_id: str, actor: str
-) -> dict:
+def scoring_policy(store: ConversationStore, conversation_id: str, actor: str) -> dict:
     from omnigent.server.task_experiment import list_experiment_events
 
     conversation = store.get_conversation(conversation_id)

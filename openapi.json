@@ -4498,6 +4498,37 @@
         "title": "SandboxStatus",
         "type": "object"
       },
+      "ScoringEligibilityInput": {
+        "additionalProperties": false,
+        "properties": {
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "test_fixture",
+                  "duplicate",
+                  "out_of_scope",
+                  "other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "score_eligible": {
+            "title": "Score Eligible",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "score_eligible"
+        ],
+        "title": "ScoringEligibilityInput",
+        "type": "object"
+      },
       "SendCommentsRequest": {
         "description": "Request body for `POST .../comments/send`.",
         "properties": {
@@ -10902,7 +10933,7 @@
     },
     "/v1/sessions/{session_id}": {
       "delete": {
-        "description": "Delete a session and all associated resources.\n\nRequires owner-level access. Tears down tasks, runner-side\nresources (environments, terminals), session files, and the\nconversation row.\n\n**Returns:** A `ConversationDeleted` confirmation.\n\n**Raises**\n\n- `OmnigentError` \u2014 404 if no session or no access, 403 if insufficient permissions, 409 if `delete_branch=true` and the host is offline so worktree cleanup cannot run.",
+        "description": "Delete a session and all associated resources.\n\nRequires owner-level access. Tears down tasks, runner-side\nresources (environments, terminals), session files, and the\nconversation row.\n\n**Parameters**\n\n- `if_match` \u2014 Optional session snapshot validator from `GET /v1/sessions/{id}`. When supplied, deletion is conditional: the server preserves the session unless the version, complete label mapping, activity state, and descendant set still match. This is the only contract the test-session planner may use for cleanup.\n\n**Returns:** A `ConversationDeleted` confirmation.\n\n**Raises**\n\n- `OmnigentError` \u2014 404 if no session or no access, 403 if insufficient permissions, 409 if `delete_branch=true` and the host is offline so worktree cleanup cannot run.",
         "operationId": "delete_session_v1_sessions__session_id__delete",
         "parameters": [
           {
@@ -10924,6 +10955,22 @@
               "default": false,
               "title": "Delete Branch",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
             }
           }
         ],
@@ -14663,6 +14710,160 @@
           }
         },
         "summary": "Put Feedback",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/scored-outcomes": {
+      "get": {
+        "operationId": "get_scored_outcomes_v1_sessions__session_id__scored_outcomes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Scored Outcomes V1 Sessions  Session Id  Scored Outcomes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scored Outcomes",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/scoring-eligibility/{response_id}": {
+      "put": {
+        "operationId": "put_scoring_eligibility_v1_sessions__session_id__scoring_eligibility__response_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "response_id",
+            "required": true,
+            "schema": {
+              "title": "Response Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoringEligibilityInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Scoring Eligibility V1 Sessions  Session Id  Scoring Eligibility  Response Id  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Scoring Eligibility",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/scoring-policy": {
+      "get": {
+        "operationId": "get_scoring_policy_v1_sessions__session_id__scoring_policy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Scoring Policy V1 Sessions  Session Id  Scoring Policy Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scoring Policy",
         "tags": [
           "sessions"
         ]
