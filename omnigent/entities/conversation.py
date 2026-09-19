@@ -231,6 +231,11 @@ class Conversation:
     created_at: int
     updated_at: int
     root_conversation_id: str
+    # Monotonic content-generation counter used by conditional session
+    # cleanup.  ``updated_at`` remains the display-order timestamp, so the
+    # first item appended in the creation second still invalidates a cleanup
+    # snapshot without moving the session in the sidebar.
+    next_position: int | None = None
     title: str | None = None
     kind: str = "default"
     parent_conversation_id: str | None = None

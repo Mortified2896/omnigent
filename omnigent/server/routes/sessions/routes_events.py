@@ -211,7 +211,7 @@ from omnigent.server.schemas import (
     McpServerStartup,
     SessionEventInput,
 )
-from omnigent.server.session_version import session_etag
+from omnigent.server.session_version import SessionMutationFingerprint, session_etag
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.conversation_store import PINNED_LABEL_KEY
@@ -389,6 +389,29 @@ def register_events_routes(
     runner_tunnel_tokens: frozenset[str] | None = None,
 ) -> None:
     """Register the events, stream, and delete routes on router."""
+
+    async def _get_session_mutation_fingerprint(
+        session_id: str,
+    ) -> SessionMutationFingerprint | None:
+        """Read conditional-delete state, failing closed on uncertainty."""
+        if not getattr(conversation_store, "supports_conditional_session_delete", False):
+            return None
+        getter = getattr(conversation_store, "get_session_mutation_fingerprint", None)
+        if not callable(getter):
+            return None
+        try:
+            typed_getter = cast(
+                Callable[[str], SessionMutationFingerprint | None],
+                getter,
+            )
+            return await asyncio.to_thread(typed_getter, session_id)
+        except Exception:
+            _logger.warning(
+                "Could not read conditional-delete fingerprint for %s",
+                session_id,
+                exc_info=True,
+            )
+            return None
 
     def _has_runner_created_by_authority(request: Request, conv: Any) -> bool:
         token = (request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) or "").strip()
@@ -2303,7 +2326,17 @@ def register_events_routes(
                     status_code=412,
                     detail="Conditional session deletion does not include worktree cleanup",
                 )
-            if if_match != session_etag(conv.updated_at, conv.labels or {}):
+            mutation = await _get_session_mutation_fingerprint(session_id)
+            if mutation is None:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Conditional session deletion is unavailable for this storage layout",
+                )
+            if if_match != session_etag(
+                conv.updated_at,
+                conv.labels or {},
+                mutation=mutation,
+            ):
                 raise HTTPException(
                     status_code=412,
                     detail="Session changed since the cleanup snapshot",
@@ -2336,7 +2369,17 @@ def register_events_routes(
             latest_conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
             if latest_conv is None:
                 raise _session_not_found()
-            if if_match != session_etag(latest_conv.updated_at, latest_conv.labels or {}):
+            latest_mutation = await _get_session_mutation_fingerprint(session_id)
+            if latest_mutation is None:
+                raise HTTPException(
+                    status_code=412,
+                    detail="Conditional session deletion is unavailable for this storage layout",
+                )
+            if if_match != session_etag(
+                latest_conv.updated_at,
+                latest_conv.labels or {},
+                mutation=latest_mutation,
+            ):
                 raise HTTPException(
                     status_code=412,
                     detail="Session changed during cleanup validation",
@@ -2362,6 +2405,9 @@ def register_events_routes(
                 expected_updated_at=latest_conv.updated_at,
                 expected_labels=dict(latest_conv.labels or {}),
                 expected_live_status=latest_conv.live_status,
+                expected_next_position=latest_mutation.next_position,
+                expected_comments_count=latest_mutation.comments_count,
+                expected_comments_updated_at=latest_mutation.comments_updated_at,
             )
             if not deleted:
                 raise HTTPException(

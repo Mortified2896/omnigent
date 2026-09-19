@@ -160,6 +160,7 @@ class _TestSessionManifest:
     run_id: str
     creator: str
     created_session_ids: set[str] = field(default_factory=set)
+    verified_etags: dict[str, str] = field(default_factory=dict)
     decisions: list[dict[str, object]] = field(default_factory=list)
     removed_session_ids: list[str] = field(default_factory=list)
 
@@ -170,6 +171,13 @@ class _TestSessionManifest:
 
     def record_created(self, session_id: str) -> None:
         self.created_session_ids.add(session_id)
+        self._write()
+
+    def record_verified(self, session_id: str, etag: str) -> None:
+        """Record the exact server snapshot verified by the harness."""
+        if not etag:
+            raise ValueError("A verified session snapshot must include an ETag")
+        self.verified_etags[session_id] = etag
         self._write()
 
     def record_decision(self, session_id: str, action: str, reason: str) -> None:
@@ -196,6 +204,7 @@ class _TestSessionManifest:
                     "run_id": self.run_id,
                     "creator": self.creator,
                     "created_session_ids": sorted(self.created_session_ids),
+                    "verified_etags": dict(sorted(self.verified_etags.items())),
                     "decisions": self.decisions,
                     "removed_session_ids": self.removed_session_ids,
                 },
@@ -236,6 +245,42 @@ def _test_report_result(request: pytest.FixtureRequest) -> tuple[str | None, str
         details = getattr(report, "longreprtext", "") or "test call failed"
         return "failed", f"{request.node.nodeid}: {details[-850:]}"
     return "unexpected", f"{request.node.nodeid}: pytest outcome={report.outcome}"
+
+
+def _legacy_fixture_cleanup(base_url: str, session_id: str) -> None:
+    """Clean up only sessions on the isolated server this suite owns.
+
+    Older fixtures predate the manifest-backed conditional teardown and do
+    not retain a harness-verified ETag. Their destructive fallback is disabled
+    when ``--ui-base-url`` points at an external server, so an acceptance run
+    cannot delete a user session or an existing chat. The spawned suite server
+    uses a private temporary database and remains safe to tear down directly.
+    """
+    if (
+        _server_state.get("server_url") != base_url
+        or "pid" not in _server_state
+        or "database_uri" not in _server_state
+    ):
+        warnings.warn(
+            f"Legacy fixture cleanup disabled for external server session {session_id}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    try:
+        response = httpx.delete(f"{base_url}/v1/sessions/{session_id}", timeout=10.0)
+        if response.status_code >= 400:
+            warnings.warn(
+                f"Legacy fixture cleanup returned HTTP {response.status_code} for {session_id}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    except httpx.HTTPError as exc:
+        warnings.warn(
+            f"Legacy fixture cleanup failed for {session_id}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 def _finalize_test_session(
@@ -283,6 +328,30 @@ def _finalize_test_session(
         )
         return
 
+    etag = snapshot_response.headers.get("etag")
+    expected_etag = manifest.verified_etags.get(session_id)
+    if expected_etag is None:
+        manifest.record_decision(
+            session_id,
+            "preserve",
+            "No harness-verified baseline exists for this session",
+        )
+        return
+    if etag is None:
+        manifest.record_decision(
+            session_id,
+            "preserve",
+            "Server did not provide a conditional deletion validator",
+        )
+        return
+    if etag != expected_etag:
+        manifest.record_decision(
+            session_id,
+            "preserve",
+            "Session changed after the last harness-verified snapshot",
+        )
+        return
+
     snapshot = snapshot_response.json()
     try:
         children_response = httpx.get(
@@ -305,7 +374,7 @@ def _finalize_test_session(
         creator=manifest.creator,
         created_session_ids=manifest.created_session_ids,
         verified_result=verified_result,  # type: ignore[arg-type]
-        unchanged_since_verification=bool(etag),
+        unchanged_since_verification=True,
     )
 
     if decision.action == "keep_for_inspection":
@@ -334,14 +403,6 @@ def _finalize_test_session(
     if decision.action != "delete_candidate":
         manifest.record_decision(session_id, decision.action, decision.reason)
         return
-    if etag is None:
-        manifest.record_decision(
-            session_id,
-            "preserve",
-            "Server did not provide a conditional deletion validator",
-        )
-        return
-
     try:
         delete_response = httpx.delete(
             f"{base_url}/v1/sessions/{session_id}",
@@ -1451,7 +1512,7 @@ def seeded_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         # Restore the "found" state: if we respawned the runner (a prior
         # test had killed it), tear our copy down so it doesn't outlive us.
         if respawned_runner is not None:
@@ -1490,6 +1551,16 @@ def _create_manifested_scoring_session(
         timeout=10.0,
     )
     patch_resp.raise_for_status()
+    snapshot_resp = httpx.get(
+        f"{base_url}/v1/sessions/{session_id}",
+        params={"include_items": "false", "include_liveness": "false"},
+        timeout=10.0,
+    )
+    snapshot_resp.raise_for_status()
+    etag = snapshot_resp.headers.get("etag")
+    if etag is None:
+        raise RuntimeError("Scoring session snapshot did not include an ETag")
+    manifest.record_verified(session_id, etag)
     return session_id
 
 
@@ -1659,7 +1730,7 @@ def seeded_session_pair(
         yield (live_server, session_a, session_b)
     finally:
         for sid in (session_a, session_b):
-            httpx.delete(f"{live_server}/v1/sessions/{sid}", timeout=10.0)
+            _legacy_fixture_cleanup(live_server, sid)
         # Restore the "found" state: if we respawned the runner (a prior
         # test had killed it), tear our copy down so it doesn't outlive us.
         if respawned_runner is not None:
@@ -1881,7 +1952,7 @@ def terminal_session(
         yield (live_server, session_id)
     finally:
         try:
-            httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+            _legacy_fixture_cleanup(live_server, session_id)
         finally:
             try:
                 reset_mock_llm(mock_llm_server_url)
@@ -2117,7 +2188,7 @@ def two_agent_chat_session(
             routing_token=routing_token,
         )
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned_runner is not None:
             respawned_runner.terminate()
             try:
@@ -2274,7 +2345,7 @@ def approval_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned_runner is not None:
             respawned_runner.terminate()
             try:
@@ -2373,7 +2444,7 @@ def tool_fold_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             respawned.wait(timeout=5)
@@ -2444,7 +2515,7 @@ def paused_mid_turn_session(
         # the test and wedges the shared runner for the next one.
         with contextlib.suppress(httpx.HTTPError):
             httpx.post(f"{mock_llm_server_url}/gate/release", timeout=5.0)
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             respawned.wait(timeout=5)
@@ -2650,7 +2721,7 @@ def custom_agent_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             respawned.wait(timeout=5)
@@ -2754,7 +2825,7 @@ def native_claude_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             # Escalate to SIGKILL if the runner ignores SIGTERM, so a wedged
@@ -2817,7 +2888,7 @@ def native_claude_plan_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             try:
@@ -2929,7 +3000,7 @@ def native_codex_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             # Escalate to SIGKILL if the runner ignores SIGTERM, so a wedged
@@ -3028,7 +3099,7 @@ def native_claude_mock_session(
         try:
             yield (live_server, session_id)
         finally:
-            httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+            _legacy_fixture_cleanup(live_server, session_id)
             if respawned is not None:
                 respawned.terminate()
                 try:
@@ -3066,7 +3137,7 @@ def native_codex_mock_session(
         try:
             yield (live_server, session_id)
         finally:
-            httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+            _legacy_fixture_cleanup(live_server, session_id)
             if respawned is not None:
                 respawned.terminate()
                 try:
@@ -3330,7 +3401,7 @@ def mocked_native_codex_session(
     finally:
         if session_id is not None:
             with contextlib.suppress(httpx.HTTPError):
-                httpx.delete(f"{base_url}/v1/sessions/{session_id}", timeout=10.0)
+                _legacy_fixture_cleanup(base_url, session_id)
         if runner_proc is not None and runner_proc.poll() is None:
             runner_proc.send_signal(signal.SIGTERM)
             try:
@@ -3538,7 +3609,7 @@ def native_goose_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             try:
@@ -3627,7 +3698,7 @@ def native_kiro_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             try:
@@ -3716,7 +3787,7 @@ def native_hermes_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             try:
@@ -3749,7 +3820,7 @@ def native_cursor_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             # Escalate to SIGKILL if the runner ignores SIGTERM, so a wedged
@@ -3786,7 +3857,7 @@ def native_cursor_approval_session(
     try:
         yield (live_server, session_id)
     finally:
-        httpx.delete(f"{live_server}/v1/sessions/{session_id}", timeout=10.0)
+        _legacy_fixture_cleanup(live_server, session_id)
         if respawned is not None:
             respawned.terminate()
             try:

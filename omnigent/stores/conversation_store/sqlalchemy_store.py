@@ -80,6 +80,7 @@ from omnigent.entities import (
 )
 from omnigent.entities.response_feedback import ResponseFeedback
 from omnigent.native.native_coding_agents import native_coding_agent_for_wrapper_label
+from omnigent.server.session_version import SessionMutationFingerprint
 from omnigent.session_import.models import (
     IMPORT_EXTERNAL_SESSION_ID_LABEL_KEY,
     IMPORT_SOURCE_LABEL_KEY,
@@ -222,6 +223,7 @@ def _to_conversation(
         id=row.id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        next_position=row.next_position,
         title=row.title or None,  # empty string → None at entity layer
         # kind is derived from parent-nullness, not the stored metadata column:
         # a conversation is a sub-agent iff it has a parent. This is the single
@@ -1237,6 +1239,39 @@ class SqlAlchemyConversationStore(ConversationStore):
                 return None
             meta = self._get_meta(conversation_id)
             return _to_conversation(row, meta, _fetch_labels(session, conversation_id))
+
+    @property
+    def supports_conditional_session_delete(self) -> bool:
+        """Whether all cleanup-fence state shares one transactional database."""
+        return self._conv_engine is self._engine
+
+    def get_session_mutation_fingerprint(
+        self, conversation_id: str
+    ) -> SessionMutationFingerprint | None:
+        """Read the state protected by conditional session deletion.
+
+        The content counter lives on the AP conversation row and the comment
+        fingerprint lives in the Omnigent database. A split deployment cannot
+        read and delete both stores under one transaction, so it deliberately
+        returns ``None`` and the caller must preserve the session.
+        """
+        if not self.supports_conditional_session_delete:
+            return None
+        with self._conv_session("get_session_mutation_fingerprint") as session:
+            row = session.get(SqlConversation, (current_workspace_id(), conversation_id))
+            if row is None:
+                return None
+            comments_count, comments_updated_at = session.execute(
+                select(func.count(SqlComment.id), func.max(SqlComment.updated_at)).where(
+                    SqlComment.workspace_id == current_workspace_id(),
+                    SqlComment.conversation_id == conversation_id,
+                )
+            ).one()
+            return SessionMutationFingerprint(
+                next_position=row.next_position,
+                comments_count=int(comments_count or 0),
+                comments_updated_at=comments_updated_at,
+            )
 
     def find_imported_conversation(
         self,
@@ -4534,23 +4569,30 @@ class SqlAlchemyConversationStore(ConversationStore):
         expected_updated_at: int,
         expected_labels: dict[str, str],
         expected_live_status: str | None,
+        expected_next_position: int | None,
+        expected_comments_count: int,
+        expected_comments_updated_at: int | None,
     ) -> bool:
         """Delete one isolated conversation behind a versioned mutation fence.
 
-        The parent row is locked before checking its version, labels, and
-        descendants. Sub-agent creation takes the same parent lock, so a child
-        cannot appear between the descendant check and the delete. Label edits
-        are compared inside the same AP transaction because labels have their
-        own table and do not necessarily advance ``conversations.updated_at``.
-        The persisted live status is checked under the same root lock; its
-        writer uses that lock too, so an activity transition cannot commit
-        behind the deletion fence.
+        The parent row is locked before checking its version, labels, content
+        generation, review-comment fingerprint, and descendants. Sub-agent
+        creation takes the same parent lock, so a child cannot appear between
+        the descendant check and the delete. Label edits are compared inside
+        the same AP transaction because labels have their own table and do not
+        necessarily advance ``conversations.updated_at``. The persisted live
+        status is checked under the same root lock; its writer uses that lock
+        too, so an activity transition cannot commit behind the deletion
+        fence. A split AP/Omnigent database is rejected because the comment
+        fingerprint cannot be checked and deleted atomically.
 
         This deliberately refuses any descendant rather than recursively
         deleting a tree. A stale or non-isolated candidate returns ``False``;
         callers must preserve it instead of falling back to
         :meth:`delete_conversation`.
         """
+        if not self.supports_conditional_session_delete:
+            return False
         with self._conv_session_immediate("delete_conversation_if_unchanged") as ap_sess:
             self._lock_conversation(ap_sess, conversation_id)
             row = ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id))
@@ -4558,27 +4600,28 @@ class SqlAlchemyConversationStore(ConversationStore):
                 return False
             if _fetch_labels(ap_sess, conversation_id) != dict(expected_labels):
                 return False
-            if self._conv_engine is self._engine:
-                metadata_row = ap_sess.get(
-                    SqlConversationMetadata,
-                    (current_workspace_id(), conversation_id),
+            if row.next_position != expected_next_position:
+                return False
+            comments_count, comments_updated_at = ap_sess.execute(
+                select(func.count(SqlComment.id), func.max(SqlComment.updated_at)).where(
+                    SqlComment.workspace_id == current_workspace_id(),
+                    SqlComment.conversation_id == conversation_id,
                 )
-                live_status = (
-                    decode_session_live_status(metadata_row.live_status)
-                    if metadata_row is not None and metadata_row.live_status is not None
-                    else None
-                )
-            else:
-                with self._session("delete_conversation_if_unchanged") as meta_sess:
-                    metadata_row = meta_sess.get(
-                        SqlConversationMetadata,
-                        (current_workspace_id(), conversation_id),
-                    )
-                    live_status = (
-                        decode_session_live_status(metadata_row.live_status)
-                        if metadata_row is not None and metadata_row.live_status is not None
-                        else None
-                    )
+            ).one()
+            if (
+                int(comments_count or 0) != expected_comments_count
+                or comments_updated_at != expected_comments_updated_at
+            ):
+                return False
+            metadata_row = ap_sess.get(
+                SqlConversationMetadata,
+                (current_workspace_id(), conversation_id),
+            )
+            live_status = (
+                decode_session_live_status(metadata_row.live_status)
+                if metadata_row is not None and metadata_row.live_status is not None
+                else None
+            )
             if live_status != expected_live_status:
                 return False
             child = ap_sess.execute(
@@ -4641,15 +4684,15 @@ class SqlAlchemyConversationStore(ConversationStore):
                     SqlConversationLabel.conversation_id == conversation_id,
                 )
             )
-            ap_sess.delete(row)
-
-        with self._session("delete_conversation_if_unchanged") as session:
-            session.execute(
+            ap_sess.execute(
                 delete(SqlComment).where(
                     SqlComment.workspace_id == current_workspace_id(),
                     SqlComment.conversation_id == conversation_id,
                 )
             )
+            ap_sess.delete(row)
+
+        with self._session("delete_conversation_if_unchanged") as session:
             session.execute(
                 delete(SqlPolicy).where(
                     SqlPolicy.workspace_id == current_workspace_id(),

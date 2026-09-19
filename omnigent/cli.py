@@ -4220,7 +4220,7 @@ def server(
     agent_store = SqlAlchemyAgentStore(db_uri, conv_db_uri)
     file_store = SqlAlchemyFileStore(db_uri)
     conversation_store = SqlAlchemyConversationStore(db_uri, conv_db_uri)
-    comment_store = SqlAlchemyCommentStore(db_uri)
+    comment_store = SqlAlchemyCommentStore(db_uri, conv_db_uri)
     policy_store = SqlAlchemyPolicyStore(db_uri)
     permission_store = SqlAlchemyPermissionStore(db_uri)
     scheduled_task_store = SqlAlchemyScheduledTaskStore(db_uri)

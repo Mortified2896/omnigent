@@ -8,7 +8,7 @@ import json
 import secrets
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from fastapi import (
@@ -186,7 +186,7 @@ from omnigent.server.schemas import (
     SessionSwitchAgentRequest,
     UpdateSessionRequest,
 )
-from omnigent.server.session_version import session_etag
+from omnigent.server.session_version import SessionMutationFingerprint, session_etag
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.comment_store import CommentStore
@@ -236,6 +236,29 @@ def register_core_routes(
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
 ) -> None:
     """Register the core session routes on router."""
+
+    async def _get_session_mutation_fingerprint(
+        session_id: str,
+    ) -> SessionMutationFingerprint | None:
+        """Read the conditional-delete state, failing closed on uncertainty."""
+        if not getattr(conversation_store, "supports_conditional_session_delete", False):
+            return None
+        getter = getattr(conversation_store, "get_session_mutation_fingerprint", None)
+        if not callable(getter):
+            return None
+        try:
+            typed_getter = cast(
+                Callable[[str], SessionMutationFingerprint | None],
+                getter,
+            )
+            return await asyncio.to_thread(typed_getter, session_id)
+        except Exception:
+            _logger.warning(
+                "Could not read conditional-delete fingerprint for %s",
+                session_id,
+                exc_info=True,
+            )
+            return None
 
     async def _schedule_managed_launch(
         request: Request,
@@ -996,10 +1019,12 @@ def register_core_routes(
             etag_conversation = await asyncio.to_thread(
                 conversation_store.get_conversation, session_id
             )
-        if etag_conversation is not None:
+        mutation = await _get_session_mutation_fingerprint(session_id)
+        if etag_conversation is not None and mutation is not None:
             response.headers["ETag"] = session_etag(
                 etag_conversation.updated_at,
                 etag_conversation.labels or {},
+                mutation=mutation,
             )
         return await _get_session_snapshot(
             conversation_store,

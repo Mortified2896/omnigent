@@ -1,12 +1,16 @@
 """Conditional session deletion preserves concurrent edits and descendants."""
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from omnigent.entities import MessageData, NewConversationItem
 from omnigent.errors import OmnigentError
 from omnigent.server.routes.sessions import create_sessions_router
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
+from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
+from omnigent.stores.conversation_store import sqlalchemy_store as conversation_store_module
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.util.test_session_policy import test_session_labels as make_test_session_labels
 
@@ -119,6 +123,70 @@ def test_conditional_delete_rejects_a_same_second_conversation_edit(db_uri: str)
         # edit and the snapshot happen in one epoch-second.
         assert store.update_conversation(conv.id, title="after") is not None
         stale = client.delete(f"/v1/sessions/{conv.id}", headers={"If-Match": etag})
+        assert stale.status_code == 412
+
+    assert store.get_conversation(conv.id) is not None
+
+
+def test_conditional_delete_rejects_first_same_second_append(
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route's ETag includes first-turn content generation."""
+    fixed_epoch = 1_760_000_000
+    monkeypatch.setattr(conversation_store_module, "now_epoch", lambda: fixed_epoch)
+    _ensure_agent(db_uri)
+    store = SqlAlchemyConversationStore(db_uri)
+    conv = store.create_conversation(agent_id=AGENT_ID)
+    store.set_session_live_status(conv.id, "idle")
+
+    with TestClient(_app(db_uri)) as client:
+        snapshot = client.get(
+            f"/v1/sessions/{conv.id}",
+            params={"include_items": "false", "include_liveness": "false"},
+        )
+        assert snapshot.status_code == 200
+        store.append(
+            conv.id,
+            [
+                NewConversationItem(
+                    type="message",
+                    response_id="first",
+                    data=MessageData(
+                        role="user",
+                        content=[{"type": "input_text", "text": "hello"}],
+                    ),
+                )
+            ],
+        )
+        stale = client.delete(
+            f"/v1/sessions/{conv.id}",
+            headers={"If-Match": snapshot.headers["etag"]},
+        )
+        assert stale.status_code == 412
+
+    assert store.get_conversation(conv.id) is not None
+
+
+def test_conditional_delete_rejects_review_comment_mutation(db_uri: str) -> None:
+    """The route's ETag includes review comment additions."""
+    _ensure_agent(db_uri)
+    store = SqlAlchemyConversationStore(db_uri)
+    conv = store.create_conversation(agent_id=AGENT_ID)
+    store.set_session_live_status(conv.id, "idle")
+    comments = SqlAlchemyCommentStore(db_uri)
+
+    with TestClient(_app(db_uri)) as client:
+        snapshot = client.get(
+            f"/v1/sessions/{conv.id}",
+            params={"include_items": "false", "include_liveness": "false"},
+        )
+        assert snapshot.status_code == 200
+        comments.add(conv.id, "README.md", "Keep this", 0, 4)
+        stale = client.delete(
+            f"/v1/sessions/{conv.id}",
+            headers={"If-Match": snapshot.headers["etag"]},
+        )
         assert stale.status_code == 412
 
     assert store.get_conversation(conv.id) is not None

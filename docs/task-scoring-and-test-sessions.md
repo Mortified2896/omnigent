@@ -93,10 +93,15 @@ worktree, artifact, or unrelated database cleanup as part of chat cleanup.
 
 The server-side cleanup contract is `GET /v1/sessions/{id}` followed by
 `DELETE /v1/sessions/{id}` with its `ETag` in `If-Match`. The validator covers the
-conversation version and complete label mapping. Conditional deletion rejects
+conversation version, complete label mapping, item-position generation, and
+review-comment count/latest-mutation fingerprint. The private manifest records
+the last harness-verified ETag after creation and binding; teardown preserves the
+session when that baseline is missing or no longer matches the fresh snapshot.
+Conditional deletion rejects
 branch cleanup, child sessions, active or unknown activity, pinned sessions,
-ownership changes, and any version/label/descendant race with `412`; the store
-acquires a root-session lock and deletes only an unchanged isolated session. A failed
+ownership changes, split AP/Omnigent storage, and any
+version/label/content/comment/descendant race with `412`; the store acquires a
+root-session lock and deletes only an unchanged isolated session. A failed
 conditional delete is a preservation signal, not permission to retry an
 unconditional delete. Ordinary user-initiated deletion keeps its existing
 behavior and is not the test-session planner's cleanup path.
@@ -109,11 +114,12 @@ backfilled or deleted. Retention holds and uncertain sessions remain available.
 1. Fetch GitHub, inspect branch/base/dirty work, and fast-forward the correct task
    branch before editing. Reconcile new main changes without resetting local work.
 2. The acceptance fixture stamps sessions at creation, records exact returned IDs
-   in a private server-bound manifest, and uses the planner for idempotent teardown.
-   Routine successful candidates use only the conditional `If-Match` contract;
-   failed, unexpected, or explicitly retained runs get a visible retention hold.
-   The fixture does not perform broad live cleanup. The generic legacy acceptance
-   fixture remains outside this contract until it is migrated deliberately.
+   and a post-bind verified ETag in a private server-bound manifest, and uses the
+   planner for idempotent teardown. Routine successful candidates use only the
+   conditional `If-Match` contract; failed, unexpected, or explicitly retained
+   runs get a visible retention hold. Generic legacy fixture cleanup is limited to
+   the isolated spawned test database and is disabled when the suite targets an
+   external server.
 3. The scoring-consumer audit found no enabled task-scoring outbound evaluator on
    this branch. The blind-input allowlist has a provider-free request-capture test;
    no evaluator was enabled and no review-contaminated context/tool path was added.
