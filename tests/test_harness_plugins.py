@@ -319,3 +319,16 @@ def test_builtin_native_provider_bridge_id_label_keys_match_constants() -> None:
         else:
             # Bare builders and claude (resolved via a runner helper) carry no key.
             assert provider.bridge_id_label_key is None, provider.key
+
+
+def test_openai_agents_is_selectable_in_harness_catalog() -> None:
+    """The existing Agents SDK harness is an explicit UI-selectable runtime.
+
+    This is intentionally the canonical openai-agents harness, not a second
+    chat-specific executor. Individual agents can still declare an empty tool
+    surface while other Agents SDK agents retain their normal capabilities.
+    """
+    row = next((item for item in hp.harness_catalog() if item["id"] == "openai-agents"), None)
+    assert row is not None
+    assert row["label"] == "OpenAI Agents SDK"
+    assert row["capabilities"]["integration_mode"] == "sdk_in_process"
