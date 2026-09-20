@@ -5965,3 +5965,56 @@ async def test_direct_lane_rows_absent_without_provider_confirmation(monkeypatch
     # The OmniRoute row keeps its honest label even as the only GLM row.
     glm_rows = [row for row in result.models if row.get("groupLabel") == "GLM"]
     assert [row["displayName"] for row in glm_rows] == ["GLM 5.3 · OmniRoute"]
+
+
+async def test_non_o3_picker_appends_both_glm_lanes_from_discovery(monkeypatch) -> None:
+    """Without O3 routing review, both GLM lanes still surface, labeled."""
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: False
+    )
+
+    async def catalog(*, codex_path=None, launch=None):
+        return [
+            {"id": "codex/gpt-5.6-luna", "displayName": "GPT-5.6 Luna", "isDefault": True},
+        ]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(
+        app_server,
+        "omniroute_glm_catalog_rows",
+        lambda: (
+            {
+                "id": "glm/glm-5.3",
+                "model": "glm/glm-5.3",
+                "displayName": "GLM 5.3",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "high"},
+                    {"reasoningEffort": "max"},
+                ],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        app_server,
+        "zai_direct_glm_catalog_rows",
+        lambda: ({"id": "glm-5.3", "model": "glm-5.3", "displayName": "GLM 5.3"},),
+    )
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    glm_rows = [row for row in result.models if row.get("groupLabel") == "GLM"]
+    assert [row["displayName"] for row in glm_rows] == [
+        "GLM 5.3 · OmniRoute",
+        "GLM 5.3 · Z.AI Direct",
+    ]
+    assert [(row["id"], row["accessLane"]) for row in glm_rows] == [
+        ("glm/glm-5.3", "omniroute"),
+        ("glm-5.3", "glm-direct"),
+    ]
+    # The plain GPT rows keep the default-provider presentation untouched.
+    assert result.models[0]["displayName"] == "GPT-5.6 Luna"
+    assert result.models[0].get("accessLane") is None

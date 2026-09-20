@@ -1207,6 +1207,114 @@ _zai_direct_model_cache: TTLCache[str, tuple[_JsonObject, ...]] = TTLCache(
     ttl=_ZAI_DIRECT_MODELS_TTL_SECONDS,
 )
 
+_OMNIROUTE_MODELS_TTL_SECONDS = 600
+_omniroute_glm_model_cache: TTLCache[str, tuple[_JsonObject, ...]] = TTLCache(
+    maxsize=1,
+    ttl=_OMNIROUTE_MODELS_TTL_SECONDS,
+)
+
+
+def _launch_bearer_token(launch: NativeCodexLaunch) -> str | None:
+    """Resolve a launch credential for a local, read-only model probe."""
+    for name in launch.env_passthrough:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value.removeprefix("Bearer ").strip()
+    for value in launch.credential_env.values():
+        if isinstance(value, str) and value.strip():
+            return value.removeprefix("Bearer ").strip()
+    return None
+
+
+def _omniroute_glm_rows_uncached(base_url: str, token: str) -> tuple[_JsonObject, ...]:
+    """Fetch the gateway's catalogue once and keep only mapped GLM routes."""
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    from omnigent.models.glm_model_vocabulary import (
+        GLM_OMNIROUTE_TO_DIRECT,
+        glm_display_name,
+    )
+
+    try:
+        request = Request(
+            base_url.rstrip("/") + "/models",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            method="GET",
+        )
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        _logger.debug("omniroute: GLM route discovery failed", exc_info=True)
+        return ()
+    entries = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(entries, list):
+        return ()
+    rows: list[_JsonObject] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        route_id = entry.get("id")
+        if not isinstance(route_id, str) or route_id not in GLM_OMNIROUTE_TO_DIRECT:
+            continue
+        direct_id = GLM_OMNIROUTE_TO_DIRECT[route_id]
+        capabilities = entry.get("capabilities")
+        tiers = entry.get("effort_tiers")
+        if not isinstance(tiers, list) and isinstance(capabilities, Mapping):
+            tiers = capabilities.get("effort_tiers")
+        supported = [
+            {"reasoningEffort": tier}
+            for tier in (tiers if isinstance(tiers, list) else [])
+            if isinstance(tier, str) and tier
+        ]
+        rows.append(
+            {
+                "id": route_id,
+                "model": route_id,
+                "displayName": glm_display_name(direct_id),
+                **({"supportedReasoningEfforts": supported} if supported else {}),
+            }
+        )
+    return tuple(sorted(rows, key=lambda row: str(row["id"])))
+
+
+def omniroute_glm_catalog_rows() -> tuple[_JsonObject, ...]:
+    """
+    Provider-confirmed GLM route rows from the OmniRoute lane, TTL-cached.
+
+    Discovers the default launch's gateway endpoint and lists only the GLM
+    routes the vocabulary maps, so the picker's OmniRoute GLM entries always
+    correspond to routes the live gateway actually serves.
+
+    :returns: Bare catalog rows (id/model/displayName plus honest reasoning
+        efforts) for the OmniRoute GLM routes; empty when the default launch
+        does not route through OmniRoute or the gateway is unreachable.
+    """
+    cached = _omniroute_glm_model_cache.get("omniroute")
+    if cached is not None:
+        return cached
+    try:
+        launch = resolve_native_codex_launch(model=None)
+    except Exception:  # noqa: BLE001 — no default shape means no OmniRoute rows
+        return ()
+    base_url = native_codex_launch_base_url(launch)
+    if not base_url:
+        return ()
+    omniroute_root = os.environ.get(
+        "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+    ).rstrip("/")
+    if omniroute_root.endswith("/v1"):
+        omniroute_root = omniroute_root.removesuffix("/v1")
+    if base_url.rstrip("/") != f"{omniroute_root}/v1":
+        return ()
+    token = _launch_bearer_token(launch) or os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+    if not token:
+        return ()
+    rows = _omniroute_glm_rows_uncached(base_url, token)
+    if rows:
+        _omniroute_glm_model_cache["omniroute"] = rows
+    return rows
+
 
 def _zai_direct_model_rows_uncached(api_key: str) -> tuple[_JsonObject, ...]:
     """Fetch the direct provider's model catalogue once. Never raises."""

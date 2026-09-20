@@ -1072,15 +1072,41 @@ def _default_launch_is_omniroute_served() -> bool:
     return base_url.rstrip("/") == f"{omniroute_root}/v1"
 
 
+def _omniroute_glm_picker_rows() -> list[dict[str, object]]:
+    """Lane-stamped picker rows for the OmniRoute GLM routes.
+
+    Rows exist only when the default launch routes through the OmniRoute
+    gateway and the gateway confirms the routes; the direct lane's availability
+    is deliberately not an input, so one lane going down can never erase or
+    invent the other.
+    """
+    from omnigent.harnesses.codex_native.app_server import omniroute_glm_catalog_rows
+    from omnigent.models.glm_model_vocabulary import glm_display_name
+
+    rows: list[dict[str, object]] = []
+    for row in omniroute_glm_catalog_rows():
+        route_id = str(row.get("id") or row.get("model"))
+        rows.append(
+            {
+                **row,
+                "displayName": f"{glm_display_name(route_id.split('/', 1)[1])} · OmniRoute",
+                "accessLane": "omniroute",
+                "groupLabel": "GLM",
+            }
+        )
+    return rows
+
+
 def _apply_glm_lane_rows(
     rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Label GLM rows per access lane and append the direct-lane rows.
+    """Label GLM rows per access lane and append the lane-discovered rows.
 
     OmniRoute-served GLM rows are renamed so no raw ``GLM 5.3`` row can sit
     next to the direct lane's rows looking like an unlabeled duplicate. The
-    direct rows come from the direct provider's own catalogue and are appended
-    once; a lane is never offered on the strength of the other lane's rows.
+    direct rows come from the direct provider's own catalogue and the
+    OmniRoute GLM rows from the gateway's catalogue; a lane is never offered
+    on the strength of the other lane's rows.
     """
     from omnigent.models.glm_model_vocabulary import GLM_OMNIROUTE_TO_DIRECT, glm_display_name
 
@@ -1115,7 +1141,10 @@ def _apply_glm_lane_rows(
         relabeled.append(row)
     existing = {str(row.get("id")) for row in relabeled}
     direct_rows = [row for row in _glm_direct_picker_rows() if str(row["id"]) not in existing]
-    return [*relabeled, *direct_rows]
+    omniroute_rows = [
+        row for row in _omniroute_glm_picker_rows() if str(row["id"]) not in existing
+    ]
+    return [*relabeled, *omniroute_rows, *direct_rows]
 
 
 @dataclass
