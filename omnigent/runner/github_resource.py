@@ -154,9 +154,26 @@ def _gh(argv: list[str], *, cwd: str, token: str | None = None) -> tuple[int | N
     # account (the account selector). It's only ever set outside a sandbox — see
     # _account_token_for — so it never overrides the sandbox's broker identity.
     env: dict[str, str] | None = None
+    external_session = False
     if _in_sandbox():
         env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
-    if token:
+    else:
+        # A trusted external runner receives only the session broker's
+        # synthetic token and session-local gh config. Apply the standard
+        # proxy variables only to this gh subprocess so unrelated runner
+        # traffic is not forced through the GitHub-only proxy.
+        from omnigent.git_credential_github import (
+            github_session_child_env,
+            github_session_http_env,
+        )
+
+        session_env = github_session_child_env(os.environ)
+        if session_env:
+            external_session = True
+            env = dict(os.environ)
+            env.update(session_env)
+            env.update(github_session_http_env(os.environ))
+    if token and not external_session:
         env = dict(os.environ) if env is None else env
         env["GH_TOKEN"] = token
         env.pop("GITHUB_TOKEN", None)

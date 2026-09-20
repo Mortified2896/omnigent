@@ -35,6 +35,7 @@ from omnigent.debug_logging import (
     USER_ID_ENV_VAR,
 )
 from omnigent.gateway_inference import gateway_inference_map
+from omnigent.git_credential_github import GithubSessionBroker
 from omnigent.harness_aliases import canonicalize_harness, is_claude_sdk_harness_name
 from omnigent.harness_availability import HARNESS_BINARY_MISSING, HarnessAvailability
 from omnigent.host import HOST_FATAL_EXIT_CODE
@@ -1039,11 +1040,26 @@ class _RunnerHandle:
         previous runner (the server rotates the binding token per
         attempt, so the runner id alone can't identify a predecessor).
         ``None`` for frames from servers that predate ``session_id``.
+    :param github_session: Optional trusted external-host GitHub broker owned
+        by this runner. Managed sandboxes leave it ``None``.
     """
 
     proc: subprocess.Popen[bytes] | ZygoteRunnerProc
     log_path: Path
     session_id: str | None = None
+    github_session: GithubSessionBroker | None = None
+
+
+def _close_abandoned_github_session(
+    future: asyncio.Future[GithubSessionBroker | None],
+) -> None:
+    """Close a broker whose launch task was cancelled during setup."""
+    if future.cancelled():
+        return
+    with contextlib.suppress(Exception):
+        broker = future.result()
+        if broker is not None:
+            broker.close()
 
 
 class HostRetryableConnectionError(Exception):
@@ -1066,6 +1082,8 @@ class HostProcess:
         identity: HostIdentity,
         server_url: str,
         lifecycle_lock: DaemonLifecycleLock | None = None,
+        *,
+        enable_trusted_external_github_broker: bool = False,
     ) -> None:
         """Initialize the host process.
 
@@ -1074,10 +1092,17 @@ class HostProcess:
         :param lifecycle_lock: Optional guard binding this daemon's lifetime
             to its registry record. When present, the daemon holds the lock
             and self-terminates once the record is deleted or reassigned.
+        :param enable_trusted_external_github_broker: Enable the per-runner
+            GitHub broker for a trusted non-managed host. The CLI host entry
+            point enables this automatically outside ``IS_SANDBOX``; embedded
+            callers remain opt-in.
         """
         self._identity = identity
         self._server_url = server_url.rstrip("/")
         self._runners: dict[str, _RunnerHandle] = {}
+        self._enable_trusted_external_github_broker = (
+            enable_trusted_external_github_broker
+        )
         # Retain the host's refreshable auth context after the first tunnel
         # handshake so runner launches can reuse its warm bearer. Failed or
         # unavailable resolution is not latched, allowing a later reconnect
@@ -1418,7 +1443,9 @@ class HostProcess:
         """
         dead = [rid for rid, handle in self._runners.items() if handle.proc.poll() is not None]
         for rid in dead:
-            self._runners.pop(rid)
+            handle = self._runners.pop(rid)
+            if handle.github_session is not None:
+                handle.github_session.close()
         return list(self._runners.keys())
 
     def _tunnel_url(self) -> str:
@@ -1810,6 +1837,45 @@ class HostProcess:
         if self._origin_workspace_id:
             env[ORIGIN_WORKSPACE_ID_ENV_VAR] = self._origin_workspace_id
 
+        # Trusted RTX/external sessions get a per-runner GitHub surface. The
+        # broker reads the host's existing gh login in the host process, then
+        # hands the runner only synthetic/path-only coordinates. Remove the
+        # ambient Git/SSH credential paths that would otherwise bypass that
+        # surface; managed sandboxes never enter this branch.
+        github_session: GithubSessionBroker | None = None
+        if self._enable_trusted_external_github_broker:
+            broker_setup = asyncio.ensure_future(
+                asyncio.to_thread(
+                    GithubSessionBroker.create,
+                    os.environ.copy(),
+                )
+            )
+            try:
+                github_session = await asyncio.shield(broker_setup)
+            except asyncio.CancelledError:
+                broker_setup.add_done_callback(_close_abandoned_github_session)
+                raise
+            if github_session is not None:
+                for key in (
+                    "GIT_TOKEN",
+                    "GIT_USERNAME",
+                    "GH_TOKEN",
+                    "GITHUB_TOKEN",
+                    "GH_CONFIG_DIR",
+                    "GIT_CONFIG_GLOBAL",
+                    "GIT_CONFIG_SYSTEM",
+                    "GIT_CONFIG_COUNT",
+                    "GIT_CONFIG_PARAMETERS",
+                    "GIT_SSH_COMMAND",
+                    "GIT_ASKPASS",
+                    "SSH_ASKPASS",
+                    "SSH_AUTH_SOCK",
+                    "NETRC",
+                    "CURL_HOME",
+                ):
+                    env.pop(key, None)
+                env.update(github_session.runner_env())
+
         # Embed the session id so operators can find all logs for a session
         # with `omnigent debug logs --session <id>`. Cap at 32 chars to keep
         # filenames manageable; strip anything non-word to guard against
@@ -1827,15 +1893,45 @@ class HostProcess:
         # abandoned fork would never be watched, stopped, or reaped, and the
         # zygote would retain its exit status forever. On cancellation we let
         # the spawn land and then tear that runner down.
-        spawn = asyncio.ensure_future(
-            asyncio.to_thread(self._spawn_runner_proc, env, _session_slug, workspace)
-        )
+        if github_session is None:
+            spawn = asyncio.ensure_future(
+                asyncio.to_thread(self._spawn_runner_proc, env, _session_slug, workspace)
+            )
+        else:
+            spawn = asyncio.ensure_future(
+                asyncio.to_thread(
+                    self._spawn_runner_proc,
+                    env,
+                    _session_slug,
+                    workspace,
+                    github_session=github_session,
+                )
+            )
         try:
             proc, log_path = await asyncio.shield(spawn)
         except asyncio.CancelledError:
-            spawn.add_done_callback(self._discard_abandoned_spawn)
+            if github_session is None:
+                spawn.add_done_callback(self._discard_abandoned_spawn)
+            else:
+                spawn.add_done_callback(
+                    functools.partial(
+                        self._discard_abandoned_spawn,
+                        github_session=github_session,
+                    )
+                )
             raise
         except OSError as exc:
+            if github_session is not None:
+                github_session.close()
+            return HostLaunchRunnerResultFrame(
+                request_id=frame.request_id,
+                status="failed",
+                error=f"failed to spawn runner: {exc}",
+            )
+        except Exception as exc:
+            if github_session is not None:
+                github_session.close()
+            _logger.exception("Failed to spawn runner %s", runner_id)
             return HostLaunchRunnerResultFrame(
                 request_id=frame.request_id,
                 status="failed",
@@ -1846,6 +1942,8 @@ class HostProcess:
             # The runner died before Popen returned — its actual error
             # is in the captured log, so ship the tail with the result
             # instead of making the user go find the file on the host.
+            if github_session is not None:
+                github_session.close()
             return HostLaunchRunnerResultFrame(
                 request_id=frame.request_id,
                 status="failed",
@@ -1873,7 +1971,10 @@ class HostProcess:
                 self._runners.pop(rid, None)
                 self._spawn_superseded_stop(rid, handle, frame.session_id)
         self._runners[runner_id] = _RunnerHandle(
-            proc=proc, log_path=log_path, session_id=frame.session_id or None
+            proc=proc,
+            log_path=log_path,
+            session_id=frame.session_id or None,
+            github_session=github_session,
         )
         watcher = asyncio.create_task(self._watch_runner(runner_id))
         self._watcher_tasks.add(watcher)
@@ -1935,6 +2036,8 @@ class HostProcess:
         env: dict[str, str],
         session_slug: str,
         workspace: Path,
+        *,
+        github_session: GithubSessionBroker | None = None,
     ) -> tuple[subprocess.Popen[bytes] | ZygoteRunnerProc, Path]:
         """Open the session log and spawn the runner, via zygote or direct Popen.
 
@@ -1951,6 +2054,9 @@ class HostProcess:
             ``RUNNER_PARENT_PID`` is the daemon pid; overridden on the zygote path).
         :param session_slug: Sanitized session id fragment for the log filename.
         :param workspace: Existing session workspace to use as the runner's cwd.
+        :param github_session: Optional external-host broker. Its masked
+            runner command cannot use the fork-only zygote path, so this
+            launch falls back to direct ``Popen``.
         :returns: ``(process_handle, log_path)`` — the handle quacks like Popen.
         :raises OSError: If the log file or a direct Popen spawn fails.
         """
@@ -1958,7 +2064,7 @@ class HostProcess:
         try:
             env[PROCESS_LOG_FILE_ENV_VAR] = str(log_path)
 
-            zygote = self._ensure_zygote_started()
+            zygote = None if github_session is not None else self._ensure_zygote_started()
             if zygote is not None:
                 try:
                     # The runner's OS parent will be the zygote, so its
@@ -2002,12 +2108,15 @@ class HostProcess:
                         with contextlib.suppress(Exception):
                             zygote.stop()
 
+            runner_argv = [sys.executable, "-P", "-m", "omnigent.runner._entry"]
+            if github_session is not None:
+                runner_argv = github_session.wrap_runner_command(runner_argv)
             with child_logging_popen_kwargs(env) as logging_kwargs:
                 proc = subprocess.Popen(
                     # -P keeps cwd off sys.path: a workspace that is itself an
                     # omnigent checkout would otherwise shadow the installed
                     # package. _entry re-adds it for spec-declared local tools.
-                    [sys.executable, "-P", "-m", "omnigent.runner._entry"],
+                    runner_argv,
                     env=env,
                     # A daemon may outlive the checkout it started from.
                     cwd=str(workspace),
@@ -2027,7 +2136,12 @@ class HostProcess:
         finally:
             log_fh.close()
 
-    def _discard_abandoned_spawn(self, spawn: asyncio.Future[Any]) -> None:
+    def _discard_abandoned_spawn(
+        self,
+        spawn: asyncio.Future[Any],
+        *,
+        github_session: GithubSessionBroker | None = None,
+    ) -> None:
         """Tear down a runner whose launch was cancelled before registration.
 
         ``_handle_launch`` shields the spawn, so a cancellation still lets the
@@ -2037,21 +2151,32 @@ class HostProcess:
         the terminate/wait round-trips are blocking control-socket exchanges.
 
         :param spawn: The completed spawn future.
+        :param github_session: Broker to close once the unregistered runner
+            has been stopped (or when spawning failed).
         """
         if spawn.cancelled():
+            if github_session is not None:
+                github_session.close()
             return
         if spawn.exception() is not None:
+            if github_session is not None:
+                github_session.close()
             return  # spawn failed; nothing was created
         proc, _log_path = spawn.result()
         _logger.warning(
             "Launch cancelled after runner spawn (pid=%s); terminating the orphan",
             proc.pid,
         )
+        def _stop_orphan() -> None:
+            try:
+                self._stop_runner_proc(proc)
+            finally:
+                if github_session is not None:
+                    github_session.close()
+
         with contextlib.suppress(RuntimeError):
             # No running loop during interpreter shutdown — best effort.
-            asyncio.get_running_loop().run_in_executor(
-                None, functools.partial(self._stop_runner_proc, proc)
-            )
+            asyncio.get_running_loop().run_in_executor(None, _stop_orphan)
 
     async def _handle_stop(
         self,
@@ -2075,7 +2200,11 @@ class HostProcess:
         # direct-Popen runner, but blocking control-socket exchanges for a
         # zygote-forked one — run them off the loop so a wedged zygote can't
         # freeze the daemon's control handler.
-        await asyncio.to_thread(self._stop_runner_proc, handle.proc)
+        try:
+            await asyncio.to_thread(self._stop_runner_proc, handle.proc)
+        finally:
+            if handle.github_session is not None:
+                handle.github_session.close()
         _logger.info("Stopped runner %s", frame.runner_id)
         print(
             f"  ↓ Runner stopped: {frame.runner_id}",
@@ -2120,6 +2249,9 @@ class HostProcess:
                     session_id,
                     exc_info=True,
                 )
+            finally:
+                if handle.github_session is not None:
+                    handle.github_session.close()
 
         task = asyncio.create_task(_stop_and_log())
         self._supersede_stop_tasks.add(task)
@@ -2213,6 +2345,8 @@ class HostProcess:
         if self._runners.get(runner_id) is not handle:
             # _handle_stop (or _cleanup_runners) removed it first —
             # an intentional termination, not a crash to report.
+            if handle.github_session is not None:
+                handle.github_session.close()
             return
         if handle.proc.returncode == 0:
             # A clean exit (code 0) is a graceful shutdown, not a crash — the
@@ -2222,10 +2356,16 @@ class HostProcess:
             # has to message to reactivate, so stay silent. A non-zero exit
             # below is a genuine crash and still reports its cause.
             _logger.info("Runner %s exited cleanly (code 0); no crash report", runner_id)
+            if handle.github_session is not None:
+                handle.github_session.close()
             return
         error = _runner_exit_error(handle.proc.returncode, handle.log_path)
         _logger.warning("Runner %s died unexpectedly: %s", runner_id, error)
-        await self._report_runner_exit(runner_id, error)
+        try:
+            await self._report_runner_exit(runner_id, error)
+        finally:
+            if handle.github_session is not None:
+                handle.github_session.close()
 
     async def _report_runner_exit(self, runner_id: str, error: str) -> None:
         """Send a ``host.runner_exited`` report, queueing on failure.
@@ -3755,6 +3895,9 @@ class HostProcess:
                 handle.proc.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
                 handle.proc.kill()
+            finally:
+                if handle.github_session is not None:
+                    handle.github_session.close()
         self._runners.clear()
 
     async def _connect_and_serve(self) -> None:
@@ -4356,7 +4499,14 @@ def run_host_process(
 
     if lifecycle_lock is None and daemon_target is not None:
         lifecycle_lock = DaemonLifecycleLock.for_target(daemon_target)
-    host = HostProcess(identity, server_url, lifecycle_lock=lifecycle_lock)
+    host = HostProcess(
+        identity,
+        server_url,
+        lifecycle_lock=lifecycle_lock,
+        enable_trusted_external_github_broker=(
+            (os.environ.get("IS_SANDBOX") or "").strip() != "1"
+        ),
+    )
     try:
         asyncio.run(host.run())
     except HostConnectError as exc:
