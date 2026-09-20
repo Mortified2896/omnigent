@@ -3996,8 +3996,14 @@ async def _auto_create_codex_terminal(
         _codex_catalog_was_stale = False
         _catalog_launch = None
         try:
+            # Validate against the session's own lane: a lane-bound session's
+            # pick must be checked against that lane's catalogue, never the
+            # default provider's, or the lane would silently fall back.
             _catalog_launch = await asyncio.to_thread(
-                resolve_native_codex_launch, model=None, spec=_launch_spec
+                resolve_native_codex_launch,
+                model=None,
+                spec=_launch_spec,
+                access_lane=launch_config.access_lane,
             )
             # Read staleness before the fetch can start a background probe.
             # The fingerprint and probe must use this session's provider.
@@ -4029,8 +4035,14 @@ async def _auto_create_codex_terminal(
             if reachable is None:
                 # Re-resolve so provider overrides cannot retain the old model.
                 # A failed probe permits fallback, but cannot retire the pick.
+                # Re-resolve within the same lane so provider overrides cannot
+                # retain the old model. A lane that cannot express a default
+                # (no explicit model) fails explicitly instead of silently
+                # routing through a different provider.
                 _codex_launch = resolve_native_codex_launch(
-                    model=unpinned_model, spec=_launch_spec
+                    model=unpinned_model,
+                    spec=_launch_spec,
+                    access_lane=launch_config.access_lane,
                 )
                 pick_to_reset = pick if fresh_rows else None
                 outcome = (

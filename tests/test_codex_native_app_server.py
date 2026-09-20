@@ -802,7 +802,7 @@ async def test_codex_launch_catalog_reads_the_store_then_probes_once(
     monkeypatch.setattr(
         codex_native_app_server,
         "resolve_native_codex_launch",
-        lambda *, model, spec=None: codex_native_app_server.NativeCodexLaunch(
+        lambda *, model, spec=None, access_lane=None: codex_native_app_server.NativeCodexLaunch(
             config_overrides=['model_provider="openai"'], model=model, profile=None
         ),
     )
@@ -1069,7 +1069,7 @@ async def test_codex_launch_catalog_is_stale_reads_the_default_shape(
     monkeypatch.setattr(
         codex_native_app_server,
         "resolve_native_codex_launch",
-        lambda *, model, spec=None: codex_native_app_server.NativeCodexLaunch(
+        lambda *, model, spec=None, access_lane=None: codex_native_app_server.NativeCodexLaunch(
             config_overrides=[], model=model, profile=None
         ),
     )
