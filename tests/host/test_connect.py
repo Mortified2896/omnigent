@@ -5800,3 +5800,168 @@ async def test_o3_catalog_preserves_explicit_lanes_and_native_efforts(monkeypatc
     )
     sourced = _with_model_configuration_source(result.models, "codex-native")
     assert [row["source"]["kind"] for row in sourced] == ["gateway", "subscription"]
+
+
+async def test_glm_rows_get_explicit_omniroute_and_direct_lanes(monkeypatch) -> None:
+    """One GLM model surfaces as two labeled lanes; neither erases the other."""
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_launch",
+        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=model,
+            profile=None,
+            summary=access_lane,
+        ),
+    )
+
+    async def catalog(*, launch):
+        rows = [{"id": "codex/gpt-5.6-luna", "displayName": "GPT-5.6 Luna"}]
+        if launch is not None and launch.summary == "omniroute":
+            rows += [{"id": "glm/glm-5.3"}, {"id": "glm/glm-5.3-flash"}]
+        return rows
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(
+        app_server,
+        "zai_direct_glm_catalog_rows",
+        lambda: (
+            {
+                "id": "glm-5.3",
+                "model": "glm-5.3",
+                "displayName": "GLM 5.3",
+                "defaultReasoningEffort": "max",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "high"},
+                    {"reasoningEffort": "max"},
+                ],
+            },
+            {
+                "id": "glm-5.3-flash",
+                "model": "glm-5.3-flash",
+                "displayName": "GLM 5.3 Flash",
+            },
+        ),
+    )
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    glm_rows = [row for row in result.models if row.get("groupLabel") == "GLM"]
+    assert [row["displayName"] for row in glm_rows] == [
+        "GLM 5.3 · OmniRoute",
+        "GLM 5.3 Flash · OmniRoute",
+        "GLM 5.3 · Z.AI Direct",
+        "GLM 5.3 Flash · Z.AI Direct",
+    ]
+    assert [row["accessLane"] for row in glm_rows] == [
+        "omniroute",
+        "omniroute",
+        "glm-direct",
+        "glm-direct",
+    ]
+    # (GLM 5.3, Z.AI Direct) and (GLM 5.3, OmniRoute) are distinct pickable
+    # rows even though both ultimately run GLM 5.3.
+    selections = {(row["id"], row["accessLane"]) for row in glm_rows}
+    assert selections == {
+        ("glm/glm-5.3", "omniroute"),
+        ("glm/glm-5.3-flash", "omniroute"),
+        ("glm-5.3", "glm-direct"),
+        ("glm-5.3-flash", "glm-direct"),
+    }
+    direct = next(
+        row for row in glm_rows if row["accessLane"] == "glm-direct" and row["id"] == "glm-5.3"
+    )
+    assert direct["defaultReasoningEffort"] == "max"
+    assert [level["reasoningEffort"] for level in direct["supportedReasoningEfforts"]] == [
+        "low",
+        "high",
+        "max",
+    ]
+    assert result.routable_models.count("glm/glm-5.3") == 1
+    assert result.routable_models.count("glm-5.3") == 1
+
+
+async def test_direct_lane_rows_survive_an_omniroute_catalog_without_glm(monkeypatch) -> None:
+    """A GLM-less OmniRoute catalogue cannot erase the confirmed direct lane."""
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_launch",
+        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=model,
+            profile=None,
+            summary=access_lane,
+        ),
+    )
+
+    async def catalog(*, launch):
+        return [{"id": "codex/gpt-5.6-luna", "displayName": "GPT-5.6 Luna"}]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(
+        app_server,
+        "zai_direct_glm_catalog_rows",
+        lambda: (
+            {"id": "glm-5.3", "model": "glm-5.3", "displayName": "GLM 5.3"},
+            {"id": "glm-5.3-flash", "model": "glm-5.3-flash", "displayName": "GLM 5.3 Flash"},
+        ),
+    )
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    direct_rows = [row for row in result.models if row.get("accessLane") == "glm-direct"]
+    assert [row["displayName"] for row in direct_rows] == [
+        "GLM 5.3 · Z.AI Direct",
+        "GLM 5.3 Flash · Z.AI Direct",
+    ]
+    assert not [
+        row
+        for row in result.models
+        if row.get("accessLane") == "omniroute" and str(row.get("id", "")).startswith("glm")
+    ]
+
+
+async def test_direct_lane_rows_absent_without_provider_confirmation(monkeypatch) -> None:
+    """Without a confirmed direct catalogue, no direct rows are invented."""
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_launch",
+        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=model,
+            profile=None,
+            summary=access_lane,
+        ),
+    )
+
+    async def catalog(*, launch):
+        return [{"id": "glm/glm-5.3"}]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(app_server, "zai_direct_glm_catalog_rows", lambda: ())
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    assert not [row for row in result.models if row.get("accessLane") == "glm-direct"]
+    # The OmniRoute row keeps its honest label even as the only GLM row.
+    glm_rows = [row for row in result.models if row.get("groupLabel") == "GLM"]
+    assert [row["displayName"] for row in glm_rows] == ["GLM 5.3 · OmniRoute"]

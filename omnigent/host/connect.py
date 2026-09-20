@@ -1018,11 +1018,104 @@ def _with_model_configuration_source(
     lane_sources = {
         "omniroute": {"kind": "gateway", "label": "AI Gateway", "name": "OmniRoute"},
         "codex-direct": {"kind": "subscription", "label": "Subscription", "name": "codex"},
+        "glm-direct": {"kind": "key", "label": "Direct Provider", "name": "Z.AI"},
     }
     return [
         {**model, "source": lane_sources.get(str(model.get("accessLane")), source)}
         for model in models
     ]
+
+
+def _glm_direct_picker_rows() -> list[dict[str, object]]:
+    """Lane-stamped picker rows for the direct Z.ai GLM models.
+
+    Rows exist only when the direct provider confirms its catalogue and the
+    host holds ``ZAI_API_KEY``; OmniRoute availability is deliberately not an
+    input, so one lane going down can never erase or invent the other.
+    """
+    from omnigent.harnesses.codex_native.app_server import zai_direct_glm_catalog_rows
+    from omnigent.models.glm_model_vocabulary import glm_display_name
+
+    rows: list[dict[str, object]] = []
+    for row in zai_direct_glm_catalog_rows():
+        direct_id = str(row.get("id") or row.get("model"))
+        rows.append(
+            {
+                **row,
+                "displayName": f"{glm_display_name(direct_id)} · Z.AI Direct",
+                "accessLane": "glm-direct",
+                "groupLabel": "GLM",
+            }
+        )
+    return rows
+
+
+def _default_launch_is_omniroute_served() -> bool:
+    """Whether the default Codex launch routes through the OmniRoute gateway."""
+    from omnigent.harnesses.codex_native.app_server import (
+        native_codex_launch_base_url,
+        resolve_native_codex_launch,
+    )
+
+    try:
+        launch = resolve_native_codex_launch(model=None)
+    except Exception:  # noqa: BLE001 — no default shape means no OmniRoute rows
+        return False
+    base_url = native_codex_launch_base_url(launch)
+    if not base_url:
+        return False
+    omniroute_root = os.environ.get(
+        "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+    ).rstrip("/")
+    if omniroute_root.endswith("/v1"):
+        omniroute_root = omniroute_root.removesuffix("/v1")
+    return base_url.rstrip("/") == f"{omniroute_root}/v1"
+
+
+def _apply_glm_lane_rows(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Label GLM rows per access lane and append the direct-lane rows.
+
+    OmniRoute-served GLM rows are renamed so no raw ``GLM 5.3`` row can sit
+    next to the direct lane's rows looking like an unlabeled duplicate. The
+    direct rows come from the direct provider's own catalogue and are appended
+    once; a lane is never offered on the strength of the other lane's rows.
+    """
+    from omnigent.models.glm_model_vocabulary import GLM_OMNIROUTE_TO_DIRECT, glm_display_name
+
+    has_laneless_glm = any(
+        (row.get("model") or row.get("id")) in GLM_OMNIROUTE_TO_DIRECT
+        and row.get("accessLane") is None
+        for row in rows
+    )
+    omniroute_catalog = has_laneless_glm and _default_launch_is_omniroute_served()
+    relabeled: list[dict[str, object]] = []
+    for row in rows:
+        raw_id = row.get("model") or row.get("id")
+        if (
+            isinstance(raw_id, str)
+            and raw_id in GLM_OMNIROUTE_TO_DIRECT
+            and (
+                row.get("accessLane") == "omniroute"
+                or (row.get("accessLane") is None and omniroute_catalog)
+            )
+        ):
+            direct_id = GLM_OMNIROUTE_TO_DIRECT[raw_id]
+            lane_already_stamped = row.get("accessLane") == "omniroute"
+            relabeled.append(
+                {
+                    **row,
+                    "displayName": f"{glm_display_name(direct_id)} · OmniRoute",
+                    "groupLabel": "GLM",
+                    **({} if lane_already_stamped else {"accessLane": "omniroute"}),
+                }
+            )
+            continue
+        relabeled.append(row)
+    existing = {str(row.get("id")) for row in relabeled}
+    direct_rows = [row for row in _glm_direct_picker_rows() if str(row["id"]) not in existing]
+    return [*relabeled, *direct_rows]
 
 
 @dataclass
@@ -2917,6 +3010,7 @@ class HostProcess:
             return None
         if rows is None:
             return None
+        rows = _apply_glm_lane_rows(rows)
         routable = [row["id"] for row in rows if isinstance(row.get("id"), str) and row["id"]]
         return ModelOptionsResult(models=rows, routable_models=routable)
 

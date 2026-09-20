@@ -241,3 +241,58 @@ async def test_access_lane_requires_model_override(monkeypatch: pytest.MonkeyPat
     }
     with pytest.raises(RuntimeError, match="requires model_override"):
         await _run(_Client(_Resp(200, snapshot)))
+
+
+@pytest.mark.asyncio
+async def test_glm_direct_lane_is_an_allowed_persisted_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored glm-direct lane label survives the snapshot round-trip."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "model_override": "glm-5.3",
+        "labels": {"omnigent.access_lane": "glm-direct"},
+    }
+
+    cfg = await _run(_Client(_Resp(200, snapshot)))
+
+    assert cfg.model_override == "glm-5.3"
+    assert cfg.access_lane == "glm-direct"
+
+
+@pytest.mark.asyncio
+async def test_omniroute_and_glm_direct_lanes_stay_distinct_on_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reloading the same model under different lanes yields different lanes."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+
+    omniroute_cfg = await _run(
+        _Client(
+            _Resp(
+                200,
+                {
+                    "workspace": "/tmp/repo",
+                    "model_override": "glm/glm-5.3",
+                    "labels": {"omnigent.access_lane": "omniroute"},
+                },
+            )
+        )
+    )
+    direct_cfg = await _run(
+        _Client(
+            _Resp(
+                200,
+                {
+                    "workspace": "/tmp/repo",
+                    "model_override": "glm-5.3",
+                    "labels": {"omnigent.access_lane": "glm-direct"},
+                },
+            )
+        )
+    )
+
+    assert omniroute_cfg.access_lane == "omniroute"
+    assert direct_cfg.access_lane == "glm-direct"
+    assert omniroute_cfg.access_lane != direct_cfg.access_lane

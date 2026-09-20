@@ -26,6 +26,13 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from omnigent.models import model_catalog
+from omnigent.models.glm_model_vocabulary import (
+    GLM_DIRECT_API_KEY_ENV,
+    GLM_DIRECT_BASE_URL,
+    GLM_DIRECT_MODELS,
+    GLM_OMNIROUTE_TO_DIRECT,
+    glm_display_name,
+)
 from omnigent.util.json_types import JsonObject as _JsonObject
 
 if TYPE_CHECKING:
@@ -1192,6 +1199,112 @@ async def _codex_launch_catalog(
 
     read = model_catalog_store.reprobe_catalog if reprobe else model_catalog_store.ensure_catalog
     return await read("codex-native", fingerprint, _probe)
+
+
+_ZAI_DIRECT_MODELS_TTL_SECONDS = 600
+_zai_direct_model_cache: TTLCache[str, tuple[_JsonObject, ...]] = TTLCache(
+    maxsize=1,
+    ttl=_ZAI_DIRECT_MODELS_TTL_SECONDS,
+)
+
+
+def _zai_direct_model_rows_uncached(api_key: str) -> tuple[_JsonObject, ...]:
+    """Fetch the direct provider's model catalogue once. Never raises."""
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    try:
+        request = Request(
+            GLM_DIRECT_BASE_URL.rstrip("/") + "/models",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        # Discovery is best-effort: a fetch failure hides the direct lane
+        # rather than inventing rows, and a launch against the lane still
+        # fails explicitly with the provider's own error.
+        _logger.debug("zai-direct: model discovery failed", exc_info=True)
+        return ()
+    if not isinstance(payload, Mapping):
+        return ()
+    # The live Z.ai catalogue is {"models": [{slug, ...}]}; tolerate the
+    # OpenAI-compatible {"data": [{"id", ...}]} spelling too.
+    raw_entries = payload.get("models")
+    if not isinstance(raw_entries, list):
+        raw_entries = payload.get("data")
+    entries = raw_entries
+    if not isinstance(entries, list):
+        return ()
+    rows: list[_JsonObject] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        model_id = entry.get("slug") or entry.get("id")
+        if not isinstance(model_id, str) or model_id not in GLM_DIRECT_MODELS:
+            continue
+        efforts = entry.get("supported_reasoning_levels")
+        supported: list[_JsonObject] = []
+        if isinstance(efforts, list):
+            for level in efforts:
+                if not isinstance(level, Mapping):
+                    continue
+                effort = level.get("effort") or level.get("level")
+                if isinstance(effort, str) and effort:
+                    supported.append(
+                        {
+                            "reasoningEffort": effort,
+                            **(
+                                {"description": level["description"]}
+                                if isinstance(level.get("description"), str)
+                                and level.get("description")
+                                else {}
+                            ),
+                        }
+                    )
+        default_effort = entry.get("default_reasoning_level")
+        rows.append(
+            {
+                "id": model_id,
+                "model": model_id,
+                "displayName": glm_display_name(model_id),
+                **(
+                    {"defaultReasoningEffort": default_effort}
+                    if isinstance(default_effort, str) and default_effort
+                    else {}
+                ),
+                **({"supportedReasoningEfforts": supported} if supported else {}),
+            }
+        )
+    return tuple(sorted(rows, key=lambda row: str(row["id"])))
+
+
+def zai_direct_glm_catalog_rows() -> tuple[_JsonObject, ...]:
+    """
+    Provider-confirmed GLM rows for the direct Z.ai lane, TTL-cached.
+
+    Requires ``ZAI_API_KEY`` in the environment; an absent key or a failed
+    fetch yields no rows, so the picker only ever offers the direct lane when
+    the direct provider itself confirms its models.
+
+    :returns: Bare catalog rows (id/model/displayName plus honest reasoning
+        efforts), never lane metadata — access-lane stamping belongs to the
+        host option shapers.
+    """
+    api_key = os.environ.get(GLM_DIRECT_API_KEY_ENV, "").strip()
+    if not api_key:
+        return ()
+    cached = _zai_direct_model_cache.get("direct")
+    if cached is not None:
+        return cached
+    rows = _zai_direct_model_rows_uncached(api_key)
+    if rows:
+        _zai_direct_model_cache["direct"] = rows
+    return rows
 
 
 async def codex_launch_catalog(
@@ -3046,6 +3159,7 @@ def _resolve_native_codex_access_lane(
     from omnigent.onboarding.provider_config import default_provider_for_harness, load_config
     from omnigent.stores.conversation_store import (
         CODEX_ACCESS_LANE_DIRECT,
+        CODEX_ACCESS_LANE_GLM_DIRECT,
         CODEX_ACCESS_LANE_OMNIROUTE,
     )
 
@@ -3074,6 +3188,44 @@ def _resolve_native_codex_access_lane(
                 provider="openai-codex-subscription",
                 provider_fallback=False,
             ),
+        )
+
+    if access_lane == CODEX_ACCESS_LANE_GLM_DIRECT:
+        # Accept both the provider-local spelling and the OmniRoute route
+        # spelling for the same model: the lane label, not the id spelling,
+        # is what keeps the two economic paths apart.
+        direct_model = GLM_OMNIROUTE_TO_DIRECT.get(model, model)
+        if direct_model not in GLM_DIRECT_MODELS:
+            raise OmnigentError(
+                f"Z.AI Direct does not serve model {model!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        api_key = os.environ.get(GLM_DIRECT_API_KEY_ENV, "").strip()
+        if not api_key:
+            raise OmnigentError(
+                f"Z.AI Direct is not configured: set {GLM_DIRECT_API_KEY_ENV} on the host",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        # A native Responses provider: current Codex speaks the direct
+        # Z.ai /api/v1 surface with wire_api="responses" and no adapter, so
+        # no compatibility proxy sits between Codex and the provider.
+        return NativeCodexLaunch(
+            config_overrides=_provider_codex_config_overrides(
+                model=direct_model,
+                base_url=GLM_DIRECT_BASE_URL,
+                env_key=GLM_DIRECT_API_KEY_ENV,
+                wire_api="responses",
+            ),
+            model=direct_model,
+            profile=None,
+            summary=f"Z.AI Direct lane (model={direct_model!r})",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=CODEX_ACCESS_LANE_GLM_DIRECT,
+                provider="z.ai",
+                provider_fallback=False,
+            ),
+            env_passthrough=(GLM_DIRECT_API_KEY_ENV,),
+            credential_env={GLM_DIRECT_API_KEY_ENV: api_key},
         )
 
     if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:

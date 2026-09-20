@@ -28,7 +28,14 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
     monkeypatch.setenv("HOME", str(tmp_path))
-    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "CODEX_HOME"):
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ZAI_API_KEY",
+        "OMNIROUTE_O3_KEY",
+        "CODEX_HOME",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
     return tmp_path
@@ -1047,3 +1054,178 @@ def test_global_auth_block_login_logged_out_marks_login_required(
 
     assert "global auth block" in launch.summary
     assert launch.login_required is True
+
+
+def test_explicit_glm_direct_lane_requires_zai_credential(_isolated: Path) -> None:
+    """A missing Z.ai credential fails the lane explicitly, never via OmniRoute."""
+    with pytest.raises(OmnigentError, match=r"^Z\.AI Direct is not configured"):
+        resolve_native_codex_launch(model="glm-5.3", access_lane="glm-direct")
+
+
+def test_explicit_glm_direct_lane_uses_native_zai_provider(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The direct lane registers a native Responses provider at Z.ai's /api/v1."""
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+
+    launch = resolve_native_codex_launch(model="glm-5.3", access_lane="glm-direct")
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.model == "glm-5.3"
+    assert launch.profile is None
+    assert 'base_url="https://api.z.ai/api/v1"' in joined
+    assert 'env_key="ZAI_API_KEY"' in joined
+    assert 'wire_api="responses"' in joined
+    assert launch.env_passthrough == ("ZAI_API_KEY",)
+    assert launch.credential_env == {"ZAI_API_KEY": "zai-test-placeholder"}
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "glm-direct"
+    assert launch.trace_provenance.provider == "z.ai"
+    assert launch.trace_provenance.provider_fallback is False
+
+
+def test_explicit_glm_direct_lane_accepts_omniroute_spelling(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route spelling resolves to the provider-local id on the direct lane."""
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+
+    launch = resolve_native_codex_launch(model="glm/glm-5.3-flash", access_lane="glm-direct")
+
+    assert launch.model == "glm-5.3-flash"
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "glm-direct"
+
+
+def test_explicit_glm_direct_lane_rejects_unlisted_model(_isolated: Path) -> None:
+    """Models the direct provider does not serve fail closed on the direct lane."""
+    with pytest.raises(OmnigentError, match=r"^Z\.AI Direct does not serve model"):
+        resolve_native_codex_launch(model="glm/glm-4.6", access_lane="glm-direct")
+
+
+def test_glm_direct_lane_never_routes_through_omniroute(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A selected direct lane ignores a fully configured OmniRoute environment."""
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "omniroute-test-placeholder")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    launch = resolve_native_codex_launch(model="glm-5.3", access_lane="glm-direct")
+
+    joined = "\n".join(launch.config_overrides)
+    assert "api.z.ai" in joined
+    assert "127.0.0.1:20128" not in joined
+    assert "OMNIROUTE_O3_KEY" not in joined
+    assert launch.env_passthrough == ("ZAI_API_KEY",)
+
+
+def test_omniroute_lane_for_glm_never_consumes_zai_direct(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The OmniRoute lane keeps routing GLM through the gateway, not Z.ai."""
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "omniroute-test-placeholder")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    launch = resolve_native_codex_launch(model="glm/glm-5.3", access_lane="omniroute")
+
+    joined = "\n".join(launch.config_overrides)
+    assert 'base_url="http://127.0.0.1:20128/v1"' in joined
+    assert "api.z.ai" not in joined
+    assert "ZAI_API_KEY" not in joined
+    assert launch.env_passthrough == ("OMNIROUTE_O3_KEY",)
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "omniroute"
+
+
+def test_zai_direct_discovery_offers_exactly_the_served_models(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery mirrors the direct provider's catalogue and never invents rows."""
+    import json as _json
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+    app_server._zai_direct_model_cache.clear()
+
+    payload = {
+        "models": [
+            {
+                "slug": "glm-5.3",
+                "default_reasoning_level": "max",
+                "supported_reasoning_levels": [
+                    {"effort": "low", "description": "Fast"},
+                    {"effort": "high", "description": "Deep"},
+                    {"effort": "max", "description": "Deepest"},
+                ],
+            },
+            {"slug": "glm-5.3-flash", "default_reasoning_level": "max"},
+            # Not a direct-lane model: must never surface as a direct row.
+            {"slug": "glm-4.6"},
+            {"slug": "some-other-provider-model"},
+        ]
+    }
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return _json.dumps(payload).encode()
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> _Response:
+        assert request.full_url == "https://api.z.ai/api/v1/models"
+        assert timeout == 10
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    try:
+        rows = app_server.zai_direct_glm_catalog_rows()
+    finally:
+        app_server._zai_direct_model_cache.clear()
+
+    assert [row["id"] for row in rows] == ["glm-5.3", "glm-5.3-flash"]
+    assert [row["displayName"] for row in rows] == ["GLM 5.3", "GLM 5.3 Flash"]
+    assert rows[0]["defaultReasoningEffort"] == "max"
+    assert [level["reasoningEffort"] for level in rows[0]["supportedReasoningEfforts"]] == [
+        "low",
+        "high",
+        "max",
+    ]
+    # glm-5.3-flash carries no levels in the fixture: none are invented.
+    assert "supportedReasoningEfforts" not in rows[1]
+
+
+def test_zai_direct_discovery_requires_credential(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No key means no direct rows; the lane never leaks into other lanes."""
+    from omnigent.harnesses.codex_native import app_server
+
+    app_server._zai_direct_model_cache.clear()
+    assert app_server.zai_direct_glm_catalog_rows() == ()
+
+
+def test_glm_lane_vocabulary_stays_paired_with_both_catalogues() -> None:
+    """A catalogue rebuild cannot drop the direct lane while keeping OmniRoute.
+
+    Every OmniRoute GLM route must name a direct model the vocabulary knows,
+    and every direct row must be reachable from a route — an asymmetric
+    vocabulary is what silently stranded the direct lane behind PR #171.
+    """
+    from omnigent.models.glm_model_vocabulary import (
+        GLM_DIRECT_MODELS,
+        GLM_OMNIROUTE_TO_DIRECT,
+    )
+
+    assert set(GLM_OMNIROUTE_TO_DIRECT.values()) == GLM_DIRECT_MODELS
+    assert GLM_DIRECT_MODELS, "direct lane vanished from the vocabulary"
+    for route_id, direct_id in GLM_OMNIROUTE_TO_DIRECT.items():
+        assert route_id.startswith("glm/")
+        assert route_id.split("/", 1)[1] == direct_id

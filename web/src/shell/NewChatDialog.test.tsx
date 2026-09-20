@@ -1597,6 +1597,59 @@ describe("NewChatLandingScreen", () => {
     });
   });
 
+  it("shows GLM OmniRoute and Z.AI Direct rows as distinct selectable lanes", async () => {
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                {
+                  id: "glm/glm-5.3",
+                  displayName: "GLM 5.3 · OmniRoute",
+                  accessLane: "omniroute" as const,
+                  groupLabel: "GLM",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "high", description: "High" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                },
+                {
+                  id: "glm-5.3",
+                  displayName: "GLM 5.3 · Z.AI Direct",
+                  accessLane: "glm-direct" as const,
+                  groupLabel: "GLM",
+                  defaultReasoningEffort: "max",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "high", description: "High" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_glm_lane" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("GLM")).toBeTruthy();
+    const directOption = screen.getByRole("option", { name: /^GLM 5\.3 · Z\.AI Direct/ });
+    expect(directOption).toHaveAttribute("data-access-lane", "glm-direct");
+    fireEvent.click(directOption);
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("glm-5.3");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("glm-direct");
+  });
+
   it("omits model and effort launch overrides when both inline selectors are Default", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
