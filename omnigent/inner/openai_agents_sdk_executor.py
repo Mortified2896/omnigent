@@ -1956,7 +1956,7 @@ class OpenAIAgentsSDKExecutor(Executor):
             last_total = getattr(last_r.usage, "total_tokens", 0) or 0
             context_tok = last_total if last_total else last_in + last_out
             if in_tok or out_tok:
-                reported_model = (\n                    self._omniroute_provenance.pop_model_for(raw_responses) or model\n                )
+                reported_model = self._omniroute_provenance.pop_model_for(raw_responses) or model
                 turn_usage = {
                     "input_tokens": in_tok - cached_tok,  # non-cached portion
                     "output_tokens": out_tok,
