@@ -331,4 +331,4 @@ def test_openai_agents_is_selectable_in_harness_catalog() -> None:
     row = next((item for item in hp.harness_catalog() if item["id"] == "openai-agents"), None)
     assert row is not None
     assert row["label"] == "OpenAI Agents SDK"
-    assert row["capabilities"]["integration_mode"] == "sdk_in_process"
+    assert row["capabilities"]["integration_mode"] == "sdk-in-process"
