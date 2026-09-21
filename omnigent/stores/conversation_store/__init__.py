@@ -94,6 +94,13 @@ CODEX_ACCESS_LANES = frozenset(
     {CODEX_ACCESS_LANE_OMNIROUTE, CODEX_ACCESS_LANE_DIRECT, CODEX_ACCESS_LANE_GLM_DIRECT}
 )
 
+# Server-written marker that a session is one model-advisor round's assigned
+# execution. Its presence flips the runner's launch validation to an enforced
+# exact-selection policy: an unavailable assigned model/effort FAILS the
+# assignment instead of resetting to any default. Written only by the server's
+# advisor confirm path; clients cannot seed it at session creation.
+ADVISOR_ROUND_LABEL_KEY = "omnigent.advisor.round_id"
+
 # Reserved label key that stores a session's sidebar "project" membership
 # (implicit collections — a project exists while ≥1 session carries this key).
 # Namespaced so it never collides with the user-facing "project" term or other

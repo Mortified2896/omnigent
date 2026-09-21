@@ -532,8 +532,10 @@ def _run_migrations(engine: Engine, db_uri: str) -> None:
         # tables — those need a real migration, which is why the
         # short-circuit above was removed. Both bases are created because
         # in single-DB mode this engine hosts the AP tables too.
-        for base in (OmnigentBase, ConversationBase):
-            base.metadata.create_all(bind=engine, checkfirst=True)
+        from omnigent.model_advisor_repository import metadata as model_advisor_metadata
+
+        for metadata in (OmnigentBase.metadata, ConversationBase.metadata, model_advisor_metadata):
+            metadata.create_all(bind=engine, checkfirst=True)
 
 
 def run_migrations_with_retry(

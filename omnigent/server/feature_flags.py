@@ -23,6 +23,7 @@ class Feature(StrEnum):
     USAGE_PAGE = "usage_page"
     HARNESS_INSTALL = "harness_install"
     CANVAS = "canvas"
+    MODEL_ADVISOR = "model_advisor"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,12 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         description="Web Canvas page: sessions as draggable cards grouped by project",
         owner="web",
         review_by_release="0.15.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.MODEL_ADVISOR,
+        description="Concrete model advisor with visible review and override",
+        owner="web",
+        review_by_release="0.16.0",
     ),
 )
 

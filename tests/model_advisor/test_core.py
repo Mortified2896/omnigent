@@ -42,15 +42,25 @@ class AdvisorCoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.human = candidate()
         self.advice = candidate(
-            "glm-high", lane_id="zai-direct", provider_id="zai",
-            connection_id="fixture-glm-account", model_id="fixture-glm",
-            reasoning_effort="high", access_class="glm_plan",
+            "glm-high",
+            lane_id="zai-direct",
+            provider_id="zai",
+            connection_id="fixture-glm-account",
+            model_id="fixture-glm",
+            reasoning_effort="high",
+            access_class="glm_plan",
         )
         self.pool = PoolSnapshot("catalog-1", (self.human, self.advice))
         self.round = RoundChoices(
-            "owner-1", "host-1", "round-1", "settings-1",
-            task_fingerprint("Explain this task."), self.pool,
-            self.advice, self.human.candidate_id, self.advice.candidate_id,
+            "owner-1",
+            "host-1",
+            "round-1",
+            "settings-1",
+            task_fingerprint("Explain this task."),
+            self.pool,
+            self.advice,
+            self.human.candidate_id,
+            self.advice.candidate_id,
         )
 
     def test_only_two_entitlement_classes(self) -> None:
@@ -76,7 +86,9 @@ class AdvisorCoreTests(unittest.TestCase):
                 candidate(model_id=model)
 
     def test_explicit_no_effort_supported(self) -> None:
-        self.assertEqual(candidate(reasoning_effort="not_applicable").reasoning_effort, "not_applicable")
+        self.assertEqual(
+            candidate(reasoning_effort="not_applicable").reasoning_effort, "not_applicable"
+        )
 
     def test_pool_requires_nonempty_immutable_membership(self) -> None:
         for rows in ((), [self.human], (object(),)):
@@ -85,7 +97,10 @@ class AdvisorCoreTests(unittest.TestCase):
 
     def test_pool_rejects_duplicate_ids(self) -> None:
         with self.assertRaises(AdvisorContractError):
-            PoolSnapshot("catalog-1", (self.human, replace(self.advice, candidate_id=self.human.candidate_id)))
+            PoolSnapshot(
+                "catalog-1",
+                (self.human, replace(self.advice, candidate_id=self.human.candidate_id)),
+            )
 
     def test_pool_rejects_duplicate_route_under_alias(self) -> None:
         with self.assertRaises(AdvisorContractError):
@@ -114,25 +129,39 @@ class AdvisorCoreTests(unittest.TestCase):
 
     def test_advisor_payload_has_no_human_choice_or_review_metadata(self) -> None:
         request = build_advisor_request("Explain this task.", self.pool)
-        self.assertEqual(set(request), {"schema_version", "instructions", "task", "candidates", "output_schema"})
+        self.assertEqual(
+            set(request), {"schema_version", "instructions", "task", "candidates", "output_schema"}
+        )
         wire = json.dumps(request)
-        for forbidden in ("human_candidate_id", "owner-1", "fixture-chatgpt-account", "review_source"):
+        for forbidden in (
+            "human_candidate_id",
+            "owner-1",
+            "fixture-chatgpt-account",
+            "review_source",
+        ):
             self.assertNotIn(forbidden, wire)
         self.assertEqual(request, build_advisor_request("Explain this task.", self.pool))
 
     def test_output_schema_contains_only_frozen_ids(self) -> None:
         schema = build_advisor_request("task", self.pool)["output_schema"]
-        self.assertEqual(schema["properties"]["candidate_id"]["enum"], ["plan-small-low", "glm-high"])
+        self.assertEqual(
+            schema["properties"]["candidate_id"]["enum"], ["plan-small-low", "glm-high"]
+        )
         self.assertFalse(schema["additionalProperties"])
 
     def test_valid_advisor_json_selects_exact_tuple(self) -> None:
-        row, reason = parse_advisor_result('{"candidate_id":"glm-high","rationale":"Hard task"}', self.pool)
+        row, reason = parse_advisor_result(
+            '{"candidate_id":"glm-high","rationale":"Hard task"}', self.pool
+        )
         self.assertEqual(row, self.advice)
         self.assertEqual(reason, "Hard task")
 
     def test_invalid_or_extended_advisor_json_fails(self) -> None:
         cases = (
-            "not json", "[]", "null", "{}",
+            "not json",
+            "[]",
+            "null",
+            "{}",
             '{"candidate_id":"outside","rationale":"x"}',
             '{"candidate_id":"glm-high","rationale":"x","model":"other"}',
             '{"candidate_id":"glm-high","candidate_id":"plan-small-low","rationale":"x"}',
@@ -163,8 +192,10 @@ class AdvisorCoreTests(unittest.TestCase):
 
     def test_replay_does_not_rerandomize(self) -> None:
         for bit in (0, 1):
-            saved = prepare_assignment(self.round, draw_bit=lambda: bit)
-            self.assertIs(prepare_assignment(self.round, draw_bit=must_not_draw, existing=saved), saved)
+            saved = prepare_assignment(self.round, draw_bit=lambda b=bit: b)
+            self.assertIs(
+                prepare_assignment(self.round, draw_bit=must_not_draw, existing=saved), saved
+            )
 
     def test_changed_request_cannot_reuse_assignment(self) -> None:
         saved = prepare_assignment(self.round, draw_bit=lambda: 0)
@@ -179,13 +210,17 @@ class AdvisorCoreTests(unittest.TestCase):
             replace(self.round, advisor_candidate_id=self.human.candidate_id),
         )
         for changed in variants:
-            with self.subTest(changed=changed.fingerprint), self.assertRaises(AdvisorContractError):
+            with (
+                self.subTest(changed=changed.fingerprint),
+                self.assertRaises(AdvisorContractError),
+            ):
                 prepare_assignment(changed, draw_bit=must_not_draw, existing=saved)
 
     def test_tampered_assignment_cannot_replay(self) -> None:
         saved = prepare_assignment(self.round, draw_bit=lambda: 0)
         variants = (
-            replace(saved, selected=self.advice), replace(saved, arm="same"),
+            replace(saved, selected=self.advice),
+            replace(saved, arm="same"),
             replace(saved, probability_denominator=1),
         )
         for changed in variants:
@@ -195,12 +230,14 @@ class AdvisorCoreTests(unittest.TestCase):
     def test_invalid_rng_output_rejected(self) -> None:
         for bit in (True, False, 0.5, -1, 2, "1"):
             with self.subTest(bit=bit), self.assertRaises(AdvisorContractError):
-                prepare_assignment(self.round, draw_bit=lambda: bit)
+                prepare_assignment(self.round, draw_bit=lambda b=bit: b)
 
     def test_task_hash_binds_exact_text_and_context(self) -> None:
         original = task_fingerprint("task")
         self.assertNotEqual(original, task_fingerprint("task "))
-        self.assertNotEqual(original, task_fingerprint("task", execution_context_digest="different"))
+        self.assertNotEqual(
+            original, task_fingerprint("task", execution_context_digest="different")
+        )
 
     def test_empty_task_and_invalid_digest_rejected(self) -> None:
         with self.assertRaises(AdvisorContractError):

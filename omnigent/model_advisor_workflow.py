@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, replace
 from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 from omnigent.model_advisor_core import (
@@ -40,7 +40,9 @@ def _id(value: object) -> str:
 
 def canonical_json(value: object) -> str:
     """Canonical JSON used for fingerprints and private durable snapshots."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def document_digest(value: object) -> str:
@@ -59,9 +61,15 @@ class AdvisorPreferences:
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
             raise AdvisorContractError("enabled must be a boolean")
-        if type(self.human_probability_percent) is not int or not 0 <= self.human_probability_percent <= 100:
+        if (
+            type(self.human_probability_percent) is not int
+            or not 0 <= self.human_probability_percent <= 100
+        ):
             raise AdvisorContractError("Human probability must be an integer from 0 to 100")
-        if not isinstance(self.allowed_candidate_ids, tuple) or len(self.allowed_candidate_ids) > 128:
+        if (
+            not isinstance(self.allowed_candidate_ids, tuple)
+            or len(self.allowed_candidate_ids) > 128
+        ):
             raise AdvisorContractError("Invalid allowed candidate list")
         for candidate_id in self.allowed_candidate_ids:
             _id(candidate_id)
@@ -73,13 +81,20 @@ class AdvisorPreferences:
             raise AdvisorContractError("Select allowed answers and an advisor before enabling")
 
     def to_payload(self) -> dict[str, object]:
-        return {"schema_version": 1, **asdict(self), "allowed_candidate_ids": list(self.allowed_candidate_ids)}
+        return {
+            "schema_version": 1,
+            **asdict(self),
+            "allowed_candidate_ids": list(self.allowed_candidate_ids),
+        }
 
     @classmethod
     def from_payload(cls, payload: object) -> AdvisorPreferences:
         if not isinstance(payload, dict) or set(payload) != {
-            "schema_version", "enabled", "allowed_candidate_ids",
-            "advisor_candidate_id", "human_probability_percent",
+            "schema_version",
+            "enabled",
+            "allowed_candidate_ids",
+            "advisor_candidate_id",
+            "human_probability_percent",
         }:
             raise AdvisorContractError("Unexpected preferences shape")
         if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
@@ -125,7 +140,10 @@ class FrozenRound:
         if not isinstance(self.pool, PoolSnapshot) or not isinstance(self.advisor, Candidate):
             raise AdvisorContractError("Invalid round catalog")
         self.pool.get(self.human_candidate_id)
-        if type(self.human_probability_percent) is not int or not 0 <= self.human_probability_percent <= 100:
+        if (
+            type(self.human_probability_percent) is not int
+            or not 0 <= self.human_probability_percent <= 100
+        ):
             raise AdvisorContractError("Invalid assignment probability")
 
     @property
@@ -144,14 +162,22 @@ class FrozenRound:
         """Decode only a server-written private snapshot, not a browser request."""
         data = dict(payload)
         pool = data["pool"]
-        data["pool"] = PoolSnapshot(pool["catalog_revision"], tuple(Candidate(**row) for row in pool["candidates"]))
+        data["pool"] = PoolSnapshot(
+            pool["catalog_revision"], tuple(Candidate(**row) for row in pool["candidates"])
+        )
         data["advisor"] = Candidate(**data["advisor"])
         return cls(**data)
 
 
 def freeze_round(
-    *, owner_id: str, host_id: str, round_id: str, settings_revision: str,
-    task: str, preferences: AdvisorPreferences, catalog: PoolSnapshot,
+    *,
+    owner_id: str,
+    host_id: str,
+    round_id: str,
+    settings_revision: str,
+    task: str,
+    preferences: AdvisorPreferences,
+    catalog: PoolSnapshot,
     human_candidate_id: str,
 ) -> FrozenRound:
     """Freeze the exact common pool; no automatic replacement of stale choices."""
@@ -161,8 +187,15 @@ def freeze_round(
     pool = PoolSnapshot(catalog.catalog_revision, rows)
     advisor = catalog.get(preferences.advisor_candidate_id or "")
     return FrozenRound(
-        owner_id, host_id, round_id, settings_revision, task, pool,
-        advisor, human_candidate_id, preferences.human_probability_percent,
+        owner_id,
+        host_id,
+        round_id,
+        settings_revision,
+        task,
+        pool,
+        advisor,
+        human_candidate_id,
+        preferences.human_probability_percent,
     )
 
 
@@ -197,7 +230,9 @@ class ReviewDecision:
         return "randomized_unblinded"
 
     def to_payload(self) -> dict[str, object]:
-        return json.loads(canonical_json({**asdict(self), "comparison_group": self.comparison_group}))
+        return json.loads(
+            canonical_json({**asdict(self), "comparison_group": self.comparison_group})
+        )
 
     @classmethod
     def from_payload(cls, payload: dict) -> ReviewDecision:
@@ -211,14 +246,23 @@ class ReviewDecision:
 
 
 def prepare_review(
-    frozen: FrozenRound, raw_advice: str, *, randbelow: Callable[[int], int],
+    frozen: FrozenRound,
+    raw_advice: str,
+    *,
+    randbelow: Callable[[int], int],
 ) -> ReviewDecision:
     """Call only within the durable store's claimed transaction; no network I/O."""
     advisor_pick, rationale = parse_advisor_result(raw_advice, frozen.pool)
     choices = RoundChoices(
-        frozen.owner_id, frozen.host_id, frozen.round_id, frozen.settings_revision,
-        task_fingerprint(frozen.task), frozen.pool, frozen.advisor,
-        frozen.human_candidate_id, advisor_pick.candidate_id,
+        frozen.owner_id,
+        frozen.host_id,
+        frozen.round_id,
+        frozen.settings_revision,
+        task_fingerprint(frozen.task),
+        frozen.pool,
+        frozen.advisor,
+        frozen.human_candidate_id,
+        advisor_pick.candidate_id,
     )
     pct = frozen.human_probability_percent
     if pct == 50:
@@ -235,19 +279,30 @@ def prepare_review(
             raise AdvisorContractError("Invalid assignment random draw")
         human = draw < pct
         assigned = Assignment(
-            choices.fingerprint, "human" if human else "advisor",
+            choices.fingerprint,
+            "human" if human else "advisor",
             frozen.pool.get(frozen.human_candidate_id) if human else advisor_pick,
-            pct if human else 100 - pct, 100,
+            pct if human else 100 - pct,
+            100,
         )
     return ReviewDecision(
-        frozen.fingerprint, frozen.human_candidate_id, advisor_pick.candidate_id,
-        rationale, assigned, assigned.selected, pct,
+        frozen.fingerprint,
+        frozen.human_candidate_id,
+        advisor_pick.candidate_id,
+        rationale,
+        assigned,
+        assigned.selected,
+        pct,
     )
 
 
 def confirm_review(
-    frozen: FrozenRound, review: ReviewDecision, live_catalog: PoolSnapshot,
-    *, override_candidate_id: str | None = None, reason: str | None = None,
+    frozen: FrozenRound,
+    review: ReviewDecision,
+    live_catalog: PoolSnapshot,
+    *,
+    override_candidate_id: str | None = None,
+    reason: str | None = None,
 ) -> ReviewDecision:
     """Explicit confirmation; availability failure cannot change the assignment."""
     if review.round_fingerprint != frozen.fingerprint:
@@ -257,6 +312,10 @@ def confirm_review(
         chosen = frozen.pool.get(override_candidate_id)
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 600:
             raise AdvisorContractError("An override needs a short reason")
-        review = replace(review, execution_candidate=chosen, overridden=True, override_reason=reason.strip())
-    require_exact_available(replace(review.original_assignment, selected=chosen), live_catalog.candidates)
+        review = replace(
+            review, execution_candidate=chosen, overridden=True, override_reason=reason.strip()
+        )
+    require_exact_available(
+        replace(review.original_assignment, selected=chosen), live_catalog.candidates
+    )
     return review

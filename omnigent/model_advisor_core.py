@@ -62,8 +62,13 @@ class Candidate:
 
     def __post_init__(self) -> None:
         for field in (
-            "candidate_id", "lane_id", "provider_id", "connection_id", "harness",
-            "model_id", "reasoning_effort",
+            "candidate_id",
+            "lane_id",
+            "provider_id",
+            "connection_id",
+            "harness",
+            "model_id",
+            "reasoning_effort",
         ):
             value = getattr(self, field)
             _text(value, field)
@@ -83,8 +88,13 @@ class Candidate:
     def route_identity(self) -> tuple[str, ...]:
         """Preserve provider/lane/effort identity even for identical model names."""
         return (
-            self.lane_id, self.provider_id, self.connection_id, self.harness,
-            self.model_id, self.reasoning_effort, self.access_class,
+            self.lane_id,
+            self.provider_id,
+            self.connection_id,
+            self.harness,
+            self.model_id,
+            self.reasoning_effort,
+            self.access_class,
         )
 
 
@@ -139,7 +149,10 @@ def build_advisor_request(task: str, pool: PoolSnapshot) -> dict[str, object]:
         "output_schema": {
             "type": "object",
             "properties": {
-                "candidate_id": {"type": "string", "enum": [r.candidate_id for r in pool.candidates]},
+                "candidate_id": {
+                    "type": "string",
+                    "enum": [r.candidate_id for r in pool.candidates],
+                },
                 "rationale": {"type": "string", "minLength": 1, "maxLength": 600},
             },
             "required": ["candidate_id", "rationale"],
@@ -192,7 +205,8 @@ class RoundChoices:
         if not isinstance(self.pool, PoolSnapshot) or not isinstance(self.advisor, Candidate):
             raise AdvisorContractError("Invalid round catalog")
         if (
-            not isinstance(self.task_digest, str) or len(self.task_digest) != 64
+            not isinstance(self.task_digest, str)
+            or len(self.task_digest) != 64
             or any(c not in "0123456789abcdef" for c in self.task_digest)
         ):
             raise AdvisorContractError("Expected SHA-256 task digest")
@@ -244,14 +258,20 @@ def prepare_assignment(
         if expected_arm not in (("same",) if same else ("human", "advisor")):
             raise AdvisorContractError("Invalid stored assignment arm")
         selected_id = (
-            choices.advisor_candidate_id if expected_arm == "advisor" else choices.human_candidate_id
+            choices.advisor_candidate_id
+            if expected_arm == "advisor"
+            else choices.human_candidate_id
         )
-        expected = Assignment(choices.fingerprint, expected_arm, choices.pool.get(selected_id), 1, 1 if same else 2)
+        expected = Assignment(
+            choices.fingerprint, expected_arm, choices.pool.get(selected_id), 1, 1 if same else 2
+        )
         if existing != expected:
             raise AdvisorContractError("Stored assignment does not match frozen proposals")
         return existing
     if same:
-        return Assignment(choices.fingerprint, "same", choices.pool.get(choices.human_candidate_id), 1, 1)
+        return Assignment(
+            choices.fingerprint, "same", choices.pool.get(choices.human_candidate_id), 1, 1
+        )
     bit = draw_bit()
     if type(bit) is not int or bit not in (0, 1):
         raise AdvisorContractError("Assignment draw must be integer zero or one")
@@ -260,7 +280,9 @@ def prepare_assignment(
     return Assignment(choices.fingerprint, arm, choices.pool.get(selected_id), 1, 2)
 
 
-def require_exact_available(assignment: Assignment, live_candidates: Iterable[Candidate]) -> Candidate:
+def require_exact_available(
+    assignment: Assignment, live_candidates: Iterable[Candidate]
+) -> Candidate:
     """Recheck selected identity; never replace it with a default or another lane."""
     for row in live_candidates:
         if row.route_identity == assignment.selected.route_identity:
