@@ -3244,8 +3244,8 @@ export function NewChatLandingScreen() {
               codexModelOptions,
               stored.model,
               stored.accessLane === "omniroute" ||
-              stored.accessLane === "codex-direct" ||
-              stored.accessLane === "glm-direct"
+                stored.accessLane === "codex-direct" ||
+                stored.accessLane === "glm-direct"
                 ? stored.accessLane
                 : null,
             )
