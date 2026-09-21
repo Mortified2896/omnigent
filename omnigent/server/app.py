@@ -2660,7 +2660,7 @@ def create_app(
         and host_store is not None
     ):
 
-        def _model_advisor_session_launcher(
+        async def _model_advisor_session_launcher(
             body: Any,
             *,
             user_id: str | None,
@@ -2673,7 +2673,7 @@ def create_app(
                 _create_session_from_existing_agent,
             )
 
-            return _create_session_from_existing_agent(
+            session, _project_warnings = await _create_session_from_existing_agent(
                 conversation_store,
                 agent_store,
                 runner_router,
@@ -2692,6 +2692,9 @@ def create_app(
                 enforce_reserved_label_seed=False,
                 project_store=project_store,
             )
+            # The advisor service expects the created session snapshot, not
+            # the (session, project-warnings) tuple the public route unpacks.
+            return session
 
         model_advisor_service = ModelAdvisorService(
             repository=model_advisor_store,
