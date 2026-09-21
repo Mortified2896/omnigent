@@ -42,6 +42,8 @@ from omnigent.host.daemon_lifecycle import DaemonLifecycleLock
 from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE,
     WORKSPACE_MISSING_ERROR_CODE,
+    HostAdvisorCallFrame,
+    HostAdvisorCallResultFrame,
     HostConnectionErrorFrame,
     HostCreateDirFrame,
     HostCreateDirResultFrame,
@@ -3216,6 +3218,43 @@ class HostProcess:
             error="the claude model probe failed — see the host log",
         )
 
+    async def _handle_advisor_call(
+        self, frame: HostAdvisorCallFrame
+    ) -> HostAdvisorCallResultFrame:
+        """Run the single bounded, tool-free advisor selection locally.
+
+        The advisor's authorized lane/account binding (``codex-direct``
+        login or ``glm-direct`` key) exists only on this machine, so the
+        call must run here — the same reason model options resolve here.
+        All transport failures come back as honest ``failed`` frames; the
+        raw output is returned unparsed for server-side validation.
+        """
+        from omnigent.host.advisor_call import AdvisorCallError, generate_advisor_selection
+
+        try:
+            result = await generate_advisor_selection(
+                request=frame.request,
+                model=frame.model,
+                access_lane=frame.access_lane,
+                reasoning_effort=frame.reasoning_effort,
+            )
+        except AdvisorCallError as exc:
+            return HostAdvisorCallResultFrame(
+                request_id=frame.request_id,
+                status="failed",
+                error=str(exc),
+            )
+        return HostAdvisorCallResultFrame(
+            request_id=frame.request_id,
+            status="ok",
+            raw_output=result.raw_output,
+            latency_ms=result.latency_ms,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cached_input_tokens=result.cached_input_tokens,
+            response_id=result.response_id,
+        )
+
     @staticmethod
     def _dispatch_fs_op(
         reader: object,
@@ -4407,6 +4446,21 @@ class HostProcess:
                     error=f"model options resolution crashed for {frame.harness!r}",
                 )
             await ws.send(encode_host_frame(options_result))
+        elif isinstance(frame, HostAdvisorCallFrame):
+            # One bounded tool-free advisor selection on this machine, where
+            # the authorized codex-direct / glm-direct credentials live. A
+            # crash becomes an honest failed frame; the server decides what
+            # the failed round means.
+            try:
+                advisor_result = await self._handle_advisor_call(frame)
+            except Exception:
+                _logger.exception("Advisor call crashed for model %r", frame.model)
+                advisor_result = HostAdvisorCallResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error="advisor call crashed on the host",
+                )
+            await ws.send(encode_host_frame(advisor_result))
         elif isinstance(frame, (HostImportLocalFrame, HostImportLocalByIdFrame)):
             # Streams one host.import_local_session per session (reads run off the
             # event loop inside), then a terminal host.import_local_done.

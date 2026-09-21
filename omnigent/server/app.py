@@ -69,6 +69,7 @@ from omnigent.server.feature_flags import Feature, FeatureFlags, resolve_feature
 from omnigent.server.managed_hosts import ManagedSandboxDeployment
 from omnigent.server.managed_sandbox_reaper import ManagedSandboxReaper
 from omnigent.server.mcp_pool import ServerMcpPool
+from omnigent.server.model_advisor_service import ModelAdvisorService
 from omnigent.server.o3_routing_review import o3_routing_review_enabled
 from omnigent.server.o3_routing_review.routes import create_o3_routing_review_router
 from omnigent.server.o3_routing_review.service import RoutingReviewError
@@ -89,6 +90,7 @@ from omnigent.server.routes.extension_assets import create_extension_assets_rout
 from omnigent.server.routes.extensions import create_extensions_router
 from omnigent.server.routes.harnesses import create_harnesses_router
 from omnigent.server.routes.imports import create_imports_router
+from omnigent.server.routes.model_advisor import create_model_advisor_router
 from omnigent.server.routes.policy_registry import create_policy_registry_router
 from omnigent.server.routes.projects import create_projects_router
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
@@ -1082,6 +1084,7 @@ def create_app(
     permission_store: PermissionStore | None = None,
     scheduled_task_store: ScheduledTaskStore | None = None,
     project_store: ProjectStore | None = None,
+    model_advisor_store: Any | None = None,  # AdvisorRepository — model advisor only
     auth_provider: AuthProvider | None = None,
     host_store: HostStore | None = None,
     account_store: Any | None = None,  # SqlAlchemyAccountStore — accounts mode only
@@ -2650,6 +2653,56 @@ def create_app(
             create_o3_routing_review_router(auth_provider=auth_provider),
             prefix="/v1",
             tags=["o3_routing_review"],
+        )
+    if (
+        resolved_feature_flags.enabled(Feature.MODEL_ADVISOR)
+        and model_advisor_store is not None
+        and host_store is not None
+    ):
+
+        def _model_advisor_session_launcher(
+            body: Any,
+            *,
+            user_id: str | None,
+            request: Any = None,
+        ) -> Any:
+            # Same creation path POST /v1/sessions uses, so the advisor's one
+            # executor launch carries the exact pinned model/effort/lane on
+            # the session row before the runner boots the harness.
+            from omnigent.server.routes._sessions.orchestration import (
+                _create_session_from_existing_agent,
+            )
+
+            return _create_session_from_existing_agent(
+                conversation_store,
+                agent_store,
+                runner_router,
+                body,
+                request,
+                agent_cache=agent_cache,
+                user_id=user_id,
+                permission_store=permission_store,
+                liveness_lookup=_bulk_session_liveness,
+                file_store=file_store,
+                artifact_store=artifact_store,
+                background_title_coordinator=background_title_coordinator,
+                project_store=project_store,
+            )
+
+        model_advisor_service = ModelAdvisorService(
+            repository=model_advisor_store,
+            host_store=host_store,
+            host_registry=host_registry,
+            conversation_store=conversation_store,
+            session_launcher=_model_advisor_session_launcher,
+        )
+        app.include_router(
+            create_model_advisor_router(
+                auth_provider=auth_provider,
+                service=model_advisor_service,
+            ),
+            prefix="/v1",
+            tags=["model_advisor"],
         )
     app.include_router(
         create_extensions_router(

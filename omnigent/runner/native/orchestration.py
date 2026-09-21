@@ -462,6 +462,13 @@ class _CodexNativeLaunchConfig:
         still has work to do. False on a session something already routed —
         a web create that pinned the model before the pane launched — so the
         ``UserPromptSubmit`` hook is never registered and no prompt is held.
+    :param advisor_round_id: Model-advisor round id
+        (``omnigent.advisor.round_id`` label) when this session is an
+        advisor-dispatched execution. Advisor rounds carry an enforced
+        exact-selection policy: an unreachable assigned model/effort fails
+        the assignment — never a reset to the lane default and never a
+        cross-lane fallback. ``None`` keeps the ordinary reset/fallback
+        behavior for normal sessions.
     """
 
     workspace: Path
@@ -478,6 +485,7 @@ class _CodexNativeLaunchConfig:
     auto_harness: bool = False
     routing_enabled: bool = False
     turn_routing: bool = False
+    advisor_round_id: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1038,6 +1046,7 @@ async def _codex_native_launch_config(
     # fork-source branch in _auto_create_codex_terminal); inert otherwise.
     from omnigent.runner.subagent_routing import routing_class_from_snapshot
     from omnigent.stores.conversation_store import (
+        ADVISOR_ROUND_LABEL_KEY,
         CODEX_ACCESS_LANE_LABEL_KEY,
         CODEX_ACCESS_LANES,
         CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
@@ -1061,6 +1070,7 @@ async def _codex_native_launch_config(
     }
     bypass_sandbox = deployment_trusted
     access_lane: str | None = None
+    advisor_round_id: str | None = None
     labels = snapshot.get("labels")
     if isinstance(labels, dict):
         _fsi = labels.get(FORK_SOURCE_LABEL_KEY)
@@ -1073,6 +1083,9 @@ async def _codex_native_launch_config(
         bypass_sandbox = (
             deployment_trusted or labels.get(CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY) == "1"
         )
+        _advisor_round = labels.get(ADVISOR_ROUND_LABEL_KEY)
+        if isinstance(_advisor_round, str) and _advisor_round:
+            advisor_round_id = _advisor_round
         raw_access_lane = labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
         if raw_access_lane is not None:
             if not isinstance(raw_access_lane, str) or raw_access_lane not in CODEX_ACCESS_LANES:
@@ -1108,6 +1121,7 @@ async def _codex_native_launch_config(
         auto_harness=routing_class.auto_harness,
         routing_enabled=routing_class.routing_enabled,
         turn_routing=routing_class.turn_routing,
+        advisor_round_id=advisor_round_id,
     )
 
 
@@ -4036,6 +4050,19 @@ async def _auto_create_codex_terminal(
                     _codex_catalog_was_stale = False
                     reachable = codex_reachable_model_slug(pick, fresh_rows)
             if reachable is None:
+                if launch_config.advisor_round_id:
+                    # Enforced exact-selection policy for advisor rounds: the
+                    # assigned model must be exactly available on its assigned
+                    # lane. Fail the assignment — never reset to the lane
+                    # default, never fall back across providers, not even
+                    # within the same lane. Ordinary sessions below keep the
+                    # existing reset/fallback behavior unchanged.
+                    raise RuntimeError(
+                        f"Advisor round {launch_config.advisor_round_id!r} assigned "
+                        f"model {pick!r} on lane {launch_config.access_lane!r}, but it "
+                        "is not in the lane's current model list; the exact-selection "
+                        "policy fails this assignment instead of substituting a model."
+                    )
                 if launch_config.access_lane is None:
                     # Re-resolve so provider overrides cannot retain the old
                     # model. A failed probe permits fallback, but cannot

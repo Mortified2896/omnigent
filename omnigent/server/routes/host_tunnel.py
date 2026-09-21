@@ -29,6 +29,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from omnigent.db.db_models import InvalidUuidError, uuid_to_bytes
 from omnigent.debug_logging import debug_event, set_current_user_id
 from omnigent.host.frames import (
+    HostAdvisorCallResultFrame,
     HostConnectionErrorFrame,
     HostCreateDirResultFrame,
     HostCreateWorktreeResultFrame,
@@ -796,6 +797,22 @@ async def _receive_loop(
                         "status": frame.status,
                         "models": frame.models,
                         "routable_models": frame.routable_models,
+                        "error": frame.error,
+                    }
+                )
+            continue
+        if isinstance(frame, HostAdvisorCallResultFrame):
+            advisor_future = conn.pending_advisor_calls.pop(frame.request_id, None)
+            if advisor_future is not None and not advisor_future.done():
+                advisor_future.set_result(
+                    {
+                        "status": frame.status,
+                        "raw_output": frame.raw_output,
+                        "latency_ms": frame.latency_ms,
+                        "input_tokens": frame.input_tokens,
+                        "output_tokens": frame.output_tokens,
+                        "cached_input_tokens": frame.cached_input_tokens,
+                        "response_id": frame.response_id,
                         "error": frame.error,
                     }
                 )

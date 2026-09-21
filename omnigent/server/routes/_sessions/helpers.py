@@ -9149,6 +9149,18 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
             f"label {_TURN_ACTOR_LABEL!r} is server-internal and cannot be set by clients",
             code=ErrorCode.INVALID_INPUT,
         )
+    # The model-advisor namespace is written only by the advisor confirm path;
+    # a client seed would forge the experiment metadata that the runner's
+    # exact-selection policy and round inspection trust (omnigent.advisor.*).
+    _advisor_seed = next(
+        (key for key in labels if key.startswith("omnigent.advisor.")),
+        None,
+    )
+    if _advisor_seed is not None:
+        raise OmnigentError(
+            f"label {_advisor_seed!r} is server-internal and cannot be set by clients",
+            code=ErrorCode.INVALID_INPUT,
+        )
     # The archive timestamp is stamped by the server on the archive transition
     # only; a client write would forge the retention clock, including on shared
     # sessions the caller does not own.

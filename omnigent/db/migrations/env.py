@@ -10,6 +10,7 @@ from sqlalchemy import Connection, engine_from_config, pool
 
 from omnigent.db import ConversationBase, OmnigentBase
 from omnigent.db.utils import _set_alembic_database_url
+from omnigent.model_advisor_repository import metadata as _model_advisor_metadata
 
 config = context.config
 
@@ -34,7 +35,7 @@ if config.config_file_name is not None:
 
 # Both bases share one physical DB and one migration lineage; autogenerate
 # diffs the union of their metadata so neither side's tables look "extra".
-target_metadata = [OmnigentBase.metadata, ConversationBase.metadata]
+target_metadata = [OmnigentBase.metadata, ConversationBase.metadata, _model_advisor_metadata]
 
 # Allow overriding the DB URL via environment variable.
 db_url = os.environ.get("OMNIGENT_DB_URL")

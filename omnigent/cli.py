@@ -4225,6 +4225,12 @@ def server(
     permission_store = SqlAlchemyPermissionStore(db_uri)
     scheduled_task_store = SqlAlchemyScheduledTaskStore(db_uri)
     project_store = SqlAlchemyProjectStore(db_uri)
+    # The advisor store shares the normal application engine; its table is
+    # installed by the standard Alembic chain (never create_all here).
+    from omnigent.db.utils import get_or_create_engine
+    from omnigent.model_advisor_repository import AdvisorRepository
+
+    model_advisor_store = AdvisorRepository(get_or_create_engine(db_uri))
     artifact_store = _create_artifact_store(art_loc)
 
     # Initialize the runtime with store references so workflow code
@@ -4391,6 +4397,7 @@ def server(
         permission_store=permission_store,
         scheduled_task_store=scheduled_task_store,
         project_store=project_store,
+        model_advisor_store=model_advisor_store,
         auth_provider=auth_provider,
         host_store=host_store,
         account_store=account_store,

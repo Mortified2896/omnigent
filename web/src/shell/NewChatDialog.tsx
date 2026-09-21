@@ -83,6 +83,7 @@ import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { attachmentKey } from "@/lib/attachments";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { NewChatAdvisorSection } from "@/model-advisor/NewChatAdvisorSection";
 import { HarnessSetupDialog } from "@/shell/HarnessSetupDialog";
 import {
   harnessUnavailableReasonOnHost,
@@ -94,7 +95,7 @@ import {
 
 // Re-exported for tests that import the readiness helpers from this module.
 export { harnessUnavailableReasonOnHost, harnessUnconfiguredOnHost, harnessWarningBadgeText };
-import { sandboxOptionLabel } from "@/lib/capabilities";
+import { isFeatureEnabled, sandboxOptionLabel } from "@/lib/capabilities";
 import {
   isSlashCommandText,
   rankedSlashCommandNames,
@@ -2229,6 +2230,10 @@ export function NewChatLandingScreen() {
   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
   const o3RoutingReviewEnabled = info !== "loading" && info.o3_routing_review_enabled;
+  // Model advisor: OFF unless the server advertises the release feature. The
+  // gated section owns its own API lifecycle; nothing provider-backed starts
+  // from this component.
+  const modelAdvisorEnabled = isFeatureEnabled(info, "model_advisor");
   // Which router can answer a pick. The external AI-Gateway router only covers
   // a family the host runs through the gateway; the built-in judge covers any
   // family. Read once here and reused by every routing gate below. "loading"
@@ -2568,6 +2573,23 @@ export function NewChatLandingScreen() {
       landingDraft = submittedRef.current ? null : draftRef.current;
     };
   }, []);
+
+  // Model-advisor round launched: the server created the session bound to the
+  // confirmed assignment, so follow it exactly like a finished create.
+  const handleAdvisorLaunched = useCallback(
+    (sessionId: string) => {
+      landingDraft = null;
+      if (onScreenRef.current) navigate(`/c/${sessionId}`);
+    },
+    [navigate],
+  );
+  const handleAdvisorHumanPick = useCallback(
+    (pick: { model: string; accessLane: string | null; effort: string }) => {
+      setPickedCodexModel(pick.model, pick.accessLane as CodexAccessLane | null);
+      setPickedEffort(pick.effort);
+    },
+    [setPickedCodexModel],
+  );
 
   useEffect(() => {
     if (
@@ -5706,6 +5728,22 @@ export function NewChatLandingScreen() {
                 )}
               </div>
             )}
+
+          {modelAdvisorEnabled && (
+            <NewChatAdvisorSection
+              hostId={selectedHostId}
+              task={message}
+              humanPick={
+                pickedModel !== ""
+                  ? { model: pickedModel, accessLane: pickedCodexAccessLane, effort: pickedEffort }
+                  : null
+              }
+              launchAgentId={effectiveAgentId}
+              launchWorkspace={workspace === "" ? null : workspace}
+              onHumanCandidateChosen={handleAdvisorHumanPick}
+              onLaunched={handleAdvisorLaunched}
+            />
+          )}
 
           {o3Proposal && !o3ReviewLoading && (
             <RoutingProposalCard

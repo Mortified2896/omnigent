@@ -75,6 +75,8 @@ class HostFrameKind(str, Enum):
     FS_WRITE_REQUEST = "host.fs_write_request"
     MODEL_OPTIONS = "host.model_options"
     MODEL_OPTIONS_RESULT = "host.model_options_result"
+    ADVISOR_CALL = "host.advisor_call"
+    ADVISOR_CALL_RESULT = "host.advisor_call_result"
     IMPORT_LOCAL = "host.import_local"
     IMPORT_LOCAL_BY_ID = "host.import_local_by_id"
     IMPORT_LOCAL_SESSION = "host.import_local_session"
@@ -901,6 +903,46 @@ class HostModelOptionsResultFrame:
 
 
 @dataclass
+class HostAdvisorCallFrame:
+    """Server → host: run ONE bounded, tool-free advisor selection call.
+
+    :param request: The allowlisted advisor request built by
+        ``model_advisor_core.build_advisor_request`` (instructions, task,
+        candidate rows, output schema). The host transport must not add
+        tools, history or credentials to it.
+    :param model: The advisor model id, e.g. ``"gpt-5.3-codex"``.
+    :param access_lane: The authorized lane binding the advisor's
+        provider/account, e.g. ``"codex-direct"`` or ``"glm-direct"``.
+    :param reasoning_effort: The advisor's explicit effort, or ``None``.
+    """
+
+    request_id: str
+    request: _JsonObject
+    model: str
+    access_lane: str | None = None
+    reasoning_effort: str | None = None
+
+
+@dataclass
+class HostAdvisorCallResultFrame:
+    """Host → server: raw advisor selection plus bounded overhead telemetry.
+
+    ``raw_output`` is the unparsed final message; the server validates it
+    against the frozen pool. Usage counters are ``None`` when unknown.
+    """
+
+    request_id: str
+    status: str
+    raw_output: str | None = None
+    latency_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    response_id: str | None = None
+    error: str | None = None
+
+
+@dataclass
 class HostImportedLocalSession:
     """One local transcript the host read, normalized for import.
 
@@ -1023,6 +1065,8 @@ HostFrame = (
     | HostFsWriteFrame
     | HostModelOptionsFrame
     | HostModelOptionsResultFrame
+    | HostAdvisorCallFrame
+    | HostAdvisorCallResultFrame
     | HostImportLocalFrame
     | HostImportLocalByIdFrame
     | HostImportLocalSessionFrame
@@ -1400,6 +1444,32 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "routable_models": frame.routable_models,
             }
         )
+    if isinstance(frame, HostAdvisorCallFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.ADVISOR_CALL.value,
+                "request_id": frame.request_id,
+                "request": frame.request,
+                "model": frame.model,
+                "access_lane": frame.access_lane,
+                "reasoning_effort": frame.reasoning_effort,
+            }
+        )
+    if isinstance(frame, HostAdvisorCallResultFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.ADVISOR_CALL_RESULT.value,
+                "request_id": frame.request_id,
+                "status": frame.status,
+                "raw_output": frame.raw_output,
+                "latency_ms": frame.latency_ms,
+                "input_tokens": frame.input_tokens,
+                "output_tokens": frame.output_tokens,
+                "cached_input_tokens": frame.cached_input_tokens,
+                "response_id": frame.response_id,
+                "error": frame.error,
+            }
+        )
     if isinstance(frame, HostImportLocalFrame):
         return _encode_payload(
             {
@@ -1574,6 +1644,10 @@ def _decode_known_host_frame(
             return _decode_model_options(msg)
         case HostFrameKind.MODEL_OPTIONS_RESULT:
             return _decode_model_options_result(msg)
+        case HostFrameKind.ADVISOR_CALL:
+            return _decode_advisor_call(msg)
+        case HostFrameKind.ADVISOR_CALL_RESULT:
+            return _decode_advisor_call_result(msg)
         case HostFrameKind.IMPORT_LOCAL:
             return _decode_import_local(msg)
         case HostFrameKind.IMPORT_LOCAL_BY_ID:
@@ -2119,6 +2193,44 @@ def _decode_model_options_result(msg: _JsonObject) -> HostModelOptionsResultFram
         models=models,
         error=_optional_nullable_str(msg, "error"),
         routable_models=routable,
+    )
+
+
+def _decode_advisor_call(msg: _JsonObject) -> HostAdvisorCallFrame:
+    """Decode a host.advisor_call request frame."""
+    request = msg.get("request")
+    if not isinstance(request, dict):
+        raise ValueError("frame field must be a JSON object: 'request'")
+    return HostAdvisorCallFrame(
+        request_id=_required_str(msg, "request_id"),
+        request=request,
+        model=_required_str(msg, "model"),
+        access_lane=_optional_nullable_str(msg, "access_lane"),
+        reasoning_effort=_optional_nullable_str(msg, "reasoning_effort"),
+    )
+
+
+def _decode_advisor_call_result(msg: _JsonObject) -> HostAdvisorCallResultFrame:
+    """Decode a host.advisor_call_result frame."""
+
+    def _optional_int(key: str) -> int | None:
+        value = msg.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"frame field must be a nonnegative integer or null: '{key}'")
+        return value
+
+    return HostAdvisorCallResultFrame(
+        request_id=_required_str(msg, "request_id"),
+        status=_required_str(msg, "status"),
+        raw_output=_optional_nullable_str(msg, "raw_output"),
+        latency_ms=_optional_int("latency_ms"),
+        input_tokens=_optional_int("input_tokens"),
+        output_tokens=_optional_int("output_tokens"),
+        cached_input_tokens=_optional_int("cached_input_tokens"),
+        response_id=_optional_nullable_str(msg, "response_id"),
+        error=_optional_nullable_str(msg, "error"),
     )
 
 
