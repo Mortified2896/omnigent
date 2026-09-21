@@ -8199,6 +8199,7 @@ async def _create_session_from_existing_agent(
     artifact_store: ArtifactStore | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     project_store: ProjectStore | None = None,
+    enforce_reserved_label_seed: bool = True,
 ) -> tuple[SessionResponse, tuple[dict[str, str], ...]]:
     """
     Create a session bound to an already-registered agent.
@@ -8228,6 +8229,10 @@ async def _create_session_from_existing_agent(
         ``file_id`` references in ``initial_items`` before forwarding
         to the runner.
     :param artifact_store: Optional binary content store for the same.
+    :param enforce_reserved_label_seed: Keep the client reserved-label
+        seed guard. Only server-internal callers that build the label
+        seed themselves (the model-advisor executor launch) may pass
+        ``False``; public routes must leave the default in place.
     :returns: The newly created session snapshot.
     :raises OmnigentError: 404 if no agent matches ``body.agent_id``;
         403/404 if ``parent_session_id`` or session-scoped ``agent_id``
@@ -8246,7 +8251,12 @@ async def _create_session_from_existing_agent(
     assert body.agent_id is not None
 
     _reject_reserved_cost_control_label_seed(body.labels)
-    _reject_server_reserved_label_seed(body.labels)
+    # The reserved-seed guard targets CLIENT-supplied labels. Server-internal
+    # callers that construct the seed themselves (the model-advisor executor
+    # launch writes omnigent.advisor.* round labels) must opt out explicitly,
+    # or their own launch would be refused by the guard meant for clients.
+    if enforce_reserved_label_seed:
+        _reject_server_reserved_label_seed(body.labels)
 
     agent = await validate_session_agent(
         user_id=user_id,

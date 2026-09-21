@@ -559,3 +559,47 @@ def test_advisor_label_namespace_is_server_only() -> None:
     _reject_server_reserved_label_seed({"team": "ml"})
     with _pytest.raises(OmnigentError, match="server-internal"):
         _reject_server_reserved_label_seed({"omnigent.advisor.round_id": "forged"})
+
+
+def test_internal_launch_skips_client_label_guard(monkeypatch) -> None:
+    """The advisor's server-side launch seeds omnigent.advisor.* itself.
+
+    The shared creation path must keep validating the seed on the public
+    route, but the internal caller opts out — otherwise the advisor's own
+    confirm launch is refused by the guard meant for clients.
+    """
+    import asyncio
+    import contextlib
+
+    import omnigent.server.routes._sessions.orchestration as orchestration
+    from omnigent.server.schemas import SessionCreateRequest
+
+    seen: list[dict[str, str] | None] = []
+    real_guard = orchestration._reject_server_reserved_label_seed
+
+    def spy(labels):
+        seen.append(labels)
+        return real_guard(labels)
+
+    monkeypatch.setattr(orchestration, "_reject_server_reserved_label_seed", spy)
+    body = SessionCreateRequest(
+        agent_id="no-such-agent",
+        labels={"omnigent.advisor.round_id": "adviseround-regression"},
+    )
+
+    async def attempt(enforce: bool) -> None:
+        # Later store-less failures are fine; this seam pins the guard.
+        with contextlib.suppress(Exception):
+            await orchestration._create_session_from_existing_agent(
+                None,
+                None,
+                None,
+                body,
+                None,
+                enforce_reserved_label_seed=enforce,
+            )
+
+    asyncio.run(attempt(True))
+    assert seen == [body.labels]
+    asyncio.run(attempt(False))
+    assert seen == [body.labels]
