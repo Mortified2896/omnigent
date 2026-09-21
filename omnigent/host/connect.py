@@ -1018,11 +1018,155 @@ def _with_model_configuration_source(
     lane_sources = {
         "omniroute": {"kind": "gateway", "label": "AI Gateway", "name": "OmniRoute"},
         "codex-direct": {"kind": "subscription", "label": "Subscription", "name": "codex"},
+        "glm-direct": {"kind": "key", "label": "Direct Provider", "name": "Z.AI"},
     }
     return [
         {**model, "source": lane_sources.get(str(model.get("accessLane")), source)}
         for model in models
     ]
+
+
+def _glm_direct_picker_rows() -> list[dict[str, object]]:
+    """Lane-stamped picker rows for the direct Z.ai GLM models.
+
+    Rows exist only when the direct provider confirms its catalogue and the
+    host holds ``ZAI_API_KEY``; OmniRoute availability is deliberately not an
+    input, so one lane going down can never erase or invent the other.
+    """
+    from omnigent.harnesses.codex_native.app_server import zai_direct_glm_catalog_rows
+    from omnigent.models.glm_model_vocabulary import glm_display_name
+
+    rows: list[dict[str, object]] = []
+    for row in zai_direct_glm_catalog_rows():
+        direct_id = str(row.get("id") or row.get("model"))
+        rows.append(
+            {
+                **row,
+                "displayName": f"{glm_display_name(direct_id)} · Z.AI Direct",
+                "accessLane": "glm-direct",
+                "groupLabel": "GLM",
+            }
+        )
+    return rows
+
+
+def _default_launch_is_omniroute_served() -> bool:
+    """Whether the default Codex launch routes through the OmniRoute gateway."""
+    from omnigent.harnesses.codex_native.app_server import (
+        native_codex_launch_base_url,
+        resolve_native_codex_launch,
+    )
+
+    try:
+        launch = resolve_native_codex_launch(model=None)
+    except Exception:  # noqa: BLE001 — no default shape means no OmniRoute rows
+        return False
+    base_url = native_codex_launch_base_url(launch)
+    if not base_url:
+        return False
+    omniroute_root = os.environ.get(
+        "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+    ).rstrip("/")
+    if omniroute_root.endswith("/v1"):
+        omniroute_root = omniroute_root.removesuffix("/v1")
+    return base_url.rstrip("/") == f"{omniroute_root}/v1"
+
+
+def _omniroute_glm_picker_rows() -> list[dict[str, object]]:
+    """Lane-stamped picker rows for the OmniRoute GLM routes.
+
+    Rows exist only when the default launch routes through the OmniRoute
+    gateway and the gateway confirms the routes; the direct lane's availability
+    is deliberately not an input, so one lane going down can never erase or
+    invent the other.
+    """
+    from omnigent.harnesses.codex_native.app_server import omniroute_glm_catalog_rows
+    from omnigent.models.glm_model_vocabulary import glm_display_name
+
+    rows: list[dict[str, object]] = []
+    for row in omniroute_glm_catalog_rows():
+        route_id = str(row.get("id") or row.get("model"))
+        rows.append(
+            {
+                **row,
+                "displayName": f"{glm_display_name(route_id.split('/', 1)[1])} · OmniRoute",
+                "accessLane": "omniroute",
+                "groupLabel": "GLM",
+            }
+        )
+    return rows
+
+
+def _picker_row_identity(row: Mapping[str, object]) -> tuple[str, str]:
+    """The persisted identity of one picker row: its lane plus its model id.
+
+    The native option schema (``NativeModelOption``) represents no connection
+    id, so ``(accessLane, model)`` is the full identity a row carries: rows
+    that differ in either are different pickable choices. Identity must never
+    be the bare model id — a separately qualified Direct entry would then
+    disappear whenever another lane serves a model under the same id.
+    """
+    lane = row.get("accessLane")
+    model = row.get("model") or row.get("id")
+    return (str(lane) if lane is not None else "", str(model) if model is not None else "")
+
+
+def _apply_glm_lane_rows(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Label GLM rows per access lane and append the lane-discovered rows.
+
+    OmniRoute-served GLM rows are renamed so no raw ``GLM 5.3`` row can sit
+    next to the direct lane's rows looking like an unlabeled duplicate. The
+    direct rows come from the direct provider's own catalogue and the
+    OmniRoute GLM rows from the gateway's catalogue; a lane is never offered
+    on the strength of the other lane's rows, and a confirmed row on one lane
+    is never suppressed by a same-id row on another.
+    """
+    from omnigent.models.glm_model_vocabulary import (
+        GLM_OMNIROUTE_ROUTES,
+        GLM_OMNIROUTE_TO_DIRECT,
+        glm_display_name,
+    )
+
+    has_laneless_glm = any(
+        (row.get("model") or row.get("id")) in GLM_OMNIROUTE_ROUTES
+        and row.get("accessLane") is None
+        for row in rows
+    )
+    omniroute_catalog = has_laneless_glm and _default_launch_is_omniroute_served()
+    relabeled: list[dict[str, object]] = []
+    for row in rows:
+        raw_id = row.get("model") or row.get("id")
+        if (
+            isinstance(raw_id, str)
+            and raw_id in GLM_OMNIROUTE_ROUTES
+            and (
+                row.get("accessLane") == "omniroute"
+                or (row.get("accessLane") is None and omniroute_catalog)
+            )
+        ):
+            direct_id = GLM_OMNIROUTE_TO_DIRECT.get(raw_id)
+            lane_already_stamped = row.get("accessLane") == "omniroute"
+            display_id = direct_id or raw_id.split("/", 1)[1]
+            relabeled.append(
+                {
+                    **row,
+                    "displayName": f"{glm_display_name(display_id)} · OmniRoute",
+                    "groupLabel": "GLM",
+                    **({} if lane_already_stamped else {"accessLane": "omniroute"}),
+                }
+            )
+            continue
+        relabeled.append(row)
+    existing = {_picker_row_identity(row) for row in relabeled}
+    direct_rows = [
+        row for row in _glm_direct_picker_rows() if _picker_row_identity(row) not in existing
+    ]
+    omniroute_rows = [
+        row for row in _omniroute_glm_picker_rows() if _picker_row_identity(row) not in existing
+    ]
+    return [*relabeled, *omniroute_rows, *direct_rows]
 
 
 @dataclass
@@ -2876,13 +3020,20 @@ class HostProcess:
         (probed from the configured Codex binary on a miss). There is no
         curated fallback: no catalog means an honest empty answer.
 
-        :returns: The catalog listing, or ``None`` when unavailable.
+        The GLM lanes are discovered independently of the default catalogue:
+        a default-catalog failure, a ``None`` answer, or a confirmed-empty
+        listing must never stop a separately healthy direct/gateway GLM lane
+        from being queried — and never invent rows for it either. Each
+        lane's availability is its own provider's confirmation.
+
+        :returns: The catalog listing, or ``None`` when nothing is available.
         """
         from omnigent.harnesses.codex_native.app_server import (
             codex_launch_catalog,
-            resolve_native_codex_launch,
+            resolve_native_codex_catalog_launch,
         )
 
+        rows: list[dict[str, object]] | None = None
         try:
             from omnigent.server.o3_routing_review import o3_routing_review_enabled
 
@@ -2894,7 +3045,7 @@ class HostProcess:
                 ):
                     try:
                         launch = await asyncio.to_thread(
-                            resolve_native_codex_launch, model=None, access_lane=lane
+                            resolve_native_codex_catalog_launch, access_lane=lane
                         )
                         lane_rows = await codex_launch_catalog(launch=launch)
                     except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
@@ -2908,14 +3059,17 @@ class HostProcess:
                             preserve_default=not rows,
                         )
                     )
-                if not rows:
-                    return None
             else:
                 rows = await codex_launch_catalog()
         except Exception:  # noqa: BLE001 — no catalog, never a crash
             _logger.warning("Codex model catalog unavailable", exc_info=True)
-            return None
+            rows = None
         if rows is None:
+            # The default catalogue is unavailable; the GLM lanes are still
+            # queried on their own confirmations below.
+            rows = []
+        rows = _apply_glm_lane_rows(rows)
+        if not rows:
             return None
         routable = [row["id"] for row in rows if isinstance(row.get("id"), str) and row["id"]]
         return ModelOptionsResult(models=rows, routable_models=routable)

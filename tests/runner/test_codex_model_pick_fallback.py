@@ -104,7 +104,10 @@ async def codex_launch_harness(
     )
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        access_lane: str | None = None,
     ) -> codex_app.NativeCodexLaunch:
         return codex_app.NativeCodexLaunch(
             config_overrides=[],
@@ -415,7 +418,10 @@ async def test_generic_provider_fallback_rebuilds_model_config_overrides(
     pick = harness.snapshot["model_override"]
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        access_lane: str | None = None,
     ) -> codex_app.NativeCodexLaunch:
         del spec
         model = model or _PROVIDER_DEFAULT
@@ -518,7 +524,10 @@ async def test_subscription_fallback_pins_only_fresh_account_default(
     harness = codex_launch_harness
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        access_lane: str | None = None,
     ) -> codex_app.NativeCodexLaunch:
         del spec
         return codex_app.NativeCodexLaunch(
