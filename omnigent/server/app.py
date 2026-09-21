@@ -2686,6 +2686,10 @@ def create_app(
                 file_store=file_store,
                 artifact_store=artifact_store,
                 background_title_coordinator=background_title_coordinator,
+                # This call is server-internal: the advisor service itself
+                # seeds omnigent.advisor.* round labels, which the client
+                # reserved-label guard would (correctly) refuse from a client.
+                enforce_reserved_label_seed=False,
                 project_store=project_store,
             )
 
