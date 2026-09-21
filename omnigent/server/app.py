@@ -2660,7 +2660,7 @@ def create_app(
         and host_store is not None
     ):
 
-        def _model_advisor_session_launcher(
+        async def _model_advisor_session_launcher(
             body: Any,
             *,
             user_id: str | None,
