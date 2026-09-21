@@ -1597,6 +1597,150 @@ describe("NewChatLandingScreen", () => {
     });
   });
 
+  it("shows GLM OmniRoute and Z.AI Direct rows as distinct selectable lanes", async () => {
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                {
+                  id: "glm/glm-5.3",
+                  displayName: "GLM 5.3 · OmniRoute",
+                  accessLane: "omniroute" as const,
+                  groupLabel: "GLM",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "high", description: "High" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                },
+                {
+                  id: "glm-5.3",
+                  displayName: "GLM 5.3 · Z.AI Direct",
+                  accessLane: "glm-direct" as const,
+                  groupLabel: "GLM",
+                  defaultReasoningEffort: "max",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "high", description: "High" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_glm_lane" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    expect(screen.getByText("GLM")).toBeTruthy();
+    const directOption = screen.getByRole("option", { name: /^GLM 5\.3 · Z\.AI Direct/ });
+    expect(directOption).toHaveAttribute("data-access-lane", "glm-direct");
+    fireEvent.click(directOption);
+
+    // The lane row's own effort capabilities feed the effort selector, and a
+    // picked effort is SUBMITTED with the launch (not merely present in a
+    // fixture) and persisted for the next session.
+    openSelect("new-chat-landing-inline-effort");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Default",
+      "Low",
+      "High",
+      "Max",
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: "Max" }));
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("glm-5.3");
+    expect(body.reasoning_effort).toBe("max");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("glm-direct");
+    expect(JSON.parse(localStorage.getItem(HARNESS_OPTIONS_KEY) ?? "{}")).toMatchObject({
+      "codex-native": { model: "glm-5.3", accessLane: "glm-direct", effort: "max" },
+    });
+  });
+
+  it("restores a same-id GLM pick to its own lane after a remount", async () => {
+    // Both lanes serve the SAME wire id; only the lane tells them apart. A
+    // restore keyed on the bare id would land on the wrong lane.
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                {
+                  id: "glm-5.3",
+                  displayName: "GLM 5.3 · OmniRoute",
+                  accessLane: "omniroute" as const,
+                  groupLabel: "GLM",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "high", description: "High" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                },
+                {
+                  id: "glm-5.3",
+                  displayName: "GLM 5.3 · Z.AI Direct",
+                  accessLane: "glm-direct" as const,
+                  groupLabel: "GLM",
+                  defaultReasoningEffort: "max",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "high", description: "High" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_glm_same_id" }),
+    } as unknown as Response);
+    renderLanding();
+    selectAgent("a2");
+
+    openSelect("new-chat-landing-inline-model");
+    fireEvent.click(screen.getByRole("option", { name: "GLM 5.3 · Z.AI Direct" }));
+
+    openSelect("new-chat-landing-inline-effort");
+    fireEvent.click(screen.getByRole("option", { name: "Max" }));
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("glm-5.3");
+    expect(body.reasoning_effort).toBe("max");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("glm-direct");
+    // The submitted (model, lane, effort) combination is what persists for the
+    // next session.
+    expect(JSON.parse(localStorage.getItem(HARNESS_OPTIONS_KEY) ?? "{}")).toMatchObject({
+      "codex-native": { model: "glm-5.3", accessLane: "glm-direct", effort: "max" },
+    });
+
+    // Reload: the DIRECT row is the restored pick — the omniroute row sharing
+    // the id stays unchecked.
+    remountLanding();
+    selectAgent("a2");
+    openSelect("new-chat-landing-inline-model");
+    const reopened = screen.getAllByRole("option", { name: /GLM 5\.3 ·/ });
+    expect(
+      reopened.find((option) => option.getAttribute("data-access-lane") === "glm-direct"),
+    ).toHaveAttribute("data-checked", "true");
+    expect(
+      reopened.find((option) => option.getAttribute("data-access-lane") === "omniroute"),
+    ).toHaveAttribute("data-checked", "false");
+    closeMenu();
+  });
+
   it("omits model and effort launch overrides when both inline selectors are Default", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,

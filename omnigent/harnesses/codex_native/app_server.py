@@ -13,6 +13,7 @@ import shlex
 import socket
 import sys
 import tempfile
+import threading
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -26,6 +27,13 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from omnigent.models import model_catalog
+from omnigent.models.glm_model_vocabulary import (
+    GLM_DIRECT_API_KEY_ENV,
+    GLM_DIRECT_BASE_URL,
+    GLM_DIRECT_MODELS,
+    GLM_OMNIROUTE_TO_DIRECT,
+    glm_display_name,
+)
 from omnigent.util.json_types import JsonObject as _JsonObject
 
 if TYPE_CHECKING:
@@ -1192,6 +1200,263 @@ async def _codex_launch_catalog(
 
     read = model_catalog_store.reprobe_catalog if reprobe else model_catalog_store.ensure_catalog
     return await read("codex-native", fingerprint, _probe)
+
+
+_ZAI_DIRECT_MODELS_TTL_SECONDS = 600
+_zai_direct_model_cache: TTLCache[str, tuple[_JsonObject, ...]] = TTLCache(
+    maxsize=8,
+    ttl=_ZAI_DIRECT_MODELS_TTL_SECONDS,
+)
+_zai_direct_cache_lock = threading.Lock()
+
+_OMNIROUTE_MODELS_TTL_SECONDS = 600
+_omniroute_glm_model_cache: TTLCache[str, tuple[_JsonObject, ...]] = TTLCache(
+    maxsize=8,
+    ttl=_OMNIROUTE_MODELS_TTL_SECONDS,
+)
+_omniroute_cache_lock = threading.Lock()
+
+
+def _credential_generation(secret: str) -> str:
+    """A stable, non-secret fingerprint of a credential for cache identity.
+
+    Cache entries must not outlive the credential they were fetched with, but
+    raw credentials must never appear in cache keys (or logs). A truncated
+    SHA-256 digest distinguishes rotated credentials without disclosing them.
+
+    :param secret: The raw credential value.
+    :returns: A short hex digest, e.g. ``"9f86d081884c7d65"``.
+    """
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+
+
+def _zai_direct_cache_key(api_key: str) -> str:
+    """Cache identity for one direct-lane connection: endpoint + credential."""
+    return f"direct|{GLM_DIRECT_BASE_URL}|{_credential_generation(api_key)}"
+
+
+def _omniroute_cache_key(base_url: str, token: str) -> str:
+    """Cache identity for one gateway connection: endpoint + credential."""
+    return f"omniroute|{base_url.rstrip('/')}|{_credential_generation(token)}"
+
+
+def _launch_bearer_token(launch: NativeCodexLaunch) -> str | None:
+    """Resolve a launch credential for a local, read-only model probe."""
+    for name in launch.env_passthrough:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value.removeprefix("Bearer ").strip()
+    for value in launch.credential_env.values():
+        if isinstance(value, str) and value.strip():
+            return value.removeprefix("Bearer ").strip()
+    return None
+
+
+def _omniroute_glm_rows_uncached(base_url: str, token: str) -> tuple[_JsonObject, ...]:
+    """Fetch the gateway's catalogue once and keep only known GLM routes."""
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    from omnigent.models.glm_model_vocabulary import (
+        GLM_OMNIROUTE_ROUTES,
+        GLM_OMNIROUTE_TO_DIRECT,
+        glm_display_name,
+    )
+
+    try:
+        request = Request(
+            base_url.rstrip("/") + "/models",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            method="GET",
+        )
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        _logger.debug("omniroute: GLM route discovery failed", exc_info=True)
+        return ()
+    entries = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(entries, list):
+        return ()
+    rows: list[_JsonObject] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        route_id = entry.get("id")
+        # Gateway route knowledge, not Direct eligibility: OmniRoute-only
+        # generations qualify here on the gateway's own confirmation.
+        if not isinstance(route_id, str) or route_id not in GLM_OMNIROUTE_ROUTES:
+            continue
+        direct_id = GLM_OMNIROUTE_TO_DIRECT.get(route_id)
+        capabilities = entry.get("capabilities")
+        tiers = entry.get("effort_tiers")
+        if not isinstance(tiers, list) and isinstance(capabilities, Mapping):
+            tiers = capabilities.get("effort_tiers")
+        supported = [
+            {"reasoningEffort": tier}
+            for tier in (tiers if isinstance(tiers, list) else [])
+            if isinstance(tier, str) and tier
+        ]
+        rows.append(
+            {
+                "id": route_id,
+                "model": route_id,
+                "displayName": glm_display_name(direct_id or route_id.split("/", 1)[1]),
+                **({"supportedReasoningEfforts": supported} if supported else {}),
+            }
+        )
+    return tuple(sorted(rows, key=lambda row: str(row["id"])))
+
+
+def omniroute_glm_catalog_rows() -> tuple[_JsonObject, ...]:
+    """
+    Provider-confirmed GLM route rows from the OmniRoute lane, TTL-cached.
+
+    Discovers the default launch's gateway endpoint and lists only the GLM
+    routes the vocabulary maps, so the picker's OmniRoute GLM entries always
+    correspond to routes the live gateway actually serves. The cache is keyed
+    by the resolved endpoint and a non-secret digest of the credential, so a
+    provider or credential change can never serve a previous connection's
+    rows; the current configuration is resolved *before* the cache is
+    consulted.
+
+    :returns: Bare catalog rows (id/model/displayName plus honest reasoning
+        efforts) for the OmniRoute GLM routes; empty when the default launch
+        does not route through OmniRoute or the gateway is unreachable.
+    """
+    try:
+        launch = resolve_native_codex_launch(model=None)
+    except Exception:  # noqa: BLE001 — no default shape means no OmniRoute rows
+        return ()
+    base_url = native_codex_launch_base_url(launch)
+    if not base_url:
+        return ()
+    omniroute_root = os.environ.get(
+        "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+    ).rstrip("/")
+    if omniroute_root.endswith("/v1"):
+        omniroute_root = omniroute_root.removesuffix("/v1")
+    if base_url.rstrip("/") != f"{omniroute_root}/v1":
+        return ()
+    token = _launch_bearer_token(launch) or os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+    if not token:
+        return ()
+    key = _omniroute_cache_key(base_url, token)
+    with _omniroute_cache_lock:
+        cached = _omniroute_glm_model_cache.get(key)
+        if cached is not None:
+            return cached
+        rows = _omniroute_glm_rows_uncached(base_url, token)
+        if rows:
+            _omniroute_glm_model_cache[key] = rows
+        return rows
+
+
+def _zai_direct_model_rows_uncached(api_key: str) -> tuple[_JsonObject, ...]:
+    """Fetch the direct provider's model catalogue once. Never raises."""
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    try:
+        request = Request(
+            GLM_DIRECT_BASE_URL.rstrip("/") + "/models",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        # Discovery is best-effort: a fetch failure hides the direct lane
+        # rather than inventing rows, and a launch against the lane still
+        # fails explicitly with the provider's own error.
+        _logger.debug("zai-direct: model discovery failed", exc_info=True)
+        return ()
+    if not isinstance(payload, Mapping):
+        return ()
+    # The live Z.ai catalogue is {"models": [{slug, ...}]}; tolerate the
+    # OpenAI-compatible {"data": [{"id", ...}]} spelling too.
+    raw_entries = payload.get("models")
+    if not isinstance(raw_entries, list):
+        raw_entries = payload.get("data")
+    entries = raw_entries
+    if not isinstance(entries, list):
+        return ()
+    rows: list[_JsonObject] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        model_id = entry.get("slug") or entry.get("id")
+        if not isinstance(model_id, str) or model_id not in GLM_DIRECT_MODELS:
+            continue
+        efforts = entry.get("supported_reasoning_levels")
+        supported: list[_JsonObject] = []
+        if isinstance(efforts, list):
+            for level in efforts:
+                if not isinstance(level, Mapping):
+                    continue
+                effort = level.get("effort") or level.get("level")
+                if isinstance(effort, str) and effort:
+                    supported.append(
+                        {
+                            "reasoningEffort": effort,
+                            **(
+                                {"description": level["description"]}
+                                if isinstance(level.get("description"), str)
+                                and level.get("description")
+                                else {}
+                            ),
+                        }
+                    )
+        default_effort = entry.get("default_reasoning_level")
+        rows.append(
+            {
+                "id": model_id,
+                "model": model_id,
+                "displayName": glm_display_name(model_id),
+                **(
+                    {"defaultReasoningEffort": default_effort}
+                    if isinstance(default_effort, str) and default_effort
+                    else {}
+                ),
+                **({"supportedReasoningEfforts": supported} if supported else {}),
+            }
+        )
+    return tuple(sorted(rows, key=lambda row: str(row["id"])))
+
+
+def zai_direct_glm_catalog_rows() -> tuple[_JsonObject, ...]:
+    """
+    Provider-confirmed GLM rows for the direct Z.ai lane, TTL-cached.
+
+    Requires ``ZAI_API_KEY`` in the environment; an absent key or a failed
+    fetch yields no rows, so the picker only ever offers the direct lane when
+    the direct provider itself confirms its models. The cache is keyed by the
+    endpoint and a non-secret digest of the credential — the key is checked
+    before the cache is consulted — so a rotated or replaced credential can
+    never serve a previous account's catalogue, and raw credentials never
+    appear in cache keys.
+
+    :returns: Bare catalog rows (id/model/displayName plus honest reasoning
+        efforts), never lane metadata — access-lane stamping belongs to the
+        host option shapers.
+    """
+    api_key = os.environ.get(GLM_DIRECT_API_KEY_ENV, "").strip()
+    if not api_key:
+        # A missing key hides the lane even when a previous connection's rows
+        # are still warm: rows are always attributable to the credential that
+        # fetched them.
+        return ()
+    key = _zai_direct_cache_key(api_key)
+    with _zai_direct_cache_lock:
+        cached = _zai_direct_model_cache.get(key)
+        if cached is not None:
+            return cached
+        rows = _zai_direct_model_rows_uncached(api_key)
+        if rows:
+            _zai_direct_model_cache[key] = rows
+        return rows
 
 
 async def codex_launch_catalog(
@@ -3046,6 +3311,7 @@ def _resolve_native_codex_access_lane(
     from omnigent.onboarding.provider_config import default_provider_for_harness, load_config
     from omnigent.stores.conversation_store import (
         CODEX_ACCESS_LANE_DIRECT,
+        CODEX_ACCESS_LANE_GLM_DIRECT,
         CODEX_ACCESS_LANE_OMNIROUTE,
     )
 
@@ -3074,6 +3340,44 @@ def _resolve_native_codex_access_lane(
                 provider="openai-codex-subscription",
                 provider_fallback=False,
             ),
+        )
+
+    if access_lane == CODEX_ACCESS_LANE_GLM_DIRECT:
+        # Accept both the provider-local spelling and the OmniRoute route
+        # spelling for the same model: the lane label, not the id spelling,
+        # is what keeps the two economic paths apart.
+        direct_model = GLM_OMNIROUTE_TO_DIRECT.get(model, model)
+        if direct_model not in GLM_DIRECT_MODELS:
+            raise OmnigentError(
+                f"Z.AI Direct does not serve model {model!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        api_key = os.environ.get(GLM_DIRECT_API_KEY_ENV, "").strip()
+        if not api_key:
+            raise OmnigentError(
+                f"Z.AI Direct is not configured: set {GLM_DIRECT_API_KEY_ENV} on the host",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        # A native Responses provider: current Codex speaks the direct
+        # Z.ai /api/v1 surface with wire_api="responses" and no adapter, so
+        # no compatibility proxy sits between Codex and the provider.
+        return NativeCodexLaunch(
+            config_overrides=_provider_codex_config_overrides(
+                model=direct_model,
+                base_url=GLM_DIRECT_BASE_URL,
+                env_key=GLM_DIRECT_API_KEY_ENV,
+                wire_api="responses",
+            ),
+            model=direct_model,
+            profile=None,
+            summary=f"Z.AI Direct lane (model={direct_model!r})",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=CODEX_ACCESS_LANE_GLM_DIRECT,
+                provider="z.ai",
+                provider_fallback=False,
+            ),
+            env_passthrough=(GLM_DIRECT_API_KEY_ENV,),
+            credential_env={GLM_DIRECT_API_KEY_ENV: api_key},
         )
 
     if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:
@@ -3132,6 +3436,154 @@ def _resolve_native_codex_access_lane(
                 provider=entry.name,
             ),
             env_passthrough=launch.env_passthrough,
+        )
+
+    raise OmnigentError(
+        f"Unsupported native Codex access lane {access_lane!r}.",
+        code=ErrorCode.INVALID_INPUT,
+    )
+
+
+def resolve_native_codex_catalog_launch(
+    *,
+    spec: AgentSpec | None = None,
+    access_lane: str | None = None,
+) -> NativeCodexLaunch:
+    """Resolve the ``model=None`` launch SHAPE a lane's catalogue is probed with.
+
+    Catalogue probes fingerprint the launch shape (:func:`codex_catalog_fingerprint`),
+    which is a ``model=None`` resolution so per-session picks never fragment
+    the shared catalog. :func:`resolve_native_codex_launch` deliberately
+    rejects ``model=None`` together with an ``access_lane`` — a session launch
+    on a lane must name its model — so callers that want a lane's CATALOG (the
+    runner's pick validation, the host's per-lane picker probe) must resolve
+    it through this function instead. The production launch guard stays
+    intact; this is the supported catalogue-discovery entry point, and it
+    fails closed per lane: a lane that cannot produce a launch shape raises
+    :class:`OmnigentError` rather than resolving a different provider.
+
+    :param spec: The session spec, when there is one, so its credential wins
+        over machine-level config exactly as at launch.
+    :param access_lane: The persisted lane whose catalogue is wanted, or
+        ``None`` for the default provider's shape.
+    :returns: The ``model=None`` launch shape for that lane's catalogue.
+    """
+    from omnigent.errors import ErrorCode, OmnigentError
+    from omnigent.onboarding.ambient import codex_auth_has_credential
+    from omnigent.onboarding.provider_config import default_provider_for_harness, load_config
+    from omnigent.stores.conversation_store import (
+        CODEX_ACCESS_LANE_DIRECT,
+        CODEX_ACCESS_LANE_GLM_DIRECT,
+        CODEX_ACCESS_LANE_OMNIROUTE,
+    )
+
+    if access_lane is None:
+        return resolve_native_codex_launch(model=None, spec=spec)
+
+    if access_lane == CODEX_ACCESS_LANE_DIRECT:
+        # The subscription catalogue is Codex's own login probed bare on its
+        # built-in provider: the same shape a logged-in direct launch uses,
+        # without a model pin.
+        auth_path = _codex_home_config_source_from_env() / "auth.json"
+        if not codex_auth_has_credential(auth_path):
+            raise OmnigentError(
+                "Codex Subscription — Direct is not authenticated",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        return NativeCodexLaunch(
+            config_overrides=['model_provider="openai"'],
+            model=None,
+            profile=None,
+            summary="Codex Subscription — Direct (catalogue)",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=CODEX_ACCESS_LANE_DIRECT,
+                provider="openai-codex-subscription",
+                provider_fallback=False,
+            ),
+        )
+
+    if access_lane == CODEX_ACCESS_LANE_GLM_DIRECT:
+        api_key = os.environ.get(GLM_DIRECT_API_KEY_ENV, "").strip()
+        if not api_key:
+            raise OmnigentError(
+                f"Z.AI Direct is not configured: set {GLM_DIRECT_API_KEY_ENV} on the host",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        return NativeCodexLaunch(
+            config_overrides=_provider_codex_config_overrides(
+                model=None,
+                base_url=GLM_DIRECT_BASE_URL,
+                env_key=GLM_DIRECT_API_KEY_ENV,
+                wire_api="responses",
+            ),
+            model=None,
+            profile=None,
+            summary="Z.AI Direct lane (catalogue)",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=CODEX_ACCESS_LANE_GLM_DIRECT,
+                provider="z.ai",
+                provider_fallback=False,
+            ),
+            env_passthrough=(GLM_DIRECT_API_KEY_ENV,),
+            credential_env={GLM_DIRECT_API_KEY_ENV: api_key},
+        )
+
+    if access_lane == CODEX_ACCESS_LANE_OMNIROUTE:
+        # The gateway catalogue comes from the same configured default a
+        # lane launch selects; without a model pin the provider keeps its
+        # own default model for the probe.
+        entry = default_provider_for_harness(load_config(), "codex")
+        if entry is not None:
+            launch = _codex_provider_launch(entry, None)
+            if launch is None:
+                raise OmnigentError(
+                    "OmniRoute lane unavailable",
+                    code=ErrorCode.HARNESS_NOT_CONFIGURED,
+                )
+            return NativeCodexLaunch(
+                config_overrides=launch.config_overrides,
+                model=launch.model,
+                profile=launch.profile,
+                summary=f"OmniRoute lane via provider {entry.name!r} (catalogue)",
+                trace_provenance=CodexTraceLaunchProvenance(
+                    access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
+                    provider=entry.name,
+                ),
+                env_passthrough=launch.env_passthrough,
+            )
+        from omnigent.server.o3_routing_review.omniroute import _codex_mcp_omniroute_key
+
+        o3_base = os.environ.get(
+            "OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128"
+        ).rstrip("/")
+        o3_key = (
+            os.environ.get("OMNIROUTE_O3_KEY", "").strip()
+            or _codex_mcp_omniroute_key(o3_base)
+            or ""
+        )
+        if o3_key.lower().startswith("bearer "):
+            o3_key = o3_key[7:].strip()
+        if not o3_key or not o3_base.startswith(("http://127.0.0.1:", "http://localhost:")):
+            raise OmnigentError(
+                "OmniRoute lane unavailable",
+                code=ErrorCode.HARNESS_NOT_CONFIGURED,
+            )
+        return NativeCodexLaunch(
+            config_overrides=_provider_codex_config_overrides(
+                model=None,
+                base_url=f"{o3_base}/v1",
+                env_key="OMNIROUTE_O3_KEY",
+                wire_api="responses",
+            ),
+            model=None,
+            profile=None,
+            summary="O3 OmniRoute lane (catalogue)",
+            trace_provenance=CodexTraceLaunchProvenance(
+                access_lane=CODEX_ACCESS_LANE_OMNIROUTE,
+                provider=O3_TRACE_PROVIDER_NAME,
+            ),
+            env_passthrough=("OMNIROUTE_O3_KEY",),
+            credential_env={"OMNIROUTE_O3_KEY": o3_key},
         )
 
     raise OmnigentError(

@@ -732,7 +732,7 @@ async def test_codex_native_title_keeps_loop_responsive_during_profile_resolutio
 
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.app_server.resolve_native_codex_launch",
-        lambda *, model, spec=None: NativeCodexLaunch([], model, "test-profile"),
+        lambda *, model, spec=None, access_lane=None: NativeCodexLaunch([], model, "test-profile"),
     )
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.app_server._find_codex_cli", lambda: "codex"
@@ -842,7 +842,9 @@ async def test_codex_native_title_uses_ephemeral_tool_free_exec(
     )
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.app_server.resolve_native_codex_launch",
-        lambda *, model, spec=None: NativeCodexLaunch(provider_overrides, model, None),
+        lambda *, model, spec=None, access_lane=None: NativeCodexLaunch(
+            provider_overrides, model, None
+        ),
     )
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.app_server._find_codex_cli",
@@ -974,7 +976,7 @@ async def test_codex_native_title_kills_process_when_cancelled(
 
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.app_server.resolve_native_codex_launch",
-        lambda *, model, spec=None: NativeCodexLaunch([], model, None),
+        lambda *, model, spec=None, access_lane=None: NativeCodexLaunch([], model, None),
     )
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.app_server._find_codex_cli",

@@ -3243,7 +3243,9 @@ export function NewChatLandingScreen() {
           ? findCodexOption(
               codexModelOptions,
               stored.model,
-              stored.accessLane === "omniroute" || stored.accessLane === "codex-direct"
+              stored.accessLane === "omniroute" ||
+                stored.accessLane === "codex-direct" ||
+                stored.accessLane === "glm-direct"
                 ? stored.accessLane
                 : null,
             )
