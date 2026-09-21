@@ -3932,6 +3932,7 @@ async def _auto_create_codex_terminal(
         codex_terminal_env,
         is_unreadable_thread_error,
         preload_codex_thread_for_resume,
+        resolve_native_codex_catalog_launch,
         resolve_native_codex_launch,
     )
     from omnigent.harnesses.codex_native.bridge import (
@@ -3998,10 +3999,12 @@ async def _auto_create_codex_terminal(
         try:
             # Validate against the session's own lane: a lane-bound session's
             # pick must be checked against that lane's catalogue, never the
-            # default provider's, or the lane would silently fall back.
+            # default provider's, or the lane would silently fall back. The
+            # catalogue SHAPE is a model=None resolution resolved through the
+            # supported catalogue-discovery resolver — the launch resolver
+            # rejects model=None on a lane, and this guard is deliberate.
             _catalog_launch = await asyncio.to_thread(
-                resolve_native_codex_launch,
-                model=None,
+                resolve_native_codex_catalog_launch,
                 spec=_launch_spec,
                 access_lane=launch_config.access_lane,
             )
@@ -4033,29 +4036,52 @@ async def _auto_create_codex_terminal(
                     _codex_catalog_was_stale = False
                     reachable = codex_reachable_model_slug(pick, fresh_rows)
             if reachable is None:
-                # Re-resolve so provider overrides cannot retain the old model.
-                # A failed probe permits fallback, but cannot retire the pick.
-                # Re-resolve within the same lane so provider overrides cannot
-                # retain the old model. A lane that cannot express a default
-                # (no explicit model) fails explicitly instead of silently
-                # routing through a different provider.
-                _codex_launch = resolve_native_codex_launch(
-                    model=unpinned_model,
-                    spec=_launch_spec,
-                    access_lane=launch_config.access_lane,
-                )
-                pick_to_reset = pick if fresh_rows else None
-                outcome = (
-                    "resetting the pick to Default after terminal launch"
-                    if pick_to_reset is not None
-                    else "keeping the pick because the catalog re-probe failed"
-                )
+                if launch_config.access_lane is None:
+                    # Re-resolve so provider overrides cannot retain the old
+                    # model. A failed probe permits fallback, but cannot
+                    # retire the pick.
+                    _codex_launch = resolve_native_codex_launch(
+                        model=unpinned_model,
+                        spec=_launch_spec,
+                    )
+                    pick_to_reset = pick if fresh_rows else None
+                    outcome = (
+                        "resetting the pick to Default after terminal launch"
+                        if pick_to_reset is not None
+                        else "keeping the pick because the catalog re-probe failed"
+                    )
+                elif fresh_rows:
+                    # Confirmed unsupported on THIS lane's current catalogue:
+                    # reset within the lane, to the lane catalogue's own
+                    # default row. A lane has no cross-provider default, and a
+                    # pinned pick is never reset to another provider, account
+                    # or effort on failure. Without a lane default row the
+                    # pick stays pinned and the provider's own launch error is
+                    # the honest outcome.
+                    lane_default = default_row(_codex_catalog or [])
+                    lane_default_id = (
+                        str(lane_default.get("id") or lane_default.get("model") or "") or None
+                        if lane_default is not None
+                        else None
+                    )
+                    if lane_default_id:
+                        _codex_launch = resolve_native_codex_launch(
+                            model=lane_default_id,
+                            spec=_launch_spec,
+                            access_lane=launch_config.access_lane,
+                        )
+                        pick_to_reset = pick
+                        outcome = f"resetting the pick to the lane default {lane_default_id!r}"
+                    else:
+                        outcome = "keeping the pick: the lane catalogue has no default row"
+                else:
+                    outcome = "keeping the pick because the catalog re-probe failed"
                 offered = ", ".join(
-                    str(row.get("id") or row.get("model") or "") for row in _codex_catalog
+                    str(row.get("id") or row.get("model") or "") for row in _codex_catalog or []
                 )
                 _logger.warning(
                     "codex-native: model pick %r for session %s is not in the provider's "
-                    "model list (it offers: %s); launching on the default and %s",
+                    "model list (it offers: %s); %s",
                     pick,
                     session_id,
                     offered,

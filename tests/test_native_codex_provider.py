@@ -11,6 +11,7 @@ parser; config + ambient are isolated so resolution is deterministic.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -1212,20 +1213,462 @@ def test_zai_direct_discovery_requires_credential(
     assert app_server.zai_direct_glm_catalog_rows() == ()
 
 
-def test_glm_lane_vocabulary_stays_paired_with_both_catalogues() -> None:
-    """A catalogue rebuild cannot drop the direct lane while keeping OmniRoute.
+def test_glm_lane_vocabulary_keeps_direct_eligibility_narrow() -> None:
+    """Gateway route knowledge is a superset of Direct eligibility, by design.
 
-    Every OmniRoute GLM route must name a direct model the vocabulary knows,
-    and every direct row must be reachable from a route — an asymmetric
-    vocabulary is what silently stranded the direct lane behind PR #171.
+    Every direct model must stay reachable from a gateway route (an asymmetric
+    mapped pair is what silently stranded the direct lane behind PR #171), but
+    the gateway vocabulary also carries OmniRoute-only generations: knowing a
+    route for display/qualification on the gateway lane never implies the
+    direct provider serves it.
     """
     from omnigent.models.glm_model_vocabulary import (
         GLM_DIRECT_MODELS,
+        GLM_OMNIROUTE_ROUTES,
         GLM_OMNIROUTE_TO_DIRECT,
     )
 
+    # Direct eligibility stays exactly the served pair.
+    assert {"glm-5.3", "glm-5.3-flash"} == GLM_DIRECT_MODELS
+    # Every direct model is reachable from a route, under the local spelling.
     assert set(GLM_OMNIROUTE_TO_DIRECT.values()) == GLM_DIRECT_MODELS
-    assert GLM_DIRECT_MODELS, "direct lane vanished from the vocabulary"
-    for route_id, direct_id in GLM_OMNIROUTE_TO_DIRECT.items():
+    # Gateway route knowledge is a strict superset: OmniRoute-only
+    # generations are known for the gateway lane and mapped to nothing.
+    assert set(GLM_OMNIROUTE_TO_DIRECT) < set(GLM_OMNIROUTE_ROUTES)
+    assert GLM_OMNIROUTE_ROUTES["glm/glm-4.6"] is None
+    for route_id, direct_id in GLM_OMNIROUTE_ROUTES.items():
         assert route_id.startswith("glm/")
-        assert route_id.split("/", 1)[1] == direct_id
+        if direct_id is not None:
+            assert route_id.split("/", 1)[1] == direct_id
+            assert direct_id in GLM_DIRECT_MODELS
+
+
+def test_lane_launch_guard_holds_for_every_lane(_isolated: Path) -> None:
+    """The production launch resolver rejects model=None on any lane.
+
+    Catalogue probes fingerprint a model-free launch SHAPE, which they must
+    obtain through :func:`resolve_native_codex_catalog_launch` — never by
+    calling the launch resolver with the invalid model=None+lane shape this
+    guard deliberately rejects (the exception-swallowing skip that audit item
+    D reproduced).
+    """
+    for lane in ("omniroute", "codex-direct", "glm-direct"):
+        with pytest.raises(OmnigentError, match="requires an explicit model"):
+            resolve_native_codex_launch(model=None, access_lane=lane)
+
+
+def test_catalog_launch_resolver_gives_the_direct_lane_a_model_free_shape(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The direct lane's catalogue shape carries the provider, never a pin."""
+    from omnigent.harnesses.codex_native.app_server import resolve_native_codex_catalog_launch
+
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-placeholder")
+
+    launch = resolve_native_codex_catalog_launch(access_lane="glm-direct")
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.model is None
+    assert launch.profile is None
+    assert 'base_url="https://api.z.ai/api/v1"' in joined
+    assert 'env_key="ZAI_API_KEY"' in joined
+    assert 'wire_api="responses"' in joined
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "glm-direct"
+    assert launch.trace_provenance.provider == "z.ai"
+    assert launch.trace_provenance.provider_fallback is False
+    # Secret-safe: the credential rides the env passthrough, never the shape.
+    assert launch.env_passthrough == ("ZAI_API_KEY",)
+    assert launch.credential_env == {"ZAI_API_KEY": "zai-test-placeholder"}
+    assert "zai-test-placeholder" not in joined
+    assert "zai-test-placeholder" not in launch.summary
+
+
+def test_catalog_launch_resolver_requires_the_lane_credential(_isolated: Path) -> None:
+    """An unconfigured lane fails its catalogue shape explicitly."""
+    from omnigent.harnesses.codex_native.app_server import resolve_native_codex_catalog_launch
+
+    with pytest.raises(OmnigentError, match=r"^Z\.AI Direct is not configured"):
+        resolve_native_codex_catalog_launch(access_lane="glm-direct")
+
+
+def test_catalog_launch_resolver_gives_omniroute_a_model_free_shape(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway catalogue shape pins the gateway, not a session model."""
+    from omnigent.harnesses.codex_native.app_server import resolve_native_codex_catalog_launch
+
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "omniroute-test-placeholder")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    launch = resolve_native_codex_catalog_launch(access_lane="omniroute")
+
+    joined = "\n".join(launch.config_overrides)
+    assert launch.model is None
+    assert 'base_url="http://127.0.0.1:20128/v1"' in joined
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "omniroute"
+    # Secret-safe: the token rides the env passthrough, never the overrides.
+    assert launch.env_passthrough == ("OMNIROUTE_O3_KEY",)
+    assert "omniroute-test-placeholder" not in joined
+    assert "omniroute-test-placeholder" not in launch.summary
+
+
+def test_catalog_launch_resolver_gives_codex_direct_a_model_free_shape(
+    _isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The subscription catalogue shape is Codex's own login, model-free."""
+    from omnigent.harnesses.codex_native.app_server import resolve_native_codex_catalog_launch
+
+    monkeypatch.setattr(
+        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: True
+    )
+
+    launch = resolve_native_codex_catalog_launch(access_lane="codex-direct")
+
+    assert launch.model is None
+    assert launch.config_overrides == ['model_provider="openai"']
+    assert launch.trace_provenance is not None
+    assert launch.trace_provenance.access_lane == "codex-direct"
+    assert launch.trace_provenance.provider_fallback is False
+
+
+def test_catalog_launch_resolver_with_no_lane_uses_the_default_shape(
+    _isolated: Path,
+) -> None:
+    """Without a lane the catalogue shape is the plain default resolution."""
+    from omnigent.harnesses.codex_native.app_server import resolve_native_codex_catalog_launch
+
+    _seed(
+        _isolated,
+        {
+            "production-gateway": {
+                "kind": "gateway",
+                "default": True,
+                "openai": {
+                    "base_url": "https://gateway.example.test/v1",
+                    "api_key": "test-placeholder",
+                },
+            }
+        },
+    )
+
+    launch = resolve_native_codex_catalog_launch()
+
+    assert launch.model is None
+    assert "gateway.example.test" in "\n".join(launch.config_overrides)
+
+
+def test_catalog_launch_resolver_rejects_unknown_lane(_isolated: Path) -> None:
+    from omnigent.harnesses.codex_native.app_server import resolve_native_codex_catalog_launch
+
+    with pytest.raises(OmnigentError, match="Unsupported native Codex access lane"):
+        resolve_native_codex_catalog_launch(access_lane="bogus-lane")
+
+
+# ---------------------------------------------------------------------------
+# GLM catalogue cache identity (audit item C): entries are scoped to the
+# connection that produced them — lane, endpoint, and a non-secret digest of
+# the credential/configuration — never to bare lane constants.
+# ---------------------------------------------------------------------------
+
+
+def _zai_http_payload(payload: dict[str, object]) -> object:
+    """A context-manager stand-in for urlopen() serving one JSON payload."""
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            import json as _json
+
+            return _json.dumps(payload).encode()
+
+    return _Response()
+
+
+@pytest.fixture()
+def _glm_cache_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fresh GLM caches and a clean env for every cache test."""
+    from omnigent.harnesses.codex_native import app_server
+
+    app_server._zai_direct_model_cache.clear()
+    app_server._omniroute_glm_model_cache.clear()
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.delenv("OMNIROUTE_O3_KEY", raising=False)
+    yield
+    app_server._zai_direct_model_cache.clear()
+    app_server._omniroute_glm_model_cache.clear()
+
+
+def test_zai_direct_cache_is_scoped_to_the_credential(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replaced account key re-fetches: account A's rows never serve B."""
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    fetches: list[str] = []
+    payloads = (
+        {"models": [{"slug": "glm-5.3"}]},
+        {"models": [{"slug": "glm-5.3-flash"}]},
+    )
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        fetches.append(str(request.get_header("Authorization")))
+        return _zai_http_payload(payloads[len(fetches) - 1])
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    monkeypatch.setenv("ZAI_API_KEY", "key-account-A")
+    rows_a = app_server.zai_direct_glm_catalog_rows()
+    assert [row["id"] for row in rows_a] == ["glm-5.3"]
+    # Warm cache: the same credential is served without another fetch.
+    assert app_server.zai_direct_glm_catalog_rows() == rows_a
+    assert len(fetches) == 1
+
+    monkeypatch.setenv("ZAI_API_KEY", "key-account-B")
+    rows_b = app_server.zai_direct_glm_catalog_rows()
+    assert [row["id"] for row in rows_b] == ["glm-5.3-flash"]
+    assert len(fetches) == 2, "a new credential must not replay account A's rows"
+
+
+def test_zai_direct_cache_hides_rows_without_a_key(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing the key hides the lane even with a warm cache, fetching nothing."""
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        return _zai_http_payload({"models": [{"slug": "glm-5.3"}]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ZAI_API_KEY", "key-account-A")
+    assert app_server.zai_direct_glm_catalog_rows()
+
+    monkeypatch.delenv("ZAI_API_KEY")
+    assert app_server.zai_direct_glm_catalog_rows() == ()
+
+
+def test_zai_direct_cache_refreshes_after_expiry(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An expired TTL entry re-fetches instead of serving stale rows."""
+    import urllib.request
+
+    from cachetools import TTLCache
+
+    from omnigent.harnesses.codex_native import app_server
+
+    fetches: list[int] = []
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        fetches.append(len(fetches))
+        return _zai_http_payload({"models": [{"slug": "glm-5.3"}]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ZAI_API_KEY", "key-account-A")
+    monkeypatch.setattr(app_server, "_zai_direct_model_cache", TTLCache(maxsize=8, ttl=0.05))
+
+    app_server.zai_direct_glm_catalog_rows()
+    app_server.zai_direct_glm_catalog_rows()
+    assert len(fetches) == 1
+    time.sleep(0.08)
+    app_server.zai_direct_glm_catalog_rows()
+    assert len(fetches) == 2, "an expired entry must refresh from the provider"
+
+
+def test_zai_direct_cache_single_flights_concurrent_access(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Racing readers on a cold cache pay exactly one provider fetch."""
+    import threading
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    fetch_lock = threading.Lock()
+    fetches: list[int] = []
+    first_arrived = threading.Event()
+    release = threading.Event()
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        with fetch_lock:
+            fetches.append(1)
+        first_arrived.set()
+        release.wait(timeout=5)
+        return _zai_http_payload({"models": [{"slug": "glm-5.3"}]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ZAI_API_KEY", "key-account-A")
+
+    results: list[tuple[object, ...]] = []
+    errors: list[BaseException] = []
+
+    def reader() -> None:
+        try:
+            results.append(app_server.zai_direct_glm_catalog_rows())
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=reader) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    # Deterministic single-flight: once the one fetch has started, every other
+    # reader either blocks on the cache lock or arrives after the cache is
+    # populated — either way exactly one provider fetch may happen.
+    assert first_arrived.wait(timeout=5)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert len(fetches) == 1, "concurrent readers must single-flight one fetch"
+    assert all(rows == results[0] for rows in results)
+
+
+def test_zai_direct_and_omniroute_cache_keys_never_carry_credentials(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cache keys hold credential digests, never raw secrets."""
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        return _zai_http_payload({"models": [{"slug": "glm-5.3"}]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ZAI_API_KEY", "zai-secret-do-not-leak")
+    app_server.zai_direct_glm_catalog_rows()
+
+    keys = list(app_server._zai_direct_model_cache.keys())
+    assert keys, "the direct catalogue must have been cached"
+    assert all("zai-secret-do-not-leak" not in key for key in keys)
+
+    # The OmniRoute cache shares the convention.
+    def omni_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        return _zai_http_payload({"data": [{"id": "glm/glm-5.3"}]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", omni_urlopen)
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "omniroute-secret-do-not-leak")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+    launch = app_server.resolve_native_codex_catalog_launch(access_lane="omniroute")
+    monkeypatch.setattr(app_server, "resolve_native_codex_launch", lambda *, model: launch)
+    app_server.omniroute_glm_catalog_rows()
+
+    omni_keys = list(app_server._omniroute_glm_model_cache.keys())
+    assert omni_keys, "the gateway catalogue must have been cached"
+    assert all("omniroute-secret-do-not-leak" not in key for key in omni_keys)
+    # And the digest is stable: the same credential maps to the same key.
+    assert app_server._omniroute_cache_key(
+        "http://x/v1", "tok"
+    ) == app_server._omniroute_cache_key("http://x/v1", "tok")
+    assert app_server._omniroute_cache_key(
+        "http://x/v1", "tok1"
+    ) != app_server._omniroute_cache_key("http://x/v1", "tok2")
+
+
+def test_omniroute_cache_is_resolved_against_the_current_configuration(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Endpoint/credential changes re-resolve before the cache is consulted."""
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    fetches: list[str] = []
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        auth = str(request.get_header("Authorization"))
+        fetches.append(auth)
+        return _zai_http_payload({"data": [{"id": "glm/glm-5.3"}]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    def launch_for_base(base: str) -> app_server.NativeCodexLaunch:
+        return app_server.NativeCodexLaunch(
+            config_overrides=app_server._provider_codex_config_overrides(
+                model=None,
+                base_url=f"{base}/v1",
+                env_key="OMNIROUTE_O3_KEY",
+                wire_api="responses",
+            ),
+            model=None,
+            profile=None,
+            summary="omniroute-catalogue",
+            env_passthrough=("OMNIROUTE_O3_KEY",),
+        )
+
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "token-one")
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: launch_for_base("http://127.0.0.1:20128"),
+    )
+    rows_one = app_server.omniroute_glm_catalog_rows()
+    assert rows_one
+    assert app_server.omniroute_glm_catalog_rows() == rows_one
+    assert len(fetches) == 1, "a warm, matching connection is served from cache"
+
+    # Same base URL, rotated credential: the token is re-read BEFORE the cache
+    # lookup, so the new connection re-fetches.
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "token-two")
+    app_server.omniroute_glm_catalog_rows()
+    assert len(fetches) == 2
+    assert fetches[-1].endswith("token-two")
+
+    # Changed gateway endpoint (a different provider/config generation):
+    # the current configuration is resolved again, not replayed from cache.
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: launch_for_base("http://127.0.0.1:20199"),
+    )
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20199")
+    app_server.omniroute_glm_catalog_rows()
+    assert len(fetches) == 3, "an endpoint change must not serve the old gateway's rows"
+
+
+def test_omniroute_rows_qualify_gateway_only_generations(
+    _isolated: Path, _glm_cache_isolated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gateway route knowledge, not Direct eligibility, filters OmniRoute rows.
+
+    An OmniRoute-only generation (e.g. glm-4.6) qualifies on the gateway lane
+    because the gateway serves it — without implying any Direct support.
+    """
+    import urllib.request
+
+    from omnigent.harnesses.codex_native import app_server
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> object:
+        return _zai_http_payload(
+            {
+                "data": [
+                    {"id": "glm/glm-5.3", "effort_tiers": ["high"]},
+                    {"id": "glm/glm-4.6"},
+                    {"id": "gpt-5.6"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    rows = app_server._omniroute_glm_rows_uncached("http://127.0.0.1:20128/v1", "tok")
+
+    assert [row["id"] for row in rows] == ["glm/glm-4.6", "glm/glm-5.3"]
+    by_id = {row["id"]: row for row in rows}
+    assert by_id["glm/glm-4.6"]["displayName"] == "GLM 4.6"
+    assert by_id["glm/glm-5.3"]["displayName"] == "GLM 5.3"
+    assert by_id["glm/glm-5.3"]["supportedReasoningEfforts"] == [{"reasoningEffort": "high"}]
+    # ...while the direct lane still refuses the gateway-only generation.
+    with pytest.raises(OmnigentError, match=r"^Z\.AI Direct does not serve model"):
+        resolve_native_codex_launch(model="glm/glm-4.6", access_lane="glm-direct")

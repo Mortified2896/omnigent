@@ -1097,6 +1097,20 @@ def _omniroute_glm_picker_rows() -> list[dict[str, object]]:
     return rows
 
 
+def _picker_row_identity(row: Mapping[str, object]) -> tuple[str, str]:
+    """The persisted identity of one picker row: its lane plus its model id.
+
+    The native option schema (``NativeModelOption``) represents no connection
+    id, so ``(accessLane, model)`` is the full identity a row carries: rows
+    that differ in either are different pickable choices. Identity must never
+    be the bare model id — a separately qualified Direct entry would then
+    disappear whenever another lane serves a model under the same id.
+    """
+    lane = row.get("accessLane")
+    model = row.get("model") or row.get("id")
+    return (str(lane) if lane is not None else "", str(model) if model is not None else "")
+
+
 def _apply_glm_lane_rows(
     rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -1106,12 +1120,17 @@ def _apply_glm_lane_rows(
     next to the direct lane's rows looking like an unlabeled duplicate. The
     direct rows come from the direct provider's own catalogue and the
     OmniRoute GLM rows from the gateway's catalogue; a lane is never offered
-    on the strength of the other lane's rows.
+    on the strength of the other lane's rows, and a confirmed row on one lane
+    is never suppressed by a same-id row on another.
     """
-    from omnigent.models.glm_model_vocabulary import GLM_OMNIROUTE_TO_DIRECT, glm_display_name
+    from omnigent.models.glm_model_vocabulary import (
+        GLM_OMNIROUTE_ROUTES,
+        GLM_OMNIROUTE_TO_DIRECT,
+        glm_display_name,
+    )
 
     has_laneless_glm = any(
-        (row.get("model") or row.get("id")) in GLM_OMNIROUTE_TO_DIRECT
+        (row.get("model") or row.get("id")) in GLM_OMNIROUTE_ROUTES
         and row.get("accessLane") is None
         for row in rows
     )
@@ -1121,28 +1140,31 @@ def _apply_glm_lane_rows(
         raw_id = row.get("model") or row.get("id")
         if (
             isinstance(raw_id, str)
-            and raw_id in GLM_OMNIROUTE_TO_DIRECT
+            and raw_id in GLM_OMNIROUTE_ROUTES
             and (
                 row.get("accessLane") == "omniroute"
                 or (row.get("accessLane") is None and omniroute_catalog)
             )
         ):
-            direct_id = GLM_OMNIROUTE_TO_DIRECT[raw_id]
+            direct_id = GLM_OMNIROUTE_TO_DIRECT.get(raw_id)
             lane_already_stamped = row.get("accessLane") == "omniroute"
+            display_id = direct_id or raw_id.split("/", 1)[1]
             relabeled.append(
                 {
                     **row,
-                    "displayName": f"{glm_display_name(direct_id)} · OmniRoute",
+                    "displayName": f"{glm_display_name(display_id)} · OmniRoute",
                     "groupLabel": "GLM",
                     **({} if lane_already_stamped else {"accessLane": "omniroute"}),
                 }
             )
             continue
         relabeled.append(row)
-    existing = {str(row.get("id")) for row in relabeled}
-    direct_rows = [row for row in _glm_direct_picker_rows() if str(row["id"]) not in existing]
+    existing = {_picker_row_identity(row) for row in relabeled}
+    direct_rows = [
+        row for row in _glm_direct_picker_rows() if _picker_row_identity(row) not in existing
+    ]
     omniroute_rows = [
-        row for row in _omniroute_glm_picker_rows() if str(row["id"]) not in existing
+        row for row in _omniroute_glm_picker_rows() if _picker_row_identity(row) not in existing
     ]
     return [*relabeled, *omniroute_rows, *direct_rows]
 
@@ -2998,13 +3020,20 @@ class HostProcess:
         (probed from the configured Codex binary on a miss). There is no
         curated fallback: no catalog means an honest empty answer.
 
-        :returns: The catalog listing, or ``None`` when unavailable.
+        The GLM lanes are discovered independently of the default catalogue:
+        a default-catalog failure, a ``None`` answer, or a confirmed-empty
+        listing must never stop a separately healthy direct/gateway GLM lane
+        from being queried — and never invent rows for it either. Each
+        lane's availability is its own provider's confirmation.
+
+        :returns: The catalog listing, or ``None`` when nothing is available.
         """
         from omnigent.harnesses.codex_native.app_server import (
             codex_launch_catalog,
-            resolve_native_codex_launch,
+            resolve_native_codex_catalog_launch,
         )
 
+        rows: list[dict[str, object]] | None = None
         try:
             from omnigent.server.o3_routing_review import o3_routing_review_enabled
 
@@ -3016,7 +3045,7 @@ class HostProcess:
                 ):
                     try:
                         launch = await asyncio.to_thread(
-                            resolve_native_codex_launch, model=None, access_lane=lane
+                            resolve_native_codex_catalog_launch, access_lane=lane
                         )
                         lane_rows = await codex_launch_catalog(launch=launch)
                     except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
@@ -3030,16 +3059,18 @@ class HostProcess:
                             preserve_default=not rows,
                         )
                     )
-                if not rows:
-                    return None
             else:
                 rows = await codex_launch_catalog()
         except Exception:  # noqa: BLE001 — no catalog, never a crash
             _logger.warning("Codex model catalog unavailable", exc_info=True)
-            return None
+            rows = None
         if rows is None:
-            return None
+            # The default catalogue is unavailable; the GLM lanes are still
+            # queried on their own confirmations below.
+            rows = []
         rows = _apply_glm_lane_rows(rows)
+        if not rows:
+            return None
         routable = [row["id"] for row in rows if isinstance(row.get("id"), str) and row["id"]]
         return ModelOptionsResult(models=rows, routable_models=routable)
 

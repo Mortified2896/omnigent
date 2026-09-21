@@ -244,20 +244,29 @@ async def test_access_lane_requires_model_override(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_override", "spelling"),
+    [
+        pytest.param("glm-5.3", "provider-local", id="provider-local"),
+        pytest.param("glm/glm-5.3", "legacy-qualified", id="legacy-qualified"),
+    ],
+)
 async def test_glm_direct_lane_is_an_allowed_persisted_choice(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, model_override: str, spelling: str
 ) -> None:
-    """A stored glm-direct lane label survives the snapshot round-trip."""
+    """A stored glm-direct lane survives the snapshot round-trip in both id
+    spellings the direct lane accepts: the provider-local id and the legacy
+    OmniRoute-qualified alias for the same model."""
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
     snapshot = {
         "workspace": "/tmp/repo",
-        "model_override": "glm-5.3",
+        "model_override": model_override,
         "labels": {"omnigent.access_lane": "glm-direct"},
     }
 
     cfg = await _run(_Client(_Resp(200, snapshot)))
 
-    assert cfg.model_override == "glm-5.3"
+    assert cfg.model_override == model_override
     assert cfg.access_lane == "glm-direct"
 
 

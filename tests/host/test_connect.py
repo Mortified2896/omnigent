@@ -5768,10 +5768,10 @@ async def test_o3_catalog_preserves_explicit_lanes_and_native_efforts(monkeypatc
     )
     monkeypatch.setattr(
         app_server,
-        "resolve_native_codex_launch",
-        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
             config_overrides=[],
-            model=model,
+            model=None,
             profile=None,
             summary=access_lane,
         ),
@@ -5811,10 +5811,10 @@ async def test_glm_rows_get_explicit_omniroute_and_direct_lanes(monkeypatch) -> 
     )
     monkeypatch.setattr(
         app_server,
-        "resolve_native_codex_launch",
-        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
             config_overrides=[],
-            model=model,
+            model=None,
             profile=None,
             summary=access_lane,
         ),
@@ -5897,10 +5897,10 @@ async def test_direct_lane_rows_survive_an_omniroute_catalog_without_glm(monkeyp
     )
     monkeypatch.setattr(
         app_server,
-        "resolve_native_codex_launch",
-        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
             config_overrides=[],
-            model=model,
+            model=None,
             profile=None,
             summary=access_lane,
         ),
@@ -5943,10 +5943,10 @@ async def test_direct_lane_rows_absent_without_provider_confirmation(monkeypatch
     )
     monkeypatch.setattr(
         app_server,
-        "resolve_native_codex_launch",
-        lambda *, model, access_lane: app_server.NativeCodexLaunch(
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
             config_overrides=[],
-            model=model,
+            model=None,
             profile=None,
             summary=access_lane,
         ),
@@ -6018,3 +6018,205 @@ async def test_non_o3_picker_appends_both_glm_lanes_from_discovery(monkeypatch) 
     # The plain GPT rows keep the default-provider presentation untouched.
     assert result.models[0]["displayName"] == "GPT-5.6 Luna"
     assert result.models[0].get("accessLane") is None
+
+
+async def test_o3_lane_catalog_failure_does_not_hide_the_other_lane(monkeypatch) -> None:
+    """Each O3 lane's rows are aggregated independently of the other's health."""
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=None,
+            profile=None,
+            summary=access_lane,
+        ),
+    )
+
+    async def catalog(*, launch):
+        if launch.summary == "omniroute":
+            raise RuntimeError("gateway down")
+        return [{"id": "gpt-5.5", "isDefault": True}]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+
+    result = await _make_host_process()._probed_codex_model_options()
+    assert result is not None
+    assert [row["accessLane"] for row in result.models] == ["codex-direct"]
+    assert not [row for row in result.models if row.get("accessLane") == "omniroute"]
+
+    async def catalog_reversed(*, launch):
+        if launch.summary == "codex-direct":
+            raise RuntimeError("subscription unavailable")
+        return [{"id": "glm/glm-5.3", "isDefault": True}]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog_reversed)
+
+    result = await _make_host_process()._probed_codex_model_options()
+    assert result is not None
+    assert [row["accessLane"] for row in result.models] == ["omniroute"]
+    assert not [row for row in result.models if row.get("accessLane") == "codex-direct"]
+
+
+async def test_default_catalog_failures_do_not_hide_a_healthy_glm_lane(monkeypatch) -> None:
+    """None/raise/empty default catalogues still leave the GLM lanes queried.
+
+    The audited early-return bug: every default-catalog failure mode used to
+    return before the lane discovery ran, so a healthy Direct lane vanished
+    whenever the default catalogue was unavailable. Each failure mode must
+    still consult the lanes and answer with whatever a lane confirms.
+    """
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: False
+    )
+
+    async def catalog_fail(*, codex_path=None, launch=None):
+        return None
+
+    async def catalog_raise(*, codex_path=None, launch=None):
+        raise RuntimeError("probe dead")
+
+    async def catalog_empty(*, codex_path=None, launch=None):
+        return []
+
+    direct_rows = (
+        {"id": "glm-5.3", "model": "glm-5.3", "displayName": "GLM 5.3"},
+        {"id": "glm-5.3-flash", "model": "glm-5.3-flash", "displayName": "GLM 5.3 Flash"},
+    )
+    for scenario, catalog in (
+        ("none", catalog_fail),
+        ("raise", catalog_raise),
+        ("empty", catalog_empty),
+    ):
+        discovery_calls = []
+
+        def direct_discovery(rows=direct_rows, calls=discovery_calls):
+            calls.append(1)
+            return rows
+
+        monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+        monkeypatch.setattr(app_server, "zai_direct_glm_catalog_rows", direct_discovery)
+
+        result = await _make_host_process()._probed_codex_model_options()
+
+        assert len(discovery_calls) == 1, f"{scenario}: the direct lane was never queried"
+        assert result is not None, f"{scenario}: a healthy direct lane must not vanish"
+        assert [row["accessLane"] for row in result.models] == ["glm-direct", "glm-direct"]
+        assert [row["displayName"] for row in result.models] == [
+            "GLM 5.3 · Z.AI Direct",
+            "GLM 5.3 Flash · Z.AI Direct",
+        ]
+
+    # Control: with nothing available anywhere the honest answer is still None.
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog_fail)
+    monkeypatch.setattr(app_server, "zai_direct_glm_catalog_rows", lambda: ())
+    monkeypatch.setattr(app_server, "omniroute_glm_catalog_rows", lambda: ())
+    assert await _make_host_process()._probed_codex_model_options() is None
+
+
+async def test_probe_resolves_lanes_through_the_catalogue_resolver(monkeypatch) -> None:
+    """The probe never touches the launch resolver's model=None+lane guard.
+
+    The launch resolver rejects model=None together with a lane (the production
+    guard); the probe must obtain each lane's catalogue shape through the
+    supported catalogue resolver instead of depending on an exception path.
+    """
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: True
+    )
+
+    def guarded_launch_resolver(**kwargs):
+        # pytest.fail raises BaseException: the probe's per-lane
+        # `except Exception` cannot swallow it, so a regression back to the
+        # guarded resolver fails loudly instead of returning an empty probe.
+        # The lane-FREE default shape (model=None, no lane) is legitimate —
+        # the gateway rows' own discovery resolves it — so only the guarded
+        # model=None+lane combination fails here.
+        if kwargs.get("access_lane") is not None:
+            pytest.fail("the probe must not resolve a lane shape through the launch guard")
+        raise RuntimeError("no default launch shape in this test")
+
+    monkeypatch.setattr(app_server, "resolve_native_codex_launch", guarded_launch_resolver)
+
+    async def catalog(*, launch):
+        return [{"id": f"row-{launch.summary}", "isDefault": True}]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=None,
+            profile=None,
+            summary=access_lane,
+        ),
+    )
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    assert [row["accessLane"] for row in result.models] == ["omniroute", "codex-direct"]
+
+
+async def test_glm_same_model_id_on_both_lanes_stays_distinct(monkeypatch) -> None:
+    """A same-id row on one lane never suppresses the other lane's row.
+
+    Restores PR #171's equal-ID/different-lane host invariant: identity is
+    (lane, model), not the bare model id.
+    """
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: False
+    )
+
+    async def catalog(*, codex_path=None, launch=None):
+        # An omniroute-stamped row served under the PROVIDER-LOCAL spelling —
+        # the same id spelling the direct lane uses, e.g. a lane-shaped row
+        # from the O3 lane shaper.
+        return [
+            {
+                "id": "glm-5.3",
+                "model": "glm-5.3",
+                "displayName": "GLM 5.3 · OmniRoute",
+                "accessLane": "omniroute",
+                "groupLabel": "GLM",
+            }
+        ]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(
+        app_server,
+        "omniroute_glm_catalog_rows",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        app_server,
+        "zai_direct_glm_catalog_rows",
+        lambda: ({"id": "glm-5.3", "model": "glm-5.3", "displayName": "GLM 5.3"},),
+    )
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    glm_rows = [row for row in result.models if row.get("groupLabel") == "GLM"]
+    assert [(row["id"], row["accessLane"]) for row in glm_rows] == [
+        ("glm-5.3", "omniroute"),
+        ("glm-5.3", "glm-direct"),
+    ]
+    assert [row["displayName"] for row in glm_rows] == [
+        "GLM 5.3 · OmniRoute",
+        "GLM 5.3 · Z.AI Direct",
+    ]
+    # Both (id, lane) identities are pickable and listed as routable.
+    assert result.routable_models.count("glm-5.3") == 2
