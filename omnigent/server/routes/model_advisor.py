@@ -48,6 +48,18 @@ class CreateRoundRequest(BaseModel):
     profile: str = "default"
     task: str = Field(min_length=1, max_length=200_000)
     human_candidate_id: str
+    # A browser-generated key is reused across retries/double-clicks. The
+    # service binds it to the owner, host, prompt and frozen settings before
+    # deriving the durable round id; it is not an authorization credential.
+    submission_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    # Draft settings are explicitly frozen for this round. Saved defaults are
+    # still the fallback for older clients that omit this field.
+    preferences: AdvisorPreferencesBody | None = None
 
 
 class SessionLaunchRequest(BaseModel):
@@ -169,6 +181,10 @@ def create_model_advisor_router(
             body.profile,
             task=body.task,
             human_candidate_id=body.human_candidate_id,
+            submission_key=body.submission_key,
+            preferences=(
+                _preferences_from_body(body.preferences) if body.preferences is not None else None
+            ),
         )
 
     @router.get("/model-advisor/rounds/{round_id}")

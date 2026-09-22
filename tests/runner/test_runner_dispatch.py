@@ -1912,6 +1912,24 @@ def test_build_spawn_env_applies_model_override(
     assert overridden["HARNESS_CLAUDE_SDK_MODEL"] == "claude-sonnet-4-6"
 
 
+def test_build_spawn_env_carries_server_selected_codex_access_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Advisor provider lanes reach the Codex child before it is spawned."""
+    monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
+    spec = AgentSpec(
+        spec_version=1,
+        name="x",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "codex"}),
+    )
+
+    env = _build_spawn_env_from_spec(spec, "codex", access_lane="glm-direct")
+
+    assert env is not None
+    assert env["HARNESS_CODEX_ACCESS_LANE"] == "glm-direct"
+
+
 def test_build_spawn_env_routes_hermes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The dispatch chain routes ``hermes`` to its builder.
 

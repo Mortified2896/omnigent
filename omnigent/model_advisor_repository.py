@@ -172,10 +172,17 @@ class AdvisorRepository:
         except IntegrityError as exc:
             raise AdvisorConflict("Preferences created concurrently; reload first") from exc
 
-    def reserve_round(self, frozen: FrozenRound) -> Claim:
+    def reserve_round(self, frozen: FrozenRound, *, submission_key: str | None = None) -> Claim:
         """Atomic create-before-advisor-call. Duplicate submissions receive no claim."""
         key = _key(frozen.owner_id, frozen.host_id, "round", frozen.round_id)
-        payload = {"fingerprint": frozen.fingerprint, "frozen": frozen.to_payload()}
+        payload = {
+            "fingerprint": frozen.fingerprint,
+            "frozen": frozen.to_payload(),
+            # This is audit metadata only. The durable key remains scoped by
+            # owner + host + round id, and the frozen fingerprint is what
+            # prevents a same-id request from changing the reservation.
+            "submission_key": submission_key,
+        }
         try:
             with self.engine.begin() as connection:
                 connection.execute(

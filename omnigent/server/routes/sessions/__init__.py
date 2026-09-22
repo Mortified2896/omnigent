@@ -797,6 +797,7 @@ def create_sessions_router(
     host_registry: HostRegistry | None = None,
     project_store: ProjectStore | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
+    internal_session_hooks: dict[str, Callable[..., Any]] | None = None,
 ) -> APIRouter:
     """
     Factory that builds the sessions router.
@@ -897,6 +898,7 @@ def create_sessions_router(
         host_registry=host_registry,
         project_store=project_store,
         background_title_coordinator=background_title_coordinator,
+        internal_session_hooks=internal_session_hooks,
     )
 
     register_hooks_routes(
@@ -967,6 +969,7 @@ def create_sessions_router(
         host_registry=host_registry,
         background_title_coordinator=background_title_coordinator,
         runner_tunnel_tokens=runner_tunnel_tokens,
+        internal_event_hooks=internal_session_hooks,
     )
 
     register_permissions_routes(

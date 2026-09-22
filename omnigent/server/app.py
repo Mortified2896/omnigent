@@ -2570,6 +2570,10 @@ def create_app(
         )
         return {"user_id": user_id, "is_admin": is_admin}
 
+    # Server-internal session workflows use these closures to enter the same
+    # host-binding and event-dispatch paths as public session creation. They
+    # are never exposed as routes or accepted from browser input.
+    model_advisor_session_hooks: dict[str, Callable[..., Any]] = {}
     app.include_router(
         create_sessions_router(
             conversation_store,
@@ -2603,6 +2607,7 @@ def create_app(
             # files a session into a project (owner-private membership).
             project_store=project_store,
             background_title_coordinator=background_title_coordinator,
+            internal_session_hooks=model_advisor_session_hooks,
         ),
         prefix="/v1",
         tags=["sessions"],
@@ -2691,7 +2696,46 @@ def create_app(
                 # reserved-label guard would (correctly) refuse from a client.
                 enforce_reserved_label_seed=False,
                 project_store=project_store,
+                # The first advisor task must be submitted after the host
+                # runner is bound. Otherwise the generic create helper quite
+                # correctly stores initial_items as history-only seed data,
+                # and no executor turn ever starts.
+                defer_initial_items=True,
             )
+
+            if request is None:
+                raise RuntimeError("Model Advisor executor launch requires an application request")
+
+            # Match the public create route's ownership grant before using its
+            # host-launch authorization closure.
+            if permission_store is not None and user_id is not None:
+                from omnigent.server.auth import LEVEL_OWNER
+
+                await asyncio.to_thread(permission_store.ensure_user, user_id)
+                await asyncio.to_thread(permission_store.grant, user_id, session.id, LEVEL_OWNER)
+
+            bind_and_launch = model_advisor_session_hooks.get("bind_and_launch_on_caller_host")
+            if not callable(bind_and_launch):
+                raise RuntimeError("session host-launch path is not wired")
+            await bind_and_launch(
+                request,
+                user_id=user_id,
+                session_id=session.id,
+                host_id=body.host_id,
+                workspace=session.workspace,
+                harness=session.harness,
+            )
+
+            # Enter the real POST /sessions/{id}/events implementation. It
+            # performs policy evaluation, runner rendezvous, session-init,
+            # relay readiness, persistence, and exactly one runner forward.
+            post_event = model_advisor_session_hooks.get("post_event")
+            if not callable(post_event):
+                raise RuntimeError("session event-dispatch path is not wired")
+            if len(body.initial_items) != 1:
+                raise RuntimeError("Model Advisor executor launch requires one initial task")
+            await post_event(request, session.id, body.initial_items[0])
+
             # The advisor service expects the created session snapshot, not
             # the (session, project-warnings) tuple the public route unpacks.
             return session

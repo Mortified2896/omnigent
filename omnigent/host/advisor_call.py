@@ -5,14 +5,15 @@ request built by ``model_advisor_core.build_advisor_request`` and must answer
 with a strict JSON selection. Tool prevention lives at the transport boundary,
 not in the prompt:
 
-- a throwaway private ``CODEX_HOME`` means no ``mcp_servers.*`` and no user
-  hooks/rules can be inherited;
+- a throwaway private ``CODEX_HOME`` plus ``--ignore-user-config`` means no
+  ``mcp_servers.*`` or user hooks/rules can be inherited;
 - the launch's lane ``config_overrides`` bind the exact provider/account the
   user authorized (``codex-direct`` login or ``glm-direct`` key) — an
   ``omniroute`` gateway is only usable when explicitly resolved for it;
-- explicit config disables every bundled tool surface (shell, unified exec,
-  web search, apps, browser/computer use, image generation, multi-agent,
-  plugins, tool search) and ``--sandbox read-only`` plus
+- explicit CLI feature disables and compatibility config overrides disable
+  every bundled tool surface (shell, unified exec, web search, apps,
+  browser/computer use, image generation, multi-agent, plugins, tool search,
+  image viewing, sleep, and code mode) and ``--sandbox read-only`` plus
   ``approval_policy="never"`` leave nothing to approve with;
 - ``--output-schema`` constrains the final message shape on the transport
   itself; the server still re-validates the JSON against the frozen pool
@@ -44,6 +45,38 @@ ADVISOR_INFERENCE_TIMEOUT_SECONDS = 90.0
 # --strict-config here).
 ADVISOR_MAX_OUTPUT_TOKENS = 2000
 
+_NO_TOOLS_FEATURES = (
+    "apps",
+    "auth_elicitation",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "code_mode",
+    "code_mode_host",
+    "computer_use",
+    "enable_mcp_apps",
+    "hooks",
+    "image_generation",
+    "in_app_browser",
+    "in_app_local_automation",
+    "multi_agent",
+    "multi_agent_v2",
+    "plugin_sharing",
+    "plugins",
+    "remote_plugin",
+    "request_permissions_tool",
+    "shell_tool",
+    "skill_search",
+    "sleep_tool",
+    "tool_search",
+    "tool_suggest",
+    "unified_exec",
+    "view_image",
+)
+
+# Older Codex binaries do not expose all feature switches above. Keep the
+# compatibility config overrides; current binaries receive the stronger
+# ``--disable`` form below and are inspected in release acceptance.
 _NO_TOOLS_CONFIG_OVERRIDES = (
     'approval_policy="never"',
     "features.unified_exec=false",
@@ -189,7 +222,6 @@ async def generate_advisor_selection(
     from omnigent.inner.codex_executor import (
         _codex_home_config_source_from_env,
         _populate_codex_home_config,
-        materialize_codex_provider_config,
     )
 
     prompt = build_advisor_prompt(request)
@@ -218,16 +250,20 @@ async def generate_advisor_selection(
             env_passthrough=launch.env_passthrough,
             credential_env=launch.credential_env,
         )
-        native_server.config_overrides = materialize_codex_provider_config(
-            codex_home,
-            native_server.config_overrides,
-        )
+        # Keep generated provider tables on the CLI. ``--ignore-user-config``
+        # intentionally prevents Codex from reading even this isolated
+        # private home, so moving ``model_providers.*`` into config.toml here
+        # would make an explicit glm-direct launch fail with "model provider
+        # omnigent_provider not found". Direct lanes use only an environment
+        # variable name in the provider table; no credential is exposed in
+        # argv, and the isolated home still contains no inherited tools/rules.
         output_schema_path = temp_root / "advisor-output-schema.json"
         output_schema_path.write_text(json.dumps(_OUTPUT_SCHEMA))
         output_path = temp_root / "selection.json"
         args = [
             "exec",
             "--ephemeral",
+            "--ignore-user-config",
             "--ignore-rules",
             "--skip-git-repo-check",
             "--sandbox",
@@ -240,6 +276,8 @@ async def generate_advisor_selection(
             "never",
             "--json",
         ]
+        for feature in _NO_TOOLS_FEATURES:
+            args.extend(("--disable", feature))
         for override in native_server.config_overrides:
             args.extend(("--config", override))
         for override in _NO_TOOLS_CONFIG_OVERRIDES:

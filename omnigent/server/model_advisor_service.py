@@ -262,7 +262,16 @@ class ModelAdvisorService:
             )
         models = result.get("models")
         rows = [row for row in models if isinstance(row, dict)] if isinstance(models, list) else []
-        catalog = build_host_catalog(rows)
+        try:
+            catalog = build_host_catalog(rows)
+        except AdvisorContractError as exc:
+            # An authenticated host can be online while no qualified direct
+            # lane is currently available. Surface that state to the UI as a
+            # visible catalog-unavailable response, never as a server 500.
+            raise HTTPException(
+                status_code=422,
+                detail="No qualified concrete models are available for the advisor on this host",
+            ) from exc
         if not catalog.options:
             raise HTTPException(
                 status_code=422,
@@ -343,8 +352,18 @@ class ModelAdvisorService:
     # ── rounds ───────────────────────────────────────────────
 
     async def _preferences_for_round(
-        self, owner: str, host_id: str, profile: str
-    ) -> tuple[Record, AdvisorPreferences]:
+        self,
+        owner: str,
+        host_id: str,
+        profile: str,
+        explicit: AdvisorPreferences | None = None,
+    ) -> tuple[Record | None, AdvisorPreferences]:
+        if explicit is not None:
+            if not explicit.enabled:
+                raise HTTPException(
+                    status_code=422, detail="The model advisor is disabled in round settings"
+                )
+            return None, explicit
         record = await asyncio.to_thread(self.repository.load_preferences, owner, host_id, profile)
         if record is None:
             raise HTTPException(
@@ -371,28 +390,62 @@ class ModelAdvisorService:
         *,
         task: str,
         human_candidate_id: str,
+        submission_key: str | None = None,
+        preferences: AdvisorPreferences | None = None,
     ) -> dict[str, Any]:
         owner = self.owner_id(user_id)
         self._validated_profile(profile)
         self._authorized_host(user_id, host_id)
-        prefs_record, preferences = await self._preferences_for_round(owner, host_id, profile)
+        prefs_record, frozen_preferences = await self._preferences_for_round(
+            owner, host_id, profile, explicit=preferences
+        )
         if not isinstance(task, str) or not task.strip() or len(task) > 200_000:
             raise HTTPException(status_code=422, detail="A nonempty initial task is required")
-        if human_candidate_id not in preferences.allowed_candidate_ids:
+        if human_candidate_id not in frozen_preferences.allowed_candidate_ids:
             raise HTTPException(
                 status_code=422,
-                detail="Your pick must be one of the saved allowed answers",
+                detail="Your pick must be one of the allowed answers frozen for this round",
             )
+
+        # The round id is deterministic for one submission identity. The
+        # browser reuses submission_key across network retries; the server
+        # still binds it to every meaningful input so a reused key cannot join
+        # a different prompt/settings snapshot. An omitted key keeps older
+        # clients idempotent by using the same content-derived identity.
+        identity_key = submission_key or "implicit"
+        submission_identity = document_digest(
+            {
+                "owner": owner,
+                "host": host_id,
+                "profile": profile,
+                "task": task,
+                "human_candidate_id": human_candidate_id,
+                "preferences": frozen_preferences.to_payload(),
+                "submission_key": identity_key,
+            }
+        )
+        round_id = "adviseround-" + submission_identity
+
+        # Avoid a second catalog request or background call on an exact retry.
+        # The durable owner/host scope is checked by the repository itself.
+        existing = await asyncio.to_thread(self.repository.load_round, owner, host_id, round_id)
+        if existing is not None:
+            return await self.load_round(user_id, host_id, round_id)
+
         catalog = await self.load_catalog(user_id, host_id)
-        round_id = "adviseround-" + secrets.token_hex(8)
+        settings_revision = (
+            f"prefs-v{prefs_record.version}-{prefs_record.etag}"
+            if prefs_record is not None
+            else "round-draft-" + document_digest(frozen_preferences.to_payload())
+        )
         try:
             frozen = freeze_round(
                 owner_id=owner,
                 host_id=host_id,
                 round_id=round_id,
-                settings_revision=f"prefs-v{prefs_record.version}-{prefs_record.etag}",
+                settings_revision=settings_revision,
                 task=task,
-                preferences=preferences,
+                preferences=frozen_preferences,
                 catalog=catalog.pool,
                 human_candidate_id=human_candidate_id,
             )
@@ -401,9 +454,23 @@ class ModelAdvisorService:
             # round is rejected explicitly, never silently re-chosen.
             raise HTTPException(
                 status_code=422,
-                detail=f"Saved advisor settings no longer match the live catalog: {exc}",
+                detail=f"Advisor settings no longer match the live catalog: {exc}",
             ) from exc
-        claim = await asyncio.to_thread(self.repository.reserve_round, frozen)
+        try:
+            claim = await asyncio.to_thread(
+                self.repository.reserve_round, frozen, submission_key=submission_key
+            )
+        except AdvisorConflict as exc:
+            # Two identical retries can race between the read-above and the
+            # insert. Once the first transaction commits, return its durable
+            # reservation rather than making the browser see a false conflict
+            # or starting a second advisor call.
+            existing = await asyncio.to_thread(
+                self.repository.load_round, owner, host_id, round_id
+            )
+            if existing is not None:
+                return await self.load_round(user_id, host_id, round_id)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if claim.acquired:
             self._schedule_advisor_call(owner, host_id, round_id, frozen)
         return await self.load_round(user_id, host_id, round_id)
@@ -502,9 +569,16 @@ class ModelAdvisorService:
         projection = self._round_projection(record, round_id)
         session_id = projection.get("execution", {}).get("session_id")
         if isinstance(session_id, str) and session_id:
-            observed = await asyncio.to_thread(self.observed_execution, session_id)
-            if observed is not None:
-                projection["observed_execution"] = observed
+            requested = await asyncio.to_thread(self.requested_execution, session_id)
+            if requested is not None:
+                projection["requested_execution"] = requested
+            actual = record.payload.get("actual_execution")
+            if not isinstance(actual, dict):
+                actual = await asyncio.to_thread(self.actual_execution, session_id)
+            projection["actual_execution"] = actual or {
+                "status": "unknown",
+                "reason": "This runtime did not provide verified provider execution telemetry",
+            }
         return projection
 
     @staticmethod
@@ -680,11 +754,12 @@ class ModelAdvisorService:
 
     # ── live execution inspection ────────────────────────────
 
-    def observed_execution(self, session_id: str) -> dict[str, Any] | None:
-        """Best-effort live read of the bound session's actual model/effort.
+    def requested_execution(self, session_id: str) -> dict[str, Any] | None:
+        """Return requested session metadata, never relabeled as observed.
 
-        Read-time join only: never written back as if it were frozen
-        provenance, and missing fields stay unknown.
+        The conversation row contains the launch request. Provider/runtime
+        evidence is a separate concern and is reported as unknown until the
+        runtime writes an actual execution record.
         """
         conv: Conversation | None = self._conversation_store.get_conversation(session_id)
         if conv is None:
@@ -697,5 +772,18 @@ class ModelAdvisorService:
             "reasoning_effort": getattr(conv, "reasoning_effort", None),
             "access_lane": labels.get("omnigent.access_lane"),
             "comparison_group": labels.get(ADVISOR_ROUND_GROUP_LABEL_KEY),
-            "live": True,
+        }
+
+    def actual_execution(self, session_id: str) -> dict[str, Any] | None:
+        """Return only harness-reported execution evidence for one session."""
+        conv: Conversation | None = self._conversation_store.get_conversation(session_id)
+        if conv is None or not isinstance(conv.reported_model, str) or not conv.reported_model:
+            return None
+        return {
+            "status": "observed",
+            "model": conv.reported_model,
+            # This runtime has no separate observed effort/lane event. Do not
+            # copy requested metadata into these fields.
+            "reasoning_effort": None,
+            "access_lane": None,
         }

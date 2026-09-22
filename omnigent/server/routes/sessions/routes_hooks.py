@@ -95,6 +95,7 @@ from omnigent.spec.types import (
     PolicyAction,
 )
 from omnigent.stores import AgentStore, ConversationStore
+from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY
 from omnigent.stores.permission_store import PermissionStore
 
 
@@ -1704,6 +1705,8 @@ def register_hooks_routes(
             )
 
         async def _pin(model: str) -> bool:
+            if conv is not None and ADVISOR_ROUND_LABEL_KEY in (conv.labels or {}):
+                return False
             try:
                 await asyncio.to_thread(
                     conversation_store.update_conversation,

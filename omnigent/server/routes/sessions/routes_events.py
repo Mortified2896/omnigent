@@ -214,7 +214,7 @@ from omnigent.server.schemas import (
 from omnigent.server.session_version import SessionMutationFingerprint, session_etag
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
-from omnigent.stores.conversation_store import PINNED_LABEL_KEY
+from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY, PINNED_LABEL_KEY
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.host_store import host_is_live
 from omnigent.stores.permission_store import PermissionStore
@@ -387,6 +387,7 @@ def register_events_routes(
     host_registry: HostRegistry | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     runner_tunnel_tokens: frozenset[str] | None = None,
+    internal_event_hooks: dict[str, Callable[..., Any]] | None = None,
 ) -> None:
     """Register the events, stream, and delete routes on router."""
 
@@ -1465,6 +1466,15 @@ def register_events_routes(
         if body.type == _EXTERNAL_MODEL_CHANGE_TYPE:
             from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
 
+            if (
+                ADVISOR_ROUND_LABEL_KEY in (conv.labels or {})
+                and body.data.get("model") != conv.model_override
+            ):
+                raise OmnigentError(
+                    "Model Advisor sessions are pinned to their confirmed model; start a new "
+                    "advisor round to choose another route.",
+                    code=ErrorCode.CONFLICT,
+                )
             protect_recorded_policy(
                 conv.labels or {},
                 {"model_override": conv.model_override},
@@ -1499,6 +1509,15 @@ def register_events_routes(
         if body.type == _EXTERNAL_REASONING_EFFORT_CHANGE_TYPE:
             from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
 
+            if (
+                ADVISOR_ROUND_LABEL_KEY in (conv.labels or {})
+                and body.data.get("reasoning_effort") != conv.reasoning_effort
+            ):
+                raise OmnigentError(
+                    "Model Advisor sessions are pinned to their confirmed reasoning level; start "
+                    "a new advisor round to choose another route.",
+                    code=ErrorCode.CONFLICT,
+                )
             protect_recorded_policy(
                 conv.labels or {},
                 {"reasoning_effort": conv.reasoning_effort},
@@ -2562,3 +2581,11 @@ def register_events_routes(
         except Exception:
             pass
         return ConversationDeleted(id=session_id)
+
+    # Server-internal workflows such as Model Advisor must be able to submit
+    # their first message only after a host runner is bound. Expose the same
+    # closure used by POST /sessions/{id}/events through an application-owned
+    # hook; this keeps authorization, policy evaluation, relay readiness, and
+    # exact runner dispatch on one path without creating an internal HTTP hop.
+    if internal_event_hooks is not None:
+        internal_event_hooks["post_event"] = _post_event_impl

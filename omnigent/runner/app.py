@@ -171,6 +171,7 @@ from omnigent.server.schemas import (
 )
 from omnigent.spec.skill_sources import SkillSourceContext, resolve_harness_skills
 from omnigent.spec.types import AgentSpec, LocalToolInfo, SkillSpec
+from omnigent.stores.conversation_store import CODEX_ACCESS_LANE_LABEL_KEY
 from omnigent.terminals.control_bridge import bridge_tmux_control_to_websocket
 from omnigent.terminals.ws_common import WS_CLOSE_TERMINAL_NOT_FOUND
 from omnigent.tools.builtins.load_skill import (
@@ -3798,6 +3799,13 @@ def create_runner_app(
                 if init_context.envelope is not None
                 else await _fetch_session_model_override(session_id)
             )
+            _access_lane = (
+                init_context.labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
+                if init_context.labels is not None
+                else None
+            )
+            if not isinstance(_access_lane, str) or not _access_lane:
+                _access_lane = None
             spawn_env = _build_spawn_env_from_spec(
                 spec,
                 harness_name,
@@ -3805,6 +3813,7 @@ def create_runner_app(
                 cwd=await _session_runtime_cwd(session_id),
                 session_id=session_id,
                 model_override=_model_override,
+                access_lane=_access_lane,
             )
             if spawn_env is None:
                 spawn_env = await _resolve_native_spawn_env(
@@ -7403,6 +7412,7 @@ def create_runner_app(
                 cwd=await _session_runtime_cwd(conv),
                 model_override=cast(str | None, msg_body.get("model_override")),
                 session_id=conv,
+                access_lane=cast(str | None, msg_body.get("access_lane")),
             )
             # Gated harnesses use nullable to avoid the fallback literal.
             _authored_bg = raw_author_instructions(cached_spec) is not None
@@ -11885,6 +11895,7 @@ def _build_spawn_env_from_spec(
     workdir: Path | None = None,
     model_override: str | None = None,
     session_id: str | None = None,
+    access_lane: str | None = None,
 ) -> dict[str, str] | None:
     """Build spawn-env from spec — mirrors workflow.py's helpers.
 
@@ -11902,6 +11913,10 @@ def _build_spawn_env_from_spec(
         via ``--model`` in :func:`_build_claude_native_base_args`; the
         SDK harnesses have no such arg, so the override must land in the
         env var here.)
+    :param access_lane: Server-written Model Advisor provider lane. Only
+        advisor turns set this value; it is forwarded to the Codex harness so
+        direct-provider assignments cannot fall back to the host's default
+        subscription route.
     :returns: The spawn-env dict, or ``None`` for native / unknown harnesses.
     """
     # Namespaced generic-ACP ids (``acp:<slug>``) canonicalize to ``acp`` so the
@@ -12009,6 +12024,12 @@ def _build_spawn_env_from_spec(
         model_key = _HARNESS_MODEL_ENV_KEY.get(harness)
         if model_key is not None:
             env[model_key] = model_override
+
+    if access_lane and env is not None and harness == "codex":
+        # This is intentionally a separate, server-only signal from the model
+        # override. The Codex harness resolves the lane to its exact provider
+        # configuration and fails closed if that provider is unavailable.
+        env["HARNESS_CODEX_ACCESS_LANE"] = access_lane
 
     # Routing visibility: log the resolved gateway target so operators can
     # confirm which provider a turn actually hits (api.anthropic.com /
