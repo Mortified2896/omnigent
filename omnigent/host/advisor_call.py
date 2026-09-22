@@ -242,9 +242,11 @@ async def generate_advisor_selection(
         _codex_home_config_source_from_env,
         _populate_codex_home_config,
     )
+    from omnigent.models.codex_model_vocabulary import native_codex_model_slug
 
     prompt = build_advisor_prompt(request)
-    launch = resolve_native_codex_launch(model=model, spec=None, access_lane=access_lane)
+    native_model = native_codex_model_slug(model) if access_lane == "codex-direct" else model
+    launch = resolve_native_codex_launch(model=native_model, spec=None, access_lane=access_lane)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(
         prefix="omnigent-advisor-", dir=_advisor_temp_parent()

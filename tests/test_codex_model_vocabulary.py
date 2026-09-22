@@ -12,6 +12,7 @@ from omnigent.models.codex_model_vocabulary import (
     codex_reachable_model_slug,
     codex_spawn_model,
     comparable_model_id,
+    native_codex_model_slug,
 )
 from omnigent.util.reasoning_effort import clamp_effort_for_model
 
@@ -104,10 +105,20 @@ def test_comparable_model_id_folds_prefix_dots_and_case() -> None:
     assert comparable_model_id("Databricks-GPT-5-6-Sol[1M]") == "gpt-5-6-sol"
 
 
+def test_native_codex_model_slug_removes_only_the_codex_route_marker() -> None:
+    assert native_codex_model_slug("codex/gpt-5.5") == "gpt-5.5"
+    assert native_codex_model_slug(" GPT-5.5 ") == "GPT-5.5"
+    assert native_codex_model_slug("glm-5.3") == "glm-5.3"
+
+
 def test_catalog_id_translates_to_the_codex_slug() -> None:
     assert codex_reachable_model_slug("databricks-gpt-5-6-luna", _CATALOG) == "gpt-5.6-luna"
     assert codex_reachable_model_slug("databricks-gpt-5-6-sol", _CATALOG) == "gpt-5.6-sol"
     assert codex_reachable_model_slug("databricks-gpt-5-5", _CATALOG) == "gpt-5.5"
+
+
+def test_route_qualified_codex_id_matches_the_native_catalog_slug() -> None:
+    assert codex_reachable_model_slug("codex/gpt-5.5", _CATALOG) == "gpt-5.5"
 
 
 def test_a_codex_slug_translates_to_itself() -> None:

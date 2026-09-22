@@ -69,6 +69,26 @@ async def test_advisor_round_with_available_pick_launches_unchanged(advisor_harn
 
 
 @pytest.mark.asyncio
+async def test_advisor_round_route_qualified_codex_pick_launches_native_slug(
+    advisor_harness,
+) -> None:
+    """The route id stays persisted while native Codex receives its bare slug."""
+    harness = advisor_harness
+    harness.snapshot["model_override"] = "codex/gpt-5.6-sol"
+    harness.snapshot["labels"] = {
+        _ADVISOR_LABEL: "adviseround-route-qualified",
+        "omnigent.access_lane": "codex-direct",
+    }
+    harness.seed_catalog([{"id": "gpt-5.6-sol", "isDefault": True}], access_lane="codex-direct")
+
+    await harness.launch()
+
+    assert harness.builds[0]["model"] == "gpt-5.6-sol"
+    assert harness.snapshot["model_override"] == "codex/gpt-5.6-sol"
+    assert harness.resets == []
+
+
+@pytest.mark.asyncio
 async def test_advisor_round_rejects_effort_alias_or_substitution(advisor_harness) -> None:
     """An unsupported requested effort fails instead of being aliased."""
     harness = advisor_harness

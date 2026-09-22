@@ -215,6 +215,7 @@ class AdvisorRepository:
         raw_advice: str,
         *,
         randbelow: Callable[[int], int],
+        overhead: dict | None = None,
     ) -> Claim:
         """Store selection/draw once; only a claimed transaction can draw.
 
@@ -242,6 +243,8 @@ class AdvisorRepository:
                 "advice_digest": advice_digest,
                 "review": review.to_payload(),
             }
+            if overhead is not None:
+                payload["advisor_overhead"] = dict(overhead)
             result = self._cas(connection, key, locked, "awaiting_confirmation", payload)
             return Claim(result, True)
 
