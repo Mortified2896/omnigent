@@ -2069,6 +2069,7 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
         "CODEX_ACCESS_TOKEN": "codex-workspace-token",
         "OPENAI_API_KEY": "sk-o",
         "OPENAI_BASE_URL": "https://gateway.example.com/openai",
+        "ZAI_API_KEY": "zai-direct-key",
         "GEMINI_API_KEY": "g-key",
         "AWS_BEARER_TOKEN_BEDROCK": "absk-fwd",
         "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -2096,6 +2097,7 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
         "CODEX_ACCESS_TOKEN",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
+        "ZAI_API_KEY",
         "GEMINI_API_KEY",
         "AWS_BEARER_TOKEN_BEDROCK",
         "ANTHROPIC_BEDROCK_BASE_URL",
@@ -6018,6 +6020,51 @@ async def test_non_o3_picker_appends_both_glm_lanes_from_discovery(monkeypatch) 
     # The plain GPT rows keep the default-provider presentation untouched.
     assert result.models[0]["displayName"] == "GPT-5.6 Luna"
     assert result.models[0].get("accessLane") is None
+
+
+async def test_model_advisor_picker_uses_the_live_codex_direct_catalog(monkeypatch) -> None:
+    """The advisor release probes Codex Subscription — Direct explicitly."""
+    from omnigent.harnesses.codex_native import app_server
+
+    monkeypatch.setenv("OMNIGENT_FEATURES", "model_advisor")
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: False
+    )
+    seen_lanes: list[str] = []
+
+    def resolve(*, spec=None, access_lane):
+        del spec
+        seen_lanes.append(access_lane)
+        return app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=None,
+            profile=None,
+            summary=access_lane,
+        )
+
+    async def catalog(*, launch):
+        assert launch.summary == "codex-direct"
+        return [
+            {
+                "id": "gpt-live",
+                "displayName": "GPT Live",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                "isDefault": True,
+            }
+        ]
+
+    monkeypatch.setattr(app_server, "resolve_native_codex_catalog_launch", resolve)
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(app_server, "zai_direct_glm_catalog_rows", lambda: ())
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    assert seen_lanes == ["codex-direct"]
+    assert [(row["id"], row["accessLane"]) for row in result.models] == [
+        ("gpt-live", "codex-direct")
+    ]
+    assert result.models[0]["supportedReasoningEfforts"] == [{"reasoningEffort": "high"}]
 
 
 async def test_o3_lane_catalog_failure_does_not_hide_the_other_lane(monkeypatch) -> None:

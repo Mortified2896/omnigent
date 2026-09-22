@@ -3390,6 +3390,8 @@ class CodexExecutor(Executor):
         gateway: bool = False,
         databricks_profile: str | None = None,
         model_provider_override: str | None = None,
+        extra_config_overrides: Sequence[str] = (),
+        credential_env: Mapping[str, str] | None = None,
         gateway_host: str | None = None,
         base_url_override: str | None = None,
         gateway_auth_command: str | None = None,
@@ -3427,6 +3429,10 @@ class CodexExecutor(Executor):
             executor bridges into the per-session ``CODEX_HOME``). Set from
             ``HARNESS_CODEX_MODEL_PROVIDER``. Mutually exclusive with
             *gateway* — the gateway path pins its own generated provider.
+        :param extra_config_overrides: Additional Codex ``-c`` overrides,
+            used by server-selected direct provider lanes.
+        :param credential_env: Resolved credentials to add to the filtered
+            Codex child environment for a server-selected provider lane.
         :param gateway_host: Gateway workspace host origin, e.g.
             ``"https://example.databricks.com"``.  Set from
             ``HARNESS_CODEX_GATEWAY_HOST`` (written by the Omnigent workflow
@@ -3499,11 +3505,13 @@ class CodexExecutor(Executor):
             )
         self._codex_path = resolved_codex
         self._env = _clean_codex_env(declared_passthrough(self._os_env_spec))
+        self._env.update(credential_env or {})
         # Retry policy → OpenAI SDK env vars (Codex uses the OpenAI
         # SDK internally). Speculative — empirical audit pending.
         self._retry_policy = retry_policy if retry_policy is not None else RetryPolicy()
         self._env.update(self._retry_policy.codex_cli.env())
         self._codex_config_overrides: list[str] = []
+        self._codex_config_overrides.extend(extra_config_overrides)
         if model_provider_override is not None and gateway:
             # Both would fight over model_provider in the -c overrides; the
             # AP producer must emit exactly one routing mechanism.

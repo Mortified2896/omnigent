@@ -129,12 +129,16 @@ beforeEach(() => {
           state: "dispatch_bound",
           version: (rounds[id]?.version as number) + 1,
           execution: { session_id: "conv_new", uncertain: false },
-          observed_execution: {
+          requested_execution: {
             session_id: "conv_new",
             model: "glm-5.3",
             reasoning_effort: "high",
             access_lane: "glm-direct",
             comparison_group: "manual_override",
+          },
+          actual_execution: {
+            status: "unknown",
+            reason: "fixture has no provider telemetry",
           },
         };
         return Response.json(rounds[id]);
@@ -187,6 +191,64 @@ it("hydrates saved settings and shows enabled panel", async () => {
   expect(await screen.findByText(/Save defaults/)).toBeDefined();
 });
 
+it("ignores hydration responses from a host that is no longer selected", async () => {
+  let resolveOldCatalog!: (response: Response) => void;
+  let resolveOldPreferences!: (response: Response) => void;
+  const oldCatalog = new Promise<Response>((resolve) => {
+    resolveOldCatalog = resolve;
+  });
+  const oldPreferences = new Promise<Response>((resolve) => {
+    resolveOldPreferences = resolve;
+  });
+  const host2Preferences = {
+    ...prefsDto,
+    preferences: {
+      ...(savedPrefs?.preferences ?? {}),
+      allowed_candidate_ids: [OPTION_B.candidate_id],
+      advisor_candidate_id: OPTION_B.candidate_id,
+    },
+  };
+  api.mockImplementation(async (url: string) => {
+    const host = new URL(url, "http://test.local").searchParams.get("host_id");
+    if (host === "host_1") {
+      return url.includes("/catalog") ? oldCatalog : oldPreferences;
+    }
+    if (url.includes("/catalog")) {
+      return Response.json({
+        object: "model_advisor.catalog",
+        catalog_revision: "host2",
+        options: [OPTION_B],
+      });
+    }
+    if (url.includes("/preferences")) return Response.json(host2Preferences);
+    throw new Error(`Unexpected API call: ${url}`);
+  });
+
+  const view = mountSection();
+  view.rerender(
+    <NewChatAdvisorSection
+      hostId="host_2"
+      task="Write a test suite"
+      humanPick={GLM_PICK}
+      launchAgentId="ag_1"
+      launchWorkspace="/repo"
+      onHumanCandidateChosen={() => {}}
+      onLaunched={() => {}}
+    />,
+  );
+  expect((await screen.findAllByText(/GLM-5\.3/)).length).toBeGreaterThan(0);
+
+  resolveOldCatalog(
+    Response.json({
+      object: "model_advisor.catalog",
+      catalog_revision: "stale-host1",
+      options: [OPTION_A],
+    }),
+  );
+  resolveOldPreferences(Response.json(prefsDto));
+  await waitFor(() => expect(screen.queryByText(/gpt-5\.3-codex/)).toBeNull());
+});
+
 it("surfaces a catalog failure as a visible reason", async () => {
   api.mockImplementation(async (url: string) => {
     if (url.includes("/model-advisor/catalog"))
@@ -211,6 +273,8 @@ it("reserves a round on Get recommendation and shows the review", async () => {
   assert(posted !== undefined);
   const body = JSON.parse((posted[1] as RequestInit).body as string);
   expect(body.human_candidate_id).toBe("choice-bbb");
+  expect(body.submission_key).toEqual(expect.any(String));
+  expect(body.preferences.allowed_candidate_ids).toEqual(["choice-aaa", "choice-bbb"]);
 });
 
 it("does not reserve a round without the composer prompt", async () => {
@@ -233,6 +297,16 @@ it("disables Get recommendation when the composer pick is outside the pool", asy
   expect(posted).toBeUndefined();
 });
 
+it("requires the exact lane, model, and reasoning effort", async () => {
+  mountSection({
+    humanPick: { model: OPTION_A.model_id, accessLane: OPTION_A.lane_id, effort: "high" },
+  });
+  await screen.findByLabelText("Model advisor");
+  const button = screen.getByRole("button", { name: "Get recommendation" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(screen.getByLabelText("Your model and reasoning level")).toHaveValue("");
+});
+
 it("confirms the assignment and reports the bound session", async () => {
   const onLaunched = vi.fn();
   mountSection({ onLaunched });
@@ -241,7 +315,8 @@ it("confirms the assignment and reports the bound session", async () => {
   await screen.findByLabelText("Review model assignment");
   fireEvent.click(screen.getByRole("button", { name: "Run selected model" }));
   await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
-  expect(screen.getByText(/Actually ran glm-5\.3/)).toBeDefined();
+  expect(screen.getByText(/Requested: glm-5\.3/)).toBeDefined();
+  expect(screen.getByText(/Actual: unknown\/unverified/)).toBeDefined();
 });
 
 it("marks an explicit override and still launches", async () => {

@@ -37,6 +37,7 @@ from omnigent.server.routes._sessions.helpers import (
     _RunnerForwardResult,
 )
 from omnigent.spec.types import SkillSpec
+from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
@@ -6957,6 +6958,42 @@ async def test_post_external_model_change_publishes_session_model(
     snapshot = (await client.get(f"/v1/sessions/{session['id']}")).json()
     assert snapshot["llm_model"] == "claude-opus-4-8[1m]"
     assert snapshot["model_override"] is None
+
+
+async def test_model_advisor_session_rejects_follow_up_route_changes(
+    client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    """A confirmed advisor route cannot be changed by a later turn control."""
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+    store = SqlAlchemyConversationStore(db_uri)
+    store.set_labels(sid, {ADVISOR_ROUND_LABEL_KEY: "adviseround-follow-up"})
+    store.update_conversation(sid, model_override="gpt-5.3-codex", reasoning_effort="medium")
+
+    model_event = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={"type": "external_model_change", "data": {"model": "glm-5.3"}},
+    )
+    assert model_event.status_code == 409, model_event.text
+    effort_event = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={
+            "type": "external_reasoning_effort_change",
+            "data": {"reasoning_effort": "high"},
+        },
+    )
+    assert effort_event.status_code == 409, effort_event.text
+    patch = await client.patch(
+        f"/v1/sessions/{sid}",
+        json={"model_override": "glm-5.3", "reasoning_effort": "high"},
+    )
+    assert patch.status_code == 409, patch.text
+    unchanged = store.get_conversation(sid)
+    assert unchanged is not None
+    assert unchanged.model_override == "gpt-5.3-codex"
+    assert unchanged.reasoning_effort == "medium"
 
 
 @pytest.mark.parametrize("sentinel", ["<synthetic>", " <synthetic> "])

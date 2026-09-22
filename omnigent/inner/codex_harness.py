@@ -37,6 +37,12 @@ Env vars read at startup:
   ``CODEX_HOME``). Mutually exclusive with
   ``HARNESS_CODEX_GATEWAY`` (the gateway path pins its own
   generated provider).
+- ``HARNESS_CODEX_ACCESS_LANE``: server-written exact provider lane for a
+  Model Advisor answer turn (for example ``codex-direct`` or ``glm-direct``).
+  When set, the harness resolves that lane's provider config and credentials
+  itself and ignores ordinary gateway/provider fallback settings. Browser
+  requests cannot set this value; the server adds it from the confirmed
+  advisor-session labels.
 - ``HARNESS_CODEX_CWD``: working directory the executor launches
   the Codex CLI in. ``None`` falls back to ``OMNIGENT_RUNNER_WORKSPACE``
   if set, then to the subprocess's inherited cwd.
@@ -90,6 +96,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -109,6 +116,7 @@ _ENV_MODEL = "HARNESS_CODEX_MODEL"
 _ENV_GATEWAY = "HARNESS_CODEX_GATEWAY"
 _ENV_DATABRICKS_PROFILE = "HARNESS_CODEX_DATABRICKS_PROFILE"
 _ENV_MODEL_PROVIDER = "HARNESS_CODEX_MODEL_PROVIDER"
+_ENV_ACCESS_LANE = "HARNESS_CODEX_ACCESS_LANE"
 _ENV_GATEWAY_HOST = "HARNESS_CODEX_GATEWAY_HOST"
 _ENV_CWD = "HARNESS_CODEX_CWD"
 _ENV_CODEX_PATH = "OMNIGENT_CODEX_PATH"
@@ -287,31 +295,69 @@ def _build_codex_executor() -> Executor:
     bundle_dir = Path(bundle_dir_raw) if bundle_dir_raw else None
     agent_name_raw = os.environ.get(_ENV_AGENT_NAME, "").strip()
     agent_name = agent_name_raw or None
-    return CodexExecutor(
-        cwd=os.environ.get(_ENV_CWD) or os.environ.get("OMNIGENT_RUNNER_WORKSPACE") or None,
-        os_env=_resolve_os_env(),
-        model=os.environ.get(_ENV_MODEL),
-        codex_path=resolve_harness_path("codex"),
-        gateway=_parse_truthy(_ENV_GATEWAY, default=False),
-        databricks_profile=os.environ.get(_ENV_DATABRICKS_PROFILE),
-        model_provider_override=os.environ.get(_ENV_MODEL_PROVIDER) or None,
-        gateway_host=os.environ.get(_ENV_GATEWAY_HOST) or None,
+    access_lane = os.environ.get(_ENV_ACCESS_LANE, "").strip() or None
+    lane_launch = None
+    if access_lane is not None:
+        # Import lazily: app_server imports the native Codex machinery, while
+        # this module is also imported by that machinery on native sessions.
+        from omnigent.harnesses.codex_native.app_server import resolve_native_codex_launch
+
+        lane_launch = resolve_native_codex_launch(
+            model=os.environ.get(_ENV_MODEL) or None,
+            access_lane=access_lane,
+        )
+        if lane_launch.profile is not None:
+            raise OSError(
+                f"Model Advisor lane {access_lane!r} requires a native Codex profile "
+                "and cannot be used by the in-process Codex harness"
+            )
+
+    executor_kwargs: dict[str, Any] = {
+        "cwd": os.environ.get(_ENV_CWD) or os.environ.get("OMNIGENT_RUNNER_WORKSPACE") or None,
+        "os_env": _resolve_os_env(),
+        "model": lane_launch.model if lane_launch is not None else os.environ.get(_ENV_MODEL),
+        "codex_path": resolve_harness_path("codex"),
+        "gateway": (
+            False if lane_launch is not None else _parse_truthy(_ENV_GATEWAY, default=False)
+        ),
+        "databricks_profile": (
+            None if lane_launch is not None else os.environ.get(_ENV_DATABRICKS_PROFILE)
+        ),
+        "model_provider_override": (
+            None if lane_launch is not None else os.environ.get(_ENV_MODEL_PROVIDER) or None
+        ),
+        "gateway_host": (
+            None if lane_launch is not None else os.environ.get(_ENV_GATEWAY_HOST) or None
+        ),
         # Default ``True`` mirrors the inner CodexExecutor's
         # constructor default, which mirrors Codex's own
         # default. An operator who set the env var to ``"0"``
         # wants the search disabled.
-        enable_web_search=_parse_truthy(_ENV_ENABLE_WEB_SEARCH, default=True),
+        "enable_web_search": _parse_truthy(_ENV_ENABLE_WEB_SEARCH, default=True),
         # Default ``False`` mirrors the inner executor's default
         # (native tools enabled).
-        disable_native_tools=_parse_truthy(_ENV_DISABLE_NATIVE_TOOLS, default=False),
-        base_url_override=os.environ.get(_ENV_GATEWAY_BASE_URL) or None,
-        gateway_auth_command=os.environ.get(_ENV_GATEWAY_AUTH_COMMAND) or None,
-        gateway_auth_refresh_interval_ms=os.environ.get(_ENV_GATEWAY_AUTH_REFRESH_INTERVAL_MS)
-        or None,
-        retry_policy=_resolve_retry_policy(),
-        bundle_dir=bundle_dir,
-        agent_name=agent_name,
-        skills_filter=_resolve_skills_filter(),
+        "disable_native_tools": _parse_truthy(_ENV_DISABLE_NATIVE_TOOLS, default=False),
+        "base_url_override": (
+            None if lane_launch is not None else os.environ.get(_ENV_GATEWAY_BASE_URL) or None
+        ),
+        "gateway_auth_command": (
+            None if lane_launch is not None else os.environ.get(_ENV_GATEWAY_AUTH_COMMAND) or None
+        ),
+        "gateway_auth_refresh_interval_ms": (
+            None
+            if lane_launch is not None
+            else os.environ.get(_ENV_GATEWAY_AUTH_REFRESH_INTERVAL_MS) or None
+        ),
+        "retry_policy": _resolve_retry_policy(),
+        "bundle_dir": bundle_dir,
+        "agent_name": agent_name,
+        "skills_filter": _resolve_skills_filter(),
+    }
+    if lane_launch is not None:
+        executor_kwargs["extra_config_overrides"] = lane_launch.config_overrides
+        executor_kwargs["credential_env"] = lane_launch.credential_env
+    return CodexExecutor(
+        **executor_kwargs,
     )
 
 

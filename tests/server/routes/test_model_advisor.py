@@ -383,6 +383,40 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
         assert len(launched) == 1
 
 
+def test_round_freezes_explicit_draft_and_reuses_submission_key(db_uri) -> None:
+    """Unsaved round settings are authoritative, and retries do not call twice."""
+    reply = {
+        **ADVISOR_OK_REPLY,
+        "raw_output": json.dumps({"candidate_id": ADVISOR_ID, "rationale": "GLM fits."}),
+    }
+    client, registry = client_for(db_uri, reply=reply)
+    draft = {
+        "enabled": True,
+        "allowed_candidate_ids": [ADVISOR_ID],
+        "advisor_candidate_id": HUMAN_ID,
+        "human_probability_percent": 20,
+    }
+    body = {
+        "host_id": "host_1",
+        "task": "Use the unsaved draft",
+        "human_candidate_id": ADVISOR_ID,
+        "submission_key": "stable-double-click",
+        "preferences": draft,
+    }
+    with client:
+        client.put("/v1/model-advisor/preferences", json=PREFERENCES_BODY, headers=JSON_ALICE)
+        first = client.post("/v1/model-advisor/rounds", json=body, headers=JSON_ALICE)
+        second = client.post("/v1/model-advisor/rounds", json=body, headers=JSON_ALICE)
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.json()["round_id"] == first.json()["round_id"]
+        settled = _settle(client, first.json()["round_id"])
+        assert settled["review"]["human_candidate_id"] == ADVISOR_ID
+        assert settled["review"]["advisor_candidate_id"] == ADVISOR_ID
+        assert settled["review"]["human_probability_percent"] == 20
+        assert registry.advisor_calls == 1
+
+
 def test_override_preserves_original_and_launches_choice(db_uri) -> None:
     launched: list[Any] = []
 
@@ -603,3 +637,79 @@ def test_internal_launch_skips_client_label_guard(monkeypatch) -> None:
     assert seen == [body.labels]
     asyncio.run(attempt(False))
     assert seen == [body.labels]
+
+
+def test_internal_launch_with_advisor_labels_reaches_real_creation_helper(monkeypatch) -> None:
+    """The trusted internal flag reaches the shared creator and persists labels."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import omnigent.server.routes._session_create_validation as validation
+    import omnigent.server.routes._sessions.orchestration as orchestration
+    from omnigent.entities import Agent, Conversation
+    from omnigent.server.schemas import SessionCreateRequest
+
+    created: list[dict[str, Any]] = []
+    labels = {"omnigent.advisor.round_id": "adviseround-real-path"}
+    agent = Agent(
+        id="ag_advisor",
+        created_at=1,
+        name="advisor-test",
+        bundle_location="bundle-advisor",
+    )
+
+    class Store:
+        def create_conversation(self, **kwargs: Any) -> Conversation:
+            created.append(kwargs)
+            return Conversation(
+                id="conv_real_path",
+                created_at=1,
+                updated_at=1,
+                root_conversation_id="conv_real_path",
+                agent_id=kwargs["agent_id"],
+                title=kwargs["title"],
+                host_id=kwargs["host_id"],
+                workspace=kwargs["workspace"],
+                terminal_launch_args=kwargs["terminal_launch_args"],
+            )
+
+        def set_labels(self, _session_id: str, new_labels: dict[str, str]) -> None:
+            assert new_labels == labels
+
+    async def resolve(**kwargs: Any) -> Any:
+        return SimpleNamespace(body=kwargs["body"], project_id=None, warnings=())
+
+    async def snapshot(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(id="conv_real_path")  # type: ignore[return-value]
+
+    async def reject_routing(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def attempt() -> tuple[Any, Store]:
+        async def validate(**_kwargs: Any) -> Agent:
+            return agent
+
+        monkeypatch.setattr(orchestration, "validate_session_agent", validate)
+        monkeypatch.setattr(validation, "resolve_project_session_create", resolve)
+        monkeypatch.setattr(orchestration, "_reject_ungatewayed_model_routing", reject_routing)
+        monkeypatch.setattr(orchestration, "_get_session_snapshot", snapshot)
+        body = SessionCreateRequest(agent_id=agent.id, labels=labels)
+        store = Store()
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(host_registry=None)),
+            headers={},
+        )
+        result = await orchestration._create_session_from_existing_agent(
+            store,
+            None,
+            None,
+            body,
+            request,
+            user_id="alice@test",
+            enforce_reserved_label_seed=False,
+        )
+        return result, store
+
+    result, _store = asyncio.run(attempt())
+    assert result[0].id == "conv_real_path"
+    assert created[0]["agent_id"] == agent.id

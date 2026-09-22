@@ -94,12 +94,20 @@ export interface RoundDto {
   failure_reason: string | null;
   review?: RoundReviewDto;
   execution: { session_id: string | null; uncertain: boolean };
-  observed_execution?: {
+  requested_execution?: {
     session_id: string;
     model: string | null;
     reasoning_effort: string | null;
     access_lane: string | null;
     comparison_group: string | null;
+  };
+  actual_execution?: {
+    status: "unknown" | "observed";
+    reason?: string;
+    provider?: string | null;
+    model?: string | null;
+    reasoning_effort?: string | null;
+    access_lane?: string | null;
   };
   advisor_overhead?: {
     latency_ms: number | null;
@@ -156,6 +164,8 @@ export async function createRound(
   profile: string,
   task: string,
   humanCandidateId: string,
+  preferences: AdvisorPreferences,
+  submissionKey: string,
 ): Promise<RoundDto> {
   return advisorFetch<RoundDto>("/v1/model-advisor/rounds", {
     method: "POST",
@@ -165,6 +175,13 @@ export async function createRound(
       profile,
       task,
       human_candidate_id: humanCandidateId,
+      submission_key: submissionKey,
+      preferences: {
+        enabled: preferences.enabled,
+        allowed_candidate_ids: preferences.allowed_candidate_ids,
+        advisor_candidate_id: preferences.advisor_candidate_id,
+        human_probability_percent: preferences.human_probability_percent,
+      },
     }),
   });
 }

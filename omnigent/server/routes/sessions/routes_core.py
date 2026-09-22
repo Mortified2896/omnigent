@@ -191,13 +191,14 @@ from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.comment_store import CommentStore
 from omnigent.stores.conversation_store import (
-    CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY as _CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
-)
-from omnigent.stores.conversation_store import (
+    ADVISOR_ROUND_LABEL_KEY,
     PINNED_LABEL_KEY,
     PROJECT_LABEL_KEY,
     ConversationNotFoundError,
     pinned_label_key,
+)
+from omnigent.stores.conversation_store import (
+    CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY as _CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
 )
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.permission_store import PermissionStore
@@ -234,8 +235,29 @@ def register_core_routes(
     host_registry: HostRegistry | None = None,
     project_store: ProjectStore | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
+    internal_session_hooks: dict[str, Callable[..., Any]] | None = None,
 ) -> None:
     """Register the core session routes on router."""
+
+    def _reject_advisor_route_change(
+        session: Conversation | None,
+        fields: set[str] | frozenset[str],
+    ) -> None:
+        """Keep an advisor-created conversation on its confirmed route."""
+        if session is None or ADVISOR_ROUND_LABEL_KEY not in (session.labels or {}):
+            return
+        if fields & {
+            "model_override",
+            "reasoning_effort",
+            "harness_override",
+            "terminal_launch_args",
+            "runner_id",
+        }:
+            raise OmnigentError(
+                "Model Advisor sessions are pinned to their confirmed model, lane and reasoning "
+                "level; start a new advisor round to choose another route.",
+                code=ErrorCode.CONFLICT,
+            )
 
     async def _get_session_mutation_fingerprint(
         session_id: str,
@@ -482,6 +504,13 @@ def register_core_routes(
                 launch_result.get("error"),
             )
         return runner_id, launch_failed
+
+    # The model-advisor service is mounted alongside this router rather than
+    # inside it. Give that server-internal caller the exact same host binding
+    # closure used by public POST /sessions without exposing a new client
+    # endpoint or duplicating the launch authorization path.
+    if internal_session_hooks is not None:
+        internal_session_hooks["bind_and_launch_on_caller_host"] = _bind_and_launch_on_caller_host
 
     @router.post(
         "/sessions",
@@ -1824,6 +1853,7 @@ def register_core_routes(
         conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         if conv is None or conv.agent_id is None:
             raise _session_not_found()
+        _reject_advisor_route_change(conv, {"model_override"})
         try:
             validate_model_override(body.expected_model_override)
         except ValueError as exc:
@@ -1925,6 +1955,7 @@ def register_core_routes(
 
         policy_session = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         if policy_session is not None:
+            _reject_advisor_route_change(policy_session, body.model_fields_set)
             protect_recorded_policy(
                 policy_session.labels or {},
                 {key: getattr(policy_session, key, None) for key in body.model_fields_set},
@@ -2933,6 +2964,7 @@ def register_core_routes(
         from omnigent.server.o3_routing_review.session_policy import require_new_review
 
         require_new_review(session.labels or {}, "switching harness")
+        _reject_advisor_route_change(session, {"harness_override", "model_override"})
         if session.kind == "sub_agent":
             raise OmnigentError(
                 "Cannot switch the agent of a sub-agent session — only top-level "

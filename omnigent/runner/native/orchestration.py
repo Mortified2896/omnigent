@@ -1014,19 +1014,8 @@ async def _codex_native_launch_config(
                 f"Invalid model_override for Codex session {session_id!r}: {exc}"
             ) from exc
     reasoning_effort = snapshot.get("reasoning_effort")
-    if reasoning_effort is not None:
-        from omnigent.util.reasoning_effort import codex_efforts_for_model, validate_effort
-
-        try:
-            reasoning_effort = validate_effort(
-                reasoning_effort,
-                "codex",
-                codex_efforts_for_model(model_override),
-            )
-        except ValueError as exc:
-            raise RuntimeError(
-                f"Invalid reasoning_effort for Codex session {session_id!r}: {exc}"
-            ) from exc
+    if reasoning_effort is not None and not isinstance(reasoning_effort, str):
+        raise RuntimeError(f"Invalid reasoning_effort for Codex session {session_id!r}.")
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
@@ -1099,6 +1088,32 @@ async def _codex_native_launch_config(
                     f"{session_id!r} requires model_override."
                 )
             access_lane = raw_access_lane
+    if reasoning_effort is not None:
+        if advisor_round_id:
+            # Advisor candidates are already concrete model+effort rows from
+            # the authenticated host catalog. Preserve that exact spelling;
+            # the ordinary Codex path's max/ultra aliasing is a fallback
+            # convenience and would silently change an advisor assignment.
+            from omnigent.util.reasoning_effort import EFFORT_VALUES
+
+            if reasoning_effort not in EFFORT_VALUES:
+                raise RuntimeError(
+                    f"Advisor round {advisor_round_id!r} has invalid exact reasoning_effort "
+                    f"{reasoning_effort!r} for session {session_id!r}."
+                )
+        else:
+            from omnigent.util.reasoning_effort import codex_efforts_for_model, validate_effort
+
+            try:
+                reasoning_effort = validate_effort(
+                    reasoning_effort,
+                    "codex",
+                    codex_efforts_for_model(model_override),
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Invalid reasoning_effort for Codex session {session_id!r}: {exc}"
+                ) from exc
     # One derivation of the session's Smart Routing class, shared with the SDK
     # codex path, so "pinned" and "auto-harness" mean the same on both.
     routing_class = routing_class_from_snapshot(
@@ -4037,6 +4052,25 @@ async def _auto_create_codex_terminal(
                 exc_info=True,
                 extra={"session_id": session_id},
             )
+        if launch_config.advisor_round_id and launch_config.model_override:
+            if not _codex_catalog:
+                raise RuntimeError(
+                    f"Advisor round {launch_config.advisor_round_id!r} cannot verify "
+                    "exact-selection "
+                    f"for model {launch_config.model_override!r} on lane "
+                    f"{launch_config.access_lane!r}: the live model catalog is unavailable."
+                )
+            if _codex_catalog_was_stale:
+                fresh_rows = await codex_reprobed_launch_catalog(
+                    codex_path=_codex_cli_path, launch=_catalog_launch
+                )
+                if not fresh_rows:
+                    raise RuntimeError(
+                        f"Advisor round {launch_config.advisor_round_id!r} cannot verify "
+                        "exact-selection because its lane catalog refresh failed."
+                    )
+                _codex_catalog = fresh_rows
+                _codex_catalog_was_stale = False
         if launch_config.model_override and _codex_catalog:
             pick = launch_config.model_override
             reachable = codex_reachable_model_slug(pick, _codex_catalog)
@@ -4115,6 +4149,41 @@ async def _auto_create_codex_terminal(
                     outcome,
                     extra={"session_id": session_id},
                 )
+            if launch_config.advisor_round_id and reachable is not None:
+                selected_row = next(
+                    (
+                        row
+                        for row in _codex_catalog
+                        if row.get("id") == reachable or row.get("model") == reachable
+                    ),
+                    None,
+                )
+                raw_supported = (
+                    selected_row.get("supportedReasoningEfforts") if selected_row else None
+                )
+                supported_efforts = (
+                    {
+                        entry.get("reasoningEffort")
+                        for entry in raw_supported
+                        if isinstance(entry, dict)
+                        and isinstance(entry.get("reasoningEffort"), str)
+                    }
+                    if isinstance(raw_supported, list)
+                    else set()
+                )
+                if not supported_efforts and selected_row is not None:
+                    default_effort = selected_row.get("defaultReasoningEffort")
+                    if isinstance(default_effort, str) and default_effort:
+                        supported_efforts.add(default_effort)
+                requested_effort = launch_config.reasoning_effort
+                if requested_effort is not None and requested_effort not in supported_efforts:
+                    raise RuntimeError(
+                        f"Advisor round {launch_config.advisor_round_id!r} assigned "
+                        f"unsupported exact reasoning effort {requested_effort!r} for model "
+                        f"{pick!r} on lane {launch_config.access_lane!r}; "
+                        "the exact-selection policy fails this assignment instead of "
+                        "aliasing or substituting an effort."
+                    )
         if _codex_launch.model is None and _codex_launch.profile is None and _codex_catalog:
             # Same staleness rule as the claude branch: never convert a stale
             # entry's default into an explicit model pin.

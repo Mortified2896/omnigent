@@ -29,6 +29,13 @@ import { editorReducer, initialEditor, type AdvisorOption } from "@/model-adviso
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
 
+function newSubmissionKey(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `submission-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export interface HumanModelPick {
   model: string;
   accessLane: string | null;
@@ -72,6 +79,23 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const onScreen = useRef(true);
+  const scopeToken = useRef({ generation: 0, host: "" });
+  const inputGeneration = useRef(0);
+  const submissionIdentity = useRef<string | null>(null);
+  const submissionKey = useRef<string | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimer.current !== null) clearInterval(pollTimer.current);
+    pollTimer.current = null;
+  }, []);
+
+  const isCurrentScope = useCallback((host: string, generation: number) => {
+    return (
+      onScreen.current &&
+      scopeToken.current.host === host &&
+      scopeToken.current.generation === generation
+    );
+  }, []);
 
   useEffect(() => {
     onScreen.current = true;
@@ -85,8 +109,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   // Scope change = host change: reset everything, hydrate saved settings and
   // the qualified catalog. Reads only; no provider calls start here.
   useEffect(() => {
+    const generation = scopeToken.current.generation + 1;
+    scopeToken.current = { generation, host: hostId ?? "" };
+    inputGeneration.current += 1;
+    stopPolling();
+    submissionIdentity.current = null;
+    submissionKey.current = null;
     dispatchEditor({ type: "scope", scope });
     setRound(IDLE_ROUND);
+    setOptions([]);
     setCatalogError(null);
     if (hostId === null) return;
     let cancelled = false;
@@ -96,7 +127,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           fetchCatalog(hostId),
           fetchPreferences(hostId),
         ]);
-        if (cancelled) return;
+        if (cancelled || !isCurrentScope(hostId, generation)) return;
         setOptions(toAdvisorOptions(catalog));
         const saved = toSavedPreferences(prefs);
         if (saved) {
@@ -120,7 +151,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           });
         }
       } catch (cause) {
-        if (!cancelled) {
+        if (!cancelled && isCurrentScope(hostId, generation)) {
           setCatalogError(
             cause instanceof Error ? cause.message : "Couldn't load advisor settings.",
           );
@@ -131,21 +162,23 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     return () => {
       cancelled = true;
     };
-  }, [hostId, scope]);
-
-  const stopPolling = useCallback(() => {
-    if (pollTimer.current !== null) clearInterval(pollTimer.current);
-    pollTimer.current = null;
-  }, []);
+  }, [hostId, isCurrentScope, scope, stopPolling]);
 
   const pollRound = useCallback(
-    (host: string, roundId: string, startedAt: number) => {
+    (
+      host: string,
+      roundId: string,
+      startedAt: number,
+      generation: number,
+      inputVersion: number,
+    ) => {
       stopPolling();
       const tick = () => {
         void (async () => {
           try {
             const dto = await fetchRound(host, roundId);
-            if (!onScreen.current) return;
+            if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion)
+              return;
             if (dto.state === "advisor_pending" || dto.state === "assigning") {
               if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
                 stopPolling();
@@ -160,6 +193,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             stopPolling();
             setRound({ round: dto, busy: false, error: null });
           } catch (cause) {
+            if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion)
+              return;
             stopPolling();
             setRound({
               round: null,
@@ -174,25 +209,43 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       tick();
       pollTimer.current = setInterval(tick, POLL_INTERVAL_MS);
     },
-    [stopPolling],
+    [isCurrentScope, stopPolling],
   );
 
   const resolveHumanCandidate = useCallback((): string | null => {
     const pick = humanPick;
-    if (!pick || pick.model === "") return null;
-    const matching = options.filter((option) => option.model_id === pick.model);
-    if (matching.length === 0) return null;
-    const byLane = pick.accessLane
-      ? matching.filter((option) => option.lane_id === pick.accessLane)
-      : matching;
-    const pool = byLane.length > 0 ? byLane : matching;
-    const exactEffort = pick.effort
-      ? pool.find((option) => option.reasoning_effort === pick.effort)
-      : undefined;
-    if (exactEffort) return exactEffort.candidate_id;
-    const notApplicable = pool.find((option) => option.reasoning_effort === "not_applicable");
-    return notApplicable?.candidate_id ?? pool[0]?.candidate_id ?? null;
+    if (!pick || pick.model === "" || !pick.accessLane) return null;
+    const requestedEffort = pick.effort || "not_applicable";
+    return (
+      options.find(
+        (option) =>
+          option.available &&
+          option.model_id === pick.model &&
+          option.lane_id === pick.accessLane &&
+          option.reasoning_effort === requestedEffort,
+      )?.candidate_id ?? null
+    );
   }, [humanPick, options]);
+
+  // A task, human pick or draft-settings change invalidates an in-flight
+  // round. This keeps the review tied to exactly the values the server froze.
+  useEffect(() => {
+    const identity = JSON.stringify({
+      scope,
+      task,
+      humanCandidateId: resolveHumanCandidate(),
+      preferences: editor.draft,
+    });
+    if (submissionIdentity.current !== null && submissionIdentity.current !== identity) {
+      inputGeneration.current += 1;
+      stopPolling();
+      setRound(IDLE_ROUND);
+    }
+    if (submissionIdentity.current !== identity) {
+      submissionKey.current = newSubmissionKey();
+    }
+    submissionIdentity.current = identity;
+  }, [editor.draft, resolveHumanCandidate, scope, stopPolling, task]);
 
   const handlePropose = useCallback(() => {
     if (hostId === null || round.busy) return;
@@ -216,15 +269,29 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       });
       return;
     }
+    const host = hostId;
+    const generation = scopeToken.current.generation;
+    const inputVersion = inputGeneration.current;
+    const identity = JSON.stringify({
+      scope,
+      task,
+      humanCandidateId,
+      preferences: draft,
+    });
+    if (submissionIdentity.current !== identity || submissionKey.current === null) {
+      submissionIdentity.current = identity;
+      submissionKey.current = newSubmissionKey();
+    }
+    const requestKey = submissionKey.current;
     setRound({ round: null, busy: true, error: null });
     void (async () => {
       try {
-        const dto = await createRound(hostId, "default", task, humanCandidateId);
-        if (!onScreen.current) return;
+        const dto = await createRound(host, "default", task, humanCandidateId, draft, requestKey);
+        if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({ round: dto, busy: true, error: null });
-        pollRound(hostId, dto.round_id, Date.now());
+        pollRound(host, dto.round_id, Date.now(), generation, inputVersion);
       } catch (cause) {
-        if (!onScreen.current) return;
+        if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({
           round: null,
           busy: false,
@@ -232,19 +299,31 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         });
       }
     })();
-  }, [editor.draft, hostId, pollRound, resolveHumanCandidate, round.busy, task]);
+  }, [
+    editor.draft,
+    hostId,
+    isCurrentScope,
+    pollRound,
+    resolveHumanCandidate,
+    round.busy,
+    scope,
+    task,
+  ]);
 
   const handleSave = useCallback(() => {
     if (hostId === null || !editor.draft) return;
+    const host = hostId;
+    const generation = scopeToken.current.generation;
     const submitted = editor.draft;
     void (async () => {
       try {
-        const dto = await savePreferences(hostId, "default", submitted, editor.saved?.version ?? 0);
+        const dto = await savePreferences(host, "default", submitted, editor.saved?.version ?? 0);
         const saved = toSavedPreferences(dto);
-        if (saved && onScreen.current) {
+        if (saved && isCurrentScope(host, generation)) {
           dispatchEditor({ type: "saved", scope, saved, submitted });
         }
       } catch (cause) {
+        if (!isCurrentScope(host, generation)) return;
         if (cause instanceof AdvisorConflictError) {
           dispatchEditor({
             type: "error",
@@ -252,9 +331,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             message: "Saved settings changed elsewhere. Reload the panel and reapply.",
           });
           try {
-            const prefs = await fetchPreferences(hostId);
+            const prefs = await fetchPreferences(host);
             const fresh = toSavedPreferences(prefs);
-            if (fresh && onScreen.current) dispatchEditor({ type: "hydrate", scope, saved: fresh });
+            if (fresh && isCurrentScope(host, generation))
+              dispatchEditor({ type: "hydrate", scope, saved: fresh });
           } catch {
             // Keep the conflict error visible.
           }
@@ -267,7 +347,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         });
       }
     })();
-  }, [editor.draft, editor.saved?.version, hostId, scope]);
+  }, [editor.draft, editor.saved?.version, hostId, isCurrentScope, scope]);
 
   const handleConfirm = useCallback(
     (overrideId: string | null, reason: string | null) => {
@@ -282,6 +362,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         });
         return;
       }
+      const generation = scopeToken.current.generation;
+      const inputVersion = inputGeneration.current;
       setRound({ round: current, busy: true, error: null });
       void (async () => {
         try {
@@ -296,13 +378,13 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             overrideId,
             reason,
           );
-          if (!onScreen.current) return;
+          if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({ round: dto, busy: false, error: null });
           if (dto.execution.session_id !== null) {
             onLaunched(dto.execution.session_id);
           }
         } catch (cause) {
-          if (!onScreen.current) return;
+          if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({
             round: current,
             busy: false,
@@ -311,19 +393,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         }
       })();
     },
-    [hostId, launchAgentId, launchWorkspace, onLaunched, round.busy, round.round],
+    [hostId, isCurrentScope, launchAgentId, launchWorkspace, onLaunched, round.busy, round.round],
   );
 
   const handleCancel = useCallback(() => {
     const host = hostId;
     const current = round.round;
     if (host === null || current === null || round.busy) return;
+    const generation = scopeToken.current.generation;
+    const inputVersion = inputGeneration.current;
     void (async () => {
       try {
         const dto = await cancelRound(host, current.round_id, current.version);
-        if (onScreen.current) setRound({ round: dto, busy: false, error: null });
+        if (isCurrentScope(host, generation) && inputGeneration.current === inputVersion)
+          setRound({ round: dto, busy: false, error: null });
       } catch (cause) {
-        if (onScreen.current) {
+        if (isCurrentScope(host, generation) && inputGeneration.current === inputVersion) {
           setRound({
             round: current,
             busy: false,
@@ -332,7 +417,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         }
       }
     })();
-  }, [hostId, round.busy, round.round]);
+  }, [hostId, isCurrentScope, round.busy, round.round]);
 
   const review = useMemo(() => toReviewView(round.round ?? undefinedRound), [round.round]);
   const reviewVisible =
@@ -402,16 +487,29 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           and will not retry automatically.
         </p>
       ) : null}
-      {round.round?.observed_execution ? (
+      {round.round?.requested_execution ? (
         <p className="text-xs text-muted-foreground">
-          Actually ran {round.round.observed_execution.model ?? "unknown model"}
-          {round.round.observed_execution.reasoning_effort
-            ? ` at ${round.round.observed_execution.reasoning_effort} reasoning`
+          Requested: {round.round.requested_execution.model ?? "unknown model"}
+          {round.round.requested_execution.reasoning_effort
+            ? ` at ${round.round.requested_execution.reasoning_effort} reasoning`
             : ""}
-          {round.round.observed_execution.access_lane
-            ? ` via ${round.round.observed_execution.access_lane}`
+          {round.round.requested_execution.access_lane
+            ? ` via ${round.round.requested_execution.access_lane}`
             : ""}
           .
+        </p>
+      ) : null}
+      {round.round?.actual_execution ? (
+        <p className="text-xs text-muted-foreground">
+          Actual:{" "}
+          {round.round.actual_execution.status === "observed"
+            ? `${round.round.actual_execution.model ?? "unknown model"}${
+                round.round.actual_execution.reasoning_effort
+                  ? ` at ${round.round.actual_execution.reasoning_effort} reasoning`
+                  : ""
+              }`
+            : "unknown/unverified"}
+          {round.round.actual_execution.reason ? ` — ${round.round.actual_execution.reason}` : ""}
         </p>
       ) : null}
     </div>

@@ -675,8 +675,9 @@ _RUNNER_ENV_ALLOWLIST_PREFIXES: tuple[str, ...] = ("LC_", "MLFLOW_", "OTEL_", "O
 # and CLAUDE_CODE_OAUTH_TOKEN for `claude setup-token` subscription auth),
 # OPENAI_* for codex / openai-agents (CODEX_ACCESS_TOKEN is the codex
 # CLI's headless ChatGPT-workspace credential, minted in the ChatGPT
-# admin console — Business/Enterprise plans), GEMINI_API_KEY for the
-# gemini family. GIT_TOKEN / GIT_USERNAME feed the sandbox host
+# admin console — Business/Enterprise plans), ZAI_API_KEY for the
+# direct Z.AI/GLM Codex provider, and GEMINI_API_KEY for the gemini family.
+# GIT_TOKEN / GIT_USERNAME feed the sandbox host
 # image's git credential helper (deploy/docker/Dockerfile `host`
 # target) so the agent's own fetch/push against a private repository
 # authenticates, not just the launch-time clone. Unlike the rest of
@@ -697,6 +698,7 @@ _BASE_HARNESS_CREDENTIAL_ENV_VARS: frozenset[str] = frozenset(
         "CODEX_ACCESS_TOKEN",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
+        "ZAI_API_KEY",
         "GEMINI_API_KEY",
         "GIT_TOKEN",
         "GIT_USERNAME",
@@ -1169,6 +1171,13 @@ def _apply_glm_lane_rows(
         row for row in _omniroute_glm_picker_rows() if _picker_row_identity(row) not in existing
     ]
     return [*relabeled, *omniroute_rows, *direct_rows]
+
+
+def _model_advisor_release_enabled() -> bool:
+    """Return whether this host is serving the concrete advisor release."""
+    from omnigent.server.feature_flags import Feature, resolve_feature_flags
+
+    return resolve_feature_flags().enabled(Feature.MODEL_ADVISOR)
 
 
 @dataclass
@@ -3061,6 +3070,28 @@ class HostProcess:
                             preserve_default=not rows,
                         )
                     )
+            elif _model_advisor_release_enabled():
+                # Model Advisor v1 is deliberately scoped to the two direct
+                # subscription lanes. Do not let the host's ambient provider
+                # (or a generic gateway/default row) become an advisor
+                # candidate just because it is the normal picker default.
+                try:
+                    launch = await asyncio.to_thread(
+                        resolve_native_codex_catalog_launch,
+                        access_lane="codex-direct",
+                    )
+                    direct_rows = await codex_launch_catalog(launch=launch)
+                except Exception:  # noqa: BLE001 — an unavailable lane stays unavailable
+                    _logger.warning(
+                        "Codex direct catalog unavailable for Model Advisor", exc_info=True
+                    )
+                    direct_rows = None
+                rows = _codex_options_for_access_lane(
+                    direct_rows or (),
+                    access_lane="codex-direct",
+                    group_label="Codex Subscription — Direct",
+                    preserve_default=True,
+                )
             else:
                 rows = await codex_launch_catalog()
         except Exception:  # noqa: BLE001 — no catalog, never a crash

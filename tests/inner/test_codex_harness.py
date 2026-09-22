@@ -13,6 +13,7 @@ e2e suite when available.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -140,6 +141,44 @@ def test_executor_factory_reads_env_vars(
     assert os_env_value.type == "caller_process"
     assert os_env_value.sandbox is not None
     assert os_env_value.sandbox.type == "none"
+
+
+def test_executor_factory_resolves_server_selected_access_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Advisor lane metadata selects the matching Codex provider config.
+
+    The lane is deliberately resolved in the harness, after the runner has
+    created the subprocess, so a direct GLM assignment cannot be rerouted by
+    the host's ordinary ChatGPT provider settings.
+    """
+    monkeypatch.setenv("HARNESS_CODEX_ACCESS_LANE", "glm-direct")
+    monkeypatch.setenv("HARNESS_CODEX_MODEL", "glm-5.3")
+    launch = SimpleNamespace(
+        model="glm-5.3",
+        profile=None,
+        config_overrides=['model_provider="omnigent_provider"'],
+        credential_env={"ZAI_API_KEY": "fixture-zai-key"},
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_init(self: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch(
+            "omnigent.harnesses.codex_native.app_server.resolve_native_codex_launch",
+            return_value=launch,
+        ),
+        patch("omnigent.inner.codex_harness.CodexExecutor.__init__", _fake_init),
+    ):
+        codex_harness._build_codex_executor()
+
+    assert captured["model"] == "glm-5.3"
+    assert captured["gateway"] is False
+    assert captured["model_provider_override"] is None
+    assert captured["extra_config_overrides"] == launch.config_overrides
+    assert captured["credential_env"] == launch.credential_env
 
 
 def test_executor_factory_cwd_falls_back_to_runner_workspace(

@@ -19,6 +19,7 @@ import pytest
 from omnigent.host import advisor_call
 from omnigent.host.advisor_call import (
     _NO_TOOLS_CONFIG_OVERRIDES,
+    _NO_TOOLS_FEATURES,
     ADVISOR_MAX_OUTPUT_TOKENS,
     AdvisorCallError,
     build_advisor_prompt,
@@ -146,6 +147,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     argv = captured["argv"]
     assert argv[0] == "exec"
     assert "--ephemeral" in argv
+    assert "--ignore-user-config" in argv
     assert "--ignore-rules" in argv
     sandbox_at = argv.index("--sandbox")
     assert argv[sandbox_at + 1] == "read-only"
@@ -157,9 +159,13 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     assert 'model_reasoning_effort="high"' in argv
     assert argv[argv.index("--model") + 1] == "glm-5.3"
     assert argv[-1] == "-", "the prompt must travel over stdin, not argv"
+    disable_values = [
+        argv[index + 1] for index, item in enumerate(argv[:-1]) if item == "--disable"
+    ]
+    assert disable_values == list(_NO_TOOLS_FEATURES)
     for override in _NO_TOOLS_CONFIG_OVERRIDES:
-        assert override in argv
-    config_values = [argv[index + 1] for index, item in enumerate(argv) if item == "--config"]
+        assert override in captured["argv"]
+    config_values = [argv[index + 1] for index, item in enumerate(argv[:-1]) if item == "--config"]
     assert "model_max_output_tokens=2000" in config_values
     assert 'model_reasoning_effort="high"' in config_values
     assert not any("mcp" in value.lower() for value in config_values), (

@@ -340,6 +340,8 @@ from omnigent.spec.types import (
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.conversation_store import (
+    ADVISOR_ROUND_LABEL_KEY,
+    CODEX_ACCESS_LANE_LABEL_KEY,
     PINNED_LABEL_KEY,
     ConversationNotFoundError,
     NameAlreadyExistsError,
@@ -5056,6 +5058,19 @@ async def _forward_event_to_runner(
         # resolved copy — id-based dedup, not a role/content guess.
         "persisted_item_id": persisted_items[0].id,
     }
+    # Advisor assignments carry a server-written lane label. Forward that
+    # exact lane to the runner on every turn so the in-process Codex harness
+    # cannot fall back to its ordinary ChatGPT provider when an assignment is
+    # routed through a direct provider. Browser input never gets to write this
+    # field: it is copied only from the persisted advisor-session labels.
+    if ADVISOR_ROUND_LABEL_KEY in (conv.labels or {}):
+        access_lane = (conv.labels or {}).get(CODEX_ACCESS_LANE_LABEL_KEY)
+        if not isinstance(access_lane, str) or not access_lane:
+            raise HTTPException(
+                status_code=409,
+                detail="Advisor session has no valid confirmed access lane",
+            )
+        runner_body["access_lane"] = access_lane
     # Persist the turn-initiating actor so /policies/evaluate and MCP
     # tools/call can read it back on any server replica.  Skip system-driven
     # forwards (sub-agent results, parent-wake carry created_by=None) — they
@@ -8200,6 +8215,7 @@ async def _create_session_from_existing_agent(
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     project_store: ProjectStore | None = None,
     enforce_reserved_label_seed: bool = True,
+    defer_initial_items: bool = False,
 ) -> tuple[SessionResponse, tuple[dict[str, str], ...]]:
     """
     Create a session bound to an already-registered agent.
@@ -8233,6 +8249,11 @@ async def _create_session_from_existing_agent(
         seed guard. Only server-internal callers that build the label
         seed themselves (the model-advisor executor launch) may pass
         ``False``; public routes must leave the default in place.
+    :param defer_initial_items: Keep the validated initial items on the
+        server-internal request, but defer their dispatch until the caller
+        has completed any host binding. This is used by the model-advisor
+        launcher so the first turn goes through the real session-event path
+        instead of becoming history-only seed data before a runner exists.
     :returns: The newly created session snapshot.
     :raises OmnigentError: 404 if no agent matches ``body.agent_id``;
         403/404 if ``parent_session_id`` or session-scoped ``agent_id``
@@ -8954,7 +8975,7 @@ async def _create_session_from_existing_agent(
     except Exception:  # noqa: BLE001
         pass
 
-    if body.initial_items:
+    if body.initial_items and not defer_initial_items:
         runner_client = await _get_runner_client(conv.id, runner_router)
         if runner_client is None:
             # No runner bound — persist initial items as history-only

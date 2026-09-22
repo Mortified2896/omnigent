@@ -69,6 +69,31 @@ async def test_advisor_round_with_available_pick_launches_unchanged(advisor_harn
 
 
 @pytest.mark.asyncio
+async def test_advisor_round_rejects_effort_alias_or_substitution(advisor_harness) -> None:
+    """An unsupported requested effort fails instead of being aliased."""
+    harness = advisor_harness
+    pick = "gpt-5.6-sol"
+    harness.snapshot["model_override"] = pick
+    harness.snapshot["reasoning_effort"] = "max"
+    harness.snapshot["labels"] = {_ADVISOR_LABEL: "adviseround-effort"}
+    harness.seed_catalog(
+        [
+            {
+                "id": pick,
+                "isDefault": True,
+                "supportedReasoningEfforts": [{"reasoningEffort": "xhigh"}],
+            }
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="exact-selection"):
+        await harness.launch()
+
+    assert harness.builds == []
+    assert harness.resets == []
+
+
+@pytest.mark.asyncio
 async def test_ordinary_session_still_resets_the_same_unavailable_pick(advisor_harness) -> None:
     """No advisor label: the pre-existing lane/provider fallback is unchanged."""
     harness = advisor_harness
