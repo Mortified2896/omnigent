@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import tempfile
 import time
 from dataclasses import dataclass
@@ -100,6 +101,24 @@ _OUTPUT_SCHEMA = {
     "required": ["candidate_id", "rationale"],
     "additionalProperties": False,
 }
+
+
+def _advisor_temp_parent() -> Path:
+    """Return a private, instance-owned parent for the advisor sandbox.
+
+    Codex creates short-lived helper aliases under ``CODEX_HOME`` even for a
+    tool-disabled ``exec``. Recent Codex builds refuse to create those aliases
+    below the system temporary directory, so the advisor's isolated home must
+    live under Omnigent's writable instance configuration/data area instead.
+    The directory is still disposable and mode ``0700``; it is not the
+    configured Codex home and never broadens access to user configuration.
+    """
+    configured_root = os.environ.get("OMNIGENT_CONFIG_HOME") or os.environ.get("OMNIGENT_DATA_DIR")
+    root = Path(configured_root) if configured_root else Path.home() / ".cache" / "omnigent"
+    parent = root / "advisor-runtime"
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent.chmod(0o700)
+    return parent
 
 
 class AdvisorCallError(RuntimeError):
@@ -227,7 +246,9 @@ async def generate_advisor_selection(
     prompt = build_advisor_prompt(request)
     launch = resolve_native_codex_launch(model=model, spec=None, access_lane=access_lane)
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="omnigent-advisor-") as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="omnigent-advisor-", dir=_advisor_temp_parent()
+    ) as temp_dir:
         temp_root = Path(temp_dir)
         codex_home = temp_root / "codex-home"
         workdir = temp_root / "workspace"
