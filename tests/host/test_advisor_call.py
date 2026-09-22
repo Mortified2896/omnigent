@@ -71,6 +71,8 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
 ) -> None:
     """The captured codex exec invocation carries zero tools end to end."""
     captured: dict[str, Any] = {}
+    configured_home = tmp_path / "instance-config"
+    monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(configured_home))
 
     def fake_resolve_launch(
         *, model: str, spec: Any = None, access_lane: str | None = None
@@ -174,6 +176,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     # Lane binding traveled into the launch resolution and the child env.
     assert captured["lane"] == "glm-direct"
     assert captured["env"]["ZAI_API_KEY"] == "from-env"
+    assert Path(captured["env"]["CODEX_HOME"]).is_relative_to(configured_home / "advisor-runtime")
     assert "<task>\nDo the thing\n</task>" in captured["stdin"]
     assert result.raw_output.startswith("{")
     assert json.loads(result.raw_output)["candidate_id"] == "choice-a"
