@@ -78,6 +78,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
         *, model: str, spec: Any = None, access_lane: str | None = None
     ) -> SimpleNamespace:
         captured["lane"] = access_lane
+        captured["resolved_model"] = model
         return SimpleNamespace(
             model=model,
             profile=None,
@@ -175,12 +176,26 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     )
     # Lane binding traveled into the launch resolution and the child env.
     assert captured["lane"] == "glm-direct"
+    assert captured["resolved_model"] == "glm-5.3"
     assert captured["env"]["ZAI_API_KEY"] == "from-env"
     assert Path(captured["env"]["CODEX_HOME"]).is_relative_to(configured_home / "advisor-runtime")
     assert "<task>\nDo the thing\n</task>" in captured["stdin"]
     assert result.raw_output.startswith("{")
     assert json.loads(result.raw_output)["candidate_id"] == "choice-a"
     assert result.input_tokens == 11 and result.output_tokens == 3
+
+    direct_result = await generate_advisor_selection(
+        request=request,
+        model="codex/gpt-5.5",
+        access_lane="codex-direct",
+        reasoning_effort="high",
+    )
+    direct_argv = captured["argv"]
+    assert captured["lane"] == "codex-direct"
+    assert captured["resolved_model"] == "gpt-5.5"
+    assert captured["build"]["model"] == "gpt-5.5"
+    assert direct_argv[direct_argv.index("--model") + 1] == "gpt-5.5"
+    assert json.loads(direct_result.raw_output)["candidate_id"] == "choice-a"
 
 
 @pytest.mark.asyncio

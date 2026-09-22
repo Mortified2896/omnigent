@@ -521,6 +521,7 @@ class ModelAdvisorService:
                     round_id,
                     str(result["raw_output"]),
                     randbelow=self._randbelow,
+                    overhead=self._advisor_overhead(result),
                 )
             except AdvisorConflict:
                 # Cancelled or already finished while the call was in flight;
@@ -531,7 +532,6 @@ class ModelAdvisorService:
                     owner, host_id, round_id, f"advisor output rejected: {exc}"
                 )
                 return
-            self._record_overhead(owner, host_id, round_id, result)
 
         def _log_crash(task: asyncio.Task[None]) -> None:
             if not task.cancelled() and task.exception() is not None:
@@ -551,20 +551,16 @@ class ModelAdvisorService:
             _logger.warning("Could not mark advisor round %s failed: %s", round_id, reason)
         _logger.warning("Advisor round %s blocked: %s", round_id, reason)
 
-    def _record_overhead(
-        self, owner: str, host_id: str, round_id: str, result: dict[str, Any]
-    ) -> None:
-        overhead = {
+    @staticmethod
+    def _advisor_overhead(result: dict[str, Any]) -> dict[str, Any]:
+        """Project bounded provider telemetry into the finish transaction."""
+        return {
             "latency_ms": result.get("latency_ms"),
             "input_tokens": result.get("input_tokens"),
             "output_tokens": result.get("output_tokens"),
             "cached_input_tokens": result.get("cached_input_tokens"),
             "response_id": result.get("response_id"),
         }
-        try:
-            self.repository.record_advisor_overhead(owner, host_id, round_id, overhead=overhead)
-        except (AdvisorConflict, AdvisorContractError):
-            _logger.debug("advisor overhead recording lost the race for %s", round_id)
 
     async def load_round(self, user_id: str | None, host_id: str, round_id: str) -> dict[str, Any]:
         owner = self.owner_id(user_id)

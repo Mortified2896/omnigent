@@ -4019,7 +4019,11 @@ async def _auto_create_codex_terminal(
             codex_launch_catalog_is_stale,
             codex_reprobed_launch_catalog,
         )
-        from omnigent.models.codex_model_vocabulary import codex_reachable_model_slug
+        from omnigent.models.codex_model_vocabulary import (
+            codex_reachable_model_slug,
+            comparable_model_id,
+            native_codex_model_slug,
+        )
         from omnigent.models.model_catalog_store import default_row
 
         _codex_catalog: list[_JsonObject] | None = None
@@ -4150,11 +4154,27 @@ async def _auto_create_codex_terminal(
                     extra={"session_id": session_id},
                 )
             if launch_config.advisor_round_id and reachable is not None:
+                # The picker keeps ``codex/`` as the candidate's route
+                # identity, while the ChatGPT-plan Codex binary accepts the
+                # corresponding bare slug. Normalize only at this native
+                # launch boundary; the persisted/requested identity remains
+                # unchanged and the exact lane/catalog checks above still
+                # govern the assignment.
+                if launch_config.access_lane == "codex-direct":
+                    _codex_launch = _dataclass_replace(
+                        _codex_launch,
+                        model=native_codex_model_slug(reachable),
+                    )
                 selected_row = next(
                     (
                         row
                         for row in _codex_catalog
-                        if row.get("id") == reachable or row.get("model") == reachable
+                        if any(
+                            isinstance(spelling, str)
+                            and comparable_model_id(native_codex_model_slug(spelling))
+                            == comparable_model_id(native_codex_model_slug(reachable))
+                            for spelling in (row.get("id"), row.get("model"))
+                        )
                     ),
                     None,
                 )

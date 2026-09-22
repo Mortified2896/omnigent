@@ -57,6 +57,7 @@ from typing import Any
 #: endpoint's ``databricks-``; the extended catalog's ids are spelled with it.
 _MODEL_ROUTE_PREFIX = "system.ai."
 _CATALOG_PREFIXES: tuple[str, ...] = ("databricks-", _MODEL_ROUTE_PREFIX)
+_CODEX_ROUTE_PREFIX = "codex/"
 
 #: A bare gpt id, split into family, version digits, and optional tier —
 #: ``gpt-5-6-luna`` → ``("gpt", "5", "6", "luna")``. Codex spells the
@@ -109,6 +110,23 @@ def comparable_model_id(model: str) -> str:
     :returns: The comparable bare id, e.g. ``"gpt-5-6-luna"``.
     """
     return bare_model_id(model).replace(".", "-")
+
+
+def native_codex_model_slug(model: str) -> str:
+    """Return the native Codex slug for a route-qualified Codex model.
+
+    The model-advisor catalog keeps ``codex/`` on OpenAI candidates so the
+    route remains distinct from another lane serving the same checkpoint.
+    ChatGPT-plan Codex itself accepts the live catalog's bare slug, however,
+    so only the native process boundary should remove this route marker.
+
+    :param model: A candidate or catalog model id, e.g. ``"codex/gpt-5.5"``.
+    :returns: The model spelling accepted by native Codex, e.g. ``"gpt-5.5"``.
+    """
+    stripped = model.strip()
+    if stripped.casefold().startswith(_CODEX_ROUTE_PREFIX):
+        return stripped[len(_CODEX_ROUTE_PREFIX) :]
+    return stripped
 
 
 def codex_spawn_model(model: str) -> str | None:
@@ -173,7 +191,7 @@ def codex_reachable_model_slug(
     """
     if not isinstance(model, str) or not model.strip():
         return None
-    target = comparable_model_id(model)
+    target = comparable_model_id(native_codex_model_slug(model))
     for option in options:
         if not isinstance(option, Mapping):
             continue
@@ -184,6 +202,9 @@ def codex_reachable_model_slug(
         # separately from its own slug; matching either side keeps the
         # translation working whichever spelling the deployment lists.
         for spelling in (slug, option.get("model")):
-            if isinstance(spelling, str) and comparable_model_id(spelling) == target:
+            if (
+                isinstance(spelling, str)
+                and comparable_model_id(native_codex_model_slug(spelling)) == target
+            ):
                 return slug.strip()
     return None

@@ -60,11 +60,21 @@ class _LaunchHarness:
             server_client=self.server_client,
         )
 
-    def catalog_shape(self, *, ambient: bool = False) -> codex_app.NativeCodexLaunch:
+    def catalog_shape(
+        self,
+        *,
+        ambient: bool = False,
+        access_lane: str | None = None,
+    ) -> codex_app.NativeCodexLaunch:
         """Resolve the catalog shape without a per-session model selection."""
         spec = (
             self.agent_spec.spec if isinstance(self.agent_spec, ResolvedSpec) else self.agent_spec
         )
+        if access_lane is not None:
+            return codex_app.resolve_native_codex_catalog_launch(
+                spec=None if ambient else spec,
+                access_lane=access_lane,
+            )
         return codex_app.resolve_native_codex_launch(model=None, spec=None if ambient else spec)
 
     def seed_catalog(
@@ -73,10 +83,11 @@ class _LaunchHarness:
         *,
         stale: bool = False,
         ambient: bool = False,
+        access_lane: str | None = None,
     ) -> str:
         """Seed a real store entry, optionally older than its freshness budget."""
         fingerprint = codex_app.codex_catalog_fingerprint(
-            self.catalog_shape(ambient=ambient), codex_path=_CODEX_PATH
+            self.catalog_shape(ambient=ambient, access_lane=access_lane), codex_path=_CODEX_PATH
         )
         model_catalog_store.write_catalog("codex-native", fingerprint, rows)
         if stale:
@@ -116,6 +127,19 @@ async def codex_launch_harness(
         )
 
     monkeypatch.setattr(codex_app, "resolve_native_codex_launch", resolve_launch)
+
+    def resolve_catalog_launch(
+        *, spec: AgentSpec | None = None, access_lane: str | None = None
+    ) -> codex_app.NativeCodexLaunch:
+        return codex_app.resolve_native_codex_launch(
+            model=None, spec=spec, access_lane=access_lane
+        )
+
+    monkeypatch.setattr(
+        codex_app,
+        "resolve_native_codex_catalog_launch",
+        resolve_catalog_launch,
+    )
     monkeypatch.setattr(codex_app, "codex_launch_catalog", REAL_CODEX_LAUNCH_CATALOG)
     monkeypatch.setattr(
         codex_app, "codex_reprobed_launch_catalog", REAL_CODEX_REPROBED_LAUNCH_CATALOG
