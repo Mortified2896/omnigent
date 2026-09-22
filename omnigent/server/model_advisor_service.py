@@ -75,6 +75,12 @@ ADVISOR_ROUND_GROUP_LABEL_KEY = "omnigent.advisor.comparison_group"
 
 def _lane_classification(lane: str | None, model_id: str) -> tuple[AccessClass, str, str] | None:
     if lane in _LANE_CLASSIFICATIONS:
+        # An extended catalog can carry GLM rows while probing Codex's
+        # built-in subscription provider. Never turn a GLM checkpoint into a
+        # ChatGPT-plan candidate merely because the probe stamped the direct
+        # lane onto it.
+        if lane == "codex-direct" and model_id.casefold().startswith(_GLM_MODEL_PREFIXES):
+            return None
         return _LANE_CLASSIFICATIONS[lane]
     if lane == "omniroute" and model_id.casefold().startswith(_GLM_MODEL_PREFIXES):
         # An explicitly qualified OmniRoute GLM route stays a distinct GLM

@@ -124,6 +124,33 @@ CATALOG_MODELS = [
 ]
 
 
+def test_build_host_catalog_does_not_attribute_glm_to_codex_subscription() -> None:
+    from omnigent.server.model_advisor_service import build_host_catalog
+
+    catalog = build_host_catalog(
+        [
+            {
+                "id": "glm-5.3",
+                "model": "glm-5.3",
+                "accessLane": "codex-direct",
+                "displayName": "GLM 5.3",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+            },
+            {
+                "id": "gpt-live",
+                "model": "gpt-live",
+                "accessLane": "codex-direct",
+                "displayName": "GPT Live",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+            },
+        ]
+    )
+
+    assert [(option.model_id, option.access_class) for option in catalog.options] == [
+        ("gpt-live", "chatgpt_plan")
+    ]
+
+
 def _candidate_id(lane: str, model: str, effort: str) -> str:
     """Compute the stable candidate id exactly as the service does."""
     identity = (

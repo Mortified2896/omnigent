@@ -986,6 +986,18 @@ def _codex_options_for_access_lane(
     return normalized
 
 
+def _is_glm_model_id(model_id: object) -> bool:
+    """Recognize GLM ids that must never be attributed to Codex direct.
+
+    A configured ``model_catalog_json`` can extend Codex's own rows with the
+    GLM rows used by the gateway. The Codex-direct probe still reads that
+    effective catalog, so filter those provider-local ids before stamping the
+    subscription lane onto them. This preserves route identity without an
+    OpenAI model allowlist.
+    """
+    return isinstance(model_id, str) and model_id.casefold().startswith("glm")
+
+
 @dataclass(frozen=True)
 class ModelOptionsResult:
     """One resolved model listing: picker rows + the settable-but-unlisted ids.
@@ -3086,8 +3098,13 @@ class HostProcess:
                         "Codex direct catalog unavailable for Model Advisor", exc_info=True
                     )
                     direct_rows = None
+                direct_rows = [
+                    row
+                    for row in (direct_rows or ())
+                    if not _is_glm_model_id(row.get("model") or row.get("id"))
+                ]
                 rows = _codex_options_for_access_lane(
-                    direct_rows or (),
+                    direct_rows,
                     access_lane="codex-direct",
                     group_label="Codex Subscription — Direct",
                     preserve_default=True,

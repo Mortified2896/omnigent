@@ -6050,7 +6050,12 @@ async def test_model_advisor_picker_uses_the_live_codex_direct_catalog(monkeypat
                 "displayName": "GPT Live",
                 "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
                 "isDefault": True,
-            }
+            },
+            # The effective merged catalog can carry GLM rows from the
+            # gateway lane. They must not inherit the direct subscription
+            # lane merely because this probe is direct.
+            {"id": "glm-5.3", "displayName": "GLM 5.3"},
+            {"id": "glm/glm-5.3", "displayName": "GLM 5.3 via gateway"},
         ]
 
     monkeypatch.setattr(app_server, "resolve_native_codex_catalog_launch", resolve)
