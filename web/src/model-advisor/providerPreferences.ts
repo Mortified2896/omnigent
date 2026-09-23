@@ -7,6 +7,11 @@ export const PROVIDER_LABELS: Record<ProviderGroup, string> = {
   glm: "GLM / Z.AI",
 };
 
+const REASONING_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+const REASONING_EFFORT_RANK: ReadonlyMap<string, number> = new Map(
+  REASONING_EFFORT_ORDER.map((effort, index) => [effort, index]),
+);
+
 export interface ProviderSelection {
   enabled: boolean;
   collapsed: boolean;
@@ -136,7 +141,14 @@ export function groupModels(
     }
     model.options.push(option);
   }
-  return [...models.values()];
+  return [...models.values()].map((model) => ({
+    ...model,
+    options: [...model.options].sort(
+      (left, right) =>
+        (REASONING_EFFORT_RANK.get(left.reasoning_effort) ?? REASONING_EFFORT_ORDER.length) -
+        (REASONING_EFFORT_RANK.get(right.reasoning_effort) ?? REASONING_EFFORT_ORDER.length),
+    ),
+  }));
 }
 
 export function effortLabel(effort: string): string {

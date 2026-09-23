@@ -8,6 +8,7 @@ import {
   type AdvisorPreferences,
   type AdvisorOption,
 } from "./editor";
+import { groupModels, type LogicalOption } from "./providerPreferences";
 
 const prefs: AdvisorPreferences = {
   schema_version: 1,
@@ -39,6 +40,30 @@ const hydrated = () =>
   editorReducer(initialEditor("owner:host"), { type: "hydrate", scope: "owner:host", saved });
 
 describe("model advisor settings editor", () => {
+  it("orders reasoning levels from lowest to highest within each model", () => {
+    const scrambledOptions: LogicalOption[] = [
+      "max",
+      "low",
+      "ultra",
+      "high",
+      "medium",
+      "xhigh",
+    ].map((reasoning_effort) => ({
+      choice_id: `choice-${reasoning_effort}`,
+      provider: "openai",
+      model_id: "gpt-5.6-terra",
+      display_name: "GPT-5.6-Terra",
+      reasoning_effort,
+      model_ids: ["gpt-5.6-terra"],
+      access_lanes: ["codex-direct"],
+      available: true,
+    }));
+
+    expect(
+      groupModels(scrambledOptions, "openai")[0]?.options.map((option) => option.reasoning_effort),
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
+
   it("does not edit or save empty state before hydration", () => {
     const state = initialEditor("owner:host");
     expect(editorReducer(state, { type: "edit", preferences: prefs })).toBe(state);
