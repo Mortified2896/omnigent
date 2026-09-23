@@ -275,6 +275,43 @@ def test_codex_prefixed_direct_models_group_with_the_same_omniroute_checkpoint()
             } == {"direct", "omniroute"}
 
 
+def test_codex_direct_gpt_6_luna_uses_its_canonical_choice() -> None:
+    from omnigent.server.model_advisor_service import build_host_catalog
+
+    catalog = build_host_catalog(
+        [
+            {
+                "id": "codex/gpt-6-luna",
+                "model": "codex/gpt-6-luna",
+                "displayName": "GPT-6-Luna",
+                "accessLane": "codex-direct",
+                "defaultReasoningEffort": "medium",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": effort}
+                    for effort in ("low", "medium", "high", "xhigh", "max")
+                ],
+            }
+        ]
+    )
+
+    assert len(catalog.logical_options) == 5
+    assert {option.choice.model_id for option in catalog.logical_options} == {"gpt-6-luna"}
+    assert {option.choice.reasoning_effort for option in catalog.logical_options} == {
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    }
+    assert all(option.model_ids == ("codex/gpt-6-luna",) for option in catalog.logical_options)
+    assert all(option.access_lanes == ("codex-direct",) for option in catalog.logical_options)
+    assert all(
+        {route.transport for route in catalog.routes_by_choice[option.choice.choice_id]}
+        == {"direct"}
+        for option in catalog.logical_options
+    )
+
+
 def _candidate_id(lane: str, model: str, effort: str) -> str:
     """Compute the stable candidate id exactly as the service does."""
     identity = (

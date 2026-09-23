@@ -98,13 +98,12 @@ _OPENAI_OMNIROUTE_TO_CANONICAL: dict[str, str] = {
     "codex/gpt-5.6-luna": "gpt-5.6-luna",
     "codex/gpt-5.5": "gpt-5.5",
 }
-# The Codex direct catalog can use the same provider-prefixed spelling as its
-# OmniRoute catalog. These aliases were qualified on both live lanes; retain
-# an explicit direct-lane map so the catalog spelling does not become a second
-# logical checkpoint. Do not strip ``codex/`` generically: the prefix alone is
-# not proof that two provider rows are equivalent.
+# Codex Direct can report provider-prefixed ids too. Keep these exact direct
+# aliases separate from the OmniRoute map: a direct row does not qualify a
+# gateway route, and the prefix alone is not proof that two rows are equivalent.
 _OPENAI_DIRECT_TO_CANONICAL: dict[str, str] = {
     "codex/gpt-6-astra": "gpt-6-astra",
+    "codex/gpt-6-luna": "gpt-6-luna",
     "codex/gpt-5.6-luna": "gpt-5.6-luna",
 }
 from omnigent.models.glm_model_vocabulary import (  # noqa: E402
