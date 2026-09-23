@@ -6022,8 +6022,8 @@ async def test_non_o3_picker_appends_both_glm_lanes_from_discovery(monkeypatch) 
     assert result.models[0].get("accessLane") is None
 
 
-async def test_model_advisor_picker_uses_the_live_codex_direct_catalog(monkeypatch) -> None:
-    """The advisor release probes Codex Subscription — Direct explicitly."""
+async def test_model_advisor_picker_uses_both_openai_lanes(monkeypatch) -> None:
+    """The provider-grouped advisor probes both qualified OpenAI lanes."""
     from omnigent.harnesses.codex_native import app_server
 
     monkeypatch.setenv("OMNIGENT_FEATURES", "model_advisor")
@@ -6043,7 +6043,7 @@ async def test_model_advisor_picker_uses_the_live_codex_direct_catalog(monkeypat
         )
 
     async def catalog(*, launch):
-        assert launch.summary == "codex-direct"
+        assert launch.summary in {"omniroute", "codex-direct"}
         return [
             {
                 "id": "gpt-live",
@@ -6065,11 +6065,14 @@ async def test_model_advisor_picker_uses_the_live_codex_direct_catalog(monkeypat
     result = await _make_host_process()._probed_codex_model_options()
 
     assert result is not None
-    assert seen_lanes == ["codex-direct"]
+    assert seen_lanes == ["omniroute", "codex-direct"]
     assert [(row["id"], row["accessLane"]) for row in result.models] == [
-        ("gpt-live", "codex-direct")
+        ("gpt-live", "omniroute"),
+        ("gpt-live", "codex-direct"),
     ]
-    assert result.models[0]["supportedReasoningEfforts"] == [{"reasoningEffort": "high"}]
+    assert all(
+        row["supportedReasoningEfforts"] == [{"reasoningEffort": "high"}] for row in result.models
+    )
 
 
 async def test_o3_lane_catalog_failure_does_not_hide_the_other_lane(monkeypatch) -> None:
