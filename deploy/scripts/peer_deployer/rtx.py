@@ -18,11 +18,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.request import urlopen
 
+from release_controller.accepted import verify_accepted_artifact
+
 from .rtx_contract import (
     Journal,
     Peer,
     Refused,
-    canonical_digest,
     database_evidence,
     digest,
     distinct,
@@ -32,6 +33,7 @@ from .rtx_contract import (
 CONFIG = Path("/etc/omnigent-peers")
 TRANSACTIONS = Path("/srv/omnigent/peer-transactions")
 ARTIFACTS = Path("/srv/omnigent/artifacts")
+RELEASES = Path("/srv/omnigent/releases")
 
 
 def run(args: list[str], *, timeout: int = 60) -> str:
@@ -155,44 +157,21 @@ def snapshot(peer: Peer, expected_sha: str) -> dict:
 
 
 def accepted(path: Path, expected_digest: str) -> dict:
-    trusted(path)
-    record = json.loads(path.read_text())
-    require(canonical_digest(record) == expected_digest, "accepted-artifact mismatch")
-    sha = record["source_sha"]
-    require(bool(re.fullmatch(r"[a-f0-9]{40}", sha)), "invalid artifact SHA")
-    require(path == ARTIFACTS / sha / "acceptance-v2.json", "wrong acceptance path")
-    runtime = Path(record["runtime"])
-    require(runtime == Path("/srv/omnigent/releases") / sha, "wrong immutable runtime path")
-    trusted(runtime)
-    for name, expected in record["hashes"].items():
-        relative = Path(name)
-        require(not relative.is_absolute() and ".." not in relative.parts, "unsafe artifact path")
-        resource = runtime / relative
-        trusted(resource)
-        require(digest(resource) == expected, f"artifact changed: {name}")
-    require(record["schema_policy"] == "same-schema", "unsupported migration policy")
-    require(
-        all(
-            record["checks"].get(k) is True
-            for k in (
-                "dependencies",
-                "isolated_boot",
-                "build_identity",
-                "frontend",
-                "o3_off",
-                "smart_routing",
-            )
-        ),
-        "incomplete candidate acceptance",
-    )
-    python = runtime / "venv/bin/python"
-    require(os.access(python, os.X_OK), "candidate executable missing")
-    build = run(
-        [str(python), "-c", "from omnigent._build_info import COMMIT_SHA; print(COMMIT_SHA)"]
-    )
-    require(build == sha, "candidate executable build mismatch")
-    run(["/srv/tools/uv-0.12.1/bin/uv", "pip", "check", "--python", str(python)])
-    return record
+    try:
+        return verify_accepted_artifact(
+            path,
+            expected_digest,
+            artifacts_root=ARTIFACTS,
+            release_root=RELEASES,
+            owner_uid=0,
+            trust=trusted,
+            runner=run,
+            uv_executable="/srv/tools/uv-0.12.1/bin/uv",
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, Refused):
+            raise
+        raise Refused(str(exc)) from exc
 
 
 @contextmanager

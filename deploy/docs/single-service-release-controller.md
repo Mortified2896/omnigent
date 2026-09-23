@@ -1,7 +1,7 @@
 # Single-service Omnigent release controller
 
-Status: design + pure contract only. Nothing in this document authorizes a live
-rollout.
+Status: design + pure contract + disposable executor prototype. No host/systemd
+wiring exists, and nothing in this document authorizes a live rollout.
 
 ## Goal
 
@@ -46,10 +46,13 @@ The intended host layout is deliberately independent of O1/O2 naming:
 Names and final paths are not yet an installation contract. HomeLab owns the
 eventual host wiring.
 
-## What this first slice implements
+## What the prototype implements
 
-`deploy/scripts/release_controller/core.py` is a pure, topology-independent
-contract. It has no filesystem, systemd, database, network or model access.
+`deploy/scripts/release_controller/core.py` is the pure,
+topology-independent contract. It has no filesystem, systemd, database,
+network or model access. `executor.py` adds a disposable implementation that
+rejects service roots outside the operating system's temporary directory.
+It has no CLI, systemd adapter or application endpoint.
 
 It defines:
 
@@ -63,8 +66,39 @@ It defines:
 - the critical rule that automatic state rollback is forbidden once writes have
   reopened.
 
-The current O1/O2 deployment remains untouched. Later work can adapt its
-acceptance records and controller evidence into this generic contract.
+The executor uses the current `acceptance-v2.json` record, canonical digest,
+release file hashes and embedded SHA check. The v2 verifier is shared with the
+existing RTX peer entrypoint; O1/O2 identity and target selection remain in the
+peer controller. A disposable test may mirror a root-owned accepted record and
+its immutable bytes into temporary roots, but the original record digest and
+recorded release path remain pinned.
+
+The executor journals one transaction record, serializes activation with a
+nonblocking file lock, waits for stable zero active work after its adapter
+confirms the write fence, backs up the instance's own SQLite state, atomically
+switches `previous` and `current`, restarts through the fixed adapter, and
+verifies before reopening writes. Its recovery path reconciles the old release
+and `previous` pointer if power loss occurs between an atomic pointer update
+and the following journal write.
+
+The tests create the database with Omnigent's real Alembic migrations and use
+the real SQLAlchemy conversation store. The executor adapter and its synthetic
+v2 test releases still simulate the service process, ingress fence, work
+counter and health checks. There is not yet a real Omnigent process adapter.
+The executor is a learning prototype only; it is not a privileged controller
+or an installation package.
+
+A one-off RTX rehearsal also copied two existing root-accepted releases and
+their `acceptance-v2.json` records into temporary roots, then used the executor
+to stop a real Omnigent process at `4faf6943ee2735f67c7bebb922c443ef300b735e`,
+back up its temporary database, switch the temporary pointer, and start
+`30f919e08d459d6e74d1c0c1c0857bce7056d4e3` at the same loopback URL. Both
+processes passed health, `/v1/info`, UI, build-SHA and schema checks; a seeded
+conversation survived. The acceptance bytes were verified against their
+original root-owned records. That run still simulated the write fence and
+active-work counter and had no external clients. It proves the real package and
+process transition path works in a quiescent disposable instance, not that the
+host can fence or drain a live service safely.
 
 ## Required activation sequence
 
@@ -123,6 +157,14 @@ are stable rather than fork them. The custom pieces we expect to retain are the
 immutable accepted release identity, host-owned privilege boundary, exact-SHA
 activation, persistent-state backup, and deterministic rollback policy.
 
+The current session-drain helper is not safe to call directly from this
+controller: its active-session query treats a query failure as zero work. The
+server also has no server-wide write fence covering HTTP, WebSocket, runners
+and scheduled work. The disposable adapter therefore treats fence, drain and
+restart as explicit fail-closed operations. A real adapter must prove all
+writers are fenced and admitted work is drained; a proxy-only gate would not
+account for scheduled or in-process writers.
+
 ## Relationship to the O1/O2 work
 
 The peer deployment remains the current production safety mechanism. The
@@ -149,6 +191,9 @@ Do not replace the double setup until a disposable rehearsal proves all of:
 - a real running Omnigent can request activation without possessing root;
 - the external controller survives the Omnigent restart;
 - already-admitted HTTP/WebSocket/runner/scheduled work is drained correctly;
+- the existing acceptance-v2 record is used for both releases, and a real
+  accepted Omnigent process is switched between them under an independently
+  verified fence;
 - the exact accepted candidate is launched, not rebuilt or pulled;
 - service state and conversations survive a successful activation;
 - startup failure restores the exact previous release and state while fenced;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -39,7 +40,7 @@ def release(sha: str, digest: str, *, schema: str = SCHEMA) -> ReleaseIdentity:
     )
 
 
-def current(**changes: object) -> RuntimeObservation:
+def current(**changes: Any) -> RuntimeObservation:
     value = RuntimeObservation(
         release=release(CURRENT_SHA, CURRENT_DIGEST),
         process_generation="server-101:host-201",
@@ -53,7 +54,7 @@ def current(**changes: object) -> RuntimeObservation:
     return replace(value, **changes)
 
 
-def candidate(**changes: object) -> CandidateEvidence:
+def candidate(**changes: Any) -> CandidateEvidence:
     value = CandidateEvidence(
         release=release(CANDIDATE_SHA, CANDIDATE_DIGEST),
         observed_at=NOW,
@@ -67,7 +68,7 @@ def candidate(**changes: object) -> CandidateEvidence:
     return replace(value, **changes)
 
 
-def controller(**changes: object) -> ControllerReadiness:
+def controller(**changes: Any) -> ControllerReadiness:
     value = ControllerReadiness(
         observed_at=NOW,
         independent=True,
@@ -129,6 +130,8 @@ def test_unknown_provenance_does_not_invent_official_version() -> None:
         (lambda: current(state_generation=None), "state_generation"),
         (lambda: current(observed_at=NOW - 61), "current_freshness"),
         (lambda: current(healthy=False), "current_health"),
+        (lambda: current(writes_fenced=True), "current_writes_fenced_or_unknown"),
+        (lambda: current(writes_fenced=None), "current_writes_fenced_or_unknown"),
         (lambda: current(active_work=None), "active_work_unknown"),
     ],
 )
@@ -193,9 +196,7 @@ def test_controller_capabilities_default_to_blocking(field: str) -> None:
 def test_schema_change_is_not_automatically_activatable() -> None:
     plan = plan_activation(
         current(),
-        candidate(
-            release=release(CANDIDATE_SHA, CANDIDATE_DIGEST, schema="schema-2")
-        ),
+        candidate(release=release(CANDIDATE_SHA, CANDIDATE_DIGEST, schema="schema-2")),
         release(PREVIOUS_SHA, PREVIOUS_DIGEST),
         controller(),
         now=NOW,
@@ -225,9 +226,7 @@ def test_already_current_requires_same_acceptance_not_only_same_sha() -> None:
     )
     assert plan.status == "already_current"
 
-    changed_acceptance = candidate(
-        release=release(CURRENT_SHA, CANDIDATE_DIGEST)
-    )
+    changed_acceptance = candidate(release=release(CURRENT_SHA, CANDIDATE_DIGEST))
     plan = plan_activation(
         current(),
         changed_acceptance,
@@ -290,8 +289,13 @@ def test_request_rejects_non_uuid4_key() -> None:
         (ActivationPhase.SWITCHED, ActivationPhase.STARTING, True),
         (ActivationPhase.STARTING, ActivationPhase.VERIFYING, True),
         (ActivationPhase.VERIFYING, ActivationPhase.COMMITTED, True),
+        (ActivationPhase.COMMITTED, ActivationPhase.REOPENING_WRITES, True),
+        (ActivationPhase.COMMITTED, ActivationPhase.ROLLING_BACK, True),
+        (ActivationPhase.REOPENING_WRITES, ActivationPhase.WRITES_REOPENED, True),
+        (ActivationPhase.REOPENING_WRITES, ActivationPhase.ROLLING_BACK, False),
+        (ActivationPhase.WRITES_REOPENED, ActivationPhase.RECOVERY_REQUIRED, True),
         (ActivationPhase.STARTING, ActivationPhase.ROLLING_BACK, True),
-        (ActivationPhase.COMMITTED, ActivationPhase.ROLLING_BACK, False),
+        (ActivationPhase.WRITES_REOPENED, ActivationPhase.ROLLING_BACK, False),
         (ActivationPhase.ROLLED_BACK, ActivationPhase.STARTING, False),
     ],
 )
@@ -329,12 +333,38 @@ def test_automatic_rollback_requires_verified_backup_and_previous_release() -> N
     )
 
 
+def test_committed_candidate_can_roll_back_until_write_reopen_starts() -> None:
+    assert automatic_rollback_allowed(
+        phase=ActivationPhase.COMMITTED,
+        writes_reopened=False,
+        backup_verified=True,
+        previous_release_verified=True,
+    )
+    assert not automatic_rollback_allowed(
+        phase=ActivationPhase.COMMITTED,
+        writes_reopened=True,
+        backup_verified=True,
+        previous_release_verified=True,
+    )
+
+
+def test_write_reopen_intent_is_uncertain_and_forbids_state_rollback() -> None:
+    assert not automatic_rollback_allowed(
+        phase=ActivationPhase.REOPENING_WRITES,
+        writes_reopened=False,
+        backup_verified=True,
+        previous_release_verified=True,
+    )
+
+
 def test_terminal_phases_do_not_auto_rollback() -> None:
     for phase in (
         ActivationPhase.PLANNED,
-        ActivationPhase.COMMITTED,
         ActivationPhase.ROLLED_BACK,
+        ActivationPhase.REFUSED,
         ActivationPhase.RECOVERY_REQUIRED,
+        ActivationPhase.REOPENING_WRITES,
+        ActivationPhase.WRITES_REOPENED,
     ):
         assert not automatic_rollback_allowed(
             phase=phase,

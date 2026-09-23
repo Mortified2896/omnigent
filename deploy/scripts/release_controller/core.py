@@ -37,8 +37,11 @@ class ActivationPhase(StrEnum):
     STARTING = "starting"
     VERIFYING = "verifying"
     COMMITTED = "committed"
+    REOPENING_WRITES = "reopening_writes"
+    WRITES_REOPENED = "writes_reopened"
     ROLLING_BACK = "rolling_back"
     ROLLED_BACK = "rolled_back"
+    REFUSED = "refused"
     RECOVERY_REQUIRED = "recovery_required"
 
 
@@ -50,21 +53,25 @@ _ALLOWED = {
     ActivationPhase.FENCING: {
         ActivationPhase.DRAINING,
         ActivationPhase.ROLLING_BACK,
+        ActivationPhase.REFUSED,
         ActivationPhase.RECOVERY_REQUIRED,
     },
     ActivationPhase.DRAINING: {
         ActivationPhase.QUIESCED,
         ActivationPhase.ROLLING_BACK,
+        ActivationPhase.REFUSED,
         ActivationPhase.RECOVERY_REQUIRED,
     },
     ActivationPhase.QUIESCED: {
         ActivationPhase.BACKED_UP,
         ActivationPhase.ROLLING_BACK,
+        ActivationPhase.REFUSED,
         ActivationPhase.RECOVERY_REQUIRED,
     },
     ActivationPhase.BACKED_UP: {
         ActivationPhase.SWITCHED,
         ActivationPhase.ROLLING_BACK,
+        ActivationPhase.REFUSED,
         ActivationPhase.RECOVERY_REQUIRED,
     },
     ActivationPhase.SWITCHED: {
@@ -86,8 +93,22 @@ _ALLOWED = {
         ActivationPhase.ROLLED_BACK,
         ActivationPhase.RECOVERY_REQUIRED,
     },
-    ActivationPhase.COMMITTED: set(),
+    # COMMITTED means the candidate is verified while writes are still
+    # fenced. A failure may roll back until the durable write-reopen boundary.
+    ActivationPhase.COMMITTED: {
+        ActivationPhase.REOPENING_WRITES,
+        ActivationPhase.ROLLING_BACK,
+        ActivationPhase.RECOVERY_REQUIRED,
+    },
+    # Once write reopening begins, interruption leaves its outcome uncertain.
+    # Recovery must preserve state rather than restore the old backup.
+    ActivationPhase.REOPENING_WRITES: {
+        ActivationPhase.WRITES_REOPENED,
+        ActivationPhase.RECOVERY_REQUIRED,
+    },
+    ActivationPhase.WRITES_REOPENED: {ActivationPhase.RECOVERY_REQUIRED},
     ActivationPhase.ROLLED_BACK: set(),
+    ActivationPhase.REFUSED: set(),
     ActivationPhase.RECOVERY_REQUIRED: set(),
 }
 
@@ -283,6 +304,8 @@ def plan_activation(
         blockers.append("current_freshness")
     if current.healthy is not True:
         blockers.append("current_health")
+    if current.writes_fenced is not False:
+        blockers.append("current_writes_fenced_or_unknown")
     if type(current.active_work) is not int or current.active_work < 0:
         blockers.append("active_work_unknown")
 
@@ -332,11 +355,7 @@ def plan_activation(
     stamps = [current.observed_at, candidate.observed_at, controller.observed_at]
     expiry = min(
         [now + MAX_EVIDENCE_AGE_SECONDS]
-        + [
-            float(value) + MAX_EVIDENCE_AGE_SECONDS
-            for value in stamps
-            if _number(value)
-        ]
+        + [float(value) + MAX_EVIDENCE_AGE_SECONDS for value in stamps if _number(value)]
     )
     return ActivationPlan(
         "blocked" if blockers else "ready",
@@ -391,8 +410,10 @@ def automatic_rollback_allowed(
     if writes_reopened:
         return False
     if phase in {
-        ActivationPhase.COMMITTED,
+        ActivationPhase.REOPENING_WRITES,
+        ActivationPhase.WRITES_REOPENED,
         ActivationPhase.ROLLED_BACK,
+        ActivationPhase.REFUSED,
         ActivationPhase.RECOVERY_REQUIRED,
         ActivationPhase.PLANNED,
     }:
