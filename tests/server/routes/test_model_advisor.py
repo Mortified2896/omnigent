@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from omnigent.db.utils import get_or_create_engine
 from omnigent.errors import OmnigentError
+from omnigent.model_advisor_provider_policy import LogicalChoice
 from omnigent.model_advisor_repository import AdvisorRepository
 from omnigent.server.auth import AuthProvider
 from omnigent.server.model_advisor_service import ModelAdvisorService
@@ -55,8 +56,11 @@ class _FakeConnection:
 
 
 class _FakeRegistry:
-    def __init__(self, conn: _FakeConnection) -> None:
+    def __init__(
+        self, conn: _FakeConnection, *, models: list[dict[str, Any]] | None = None
+    ) -> None:
         self._conn = conn
+        self._models = models
         self.sent: list[Any] = []
         self.advisor_calls = 0
 
@@ -74,7 +78,8 @@ class _FakeRegistry:
         frame = decode_host_frame(raw) if isinstance(raw, str) else raw
         if isinstance(frame, HostModelOptionsFrame):
             future = conn.pending_model_options.pop(frame.request_id, None)
-            result = {"status": "ok", "models": [dict(row) for row in CATALOG_MODELS]}
+            models = self._models if self._models is not None else CATALOG_MODELS
+            result = {"status": "ok", "models": [dict(row) for row in models]}
         elif isinstance(frame, HostAdvisorCallFrame):
             self.advisor_calls += 1
             future = conn.pending_advisor_calls.pop(frame.request_id, None)
@@ -123,6 +128,55 @@ CATALOG_MODELS = [
     {"id": "gpt-5.6", "model": "gpt-5.6", "accessLane": "omniroute", "isDefault": True},
 ]
 
+PROVIDER_OPENAI = LogicalChoice("openai", "gpt-5.5", "medium")
+PROVIDER_GLM = LogicalChoice("glm", "glm-5.3", "high")
+PROVIDER_CATALOG_MODELS = [
+    {
+        "id": "gpt-5.5",
+        "model": "gpt-5.5",
+        "displayName": "GPT-5.5 Direct",
+        "accessLane": "codex-direct",
+        "defaultReasoningEffort": "medium",
+        "supportedReasoningEfforts": [{"reasoningEffort": "medium"}],
+    },
+    {
+        "id": "codex/gpt-5.5",
+        "model": "codex/gpt-5.5",
+        "displayName": "GPT-5.5 OmniRoute",
+        "accessLane": "omniroute",
+        "defaultReasoningEffort": "medium",
+        "supportedReasoningEfforts": [{"reasoningEffort": "medium"}],
+        "advisorProvider": "openai",
+        "advisorAccessClass": "chatgpt_plan",
+        "advisorConnectionId": "omniroute-codex-oauth",
+        "advisorEntitlementKey": "chatgpt-plan:rtx-codex-owner",
+    },
+    {
+        "id": "glm-5.3",
+        "model": "glm-5.3",
+        "displayName": "GLM-5.3 Direct",
+        "accessLane": "glm-direct",
+        "defaultReasoningEffort": "high",
+        "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+        "advisorProvider": "glm",
+        "advisorAccessClass": "glm_plan",
+        "advisorConnectionId": "zai-direct-coding-plan",
+        "advisorEntitlementKey": "glm-plan:rtx-coding-plan",
+    },
+    {
+        "id": "glm/glm-5.3",
+        "model": "glm/glm-5.3",
+        "displayName": "GLM-5.3 OmniRoute",
+        "accessLane": "omniroute",
+        "defaultReasoningEffort": "high",
+        "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+        "advisorProvider": "glm",
+        "advisorAccessClass": "glm_plan",
+        "advisorConnectionId": "omniroute-glm-coding-plan",
+        "advisorEntitlementKey": "glm-plan:rtx-coding-plan",
+    },
+]
+
 
 def test_build_host_catalog_does_not_attribute_glm_to_codex_subscription() -> None:
     from omnigent.server.model_advisor_service import build_host_catalog
@@ -149,6 +203,22 @@ def test_build_host_catalog_does_not_attribute_glm_to_codex_subscription() -> No
     assert [(option.model_id, option.access_class) for option in catalog.options] == [
         ("gpt-live", "chatgpt_plan")
     ]
+
+
+def test_build_host_catalog_groups_explicit_equivalent_provider_routes() -> None:
+    from omnigent.server.model_advisor_service import build_host_catalog
+
+    catalog = build_host_catalog(PROVIDER_CATALOG_MODELS)
+    assert set(catalog.logical_choices) == {PROVIDER_OPENAI, PROVIDER_GLM}
+    assert len(catalog.logical_options) == 2
+    openai = next(option for option in catalog.logical_options if option.choice == PROVIDER_OPENAI)
+    assert set(openai.model_ids) == {"gpt-5.5", "codex/gpt-5.5"}
+    assert set(openai.access_lanes) == {"codex-direct", "omniroute"}
+    assert {route.transport for route in catalog.routes_by_choice[PROVIDER_OPENAI.choice_id]} == {
+        "direct",
+        "omniroute",
+    }
+    assert len(catalog.routes_by_choice[PROVIDER_OPENAI.choice_id]) == 2
 
 
 def _candidate_id(lane: str, model: str, effort: str) -> str:
@@ -202,10 +272,11 @@ def client_for(
     hosts: list[_FakeHost] | None = None,
     launcher: Any = None,
     randbelow: Any = None,
+    catalog_models: list[dict[str, Any]] | None = None,
 ) -> tuple[TestClient, _FakeRegistry]:
     repository = AdvisorRepository(get_or_create_engine(db_uri))
     conn = _FakeConnection(reply if reply is not None else dict(ADVISOR_OK_REPLY))
-    registry = _FakeRegistry(conn)
+    registry = _FakeRegistry(conn, models=catalog_models)
     service_kwargs: dict[str, Any] = {}
     if randbelow is not None:
         service_kwargs["randbelow"] = randbelow
@@ -264,6 +335,8 @@ def test_preferences_roundtrip_and_owner_isolation(db_uri) -> None:
         loaded = client.get("/v1/model-advisor/preferences?host_id=host_1", headers=ALICE).json()
         assert loaded["version"] == 1
         assert loaded["preferences"]["advisor_candidate_id"] == ADVISOR_ID
+        assert loaded["logical_preferences"]["schema_version"] == 2
+        assert loaded["logical_preferences"]["route_review_required"] == ["openai", "glm"]
 
         # Another (valid) identity that does not own the host is forbidden
         # outright — records are scoped to owner+host, and host ownership is
@@ -391,6 +464,7 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
         assert confirmed["state"] == "dispatch_bound"
         assert confirmed["execution"]["session_id"] == "conv_new"
         assert len(launched) == 1
+
         body = launched[0][0]
         assert body.model_override == "gpt-5.3-codex"
         assert body.reasoning_effort == "medium"
@@ -408,6 +482,289 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
         )
         assert again.status_code == 200
         assert len(launched) == 1
+
+
+def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
+    db_uri,
+) -> None:
+    launched: list[Any] = []
+
+    async def launcher(body: Any, *, user_id: str | None, request: Any = None) -> Any:
+        launched.append((body, user_id))
+        return _FakeSession()
+
+    reply = {
+        "status": "ok",
+        "raw_output": json.dumps(
+            {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "OpenAI fits."}
+        ),
+        "latency_ms": 800,
+    }
+    client, registry = client_for(
+        db_uri,
+        reply=reply,
+        launcher=launcher,
+        randbelow=lambda _bound: 0,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+    )
+    preferences = {
+        "schema_version": 2,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_GLM.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+        },
+        "advisor_choice_id": PROVIDER_OPENAI.choice_id,
+        "human_probability_percent": 50,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    with client:
+        saved = client.put(
+            "/v1/model-advisor/preferences",
+            json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+            headers=JSON_ALICE,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["preferences"]["schema_version"] == 2
+        catalog = client.get("/v1/model-advisor/catalog?host_id=host_1", headers=ALICE).json()
+        assert len(catalog["logical_options"]) == 2
+        assert set(catalog["logical_options"][0]["model_ids"]) in (
+            {"gpt-5.5", "codex/gpt-5.5"},
+            {"glm-5.3", "glm/glm-5.3"},
+        )
+        create = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Compare these provider plans",
+                "human_choice_id": PROVIDER_GLM.choice_id,
+                "submission_key": "provider-round",
+            },
+            headers=JSON_ALICE,
+        )
+        assert create.status_code == 200
+        payload = _settle(client, create.json()["round_id"])
+        assert payload["review"]["human_choice_id"] == PROVIDER_GLM.choice_id
+        assert payload["review"]["advisor_choice_id"] == PROVIDER_OPENAI.choice_id
+        assert payload["review"]["human_candidate_id"] == PROVIDER_GLM.choice_id
+        assert registry.advisor_calls == 1
+
+        confirm = client.post(
+            f"/v1/model-advisor/rounds/{payload['round_id']}/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": payload["version"],
+                "launch": {"agent_id": "ag_1", "workspace": "/repo"},
+            },
+            headers=JSON_ALICE,
+        )
+        assert confirm.status_code == 200
+        assert confirm.json()["state"] == "dispatch_bound"
+        assert len(launched) == 1
+        body = launched[0][0]
+        assert body.model_override == "glm/glm-5.3"
+        assert body.reasoning_effort == "high"
+        assert body.labels["omnigent.advisor.logical_choice_id"] == PROVIDER_GLM.choice_id
+        assert body.labels["omnigent.access_lane"] == "omniroute"
+        assert body.labels["omnigent.advisor.connection_id"] == "omniroute-glm-coding-plan"
+        assert json.loads(body.labels["omnigent.advisor.dispatch_route"])["connection_id"] == (
+            "omniroute-glm-coding-plan"
+        )
+        assert (
+            json.loads(body.labels["omnigent.advisor.transport_plan"])["primary"]["transport"]
+            == "omniroute"
+        )
+        attempts = confirm.json()["transport_attempts"]
+        assert [attempt["phase"] for attempt in attempts] == [
+            "advisor",
+            "advisor",
+            "answer",
+            "answer",
+        ]
+        assert attempts[-1]["connection_id"] == "omniroute-glm-coding-plan"
+
+
+def test_provider_grouped_round_uses_typed_pre_dispatch_fallback(db_uri) -> None:
+    from omnigent.server.model_advisor_service import PreDispatchRouteFailure
+
+    launches: list[Any] = []
+
+    async def launcher(body: Any, *, user_id: str | None, request: Any = None) -> Any:
+        launches.append(body)
+        if len(launches) == 1:
+            raise PreDispatchRouteFailure(
+                "proxy_connect_failed",
+                upstream_not_started=True,
+            )
+        return _FakeSession()
+
+    reply = {
+        "status": "ok",
+        "raw_output": json.dumps(
+            {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "OpenAI fits."}
+        ),
+        "latency_ms": 100,
+    }
+    client, _registry = client_for(
+        db_uri,
+        reply=reply,
+        launcher=launcher,
+        randbelow=lambda _bound: 0,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+    )
+    preferences = {
+        "schema_version": 2,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_GLM.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+        },
+        "advisor_choice_id": PROVIDER_OPENAI.choice_id,
+        "human_probability_percent": 50,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    with client:
+        assert (
+            client.put(
+                "/v1/model-advisor/preferences",
+                json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+                headers=JSON_ALICE,
+            ).status_code
+            == 200
+        )
+        created = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Use the exact fallback",
+                "human_choice_id": PROVIDER_GLM.choice_id,
+            },
+            headers=JSON_ALICE,
+        )
+        settled = _settle(client, created.json()["round_id"])
+        confirmed = client.post(
+            f"/v1/model-advisor/rounds/{settled['round_id']}/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": settled["version"],
+                "launch": {"agent_id": "ag_1", "workspace": "/repo"},
+            },
+            headers=JSON_ALICE,
+        )
+
+        assert confirmed.status_code == 200
+        assert confirmed.json()["state"] == "dispatch_bound"
+        assert len(launches) == 2
+        assert launches[0].labels["omnigent.access_lane"] == "omniroute"
+        assert launches[1].labels["omnigent.access_lane"] == "glm-direct"
+        attempts = confirmed.json()["transport_attempts"]
+        assert [attempt["status"] for attempt in attempts] == [
+            "dispatch_started",
+            "completed",
+            "dispatch_started",
+            "failed_before_upstream",
+            "fallback_session_created",
+            "session_bound",
+        ]
+        assert attempts[3]["reason"] == "proxy_connect_failed"
+        assert attempts[-1]["transport"] == "direct"
+
+
+def test_provider_grouped_round_never_replays_generic_launch_failure(db_uri) -> None:
+    launches: list[Any] = []
+
+    async def launcher(body: Any, *, user_id: str | None, request: Any = None) -> Any:
+        launches.append(body)
+        raise RuntimeError("ambiguous gateway timeout")
+
+    reply = {
+        "status": "ok",
+        "raw_output": json.dumps(
+            {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "OpenAI fits."}
+        ),
+        "latency_ms": 100,
+    }
+    client, _registry = client_for(
+        db_uri,
+        reply=reply,
+        launcher=launcher,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+    )
+    preferences = {
+        "schema_version": 2,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_GLM.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+        },
+        "advisor_choice_id": PROVIDER_OPENAI.choice_id,
+        "human_probability_percent": 50,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    with client:
+        client.put(
+            "/v1/model-advisor/preferences",
+            json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+            headers=JSON_ALICE,
+        )
+        created = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Do not replay",
+                "human_choice_id": PROVIDER_GLM.choice_id,
+            },
+            headers=JSON_ALICE,
+        )
+        settled = _settle(client, created.json()["round_id"])
+        confirmed = client.post(
+            f"/v1/model-advisor/rounds/{settled['round_id']}/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": settled["version"],
+                "launch": {"agent_id": "ag_1", "workspace": "/repo"},
+            },
+            headers=JSON_ALICE,
+        )
+
+        assert confirmed.status_code == 200
+        assert confirmed.json()["state"] == "dispatch_claimed"
+        assert confirmed.json()["execution"]["uncertain"] is True
+        assert len(launches) == 1
+        assert confirmed.json()["transport_attempts"][-1]["status"] == "dispatch_uncertain"
 
 
 def test_round_freezes_explicit_draft_and_reuses_submission_key(db_uri) -> None:

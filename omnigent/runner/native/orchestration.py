@@ -469,6 +469,9 @@ class _CodexNativeLaunchConfig:
         the assignment — never a reset to the lane default and never a
         cross-lane fallback. ``None`` keeps the ordinary reset/fallback
         behavior for normal sessions.
+    :param advisor_connection_id: Server-attested provider connection for a
+        v2 logical advisor dispatch. ``None`` is retained for v1/ordinary
+        sessions.
     """
 
     workspace: Path
@@ -486,6 +489,7 @@ class _CodexNativeLaunchConfig:
     routing_enabled: bool = False
     turn_routing: bool = False
     advisor_round_id: str | None = None
+    advisor_connection_id: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -954,6 +958,156 @@ async def _pi_native_launch_config(
     )
 
 
+def _validate_advisor_dispatch_route(
+    *,
+    raw_route: object,
+    raw_plan: object,
+    logical_choice_id: object,
+    session_id: str,
+    model_override: str | None,
+    reasoning_effort: str | None,
+    access_lane: str | None,
+    connection_id: str | None,
+) -> str:
+    """Validate the server-owned v2 route binding before native startup.
+
+    The browser can request only ordinary session fields.  A v2 advisor
+    session carries a server-written full plan plus the concrete route for
+    this attempt; checking both here prevents a generic/Combo provider, a
+    different account, or a model/effort substitution from leaking through
+    the native resolver.  This is validation only: no route is retried here.
+    """
+
+    if not isinstance(raw_plan, str) or not isinstance(raw_route, str):
+        raise RuntimeError(
+            f"Advisor session {session_id!r} is missing its server-owned transport binding."
+        )
+    try:
+        plan = json.loads(raw_plan)
+        route = json.loads(raw_route)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} has invalid transport binding JSON."
+        ) from exc
+    if not isinstance(plan, dict) or not isinstance(route, dict):
+        raise RuntimeError(f"Advisor session {session_id!r} has invalid transport binding shape.")
+    primary = plan.get("primary")
+    choice = plan.get("choice")
+    if not isinstance(primary, dict) or not isinstance(choice, dict):
+        raise RuntimeError(f"Advisor session {session_id!r} has an incomplete transport plan.")
+    from omnigent.model_advisor_provider_policy import (
+        LogicalChoice,
+        ProviderPolicyError,
+        QualifiedRoute,
+        TransportPlan,
+    )
+
+    try:
+        plan_model = TransportPlan.from_payload(plan)
+        actual_route = QualifiedRoute.from_payload(route)
+        expected_choice_id = LogicalChoice(**choice).choice_id
+    except (ProviderPolicyError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} has an invalid logical choice."
+        ) from exc
+    if logical_choice_id != expected_choice_id:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} logical choice does not match its transport plan."
+        )
+    if route.get("choice") != choice:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} dispatch route does not match its logical choice."
+        )
+    if actual_route.choice != plan_model.choice:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} dispatch route is outside its transport plan."
+        )
+
+    def route_binding(value: QualifiedRoute) -> tuple[object, ...]:
+        # Catalog revisions may change during a safe gateway→Direct fallback;
+        # all provider/account/checkpoint/effort identity must remain equal.
+        return (
+            value.transport,
+            value.route_id,
+            value.wire_model,
+            value.wire_effort,
+            value.entitlement_kind,
+            value.entitlement_key,
+            value.equivalence_key,
+            value.connection_id,
+        )
+
+    allowed_plan_routes = [plan_model.primary]
+    if plan_model.fallback is not None:
+        allowed_plan_routes.append(plan_model.fallback)
+    if not any(
+        route_binding(actual_route) == route_binding(value) for value in allowed_plan_routes
+    ):
+        raise RuntimeError(
+            f"Advisor session {session_id!r} dispatch route does not match a qualified plan leg."
+        )
+    required_route_keys = {
+        "choice",
+        "transport",
+        "route_id",
+        "wire_model",
+        "wire_effort",
+        "entitlement_kind",
+        "entitlement_key",
+        "equivalence_key",
+        "catalog_revision",
+        "ready",
+        "connection_id",
+    }
+    if set(route) != required_route_keys:
+        raise RuntimeError(f"Advisor session {session_id!r} has an incomplete dispatch route.")
+    if route.get("ready") is not True:
+        raise RuntimeError(f"Advisor session {session_id!r} dispatch route is not ready.")
+    if not isinstance(access_lane, str) or route.get("route_id") != access_lane:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} route/lane binding does not match the session."
+        )
+    expected_transport = "omniroute" if access_lane == "omniroute" else "direct"
+    if route.get("transport") != expected_transport:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} selected an invalid transport for {access_lane!r}."
+        )
+    if route.get("wire_model") != model_override:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} model differs from its qualified route."
+        )
+    expected_effort = reasoning_effort or "not_applicable"
+    if route.get("wire_effort") != expected_effort:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} reasoning effort differs from its qualified route."
+        )
+    route_connection = route.get("connection_id")
+    if not isinstance(route_connection, str) or not route_connection:
+        raise RuntimeError(f"Advisor session {session_id!r} has no qualified connection id.")
+    if connection_id != route_connection:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} connection binding does not match its route."
+        )
+    provider = plan_model.choice.provider
+    allowed_connections = {
+        ("openai", "omniroute"): {"omniroute-codex-oauth"},
+        ("openai", "codex-direct"): {"codex-login"},
+        ("glm", "omniroute"): {"omniroute-glm-coding-plan"},
+        ("glm", "glm-direct"): {"zai-direct-coding-plan", "zai-direct"},
+    }.get((provider, access_lane), set())
+    if route_connection not in allowed_connections:
+        raise RuntimeError(
+            f"Advisor session {session_id!r} connection {route_connection!r} is not "
+            f"qualified for provider {provider!r} on lane {access_lane!r}."
+        )
+    # The plan's primary is deliberately allowed to differ from the concrete
+    # route: a safe Direct fallback session keeps the immutable plan for audit
+    # and carries the selected fallback in this separate route label.
+    if not isinstance(primary, dict) or primary.get("choice") != choice:
+        raise RuntimeError(f"Advisor session {session_id!r} has an invalid primary route.")
+    return route_connection
+
+
 async def _codex_native_launch_config(
     *,
     session_id: str,
@@ -1035,7 +1189,11 @@ async def _codex_native_launch_config(
     # fork-source branch in _auto_create_codex_terminal); inert otherwise.
     from omnigent.runner.subagent_routing import routing_class_from_snapshot
     from omnigent.stores.conversation_store import (
+        ADVISOR_CONNECTION_LABEL_KEY,
+        ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
+        ADVISOR_LOGICAL_CHOICE_LABEL_KEY,
         ADVISOR_ROUND_LABEL_KEY,
+        ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
         CODEX_ACCESS_LANE_LABEL_KEY,
         CODEX_ACCESS_LANES,
         CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
@@ -1060,6 +1218,7 @@ async def _codex_native_launch_config(
     bypass_sandbox = deployment_trusted
     access_lane: str | None = None
     advisor_round_id: str | None = None
+    advisor_connection_id: str | None = None
     labels = snapshot.get("labels")
     if isinstance(labels, dict):
         _fsi = labels.get(FORK_SOURCE_LABEL_KEY)
@@ -1075,6 +1234,10 @@ async def _codex_native_launch_config(
         _advisor_round = labels.get(ADVISOR_ROUND_LABEL_KEY)
         if isinstance(_advisor_round, str) and _advisor_round:
             advisor_round_id = _advisor_round
+        raw_logical_choice = labels.get(ADVISOR_LOGICAL_CHOICE_LABEL_KEY)
+        raw_plan = labels.get(ADVISOR_TRANSPORT_PLAN_LABEL_KEY)
+        raw_dispatch_route = labels.get(ADVISOR_DISPATCH_ROUTE_LABEL_KEY)
+        raw_connection = labels.get(ADVISOR_CONNECTION_LABEL_KEY)
         raw_access_lane = labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
         if raw_access_lane is not None:
             if not isinstance(raw_access_lane, str) or raw_access_lane not in CODEX_ACCESS_LANES:
@@ -1088,6 +1251,37 @@ async def _codex_native_launch_config(
                     f"{session_id!r} requires model_override."
                 )
             access_lane = raw_access_lane
+        advisor_binding_values = (
+            raw_logical_choice,
+            raw_plan,
+            raw_dispatch_route,
+            raw_connection,
+        )
+        if any(value is not None for value in advisor_binding_values):
+            if not advisor_round_id:
+                raise RuntimeError(
+                    f"Logical advisor choice without an advisor round for session {session_id!r}."
+                )
+            if any(value is None for value in advisor_binding_values):
+                raise RuntimeError(
+                    f"Advisor session {session_id!r} has an incomplete transport binding."
+                )
+            if not isinstance(raw_logical_choice, str) or not raw_logical_choice:
+                raise RuntimeError(f"Invalid logical advisor choice for session {session_id!r}.")
+            advisor_connection_id = _validate_advisor_dispatch_route(
+                raw_route=raw_dispatch_route,
+                raw_plan=raw_plan,
+                logical_choice_id=raw_logical_choice,
+                session_id=session_id,
+                model_override=model_override,
+                reasoning_effort=(
+                    reasoning_effort
+                    if isinstance(reasoning_effort, str) and reasoning_effort
+                    else None
+                ),
+                access_lane=access_lane,
+                connection_id=raw_connection if isinstance(raw_connection, str) else None,
+            )
     if reasoning_effort is not None:
         if advisor_round_id:
             # Advisor candidates are already concrete model+effort rows from
@@ -1137,6 +1331,7 @@ async def _codex_native_launch_config(
         routing_enabled=routing_class.routing_enabled,
         turn_routing=routing_class.turn_routing,
         advisor_round_id=advisor_round_id,
+        advisor_connection_id=advisor_connection_id,
     )
 
 

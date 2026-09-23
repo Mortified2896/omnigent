@@ -31,6 +31,13 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.model_advisor_core import AdvisorContractError, PoolSnapshot
+from omnigent.model_advisor_provider_policy import ProviderPreferences
+from omnigent.model_advisor_provider_workflow import (
+    LogicalFrozenRound,
+    LogicalReviewDecision,
+    confirm_logical_review,
+    prepare_logical_review,
+)
 from omnigent.model_advisor_workflow import (
     AdvisorPreferences,
     FrozenRound,
@@ -172,6 +179,40 @@ class AdvisorRepository:
         except IntegrityError as exc:
             raise AdvisorConflict("Preferences created concurrently; reload first") from exc
 
+    def save_provider_preferences(
+        self,
+        owner: str,
+        host: str,
+        preferences: ProviderPreferences,
+        *,
+        expected_version: int,
+        profile: str = "default",
+    ) -> Record:
+        """CAS-save v2 logical preferences in the existing preference record."""
+        _expected(expected_version)
+        key = _key(owner, host, "preferences", profile)
+        payload = preferences.to_payload()
+        try:
+            with self.engine.begin() as connection:
+                previous = self._read(connection, key)
+                if previous is None:
+                    if expected_version != 0:
+                        raise AdvisorConflict("Preferences were not created at that version")
+                    connection.execute(
+                        insert(records).values(
+                            scope_key=key,
+                            version=1,
+                            state="saved",
+                            payload=canonical_json(payload),
+                        )
+                    )
+                    return Record(1, "saved", payload)
+                if previous.version != expected_version:
+                    raise AdvisorConflict("Preferences changed in another tab")
+                return self._cas(connection, key, previous, "saved", payload)
+        except IntegrityError as exc:
+            raise AdvisorConflict("Preferences created concurrently; reload first") from exc
+
     def reserve_round(self, frozen: FrozenRound, *, submission_key: str | None = None) -> Claim:
         """Atomic create-before-advisor-call. Duplicate submissions receive no claim."""
         key = _key(frozen.owner_id, frozen.host_id, "round", frozen.round_id)
@@ -181,6 +222,37 @@ class AdvisorRepository:
             # This is audit metadata only. The durable key remains scoped by
             # owner + host + round id, and the frozen fingerprint is what
             # prevents a same-id request from changing the reservation.
+            "submission_key": submission_key,
+        }
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    insert(records).values(
+                        scope_key=key,
+                        version=1,
+                        state="advisor_pending",
+                        payload=canonical_json(payload),
+                    )
+                )
+            return Claim(Record(1, "advisor_pending", payload), True)
+        except IntegrityError as exc:
+            with self.engine.connect() as connection:
+                previous = self._required(connection, key)
+            if previous.payload["fingerprint"] != frozen.fingerprint:
+                raise AdvisorConflict(
+                    "Round ID reused with a different prompt, pool or settings"
+                ) from exc
+            return Claim(previous, False)
+
+    def reserve_provider_round(
+        self, frozen: LogicalFrozenRound, *, submission_key: str | None = None
+    ) -> Claim:
+        """Atomically reserve one schema-v2 logical round."""
+        key = _key(frozen.owner_id, frozen.host_id, "round", frozen.round_id)
+        payload = {
+            "schema_version": 2,
+            "fingerprint": frozen.fingerprint,
+            "frozen": frozen.to_payload(),
             "submission_key": submission_key,
         }
         try:
@@ -248,6 +320,42 @@ class AdvisorRepository:
             result = self._cas(connection, key, locked, "awaiting_confirmation", payload)
             return Claim(result, True)
 
+    def finish_provider_advice(
+        self,
+        owner: str,
+        host: str,
+        round_id: str,
+        raw_advice: str,
+        *,
+        randbelow: Callable[[int], int],
+        overhead: dict | None = None,
+    ) -> Claim:
+        """Commit one v2 logical proposal and assignment under the same CAS."""
+        key = _key(owner, host, "round", round_id)
+        advice_digest = document_digest(raw_advice)
+        with self.engine.begin() as connection:
+            previous = self._required(connection, key)
+            if previous.payload.get("schema_version") != 2:
+                raise AdvisorConflict("Round is a v1 lane-bound round")
+            if "review" in previous.payload:
+                if previous.payload["advice_digest"] != advice_digest:
+                    raise AdvisorConflict("Advisor result changed after it was committed")
+                return Claim(previous, False)
+            if previous.state != "advisor_pending":
+                raise AdvisorConflict("Round no longer accepts advice")
+            locked = self._cas(connection, key, previous, "assigning", previous.payload)
+            frozen = LogicalFrozenRound.from_payload(previous.payload["frozen"])
+            review = prepare_logical_review(frozen, raw_advice, randbelow=randbelow)
+            payload = {
+                **previous.payload,
+                "advice_digest": advice_digest,
+                "review": review.to_payload(),
+            }
+            if overhead is not None:
+                payload["advisor_overhead"] = dict(overhead)
+            result = self._cas(connection, key, locked, "awaiting_confirmation", payload)
+            return Claim(result, True)
+
     def confirm(
         self,
         owner: str,
@@ -288,6 +396,53 @@ class AdvisorRepository:
                 **previous.payload,
                 "review": final.to_payload(),
                 "confirmation": confirmation,
+                "dispatch_id": "advisor-exec-" + frozen.fingerprint,
+                "actual_execution": None,
+            }
+            return Claim(self._cas(connection, key, previous, "dispatch_claimed", payload), True)
+
+    def confirm_provider(
+        self,
+        owner: str,
+        host: str,
+        round_id: str,
+        *,
+        expected_version: int,
+        execution_plan: dict,
+        override_choice_id: str | None = None,
+        reason: str | None = None,
+    ) -> Claim:
+        """Claim a v2 logical dispatch after route validation by the service."""
+        _expected(expected_version)
+        key = _key(owner, host, "round", round_id)
+        confirmation = document_digest((override_choice_id, reason, execution_plan))
+        with self.engine.begin() as connection:
+            previous = self._required(connection, key)
+            if previous.payload.get("schema_version") != 2:
+                raise AdvisorConflict("Round is a v1 lane-bound round")
+            if "confirmation" in previous.payload:
+                if previous.payload["confirmation"] != confirmation:
+                    raise AdvisorConflict("The round was already confirmed differently")
+                return Claim(previous, False)
+            if previous.version != expected_version or previous.state != "awaiting_confirmation":
+                raise AdvisorConflict("Review changed or is not ready to execute")
+            frozen = LogicalFrozenRound.from_payload(previous.payload["frozen"])
+            review = LogicalReviewDecision.from_payload(previous.payload["review"])
+            final = confirm_logical_review(
+                frozen,
+                review,
+                override_choice_id=override_choice_id,
+                reason=reason,
+            )
+            payload = {
+                **previous.payload,
+                "review": final.to_payload(),
+                "confirmation": confirmation,
+                "execution_plan": dict(execution_plan),
+                # Preserve advisor transport provenance accumulated before the
+                # answer confirmation; the answer leg appends to the same
+                # bounded audit list.
+                "transport_attempts": list(previous.payload.get("transport_attempts", [])),
                 "dispatch_id": "advisor-exec-" + frozen.fingerprint,
                 "actual_execution": None,
             }
@@ -362,4 +517,24 @@ class AdvisorRepository:
             if current is None or current.state in {"blocked", "cancelled"}:
                 return None
             merged = {**current.payload, "advisor_overhead": dict(overhead)}
+            return self._cas(connection, key, current, current.state, merged)
+
+    def record_provider_transport_attempt(
+        self,
+        owner: str,
+        host: str,
+        round_id: str,
+        *,
+        attempt: dict,
+    ) -> Record | None:
+        """Append bounded route attempt/provenance metadata to a v2 round."""
+        key = _key(owner, host, "round", round_id)
+        with self.engine.begin() as connection:
+            current = self._read(connection, key)
+            if current is None or current.payload.get("schema_version") != 2:
+                return None
+            attempts = current.payload.get("transport_attempts", [])
+            if not isinstance(attempts, list) or len(attempts) >= 8:
+                return current
+            merged = {**current.payload, "transport_attempts": [*attempts, dict(attempt)]}
             return self._cas(connection, key, current, current.state, merged)

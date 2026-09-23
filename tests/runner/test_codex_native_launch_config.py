@@ -9,11 +9,13 @@ function with a stub async client returning controlled snapshots.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
 import pytest
 
+from omnigent.model_advisor_provider_policy import LogicalChoice
 from omnigent.runner.app import _codex_native_launch_config
 
 
@@ -240,6 +242,124 @@ async def test_access_lane_requires_model_override(monkeypatch: pytest.MonkeyPat
         "labels": {"omnigent.access_lane": "omniroute"},
     }
     with pytest.raises(RuntimeError, match="requires model_override"):
+        await _run(_Client(_Resp(200, snapshot)))
+
+
+@pytest.mark.asyncio
+async def test_v2_advisor_binding_is_checked_at_native_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A v2 session cannot drift from the server-attested route/account."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    choice = LogicalChoice("openai", "gpt-5.5", "low")
+    route = {
+        "choice": {
+            "provider": choice.provider,
+            "model_id": choice.model_id,
+            "reasoning_effort": choice.reasoning_effort,
+        },
+        "transport": "omniroute",
+        "route_id": "omniroute",
+        "wire_model": "gpt-5.5",
+        "wire_effort": "low",
+        "entitlement_kind": "chatgpt_plan",
+        "entitlement_key": "chatgpt-plan:rtx-codex-owner",
+        "equivalence_key": "openai:codex-native:responses:gpt-5.5:low",
+        "catalog_revision": "catalog-v1",
+        "ready": True,
+        "connection_id": "omniroute-codex-oauth",
+    }
+    plan = {
+        "choice": route["choice"],
+        "preference": "omniroute_preferred",
+        "primary": route,
+        "fallback": None,
+        "reason": "omniroute_preferred",
+    }
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "model_override": "gpt-5.5",
+        "reasoning_effort": "low",
+        "labels": {
+            "omnigent.advisor.round_id": "adviseround-v2",
+            "omnigent.advisor.logical_choice_id": choice.choice_id,
+            "omnigent.advisor.transport_plan": json.dumps(plan),
+            "omnigent.advisor.dispatch_route": json.dumps(route),
+            "omnigent.advisor.connection_id": "omniroute-codex-oauth",
+            "omnigent.access_lane": "omniroute",
+        },
+    }
+
+    cfg = await _run(_Client(_Resp(200, snapshot)))
+
+    assert cfg.access_lane == "omniroute"
+    assert cfg.advisor_connection_id == "omniroute-codex-oauth"
+
+
+@pytest.mark.asyncio
+async def test_v2_advisor_binding_rejects_wrong_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    choice = LogicalChoice("openai", "gpt-5.5", "low")
+    route = {
+        "choice": {
+            "provider": choice.provider,
+            "model_id": choice.model_id,
+            "reasoning_effort": choice.reasoning_effort,
+        },
+        "transport": "omniroute",
+        "route_id": "omniroute",
+        "wire_model": "gpt-5.5",
+        "wire_effort": "low",
+        "entitlement_kind": "chatgpt_plan",
+        "entitlement_key": "chatgpt-plan:rtx-codex-owner",
+        "equivalence_key": "openai:codex-native:responses:gpt-5.5:low",
+        "catalog_revision": "catalog-v1",
+        "ready": True,
+        "connection_id": "omniroute-glm-coding-plan",
+    }
+    plan = {
+        "choice": route["choice"],
+        "preference": "omniroute_preferred",
+        "primary": route,
+        "fallback": None,
+        "reason": "omniroute_preferred",
+    }
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "model_override": "gpt-5.5",
+        "reasoning_effort": "low",
+        "labels": {
+            "omnigent.advisor.round_id": "adviseround-v2",
+            "omnigent.advisor.logical_choice_id": choice.choice_id,
+            "omnigent.advisor.transport_plan": json.dumps(plan),
+            "omnigent.advisor.dispatch_route": json.dumps(route),
+            "omnigent.advisor.connection_id": "omniroute-glm-coding-plan",
+            "omnigent.access_lane": "omniroute",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="not qualified"):
+        await _run(_Client(_Resp(200, snapshot)))
+
+
+@pytest.mark.asyncio
+async def test_v2_advisor_binding_rejects_partial_server_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "model_override": "gpt-5.5",
+        "labels": {
+            "omnigent.advisor.round_id": "adviseround-v2",
+            "omnigent.advisor.logical_choice_id": "logical-not-enough",
+            "omnigent.access_lane": "omniroute",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="incomplete transport binding"):
         await _run(_Client(_Resp(200, snapshot)))
 
 

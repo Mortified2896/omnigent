@@ -46,6 +46,7 @@ import { setOmnigentHostConfig } from "@/lib/host";
 import { writeHideUnconfiguredHarnesses } from "@/lib/harnessVisibilityPreferences";
 import { setPendingInitialPrompt } from "@/store/chatStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { LogicalOption } from "@/model-advisor/providerPreferences";
 
 // Only authenticatedFetch is stubbed (the create POST under test);
 // the module's other exports stay real for any other consumer in the tree.
@@ -1504,6 +1505,119 @@ describe("NewChatLandingScreen", () => {
       "XHigh",
       "Max",
     ]);
+  });
+
+  it("uses the advisor as the only model surface while enabled and restores the composer pick when disabled", async () => {
+    const advisorOptions: LogicalOption[] = [
+      {
+        choice_id: "choice-openai-medium",
+        provider: "openai",
+        model_id: "gpt-5.5",
+        display_name: "GPT-5.5",
+        reasoning_effort: "medium",
+        model_ids: ["gpt-5.5", "codex/gpt-5.5"],
+        access_lanes: ["codex-direct", "omniroute"],
+        available: true,
+      },
+      {
+        choice_id: "choice-glm-high",
+        provider: "glm",
+        model_id: "glm-5.3",
+        display_name: "GLM-5.3",
+        reasoning_effort: "high",
+        model_ids: ["glm-5.3", "glm/glm-5.3"],
+        access_lanes: ["glm-direct", "omniroute"],
+        available: true,
+      },
+    ];
+    const savedPreferences = {
+      schema_version: 2,
+      enabled: false,
+      providers: {
+        openai: {
+          enabled: true,
+          collapsed: false,
+          selected_choice_ids: [advisorOptions[0].choice_id],
+          transport_preference: "omniroute_preferred" as const,
+        },
+        glm: {
+          enabled: true,
+          collapsed: false,
+          selected_choice_ids: [advisorOptions[1].choice_id],
+          transport_preference: "omniroute_preferred" as const,
+        },
+      },
+      advisor_choice_id: advisorOptions[1].choice_id,
+      human_probability_percent: 50,
+      unresolved_legacy_ids: [],
+      route_review_required: [],
+    };
+    const catalog = {
+      object: "model_advisor.catalog",
+      catalog_revision: "landing-surface-test",
+      options: [],
+      logical_options: advisorOptions,
+    };
+    authenticatedFetchMock.mockImplementation(async (url, init) => {
+      const urlString = String(url);
+      if (urlString.includes("/model-advisor/catalog")) return Response.json(catalog);
+      if (
+        urlString.includes("/model-advisor/preferences") &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Response.json({
+          object: "model_advisor.preferences",
+          version: 2,
+          etag: '"landing-surface-test"',
+          state: "saved",
+          preferences: savedPreferences,
+          logical_preferences: savedPreferences,
+        });
+      }
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    renderLanding({ features: { model_advisor: true } });
+    selectAgent("a2");
+
+    const advisorSwitch = (await screen.findByRole("switch", {
+      name: /Compare my choice with the advisor/,
+    })) as HTMLInputElement;
+    expect(advisorSwitch.checked).toBe(false);
+    expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
+    expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
+
+    openSelect("new-chat-landing-inline-model");
+    fireEvent.click(screen.getByText("GPT-5.5"));
+    openSelect("new-chat-landing-inline-effort");
+    fireEvent.click(screen.getByRole("option", { name: "Medium" }));
+
+    fireEvent.click(advisorSwitch);
+    await waitFor(() =>
+      expect(screen.getByText("Allowed answers — shared by you and the advisor")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("new-chat-landing-inline-model")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-inline-effort")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Your model and reasoning")).toHaveValue(
+        advisorOptions[0].choice_id,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: /Compare my choice with the advisor/ }));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("switch", {
+            name: /Compare my choice with the advisor/,
+          }) as HTMLInputElement
+        ).checked,
+      ).toBe(false),
+    );
+    await waitFor(() => expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy());
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
+    expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
   });
 
   it("does not offer Max or Minimal for GPT-5.5", () => {

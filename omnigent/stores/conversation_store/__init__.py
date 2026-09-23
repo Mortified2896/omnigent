@@ -100,6 +100,10 @@ CODEX_ACCESS_LANES = frozenset(
 # assignment instead of resetting to any default. Written only by the server's
 # advisor confirm path; clients cannot seed it at session creation.
 ADVISOR_ROUND_LABEL_KEY = "omnigent.advisor.round_id"
+ADVISOR_LOGICAL_CHOICE_LABEL_KEY = "omnigent.advisor.logical_choice_id"
+ADVISOR_TRANSPORT_PLAN_LABEL_KEY = "omnigent.advisor.transport_plan"
+ADVISOR_CONNECTION_LABEL_KEY = "omnigent.advisor.connection_id"
+ADVISOR_DISPATCH_ROUTE_LABEL_KEY = "omnigent.advisor.dispatch_route"
 
 # Reserved label key that stores a session's sidebar "project" membership
 # (implicit collections — a project exists while ≥1 session carries this key).

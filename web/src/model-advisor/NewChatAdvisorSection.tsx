@@ -1,38 +1,36 @@
-/** Gated model-advisor controller for the new-chat landing composer.
- *
- * The parent (NewChatLandingScreen) owns the composer state; this component
- * owns the advisor API lifecycle only: hydrate saved settings per host once,
- * reserve one round on an explicit Get recommendation, poll it, and run or
- * cancel after the visible review. No provider call happens on typing,
- * mount or settings load — hydration reads saved preferences and the same
- * host model catalog the model picker already shows.
- */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+/** Live v2 Model Advisor controller for the new-chat composer. */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AdvisorConflictError,
   cancelRound,
   confirmRound,
-  createRound,
+  createProviderRound,
   fetchCatalog,
   fetchPreferences,
   fetchRound,
-  savePreferences,
-  toAdvisorOptions,
-  toSavedPreferences,
-  toReviewView,
+  saveProviderPreferences,
+  toLogicalOptions,
+  toSavedProviderPreferences,
   type RoundDto,
 } from "@/lib/modelAdvisorApi";
-import { ModelAdvisorPanel, ModelAdvisorReview } from "@/model-advisor/ModelAdvisorPanel";
-import { editorReducer, initialEditor, type AdvisorOption } from "@/model-advisor/editor";
+import {
+  emptyProviderPreferences,
+  effectiveOptions,
+  type LogicalOption,
+  type ProviderPreferences,
+} from "@/model-advisor/providerPreferences";
+import {
+  ProviderAdvisorReview,
+  type ProviderReviewView,
+} from "@/model-advisor/ProviderAdvisorReview";
+import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
 
 function newSubmissionKey(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
   return `submission-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
@@ -48,10 +46,22 @@ export interface NewChatAdvisorSectionProps {
   humanPick: HumanModelPick | null;
   launchAgentId: string | null;
   launchWorkspace: string | null;
-  /** Reflects the composer's model/effort when the human pick maps to a catalog candidate. */
-  onHumanCandidateChosen: (pick: HumanModelPick) => void;
-  /** Called once the server bound the round to its created session. */
   onLaunched: (sessionId: string) => void;
+  onEnabledChange?: (enabled: boolean | null) => void;
+  onHumanChoiceChange?: (choice: LogicalOption | null) => void;
+}
+
+interface SavedProviderPreferences {
+  version: number;
+  etag: string;
+  preferences: ProviderPreferences;
+}
+
+interface EditorState {
+  saved: SavedProviderPreferences | null;
+  draft: ProviderPreferences | null;
+  dirty: boolean;
+  error: string | null;
 }
 
 interface RoundFlowState {
@@ -62,6 +72,27 @@ interface RoundFlowState {
 
 const IDLE_ROUND: RoundFlowState = { round: null, busy: false, error: null };
 
+function samePreferences(a: ProviderPreferences, b: ProviderPreferences): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function providerReview(round: RoundDto | null): ProviderReviewView | null {
+  if (!round?.review) return null;
+  const humanChoiceId = round.review.human_choice_id ?? round.review.human_candidate_id;
+  const advisorChoiceId = round.review.advisor_choice_id ?? round.review.advisor_candidate_id;
+  const assignedChoiceId = round.review.assigned_choice_id ?? round.review.assigned_candidate_id;
+  if (!humanChoiceId || !advisorChoiceId || !assignedChoiceId) return null;
+  return {
+    round_fingerprint: round.review.round_fingerprint,
+    human_choice_id: humanChoiceId,
+    advisor_choice_id: advisorChoiceId,
+    rationale: round.review.rationale,
+    assigned_choice_id: assignedChoiceId,
+    assigned_arm: round.review.assigned_arm,
+    human_probability_percent: round.review.human_probability_percent,
+  };
+}
+
 export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const {
     hostId,
@@ -69,45 +100,50 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     humanPick,
     launchAgentId,
     launchWorkspace,
-    onHumanCandidateChosen,
     onLaunched,
+    onEnabledChange,
+    onHumanChoiceChange,
   } = props;
   const scope = hostId ?? "";
-  const [editor, dispatchEditor] = useReducer(editorReducer, scope, initialEditor);
-  const [options, setOptions] = useState<readonly AdvisorOption[]>([]);
+  const [editor, setEditor] = useState<EditorState>({
+    saved: null,
+    draft: null,
+    dirty: false,
+    error: null,
+  });
+  const [options, setOptions] = useState<readonly LogicalOption[]>([]);
+  const [humanChoiceId, setHumanChoiceId] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const onScreen = useRef(true);
+  const mounted = useRef(true);
   const scopeToken = useRef({ generation: 0, host: "" });
   const inputGeneration = useRef(0);
   const submissionIdentity = useRef<string | null>(null);
   const submissionKey = useRef<string | null>(null);
+  const humanChoiceTouched = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) clearInterval(pollTimer.current);
     pollTimer.current = null;
   }, []);
 
-  const isCurrentScope = useCallback((host: string, generation: number) => {
-    return (
-      onScreen.current &&
+  const isCurrentScope = useCallback(
+    (host: string, generation: number) =>
+      mounted.current &&
       scopeToken.current.host === host &&
-      scopeToken.current.generation === generation
-    );
-  }, []);
+      scopeToken.current.generation === generation,
+    [],
+  );
 
   useEffect(() => {
-    onScreen.current = true;
+    mounted.current = true;
     return () => {
-      onScreen.current = false;
-      if (pollTimer.current !== null) clearInterval(pollTimer.current);
-      pollTimer.current = null;
+      mounted.current = false;
+      stopPolling();
     };
-  }, []);
+  }, [stopPolling]);
 
-  // Scope change = host change: reset everything, hydrate saved settings and
-  // the qualified catalog. Reads only; no provider calls start here.
   useEffect(() => {
     const generation = scopeToken.current.generation + 1;
     scopeToken.current = { generation, host: hostId ?? "" };
@@ -115,39 +151,33 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     stopPolling();
     submissionIdentity.current = null;
     submissionKey.current = null;
-    dispatchEditor({ type: "scope", scope });
+    setEditor({ saved: null, draft: null, dirty: false, error: null });
     setRound(IDLE_ROUND);
     setOptions([]);
+    setHumanChoiceId(null);
+    humanChoiceTouched.current = false;
     setCatalogError(null);
+    onEnabledChange?.(null);
     if (hostId === null) return;
     let cancelled = false;
-    const hydrate = async () => {
+    void (async () => {
       try {
         const [catalog, prefs] = await Promise.all([
           fetchCatalog(hostId),
           fetchPreferences(hostId),
         ]);
         if (cancelled || !isCurrentScope(hostId, generation)) return;
-        setOptions(toAdvisorOptions(catalog));
-        const saved = toSavedPreferences(prefs);
+        setOptions(toLogicalOptions(catalog));
+        const saved = toSavedProviderPreferences(prefs);
         if (saved) {
-          dispatchEditor({ type: "hydrate", scope, saved });
+          setEditor({ saved, draft: saved.preferences, dirty: false, error: null });
         } else {
-          // First visit: an empty disabled draft the user can fill and save.
-          dispatchEditor({
-            type: "hydrate",
-            scope,
-            saved: {
-              version: 0,
-              etag: "",
-              preferences: {
-                schema_version: 1,
-                enabled: false,
-                allowed_candidate_ids: [],
-                advisor_candidate_id: null,
-                human_probability_percent: 50,
-              },
-            },
+          const empty = emptyProviderPreferences();
+          setEditor({
+            saved: { version: prefs.version, etag: prefs.etag ?? "", preferences: empty },
+            draft: empty,
+            dirty: false,
+            error: null,
           });
         }
       } catch (cause) {
@@ -157,12 +187,96 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           );
         }
       }
-    };
-    void hydrate();
+    })();
     return () => {
       cancelled = true;
     };
-  }, [hostId, isCurrentScope, scope, stopPolling]);
+  }, [hostId, isCurrentScope, onEnabledChange, stopPolling]);
+
+  useEffect(() => {
+    onEnabledChange?.(editor.draft?.enabled ?? null);
+  }, [editor.draft?.enabled, onEnabledChange]);
+
+  const resolveHumanChoice = useCallback((): string | null => {
+    if (editor.draft?.enabled && humanChoiceId !== null) return humanChoiceId;
+    if (!humanPick || humanPick.model === "") return null;
+    const effort = humanPick.effort || "not_applicable";
+    const matches = options.filter(
+      (option) =>
+        option.available &&
+        option.model_ids.includes(humanPick.model) &&
+        option.reasoning_effort === effort &&
+        (humanPick.accessLane === null || option.access_lanes.includes(humanPick.accessLane)),
+    );
+    return matches.length === 1 ? matches[0].choice_id : null;
+  }, [editor.draft?.enabled, humanChoiceId, humanPick, options]);
+
+  useEffect(() => {
+    if (editor.draft?.enabled !== false) return;
+    humanChoiceTouched.current = false;
+  }, [editor.draft?.enabled]);
+
+  useEffect(() => {
+    if (!editor.draft || options.length === 0) return;
+    if (editor.draft.enabled && humanChoiceTouched.current) return;
+    const choiceId = resolveHumanChoice();
+    setHumanChoiceId(choiceId);
+    if (choiceId !== null) {
+      onHumanChoiceChange?.(options.find((option) => option.choice_id === choiceId) ?? null);
+    }
+  }, [editor.draft, onHumanChoiceChange, options, resolveHumanChoice]);
+
+  const handleHumanChoiceChange = useCallback(
+    (choice: LogicalOption | null) => {
+      humanChoiceTouched.current = true;
+      setHumanChoiceId(choice?.choice_id ?? null);
+      onHumanChoiceChange?.(choice);
+    },
+    [onHumanChoiceChange],
+  );
+
+  const validation = useMemo(() => {
+    const draft = editor.draft;
+    if (!draft || !draft.enabled) return null;
+    if (draft.unresolved_legacy_ids.length || draft.route_review_required.length) {
+      return "Review unresolved saved choices and confirm each connection preference.";
+    }
+    try {
+      effectiveOptions(draft, options);
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : "Select at least one active answer.";
+    }
+    if (
+      !draft.advisor_choice_id ||
+      !options.some((option) => option.choice_id === draft.advisor_choice_id && option.available)
+    ) {
+      return "Choose an available advisor model and reasoning level.";
+    }
+    const resolvedHumanChoiceId = resolveHumanChoice();
+    if (
+      !resolvedHumanChoiceId ||
+      !effectiveOptions(draft, options).some((option) => option.choice_id === resolvedHumanChoiceId)
+    ) {
+      return "Choose an allowed model and reasoning level in the composer.";
+    }
+    return null;
+  }, [editor.draft, options, resolveHumanChoice]);
+
+  useEffect(() => {
+    const identity = JSON.stringify({
+      scope,
+      task,
+      humanChoiceId: resolveHumanChoice(),
+      preferences: editor.draft,
+    });
+    if (submissionIdentity.current !== null && submissionIdentity.current !== identity) {
+      inputGeneration.current += 1;
+      stopPolling();
+      setRound(IDLE_ROUND);
+    }
+    if (submissionIdentity.current !== identity) submissionKey.current = newSubmissionKey();
+    submissionIdentity.current = identity;
+  }, [editor.draft, resolveHumanChoice, scope, stopPolling, task]);
 
   const pollRound = useCallback(
     (
@@ -173,7 +287,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       inputVersion: number,
     ) => {
       stopPolling();
-      const tick = () => {
+      const tick = () =>
         void (async () => {
           try {
             const dto = await fetchRound(host, roundId);
@@ -203,54 +317,72 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             });
           }
         })();
-      };
-      // First check lands immediately (most rounds finish between the create
-      // response and the first tick), then keep polling on the interval.
       tick();
       pollTimer.current = setInterval(tick, POLL_INTERVAL_MS);
     },
     [isCurrentScope, stopPolling],
   );
 
-  const resolveHumanCandidate = useCallback((): string | null => {
-    const pick = humanPick;
-    if (!pick || pick.model === "" || !pick.accessLane) return null;
-    const requestedEffort = pick.effort || "not_applicable";
-    return (
-      options.find(
-        (option) =>
-          option.available &&
-          option.model_id === pick.model &&
-          option.lane_id === pick.accessLane &&
-          option.reasoning_effort === requestedEffort,
-      )?.candidate_id ?? null
-    );
-  }, [humanPick, options]);
+  const handleChange = useCallback((next: ProviderPreferences) => {
+    setEditor((current) => ({
+      ...current,
+      draft: next,
+      dirty: !current.saved || !samePreferences(current.saved.preferences, next),
+      error: null,
+    }));
+  }, []);
 
-  // A task, human pick or draft-settings change invalidates an in-flight
-  // round. This keeps the review tied to exactly the values the server froze.
-  useEffect(() => {
-    const identity = JSON.stringify({
-      scope,
-      task,
-      humanCandidateId: resolveHumanCandidate(),
-      preferences: editor.draft,
-    });
-    if (submissionIdentity.current !== null && submissionIdentity.current !== identity) {
-      inputGeneration.current += 1;
-      stopPolling();
-      setRound(IDLE_ROUND);
-    }
-    if (submissionIdentity.current !== identity) {
-      submissionKey.current = newSubmissionKey();
-    }
-    submissionIdentity.current = identity;
-  }, [editor.draft, resolveHumanCandidate, scope, stopPolling, task]);
+  const handleSave = useCallback(() => {
+    if (hostId === null || !editor.draft) return;
+    const host = hostId;
+    const generation = scopeToken.current.generation;
+    const submitted = editor.draft;
+    void (async () => {
+      try {
+        const dto = await saveProviderPreferences(
+          host,
+          "default",
+          submitted,
+          editor.saved?.version ?? 0,
+        );
+        const saved = toSavedProviderPreferences(dto);
+        if (saved && isCurrentScope(host, generation))
+          setEditor({ saved, draft: saved.preferences, dirty: false, error: null });
+      } catch (cause) {
+        if (!isCurrentScope(host, generation)) return;
+        if (cause instanceof AdvisorConflictError) {
+          setEditor((current) => ({
+            ...current,
+            error: "Saved settings changed elsewhere. Reload the panel and reapply.",
+          }));
+          try {
+            const fresh = toSavedProviderPreferences(await fetchPreferences(host));
+            if (fresh && isCurrentScope(host, generation)) {
+              setEditor((current) => ({
+                ...current,
+                saved: fresh,
+                dirty: current.draft !== null && !samePreferences(fresh.preferences, current.draft),
+                error: "Saved settings changed elsewhere. Reload the panel and reapply.",
+              }));
+            }
+          } catch {
+            // Keep the conflict visible.
+          }
+          return;
+        }
+        setEditor((current) => ({
+          ...current,
+          error: cause instanceof Error ? cause.message : "Couldn't save settings.",
+        }));
+      }
+    })();
+  }, [editor.draft, editor.saved?.version, hostId, isCurrentScope]);
 
   const handlePropose = useCallback(() => {
-    if (hostId === null || round.busy) return;
-    const draft = editor.draft;
-    if (!draft?.enabled) return;
+    if (hostId === null || round.busy || !editor.draft || validation !== null) {
+      if (validation !== null) setRound({ round: null, busy: false, error: validation });
+      return;
+    }
     if (task.trim() === "") {
       setRound({
         round: null,
@@ -259,34 +391,29 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       });
       return;
     }
-    const humanCandidateId = resolveHumanCandidate();
-    if (humanCandidateId === null) {
+    const resolvedHumanChoiceId = resolveHumanChoice();
+    if (!resolvedHumanChoiceId || !submissionKey.current) {
       setRound({
         round: null,
         busy: false,
-        error:
-          "Your composer pick is not one of the allowed answers. Choose an allowed model first.",
+        error: "Choose an allowed model before asking for a recommendation.",
       });
       return;
     }
     const host = hostId;
     const generation = scopeToken.current.generation;
     const inputVersion = inputGeneration.current;
-    const identity = JSON.stringify({
-      scope,
-      task,
-      humanCandidateId,
-      preferences: draft,
-    });
-    if (submissionIdentity.current !== identity || submissionKey.current === null) {
-      submissionIdentity.current = identity;
-      submissionKey.current = newSubmissionKey();
-    }
-    const requestKey = submissionKey.current;
     setRound({ round: null, busy: true, error: null });
     void (async () => {
       try {
-        const dto = await createRound(host, "default", task, humanCandidateId, draft, requestKey);
+        const dto = await createProviderRound(
+          host,
+          "default",
+          task,
+          resolvedHumanChoiceId,
+          editor.draft!,
+          submissionKey.current!,
+        );
         if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({ round: dto, busy: true, error: null });
         pollRound(host, dto.round_id, Date.now(), generation, inputVersion);
@@ -304,50 +431,11 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     hostId,
     isCurrentScope,
     pollRound,
-    resolveHumanCandidate,
+    resolveHumanChoice,
     round.busy,
-    scope,
     task,
+    validation,
   ]);
-
-  const handleSave = useCallback(() => {
-    if (hostId === null || !editor.draft) return;
-    const host = hostId;
-    const generation = scopeToken.current.generation;
-    const submitted = editor.draft;
-    void (async () => {
-      try {
-        const dto = await savePreferences(host, "default", submitted, editor.saved?.version ?? 0);
-        const saved = toSavedPreferences(dto);
-        if (saved && isCurrentScope(host, generation)) {
-          dispatchEditor({ type: "saved", scope, saved, submitted });
-        }
-      } catch (cause) {
-        if (!isCurrentScope(host, generation)) return;
-        if (cause instanceof AdvisorConflictError) {
-          dispatchEditor({
-            type: "error",
-            scope,
-            message: "Saved settings changed elsewhere. Reload the panel and reapply.",
-          });
-          try {
-            const prefs = await fetchPreferences(host);
-            const fresh = toSavedPreferences(prefs);
-            if (fresh && isCurrentScope(host, generation))
-              dispatchEditor({ type: "hydrate", scope, saved: fresh });
-          } catch {
-            // Keep the conflict error visible.
-          }
-          return;
-        }
-        dispatchEditor({
-          type: "error",
-          scope,
-          message: cause instanceof Error ? cause.message : "Couldn't save settings.",
-        });
-      }
-    })();
-  }, [editor.draft, editor.saved?.version, hostId, isCurrentScope, scope]);
 
   const handleConfirm = useCallback(
     (overrideId: string | null, reason: string | null) => {
@@ -371,18 +459,13 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             host,
             current.round_id,
             current.version,
-            {
-              agent_id: launchAgentId,
-              workspace: launchWorkspace,
-            },
+            { agent_id: launchAgentId, workspace: launchWorkspace },
             overrideId,
             reason,
           );
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({ round: dto, busy: false, error: null });
-          if (dto.execution.session_id !== null) {
-            onLaunched(dto.execution.session_id);
-          }
+          if (dto.execution.session_id !== null) onLaunched(dto.execution.session_id);
         } catch (cause) {
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({
@@ -408,24 +491,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         if (isCurrentScope(host, generation) && inputGeneration.current === inputVersion)
           setRound({ round: dto, busy: false, error: null });
       } catch (cause) {
-        if (isCurrentScope(host, generation) && inputGeneration.current === inputVersion) {
+        if (isCurrentScope(host, generation) && inputGeneration.current === inputVersion)
           setRound({
             round: current,
             busy: false,
             error: cause instanceof Error ? cause.message : "Couldn't cancel the round.",
           });
-        }
       }
     })();
   }, [hostId, isCurrentScope, round.busy, round.round]);
 
-  const review = useMemo(() => toReviewView(round.round ?? undefinedRound), [round.round]);
+  const review = providerReview(round.round);
   const reviewVisible =
     round.round !== null &&
     (round.round.state === "awaiting_confirmation" || round.round.state === "dispatch_claimed");
-
   if (hostId === null) return null;
-  if (catalogError !== null) {
+  if (catalogError !== null)
     return (
       <p
         className="text-sm text-muted-foreground"
@@ -435,32 +516,43 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         Model advisor unavailable: {catalogError}
       </p>
     );
-  }
   return (
     <div className="space-y-3" data-testid="model-advisor-section">
-      <ModelAdvisorPanel
+      <ProviderSettingsPanel
+        idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}
         value={editor.draft}
         options={options}
+        humanChoiceId={humanChoiceId}
         dirty={editor.dirty}
         busy={round.busy}
         error={editor.error}
-        humanCandidateId={resolveHumanCandidate()}
-        onChange={(next) => dispatchEditor({ type: "edit", preferences: next })}
-        onHumanChoice={(candidateId) => {
-          const option = options.find((row) => row.candidate_id === candidateId);
-          if (option) {
-            onHumanCandidateChosen({
-              model: option.model_id,
-              accessLane: option.lane_id,
-              effort: option.reasoning_effort === "not_applicable" ? "" : option.reasoning_effort,
-            });
-          }
-        }}
+        onChange={handleChange}
+        onHumanChoiceChange={handleHumanChoiceChange}
         onSave={handleSave}
-        onPropose={handlePropose}
       />
-      {reviewVisible && review !== null ? (
-        <ModelAdvisorReview
+      {editor.draft?.enabled ? (
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+            disabled={round.busy || validation !== null}
+            onClick={handlePropose}
+          >
+            {round.busy ? "Preparing recommendation…" : "Get recommendation"}
+          </button>
+          {validation ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {validation}
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            The advisor sees only the logical model and reasoning choices. Connection preference is
+            applied after the logical decision.
+          </p>
+        </div>
+      ) : null}
+      {reviewVisible && review ? (
+        <ProviderAdvisorReview
           review={review}
           options={options}
           busy={round.busy}
@@ -503,11 +595,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         <p className="text-xs text-muted-foreground">
           Actual:{" "}
           {round.round.actual_execution.status === "observed"
-            ? `${round.round.actual_execution.model ?? "unknown model"}${
-                round.round.actual_execution.reasoning_effort
-                  ? ` at ${round.round.actual_execution.reasoning_effort} reasoning`
-                  : ""
-              }`
+            ? `${round.round.actual_execution.model ?? "unknown model"}${round.round.actual_execution.reasoning_effort ? ` at ${round.round.actual_execution.reasoning_effort} reasoning` : ""}`
             : "unknown/unverified"}
           {round.round.actual_execution.reason ? ` — ${round.round.actual_execution.reason}` : ""}
         </p>
@@ -515,13 +603,3 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     </div>
   );
 }
-
-const undefinedRound: RoundDto = {
-  object: "model_advisor.round",
-  round_id: "",
-  state: "cancelled",
-  version: 0,
-  etag: "",
-  failure_reason: null,
-  execution: { session_id: null, uncertain: false },
-};

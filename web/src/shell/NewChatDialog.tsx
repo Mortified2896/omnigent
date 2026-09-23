@@ -178,6 +178,7 @@ import { useNativeServerSwitcherForMainSurface } from "@/hooks/useNativeServerSw
 import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
 import type { Conversation } from "@/hooks/useConversations";
 import type { NativeModelOption } from "@/lib/types";
+import type { LogicalOption } from "@/model-advisor/providerPreferences";
 import {
   useProjectConfig,
   useProjects,
@@ -1587,6 +1588,7 @@ function HarnessConfigModal({
   pickedHarness,
   costControlMode,
   benchmarkRoutingSelected,
+  modelAdvisorOn,
   setPermissionMode,
   setApprovalMode,
   setCursorExecMode,
@@ -1620,6 +1622,7 @@ function HarnessConfigModal({
   pickedHarness: string | null;
   costControlMode: CostControlMode;
   benchmarkRoutingSelected: boolean;
+  modelAdvisorOn: boolean;
   setPermissionMode: (mode: string) => void;
   setApprovalMode: (mode: string) => void;
   setCursorExecMode: (mode: string) => void;
@@ -1834,7 +1837,7 @@ function HarnessConfigModal({
         </DialogHeader>
 
         <div className="flex flex-col gap-5 py-1">
-          {!autoRouting && hasModelPicker && !hasPermission && (
+          {!autoRouting && hasModelPicker && !hasPermission && !modelAdvisorOn && (
             <ConfigRow label="Model" description="Underlying LLM" controlClassName="sm:w-80">
               <SearchableModelPicker
                 value={modelValue}
@@ -1847,57 +1850,63 @@ function HarnessConfigModal({
 
           {!autoRouting && hasPermission && (
             <>
-              <ConfigRow label="Model" description="Underlying LLM">
-                <RoutingModelSelect
-                  value={modelValue}
-                  onValueChange={onModelChange}
-                  offerSmartRouting={smartRoutingEligible}
-                  testId="new-chat-landing-config-model"
-                  models={claudeModelSelectOptions}
-                  contentClassName="[&_[data-slot=select-item]]:pl-2.5"
-                >
-                  {claudeModelsLoading && (
-                    <div className="px-2.5 py-1 text-sm text-muted-foreground">Loading models…</div>
-                  )}
-                  {!claudeModelsLoading && claudeModelOptions.length === 0 && (
-                    <div className="px-2.5 py-1 text-sm text-muted-foreground">
-                      Models unavailable
-                    </div>
-                  )}
-                </RoutingModelSelect>
-              </ConfigRow>
+              {!modelAdvisorOn && (
+                <ConfigRow label="Model" description="Underlying LLM">
+                  <RoutingModelSelect
+                    value={modelValue}
+                    onValueChange={onModelChange}
+                    offerSmartRouting={smartRoutingEligible}
+                    testId="new-chat-landing-config-model"
+                    models={claudeModelSelectOptions}
+                    contentClassName="[&_[data-slot=select-item]]:pl-2.5"
+                  >
+                    {claudeModelsLoading && (
+                      <div className="px-2.5 py-1 text-sm text-muted-foreground">
+                        Loading models…
+                      </div>
+                    )}
+                    {!claudeModelsLoading && claudeModelOptions.length === 0 && (
+                      <div className="px-2.5 py-1 text-sm text-muted-foreground">
+                        Models unavailable
+                      </div>
+                    )}
+                  </RoutingModelSelect>
+                </ConfigRow>
+              )}
 
-              <ConfigRow label="Effort" description="Reasoning depth vs. speed">
-                <Select
-                  // Smart Routing picks the model (and its effort) per
-                  // turn, so an explicit effort is meaningless: the row is
-                  // frozen and reads as an em-dash placeholder. Radix shows the
-                  // placeholder for the empty value, which no item can carry.
-                  value={smartRoutingOn ? "" : draftEffort || EFFORT_SELECT_NONE}
-                  onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? "" : v)}
-                  disabled={smartRoutingOn}
-                >
-                  <SelectTrigger
-                    className="w-full"
-                    data-testid="new-chat-landing-config-effort"
-                    aria-label="Reasoning effort"
+              {!modelAdvisorOn && (
+                <ConfigRow label="Effort" description="Reasoning depth vs. speed">
+                  <Select
+                    // Smart Routing picks the model (and its effort) per
+                    // turn, so an explicit effort is meaningless: the row is
+                    // frozen and reads as an em-dash placeholder. Radix shows the
+                    // placeholder for the empty value, which no item can carry.
+                    value={smartRoutingOn ? "" : draftEffort || EFFORT_SELECT_NONE}
+                    onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? "" : v)}
+                    disabled={smartRoutingOn}
                   >
-                    <SelectValue placeholder={EFFORT_UNAVAILABLE_PLACEHOLDER} />
-                  </SelectTrigger>
-                  <SelectContent
-                    position="popper"
-                    align="start"
-                    className="w-(--radix-select-trigger-width) [&_[data-slot=select-item]]:pl-2.5"
-                  >
-                    <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
-                    {CLAUDE_NATIVE_EFFORTS.map((e) => (
-                      <SelectItem key={e.value} value={e.value}>
-                        {e.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </ConfigRow>
+                    <SelectTrigger
+                      className="w-full"
+                      data-testid="new-chat-landing-config-effort"
+                      aria-label="Reasoning effort"
+                    >
+                      <SelectValue placeholder={EFFORT_UNAVAILABLE_PLACEHOLDER} />
+                    </SelectTrigger>
+                    <SelectContent
+                      position="popper"
+                      align="start"
+                      className="w-(--radix-select-trigger-width) [&_[data-slot=select-item]]:pl-2.5"
+                    >
+                      <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+                      {CLAUDE_NATIVE_EFFORTS.map((e) => (
+                        <SelectItem key={e.value} value={e.value}>
+                          {e.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </ConfigRow>
+              )}
 
               <ConfigRow label="Permissions" description="What the agent can do without asking">
                 <DescribedSelect
@@ -1917,31 +1926,35 @@ function HarnessConfigModal({
               models alongside the two choices the create call can express on its
               own: the harness's default, or the router picking per turn (only
               when routing is offered). */}
-              <ConfigRow label="Model" description="Underlying LLM">
-                <RoutingModelSelect
-                  value={modelValue}
-                  onValueChange={onModelChange}
-                  offerSmartRouting={smartRoutingEligible}
-                  testId="new-chat-landing-config-model"
-                  models={[
-                    ...(info !== "loading" && info.o3_routing_review_enabled
-                      ? [{ id: O3_ROUTING_MODEL_ID, label: "Benchmark Routing (O3)" }]
-                      : []),
-                    ...codexModelSelectOptions,
-                  ]}
-                  defaultLabel={defaultModelLabel(codexModelOptions, displayModelId)}
-                  contentClassName="[&_[data-slot=select-item]]:pl-2.5"
-                >
-                  {codexModelsLoading && (
-                    <div className="px-2.5 py-1 text-sm text-muted-foreground">Loading models…</div>
-                  )}
-                  {!codexModelsLoading && codexModelOptions.length === 0 && (
-                    <div className="px-2.5 py-1 text-sm text-muted-foreground">
-                      Models unavailable
-                    </div>
-                  )}
-                </RoutingModelSelect>
-              </ConfigRow>
+              {!modelAdvisorOn && (
+                <ConfigRow label="Model" description="Underlying LLM">
+                  <RoutingModelSelect
+                    value={modelValue}
+                    onValueChange={onModelChange}
+                    offerSmartRouting={smartRoutingEligible}
+                    testId="new-chat-landing-config-model"
+                    models={[
+                      ...(info !== "loading" && info.o3_routing_review_enabled
+                        ? [{ id: O3_ROUTING_MODEL_ID, label: "Benchmark Routing (O3)" }]
+                        : []),
+                      ...codexModelSelectOptions,
+                    ]}
+                    defaultLabel={defaultModelLabel(codexModelOptions, displayModelId)}
+                    contentClassName="[&_[data-slot=select-item]]:pl-2.5"
+                  >
+                    {codexModelsLoading && (
+                      <div className="px-2.5 py-1 text-sm text-muted-foreground">
+                        Loading models…
+                      </div>
+                    )}
+                    {!codexModelsLoading && codexModelOptions.length === 0 && (
+                      <div className="px-2.5 py-1 text-sm text-muted-foreground">
+                        Models unavailable
+                      </div>
+                    )}
+                  </RoutingModelSelect>
+                </ConfigRow>
+              )}
               <ConfigRow label="Approval" description="What the agent can do without asking">
                 <DescribedSelect
                   // Codex adds the DANGEROUS full-bypass as a 4th option; when
@@ -2234,6 +2247,14 @@ export function NewChatLandingScreen() {
   // gated section owns its own API lifecycle; nothing provider-backed starts
   // from this component.
   const modelAdvisorEnabled = isFeatureEnabled(info, "model_advisor");
+  // The advisor section reports the server-owned preference after hydration.
+  // Until then, keep the ordinary composer controls visible so a loading
+  // panel never strands the user without a model choice.
+  const [modelAdvisorActive, setModelAdvisorActive] = useState(false);
+  const modelAdvisorOn = modelAdvisorEnabled && modelAdvisorActive;
+  useEffect(() => {
+    if (!modelAdvisorEnabled) setModelAdvisorActive(false);
+  }, [modelAdvisorEnabled]);
   // Which router can answer a pick. The external AI-Gateway router only covers
   // a family the host runs through the gateway; the built-in judge covers any
   // family. Read once here and reused by every routing gate below. "loading"
@@ -2452,6 +2473,9 @@ export function NewChatLandingScreen() {
       setPickedCodexAccessLane(null);
     }
   }, []);
+  const handleAdvisorEnabledChange = useCallback((enabled: boolean | null) => {
+    setModelAdvisorActive(enabled === true);
+  }, []);
   // Controls the working-directory popover so picking a directory closes it.
   const [workspacePopoverOpen, setWorkspacePopoverOpen] = useState(false);
   // Controlled so selecting an existing worktree can close the popover.
@@ -2583,14 +2607,6 @@ export function NewChatLandingScreen() {
     },
     [navigate],
   );
-  const handleAdvisorHumanPick = useCallback(
-    (pick: { model: string; accessLane: string | null; effort: string }) => {
-      setPickedCodexModel(pick.model, pick.accessLane as CodexAccessLane | null);
-      setPickedEffort(pick.effort);
-    },
-    [setPickedCodexModel],
-  );
-
   useEffect(() => {
     if (
       !o3RoutingReviewEnabled ||
@@ -2998,6 +3014,37 @@ export function NewChatLandingScreen() {
     [agentList, effectiveAgentId, pendingAgent],
   );
   const selectedNativeHarness = nativeCodingAgentForAvailableAgent(selectedAgent)?.harness ?? null;
+  const handleAdvisorHumanChoiceChange = useCallback(
+    (choice: LogicalOption | null) => {
+      // The advisor catalog is the Codex-native logical catalog. Keep the
+      // existing physical composer state in sync for the normal submit path,
+      // while the advisor round itself continues to send only choice_id.
+      if (selectedNativeHarness !== "codex-native") return;
+      if (choice === null) {
+        setPickedCodexModel("", null);
+        setPickedEffort("");
+        return;
+      }
+      const rememberedLane =
+        pickedCodexAccessLane && choice.access_lanes.includes(pickedCodexAccessLane)
+          ? pickedCodexAccessLane
+          : null;
+      const directLane = choice.access_lanes.find(
+        (lane) => lane === "codex-direct" || lane === "glm-direct",
+      );
+      const accessLane = (rememberedLane ??
+        (choice.access_lanes.includes("omniroute")
+          ? "omniroute"
+          : (directLane ?? null))) as CodexAccessLane | null;
+      const model =
+        accessLane === "omniroute"
+          ? (choice.model_ids.find((modelId) => modelId.includes("/")) ?? choice.model_id)
+          : choice.model_id;
+      setPickedCodexModel(model, accessLane);
+      setPickedEffort(choice.reasoning_effort === "not_applicable" ? "" : choice.reasoning_effort);
+    },
+    [pickedCodexAccessLane, selectedNativeHarness, setPickedCodexModel],
+  );
   useEffect(() => {
     setO3RoutingSelected(
       selectedNativeHarness === "codex-native" &&
@@ -3071,6 +3118,11 @@ export function NewChatLandingScreen() {
     supportsCursorMode ||
     supportsModelPicker ||
     smartRoutingEligible ||
+    (selectedAgent?.harness != null && selectedAgent.harness in brainHarnessLabelsAll);
+  const selectedAgentHasNonModelKnobs =
+    supportsPermissionMode ||
+    supportsApprovalMode ||
+    supportsCursorMode ||
     (selectedAgent?.harness != null && selectedAgent.harness in brainHarnessLabelsAll);
   // Label/value pairs summarizing the selected agent's current run-config, for
   // the gear icon's hover tooltip. Mirrors the modal's per-capability rows so a
@@ -4885,52 +4937,61 @@ export function NewChatLandingScreen() {
                     has no knobs to configure, leaving a plain single-segment
                     pill. Hovering shows the current settings so they're readable
                     without opening the modal. */}
-                  {selectedAgent && selectedAgentHasKnobs && (
-                    <>
-                      {/* The segments' own padding (trigger pr-2, gear icon
+                  {selectedAgent &&
+                    selectedAgentHasKnobs &&
+                    (!modelAdvisorOn || selectedAgentHasNonModelKnobs) && (
+                      <>
+                        {/* The segments' own padding (trigger pr-2, gear icon
                         centering) supplies the gap on either side. */}
-                      <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="size-9 text-muted-foreground md:size-8"
-                              disabled={creating}
-                              onClick={() => setConfigOpen(true)}
-                              data-testid="new-chat-landing-config-gear"
-                            >
-                              <SettingsIcon className="size-4" data-icon-size="16" />
-                              <span className="sr-only">
-                                Configure {selectedAgent.display_name}
-                              </span>
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side="top"
-                            className="flex-col items-start gap-0.5 px-3 py-2"
-                            data-testid="new-chat-landing-config-gear-tooltip"
-                          >
-                            {configSummary.map((row) => (
-                              <span key={row.label} className="text-muted-foreground">
-                                {row.label}:{" "}
-                                <span className="text-background dark:text-popover-foreground">
-                                  {row.value}
+                        <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="size-9 text-muted-foreground md:size-8"
+                                disabled={creating}
+                                onClick={() => setConfigOpen(true)}
+                                data-testid="new-chat-landing-config-gear"
+                              >
+                                <SettingsIcon className="size-4" data-icon-size="16" />
+                                <span className="sr-only">
+                                  Configure {selectedAgent.display_name}
                                 </span>
-                              </span>
-                            ))}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </>
-                  )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent
+                              side="top"
+                              className="flex-col items-start gap-0.5 px-3 py-2"
+                              data-testid="new-chat-landing-config-gear-tooltip"
+                            >
+                              {configSummary
+                                .filter(
+                                  (row) =>
+                                    !modelAdvisorOn ||
+                                    (row.label !== "Model" && row.label !== "Effort"),
+                                )
+                                .map((row) => (
+                                  <span key={row.label} className="text-muted-foreground">
+                                    {row.label}:{" "}
+                                    <span className="text-background dark:text-popover-foreground">
+                                      {row.value}
+                                    </span>
+                                  </span>
+                                ))}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </>
+                    )}
                 </div>
                 {selectedAgent &&
                   (supportsModelPicker || selectedNativeHarness === "codex-native") &&
                   !sandboxSelected &&
-                  selectedHostId !== null && (
+                  selectedHostId !== null &&
+                  !modelAdvisorOn && (
                     <SearchableModelPicker
                       value={
                         o3RoutingSelected
@@ -5025,7 +5086,8 @@ export function NewChatLandingScreen() {
                 {selectedAgent &&
                   selectedNativeHarness === "codex-native" &&
                   !o3RoutingSelected &&
-                  costControlMode !== "on" && (
+                  costControlMode !== "on" &&
+                  !modelAdvisorOn && (
                     <Select
                       value={pickedEffort || EFFORT_SELECT_NONE}
                       disabled={creating}
@@ -5054,7 +5116,7 @@ export function NewChatLandingScreen() {
                       </SelectContent>
                     </Select>
                   )}
-                {(o3RoutingSelected || costControlMode === "on") && (
+                {(o3RoutingSelected || costControlMode === "on") && !modelAdvisorOn && (
                   <p className="text-xs text-muted-foreground" data-testid="routing-policy-summary">
                     {routingUnavailableReason ??
                       (o3RoutingSelected
@@ -5062,59 +5124,62 @@ export function NewChatLandingScreen() {
                         : "Omnigent Smart Routing · Native model selection, harness reasoning default.")}
                   </p>
                 )}
-                {selectedAgent && selectedAgentHasKnobs && (
-                  <HarnessConfigModal
-                    open={configOpen}
-                    onOpenChange={setConfigOpen}
-                    agent={selectedAgent}
-                    brainHarnessLabels={brainHarnessLabels}
-                    host={harnessWarningHost}
-                    hideUnconfigured={hideUnconfiguredHarnesses}
-                    smartRoutingEligible={smartRoutingEligible}
-                    permissionMode={permissionMode}
-                    approvalMode={approvalMode}
-                    cursorExecMode={cursorExecMode}
-                    bypassSandbox={bypassSandbox}
-                    pickedModel={pickedModel}
-                    pickedCodexAccessLane={pickedCodexAccessLane}
-                    claudeModelOptions={claudeModelOptions}
-                    claudeModelsLoading={
-                      !sandboxSelected && selectedHostId !== null && hostClaudeModelsLoading
-                    }
-                    codexModelOptions={codexModelOptions}
-                    codexModelsLoading={
-                      !sandboxSelected && selectedHostId !== null && hostCodexModelsLoading
-                    }
-                    piModelOptions={piModelOptions}
-                    piModelsLoading={
-                      !sandboxSelected && selectedHostId !== null && hostPiModelsLoading
-                    }
-                    pickedEffort={pickedEffort}
-                    pickedHarness={pickedHarness}
-                    costControlMode={costControlMode}
-                    benchmarkRoutingSelected={o3RoutingSelected}
-                    setPermissionMode={setPermissionMode}
-                    setApprovalMode={setApprovalMode}
-                    setCursorExecMode={setCursorExecMode}
-                    setBypassSandbox={setBypassSandbox}
-                    setPickedModel={setPickedModel}
-                    setPickedCodexModel={setPickedCodexModel}
-                    setPickedEffort={setPickedEffort}
-                    setPickedHarness={handleSetPickedHarness}
-                    onRoutingSelectionChange={(mode, benchmark) => {
-                      resetO3Review();
-                      setO3RoutingSelected(benchmark);
-                      setCostControlMode(mode);
-                      writeHarnessOption(selectedNativeHarness, {
-                        routingPolicy: benchmark
-                          ? "benchmark"
-                          : mode === "on"
-                            ? "native"
-                            : "manual",
-                      });
-                    }}
-                  />
-                )}
+                {selectedAgent &&
+                  selectedAgentHasKnobs &&
+                  (!modelAdvisorOn || selectedAgentHasNonModelKnobs) && (
+                    <HarnessConfigModal
+                      open={configOpen}
+                      onOpenChange={setConfigOpen}
+                      agent={selectedAgent}
+                      brainHarnessLabels={brainHarnessLabels}
+                      host={harnessWarningHost}
+                      hideUnconfigured={hideUnconfiguredHarnesses}
+                      smartRoutingEligible={smartRoutingEligible}
+                      permissionMode={permissionMode}
+                      approvalMode={approvalMode}
+                      cursorExecMode={cursorExecMode}
+                      bypassSandbox={bypassSandbox}
+                      pickedModel={pickedModel}
+                      pickedCodexAccessLane={pickedCodexAccessLane}
+                      claudeModelOptions={claudeModelOptions}
+                      claudeModelsLoading={
+                        !sandboxSelected && selectedHostId !== null && hostClaudeModelsLoading
+                      }
+                      codexModelOptions={codexModelOptions}
+                      codexModelsLoading={
+                        !sandboxSelected && selectedHostId !== null && hostCodexModelsLoading
+                      }
+                      piModelOptions={piModelOptions}
+                      piModelsLoading={
+                        !sandboxSelected && selectedHostId !== null && hostPiModelsLoading
+                      }
+                      pickedEffort={pickedEffort}
+                      pickedHarness={pickedHarness}
+                      costControlMode={costControlMode}
+                      benchmarkRoutingSelected={o3RoutingSelected}
+                      modelAdvisorOn={modelAdvisorOn}
+                      setPermissionMode={setPermissionMode}
+                      setApprovalMode={setApprovalMode}
+                      setCursorExecMode={setCursorExecMode}
+                      setBypassSandbox={setBypassSandbox}
+                      setPickedModel={setPickedModel}
+                      setPickedCodexModel={setPickedCodexModel}
+                      setPickedEffort={setPickedEffort}
+                      setPickedHarness={handleSetPickedHarness}
+                      onRoutingSelectionChange={(mode, benchmark) => {
+                        resetO3Review();
+                        setO3RoutingSelected(benchmark);
+                        setCostControlMode(mode);
+                        writeHarnessOption(selectedNativeHarness, {
+                          routingPolicy: benchmark
+                            ? "benchmark"
+                            : mode === "on"
+                              ? "native"
+                              : "manual",
+                        });
+                      }}
+                    />
+                  )}
                 {/* Routing is not a standalone composer toggle — it folds into
                   the gear modal's Model dropdown as an "Smart Routing"
                   option (see HarnessConfigModal). */}
@@ -5740,8 +5805,9 @@ export function NewChatLandingScreen() {
               }
               launchAgentId={effectiveAgentId}
               launchWorkspace={workspace === "" ? null : workspace}
-              onHumanCandidateChosen={handleAdvisorHumanPick}
               onLaunched={handleAdvisorLaunched}
+              onEnabledChange={handleAdvisorEnabledChange}
+              onHumanChoiceChange={handleAdvisorHumanChoiceChange}
             />
           )}
 
