@@ -979,6 +979,30 @@ def _codex_options_for_access_lane(
             "groupLabel": group_label,
             **({"isDefault": True} if is_default else {}),
         }
+        # This is host-side qualification evidence, not a model-name guess.
+        # The rows came from an explicit native Codex lane resolver: the
+        # OmniRoute lane is the configured Codex/ChatGPT subscription gateway,
+        # and the direct lane is Codex's authenticated ChatGPT subscription.
+        # The server trusts these fields only on the authenticated host frame;
+        # they are never accepted from browser input.
+        if access_lane == "omniroute":
+            row.update(
+                {
+                    "advisorProvider": "openai",
+                    "advisorAccessClass": "chatgpt_plan",
+                    "advisorConnectionId": "omniroute-codex-oauth",
+                    "advisorEntitlementKey": "chatgpt-plan:rtx-codex-owner",
+                }
+            )
+        elif access_lane == "codex-direct":
+            row.update(
+                {
+                    "advisorProvider": "openai",
+                    "advisorAccessClass": "chatgpt_plan",
+                    "advisorConnectionId": "codex-login",
+                    "advisorEntitlementKey": "chatgpt-plan:rtx-codex-owner",
+                }
+            )
         for key in ("defaultReasoningEffort", "supportedReasoningEfforts"):
             if key in option:
                 row[key] = option[key]
@@ -1061,6 +1085,10 @@ def _glm_direct_picker_rows() -> list[dict[str, object]]:
                 "displayName": f"{glm_display_name(direct_id)} · Z.AI Direct",
                 "accessLane": "glm-direct",
                 "groupLabel": "GLM",
+                "advisorProvider": "glm",
+                "advisorAccessClass": "glm_plan",
+                "advisorConnectionId": "zai-direct-coding-plan",
+                "advisorEntitlementKey": "glm-plan:rtx-coding-plan",
             }
         )
     return rows
@@ -1108,6 +1136,10 @@ def _omniroute_glm_picker_rows() -> list[dict[str, object]]:
                 "displayName": f"{glm_display_name(route_id.split('/', 1)[1])} · OmniRoute",
                 "accessLane": "omniroute",
                 "groupLabel": "GLM",
+                "advisorProvider": "glm",
+                "advisorAccessClass": "glm_plan",
+                "advisorConnectionId": "omniroute-glm-coding-plan",
+                "advisorEntitlementKey": "glm-plan:rtx-coding-plan",
             }
         )
     return rows
@@ -1170,6 +1202,10 @@ def _apply_glm_lane_rows(
                     **row,
                     "displayName": f"{glm_display_name(display_id)} · OmniRoute",
                     "groupLabel": "GLM",
+                    "advisorProvider": "glm",
+                    "advisorAccessClass": "glm_plan",
+                    "advisorConnectionId": "omniroute-glm-coding-plan",
+                    "advisorEntitlementKey": "glm-plan:rtx-coding-plan",
                     **({} if lane_already_stamped else {"accessLane": "omniroute"}),
                 }
             )

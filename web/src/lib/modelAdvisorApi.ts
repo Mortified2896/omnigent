@@ -5,6 +5,11 @@
 import { authenticatedFetch } from "@/lib/identity";
 import type { ReviewView } from "@/model-advisor/ModelAdvisorPanel";
 import type { AdvisorOption, AdvisorPreferences, SavedPreferences } from "@/model-advisor/editor";
+import type {
+  LogicalOption,
+  ProviderGroup,
+  ProviderPreferences,
+} from "@/model-advisor/providerPreferences";
 
 interface ErrorBody {
   detail?: unknown;
@@ -62,6 +67,19 @@ export interface CatalogDto {
   object: "model_advisor.catalog";
   catalog_revision: string;
   options: CatalogOptionDto[];
+  logical_options?: LogicalOptionDto[];
+}
+
+export interface LogicalOptionDto {
+  choice_id: string;
+  provider: ProviderGroup;
+  model_id: string;
+  display_name: string;
+  reasoning_effort: string;
+  model_ids: string[];
+  access_lanes: string[];
+  available: boolean;
+  unavailable_reason?: string | null;
 }
 
 export interface PreferencesDto {
@@ -70,14 +88,19 @@ export interface PreferencesDto {
   etag: string | null;
   state: string;
   preferences: AdvisorPreferences | null;
+  logical_preferences?: ProviderPreferences | null;
 }
 
 export interface RoundReviewDto {
   round_fingerprint: string;
-  human_candidate_id: string;
-  advisor_candidate_id: string;
+  schema_version?: 2;
+  human_candidate_id?: string;
+  advisor_candidate_id?: string;
+  human_choice_id?: string;
+  advisor_choice_id?: string;
   rationale: string;
-  assigned_candidate_id: string;
+  assigned_candidate_id?: string;
+  assigned_choice_id?: string;
   assigned_arm: "human" | "advisor" | "same";
   human_probability_percent: number;
   overridden: boolean;
@@ -109,6 +132,19 @@ export interface RoundDto {
     reasoning_effort?: string | null;
     access_lane?: string | null;
   };
+  execution_plan?: {
+    choice?: { provider: string; model_id: string; reasoning_effort: string };
+    preference?: string;
+    primary?: { transport: string; route_id: string; wire_model: string; wire_effort: string };
+    fallback?: {
+      transport: string;
+      route_id: string;
+      wire_model: string;
+      wire_effort: string;
+    } | null;
+    reason?: string;
+  };
+  transport_attempts?: Record<string, unknown>[];
   advisor_overhead?: {
     latency_ms: number | null;
     input_tokens: number | null;
@@ -159,6 +195,24 @@ export async function savePreferences(
   });
 }
 
+export async function saveProviderPreferences(
+  hostId: string,
+  profile: string,
+  preferences: ProviderPreferences,
+  expectedVersion: number,
+): Promise<PreferencesDto> {
+  return advisorFetch<PreferencesDto>("/v1/model-advisor/preferences", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      host_id: hostId,
+      profile,
+      expected_version: expectedVersion,
+      preferences,
+    }),
+  });
+}
+
 export async function createRound(
   hostId: string,
   profile: string,
@@ -182,6 +236,28 @@ export async function createRound(
         advisor_candidate_id: preferences.advisor_candidate_id,
         human_probability_percent: preferences.human_probability_percent,
       },
+    }),
+  });
+}
+
+export async function createProviderRound(
+  hostId: string,
+  profile: string,
+  task: string,
+  humanChoiceId: string,
+  preferences: ProviderPreferences,
+  submissionKey: string,
+): Promise<RoundDto> {
+  return advisorFetch<RoundDto>("/v1/model-advisor/rounds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      host_id: hostId,
+      profile,
+      task,
+      human_choice_id: humanChoiceId,
+      submission_key: submissionKey,
+      preferences,
     }),
   });
 }
@@ -247,15 +323,33 @@ export function toAdvisorOptions(catalog: CatalogDto): AdvisorOption[] {
   }));
 }
 
+export function toLogicalOptions(catalog: CatalogDto): LogicalOption[] {
+  return (catalog.logical_options ?? []).map((option) => ({
+    choice_id: option.choice_id,
+    provider: option.provider,
+    model_id: option.model_id,
+    display_name: option.display_name,
+    reasoning_effort: option.reasoning_effort,
+    model_ids: option.model_ids,
+    access_lanes: option.access_lanes,
+    available: option.available,
+    unavailable_reason: option.unavailable_reason ?? undefined,
+  }));
+}
+
 /** Bridge a server round projection into the review view's props. */
 export function toReviewView(round: RoundDto): ReviewView | null {
   if (!round.review) return null;
+  const humanCandidateId = round.review.human_candidate_id;
+  const advisorCandidateId = round.review.advisor_candidate_id;
+  const assignedCandidateId = round.review.assigned_candidate_id;
+  if (!humanCandidateId || !advisorCandidateId || !assignedCandidateId) return null;
   return {
     round_fingerprint: round.review.round_fingerprint,
-    human_candidate_id: round.review.human_candidate_id,
-    advisor_candidate_id: round.review.advisor_candidate_id,
+    human_candidate_id: humanCandidateId,
+    advisor_candidate_id: advisorCandidateId,
     rationale: round.review.rationale,
-    assigned_candidate_id: round.review.assigned_candidate_id,
+    assigned_candidate_id: assignedCandidateId,
     assigned_arm: round.review.assigned_arm,
     human_probability_percent: round.review.human_probability_percent,
   };
@@ -264,4 +358,21 @@ export function toReviewView(round: RoundDto): ReviewView | null {
 export function toSavedPreferences(dto: PreferencesDto): SavedPreferences | null {
   if (dto.preferences === null || dto.etag === null) return null;
   return { version: dto.version, etag: dto.etag, preferences: dto.preferences };
+}
+
+export interface SavedProviderPreferences {
+  version: number;
+  etag: string;
+  preferences: ProviderPreferences;
+}
+
+export function toSavedProviderPreferences(dto: PreferencesDto): SavedProviderPreferences | null {
+  if (
+    dto.logical_preferences === null ||
+    dto.logical_preferences === undefined ||
+    dto.etag === null
+  ) {
+    return null;
+  }
+  return { version: dto.version, etag: dto.etag, preferences: dto.logical_preferences };
 }

@@ -1,10 +1,10 @@
 # Provider-grouped Model Advisor — Codex RTX continuation
 
-Status: isolated source preparation, not connected to the live composer/API.
-Base inspected: `3d3082b453efbad332b0763bd8d73d25d599bbe2`.
-Scope: mobile settings, preserved provider selections, transport-neutral choices.
-Do not merge/deploy this follow-up merely because earlier advisor rollout tasks
-were authorized. Keep the current O1/O2 release and unrelated PRs untouched.
+Status: integrated on `codex/advisor-provider-groups-20260923` for PR #188.
+Prepared head continued from `c00571fff38880c3ba78521c1a0774ed7012274e`; the
+inspected base was `3d3082b453efbad332b0763bd8d73d25d599bbe2`.
+No deployment, merge, database migration, secret change, or O1/O2 mutation was
+performed by this follow-up.
 
 ## Required behavior
 
@@ -32,17 +32,20 @@ policy applies independently to the advisor's own call and the selected answer c
 ## Existing-source findings
 
 `omnigent/server/model_advisor_service.py::_lane_classification` admits OpenAI
-`codex-direct`, GLM `glm-direct`, and GLM-prefixed `omniroute` rows. Other gateway
-rows are excluded. This explains Direct-only OpenAI entries in the current advisor;
-it does NOT prove that RTX lacks an OpenAI subscription connection in OmniRoute.
+`codex-direct` rows, explicitly host-attested Codex OmniRoute aliases, GLM
+`glm-direct`, and the qualified GLM OmniRoute vocabulary. Other gateway rows are
+excluded. The OpenAI gateway aliases are accepted only with the host-stamped
+provider/class/connection/entitlement tuple; model-name prefixes alone remain
+insufficient evidence.
 
-`model_advisor_core.Candidate` and current frozen rounds bind route/account/model/
-effort, and `build_advisor_request` sends lane_id. Do not silently reinterpret those
-persisted rounds. Introduce a versioned logical round path reusing existing durable
-reservations, assignment, review, feedback and dispatch lifecycle. Keep v1 decoding
-and exact-pinned legacy execution. No rewrite of the already-working advisor engine.
+`model_advisor_core.Candidate` and v1 frozen rounds still bind route/account/model/
+effort, and `build_advisor_request` sends `lane_id`. They are not reinterpreted.
+The registered v2 path stores a versioned logical round alongside the existing
+durable reservation, assignment, review, feedback and dispatch lifecycle. V1 decoding
+and exact-pinned legacy execution remain unchanged; the advisor engine itself was not
+rewritten.
 
-## Prepared source
+## Integrated source
 
 - `omnigent/model_advisor_provider_policy.py`: logical IDs, strict v2 preference
   serialization, provider masking, independent advisor lookup, loss-aware v1 mapping,
@@ -52,8 +55,13 @@ and exact-pinned legacy execution. No rewrite of the already-working advisor eng
 - `web/src/model-advisor/ProviderSettingsPanel.tsx` and `provider-settings.css`:
   controlled accessible provider disclosure/switches, per-model effort chips, connection
   radios and explicit migration confirmation, independent advisor selector and Save.
-- Python and Node contract tests. These modules are deliberately unregistered so the
-  working release cannot gain a cosmetic connection switch with no backend enforcement.
+- `omnigent/model_advisor_provider_workflow.py`, the existing advisor repository,
+  API routes, host catalog adapter, real new-chat composer, and review surface now
+  register the v2 logical workflow. v1 preferences and lane-pinned rounds remain
+  on their original path.
+- Python, TypeScript, and Vitest contract tests cover migration, provider masking,
+  independent advisor selection, route-neutral input, exact dispatch labels,
+  at-most-once claims, and safe/unsafe fallback evidence.
 
 The logical catalog is supplied by a TRUSTED adapter. Do not build it by stripping
 prefixes heuristically. Use explicit verified aliases: gateway `codex/...` and native
@@ -61,74 +69,68 @@ Codex slugs may denote one checkpoint; matching text alone does not prove equiva
 Logical IDs contain no route, account, preference or availability. Removing/adding
 transport paths must not duplicate candidates, change their IDs or rerandomize a round.
 
-## Implement next in the SAME branch on RTX
+## Completed integration
 
-1. Fetch current Omnigent and HomeLab refs, read AGENTS/CONTRIBUTING, and continue this
-   branch in its own worktree as hermes. Preserve `.zcodeignore`, other dirty work,
-   active chats, the GLM repair and PR #183 TB4 work. No upstream push.
-2. Review existing API/store integration and register v2 preferences/rounds. Reuse the
-   application's database, CAS/ETags, authorization and submission-key reservations.
-   Add a thin codec adapter, not another database/service framework.
-3. Map old saved candidate IDs using explicit catalog evidence. Retain unknown IDs;
-   collapse equivalent transport duplicates. Require explicit connection-policy review
-   before applying new fallback behavior to legacy preferences. Do not auto-enroll or
-   erase missing models. Old pending/completed rounds retain their old schema/route.
-4. Wire ProviderSettingsPanel into the existing composer, not beside a duplicate old
-   settings form. Preserve review/override/50:50/feedback behavior, host-scope race
-   defenses, saved versus temporary settings, and new-chat/reload hydration.
-5. Qualify actual RTX OmniRoute OpenAI/Codex subscription and GLM Coding Plan paths.
-   Read actual active gateway connection identities, endpoint/model/effort mappings,
-   current host catalogs and default-provider configuration. A model name, source label,
-   catalog price or account-family constant is not proof of subscription entitlement.
-   Do not substitute billed OpenAI API credits. Do not invent a gateway connection;
-   missing credentials/admin changes require explicit owner action. No secret logging.
-6. Canonicalize supported reasoning semantics BEFORE logical IDs. Reject unsupported
-   levels or unproven equivalence; do not guess that Max/Ultra or Medium/High are equal.
-   The exact same model/effort may have different wire spellings only when verified.
-7. Freeze a private transport-policy snapshot separately from the logical pool and
-   advisor input. Preserve both proposals, original draw and overrides. Advisor sees
-   model/effort and neutral capability descriptions only: no routes, duplicate transport
-   candidates, route-encoded IDs, human pick, retries, quota, account or preference.
-8. Implement a scoped host dispatch resolver using QualifiedRoute attestations for the
-   SAME checkpoint/effort/harness contract and SAME plan/account. Bind explicit selected
-   connections; prevent gateway auto/Combo, emergency and account fallbacks escaping
-   that contract. Do not globally alter OmniRoute routing for unrelated sessions.
-9. Fallback only for a proven gateway failure BEFORE upstream execution. Unknown
-   timeout/502, plan quota exhaustion, partial output, tool execution or an already-bound
-   provider thread must NOT be replayed on Direct. Persist failed attempts and reasons,
-   revalidate current binding before each dispatch, and never rerun the advisor/coin.
-   Once a stateful execution starts, keep its physical route pinned; fail visibly if
-   recovery cannot preserve its thread/context without duplicated effects.
-10. Cover both advisor and answer transports, including actual empty advisor tool
-    surface. Keep logical selection and requested/observed route+effort+attempt evidence
-    separate. Show "via OmniRoute" or "Direct fallback: reason" without presenting
-    route preference as part of the advisor's recommendation.
+The existing new-chat composer now hydrates host-scoped v2 settings, preserves the
+existing human model/effort picker as the human proposal, and uses the provider
+panel only for grouped answer settings, connection policy, and the independent
+advisor engine. Save conflicts preserve the draft instead of overwriting it.
+
+The server migrates v1 settings at read time with explicit catalog mappings,
+retains unknown IDs and route-policy review state, and writes v2 only after an
+explicit save. Historical v1 rounds are decoded and dispatched unchanged.
+Live RTX inspection qualified the active Codex OAuth and GLM Coding Plan
+connections without printing credentials. The live OmniRoute catalog exposed
+`codex/gpt-6-astra`, `codex/gpt-5.6-{sol,terra,luna}`, `codex/gpt-5.5`,
+`glm/glm-5.3`, and `glm/glm-5.3-flash`; direct GLM exposed `glm-5.3` and
+`glm-5.3-flash`. Effort aliases were not invented: each route keeps the
+host-reported supported levels.
+Logical IDs contain only provider, canonical checkpoint, and effective effort.
+The frozen advisor request contains no route, account, preference, human pick,
+or fallback data. The full transport plan and per-attempt route are server-only
+labels; the runner validates lane, model, effort, plan, connection, and route
+before native startup.
+
+The dispatcher records advisor and answer attempts. A typed
+`PreDispatchRouteFailure` can use only a same-plan, same-checkpoint Direct leg
+for the three explicit pre-upstream gateway causes; current binding is rechecked
+before fallback. Generic errors, ambiguous timeout/502, quota, output, tools,
+or an established thread remain uncertain/failed and are never replayed.
 
 ## Tests and release boundary
 
-Executed here in a container SOURCE SLICE, not a full checkout:
-- 52 Python pytest cases passed, all synthetic/no provider calls.
-- 19 Node tests passed against strictly compiled providerPreferences.ts.
-- 8 actual Chromium component scenarios passed at 320/375/390/430/768 CSS-pixel widths.
-  The controlled fixture used bundled React 16.0.0 with the transpiled component,
-  not the repository's React version. Save/remount used a fixture memory store;
-  browser reload, authenticated persistence and live app integration are NOT proven.
-- TSX syntax transpilation, Python compilation, 99-column Python source/test check,
-  and Git diff whitespace checks passed. Canonical Ruff/Prettier/Pyrefly/full React
-  type checks/Vitest/production build were unavailable and remain for RTX.
-- Container git clone failed DNS. Publication uses the authorized GitHub connector.
+Focused backend and frontend checks passed:
 
-Codex must run the canonical formatters on changed files first, then repository
-unit/integration/browser checks. Add real service tests: v1 migration, paused-provider
-save/reload, independent advisor, byte-identical advisor input on route changes,
-no duplicate logical choices, exact reasoned model mapping, safe/unsafe fallback,
-retry/crash/stream/tool boundaries, pinned follow-ups and all-attempt provenance.
+- `tests/model_advisor/test_provider_policy.py`: 52 passed.
+- `tests/model_advisor/test_provider_workflow.py`: 6 passed.
+- `tests/server/routes/test_model_advisor.py`: 22 passed.
+- `tests/runner/test_codex_native_launch_config.py`: 37 passed.
+- Existing native/host regressions (`test_native_codex_provider.py`,
+  `test_advisor_call.py`, `test_connect.py`): 251 passed.
+- The provider-advisor component suite: 11 passed; TypeScript type-check,
+  Prettier checks on changed frontend files, and Oxlint all passed.
+- The production frontend build passed. Vite reported existing CSS `::highlight`
+  compatibility warnings and large-chunk warnings; neither blocked the build.
 
-Use an isolated app/DB and mock gateways first. Do not call broad historical CI debt
-an introduced regression; prove any baseline claims on current main. Real RTX routing
-qualification and narrowly bounded acceptance are the remaining host-local work;
-report exact missing verification instead of widening billing or deleting state.
+The full frontend Vitest run was 7,079 passed, 38 failed, 3 expected failures and
+1 skipped. The same 38 failures reproduced on the inspected base commit in the same
+five unrelated chat/project-routing files, so they are baseline debt rather than
+provider-advisor regressions. The provider-advisor tests remain green.
 
-Push and update this draft PR. Stop before merge/deployment for this new follow-up.
-Once separately authorized, deploy the same accepted artifact O1 first, then O2,
-with migrations/settings compatibility and independent backups/rollback acceptance.
+Rendered validation used regular Playwright with the installed system Chrome because
+the Browser plugin was unavailable. A route-stubbed app run rendered the real new-chat
+composer and provider settings at 390×844 CSS pixels: both OpenAI and GLM groups,
+connection radios, effort chips, independent advisor select, and Save controls were
+visible; document `scrollWidth` stayed at 390 (no horizontal overflow). A separate
+desktop and unauthenticated mobile smoke screenshot also loaded the app shell. The
+stubbed render was UI-only: it did not make provider calls or claim live launch
+acceptance.
+
+Live RTX inspection was read-only and qualified the active Codex OAuth and GLM Coding
+Plan connections, current OmniRoute model vocabulary, direct GLM vocabulary, and
+supported effort levels. No provider prompt, scoring chat, database mutation,
+deployment, merge, or O1/O2 change was performed. The safe fallback and no-replay
+claims are covered by synthetic typed-failure tests, not a production fault injection.
+
+The branch is ready to push/update PR #188. Merge and deployment remain outside this
+follow-up's scope.

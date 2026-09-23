@@ -31,6 +31,10 @@ export interface LogicalOption {
   model_id: string;
   display_name: string;
   reasoning_effort: string;
+  /** Physical spellings are display/catalog metadata for mapping the existing
+   * composer pick; they never enter the advisor prompt or persisted choice id. */
+  model_ids: string[];
+  access_lanes: string[];
   available: boolean;
   unavailable_reason?: string;
 }
@@ -110,7 +114,10 @@ export function activeChoiceIds(prefs: ProviderPreferences): string[] {
   });
 }
 
-export function groupModels(options: readonly LogicalOption[], provider: ProviderGroup): ModelGroup[] {
+export function groupModels(
+  options: readonly LogicalOption[],
+  provider: ProviderGroup,
+): ModelGroup[] {
   const models = new Map<string, ModelGroup>();
   const ids = new Set<string>();
   const combinations = new Set<string>();

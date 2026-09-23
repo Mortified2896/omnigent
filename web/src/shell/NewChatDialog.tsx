@@ -2583,14 +2583,6 @@ export function NewChatLandingScreen() {
     },
     [navigate],
   );
-  const handleAdvisorHumanPick = useCallback(
-    (pick: { model: string; accessLane: string | null; effort: string }) => {
-      setPickedCodexModel(pick.model, pick.accessLane as CodexAccessLane | null);
-      setPickedEffort(pick.effort);
-    },
-    [setPickedCodexModel],
-  );
-
   useEffect(() => {
     if (
       !o3RoutingReviewEnabled ||
@@ -5740,7 +5732,6 @@ export function NewChatLandingScreen() {
               }
               launchAgentId={effectiveAgentId}
               launchWorkspace={workspace === "" ? null : workspace}
-              onHumanCandidateChosen={handleAdvisorHumanPick}
               onLaunched={handleAdvisorLaunched}
             />
           )}

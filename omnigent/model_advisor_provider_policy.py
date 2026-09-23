@@ -25,8 +25,11 @@ class ProviderPolicyError(ValueError):
 
 def _text(value: object) -> None:
     if (
-        not isinstance(value, str) or not value or value != value.strip()
-        or len(value) > 512 or any(ord(c) < 32 for c in value)
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 512
+        or any(ord(c) < 32 for c in value)
     ):
         raise ProviderPolicyError("Expected a bounded canonical identifier")
 
@@ -93,9 +96,8 @@ class ProviderPreferences:
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
             raise ProviderPolicyError("enabled must be boolean")
-        if (
-            not isinstance(self.openai, ProviderSelection)
-            or not isinstance(self.glm, ProviderSelection)
+        if not isinstance(self.openai, ProviderSelection) or not isinstance(
+            self.glm, ProviderSelection
         ):
             raise ProviderPolicyError("Expected per-provider selections")
         if self.advisor_choice_id is not None:
@@ -127,12 +129,15 @@ class ProviderPreferences:
     def to_payload(self) -> dict:
         def group(value: ProviderSelection) -> dict:
             return {
-                "enabled": value.enabled, "collapsed": value.collapsed,
+                "enabled": value.enabled,
+                "collapsed": value.collapsed,
                 "selected_choice_ids": list(value.selected_choice_ids),
                 "transport_preference": value.transport_preference,
             }
+
         return {
-            "schema_version": 2, "enabled": self.enabled,
+            "schema_version": 2,
+            "enabled": self.enabled,
             "providers": {"openai": group(self.openai), "glm": group(self.glm)},
             "advisor_choice_id": self.advisor_choice_id,
             "human_probability_percent": self.human_probability_percent,
@@ -143,8 +148,13 @@ class ProviderPreferences:
     @classmethod
     def from_payload(cls, payload: object) -> ProviderPreferences:
         keys = {
-            "schema_version", "enabled", "providers", "advisor_choice_id",
-            "human_probability_percent", "unresolved_legacy_ids", "route_review_required",
+            "schema_version",
+            "enabled",
+            "providers",
+            "advisor_choice_id",
+            "human_probability_percent",
+            "unresolved_legacy_ids",
+            "route_review_required",
         }
         if not isinstance(payload, dict) or set(payload) != keys:
             raise ProviderPolicyError("Unexpected preferences shape")
@@ -156,12 +166,22 @@ class ProviderPreferences:
         parsed = {}
         for provider in PROVIDERS:
             value = groups[provider]
-            if not isinstance(value, dict) or set(value) != {
-                "enabled", "collapsed", "selected_choice_ids", "transport_preference",
-            } or not isinstance(value["selected_choice_ids"], list):
+            if (
+                not isinstance(value, dict)
+                or set(value)
+                != {
+                    "enabled",
+                    "collapsed",
+                    "selected_choice_ids",
+                    "transport_preference",
+                }
+                or not isinstance(value["selected_choice_ids"], list)
+            ):
                 raise ProviderPolicyError("Unexpected provider settings")
             parsed[provider] = ProviderSelection(
-                value["enabled"], value["collapsed"], tuple(value["selected_choice_ids"]),
+                value["enabled"],
+                value["collapsed"],
+                tuple(value["selected_choice_ids"]),
                 value["transport_preference"],
             )
         if not all(
@@ -170,8 +190,12 @@ class ProviderPreferences:
         ):
             raise ProviderPolicyError("Expected migration-state lists")
         return cls(
-            payload["enabled"], parsed["openai"], parsed["glm"], payload["advisor_choice_id"],
-            payload["human_probability_percent"], tuple(payload["unresolved_legacy_ids"]),
+            payload["enabled"],
+            parsed["openai"],
+            parsed["glm"],
+            payload["advisor_choice_id"],
+            payload["human_probability_percent"],
+            tuple(payload["unresolved_legacy_ids"]),
             tuple(payload["route_review_required"]),
         )
 
@@ -220,8 +244,12 @@ def advisor_input(task: str, choices: tuple[LogicalChoice, ...]) -> dict:
         ),
         "task": task,
         "candidates": [
-            {"candidate_id": row.choice_id, "provider": row.provider,
-             "model_id": row.model_id, "reasoning_effort": row.reasoning_effort}
+            {
+                "candidate_id": row.choice_id,
+                "provider": row.provider,
+                "model_id": row.model_id,
+                "reasoning_effort": row.reasoning_effort,
+            }
             for row in sorted(choices, key=lambda item: item.choice_id)
         ],
     }
@@ -235,6 +263,7 @@ class QualifiedRoute:
     entitlement_key identifies the SAME plan/account, not just its vendor.
     ready=False never removes a logical model from the advisor's prompt.
     """
+
     choice: LogicalChoice
     transport: Transport
     route_id: str
@@ -245,21 +274,94 @@ class QualifiedRoute:
     equivalence_key: str
     catalog_revision: str
     ready: bool = True
+    # A lane is not a connection identity: OmniRoute carries both the
+    # ChatGPT-plan and GLM-plan connections. Keep the host-attested binding
+    # separate so the native dispatch boundary can compare it explicitly.
+    connection_id: str | None = None
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.choice, LogicalChoice)
-            or self.transport not in ("direct", "omniroute")
+        if not isinstance(self.choice, LogicalChoice) or self.transport not in (
+            "direct",
+            "omniroute",
         ):
             raise ProviderPolicyError("Invalid route")
         for value in (
-            self.route_id, self.wire_model, self.wire_effort, self.entitlement_key,
-            self.equivalence_key, self.catalog_revision,
+            self.route_id,
+            self.wire_model,
+            self.wire_effort,
+            self.entitlement_key,
+            self.equivalence_key,
+            self.catalog_revision,
         ):
             _text(value)
+        if self.connection_id is None:
+            # Synthetic/legacy callers did not carry a connection identity.
+            # Preserve their shape while ensuring every serialized v2 plan has
+            # a nonempty binding that the runner can compare.
+            object.__setattr__(self, "connection_id", self.route_id)
+        _text(self.connection_id)
         expected = "chatgpt_plan" if self.choice.provider == "openai" else "glm_plan"
         if self.entitlement_kind != expected or type(self.ready) is not bool:
             raise ProviderPolicyError("Route must use the declared plan, not another billing lane")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "choice": {
+                "provider": self.choice.provider,
+                "model_id": self.choice.model_id,
+                "reasoning_effort": self.choice.reasoning_effort,
+            },
+            "transport": self.transport,
+            "route_id": self.route_id,
+            "wire_model": self.wire_model,
+            "wire_effort": self.wire_effort,
+            "entitlement_kind": self.entitlement_kind,
+            "entitlement_key": self.entitlement_key,
+            "equivalence_key": self.equivalence_key,
+            "catalog_revision": self.catalog_revision,
+            "ready": self.ready,
+            "connection_id": self.connection_id,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> QualifiedRoute:
+        base_keys = {
+            "choice",
+            "transport",
+            "route_id",
+            "wire_model",
+            "wire_effort",
+            "entitlement_kind",
+            "entitlement_key",
+            "equivalence_key",
+            "catalog_revision",
+            "ready",
+        }
+        if not isinstance(payload, dict) or set(payload) not in (
+            base_keys,
+            {*base_keys, "connection_id"},
+        ):
+            raise ProviderPolicyError("Unexpected qualified route shape")
+        choice = payload["choice"]
+        if not isinstance(choice, dict) or set(choice) != {
+            "provider",
+            "model_id",
+            "reasoning_effort",
+        }:
+            raise ProviderPolicyError("Unexpected qualified route choice")
+        return cls(
+            choice=LogicalChoice(**choice),
+            transport=payload["transport"],
+            route_id=payload["route_id"],
+            wire_model=payload["wire_model"],
+            wire_effort=payload["wire_effort"],
+            entitlement_kind=payload["entitlement_kind"],
+            entitlement_key=payload["entitlement_key"],
+            equivalence_key=payload["equivalence_key"],
+            catalog_revision=payload["catalog_revision"],
+            ready=payload["ready"],
+            connection_id=payload.get("connection_id"),
+        )
 
 
 @dataclass(frozen=True)
@@ -269,6 +371,68 @@ class TransportPlan:
     primary: QualifiedRoute
     fallback: QualifiedRoute | None
     reason: str
+
+    def __post_init__(self) -> None:
+        if self.preference not in ("omniroute_preferred", "direct_only"):
+            raise ProviderPolicyError("Invalid route preference")
+        if not isinstance(self.primary, QualifiedRoute) or self.primary.choice != self.choice:
+            raise ProviderPolicyError("Primary route does not match the logical choice")
+        if self.fallback is not None and (
+            not isinstance(self.fallback, QualifiedRoute)
+            or self.fallback.choice != self.choice
+            or self.primary.transport != "omniroute"
+            or self.fallback.transport != "direct"
+        ):
+            raise ProviderPolicyError("Fallback route is not an equivalent Direct route")
+        _text(self.reason)
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "choice": {
+                "provider": self.choice.provider,
+                "model_id": self.choice.model_id,
+                "reasoning_effort": self.choice.reasoning_effort,
+            },
+            "preference": self.preference,
+            "primary": self.primary.to_payload(),
+            "fallback": self.fallback.to_payload() if self.fallback is not None else None,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_payload(
+        cls, payload: object, *, pool: tuple[LogicalChoice, ...] = ()
+    ) -> TransportPlan:
+        if not isinstance(payload, dict) or set(payload) != {
+            "choice",
+            "preference",
+            "primary",
+            "fallback",
+            "reason",
+        }:
+            raise ProviderPolicyError("Unexpected transport plan shape")
+        raw_choice = payload["choice"]
+        if not isinstance(raw_choice, dict) or set(raw_choice) != {
+            "provider",
+            "model_id",
+            "reasoning_effort",
+        }:
+            raise ProviderPolicyError("Unexpected transport plan choice")
+        primary = QualifiedRoute.from_payload(payload["primary"])
+        fallback_value = payload["fallback"]
+        fallback = None if fallback_value is None else QualifiedRoute.from_payload(fallback_value)
+        choice = LogicalChoice(**raw_choice)
+        if primary.choice != choice or (fallback is not None and fallback.choice != choice):
+            raise ProviderPolicyError("Transport plan routes disagree with its logical choice")
+        if pool and choice.choice_id not in {item.choice_id for item in pool}:
+            raise ProviderPolicyError("Transport plan choice is outside the frozen pool")
+        return cls(
+            choice=choice,
+            preference=payload["preference"],
+            primary=primary,
+            fallback=fallback,
+            reason=payload["reason"],
+        )
 
 
 def plan_transport(
@@ -290,9 +454,13 @@ def plan_transport(
         if direct is None or not direct.ready:
             raise ProviderPolicyError("Selected Direct route unavailable")
         return TransportPlan(choice, preference, direct, None, "direct_selected")
-    if gateway and direct and (
-        gateway.entitlement_key != direct.entitlement_key
-        or gateway.equivalence_key != direct.equivalence_key
+    if (
+        gateway
+        and direct
+        and (
+            gateway.entitlement_key != direct.entitlement_key
+            or gateway.equivalence_key != direct.equivalence_key
+        )
     ):
         raise ProviderPolicyError("Routes are not equivalent on the same plan/account")
     if gateway is not None and gateway.ready:
@@ -306,8 +474,13 @@ def plan_transport(
 
 
 def permitted_fallback(
-    plan: TransportPlan, *, cause: str, upstream_not_started: bool,
-    output_seen: bool, tools_started: bool, thread_bound: bool,
+    plan: TransportPlan,
+    *,
+    cause: str,
+    upstream_not_started: bool,
+    output_seen: bool,
+    tools_started: bool,
+    thread_bound: bool,
 ) -> QualifiedRoute | None:
     """Return the prequalified fallback only for a proven pre-dispatch failure.
 
@@ -319,12 +492,18 @@ def permitted_fallback(
     if any(type(flag) is not bool for flag in flags):
         raise ProviderPolicyError("Fallback evidence must be explicit booleans")
     safe_cause = cause in {
-        "proxy_connect_failed", "proxy_circuit_open", "proxy_rejected_before_forward",
+        "proxy_connect_failed",
+        "proxy_circuit_open",
+        "proxy_rejected_before_forward",
     }
     if (
-        plan.preference != "omniroute_preferred" or plan.primary.transport != "omniroute"
-        or not safe_cause or not upstream_not_started
-        or output_seen or tools_started or thread_bound
+        plan.preference != "omniroute_preferred"
+        or plan.primary.transport != "omniroute"
+        or not safe_cause
+        or not upstream_not_started
+        or output_seen
+        or tools_started
+        or thread_bound
     ):
         return None
     return plan.fallback
@@ -348,10 +527,19 @@ def migrate_v1(payload: dict, legacy_choices: dict[str, LogicalChoice]) -> Provi
     v1 pinned a lane and the new gateway/fallback policy expands that contract.
     Unknown IDs remain stored for inspection/removal; nothing auto-selects.
     """
-    if not isinstance(payload, dict) or set(payload) != {
-        "schema_version", "enabled", "allowed_candidate_ids",
-        "advisor_candidate_id", "human_probability_percent",
-    } or type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+    if (
+        not isinstance(payload, dict)
+        or set(payload)
+        != {
+            "schema_version",
+            "enabled",
+            "allowed_candidate_ids",
+            "advisor_candidate_id",
+            "human_probability_percent",
+        }
+        or type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+    ):
         raise ProviderPolicyError("Unexpected legacy preferences")
     if not isinstance(payload["allowed_candidate_ids"], list):
         raise ProviderPolicyError("Invalid legacy answer pool")

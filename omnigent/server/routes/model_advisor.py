@@ -8,12 +8,13 @@ the private frozen round snapshot never reaches a browser.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from omnigent.model_advisor_core import AdvisorContractError
+from omnigent.model_advisor_provider_policy import ProviderPolicyError, ProviderPreferences
 from omnigent.model_advisor_workflow import AdvisorPreferences
 from omnigent.server.auth import AuthProvider
 from omnigent.server.model_advisor_service import ModelAdvisorService
@@ -30,16 +31,36 @@ _JSON_MUTATION_GUARDS = [
 class AdvisorPreferencesBody(BaseModel):
     """Client-supplied preference payload; ids only, never route metadata."""
 
+    schema_version: Literal[1] = 1
     enabled: bool
     allowed_candidate_ids: list[str] = Field(max_length=128)
     advisor_candidate_id: str | None = None
     human_probability_percent: int = Field(ge=0, le=100, default=50)
 
 
+class ProviderSelectionBody(BaseModel):
+    enabled: bool
+    collapsed: bool
+    selected_choice_ids: list[str] = Field(max_length=128)
+    transport_preference: Literal["omniroute_preferred", "direct_only"]
+
+
+class ProviderPreferencesBody(BaseModel):
+    """V2 logical settings; route/account metadata never comes from this DTO."""
+
+    schema_version: Literal[2]
+    enabled: bool
+    providers: dict[str, ProviderSelectionBody]
+    advisor_choice_id: str | None = None
+    human_probability_percent: int = Field(ge=0, le=100, default=50)
+    unresolved_legacy_ids: list[str] = Field(max_length=128, default_factory=list)
+    route_review_required: list[Literal["openai", "glm"]] = Field(default_factory=list)
+
+
 class SavePreferencesRequest(BaseModel):
     host_id: str
     profile: str = "default"
-    preferences: AdvisorPreferencesBody
+    preferences: ProviderPreferencesBody | AdvisorPreferencesBody
     expected_version: int = Field(ge=0)
 
 
@@ -47,7 +68,8 @@ class CreateRoundRequest(BaseModel):
     host_id: str
     profile: str = "default"
     task: str = Field(min_length=1, max_length=200_000)
-    human_candidate_id: str
+    human_candidate_id: str | None = None
+    human_choice_id: str | None = None
     # A browser-generated key is reused across retries/double-clicks. The
     # service binds it to the owner, host, prompt and frozen settings before
     # deriving the durable round id; it is not an authorization credential.
@@ -59,7 +81,13 @@ class CreateRoundRequest(BaseModel):
     )
     # Draft settings are explicitly frozen for this round. Saved defaults are
     # still the fallback for older clients that omit this field.
-    preferences: AdvisorPreferencesBody | None = None
+    preferences: ProviderPreferencesBody | AdvisorPreferencesBody | None = None
+
+    @model_validator(mode="after")
+    def require_one_human_choice(self) -> CreateRoundRequest:
+        if (self.human_candidate_id is None) == (self.human_choice_id is None):
+            raise ValueError("Exactly one of human_candidate_id or human_choice_id is required")
+        return self
 
 
 class SessionLaunchRequest(BaseModel):
@@ -95,7 +123,14 @@ def create_model_advisor_router(
         require_user(request, auth_provider)
         return service
 
-    def _preferences_from_body(body: AdvisorPreferencesBody) -> AdvisorPreferences:
+    def _preferences_from_body(
+        body: ProviderPreferencesBody | AdvisorPreferencesBody,
+    ) -> AdvisorPreferences | ProviderPreferences:
+        if isinstance(body, ProviderPreferencesBody):
+            try:
+                return ProviderPreferences.from_payload(body.model_dump())
+            except ProviderPolicyError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         try:
             return AdvisorPreferences(
                 enabled=body.enabled,
@@ -125,6 +160,20 @@ def create_model_advisor_router(
                     "is_default_effort": option.is_default_effort,
                 }
                 for option in catalog.options
+            ],
+            "logical_options": [
+                {
+                    "choice_id": option.choice.choice_id,
+                    "provider": option.choice.provider,
+                    "model_id": option.choice.model_id,
+                    "display_name": option.display_name,
+                    "reasoning_effort": option.choice.reasoning_effort,
+                    "model_ids": list(option.model_ids),
+                    "access_lanes": list(option.access_lanes),
+                    "available": option.available,
+                    "unavailable_reason": option.unavailable_reason,
+                }
+                for option in catalog.logical_options
             ],
         }
 
@@ -181,6 +230,7 @@ def create_model_advisor_router(
             body.profile,
             task=body.task,
             human_candidate_id=body.human_candidate_id,
+            human_choice_id=body.human_choice_id,
             submission_key=body.submission_key,
             preferences=(
                 _preferences_from_body(body.preferences) if body.preferences is not None else None
