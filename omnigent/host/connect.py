@@ -3119,32 +3119,41 @@ class HostProcess:
                         )
                     )
             elif _model_advisor_release_enabled():
-                # Model Advisor v1 is deliberately scoped to the two direct
-                # subscription lanes. Do not let the host's ambient provider
-                # (or a generic gateway/default row) become an advisor
-                # candidate just because it is the normal picker default.
-                try:
-                    launch = await asyncio.to_thread(
-                        resolve_native_codex_catalog_launch,
-                        access_lane="codex-direct",
+                # Provider-grouped Model Advisor choices need both explicit
+                # OpenAI subscription lanes. The ordinary/default provider
+                # catalog is not evidence for either lane, so resolve and
+                # probe each one independently, preserving direct fallback
+                # when OmniRoute is unavailable.
+                rows = []
+                for lane, label in (
+                    ("omniroute", "OmniRoute"),
+                    ("codex-direct", "Codex Subscription — Direct"),
+                ):
+                    try:
+                        launch = await asyncio.to_thread(
+                            resolve_native_codex_catalog_launch, access_lane=lane
+                        )
+                        lane_rows = await codex_launch_catalog(launch=launch)
+                    except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
+                        _logger.warning(
+                            "Codex %s catalog unavailable for Model Advisor",
+                            lane,
+                            exc_info=True,
+                        )
+                        continue
+                    lane_rows = [
+                        row
+                        for row in (lane_rows or ())
+                        if not _is_glm_model_id(row.get("model") or row.get("id"))
+                    ]
+                    rows.extend(
+                        _codex_options_for_access_lane(
+                            lane_rows,
+                            access_lane=lane,
+                            group_label=label,
+                            preserve_default=not rows,
+                        )
                     )
-                    direct_rows = await codex_launch_catalog(launch=launch)
-                except Exception:  # noqa: BLE001 — an unavailable lane stays unavailable
-                    _logger.warning(
-                        "Codex direct catalog unavailable for Model Advisor", exc_info=True
-                    )
-                    direct_rows = None
-                direct_rows = [
-                    row
-                    for row in (direct_rows or ())
-                    if not _is_glm_model_id(row.get("model") or row.get("id"))
-                ]
-                rows = _codex_options_for_access_lane(
-                    direct_rows,
-                    access_lane="codex-direct",
-                    group_label="Codex Subscription — Direct",
-                    preserve_default=True,
-                )
             else:
                 rows = await codex_launch_catalog()
         except Exception:  # noqa: BLE001 — no catalog, never a crash
