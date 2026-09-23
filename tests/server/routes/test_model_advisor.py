@@ -221,6 +221,60 @@ def test_build_host_catalog_groups_explicit_equivalent_provider_routes() -> None
     assert len(catalog.routes_by_choice[PROVIDER_OPENAI.choice_id]) == 2
 
 
+def test_codex_prefixed_direct_models_group_with_the_same_omniroute_checkpoint() -> None:
+    from omnigent.server.model_advisor_service import build_host_catalog
+
+    rows = []
+    for model_id in ("codex/gpt-6-astra", "codex/gpt-5.6-luna"):
+        for lane in ("codex-direct", "omniroute"):
+            row = {
+                "id": model_id,
+                "model": model_id,
+                "displayName": model_id.split("/", 1)[1],
+                "accessLane": lane,
+                "defaultReasoningEffort": "low",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "medium"},
+                ],
+            }
+            if lane == "omniroute":
+                row.update(
+                    {
+                        "advisorProvider": "openai",
+                        "advisorAccessClass": "chatgpt_plan",
+                        "advisorConnectionId": "omniroute-codex-oauth",
+                        "advisorEntitlementKey": "chatgpt-plan:rtx-codex-owner",
+                    }
+                )
+            rows.append(row)
+
+    catalog = build_host_catalog(rows)
+    options = [option for option in catalog.logical_options if option.choice.provider == "openai"]
+    assert {option.choice.model_id for option in options} == {
+        "gpt-6-astra",
+        "gpt-5.6-luna",
+    }
+    # The advisor must use the qualified host catalog instead of inventing a
+    # missing model.
+    assert not any(option.choice.model_id == "gpt-6-luna" for option in options)
+
+    for canonical in ("gpt-6-astra", "gpt-5.6-luna"):
+        for effort in ("low", "medium"):
+            matches = [
+                option
+                for option in options
+                if option.choice.model_id == canonical and option.choice.reasoning_effort == effort
+            ]
+            assert len(matches) == 1
+            logical = matches[0]
+            assert logical.model_ids == (f"codex/{canonical}",)
+            assert set(logical.access_lanes) == {"codex-direct", "omniroute"}
+            assert {
+                route.transport for route in catalog.routes_by_choice[logical.choice.choice_id]
+            } == {"direct", "omniroute"}
+
+
 def _candidate_id(lane: str, model: str, effort: str) -> str:
     """Compute the stable candidate id exactly as the service does."""
     identity = (
