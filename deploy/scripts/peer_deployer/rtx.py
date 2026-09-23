@@ -171,6 +171,14 @@ def accepted(path: Path, expected_digest: str) -> dict:
         trusted(resource)
         require(digest(resource) == expected, f"artifact changed: {name}")
     require(record["schema_policy"] == "same-schema", "unsupported migration policy")
+    for field in ("upstream_version", "upstream_ref"):
+        value = record.get(field)
+        require(
+            value is None or (
+                isinstance(value, str) and 0 < len(value.strip()) <= 160 and value.isprintable()
+            ),
+            f"malformed {field} provenance",
+        )
     require(
         all(
             record["checks"].get(k) is True

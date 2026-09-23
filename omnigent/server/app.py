@@ -65,6 +65,8 @@ from omnigent.server.background_session_titles import (
     BackgroundSessionTitleCoordinator,
     RunnerBackgroundTitleGenerator,
 )
+from omnigent.server.deployment_controller import DeploymentControllerClient
+from omnigent.server.deployment_fence import DeploymentWriteFenceMiddleware, write_fence_active
 from omnigent.server.feature_flags import Feature, FeatureFlags, resolve_feature_flags
 from omnigent.server.managed_hosts import ManagedSandboxDeployment
 from omnigent.server.managed_sandbox_reaper import ManagedSandboxReaper
@@ -85,6 +87,7 @@ from omnigent.server.performance_metrics import (
 from omnigent.server.routes.builtin_agents import create_builtin_agents_router
 from omnigent.server.routes.comments import create_comments_router
 from omnigent.server.routes.default_policies import create_default_policies_router
+from omnigent.server.routes.deployment import create_deployment_router
 from omnigent.server.routes.dictation import create_dictation_router
 from omnigent.server.routes.extension_assets import create_extension_assets_router
 from omnigent.server.routes.extensions import create_extensions_router
@@ -160,6 +163,7 @@ class ServerInfoResponse(BaseModel):
     server_version: str
     instance_id: str | None = None
     build_sha: str | None = None
+    deployment_write_fence_enabled: bool = True
     smart_routing_enabled: bool
     o3_routing_review_enabled: bool = False
     smart_routing_sources: SmartRoutingSourcesInfo
@@ -1101,6 +1105,7 @@ def create_app(
     server_config: dict[str, Any] | None = None,
     feature_flags: FeatureFlags | None = None,
     extension_state: ExtensionPluginState | None = None,
+    deployment_controller: DeploymentControllerClient | None = None,
 ) -> FastAPI:
     """
     Build and return the FastAPI application with all routes mounted.
@@ -1476,6 +1481,7 @@ def create_app(
                 tunnel_registry=tunnel_registry,
                 file_store=file_store,
                 artifact_store=artifact_store,
+                write_admission=lambda: not write_fence_active(),
             )
             on_fire = build_on_fire(fire_deps)
             # The manual "run now" trigger reuses the same fire path (dispatch /
@@ -1486,6 +1492,7 @@ def create_app(
             scheduled_task_scheduler = ScheduledTaskScheduler(
                 store=scheduled_task_store,
                 on_fire=on_fire,
+                write_admission=lambda: not write_fence_active(),
             )
             app_inst.state.scheduled_task_scheduler = scheduled_task_scheduler
             # Scheduled tasks are a non-critical subsystem: a failure loading the
@@ -1674,6 +1681,11 @@ def create_app(
     app.state.server_metrics = server_metrics
     app.state.server_metrics_otel = server_metrics_otel
     app.add_middleware(_WebSocketMetricsMiddleware, metrics=server_metrics)
+    # The external controller creates this trusted file in the instance's
+    # data directory before stopping a target.  The middleware is always
+    # installed so a candidate and a rollback release share the same fence
+    # contract; absence of the file keeps normal operation unchanged.
+    app.add_middleware(DeploymentWriteFenceMiddleware)
     # CSWSH guard: reject cross-origin WebSocket handshakes before any
     # route accepts them. Added after the metrics middleware so it is the
     # outermost WS middleware — a forbidden origin is closed without even
@@ -2484,6 +2496,7 @@ def create_app(
                 "server_version": _server_version(),
                 "instance_id": os.environ.get("OMNIGENT_INSTANCE_ID"),
                 "build_sha": COMMIT_SHA,
+                "deployment_write_fence_enabled": True,
                 "smart_routing_enabled": smart_routing_enabled,
                 "smart_routing_sources": smart_routing_sources,
                 "o3_routing_review_enabled": o3_routing_review_enabled(),
@@ -2863,6 +2876,20 @@ def create_app(
         ),
         prefix="/v1",
         tags=["sharing"],
+    )
+    # The browser can only request a fresh plan, enqueue the one fixed O1 -> O2
+    # operation, or read an opaque job.  The host-owned controller performs all
+    # evidence collection and mutation outside both Omnigent lifecycles.
+    app.state.deployment_controller = deployment_controller
+    app.include_router(
+        create_deployment_router(
+            auth_provider=auth_provider,
+            permission_store=permission_store,
+            admin_list=admin_list,
+            controller=deployment_controller,
+        ),
+        prefix="/v1",
+        tags=["deployment"],
     )
     # First-class projects (owner-private session containers). Mounted only
     # when a project store is wired; the endpoints self-scope to the caller.

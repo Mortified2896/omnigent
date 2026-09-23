@@ -111,7 +111,7 @@ describe("settingsNavGroups", () => {
     expect(ids(true)).toContain("updates");
   });
 
-  it("includes the Admin group (Members / Policies / Sharing) for any admin, in accounts OR OIDC mode", () => {
+  it("includes the Admin group (Members / Policies / Sharing / Deployment) for any admin", () => {
     const ids = (accountsEnabled: boolean, isAdmin: boolean) =>
       settingsNavGroups(accountsEnabled, false, isAdmin)
         .flatMap((g) => g.items)
@@ -121,21 +121,31 @@ describe("settingsNavGroups", () => {
     expect(ids(false, false)).not.toContain("members");
     // Admin on an accounts deploy → all appear, grouped under "Admin".
     const accountsAdmin = settingsNavGroups(true, false, true).find((g) => g.title === "Admin");
-    expect(accountsAdmin?.items.map((i) => i.id)).toEqual(["members", "policies", "sharing"]);
+    expect(accountsAdmin?.items.map((i) => i.id)).toEqual([
+      "members",
+      "policies",
+      "sharing",
+      "deployment",
+    ]);
     // Admin under OIDC (accountsEnabled false) → still appears. This is the
     // #1489 fix: OIDC previously had no admin chrome at all.
     const oidcAdmin = settingsNavGroups(false, false, true).find((g) => g.title === "Admin");
-    expect(oidcAdmin?.items.map((i) => i.id)).toEqual(["members", "policies", "sharing"]);
+    expect(oidcAdmin?.items.map((i) => i.id)).toEqual([
+      "members",
+      "policies",
+      "sharing",
+      "deployment",
+    ]);
   });
 
-  it("drops Members and Sharing from the Admin group in single-user mode, keeping Policies", () => {
+  it("drops Members and Sharing from the Admin group in single-user mode", () => {
     // 4th arg is isSingleUser. Members (manage accounts) and Sharing (grant to
     // other users) are meaningless with no other users, so both are hidden;
     // Policies stays — global policies apply to the solo user's own sessions.
     const singleUserAdmin = settingsNavGroups(false, false, true, true).find(
       (g) => g.title === "Admin",
     );
-    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies"]);
+    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies", "deployment"]);
   });
 
   it("includes the Sandbox Integrations item only when a connection is enabled", () => {

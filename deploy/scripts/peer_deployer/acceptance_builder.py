@@ -58,6 +58,8 @@ def create_from_candidate(
     target_db_schema: str,
     builder_identity: str,
     operator_identity: str,
+    upstream_version: str | None = None,
+    upstream_ref: str | None = None,
     acceptance_root: Path = acceptance.DEFAULT_ACCEPTANCE_ROOT,
 ) -> Path:
     """Probe a candidate and exclusive-create its canonical acceptance record."""
@@ -186,6 +188,8 @@ def create_from_candidate(
         builder_identity=builder_identity,
         operator_identity=operator_identity,
         target_db_schema=target_db_schema,
+        upstream_version=upstream_version,
+        upstream_ref=upstream_ref,
     )
     return acceptance.write_immutable(record, root=acceptance_root)
 

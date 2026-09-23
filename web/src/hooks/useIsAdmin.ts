@@ -24,8 +24,12 @@ export function useIsAdmin(): boolean {
     },
     staleTime: 30_000,
     // Seed from the already-resolved cache so first paint is correct when
-    // identity resolved during boot (the common case).
+    // identity resolved during boot (the common case). The seed is only a
+    // placeholder until the in-flight /v1/me probe settles; otherwise the
+    // app-wide query staleTime could keep a false placeholder fresh and hide
+    // admin surfaces for the rest of the cache window.
     initialData: getCurrentIsAdmin,
+    initialDataUpdatedAt: 0,
   });
   return data;
 }
