@@ -47,6 +47,8 @@ export interface NewChatAdvisorSectionProps {
   launchAgentId: string | null;
   launchWorkspace: string | null;
   onLaunched: (sessionId: string) => void;
+  onEnabledChange?: (enabled: boolean | null) => void;
+  onHumanChoiceChange?: (choice: LogicalOption | null) => void;
 }
 
 interface SavedProviderPreferences {
@@ -92,7 +94,16 @@ function providerReview(round: RoundDto | null): ProviderReviewView | null {
 }
 
 export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
-  const { hostId, task, humanPick, launchAgentId, launchWorkspace, onLaunched } = props;
+  const {
+    hostId,
+    task,
+    humanPick,
+    launchAgentId,
+    launchWorkspace,
+    onLaunched,
+    onEnabledChange,
+    onHumanChoiceChange,
+  } = props;
   const scope = hostId ?? "";
   const [editor, setEditor] = useState<EditorState>({
     saved: null,
@@ -101,6 +112,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     error: null,
   });
   const [options, setOptions] = useState<readonly LogicalOption[]>([]);
+  const [humanChoiceId, setHumanChoiceId] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -109,6 +121,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const inputGeneration = useRef(0);
   const submissionIdentity = useRef<string | null>(null);
   const submissionKey = useRef<string | null>(null);
+  const humanChoiceTouched = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) clearInterval(pollTimer.current);
@@ -141,7 +154,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     setEditor({ saved: null, draft: null, dirty: false, error: null });
     setRound(IDLE_ROUND);
     setOptions([]);
+    setHumanChoiceId(null);
+    humanChoiceTouched.current = false;
     setCatalogError(null);
+    onEnabledChange?.(null);
     if (hostId === null) return;
     let cancelled = false;
     void (async () => {
@@ -175,9 +191,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     return () => {
       cancelled = true;
     };
-  }, [hostId, isCurrentScope, stopPolling]);
+  }, [hostId, isCurrentScope, onEnabledChange, stopPolling]);
+
+  useEffect(() => {
+    onEnabledChange?.(editor.draft?.enabled ?? null);
+  }, [editor.draft?.enabled, onEnabledChange]);
 
   const resolveHumanChoice = useCallback((): string | null => {
+    if (editor.draft?.enabled && humanChoiceId !== null) return humanChoiceId;
     if (!humanPick || humanPick.model === "") return null;
     const effort = humanPick.effort || "not_applicable";
     const matches = options.filter(
@@ -188,7 +209,31 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         (humanPick.accessLane === null || option.access_lanes.includes(humanPick.accessLane)),
     );
     return matches.length === 1 ? matches[0].choice_id : null;
-  }, [humanPick, options]);
+  }, [editor.draft?.enabled, humanChoiceId, humanPick, options]);
+
+  useEffect(() => {
+    if (editor.draft?.enabled !== false) return;
+    humanChoiceTouched.current = false;
+  }, [editor.draft?.enabled]);
+
+  useEffect(() => {
+    if (!editor.draft || options.length === 0) return;
+    if (editor.draft.enabled && humanChoiceTouched.current) return;
+    const choiceId = resolveHumanChoice();
+    setHumanChoiceId(choiceId);
+    if (choiceId !== null) {
+      onHumanChoiceChange?.(options.find((option) => option.choice_id === choiceId) ?? null);
+    }
+  }, [editor.draft, onHumanChoiceChange, options, resolveHumanChoice]);
+
+  const handleHumanChoiceChange = useCallback(
+    (choice: LogicalOption | null) => {
+      humanChoiceTouched.current = true;
+      setHumanChoiceId(choice?.choice_id ?? null);
+      onHumanChoiceChange?.(choice);
+    },
+    [onHumanChoiceChange],
+  );
 
   const validation = useMemo(() => {
     const draft = editor.draft;
@@ -207,10 +252,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     ) {
       return "Choose an available advisor model and reasoning level.";
     }
-    const humanChoiceId = resolveHumanChoice();
+    const resolvedHumanChoiceId = resolveHumanChoice();
     if (
-      !humanChoiceId ||
-      !effectiveOptions(draft, options).some((option) => option.choice_id === humanChoiceId)
+      !resolvedHumanChoiceId ||
+      !effectiveOptions(draft, options).some((option) => option.choice_id === resolvedHumanChoiceId)
     ) {
       return "Choose an allowed model and reasoning level in the composer.";
     }
@@ -346,8 +391,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       });
       return;
     }
-    const humanChoiceId = resolveHumanChoice();
-    if (!humanChoiceId || !submissionKey.current) {
+    const resolvedHumanChoiceId = resolveHumanChoice();
+    if (!resolvedHumanChoiceId || !submissionKey.current) {
       setRound({
         round: null,
         busy: false,
@@ -365,7 +410,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           host,
           "default",
           task,
-          humanChoiceId,
+          resolvedHumanChoiceId,
           editor.draft!,
           submissionKey.current!,
         );
@@ -477,10 +522,12 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}
         value={editor.draft}
         options={options}
+        humanChoiceId={humanChoiceId}
         dirty={editor.dirty}
         busy={round.busy}
         error={editor.error}
         onChange={handleChange}
+        onHumanChoiceChange={handleHumanChoiceChange}
         onSave={handleSave}
       />
       {editor.draft?.enabled ? (
@@ -499,8 +546,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             </p>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            Your model remains selected in the composer. The advisor sees only the logical model and
-            reasoning choices.
+            The advisor sees only the logical model and reasoning choices. Connection preference is
+            applied after the logical decision.
           </p>
         </div>
       ) : null}

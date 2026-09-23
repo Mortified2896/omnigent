@@ -17,6 +17,35 @@
   font-size: 0.875rem;
   margin: 8px 0 12px;
 }
+.advisor-off-row,
+.advisor-on-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.advisor-off-row {
+  border: 1px solid #cbd2dc;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.advisor-off-copy,
+.advisor-on-heading > div {
+  min-width: 0;
+}
+.advisor-off-copy h3,
+.advisor-on-heading h3 {
+  margin-bottom: 0;
+}
+.advisor-off-copy p,
+.advisor-on-heading p {
+  margin-bottom: 0;
+}
+.advisor-off-row .advisor-switch,
+.advisor-on-heading .advisor-switch {
+  flex-shrink: 0;
+}
 .advisor-providers fieldset {
   border: 0;
   padding: 0;
@@ -212,6 +241,10 @@
   min-width: 0;
 }
 @media (max-width: 560px) {
+  .advisor-off-row,
+  .advisor-on-heading {
+    align-items: flex-start;
+  }
   .advisor-providers .advisor-model-row legend {
     float: none;
     width: 100%;

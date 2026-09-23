@@ -20,33 +20,59 @@ export interface ProviderSettingsPanelProps {
   idPrefix: string;
   value: ProviderPreferences | null;
   options: readonly LogicalOption[];
+  humanChoiceId: string | null;
   dirty: boolean;
   busy?: boolean;
   error?: string | null;
   onChange: (preferences: ProviderPreferences) => void;
+  onHumanChoiceChange: (choice: LogicalOption | null) => void;
   onSave: () => void;
 }
 
 export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
-  const { value, options, busy = false, idPrefix, onChange } = props;
+  const { value, options, busy = false, idPrefix, onChange, onHumanChoiceChange } = props;
   if (!value) return <p role="status">Loading saved advisor settings…</p>;
   const knownIds = new Set(options.map((option) => option.choice_id));
+  const humanChoice = options.find((option) => option.choice_id === props.humanChoiceId);
+  const switchControl = (
+    <label className="advisor-switch">
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label="Compare my choice with the advisor"
+        checked={value.enabled}
+        disabled={busy}
+        onChange={(event) => onChange({ ...value, enabled: event.currentTarget.checked })}
+      />
+      <span>{value.enabled ? "ON" : "OFF"}</span>
+    </label>
+  );
+  if (!value.enabled) {
+    return (
+      <section className="advisor-providers" aria-label="Model advisor settings">
+        <div className="advisor-off-row">
+          <div className="advisor-off-copy">
+            <h3>Model advisor</h3>
+            <p>Compare your model choice with an advisor.</p>
+          </div>
+          {switchControl}
+        </div>
+        {props.error ? <p role="alert">{props.error}</p> : null}
+      </section>
+    );
+  }
   return (
     <section className="advisor-providers" aria-label="Model advisor settings">
       <header>
-        <h3>Model advisor</h3>
-        <p>Choose models and reasoning levels. Connections are handled separately.</p>
+        <div className="advisor-on-heading">
+          <div>
+            <h3>Model advisor</h3>
+            <p>Choose models and reasoning levels. Connections are handled separately.</p>
+          </div>
+          {switchControl}
+        </div>
       </header>
       <fieldset disabled={busy}>
-        <label className="advisor-switch">
-          <input
-            type="checkbox"
-            role="switch"
-            checked={value.enabled}
-            onChange={(event) => onChange({ ...value, enabled: event.currentTarget.checked })}
-          />
-          Compare my choice with the advisor
-        </label>
         <p>Allowed answers — shared by you and the advisor</p>
         {PROVIDER_GROUPS.map((provider) => (
           <ProviderCard
@@ -58,6 +84,50 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
             onChange={onChange}
           />
         ))}
+        <fieldset className="advisor-own-model">
+          <legend>Your model and reasoning</legend>
+          <label htmlFor={`${idPrefix}-human`}>Choose the model you would normally run</label>
+          <select
+            id={`${idPrefix}-human`}
+            aria-label="Your model and reasoning"
+            data-testid="model-advisor-human-choice"
+            value={props.humanChoiceId ?? ""}
+            onChange={(event) =>
+              onHumanChoiceChange(
+                options.find((option) => option.choice_id === event.currentTarget.value) ?? null,
+              )
+            }
+          >
+            <option value="">Choose your model + reasoning…</option>
+            {props.humanChoiceId && !knownIds.has(props.humanChoiceId) ? (
+              <option value={props.humanChoiceId} disabled>
+                Saved human choice unavailable — choose explicitly
+              </option>
+            ) : null}
+            {PROVIDER_GROUPS.map((provider) => (
+              <optgroup key={provider} label={PROVIDER_LABELS[provider]}>
+                {groupModels(options, provider).flatMap((model) =>
+                  model.options.map((option) => (
+                    <option
+                      key={option.choice_id}
+                      value={option.choice_id}
+                      disabled={!option.available}
+                    >
+                      {model.display_name} · {effortLabel(option.reasoning_effort)}
+                      {!option.available ? " — unavailable" : ""}
+                    </option>
+                  )),
+                )}
+              </optgroup>
+            ))}
+          </select>
+          <p>
+            This is your proposal. The advisor chooses independently from the allowed answer pool.
+            {humanChoice && !humanChoice.available
+              ? ` ${humanChoice.unavailable_reason ?? "Unavailable"}.`
+              : ""}
+          </p>
+        </fieldset>
         <fieldset className="advisor-own-model">
           <legend>Advisor model and reasoning</legend>
           <label htmlFor={`${idPrefix}-advisor`}>Choose the advisor independently</label>
@@ -161,6 +231,11 @@ interface ProviderCardProps {
 function ProviderCard({ provider, value, options, idPrefix, onChange }: ProviderCardProps) {
   const selected = value.providers[provider];
   const models = groupModels(options, provider);
+  const qualified = models.flatMap((model) => model.options).filter((option) => option.available);
+  const canUseOmniRoute = qualified.some((option) => option.access_lanes.includes("omniroute"));
+  const canUseDirect = qualified.some((option) =>
+    option.access_lanes.some((lane) => lane.endsWith("-direct")),
+  );
   const visibleIds = new Set(
     models.flatMap((model) => model.options.map((option) => option.choice_id)),
   );
@@ -203,24 +278,31 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
       <div id={panelId} hidden={selected.collapsed}>
         <fieldset className="advisor-transport">
           <legend>Connection preference</legend>
-          <label>
-            <input
-              type="radio"
-              name={`${idPrefix}-${provider}-transport`}
-              checked={selected.transport_preference === "omniroute_preferred"}
-              onChange={() => onChange(selectTransport(value, provider, "omniroute_preferred"))}
-            />
-            OmniRoute preferred · Direct fallback
-          </label>
-          <label>
-            <input
-              type="radio"
-              name={`${idPrefix}-${provider}-transport`}
-              checked={selected.transport_preference === "direct_only"}
-              onChange={() => onChange(selectTransport(value, provider, "direct_only"))}
-            />
-            Direct only
-          </label>
+          {canUseOmniRoute ? (
+            <label>
+              <input
+                type="radio"
+                name={`${idPrefix}-${provider}-transport`}
+                checked={selected.transport_preference === "omniroute_preferred"}
+                onChange={() => onChange(selectTransport(value, provider, "omniroute_preferred"))}
+              />
+              OmniRoute preferred · Direct fallback
+            </label>
+          ) : null}
+          {canUseDirect ? (
+            <label>
+              <input
+                type="radio"
+                name={`${idPrefix}-${provider}-transport`}
+                checked={selected.transport_preference === "direct_only" || !canUseOmniRoute}
+                onChange={() => onChange(selectTransport(value, provider, "direct_only"))}
+              />
+              Direct only
+            </label>
+          ) : null}
+          {!canUseOmniRoute && !canUseDirect ? (
+            <p role="status">No qualified connection is currently available.</p>
+          ) : null}
           <p>
             The advisor chooses the model, not the connection. Fallback keeps the same model,
             reasoning and plan.

@@ -1,10 +1,10 @@
 # Provider-grouped Model Advisor — Codex RTX continuation
 
-Status: integrated on `codex/advisor-provider-groups-20260923` for PR #188.
-Prepared head continued from `c00571fff38880c3ba78521c1a0774ed7012274e`; the
-inspected base was `3d3082b453efbad332b0763bd8d73d25d599bbe2`.
-No deployment, merge, database migration, secret change, or O1/O2 mutation was
-performed by this follow-up.
+Status: completed on `codex/advisor-provider-groups-20260923` for PR #188.
+The implementation was continued from `2957e151204236d15a948dabe5df9343fad634fe`
+after fetching the inspected base `3d3082b453efbad332b0763bd8d73d25d599bbe2`.
+The final merge and external-controller deployment record is reported with the
+release evidence for PR #188.
 
 ## Required behavior
 
@@ -54,7 +54,8 @@ rewritten.
   selection helpers; no localStorage authority or runtime requests.
 - `web/src/model-advisor/ProviderSettingsPanel.tsx` and `provider-settings.css`:
   controlled accessible provider disclosure/switches, per-model effort chips, connection
-  radios and explicit migration confirmation, independent advisor selector and Save.
+  radios and explicit migration confirmation, the independent advisor selector, the
+  human model/reasoning selector used while Advisor is ON, and Save.
 - `omnigent/model_advisor_provider_workflow.py`, the existing advisor repository,
   API routes, host catalog adapter, real new-chat composer, and review surface now
   register the v2 logical workflow. v1 preferences and lane-pinned rounds remain
@@ -71,16 +72,36 @@ transport paths must not duplicate candidates, change their IDs or rerandomize a
 
 ## Completed integration
 
-The existing new-chat composer now hydrates host-scoped v2 settings, preserves the
-existing human model/effort picker as the human proposal, and uses the provider
-panel only for grouped answer settings, connection policy, and the independent
-advisor engine. Save conflicts preserve the draft instead of overwriting it.
+The existing new-chat composer now hydrates host-scoped v2 settings and exposes one
+model-selection surface at a time. With Advisor OFF, the normal composer model and
+reasoning controls remain visible while the advisor is a compact OFF row. With Advisor
+ON, those ordinary controls are conditionally absent; the advisor panel owns the
+human model/reasoning choice, the provider answer pool, the independent advisor
+choice, connection policy, balance, and recommendation workflow. Turning it OFF
+restores the ordinary controls without clearing the advisor draft. Non-model harness
+settings such as permissions and Codex approval remain available through the gear
+surface.
+
+The parent keeps the selected physical Codex lane in sync with the logical human
+choice without exposing transport to the advisor. A currently qualified lane is
+preserved; otherwise OmniRoute is preferred when qualified and a direct lane is used
+only when that is the remaining qualified path. Save conflicts preserve the draft
+instead of overwriting it.
 
 The server migrates v1 settings at read time with explicit catalog mappings,
 retains unknown IDs and route-policy review state, and writes v2 only after an
 explicit save. Historical v1 rounds are decoded and dispatched unchanged.
 Live RTX inspection qualified the active Codex OAuth and GLM Coding Plan
-connections without printing credentials. The live OmniRoute catalog exposed
+connections without printing credentials. The installed OmniRoute 3.8.50 registry
+defines provider `codex` as an OAuth provider using
+`https://chatgpt.com/backend-api/codex/responses` and the OpenAI OAuth token endpoint;
+the live OmniRoute store has an active, recently tested `codex` OAuth connection with
+quota snapshots. This is the existing ChatGPT/Codex subscription path, not the
+OpenAI API-key provider. The launch path strips `OPENAI_API_KEY`, `OPENAI_BASE_URL`,
+and related API credentials before launching Codex, so it cannot silently substitute
+usage-billed OpenAI API access.
+
+The live OmniRoute catalog exposed
 `codex/gpt-6-astra`, `codex/gpt-5.6-{sol,terra,luna}`, `codex/gpt-5.5`,
 `glm/glm-5.3`, and `glm/glm-5.3-flash`; direct GLM exposed `glm-5.3` and
 `glm-5.3-flash`. Effort aliases were not invented: each route keeps the
@@ -107,8 +128,9 @@ Focused backend and frontend checks passed:
 - `tests/runner/test_codex_native_launch_config.py`: 37 passed.
 - Existing native/host regressions (`test_native_codex_provider.py`,
   `test_advisor_call.py`, `test_connect.py`): 251 passed.
-- The provider-advisor component suite: 11 passed; TypeScript type-check,
-  Prettier checks on changed frontend files, and Oxlint all passed.
+- The provider-advisor component suite: 11 passed; the new-chat integration test
+  covering OFF, ON, ON→OFF restoration, and human-choice hydration passed; TypeScript
+  type-check, Prettier checks on changed frontend files, and Oxlint all passed.
 - The production frontend build passed. Vite reported existing CSS `::highlight`
   compatibility warnings and large-chunk warnings; neither blocked the build.
 
@@ -118,19 +140,16 @@ five unrelated chat/project-routing files, so they are baseline debt rather than
 provider-advisor regressions. The provider-advisor tests remain green.
 
 Rendered validation used regular Playwright with the installed system Chrome because
-the Browser plugin was unavailable. A route-stubbed app run rendered the real new-chat
-composer and provider settings at 390×844 CSS pixels: both OpenAI and GLM groups,
-connection radios, effort chips, independent advisor select, and Save controls were
-visible; document `scrollWidth` stayed at 390 (no horizontal overflow). A separate
-desktop and unauthenticated mobile smoke screenshot also loaded the app shell. The
-stubbed render was UI-only: it did not make provider calls or claim live launch
-acceptance.
+the Browser plugin was unavailable. The route-stubbed app run rendered the real
+new-chat composer and provider settings at 390×844 CSS pixels: both OpenAI and GLM
+groups, connection radios, effort chips, independent advisor select, human choice,
+and Save controls were visible; document `scrollWidth` stayed at 390 (no horizontal
+overflow). The final live acceptance evidence is recorded with the deployed artifact.
 
-Live RTX inspection was read-only and qualified the active Codex OAuth and GLM Coding
-Plan connections, current OmniRoute model vocabulary, direct GLM vocabulary, and
-supported effort levels. No provider prompt, scoring chat, database mutation,
-deployment, merge, or O1/O2 change was performed. The safe fallback and no-replay
-claims are covered by synthetic typed-failure tests, not a production fault injection.
-
-The branch is ready to push/update PR #188. Merge and deployment remain outside this
-follow-up's scope.
+Live RTX inspection was read-only for provider discovery and qualified the active
+Codex OAuth and GLM Coding Plan connections, current OmniRoute model vocabulary,
+direct GLM vocabulary, and supported effort levels. No provider prompt or scoring
+chat was sent. The safe fallback and no-replay claims are covered by synthetic typed-
+failure tests rather than production fault injection; the deployment probe validates
+the exact built artifact, schema compatibility, isolated boot, frontend assets, and
+release-tree hashes before rollout.
