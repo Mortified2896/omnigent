@@ -112,6 +112,8 @@ class ScheduledTaskScheduler:
         Defaults to ``loop.call_later``.
     :param cancel_call: Cancels a handle returned by ``schedule_call``.
         Defaults to ``handle.cancel()``.
+    :param write_admission: Optional trusted host fence predicate. When it
+        returns false, a due task is skipped before the fire callback starts.
     """
 
     def __init__(
@@ -122,12 +124,14 @@ class ScheduledTaskScheduler:
         now: Callable[[], float] = time.time,
         schedule_call: Callable[[float, Callable[[], Any]], Any] | None = None,
         cancel_call: Callable[[Any], None] | None = None,
+        write_admission: Callable[[], bool] | None = None,
     ) -> None:
         self._store = store
         self._on_fire = on_fire
         self._now = now
         self._schedule_call = schedule_call or _default_schedule_call
         self._cancel_call = cancel_call or _default_cancel_call
+        self._write_admission = write_admission
         self._jobs: dict[_JobKey, _Job] = {}
         self._started = False
 
@@ -291,6 +295,12 @@ class ScheduledTaskScheduler:
         """
         if job.running:
             _logger.debug("scheduler: task %s still running, skipping tick", job.task_id)
+            return False
+        if self._write_admission is not None and not self._write_admission():
+            _logger.info(
+                "scheduler: task %s skipped while deployment writes are fenced",
+                job.task_id,
+            )
             return False
         now_epoch = self._now()
         if now_epoch - scheduled_epoch > MISFIRE_GRACE_TIME_S:

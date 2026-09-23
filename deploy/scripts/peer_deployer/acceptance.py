@@ -23,7 +23,8 @@ from typing import Any
 
 from . import identity
 
-SCHEMA_VERSION = 1
+LEGACY_SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_ACCEPTANCE_ROOT = Path("/var/lib/omnigent-control-room/accepted-artifacts")
 TEMPORARY_PORT_BOOT_CLASSIFICATION = "isolated-temporary-port"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -116,6 +117,11 @@ class CandidateAcceptance:
     operator_identity: str
     target_db_schema: str
     acceptance_record_sha256: str
+    # Optional in the data model for legacy v1 records. New records are v2 and
+    # carry these fields explicitly; ``None`` means provenance was not
+    # recorded, never that package_version is an upstream version.
+    upstream_version: str | None = None
+    upstream_ref: str | None = None
 
     @property
     def artifact_sha(self) -> str:
@@ -135,9 +141,10 @@ class CandidateAcceptance:
         return self.frontend_tree_sha256
 
     def validate(self, *, validate_digest: bool = True) -> None:
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version not in {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}:
             raise AcceptanceError(
-                f"unsupported acceptance schema {self.schema_version}; expected {SCHEMA_VERSION}"
+                f"unsupported acceptance schema {self.schema_version}; "
+                f"expected 1 or {SCHEMA_VERSION}"
             )
         if not _SHA_RE.fullmatch(self.source_sha):
             raise AcceptanceError("source_sha must be a lowercase 40-character SHA")
@@ -214,6 +221,19 @@ class CandidateAcceptance:
         ):
             if not _IDENTITY_RE.fullmatch(value):
                 raise AcceptanceError(f"{label} contains unsafe or secret-like content")
+        for label, value in (
+            ("upstream_version", self.upstream_version),
+            ("upstream_ref", self.upstream_ref),
+        ):
+            if value is not None and (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > 160
+                or not value.isprintable()
+            ):
+                raise AcceptanceError(
+                    f"{label} is malformed; omit it when provenance is unknown"
+                )
         if validate_digest:
             if not _SHA256_RE.fullmatch(self.acceptance_record_sha256):
                 raise AcceptanceError("acceptance_record_sha256 is invalid")
@@ -250,6 +270,9 @@ class CandidateAcceptance:
             "operator_identity": self.operator_identity,
             "target_db_schema": self.target_db_schema,
         }
+        if self.schema_version >= SCHEMA_VERSION:
+            result["upstream_version"] = self.upstream_version
+            result["upstream_ref"] = self.upstream_ref
         if include_record_hash:
             result["acceptance_record_sha256"] = self.acceptance_record_sha256
         return result
@@ -269,8 +292,13 @@ class CandidateAcceptance:
     @classmethod
     def from_dict(cls, blob: dict[str, Any]) -> CandidateAcceptance:
         fields = set(cls.__dataclass_fields__)
-        if set(blob) != fields:
-            raise AcceptanceError(f"acceptance keys must be {sorted(fields)}; got {sorted(blob)}")
+        provenance_fields = {"upstream_version", "upstream_ref"}
+        version = blob.get("schema_version")
+        expected_fields = fields if version == SCHEMA_VERSION else fields - provenance_fields
+        if set(blob) != expected_fields:
+            raise AcceptanceError(
+                f"acceptance keys must be {sorted(expected_fields)}; got {sorted(blob)}"
+            )
         values = dict(blob)
         raw_wheels = values.pop("wheels")
         raw_packages = values.pop("installed_packages")

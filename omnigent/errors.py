@@ -75,6 +75,7 @@ class ErrorCode:
     # the host's wire error code passes through as the API error code.
     HARNESS_NOT_CONFIGURED = "harness_not_configured"
     WORKSPACE_MISSING = "workspace_missing"
+    DEPLOYMENT_CONTROLLER_UNAVAILABLE = "deployment_controller_unavailable"
 
 
 # Single source of truth for error code → HTTP status.
@@ -105,6 +106,7 @@ _CODE_TO_HTTP_STATUS: dict[str, int] = {
     # neither a 400 (input is fine) nor a 503 (a retry won't help).
     ErrorCode.HARNESS_NOT_CONFIGURED: 412,
     ErrorCode.WORKSPACE_MISSING: 410,
+    ErrorCode.DEPLOYMENT_CONTROLLER_UNAVAILABLE: 503,
 }
 
 

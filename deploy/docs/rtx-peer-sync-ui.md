@@ -2,13 +2,20 @@
 
 ## Status and scope
 
-This change implements the **portable, read-only core**, not a working web
-button or a privileged deployment endpoint. `peer_deployer.sync_plan` provides
-version display data, conservative readiness decisions, exact release/process/DB
-pins, and stale-request rejection. The external host adapter and web integration
-remain disabled/unimplemented until the RTX continuation below is completed.
-There are no model calls, service operations, network calls or filesystem writes
-in the core. A ready plan is **not** authorization to deploy.
+This change implements the read-only UI, the narrow authenticated API boundary,
+and the deterministic host-controller path. `peer_deployer.sync_plan` remains a
+pure core: it provides version display data, conservative readiness decisions,
+exact release/process/DB pins, and stale-request rejection. The host adapter and
+durable worker recollect evidence under the existing deployment lock, verify the
+immutable acceptance record and referenced bytes, fence target writes, and own
+the O2 transaction outside both Omnigent service lifecycles. A ready plan is
+still not authorization to deploy; the controller is the authorization and
+mutation boundary.
+
+The portable code is not installed or enabled on RTX by this change. The live
+peer releases currently lack the v2 rollback/provenance record and the external
+controller unit, so the panel must remain blocked until the reviewed host
+rollout is authorized and completed.
 
 Keep the existing two-peer architecture. First expose the O2 action in O1's
 Deployment panel, so the page showing progress is not the target being stopped.
@@ -32,9 +39,13 @@ used by `rtx_contract.canonical_digest`; it is **not** a wheel/tarball checksum.
 The acceptance record's file hashes identify bytes and must be reverified by the
 controller. Equal Git SHAs alone do not prove equal accepted releases.
 
-Embed provenance during the clean build/acceptance stage. Do not query the
-source checkout, package index or GitHub when rendering a running instance's
-version. Never rewrite an already accepted record to add display metadata.
+Each running instance also has a compact label from its own `/v1/info` response.
+The Deployment panel is fed by the controller's trusted observations, not by a
+browser checkout or a package-index lookup. Embed provenance during the clean
+build/acceptance stage. Never query the source checkout, package index or GitHub
+when rendering a running instance's version, and never rewrite an already
+accepted record to add display metadata. v1 acceptance records continue to load
+without provenance and display `not recorded`.
 
 ## Adapter contract
 
@@ -69,18 +80,21 @@ acceptance, distinct database identities, explicit rollback readiness, byte
 verification, live O1 validation and an independent controller are required.
 Matching schema strings is necessary here, but is not proof of data compatibility.
 
-## Security and transaction integration still required
+## Implemented security and transaction boundary
 
-Use the existing authenticated administrator boundary. Add the appropriate
-same-origin/CSRF protection for cookie-authenticated writes. Never accept
-observations, acceptance contents or capability flags from a browser. Never put
-a privileged generic command, sudo shell, Docker socket or Tailscale control
-interface in the web application.
+The API uses the existing authenticated administrator boundary, requires JSON
+content type and trusted origin on the state-changing route, and accepts only
+an opaque plan ID plus canonical UUID4 idempotency key. The server derives the
+requesting identity. Observations, acceptance contents, capabilities, paths,
+URLs, commands and force flags are never accepted from a browser. The web
+process talks only to the fixed Unix socket; it has no sudo shell, Docker socket
+or Tailscale control interface.
 
-A worker outside **both** Omnigent service lifecycles must own the job. A FastAPI
-background task, or an O2 child with a different process name, is not that worker.
-The endpoint acknowledges a durable job; polling must survive the target restart.
-The ordinary path must not create an AI conversation or invoke a model/provider.
+`peer_deployer.controller.ControllerService` is the worker outside **both**
+Omnigent service lifecycles. The endpoint acknowledges a SQLite-durable job;
+polling survives an O2 restart, duplicate clicks return the same job, and a
+reused key with a different expected identity is rejected. The ordinary path
+does not import a model/provider or create an AI conversation.
 
 Before mutation, the worker must:
 
@@ -128,23 +142,39 @@ Fetch current fork and HomeLab refs first, preserve dirty work, and reconcile th
 exact task branch. Read current AGENTS guidance, including any documentation
 cleanup that landed since this change. Do not use stale topology/ports from chat.
 
-Complete the runtime metadata adapter, authenticated API, durable external job
-worker, target admission/write fencing and UI. Keep the action disabled until
-those pieces are actually installed and verified. No changes to OmniRoute,
-models, scoring, Tailscale, peer topology or unrelated user sessions are needed.
+The code now contains the runtime metadata adapter, authenticated API, durable
+external job worker, target admission/write fencing and UI. Keep the action
+disabled until the host unit, access group, release acceptance records and
+candidate capability are actually installed and verified. No changes to
+OmniRoute, models, scoring, Tailscale, peer topology or unrelated user sessions
+are needed.
 
-Run the portable suite plus real repository lint/types/frontend tests. Add
-integration tests for unauthenticated/non-admin/CSRF calls, source/target drift,
-missing evidence, unhealthy peers, duplicate clicks, cross-process locking,
-busy-target races, timeout, loss of controller/browser/target, supervisor restart,
-artifact tampering, missing/failed backup, schema mismatch, failure before/after
-mutation, failed rollback, and proof that no accepted user writes are lost.
-Verify no model/provider endpoint is called on success or routine failure.
-Use disposable instances/DBs and marked test chats; never fault-inject live O1/O2
-or deploy merely to test this branch. Keep the PR draft until reviewed.
+The disposable coverage includes unauthenticated/non-admin/CSRF calls,
+source/target drift, missing or stale evidence, duplicate clicks,
+cross-process locking, busy-target revalidation, accepted-digest drift,
+schema mismatch, failed backup, startup failure after mutation, failed rollback,
+O2-owned state restoration, and proof that no accepted user write is lost.
+The write fence is also tested for HTTP mutators, existing WebSockets, host
+frames and scheduled fires. Verify no model/provider endpoint is called on
+success or routine failure. Use disposable instances/DBs and marked test chats;
+never fault-inject live O1/O2 or deploy merely to test this branch. Controller,
+target interruption, and recovery-required behavior still require the reviewed
+host rollout rehearsal before enabling the action.
+
+Keep the PR draft until reviewed.
 
 Portable tests (requires pytest, not a running Omnigent):
 
 ```sh
 python -m pytest -q tests/deploy/test_rtx_sync_plan.py
+```
+
+The implementation validation run also includes:
+
+```sh
+python -m pytest -q tests/deploy/test_peer_deployment_controller.py \
+  tests/deploy/test_peer_deployment_controller_runtime.py \
+  tests/server/routes/test_deployment.py \
+  tests/server/scheduled/test_scheduler.py \
+  tests/host/test_connect.py
 ```

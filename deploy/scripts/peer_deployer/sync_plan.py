@@ -253,7 +253,11 @@ def plan_sync(
         blocked.append("source_live_validation_stale")
 
     for name in (
-        "independent", "idle_guard_ready", "write_fence_ready", "rollback_ready", "transaction_idle"
+        "independent",
+        "idle_guard_ready",
+        "write_fence_ready",
+        "rollback_ready",
+        "transaction_idle",
     ):
         if getattr(controller, name) is not True:
             blocked.append(f"controller_{name}")

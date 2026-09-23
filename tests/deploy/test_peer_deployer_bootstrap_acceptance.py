@@ -81,6 +81,33 @@ def test_acceptance_is_canonical_hashed_and_immutable(tmp_path: Path) -> None:
         acceptance.load(path)
 
 
+def test_new_acceptance_records_embed_provenance_without_rewriting_legacy_records(
+    tmp_path: Path,
+) -> None:
+    record = replace(
+        _accepted(tmp_path),
+        upstream_version="0.13.0",
+        upstream_ref="omnigent-ai/omnigent@" + "b" * 40,
+    )
+    record = replace(record, acceptance_record_sha256=acceptance.payload_sha256(record))
+    blob = record.to_dict()
+    assert blob["schema_version"] == acceptance.SCHEMA_VERSION
+    assert blob["upstream_version"] == "0.13.0"
+    assert acceptance.CandidateAcceptance.from_dict(blob) == record
+
+    legacy = replace(
+        record,
+        schema_version=acceptance.LEGACY_SCHEMA_VERSION,
+        upstream_version=None,
+        upstream_ref=None,
+        acceptance_record_sha256="",
+    )
+    legacy = replace(legacy, acceptance_record_sha256=acceptance.payload_sha256(legacy))
+    legacy_blob = legacy.to_dict()
+    assert "upstream_version" not in legacy_blob
+    assert acceptance.CandidateAcceptance.from_dict(legacy_blob) == legacy
+
+
 def test_missing_and_malformed_acceptance_records_are_refused(tmp_path: Path) -> None:
     with pytest.raises(acceptance.AcceptanceError, match="cannot read"):
         acceptance.load(tmp_path / "missing.json")

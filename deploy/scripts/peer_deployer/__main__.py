@@ -82,6 +82,8 @@ def cmd_create_acceptance(args: argparse.Namespace) -> int:
         target_db_schema=args.target_db_schema,
         builder_identity=args.builder_identity,
         operator_identity=args.operator_identity,
+        upstream_version=args.upstream_version,
+        upstream_ref=args.upstream_ref,
     )
     _emit({"status": "accepted", "acceptance_record": str(path)})
     return 0
@@ -362,6 +364,8 @@ def _parser() -> argparse.ArgumentParser:
     p_accept.add_argument("--target-db-schema", required=True)
     p_accept.add_argument("--builder-identity", required=True)
     p_accept.add_argument("--operator-identity", required=True)
+    p_accept.add_argument("--upstream-version")
+    p_accept.add_argument("--upstream-ref")
     p_accept.set_defaults(func=cmd_create_acceptance)
 
     p_rollback = sub.add_parser("rollback", help="Pair-rollback a failed transaction")

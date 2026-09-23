@@ -127,6 +127,7 @@ class FireDeps:
     tunnel_registry: Any | None = None
     file_store: Any | None = None
     artifact_store: Any | None = None
+    write_admission: Callable[[], bool] | None = None
 
 
 def _prompt_event(prompt: str) -> SessionEventInput:
@@ -235,6 +236,10 @@ async def _trigger_fire(
     :returns: ``True`` if a background fire was started, ``False`` if skipped
         (row gone / not active when required / already in flight).
     """
+    if deps.write_admission is not None and not deps.write_admission():
+        _logger.info("scheduled fire: writes are fenced — skipping task %s", scheduled_task_id)
+        return False
+
     # Re-read the row: never trust the caller. A deleted (or, for the scheduled
     # path, non-active) row is a logged no-op done synchronously.
     with workspace_scope(workspace_id):
@@ -284,6 +289,9 @@ async def _run_fire(
     the scheduled path requires an active row, run-now allows a paused row.
     """
     with workspace_scope(workspace_id):
+        if deps.write_admission is not None and not deps.write_admission():
+            _logger.info("scheduled fire: writes fenced before task %s started", scheduled_task_id)
+            return
         task = await asyncio.to_thread(deps.scheduled_task_store.get, scheduled_task_id)
         if task is None:
             _logger.info("scheduled fire: task %s no longer exists — skipping", scheduled_task_id)

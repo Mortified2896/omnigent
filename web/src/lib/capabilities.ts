@@ -141,6 +141,12 @@ export interface ServerInfo {
    * live server always reports it.
    */
   server_version: string | null;
+  /** Runtime identity from the running release, never from a local checkout. */
+  instance_id?: string | null;
+  /** Full immutable fork/build SHA, when the release embedded one. */
+  build_sha?: string | null;
+  /** Whether this runtime understands the controller's write fence. */
+  deployment_write_fence_enabled?: boolean;
   /**
    * True when the server has a routing client configured — a server ``llm:``
    * block, or a ``routing.provider=external`` block.
@@ -242,6 +248,9 @@ export const FALLBACK_SERVER_INFO: ServerInfo = {
   sharing_mode: "on",
   public_sharing_enabled: true,
   server_version: null,
+  instance_id: null,
+  build_sha: null,
+  deployment_write_fence_enabled: false,
   smart_routing_enabled: false,
   smart_routing_sources: { external: false, oss: false },
   o3_routing_review_enabled: false,
@@ -331,6 +340,9 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           // Fail open: only an explicit false disables the public toggle.
           public_sharing_enabled: data.public_sharing_enabled !== false,
           server_version: typeof data.server_version === "string" ? data.server_version : null,
+          instance_id: typeof data.instance_id === "string" ? data.instance_id : null,
+          build_sha: typeof data.build_sha === "string" ? data.build_sha : null,
+          deployment_write_fence_enabled: data.deployment_write_fence_enabled === true,
           smart_routing_enabled: smartRoutingEnabled,
           smart_routing_sources: parseSmartRoutingSources(
             data.smart_routing_sources,

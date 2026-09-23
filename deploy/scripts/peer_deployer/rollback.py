@@ -40,10 +40,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
 
 from . import identity, transaction
 from .identity import Instance
@@ -103,24 +103,36 @@ def _verify_db_backup(record: TransactionRecord) -> None:
         )
     sqlite = shutil.which("sqlite3")
     if sqlite is None:
-        raise RollbackError("sqlite3 not available for DB integrity verification")
-    result = subprocess.run(
-        [sqlite, str(backup), "PRAGMA integrity_check;"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or result.stdout.strip() != "ok":
+        try:
+            with sqlite3.connect(f"file:{backup}?mode=ro", uri=True) as connection:
+                result_text = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        except sqlite3.Error as exc:
+            raise RollbackError(
+                f"REFUSED: rollback DB backup failed integrity_check: {exc}"
+            ) from exc
+        result_code = 0
+        result_error = ""
+    else:
+        result = subprocess.run(
+            [sqlite, str(backup), "PRAGMA integrity_check;"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result_text = result.stdout.strip()
+        result_code = result.returncode
+        result_error = result.stderr.strip()
+    if result_code != 0 or result_text != "ok":
         raise RollbackError(
             f"REFUSED: rollback DB backup failed integrity_check: "
-            f"{result.stdout.strip()!r} {result.stderr.strip()!r}"
+            f"{result_text!r} {result_error!r}"
         )
 
 
 def _resolve_current_runtime(
     target_root: Path,
-    runtime_resolver: Optional[Callable[[Path], Path]] = None,
-) -> Optional[Path]:
+    runtime_resolver: Callable[[Path], Path] | None = None,
+) -> Path | None:
     """Return the current runtime path for the target, if any.
 
     If ``runtime_resolver`` is provided, it is called with the target
@@ -147,7 +159,7 @@ def _resolve_current_runtime(
 
 def _resolve_current_link(
     target_root: Path,
-    runtime_resolver: Optional[Callable[[Path], Path]] = None,
+    runtime_resolver: Callable[[Path], Path] | None = None,
 ) -> Path:
     """Return the symlink path used to point to the current runtime.
 
@@ -165,7 +177,7 @@ def _resolve_current_link(
 
 def _resolve_home(
     target: Instance,
-    home_mapping: Optional[dict[str, Path]] = None,
+    home_mapping: dict[str, Path] | None = None,
 ) -> Path:
     """Return the data home for the target instance."""
     if home_mapping is not None:
@@ -186,8 +198,8 @@ def _resolve_home(
 def paired_rollback(
     record: TransactionRecord,
     *,
-    runtime_resolver: Optional[Callable[[Path], Path]] = None,
-    home_mapping: Optional[dict[str, Path]] = None,
+    runtime_resolver: Callable[[Path], Path] | None = None,
+    home_mapping: dict[str, Path] | None = None,
 ) -> dict:
     """Restore the target to its pre-promotion state.
 
