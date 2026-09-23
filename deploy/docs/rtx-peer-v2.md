@@ -26,6 +26,31 @@ Legacy promotion scripts are refused on RTX and deprecated for removal in v0.14.
 No legacy deployment daemon is installed. HomeLab owns the one-time bootstrap,
 systemd units, environment files, snapshots and Tailscale mappings.
 
+The source-controlled external-controller path is
+`python -m peer_deployer.external_rtx`. It accepts a target and immutable
+acceptance identity without a supervisor argument, proves that the caller and
+its ancestors are outside both Omnigent instances, serializes with peer-mode
+transactions, records a durable external transaction, backs up the stopped
+target's database and state, and restores the prior release/database on a
+failed start. Keep the independent controller alive and promote targets
+sequentially. A recovered interrupted transaction rolls back to its recorded
+previous release.
+
+From an independent shell already on `rtx-omnigent`, the command shape is:
+
+```sh
+sudo -n env PYTHONPATH="/srv/omnigent/releases/<sha>/source/deploy/scripts" \
+  /srv/omnigent/releases/<sha>/venv/bin/python -m peer_deployer.external_rtx promote \
+  --target O1 --expected-current-sha <current-sha> \
+  --acceptance /srv/omnigent/artifacts/<sha>/acceptance-v2.json \
+  --acceptance-sha256 <canonical-acceptance-sha256> --transaction <external-transaction-id>
+```
+
+Use the same command for O2 only after O1 is verified healthy at the accepted
+SHA. For an interrupted transaction, invoke `recover` with the recorded target
+and transaction ID. This external procedure does not change the
+instance-controlled peer contract below.
+
 O1 is primary; O2 is the warm maintenance peer. Neither replaces/restarts itself
 from inside its own task runtime; this does not prohibit an external deployment.
 Each has separate `/srv/omnigent/o{1,2}/{config,home,state,releases}` roots,

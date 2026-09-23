@@ -98,6 +98,14 @@ _OPENAI_OMNIROUTE_TO_CANONICAL: dict[str, str] = {
     "codex/gpt-5.6-luna": "gpt-5.6-luna",
     "codex/gpt-5.5": "gpt-5.5",
 }
+# Codex Direct can report provider-prefixed ids too. Keep these exact direct
+# aliases separate from the OmniRoute map: a direct row does not qualify a
+# gateway route, and the prefix alone is not proof that two rows are equivalent.
+_OPENAI_DIRECT_TO_CANONICAL: dict[str, str] = {
+    "codex/gpt-6-astra": "gpt-6-astra",
+    "codex/gpt-6-luna": "gpt-6-luna",
+    "codex/gpt-5.6-luna": "gpt-5.6-luna",
+}
 from omnigent.models.glm_model_vocabulary import (  # noqa: E402
     GLM_DIRECT_MODELS,
     GLM_OMNIROUTE_ROUTES,
@@ -378,7 +386,7 @@ def _logical_choice_for_row(
             canonical = _OPENAI_OMNIROUTE_TO_CANONICAL[model_id]
             transport = "omniroute"
         else:
-            canonical = model_id
+            canonical = _OPENAI_DIRECT_TO_CANONICAL.get(model_id, model_id)
             transport = "direct"
     else:
         provider = "glm"
