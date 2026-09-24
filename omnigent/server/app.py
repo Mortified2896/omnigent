@@ -1273,6 +1273,31 @@ def create_app(
                 cookie_secret=_accounts_cfg.cookie_secret,
             )
 
+    # A trusted proxy identity is only an alias for an existing accounts
+    # identity. Validate targets after the normal accounts bootstrap (which
+    # may create its configured first admin), but never ensure/create a
+    # mapped target here. In particular, a typo must fail startup rather than
+    # creating a new user on the first request that carries the proxy header.
+    from omnigent.server.auth import UnifiedAuthProvider
+
+    if isinstance(auth_provider, UnifiedAuthProvider) and auth_provider._trusted_header_map:
+        if account_store is None:
+            raise RuntimeError(
+                "trusted-header auth requires the accounts store to validate mapped users"
+            )
+        missing_targets = sorted(
+            {
+                user_id
+                for user_id in auth_provider._trusted_header_map.values()
+                if account_store.get_user(user_id) is None
+            }
+        )
+        if missing_targets:
+            raise RuntimeError(
+                "trusted-header targets must already exist in the accounts store: "
+                + ", ".join(missing_targets)
+            )
+
     from omnigent.runner.routing import RunnerRouter
     from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
     from omnigent.server.host_registry import HostRegistry, RunnerExitReports
