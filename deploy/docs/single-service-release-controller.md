@@ -165,6 +165,38 @@ background writer have not been proven to share the coordinator.
 
 No systemd adapter or live HomeLab path is part of these tests.
 
+### Separate-process rehearsal gate (2026-09-24)
+
+Before building a concrete process adapter, the available accepted releases
+were checked against the server protocol this adapter must call. The
+root-owned acceptance-v2 records and release bytes for
+`4faf6943ee2735f67c7bebb922c443ef300b735e` and
+`30f919e08d459d6e74d1c0c1c0857bce7056d4e3` both passed the current
+release-controller verifier, including byte hashes and the dependency check;
+both record schema `b4d8e2f6a9c1`. Neither installed runtime contains
+`omnigent.server.deployment_quiescence` or the generation-bound tunnel drain
+frames.
+
+The `4faf...` runtime was launched as a separate disposable process from its
+accepted venv, with temporary HOME, config, data, and control-socket paths.
+It returned healthy status and reported its exact embedded SHA, but did not
+create the requested Unix controller socket. The process was terminated and
+the temporary directory removed. No acceptance evidence, release tree,
+service pointer, live database, or O1/O2 process was changed.
+
+This is a hard precondition failure for the requested A-to-B trial: the
+currently available accepted pair cannot expose the fence/certificate
+protocol, so a controller cannot safely proceed to stop A. Running the branch
+checkout as the server or overlaying its files onto an accepted release would
+invalidate the requested artifact proof. The multi-process activation and
+failure matrix were therefore not run. A compliant rehearsal needs
+protocol-capable immutable A and B releases accepted before activation; the
+separate-process controller adapter must then be exercised against those
+exact releases. The concrete executor adapter and controller-SIGKILL matrix
+remain unimplemented in this slice: implementing them against the branch
+checkout would exercise different server bytes and would not remove this
+compatibility blocker.
+
 ## Required activation sequence
 
 A future host adapter must implement the sequence below. The pure plan becoming
