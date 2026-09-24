@@ -17,11 +17,12 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from . import rtx
-from .rtx_contract import Peer, Refused, durable_json, require
+from .rtx_contract import Peer, Refused, canonical_digest, digest, durable_json, require
 
 _TX_ID = re.compile(r"external-[a-z0-9][a-z0-9-]{7,70}")
 _SHA = re.compile(r"[a-f0-9]{40}")
 _SHA256 = re.compile(r"[a-f0-9]{64}")
+_RELEASE_ROOT = Path("/srv/omnigent/releases")
 _MIN_FREE_BYTES = 1024**3
 
 
@@ -140,6 +141,13 @@ def _check_headroom(peer: Peer) -> None:
     require(free >= required, "insufficient disk headroom for backup and rollback")
 
 
+def _auth_overlay_dropin_path(target: Peer) -> Path:
+    return Path(
+        f"/etc/systemd/system/omnigent-{target.instance.lower()}.service.d/"
+        "50-tailscale-auth-overlay.conf"
+    )
+
+
 def promote(
     target: Peer,
     expected_sha: str,
@@ -223,6 +231,143 @@ def recover(target: Peer, transaction_id: str) -> dict:
         return tx.record
 
 
+def rollback_committed(
+    target: Peer,
+    transaction_id: str,
+    rollback_transaction_id: str,
+    auth_overlay_sha256: str,
+) -> dict:
+    """Roll back a committed external release after post-deploy acceptance fails.
+
+    This operation restores only the target release and the task-specific
+    Tailscale auth drop-in. It deliberately keeps the live database in place;
+    no database backup is restored or replaced. The original committed journal
+    remains immutable and the rollback receives its own journal.
+    """
+    external_controller_guard()
+    require(_TX_ID.fullmatch(transaction_id) is not None, "invalid external transaction ID")
+    require(
+        _TX_ID.fullmatch(rollback_transaction_id) is not None,
+        "invalid rollback transaction ID",
+    )
+    require(transaction_id != rollback_transaction_id, "rollback transaction must be distinct")
+    require(
+        _SHA256.fullmatch(auth_overlay_sha256) is not None,
+        "invalid auth overlay SHA-256",
+    )
+    with rtx.locked(rtx.TRANSACTIONS):
+        source_path = rtx.TRANSACTIONS / transaction_id / "transaction.json"
+        rtx.trusted(source_path)
+        source = json.loads(source_path.read_text())
+        require(source.get("controller") == "external", "not an external transaction")
+        require(source.get("transaction_id") == transaction_id, "transaction identity mismatch")
+        require(source.get("target") == target.document(), "transaction target mismatch")
+        require(source.get("status") == "committed", "source transaction is not committed")
+        require(
+            source.get("mutation_boundary") is True,
+            "source transaction did not mutate target",
+        )
+
+        active = Path(source["accepted_release"])
+        previous = Path(source["old_release"])
+        for release in (active, previous):
+            require(release.parent == _RELEASE_ROOT, "unowned release path")
+            rtx.trusted(release)
+        require(target.current.is_symlink(), "current release pointer missing")
+        require(target.current.resolve() == active, "active release drifted after deployment")
+        active_sha = active.name
+        previous_sha = previous.name
+        require(_SHA.fullmatch(active_sha) is not None, "invalid active release identity")
+        require(_SHA.fullmatch(previous_sha) is not None, "invalid previous release identity")
+        require(
+            source.get("expected_current_sha") == previous_sha,
+            "previous release identity mismatch",
+        )
+
+        active_artifact = rtx.accepted(
+            rtx.ARTIFACTS / active_sha / "acceptance-v2.json",
+            source["acceptance_digest"],
+        )
+        previous_artifact_path = rtx.ARTIFACTS / previous_sha / "acceptance-v2.json"
+        rtx.trusted(previous_artifact_path)
+        previous_artifact_payload = json.loads(previous_artifact_path.read_text())
+        previous_artifact_digest = canonical_digest(previous_artifact_payload)
+        previous_artifact = rtx.accepted(previous_artifact_path, previous_artifact_digest)
+        require(active_artifact["runtime"] == str(active), "active release artifact mismatch")
+        require(
+            previous_artifact["runtime"] == str(previous),
+            "previous release artifact mismatch",
+        )
+        require(
+            active_artifact["schema"] == previous_artifact["schema"],
+            "database schema differs between releases",
+        )
+
+        dropin = _auth_overlay_dropin_path(target)
+        rtx.trusted(dropin)
+        require(dropin.is_file() and not dropin.is_symlink(), "auth overlay drop-in is not a file")
+        require(digest(dropin) == auth_overlay_sha256, "auth overlay drop-in changed")
+
+        before = rtx.snapshot(target, active_sha)
+        _health(target)
+        database_before = rtx.database_evidence(target)
+        require(
+            database_before["schema"] == active_artifact["schema"],
+            "live database schema differs from active release",
+        )
+        directory = rtx.TRANSACTIONS / rollback_transaction_id
+        directory.mkdir(mode=0o700)
+        tx = ExternalJournal.create(
+            directory / "transaction.json",
+            target=target,
+            expected=active_sha,
+            old=str(active),
+            accepted=str(previous),
+            artifact_digest=previous_artifact_digest,
+            transaction_id=rollback_transaction_id,
+        )
+        tx.save(
+            owned=[*tx.record["owned"], str(dropin)],
+            operation="post-acceptance-rollback",
+            source_transaction_id=transaction_id,
+            database_restored=False,
+            config_restore={"path": str(dropin), "sha256": auth_overlay_sha256, "state": "absent"},
+        )
+        try:
+            require(rtx.snapshot(target, active_sha) == before, "target drift before rollback")
+            _health(target)
+            require(digest(dropin) == auth_overlay_sha256, "auth overlay drop-in changed")
+            tx.save(mutation_boundary=True, status="stopping")
+            rtx.stop(target)
+            dropin.unlink()
+            rtx.run(["systemctl", "daemon-reload"])
+            tx.save(status="config_restored")
+            rtx.switch(target, previous, tx)
+            tx.save(status="starting")
+            startup = rtx.start(target, previous_sha)
+            _health(target)
+            after = rtx.snapshot(target, previous_sha)
+            database_after = rtx.database_evidence(target)
+            require(
+                database_after["identity"] == database_before["identity"]
+                and database_after["schema"] == database_before["schema"],
+                "database identity or schema changed during rollback",
+            )
+            tx.save(
+                status="rolled_back",
+                target_before=before,
+                target_after=after,
+                startup=startup,
+                database_before=database_before,
+                database_after=database_after,
+                rollback_evidence={"release": str(previous), "auth_overlay": "absent"},
+            )
+        except BaseException as exc:
+            tx.save(status="rollback_failed", error=type(exc).__name__ + ": " + str(exc))
+            raise
+        return tx.record
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -235,6 +380,11 @@ def main() -> None:
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--target", choices=["O1", "O2"], required=True)
     recover_parser.add_argument("--transaction", required=True)
+    rollback_parser = subparsers.add_parser("rollback-committed")
+    rollback_parser.add_argument("--target", choices=["O1", "O2"], required=True)
+    rollback_parser.add_argument("--transaction", required=True)
+    rollback_parser.add_argument("--rollback-transaction", required=True)
+    rollback_parser.add_argument("--auth-overlay-sha256", required=True)
     args = parser.parse_args()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -243,6 +393,19 @@ def main() -> None:
     if args.command == "recover":
         external_controller_guard()
         record = recover(rtx.load_peer(args.target), args.transaction)
+        report = {"status": record["status"], "transaction": args.transaction}
+    elif args.command == "rollback-committed":
+        record = rollback_committed(
+            rtx.load_peer(args.target),
+            args.transaction,
+            args.rollback_transaction,
+            args.auth_overlay_sha256,
+        )
+        report = {
+            "status": record["status"],
+            "transaction": args.rollback_transaction,
+            "source_transaction": args.transaction,
+        }
     else:
         record = promote(
             rtx.load_peer(args.target),
@@ -251,7 +414,8 @@ def main() -> None:
             args.acceptance_sha256,
             args.transaction,
         )
-    print(json.dumps({"status": record["status"], "transaction": args.transaction}))
+        report = {"status": record["status"], "transaction": args.transaction}
+    print(json.dumps(report))
 
 
 if __name__ == "__main__":

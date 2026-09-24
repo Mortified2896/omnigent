@@ -35,12 +35,40 @@ def fixture(tmp_path, monkeypatch):
     target.current.symlink_to(old_release)
     new_release = tmp_path / "releases" / NEW
     new_release.mkdir()
-    artifact = {"source_sha": NEW, "runtime": str(new_release), "schema": "schema"}
+    artifact = {
+        "source_sha": NEW,
+        "runtime": str(new_release),
+        "schema": "schema",
+        "schema_policy": "same-schema",
+        "hashes": {},
+    }
+    old_artifact = {
+        "source_sha": OLD,
+        "runtime": str(old_release),
+        "schema": "schema",
+        "schema_policy": "same-schema",
+        "hashes": {},
+    }
 
     transaction_root = tmp_path / "transactions"
+    artifact_root = tmp_path / "artifacts"
+    monkeypatch.setattr(external_rtx, "_RELEASE_ROOT", tmp_path / "releases")
+    for sha, payload in ((OLD, old_artifact), (NEW, artifact)):
+        directory = artifact_root / sha
+        directory.mkdir(parents=True)
+        (directory / "acceptance-v2.json").write_text(json.dumps(payload))
     monkeypatch.setattr(rtx, "TRANSACTIONS", transaction_root)
+    monkeypatch.setattr(rtx, "ARTIFACTS", artifact_root)
     monkeypatch.setattr(external_rtx, "external_controller_guard", lambda: None)
-    monkeypatch.setattr(rtx, "accepted", lambda *_: artifact)
+
+    def accepted(path, _digest):
+        if Path(path) == Path("unused") or Path(path).parent.name == NEW:
+            return artifact
+        if Path(path).parent.name == OLD:
+            return old_artifact
+        raise Refused("unknown fixture artifact")
+
+    monkeypatch.setattr(rtx, "accepted", accepted)
     monkeypatch.setattr(external_rtx, "_health", lambda _: {"status": "ok"})
     monkeypatch.setattr(external_rtx, "_check_headroom", lambda _: None)
 
@@ -150,6 +178,53 @@ def test_recover_marks_preboundary_transaction_refused_without_mutation(fixture,
     assert result["recovery"] == "confirmed no active mutation occurred"
     assert target.current.resolve().name == OLD
     assert events == []
+
+
+def test_committed_external_rollback_restores_release_and_dropin_without_db_restore(
+    fixture, monkeypatch
+):
+    target, events, _, transactions = fixture
+    dropin = target.root / "unit.d" / "50-tailscale-auth-overlay.conf"
+    dropin.parent.mkdir()
+    dropin.write_text("[Service]\nEnvironment=OMNIGENT_AUTH_TRUSTED_HEADER=Tailscale-User-Login\n")
+    dropin_sha = digest(dropin)
+    monkeypatch.setattr(external_rtx, "_auth_overlay_dropin_path", lambda _: dropin)
+    monkeypatch.setattr(rtx, "trusted", lambda _: None)
+
+    committed = promote(fixture, tx_id="external-auth-overlay-deploy-001")
+    with sqlite3.connect(target.db) as connection:
+        connection.execute("insert into conversations values ('disposable test session')")
+    before = database_evidence(target)
+    events.clear()
+    monkeypatch.setattr(rtx, "run", lambda args, **_: events.append((args[0], *args[1:])))
+
+    rolled_back = external_rtx.rollback_committed(
+        target,
+        "external-auth-overlay-deploy-001",
+        "external-auth-overlay-rollback-001",
+        dropin_sha,
+    )
+
+    assert committed["status"] == "committed"
+    assert rolled_back["status"] == "rolled_back"
+    assert rolled_back["database_restored"] is False
+    assert target.current.resolve().name == OLD
+    assert not dropin.exists()
+    assert database_evidence(target) == before
+    assert events == [
+        ("stop", "O1"),
+        ("systemctl", "daemon-reload"),
+        ("start", "O1", OLD),
+    ]
+    original = json.loads(
+        (transactions / "external-auth-overlay-deploy-001" / "transaction.json").read_text()
+    )
+    assert original["status"] == "committed"
+    rollback_record = json.loads(
+        (transactions / "external-auth-overlay-rollback-001" / "transaction.json").read_text()
+    )
+    assert rollback_record["source_transaction_id"] == "external-auth-overlay-deploy-001"
+    assert rollback_record["database_after"] == before
 
 
 def test_external_controller_guard_rejects_instance_identity(monkeypatch):
