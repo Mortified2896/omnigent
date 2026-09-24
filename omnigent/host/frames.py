@@ -81,6 +81,9 @@ class HostFrameKind(str, Enum):
     IMPORT_LOCAL_BY_ID = "host.import_local_by_id"
     IMPORT_LOCAL_SESSION = "host.import_local_session"
     IMPORT_LOCAL_DONE = "host.import_local_done"
+    DEPLOYMENT_DRAIN = "host.deployment_drain"
+    DEPLOYMENT_DRAIN_ACK = "host.deployment_drain_ack"
+    DEPLOYMENT_REOPEN = "host.deployment_reopen"
 
 
 # ── Frame dataclasses ────────────────────────────────────
@@ -122,6 +125,36 @@ class HostHelloFrame:
     gateway_inference: dict[str, bool] | None = None
     telemetry_opt_out: bool = False
     installation_id: str | None = None
+    process_generation: str | None = None
+
+
+@dataclass
+class HostDeploymentDrainFrame:
+    """Server request for the host to stop admitting tunnel work and drain."""
+
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
+
+
+@dataclass
+class HostDeploymentDrainAckFrame:
+    """Host proof that its own tunnel work is idle for one drain request."""
+
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
+    remote_process_generation: str
+    active_work: int
+
+
+@dataclass
+class HostDeploymentReopenFrame:
+    """Server release of the host's exact active drain generation."""
+
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
 
 
 @dataclass
@@ -1071,6 +1104,9 @@ HostFrame = (
     | HostImportLocalByIdFrame
     | HostImportLocalSessionFrame
     | HostImportLocalDoneFrame
+    | HostDeploymentDrainFrame
+    | HostDeploymentDrainAckFrame
+    | HostDeploymentReopenFrame
 )
 
 
@@ -1122,6 +1158,36 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "gateway_inference": frame.gateway_inference,
                 "telemetry_opt_out": frame.telemetry_opt_out,
                 "installation_id": frame.installation_id,
+                "process_generation": frame.process_generation,
+            }
+        )
+    if isinstance(frame, HostDeploymentDrainFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.DEPLOYMENT_DRAIN.value,
+                "fence_generation": frame.fence_generation,
+                "server_process_generation": frame.server_process_generation,
+                "request_id": frame.request_id,
+            }
+        )
+    if isinstance(frame, HostDeploymentDrainAckFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.DEPLOYMENT_DRAIN_ACK.value,
+                "fence_generation": frame.fence_generation,
+                "server_process_generation": frame.server_process_generation,
+                "request_id": frame.request_id,
+                "remote_process_generation": frame.remote_process_generation,
+                "active_work": frame.active_work,
+            }
+        )
+    if isinstance(frame, HostDeploymentReopenFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.DEPLOYMENT_REOPEN.value,
+                "fence_generation": frame.fence_generation,
+                "server_process_generation": frame.server_process_generation,
+                "request_id": frame.request_id,
             }
         )
     if isinstance(frame, HostConnectionErrorFrame):
@@ -1656,6 +1722,26 @@ def _decode_known_host_frame(
             return _decode_import_local_session(msg)
         case HostFrameKind.IMPORT_LOCAL_DONE:
             return _decode_import_local_done(msg)
+        case HostFrameKind.DEPLOYMENT_DRAIN:
+            return HostDeploymentDrainFrame(
+                fence_generation=_required_int(msg, "fence_generation"),
+                server_process_generation=_required_str(msg, "server_process_generation"),
+                request_id=_required_str(msg, "request_id"),
+            )
+        case HostFrameKind.DEPLOYMENT_DRAIN_ACK:
+            return HostDeploymentDrainAckFrame(
+                fence_generation=_required_int(msg, "fence_generation"),
+                server_process_generation=_required_str(msg, "server_process_generation"),
+                request_id=_required_str(msg, "request_id"),
+                remote_process_generation=_required_str(msg, "remote_process_generation"),
+                active_work=_required_int(msg, "active_work"),
+            )
+        case HostFrameKind.DEPLOYMENT_REOPEN:
+            return HostDeploymentReopenFrame(
+                fence_generation=_required_int(msg, "fence_generation"),
+                server_process_generation=_required_str(msg, "server_process_generation"),
+                request_id=_required_str(msg, "request_id"),
+            )
     raise ValueError(f"unhandled host frame kind: {kind.value!r}")  # pragma: no cover
 
 
@@ -1674,6 +1760,7 @@ def _decode_host_hello(msg: _JsonObject) -> HostHelloFrame:
         gateway_inference=optional_str_bool_map(msg, "gateway_inference"),
         telemetry_opt_out=bool(msg.get("telemetry_opt_out", False)),
         installation_id=_optional_nullable_str(msg, "installation_id"),
+        process_generation=_optional_nullable_str(msg, "process_generation"),
     )
 
 

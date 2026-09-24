@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import socket
 import sqlite3
@@ -18,7 +19,6 @@ from sqlalchemy import text
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from omnigent.deployment_quiescence import ComponentObservation
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server import app as app_module
 from omnigent.server.deployment_quiescence import (
@@ -35,7 +35,7 @@ def _new_manager() -> DeploymentQuiescence:
     manager = DeploymentQuiescence(required_components=("remote_peer_inventory",))
     manager.register_component(
         "remote_peer_inventory",
-        lambda: ComponentObservation("remote_peer_inventory", "no-remote-peers", 0),
+        manager.remote_peer_observation,
     )
     return manager
 
@@ -115,6 +115,221 @@ def test_unknown_or_disconnected_remote_writer_blocks_certificate() -> None:
         _certificate(manager)
 
 
+def test_generation_bound_remote_acks_are_required_for_certificate() -> None:
+    manager = _new_manager()
+    runner_commands = []
+    host_commands = []
+    runner = manager.register_remote_peer(
+        kind="runner",
+        identity="runner-17",
+        tunnel_generation="runner-tunnel-1",
+        process_generation="runner-process-1",
+        send_command=runner_commands.append,
+    )
+    host = manager.register_remote_peer(
+        kind="host",
+        identity="host-4",
+        tunnel_generation="host-tunnel-1",
+        process_generation="host-process-1",
+        send_command=host_commands.append,
+    )
+    assert runner is not None
+    assert host is not None
+
+    generation = manager.fence()
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_drain_pending"):
+        _certificate(manager)
+    runner_request = runner_commands[-1]
+    host_request = host_commands[-1]
+    assert runner_request.operation == host_request.operation == "drain"
+    assert runner_request.fence_generation == host_request.fence_generation == generation
+    assert manager.remote_peer_observation().status == "unknown"
+
+    assert not manager.acknowledge_remote_drain(
+        runner,
+        fence_generation=generation - 1,
+        server_process_generation=manager.process_generation,
+        request_id=runner_request.request_id,
+        remote_process_generation="runner-process-1",
+        active_work=0,
+    )
+    assert manager.acknowledge_remote_drain(
+        runner,
+        fence_generation=generation,
+        server_process_generation=manager.process_generation,
+        request_id=runner_request.request_id,
+        remote_process_generation="runner-process-1",
+        active_work=0,
+    )
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_drain_pending"):
+        _certificate(manager)
+
+    assert manager.acknowledge_remote_drain(
+        host,
+        fence_generation=generation,
+        server_process_generation=manager.process_generation,
+        request_id=host_request.request_id,
+        remote_process_generation="host-process-1",
+        active_work=0,
+    )
+    certificate = _certificate(manager)
+    component_names = [component.name for component in certificate.components]
+    assert len(component_names) == len(set(component_names))
+    manager.verify_certificate(
+        certificate.certificate_id,
+        state_identity="state-identity",
+        state_generation="state-generation",
+    )
+
+    assert not manager.acknowledge_remote_drain(
+        runner,
+        fence_generation=generation,
+        server_process_generation=manager.process_generation,
+        request_id=runner_request.request_id,
+        remote_process_generation="runner-process-1",
+        active_work=1,
+    )
+    with pytest.raises(QuiescenceBlocked, match="certificate_unknown_or_invalidated"):
+        manager.verify_certificate(
+            certificate.certificate_id,
+            state_identity="state-identity",
+            state_generation="state-generation",
+        )
+    assert manager.acknowledge_remote_drain(
+        runner,
+        fence_generation=generation,
+        server_process_generation=manager.process_generation,
+        request_id=runner_request.request_id,
+        remote_process_generation="runner-process-1",
+        active_work=0,
+    )
+
+    manager.unregister_remote_peer(host)
+    with pytest.raises(QuiescenceBlocked, match="certificate_unknown_or_invalidated"):
+        manager.verify_certificate(
+            certificate.certificate_id,
+            state_identity="state-identity",
+            state_generation="state-generation",
+        )
+    assert manager.remote_peer_observation().status == "unknown"
+
+
+def test_offline_configured_peer_does_not_block_and_legacy_peer_fails_closed() -> None:
+    offline_manager = _new_manager()
+    offline_manager.fence()
+    _certificate(offline_manager)
+
+    manager = _new_manager()
+    legacy = manager.register_remote_peer(
+        kind="runner",
+        identity="old-runner",
+        tunnel_generation="legacy-tunnel",
+        process_generation=None,
+        send_command=lambda _command: None,
+    )
+    assert legacy is not None
+    manager.fence()
+    assert manager.remote_peer_observation().status == "unknown"
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_inventory_unknown"):
+        _certificate(manager)
+
+
+def test_disconnect_and_reconnect_during_fence_invalidates_old_ack() -> None:
+    manager = _new_manager()
+    commands = []
+    token = manager.register_remote_peer(
+        kind="runner",
+        identity="runner-17",
+        tunnel_generation="tunnel-a",
+        process_generation="process-a",
+        send_command=commands.append,
+    )
+    assert token is not None
+    generation = manager.fence()
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_drain_pending"):
+        _certificate(manager)
+    request = commands[-1]
+    assert manager.acknowledge_remote_drain(
+        token,
+        fence_generation=generation,
+        server_process_generation=manager.process_generation,
+        request_id=request.request_id,
+        remote_process_generation="process-a",
+        active_work=0,
+    )
+    _certificate(manager)
+
+    manager.unregister_remote_peer(token)
+    assert manager.remote_peer_observation().status == "unknown"
+    assert (
+        manager.register_remote_peer(
+            kind="runner",
+            identity="runner-17",
+            tunnel_generation="tunnel-b",
+            process_generation="process-b",
+            send_command=commands.append,
+        )
+        is None
+    )
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_inventory_unknown"):
+        _certificate(manager)
+
+
+def test_remote_drain_starts_only_after_server_admitted_work_finishes() -> None:
+    manager = _new_manager()
+    commands = []
+    token = manager.register_remote_peer(
+        kind="runner",
+        identity="runner-17",
+        tunnel_generation="tunnel-a",
+        process_generation="process-a",
+        send_command=commands.append,
+    )
+    assert token is not None
+    lease = manager.try_admit("already-admitted-server-work")
+    assert lease is not None
+    manager.fence()
+
+    with pytest.raises(QuiescenceBlocked, match="admitted_work_active:1"):
+        _certificate(manager)
+    assert not commands
+
+    lease.release()
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_drain_pending"):
+        _certificate(manager)
+    assert [item.operation for item in commands] == ["drain"]
+
+
+def test_fenced_remote_registration_requires_pre_fence_handshake_lease() -> None:
+    manager = _new_manager()
+    manager.fence()
+    refused = manager.register_remote_peer(
+        kind="runner",
+        identity="late-runner",
+        tunnel_generation="late-tunnel",
+        process_generation="late-process",
+        send_command=lambda _command: None,
+    )
+    assert refused is None
+
+    manager = _new_manager()
+    handshake = manager.try_admit("remote_tunnel_handshake")
+    assert handshake is not None
+    with handshake.activate():
+        manager.fence()
+        admitted = manager.register_remote_peer(
+            kind="runner",
+            identity="pre-fence-runner",
+            tunnel_generation="pre-fence-tunnel",
+            process_generation="pre-fence-process",
+            send_command=lambda _command: None,
+        )
+    assert admitted is not None
+    handshake.release()
+    with pytest.raises(QuiescenceBlocked, match="remote_peer_drain_pending"):
+        _certificate(manager)
+
+
 def test_process_generation_and_new_fence_work_invalidate_certificate() -> None:
     first = _new_manager()
     first.fence()
@@ -156,6 +371,15 @@ async def test_real_omnigent_server_http_and_websocket_fence_race(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Network clients prove drain and the blocked-WS-receive admission race."""
+    from omnigent.runner import create_runner_app
+    from omnigent.runner.app import register_timer, unregister_timer
+    from omnigent.runner.transports.ws_tunnel.frames import HelloFrame, encode_frame
+    from omnigent.runner.transports.ws_tunnel.serve import (
+        _DeploymentDrainState,
+        _handle_tunnel_frame,
+    )
+    from tests.runner.helpers import NullServerClient
+
     state_root = tmp_path / "state"
     state_root.mkdir()
     database = state_root / "omnigent.db"
@@ -218,6 +442,11 @@ async def test_real_omnigent_server_http_and_websocket_fence_race(
     )
     server_task = asyncio.create_task(server.serve(sockets=[listener]))
     ws = None
+    runner_ws = None
+    runner_task = None
+    runner_timer_task = None
+    runner_timer_finished: asyncio.Event | None = None
+    runner_id = "runner-quiescence-real-test"
     try:
         async with asyncio.timeout(15):
             while not server.started:
@@ -243,6 +472,53 @@ async def test_real_omnigent_server_http_and_websocket_fence_race(
             assert opened["ok"] is True
             assert opened["fenced"] is False
 
+            runner_app = create_runner_app(server_client=NullServerClient())  # type: ignore[arg-type]
+            runner_timer_finished = asyncio.Event()
+
+            async def wait_for_runner_timer() -> None:
+                assert runner_timer_finished is not None
+                await runner_timer_finished.wait()
+
+            runner_timer_task = asyncio.create_task(wait_for_runner_timer())
+            register_timer(runner_id, "timer-1", runner_timer_task)
+            runner_process_generation = "runner-process-real-test"
+            runner_connection = await connect(
+                f"ws://127.0.0.1:{port}/v1/runners/{runner_id}/tunnel"
+            )
+            runner_ws = runner_connection
+            await runner_connection.send(
+                encode_frame(
+                    HelloFrame(
+                        runner_version="test",
+                        frame_protocol_version=1,
+                        harnesses=["claude-sdk"],
+                        envs=["os_sandbox"],
+                        process_generation=runner_process_generation,
+                    )
+                )
+            )
+            async with asyncio.timeout(3):
+                while app.state.tunnel_registry.get(runner_id) is None:
+                    await asyncio.sleep(0.01)
+
+            runner_drain_state = _DeploymentDrainState(runner_process_generation)
+            runner_dispatch_tasks: dict[str, asyncio.Task[None]] = {}
+            runner_ws_channels: dict[str, Any] = {}
+
+            async def serve_runner_frames() -> None:
+                while True:
+                    raw = await runner_connection.recv()
+                    await _handle_tunnel_frame(
+                        runner_app,
+                        raw,
+                        runner_connection.send,
+                        runner_dispatch_tasks,
+                        runner_ws_channels,
+                        drain_state=runner_drain_state,
+                    )
+
+            runner_task = asyncio.create_task(serve_runner_frames())
+
             write_task = asyncio.create_task(client.post("/v1/quiescence/slow-write"))
             await asyncio.wait_for(slow_request_started.wait(), timeout=3)
             ws = await connect(f"ws://127.0.0.1:{port}/v1/quiescence/write-socket")
@@ -253,6 +529,7 @@ async def test_real_omnigent_server_http_and_websocket_fence_race(
             blocked = await _control(control_path, "observe")
             assert blocked["ok"] is False
             assert "admitted_work_active:1" in blocked["blockers"]
+            assert runner_drain_state.request is None
 
             rejected = await client.post("/v1/quiescence/slow-write")
             assert rejected.status_code == 423
@@ -266,7 +543,27 @@ async def test_real_omnigent_server_http_and_websocket_fence_race(
             result = await asyncio.wait_for(write_task, timeout=5)
             assert result.status_code == 200
             conversation_id = result.json()["conversation_id"]
+            waiting_for_runner = await _control(control_path, "observe")
+            assert waiting_for_runner["ok"] is False
+            assert "remote_peer_drain_pending" in waiting_for_runner["blockers"]
+            async with asyncio.timeout(1):
+                while runner_drain_state.request is None:
+                    await asyncio.sleep(0.01)
+            assert runner_drain_state.request is not None
+            assert runner_app.state.has_active_work() is True
+
+            assert runner_timer_finished is not None
+            runner_timer_finished.set()
+            assert runner_timer_task is not None
+            await runner_timer_task
+            unregister_timer(runner_id, "timer-1")
+            assert runner_app.state.has_active_work() is False
+
             observed = await _control(control_path, "observe")
+            async with asyncio.timeout(3):
+                while not observed["ok"]:
+                    await asyncio.sleep(0.02)
+                    observed = await _control(control_path, "observe")
             assert observed["ok"] is True, observed
             certificate = observed["certificate"]
             assert certificate["fence_generation"] == fence["fence_generation"]
@@ -327,10 +624,26 @@ async def test_real_omnigent_server_http_and_websocket_fence_race(
                 fence_generation=fence["fence_generation"],
             )
             assert opened["ok"] is True
+            async with asyncio.timeout(1):
+                while runner_drain_state.drained:
+                    await asyncio.sleep(0.01)
             resumed = await client.post("/v1/quiescence/slow-write")
             assert resumed.status_code == 200
     finally:
         finish_slow_request.set()
+        if runner_timer_finished is not None:
+            runner_timer_finished.set()
+        if runner_timer_task is not None and not runner_timer_task.done():
+            runner_timer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runner_timer_task
+        unregister_timer(runner_id, "timer-1")
+        if runner_ws is not None:
+            await runner_ws.close()
+        if runner_task is not None:
+            runner_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
+                await runner_task
         if ws is not None:
             await ws.close()
         server.should_exit = True

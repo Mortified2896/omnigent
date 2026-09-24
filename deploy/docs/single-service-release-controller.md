@@ -133,26 +133,37 @@ identity metadata. The external controller must ask the running process to
 re-verify the exact certificate immediately before stopping it; the disposable
 executor also rechecks the persistent-state digest after stop and backup.
 
-This is not yet server-wide proof for a normal connected host/runner
-deployment. An accepted host or runner tunnel is treated as an unacknowledged
-external writer, and even its disconnect does not count as a zero-work
-acknowledgement. A configured host store likewise blocks certificate issuance.
-There is no generic host/runner drain-generation protocol yet. The existing
-runner `app.state.has_active_work()` correctly sees timers, async tools,
-active turns, and parked approvals, but the server cannot query it safely over
-the current tunnel. The local runner timer test exercises that existing
-accounting only; it is not evidence of remote runner quiescence. Unknown or
-unregistered components remain blockers, and this experiment has not proved
-that every non-SQLite file writer in the server is admitted through the same
-coordinator.
+Connected host and runner tunnels now use a generic generation-bound
+`deployment.drain` / `deployment.drain_ack` / `deployment.reopen` exchange.
+The server waits for its admitted work and local components first, then sends
+each active tunnel a request bound to the exact fence generation, server
+process generation, request ID, and remote process generation. A certificate
+requires a zero-work ACK from each current remote process. Runner ACKs reuse
+`app.state.has_active_work()` and also wait for tunneled request handlers and
+WebSocket channels. Host ACKs wait for dispatched handlers, subprocess
+operations, lifecycle transitions, and host-originated state reports; a host
+ACK does not stand in for runner ACKs.
 
-A real Uvicorn listener with concurrent HTTP and WebSocket clients now proves
-the blocked-receive race and the in-flight HTTP drain against an Omnigent app
-using its migrated SQLite schema. The test also verifies database-write
-rejection after the fence, state-generation drift detection, and certificate
-invalidation. It runs the server in the pytest process; the existing separate
-disposable A-to-B rehearsal remains the real release-process transition. No
-systemd adapter or live HomeLab path is part of either test.
+Disconnect, replacement, reconnect, or unexpected post-ACK work invalidates
+remote evidence. A peer that disconnects during a fence remains an unknown
+blocker, and a reconnect is refused until writes reopen. Old host/runner
+versions without a process generation or drain support cannot ACK and block
+certification. Configured but offline peers do not block: the outer admission
+middleware rejects new tunnel handshakes while fenced, while the HTTP and
+database fences reject their writes.
+
+The tests include a real Uvicorn listener with concurrent HTTP and WebSocket
+clients, a network runner tunnel client, Omnigent's runner app with a
+registered live timer, host and runner route-level ACK tests, and host-process
+tests for active handlers and background-report send ordering. The Uvicorn
+rehearsal proves the server waits for an admitted HTTP request before sending
+DRAIN, waits for the runner timer to finish before issuing a certificate, and
+invalidates evidence on disconnect. The runner app and host daemon still run
+in the pytest process; this is not yet a separate OS-process
+server/host/runner rehearsal. Non-SQLite file writers and every possible
+background writer have not been proven to share the coordinator.
+
+No systemd adapter or live HomeLab path is part of these tests.
 
 ## Required activation sequence
 
@@ -212,12 +223,11 @@ immutable accepted release identity, host-owned privilege boundary, exact-SHA
 activation, persistent-state backup, and deterministic rollback policy.
 
 The current session-drain helper is not safe to call directly from this
-controller: its active-session query treats a query failure as zero work. The
-server also has no server-wide write fence covering HTTP, WebSocket, runners
-and scheduled work. The disposable adapter therefore treats fence, drain and
-restart as explicit fail-closed operations. A real adapter must prove all
-writers are fenced and admitted work is drained; a proxy-only gate would not
-account for scheduled or in-process writers.
+controller: its active-session query treats a query failure as zero work. This
+experiment adds a server-wide fence plus host/runner drain acknowledgements,
+but it remains a fork change and has not covered every non-SQLite writer. A
+real adapter must prove all writers are fenced and admitted work is drained; a
+proxy-only gate would not account for scheduled or in-process writers.
 
 ## Relationship to the O1/O2 work
 

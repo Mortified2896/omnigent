@@ -19,6 +19,8 @@ from omnigent.errors import OmnigentError
 from omnigent.runner import create_runner_app
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.runner.transports.ws_tunnel.frames import (
+    DeploymentDrainAckFrame,
+    DeploymentDrainFrame,
     HelloFrame,
     PingFrame,
     RequestFrame,
@@ -29,6 +31,11 @@ from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runner.transports.ws_tunnel.serve import dispatch_via_asgi
 from omnigent.runner.transports.ws_tunnel.transport import WSTunnelTransport
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.deployment_quiescence import (
+    DeploymentFenceMiddleware,
+    DeploymentQuiescence,
+    QuiescenceBlocked,
+)
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
 from tests.runner.helpers import NullServerClient
 
@@ -125,6 +132,7 @@ def _tunnel_route_app(
     allowed_tunnel_tokens: frozenset[str] | None = None,
     auth_provider: AuthProvider | None = None,
     resolve_managed_runner_owner: Callable[[str], str | None] | None = None,
+    quiescence: DeploymentQuiescence | None = None,
 ) -> TunnelRouteApp:
     """Create a minimal app containing only the runner tunnel route.
 
@@ -136,6 +144,7 @@ def _tunnel_route_app(
     :param resolve_managed_runner_owner: Optional ``runner_id -> owner``
         resolver for server-managed sandbox runners (binding-token auth,
         no user session). ``None`` disables the managed-runner lookup.
+    :param quiescence: Optional generic deployment fence coordinator.
     :returns: The FastAPI app and registry owned by its route.
     """
     registry = TunnelRegistry()
@@ -147,9 +156,12 @@ def _tunnel_route_app(
             allowed_tunnel_tokens=allowed_tunnel_tokens,
             auth_provider=auth_provider,
             resolve_managed_runner_owner=resolve_managed_runner_owner,
+            quiescence=quiescence,
         ),
         prefix="/v1",
     )
+    if quiescence is not None:
+        app.add_middleware(DeploymentFenceMiddleware, coordinator=quiescence)
     return TunnelRouteApp(app=app, registry=registry)
 
 
@@ -191,12 +203,14 @@ async def _send_hello(
     registry: TunnelRegistry,
     *,
     runner_id: str = _RUNNER_ID,
+    process_generation: str | None = None,
 ) -> None:
     """Send the runner hello frame.
 
     :param communicator: Connected ASGI WebSocket communicator.
     :param registry: Registry shared with the tunnel router.
     :param runner_id: Runner id expected to register.
+    :param process_generation: Process identity advertised for drain ACKs.
     :returns: None.
     """
     hello = HelloFrame(
@@ -204,6 +218,7 @@ async def _send_hello(
         frame_protocol_version=1,
         harnesses=["claude-sdk"],
         envs=["os_sandbox"],
+        process_generation=process_generation,
     )
     await communicator.send_input(
         {"type": "websocket.receive", "text": encode_frame(hello)},
@@ -314,6 +329,73 @@ async def test_ws_tunnel_route_round_trips_request_to_runner(
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+async def test_runner_tunnel_ack_is_required_for_server_quiescence_certificate() -> None:
+    manager = DeploymentQuiescence()
+    route = _tunnel_route_app(quiescence=manager)
+    communicator = await _connect_route(route.app, _TUNNEL_PATH)
+    await _send_hello(
+        communicator,
+        route.registry,
+        process_generation="runner-process-test",
+    )
+    generation = manager.fence()
+    certificate_args = {
+        "state_identity": "state-id",
+        "state_generation": "state-generation",
+        "persistent_state_digest": "state-digest",
+    }
+    async with asyncio.timeout(2):
+        while True:
+            try:
+                manager.issue_certificate(**certificate_args)
+            except QuiescenceBlocked as exc:
+                if "remote_peer_drain_pending" in exc.blockers:
+                    break
+            await asyncio.sleep(0.01)
+
+    drain_raw = (await communicator.receive_output(timeout=1.0))["text"]
+    drain = decode_frame(drain_raw)
+    assert isinstance(drain, DeploymentDrainFrame)
+    assert drain.fence_generation == generation
+    assert drain.server_process_generation == manager.process_generation
+
+    await communicator.send_input(
+        {
+            "type": "websocket.receive",
+            "text": encode_frame(
+                DeploymentDrainAckFrame(
+                    fence_generation=drain.fence_generation,
+                    server_process_generation=drain.server_process_generation,
+                    request_id=drain.request_id,
+                    remote_process_generation="runner-process-test",
+                    active_work=0,
+                )
+            ),
+        }
+    )
+    async with asyncio.timeout(1):
+        while manager.remote_peer_observation().status != "known":
+            await asyncio.sleep(0.01)
+
+    certificate = manager.issue_certificate(**certificate_args)
+    manager.verify_certificate(
+        certificate.certificate_id,
+        state_identity="state-id",
+        state_generation="state-generation",
+    )
+
+    await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
+    async with asyncio.timeout(1):
+        while route.registry.get(_RUNNER_ID) is not None:
+            await asyncio.sleep(0.01)
+    with pytest.raises(QuiescenceBlocked, match="certificate_unknown_or_invalidated"):
+        manager.verify_certificate(
+            certificate.certificate_id,
+            state_identity="state-id",
+            state_generation="state-generation",
+        )
 
 
 async def test_ws_tunnel_status_reports_registration(app: FastAPI) -> None:

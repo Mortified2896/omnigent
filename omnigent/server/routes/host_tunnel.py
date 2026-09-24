@@ -23,6 +23,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -33,6 +34,9 @@ from omnigent.host.frames import (
     HostConnectionErrorFrame,
     HostCreateDirResultFrame,
     HostCreateWorktreeResultFrame,
+    HostDeploymentDrainAckFrame,
+    HostDeploymentDrainFrame,
+    HostDeploymentReopenFrame,
     HostDetectCredentialsResultFrame,
     HostFsResultFrame,
     HostHarnessReadinessFrame,
@@ -61,6 +65,12 @@ from omnigent.runner.transports.ws_tunnel.frames import (
     encode_frame,
 )
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.deployment_quiescence import (
+    DeploymentQuiescence,
+    RemoteDrainCommand,
+    release_remote_handshake_admission,
+    without_admission_lease,
+)
 from omnigent.server.host_identity import find_live_host_name_collision
 from omnigent.server.host_registry import (
     HostConnection,
@@ -87,6 +97,7 @@ def create_host_tunnel_router(
     on_runner_exited: Callable[[str, str], Awaitable[None]] | None = None,
     local_single_user: bool | None = None,
     runner_exit_reports: RunnerExitReports | None = None,
+    quiescence: DeploymentQuiescence | None = None,
 ) -> APIRouter:
     """Build the router hosting the ``/hosts/{id}/tunnel`` WS endpoint.
 
@@ -128,6 +139,8 @@ def create_host_tunnel_router(
     :param runner_exit_reports: Shared store for ``host.runner_exited``
         reports, read by the runner status endpoint. ``None`` (e.g.
         minimal test wiring) drops the reports.
+    :param quiescence: Optional deployment fence for generation-bound host
+        drain participation.
     :returns: A FastAPI router with the host tunnel endpoint.
     """
     from omnigent.server.auth import local_single_user_enabled
@@ -255,6 +268,7 @@ def create_host_tunnel_router(
 
         await ws.accept()
         conn: HostConnection | None = None
+        remote_peer_token: str | None = None
         host_persisted = False
         stage = "hello"
         try:
@@ -328,6 +342,41 @@ def create_host_tunnel_router(
             stage = "registry"
             if conn is None:
                 conn = host_registry.register(host_id, ws, frame, owner=tunnel_owner)
+            if quiescence is not None:
+                loop = asyncio.get_running_loop()
+
+                def send_deployment_command(command: RemoteDrainCommand) -> None:
+                    if command.operation == "drain":
+                        outgoing = HostDeploymentDrainFrame(
+                            command.fence_generation,
+                            command.server_process_generation,
+                            command.request_id,
+                        )
+                    else:
+                        outgoing = HostDeploymentReopenFrame(
+                            command.fence_generation,
+                            command.server_process_generation,
+                            command.request_id,
+                        )
+                    data = encode_host_frame(outgoing)
+                    loop.call_soon_threadsafe(conn.outbound_queue.put_nowait, data)
+
+                remote_peer_token = quiescence.register_remote_peer(
+                    kind="host",
+                    identity=host_id,
+                    tunnel_generation=uuid4().hex,
+                    process_generation=frame.process_generation,
+                    send_command=send_deployment_command,
+                )
+                if remote_peer_token is None:
+                    host_registry.deregister(host_id, conn=conn)
+                    await asyncio.to_thread(host_store.set_offline, host_id)
+                    host_persisted = False
+                    await ws.close(
+                        code=1013,
+                        reason="host reconnect refused during deployment drain",
+                    )
+                    return
             # Delivered on the handshake, never persisted: a replica that just
             # started learns the host's gateway backing here, so a server
             # restart converges as soon as each host reconnects.
@@ -347,27 +396,36 @@ def create_host_tunnel_router(
                 ),
             )
 
-            sender_task = asyncio.create_task(
-                _sender_loop(ws, conn),
-                name=f"host-sender:{host_id}",
-            )
-            ping_task = asyncio.create_task(
-                _ping_loop(ws, conn, host_id, host_store),
-                name=f"host-ping:{host_id}",
-            )
-            receive_task = asyncio.create_task(
-                _receive_loop(
-                    ws,
-                    conn,
-                    host_id,
-                    host_store,
-                    host_registry,
-                    runner_exit_reports,
-                    on_runner_exited,
-                    on_host_update,
-                ),
-                name=f"host-receive:{host_id}",
-            )
+            with without_admission_lease():
+                sender_task = asyncio.create_task(
+                    _sender_loop(ws, conn),
+                    name=f"host-sender:{host_id}",
+                )
+                ping_task = asyncio.create_task(
+                    _ping_loop(
+                        ws,
+                        conn,
+                        host_id,
+                        host_store,
+                        quiescence=quiescence,
+                    ),
+                    name=f"host-ping:{host_id}",
+                )
+                receive_task = asyncio.create_task(
+                    _receive_loop(
+                        ws,
+                        conn,
+                        host_id,
+                        host_store,
+                        host_registry,
+                        runner_exit_reports,
+                        on_runner_exited,
+                        on_host_update,
+                        quiescence=quiescence,
+                        remote_peer_token=remote_peer_token,
+                    ),
+                    name=f"host-receive:{host_id}",
+                )
 
             if on_host_connect is not None:
                 try:
@@ -385,6 +443,8 @@ def create_host_tunnel_router(
                         "on_host_connect callback failed for %s",
                         host_id,
                     )
+
+            release_remote_handshake_admission()
 
             try:
                 done, _pending = await asyncio.wait(
@@ -408,6 +468,8 @@ def create_host_tunnel_router(
                 # was replaced; only the current one may mark it offline.
                 if host_registry.deregister(host_id, conn=conn):
                     await asyncio.to_thread(host_store.set_offline, host_id)
+                if quiescence is not None and remote_peer_token is not None:
+                    quiescence.unregister_remote_peer(remote_peer_token)
                 if on_host_disconnect is not None:
                     try:
                         await on_host_disconnect(host_id, tunnel_owner)
@@ -431,6 +493,8 @@ def create_host_tunnel_router(
             if conn is not None:
                 if host_registry.deregister(host_id, conn=conn):
                     await asyncio.to_thread(host_store.set_offline, host_id)
+                if quiescence is not None and remote_peer_token is not None:
+                    quiescence.unregister_remote_peer(remote_peer_token)
                 if on_host_disconnect is not None:
                     try:
                         await on_host_disconnect(host_id, tunnel_owner)
@@ -457,6 +521,8 @@ def create_host_tunnel_router(
             if conn is not None:
                 if host_registry.deregister(host_id, conn=conn):
                     await asyncio.to_thread(host_store.set_offline, host_id)
+            if quiescence is not None and remote_peer_token is not None:
+                quiescence.unregister_remote_peer(remote_peer_token)
             elif host_persisted:
                 await asyncio.to_thread(host_store.set_offline, host_id)
 
@@ -527,6 +593,9 @@ async def _receive_loop(
     runner_exit_reports: RunnerExitReports | None,
     on_runner_exited: Callable[[str, str], Awaitable[None]] | None,
     on_host_update: Callable[[str, str | None], Awaitable[None]] | None,
+    *,
+    quiescence: DeploymentQuiescence | None = None,
+    remote_peer_token: str | None = None,
 ) -> None:
     """Receive host frames and route results to pending futures.
 
@@ -593,6 +662,31 @@ async def _receive_loop(
                 host_id,
                 type(runner_frame).__name__,
             )
+            continue
+
+        if isinstance(frame, HostDeploymentDrainAckFrame):
+            if quiescence is not None and remote_peer_token is not None:
+                accepted = quiescence.acknowledge_remote_drain(
+                    remote_peer_token,
+                    fence_generation=frame.fence_generation,
+                    server_process_generation=frame.server_process_generation,
+                    request_id=frame.request_id,
+                    remote_process_generation=frame.remote_process_generation,
+                    active_work=frame.active_work,
+                )
+                if not accepted:
+                    _logger.warning(
+                        "host %s sent a stale or invalid deployment drain ACK",
+                        host_id,
+                    )
+            continue
+        if (
+            quiescence is not None
+            and remote_peer_token is not None
+            and quiescence.remote_peer_acknowledged(remote_peer_token)
+        ):
+            quiescence.invalidate_remote_peer_ack(remote_peer_token)
+            _logger.warning("host %s sent work after its deployment drain ACK", host_id)
             continue
 
         if isinstance(frame, HostHarnessReadinessFrame):
@@ -858,6 +952,8 @@ async def _ping_loop(
     conn: HostConnection,
     host_id: str,
     host_store: HostStore,
+    *,
+    quiescence: DeploymentQuiescence | None = None,
 ) -> None:
     """Send pings every PING_INTERVAL_S; declare dead after misses.
 
@@ -889,7 +985,8 @@ async def _ping_loop(
             return
         # The host is still within the liveness window — refresh its
         # last-seen so the freshness gate keeps it in the online set.
-        await asyncio.to_thread(host_store.heartbeat, host_id)
+        if quiescence is None or not quiescence.fenced:
+            await asyncio.to_thread(host_store.heartbeat, host_id)
         try:
             ping_text = encode_frame(PingFrame(ts=int(time.time() * 1000)))
             conn.outbound_queue.put_nowait(ping_text)

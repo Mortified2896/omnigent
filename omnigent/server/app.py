@@ -1773,25 +1773,10 @@ def create_app(
         )
 
     def _remote_peer_inventory() -> ComponentObservation:
-        # External host/runner processes need an explicit drain acknowledgement
-        # before they can be counted as idle. This experiment has not added that
-        # protocol, so configured host inventory stays unknown even when its
-        # current WebSocket registry happens to be empty.
-        if host_store is not None:
-            return ComponentObservation(
-                "remote_peer_inventory",
-                deployment_quiescence.process_generation,
-                None,
-                "unknown",
-            )
-        if tunnel_registry.online_runner_ids() or host_registry.online_host_ids():
-            return ComponentObservation(
-                "remote_peer_inventory",
-                deployment_quiescence.process_generation,
-                None,
-                "unknown",
-            )
-        return _quiescence_component("remote_peer_inventory", 0)
+        # Only peers connected to this exact server generation participate.
+        # While fenced, new tunnel handshakes are refused, so configured but
+        # offline machines cannot acquire write capability for this fence.
+        return deployment_quiescence.remote_peer_observation()
 
     def _scheduled_fire_count() -> int:
         scheduler = getattr(app.state, "scheduled_task_scheduler", None)
@@ -3320,6 +3305,7 @@ def create_app(
             auth_provider=auth_provider,
             runner_exit_reports=runner_exit_reports,
             resolve_managed_runner_owner=_resolve_managed_runner_owner,
+            quiescence=deployment_quiescence,
         ),
         prefix="/v1",
         tags=["runners"],
@@ -3345,6 +3331,7 @@ def create_app(
                 auth_provider=auth_provider,
                 runner_exit_reports=runner_exit_reports,
                 on_runner_exited=_on_runner_exited,
+                quiescence=deployment_quiescence,
                 on_host_connect=_on_hosts_changed,
                 on_host_disconnect=_on_hosts_changed,
                 on_host_update=_on_hosts_changed,

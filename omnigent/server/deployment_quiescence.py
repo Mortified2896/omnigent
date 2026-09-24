@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -37,6 +38,7 @@ _SAFE_WEBSOCKET_PATHS = frozenset({"/v1/sessions/updates"})
 _REMOTE_TUNNEL = re.compile(r"^/v1/(hosts|runners)/([^/]+)/tunnel$")
 _CONTROL_MAX_LINE = 4096
 _CERTIFICATE_TTL_SECONDS = 5.0
+_logger = logging.getLogger(__name__)
 
 
 class QuiescenceBlocked(RuntimeError):
@@ -45,6 +47,31 @@ class QuiescenceBlocked(RuntimeError):
     def __init__(self, blockers: tuple[str, ...]) -> None:
         self.blockers = blockers
         super().__init__(", ".join(blockers))
+
+
+@dataclass(frozen=True)
+class RemoteDrainCommand:
+    """Generation-bound control sent to one live remote writer."""
+
+    operation: str
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
+
+
+@dataclass
+class _RemotePeer:
+    """One exact remote process and tunnel generation participating in drain."""
+
+    token: str
+    kind: str
+    identity: str
+    tunnel_generation: str
+    process_generation: str | None
+    send_command: Callable[[RemoteDrainCommand], None]
+    connected: bool = True
+    request_id: str | None = None
+    acknowledged: bool = False
 
 
 class AdmissionLease:
@@ -89,6 +116,24 @@ def current_admission_lease() -> AdmissionLease | None:
     return _CURRENT_ADMISSION.get()
 
 
+def release_remote_handshake_admission() -> None:
+    """Release the handshake lease after a tunnel has registered as a peer."""
+    lease = _CURRENT_ADMISSION.get()
+    if lease is not None and lease.component == "remote_tunnel_handshake":
+        lease.release()
+        _CURRENT_ADMISSION.set(None)
+
+
+@contextmanager
+def without_admission_lease() -> Iterator[None]:
+    """Create long-lived tunnel tasks without inheriting the handshake lease."""
+    token = _CURRENT_ADMISSION.set(None)
+    try:
+        yield
+    finally:
+        _CURRENT_ADMISSION.reset(token)
+
+
 class DeploymentQuiescence:
     """Linearizable process-local admission fence and certificate issuer."""
 
@@ -109,6 +154,8 @@ class DeploymentQuiescence:
         self._components_sealed = False
         self._leases: dict[str, str] = {}
         self._external_writers: dict[str, str] = {}
+        self._remote_peers: dict[str, _RemotePeer] = {}
+        self._current_remote_peers: dict[tuple[str, str], str] = {}
         self._required_components = frozenset(required_components)
         self._providers: dict[str, Callable[[], ComponentObservation]] = {}
         self._certificates: dict[str, tuple[QuiescenceCertificate, float]] = {}
@@ -157,12 +204,12 @@ class DeploymentQuiescence:
             return AdmissionLease(self, token, component)
 
     def note_external_writer(self, kind: str, identity: str) -> bool:
-        """Remember a remote writer until an explicit drain protocol can ack it.
+        """Remember a legacy/untracked writer as durable unknown evidence.
 
-        The current experiment deliberately has no host/runner drain wire
-        protocol. A tunnel is therefore a durable unknown, including after it
-        disconnects. Returning ``False`` means a newly connecting writer was
-        refused by an already-active fence.
+        New host and runner tunnels use :meth:`register_remote_peer` and the
+        generation-bound drain protocol. This compatibility path remains
+        fail-closed for writers that cannot participate in that protocol.
+        Returning ``False`` means the writer was refused by an active fence.
         """
         key = f"{kind}:{identity}:{uuid4().hex}"
         with self._lock:
@@ -174,6 +221,178 @@ class DeploymentQuiescence:
             self._activity_generation += 1
             self._certificates.clear()
             return True
+
+    def register_remote_peer(
+        self,
+        *,
+        kind: str,
+        identity: str,
+        tunnel_generation: str,
+        process_generation: str | None,
+        send_command: Callable[[RemoteDrainCommand], None],
+    ) -> str | None:
+        """Register one admitted remote tunnel; fenced reconnects are refused.
+
+        Configured but offline hosts are intentionally absent from this set.
+        Once fenced, new WebSocket handshakes are rejected by admission
+        middleware, so an offline process cannot gain write capability for
+        this server generation. A handshake admitted before the fence may
+        finish registration; it joins the active drain and must ACK. The
+        active handshake lease is checked here so mounting this route without
+        the admission middleware cannot admit a new peer during a fence.
+        """
+        key = (kind, identity)
+        with self._lock:
+            previous_token = self._current_remote_peers.get(key)
+            if self._fenced and previous_token is not None:
+                previous = self._remote_peers.get(previous_token)
+                if previous is not None:
+                    previous.connected = False
+                    previous.acknowledged = False
+                    self._activity_generation += 1
+                    self._certificates.clear()
+                return None
+            if self._fenced:
+                handshake = current_admission_lease()
+                if (
+                    handshake is None
+                    or handshake.component != "remote_tunnel_handshake"
+                    or handshake._token not in self._leases
+                ):
+                    self._activity_generation += 1
+                    self._certificates.clear()
+                    return None
+            if previous_token is not None:
+                self._remote_peers.pop(previous_token, None)
+            if process_generation is not None and (
+                not process_generation.strip() or len(process_generation) > 256
+            ):
+                process_generation = None
+            token = uuid4().hex
+            peer = _RemotePeer(
+                token=token,
+                kind=kind,
+                identity=identity,
+                tunnel_generation=tunnel_generation,
+                process_generation=process_generation,
+                send_command=send_command,
+            )
+            self._remote_peers[token] = peer
+            self._current_remote_peers[key] = token
+            self._activity_generation += 1
+            self._certificates.clear()
+        return token
+
+    def unregister_remote_peer(self, token: str) -> None:
+        """Retire a tunnel; disconnect during a fence remains unknown evidence."""
+        with self._lock:
+            peer = self._remote_peers.get(token)
+            if peer is None:
+                return
+            key = (peer.kind, peer.identity)
+            if self._fenced:
+                peer.connected = False
+                peer.acknowledged = False
+            else:
+                self._remote_peers.pop(token, None)
+                if self._current_remote_peers.get(key) == token:
+                    self._current_remote_peers.pop(key, None)
+            self._activity_generation += 1
+            self._certificates.clear()
+
+    def acknowledge_remote_drain(
+        self,
+        token: str,
+        *,
+        fence_generation: int,
+        server_process_generation: str,
+        request_id: str,
+        remote_process_generation: str,
+        active_work: int,
+    ) -> bool:
+        """Accept only a zero-work ACK for the exact active tunnel request."""
+        with self._lock:
+            peer = self._remote_peers.get(token)
+            if (
+                peer is None
+                or not self._fenced
+                or not peer.connected
+                or peer.process_generation is None
+                or fence_generation != self._fence_generation
+                or server_process_generation != self.process_generation
+                or request_id != peer.request_id
+            ):
+                return False
+            if (
+                type(active_work) is not int
+                or active_work != 0
+                or remote_process_generation != peer.process_generation
+            ):
+                if peer.acknowledged:
+                    peer.acknowledged = False
+                    self._activity_generation += 1
+                    self._certificates.clear()
+                return False
+            if peer.acknowledged:
+                return True
+            peer.acknowledged = True
+            self._activity_generation += 1
+            self._certificates.clear()
+            return True
+
+    def remote_peer_observation(self) -> ComponentObservation:
+        """Observe connected peers and ACKs as a digest-bound component."""
+        with self._lock:
+            peers = tuple(self._remote_peers.values())
+            generation_data = [
+                {
+                    "kind": peer.kind,
+                    "identity": peer.identity,
+                    "tunnel_generation": peer.tunnel_generation,
+                    "process_generation": peer.process_generation,
+                    "connected": peer.connected,
+                    "request_id": peer.request_id,
+                    "acknowledged": peer.acknowledged,
+                }
+                for peer in sorted(peers, key=lambda item: (item.kind, item.identity, item.token))
+            ]
+            fenced = self._fenced
+            fence_generation = self._fence_generation
+            legacy_writers = bool(self._external_writers)
+        digest_value = hashlib.sha256(
+            json.dumps(
+                {
+                    "server_process_generation": self.process_generation,
+                    "fence_generation": fence_generation,
+                    "peers": generation_data,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        all_acked = all(
+            peer.connected and peer.process_generation is not None and peer.acknowledged
+            for peer in peers
+        )
+        if legacy_writers or (peers and (not fenced or not all_acked)):
+            return ComponentObservation("remote_peer_inventory", digest_value, None, "unknown")
+        return ComponentObservation("remote_peer_inventory", digest_value, 0)
+
+    def remote_peer_acknowledged(self, token: str) -> bool:
+        """Return whether a peer has already ACKed the current fence."""
+        with self._lock:
+            peer = self._remote_peers.get(token)
+            return bool(peer is not None and self._fenced and peer.connected and peer.acknowledged)
+
+    def invalidate_remote_peer_ack(self, token: str) -> None:
+        """Invalidate an ACK if a peer sends non-control work after draining."""
+        with self._lock:
+            peer = self._remote_peers.get(token)
+            if peer is None or not peer.acknowledged:
+                return
+            peer.acknowledged = False
+            self._activity_generation += 1
+            self._certificates.clear()
 
     def fence(self) -> int:
         """Close this process's admission and start the next drain generation."""
@@ -189,12 +408,37 @@ class DeploymentQuiescence:
 
     def open_writes(self, generation: int) -> None:
         """Reopen admission only for the exact active fence generation."""
+        commands: list[tuple[_RemotePeer, RemoteDrainCommand]] = []
         with self._lock:
             if not self._fenced or generation != self._fence_generation:
                 raise QuiescenceBlocked(("fence_generation_changed",))
+            for peer in self._remote_peers.values():
+                if peer.connected and peer.process_generation is not None and peer.request_id:
+                    commands.append(
+                        (
+                            peer,
+                            RemoteDrainCommand(
+                                operation="reopen",
+                                fence_generation=self._fence_generation,
+                                server_process_generation=self.process_generation,
+                                request_id=peer.request_id or "",
+                            ),
+                        )
+                    )
             self._fenced = False
+            self._remote_peers.clear()
+            self._current_remote_peers.clear()
             self._activity_generation += 1
             self._certificates.clear()
+        for peer, command in commands:
+            self._send_remote_command(peer, command)
+
+    @staticmethod
+    def _send_remote_command(peer: _RemotePeer, command: RemoteDrainCommand) -> None:
+        try:
+            peer.send_command(command)
+        except Exception:
+            _logger.exception("could not send remote deployment %s command", command.operation)
 
     def issue_certificate(
         self,
@@ -232,6 +476,11 @@ class DeploymentQuiescence:
                 status="unknown" if external_writers else "known",
             ),
         ]
+        # The app registers this observation as a component so it is recollected
+        # during certificate verification. Keep the manager usable on its own,
+        # while avoiding a duplicate component name in the app-backed certificate.
+        if "remote_peer_inventory" not in providers:
+            observations.append(self.remote_peer_observation())
         missing = self._required_components - providers.keys()
         if missing:
             observations.extend(
@@ -255,6 +504,22 @@ class DeploymentQuiescence:
                 blockers.append(f"{item.name}_unknown")
             elif item.active_work != 0:
                 blockers.append(f"{item.name}_active:{item.active_work}")
+        local_blockers = [
+            item
+            for item in observations
+            if item.name not in {"remote_peer_inventory", "remote_writers"}
+            and (
+                item.status != "known"
+                or type(item.active_work) is not int
+                or item.active_work != 0
+            )
+        ]
+        if not local_blockers:
+            commands = self._prepare_remote_drain_commands()
+            if commands:
+                for peer, command in commands:
+                    self._send_remote_command(peer, command)
+                raise QuiescenceBlocked(("remote_peer_drain_pending",))
         if blockers:
             raise QuiescenceBlocked(tuple(sorted(set(blockers))))
 
@@ -281,6 +546,38 @@ class DeploymentQuiescence:
             )
             self._certificates[certificate.certificate_id] = (certificate, time.monotonic())
             return certificate
+
+    def _prepare_remote_drain_commands(
+        self,
+    ) -> list[tuple[_RemotePeer, RemoteDrainCommand]]:
+        """Begin remote drain only after local admitted work and providers are idle."""
+        commands: list[tuple[_RemotePeer, RemoteDrainCommand]] = []
+        with self._lock:
+            if not self._fenced or self._leases:
+                return commands
+            changed = False
+            for peer in self._remote_peers.values():
+                if not peer.connected or peer.process_generation is None:
+                    continue
+                if peer.request_id is None:
+                    peer.request_id = uuid4().hex
+                    changed = True
+                if not peer.acknowledged:
+                    commands.append(
+                        (
+                            peer,
+                            RemoteDrainCommand(
+                                operation="drain",
+                                fence_generation=self._fence_generation,
+                                server_process_generation=self.process_generation,
+                                request_id=peer.request_id,
+                            ),
+                        )
+                    )
+            if changed:
+                self._activity_generation += 1
+                self._certificates.clear()
+        return commands
 
     def verify_certificate(
         self,
@@ -613,20 +910,7 @@ class DeploymentFenceMiddleware:
                 if refused:
                     return
                 if message.get("type") == "websocket.accept" and not accepted:
-                    if not self._coordinator.note_external_writer(
-                        remote.group(1), remote.group(2)
-                    ):
-                        refused = True
-                        await send(
-                            {
-                                "type": "websocket.close",
-                                "code": 1013,
-                                "reason": "deployment fence",
-                            }
-                        )
-                        return
                     accepted = True
-                    release_handshake()
                 await send(message)
 
             async def remote_receive() -> Message:
