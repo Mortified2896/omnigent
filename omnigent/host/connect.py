@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, SupportsIndex, SupportsInt, cast
+from uuid import uuid4
 
 import websockets.asyncio.client
 from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
@@ -49,6 +50,9 @@ from omnigent.host.frames import (
     HostCreateDirResultFrame,
     HostCreateWorktreeFrame,
     HostCreateWorktreeResultFrame,
+    HostDeploymentDrainAckFrame,
+    HostDeploymentDrainFrame,
+    HostDeploymentReopenFrame,
     HostDetectCredentialsFrame,
     HostDetectCredentialsResultFrame,
     HostFsRequestFrame,
@@ -1279,6 +1283,9 @@ class HostProcess:
             and self-terminates once the record is deleted or reassigned.
         """
         self._identity = identity
+        self._process_generation = str(uuid4())
+        self._deployment_drain: tuple[int, str, str] | None = None
+        self._deployment_drain_ack_task: asyncio.Task[None] | None = None
         self._server_url = server_url.rstrip("/")
         self._runners: dict[str, _RunnerHandle] = {}
         # Retain the host's refreshable auth context after the first tunnel
@@ -1345,6 +1352,11 @@ class HostProcess:
         # runner_id → composed error for exits that could not be sent
         # (tunnel down at the time). Flushed after the next hello.
         self._unreported_exits: dict[str, str] = {}
+        self._pending_harness_readiness: HostHarnessReadinessFrame | None = None
+        # Host-originated reports can arrive from watcher/readiness tasks
+        # outside the receive loop. Count their sends so a DRAIN ACK cannot
+        # overtake a write that began before the host entered drain mode.
+        self._deployment_state_sends = 0
         # Strong refs to per-runner watcher tasks; asyncio only keeps
         # weak refs, so an unreferenced task can be GC'd mid-flight.
         self._watcher_tasks: set[asyncio.Task[None]] = set()
@@ -2441,11 +2453,15 @@ class HostProcess:
             flushed by :meth:`_serve_frames` after the next hello.
         """
         frame = encode_host_frame(HostRunnerExitedFrame(runner_id=runner_id, error=error))
+        if self._deployment_drain is not None:
+            self._unreported_exits[runner_id] = error
+            return
         ws = self._ws
         if ws is not None:
             try:
-                await ws.send(frame)
-                return
+                if await self._send_deployment_state_frame(ws, frame):
+                    self._unreported_exits.pop(runner_id, None)
+                    return
             except Exception:  # noqa: BLE001 — any send failure parks the report
                 _logger.debug(
                     "Could not send runner_exited for %s; queueing for reconnect",
@@ -4259,12 +4275,21 @@ class HostProcess:
             gateway_inference=self._gateway_inference,
             telemetry_opt_out=_tel_opt_out,
             installation_id=_tel_install_id,
+            process_generation=self._process_generation,
         )
         try:
             encoded_hello = encode_host_frame(hello)
         except Exception as exc:
             raise HostConnectError(f"Could not encode host.hello: {exc}") from exc
         await ws.send(encoded_hello)
+        if self._deployment_drain_ack_task is not None:
+            self._deployment_drain_ack_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._deployment_drain_ack_task
+            self._deployment_drain_ack_task = None
+        # A newly admitted tunnel after server reopen is a new safe
+        # connection generation; the old server's drain no longer applies.
+        self._deployment_drain = None
         self._ws = ws
         # Reports raised while disconnected must wait until registration; the
         # server cannot route them before this connection owns the host.
@@ -4300,6 +4325,11 @@ class HostProcess:
                     # request frames run concurrently below; exceptions raised
                     # on those detached tasks are intentionally contained.
                     self._raise_connection_error_from_raw(raw)
+                    if self._handle_deployment_control(ws, raw):
+                        continue
+                    if self._deployment_drain is not None:
+                        await self._reject_frame_while_drained(ws, raw)
+                        continue
                     # Each request frame is handled on its own task so a slow
                     # handler (a model-options CLI exec, a long git walk) can't
                     # head-of-line block the frames behind it — measured
@@ -4310,12 +4340,160 @@ class HostProcess:
                     # _runner_lifecycle_lock in _dispatch_host_frame.
                     self._start_frame_task(ws, raw)
         finally:
+            if self._deployment_drain_ack_task is not None:
+                self._deployment_drain_ack_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._deployment_drain_ack_task
+                self._deployment_drain_ack_task = None
             prewarm_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await prewarm_task
             readiness_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await readiness_task
+
+    def _handle_deployment_control(
+        self,
+        ws: websockets.asyncio.client.ClientConnection,
+        raw: str,
+    ) -> bool:
+        """Apply drain/reopen control inline before dispatching later frames."""
+        try:
+            frame = decode_host_frame(raw)
+        except ValueError:
+            return False
+        if isinstance(frame, HostDeploymentDrainFrame):
+            requested = (
+                frame.fence_generation,
+                frame.server_process_generation,
+                frame.request_id,
+            )
+            current = self._deployment_drain
+            if current is not None:
+                if current == requested:
+                    return True
+                if (
+                    current[1] == frame.server_process_generation
+                    and current[0] >= frame.fence_generation
+                ):
+                    return True
+                if self._deployment_drain_ack_task is not None:
+                    self._deployment_drain_ack_task.cancel()
+            self._deployment_drain = requested
+            self._deployment_drain_ack_task = asyncio.create_task(
+                self._acknowledge_deployment_drain(ws, requested),
+                name="host-deployment-drain-ack",
+            )
+            return True
+        if isinstance(frame, HostDeploymentReopenFrame):
+            requested = (
+                frame.fence_generation,
+                frame.server_process_generation,
+                frame.request_id,
+            )
+            if self._deployment_drain == requested:
+                self._deployment_drain = None
+                task = self._deployment_drain_ack_task
+                self._deployment_drain_ack_task = None
+                if task is not None:
+                    task.cancel()
+                if self._pending_harness_readiness is not None or self._unreported_exits:
+                    flush_task = asyncio.create_task(
+                        self._flush_deferred_deployment_writes(ws),
+                        name="host-deployment-deferred-writes",
+                    )
+                    self._frame_tasks.add(flush_task)
+                    flush_task.add_done_callback(self._frame_tasks.discard)
+            return True
+        return False
+
+    async def _acknowledge_deployment_drain(
+        self,
+        ws: websockets.asyncio.client.ClientConnection,
+        request: tuple[int, str, str],
+    ) -> None:
+        """ACK only after all already-dispatched host operations finish."""
+        fence_generation, server_process_generation, request_id = request
+        while self._deployment_drain == request:
+            active_work = len(self._frame_tasks) + self._owned_subprocess_ops
+            active_work += self._deployment_state_sends
+            if self._runner_lifecycle_lock.locked():
+                active_work += 1
+            if active_work == 0:
+                await ws.send(
+                    encode_host_frame(
+                        HostDeploymentDrainAckFrame(
+                            fence_generation=fence_generation,
+                            server_process_generation=server_process_generation,
+                            request_id=request_id,
+                            remote_process_generation=self._process_generation,
+                            active_work=0,
+                        )
+                    )
+                )
+                return
+            await asyncio.sleep(0.05)
+
+    async def _send_deployment_state_frame(
+        self,
+        ws: websockets.asyncio.client.ClientConnection,
+        encoded: str,
+    ) -> bool:
+        """Send a background state write that started before deployment drain.
+
+        The counter is incremented without awaiting, so a concurrently received
+        DRAIN sees this operation as active until the frame has entered the
+        ordered WebSocket stream. A write attempted after drain is deferred.
+        """
+        if self._deployment_drain is not None:
+            return False
+        self._deployment_state_sends += 1
+        try:
+            await ws.send(encoded)
+            return True
+        finally:
+            self._deployment_state_sends -= 1
+
+    async def _flush_deferred_deployment_writes(
+        self,
+        ws: websockets.asyncio.client.ClientConnection,
+    ) -> None:
+        """Resume state reports deferred while the server was fenced."""
+        readiness = self._pending_harness_readiness
+        if readiness is not None:
+            try:
+                sent = await self._send_deployment_state_frame(
+                    ws,
+                    encode_host_frame(readiness),
+                )
+            except Exception:  # noqa: BLE001 - reconnect retries retained state.
+                _logger.debug("Could not flush host readiness after deployment", exc_info=True)
+            else:
+                if sent and self._pending_harness_readiness is readiness:
+                    self._pending_harness_readiness = None
+        for runner_id, error in list(self._unreported_exits.items()):
+            await self._report_runner_exit(runner_id, error)
+
+    async def _reject_frame_while_drained(
+        self,
+        ws: websockets.asyncio.client.ClientConnection,
+        raw: str,
+    ) -> None:
+        """Reject a post-drain launch before it can create a runner process."""
+        try:
+            frame = decode_host_frame(raw)
+        except ValueError:
+            return
+        if isinstance(frame, HostLaunchRunnerFrame):
+            await ws.send(
+                encode_host_frame(
+                    HostLaunchRunnerResultFrame(
+                        request_id=frame.request_id,
+                        status="failed",
+                        error="host is drained for deployment",
+                    )
+                )
+            )
 
     async def _harness_readiness_loop(
         self,
@@ -4351,14 +4529,15 @@ class HostProcess:
             if new_configured is None:
                 continue
             if new_configured != configured or new_gateway != gateway:
-                await ws.send(
-                    encode_host_frame(
-                        HostHarnessReadinessFrame(
-                            configured_harnesses=new_configured,
-                            gateway_inference=new_gateway,
-                        )
-                    )
+                readiness = HostHarnessReadinessFrame(
+                    configured_harnesses=new_configured,
+                    gateway_inference=new_gateway,
                 )
+                if not await self._send_deployment_state_frame(
+                    ws,
+                    encode_host_frame(readiness),
+                ):
+                    self._pending_harness_readiness = readiness
                 configured = new_configured
                 gateway = new_gateway
                 self._configured_harnesses = configured

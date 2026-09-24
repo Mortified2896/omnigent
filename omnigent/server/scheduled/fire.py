@@ -56,6 +56,10 @@ from omnigent.db.db_models import workspace_scope
 from omnigent.entities import Conversation, ScheduledTask
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER, RESERVED_USER_LOCAL
+from omnigent.server.deployment_quiescence import (
+    DeploymentQuiescence,
+    current_admission_lease,
+)
 from omnigent.server.routes._session_create_validation import (
     validate_existing_host_workspace,
     validate_session_agent,
@@ -141,6 +145,7 @@ def build_on_fire(
     deps: FireDeps,
     *,
     launch_dispatch: LaunchDispatch | None = None,
+    admission: DeploymentQuiescence | None = None,
 ) -> Callable[[int, str], Awaitable[None]]:
     """Build the real ``on_fire`` callback bound to server ``deps``.
 
@@ -166,6 +171,7 @@ def build_on_fire(
             dispatch,
             preflight,
             require_active=True,
+            admission=admission,
         )
 
     return on_fire
@@ -175,6 +181,7 @@ def build_run_now(
     deps: FireDeps,
     *,
     launch_dispatch: LaunchDispatch | None = None,
+    admission: DeploymentQuiescence | None = None,
 ) -> Callable[[int, str], Awaitable[bool]]:
     """Build the manual "run now" trigger — an immediate fire of a task.
 
@@ -210,6 +217,7 @@ def build_run_now(
             dispatch,
             preflight,
             require_active=False,
+            admission=admission,
         )
 
     return run_now
@@ -223,6 +231,7 @@ async def _trigger_fire(
     preflight: ConnectedHostPreflight | None,
     *,
     require_active: bool,
+    admission: DeploymentQuiescence | None = None,
 ) -> bool:
     """Synchronously guard a fire, then dispatch the run in the background.
 
@@ -235,38 +244,64 @@ async def _trigger_fire(
     :returns: ``True`` if a background fire was started, ``False`` if skipped
         (row gone / not active when required / already in flight).
     """
-    # Re-read the row: never trust the caller. A deleted (or, for the scheduled
-    # path, non-active) row is a logged no-op done synchronously.
-    with workspace_scope(workspace_id):
-        task = await asyncio.to_thread(deps.scheduled_task_store.get, scheduled_task_id)
-        if task is None:
-            _logger.info("scheduled fire: task %s no longer exists — skipping", scheduled_task_id)
-            return False
-        if require_active and task.state != "active":
-            _logger.info(
-                "scheduled fire: task %s is %s (not active) — skipping",
-                scheduled_task_id,
-                task.state,
-            )
-            return False
-
-    key = (workspace_id, scheduled_task_id)
-    if key in _IN_FLIGHT_TASKS:
-        _logger.info("scheduled fire: task %s already in flight — skipping", scheduled_task_id)
+    parent = current_admission_lease()
+    if parent is not None:
+        lease = parent.fork("scheduled_background_fire")
+    elif admission is not None:
+        lease = admission.try_admit("scheduled_background_fire")
+    else:
+        lease = None
+    if admission is not None and lease is None:
         return False
-    _IN_FLIGHT_TASKS.add(key)
 
-    # Fire-and-forget: the session create + launch runs in the background so the
-    # caller returns immediately (the scheduler re-arms the timer now; the route
-    # returns 202).
-    fire_task = asyncio.create_task(
-        _run_fire(deps, workspace_id, scheduled_task_id, dispatch, preflight, require_active),
-        name=f"scheduled-fire-{scheduled_task_id}",
-    )
-    _PENDING_FIRES.add(fire_task)
-    fire_task.add_done_callback(_PENDING_FIRES.discard)
-    fire_task.add_done_callback(lambda _task: _IN_FLIGHT_TASKS.discard(key))
-    return True
+    try:
+        # Re-read the row: never trust the caller. A deleted (or, for the
+        # scheduled path, non-active) row is a logged no-op done synchronously.
+        with workspace_scope(workspace_id):
+            task = await asyncio.to_thread(deps.scheduled_task_store.get, scheduled_task_id)
+            if task is None:
+                _logger.info(
+                    "scheduled fire: task %s no longer exists — skipping", scheduled_task_id
+                )
+                return False
+            if require_active and task.state != "active":
+                _logger.info(
+                    "scheduled fire: task %s is %s (not active) — skipping",
+                    scheduled_task_id,
+                    task.state,
+                )
+                return False
+
+        key = (workspace_id, scheduled_task_id)
+        if key in _IN_FLIGHT_TASKS:
+            _logger.info("scheduled fire: task %s already in flight — skipping", scheduled_task_id)
+            return False
+        _IN_FLIGHT_TASKS.add(key)
+
+        # Retain the lease until the detached session/dispatch writes finish,
+        # not just until this scheduling callback returns.
+        fire_coroutine = _run_fire(
+            deps, workspace_id, scheduled_task_id, dispatch, preflight, require_active
+        )
+        if lease is None:
+            fire_task = asyncio.create_task(
+                fire_coroutine, name=f"scheduled-fire-{scheduled_task_id}"
+            )
+        else:
+            with lease.activate():
+                fire_task = asyncio.create_task(
+                    fire_coroutine, name=f"scheduled-fire-{scheduled_task_id}"
+                )
+        _PENDING_FIRES.add(fire_task)
+        fire_task.add_done_callback(_PENDING_FIRES.discard)
+        fire_task.add_done_callback(lambda _task: _IN_FLIGHT_TASKS.discard(key))
+        if lease is not None:
+            fire_task.add_done_callback(lambda _task, retained=lease: retained.release())
+            lease = None
+        return True
+    finally:
+        if lease is not None:
+            lease.release()
 
 
 async def _run_fire(

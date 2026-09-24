@@ -25,15 +25,21 @@ from omnigent.runner.identity import (
 )
 from omnigent.runner.transports.ws_tunnel import serve as serve_module
 from omnigent.runner.transports.ws_tunnel.frames import (
+    DeploymentDrainAckFrame,
+    DeploymentDrainFrame,
+    DeploymentReopenFrame,
     PingFrame,
     RequestCancelFrame,
     RequestFrame,
+    ResponseEndFrame,
+    ResponseHeadFrame,
     WSCloseFrame,
     WSFrame,
     WSOpenFrame,
     encode_frame,
 )
 from omnigent.runner.transports.ws_tunnel.serve import (
+    _DeploymentDrainState,
     _handle_tunnel_frame,
     _serve_tunnel_once,
     _websocket_auth_redirect_url,
@@ -2377,3 +2383,78 @@ async def test_serve_tunnel_403_keeps_genuine_no_auth_decline_latched(
         )
 
     assert resets == []
+
+
+@pytest.mark.asyncio
+async def test_runner_drain_waits_for_runtime_work_and_rejects_new_requests() -> None:
+    from omnigent.runner import create_runner_app
+    from omnigent.runner.app import register_timer, unregister_timer
+    from tests.runner.helpers import NullServerClient
+
+    app = create_runner_app(server_client=NullServerClient())  # type: ignore[arg-type]
+    timer_finished = asyncio.Event()
+
+    async def wait_for_timer() -> None:
+        await timer_finished.wait()
+
+    timer_task = asyncio.create_task(wait_for_timer())
+    register_timer("deployment-drain-test", "timer-1", timer_task)
+    assert app.state.has_active_work() is True
+    dispatch_tasks: dict[str, asyncio.Task[None]] = {}
+    ws_channels: dict[str, Any] = {}
+    drain_state = _DeploymentDrainState("runner-process-1")
+    sent: list[str] = []
+
+    async def send(data: str) -> None:
+        sent.append(data)
+
+    request = DeploymentDrainFrame(7, "server-process-1", "drain-7")
+    await _handle_tunnel_frame(
+        app,
+        encode_frame(request),
+        send,
+        dispatch_tasks,
+        ws_channels,
+        drain_state=drain_state,
+    )
+    await asyncio.sleep(0.07)
+    assert not sent
+
+    await _handle_tunnel_frame(
+        app,
+        encode_frame(RequestFrame(id="new", method="POST", path="/v1/sessions")),
+        send,
+        dispatch_tasks,
+        ws_channels,
+        drain_state=drain_state,
+    )
+    from omnigent.runner.transports.ws_tunnel.frames import decode_frame
+
+    blocked = [decode_frame(raw) for raw in sent]
+    assert isinstance(blocked[0], ResponseHeadFrame)
+    assert blocked[0].status == 423
+    assert isinstance(blocked[1], ResponseEndFrame)
+    assert not dispatch_tasks
+
+    timer_finished.set()
+    await timer_task
+    assert app.state.has_active_work() is False
+    assert drain_state.ack_task is not None
+    await asyncio.wait_for(drain_state.ack_task, timeout=1)
+    ack = decode_frame(sent[-1])
+    assert isinstance(ack, DeploymentDrainAckFrame)
+    assert ack.fence_generation == 7
+    assert ack.server_process_generation == "server-process-1"
+    assert ack.remote_process_generation == "runner-process-1"
+    assert ack.active_work == 0
+
+    await _handle_tunnel_frame(
+        app,
+        encode_frame(DeploymentReopenFrame(7, "server-process-1", "drain-7")),
+        send,
+        dispatch_tasks,
+        ws_channels,
+        drain_state=drain_state,
+    )
+    assert not drain_state.drained
+    unregister_timer("deployment-drain-test", "timer-1")

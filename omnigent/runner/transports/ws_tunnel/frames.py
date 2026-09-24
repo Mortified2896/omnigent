@@ -45,6 +45,9 @@ class FrameKind(str, Enum):
     WS_OPEN = "ws.open"
     WS_FRAME = "ws.frame"
     WS_CLOSE = "ws.close"
+    DEPLOYMENT_DRAIN = "deployment.drain"
+    DEPLOYMENT_DRAIN_ACK = "deployment.drain_ack"
+    DEPLOYMENT_REOPEN = "deployment.reopen"
 
 
 # ── Frame dataclasses ────────────────────────────────────
@@ -80,6 +83,7 @@ class HelloFrame:
     telemetry_opt_out: bool = False
     direct_attach_port: int | None = None
     direct_attach_token: str | None = None
+    process_generation: str | None = None
 
 
 @dataclass
@@ -193,6 +197,35 @@ class WSCloseFrame:
     reason: str = ""
 
 
+@dataclass
+class DeploymentDrainFrame:
+    """Server request for a runner to stop admitting work and drain."""
+
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
+
+
+@dataclass
+class DeploymentDrainAckFrame:
+    """Runner proof that one exact drain request reached zero active work."""
+
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
+    remote_process_generation: str
+    active_work: int
+
+
+@dataclass
+class DeploymentReopenFrame:
+    """Server release of the runner's exact active drain generation."""
+
+    fence_generation: int
+    server_process_generation: str
+    request_id: str
+
+
 Frame = (
     HelloFrame
     | RequestFrame
@@ -205,6 +238,9 @@ Frame = (
     | WSOpenFrame
     | WSFrame
     | WSCloseFrame
+    | DeploymentDrainFrame
+    | DeploymentDrainAckFrame
+    | DeploymentReopenFrame
 )
 
 
@@ -231,6 +267,8 @@ def encode_frame(frame: Frame) -> str:
         if frame.direct_attach_port is not None and frame.direct_attach_token:
             payload["direct_attach_port"] = frame.direct_attach_port
             payload["direct_attach_token"] = frame.direct_attach_token
+        if frame.process_generation is not None:
+            payload["process_generation"] = frame.process_generation
         return json.dumps(payload)
     if isinstance(frame, RequestFrame):
         return json.dumps(
@@ -306,6 +344,35 @@ def encode_frame(frame: Frame) -> str:
                 "ch_id": frame.ch_id,
                 "code": frame.code,
                 "reason": frame.reason,
+            }
+        )
+    if isinstance(frame, DeploymentDrainFrame):
+        return json.dumps(
+            {
+                "kind": FrameKind.DEPLOYMENT_DRAIN.value,
+                "fence_generation": frame.fence_generation,
+                "server_process_generation": frame.server_process_generation,
+                "request_id": frame.request_id,
+            }
+        )
+    if isinstance(frame, DeploymentDrainAckFrame):
+        return json.dumps(
+            {
+                "kind": FrameKind.DEPLOYMENT_DRAIN_ACK.value,
+                "fence_generation": frame.fence_generation,
+                "server_process_generation": frame.server_process_generation,
+                "request_id": frame.request_id,
+                "remote_process_generation": frame.remote_process_generation,
+                "active_work": frame.active_work,
+            }
+        )
+    if isinstance(frame, DeploymentReopenFrame):
+        return json.dumps(
+            {
+                "kind": FrameKind.DEPLOYMENT_REOPEN.value,
+                "fence_generation": frame.fence_generation,
+                "server_process_generation": frame.server_process_generation,
+                "request_id": frame.request_id,
             }
         )
     raise TypeError(f"unknown frame type: {type(frame).__name__}")
@@ -390,6 +457,26 @@ def _decode_known_frame(kind: FrameKind, msg: _JsonObject) -> Frame:
             return _decode_ws_frame(msg)
         case FrameKind.WS_CLOSE:
             return _decode_ws_close(msg)
+        case FrameKind.DEPLOYMENT_DRAIN:
+            return DeploymentDrainFrame(
+                fence_generation=_required_int(msg, "fence_generation"),
+                server_process_generation=_required_str(msg, "server_process_generation"),
+                request_id=_required_str(msg, "request_id"),
+            )
+        case FrameKind.DEPLOYMENT_DRAIN_ACK:
+            return DeploymentDrainAckFrame(
+                fence_generation=_required_int(msg, "fence_generation"),
+                server_process_generation=_required_str(msg, "server_process_generation"),
+                request_id=_required_str(msg, "request_id"),
+                remote_process_generation=_required_str(msg, "remote_process_generation"),
+                active_work=_required_int(msg, "active_work"),
+            )
+        case FrameKind.DEPLOYMENT_REOPEN:
+            return DeploymentReopenFrame(
+                fence_generation=_required_int(msg, "fence_generation"),
+                server_process_generation=_required_str(msg, "server_process_generation"),
+                request_id=_required_str(msg, "request_id"),
+            )
     # Unreachable — all enum members handled above.
     raise ValueError(f"unhandled frame kind: {kind.value!r}")  # pragma: no cover
 
@@ -419,6 +506,11 @@ def _decode_hello(msg: _JsonObject) -> HelloFrame:
         telemetry_opt_out=_optional_bool(msg, "telemetry_opt_out", False),
         direct_attach_port=direct_port,
         direct_attach_token=direct_token,
+        process_generation=(
+            msg.get("process_generation")
+            if isinstance(msg.get("process_generation"), str)
+            else None
+        ),
     )
 
 
