@@ -159,6 +159,38 @@ async def test_create_lists_and_gets(auth_client: httpx.AsyncClient, db_uri: str
     assert got.json()["id"] == task_id
 
 
+async def test_audio_preferences_require_and_round_trip_voice_profile(
+    auth_client: httpx.AsyncClient, db_uri: str
+) -> None:
+    _make_user(db_uri)
+    missing_profile = await auth_client.post(
+        "/v1/scheduled-tasks",
+        json=_create_body(audio_enabled=True),
+        headers=_headers(),
+    )
+    assert missing_profile.status_code == 400
+    assert "audio_voice_profile" in missing_profile.text
+
+    created = await auth_client.post(
+        "/v1/scheduled-tasks",
+        json=_create_body(audio_enabled=True, audio_voice_profile="daily-brief"),
+        headers=_headers(),
+    )
+    assert created.status_code == 200, created.text
+    task = created.json()
+    assert task["audio_enabled"] is True
+    assert task["audio_voice_profile"] == "daily-brief"
+
+    cleared = await auth_client.patch(
+        f"/v1/scheduled-tasks/{task['id']}",
+        json={"audio_enabled": False, "audio_voice_profile": None},
+        headers=_headers(),
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["audio_enabled"] is False
+    assert cleared.json()["audio_voice_profile"] is None
+
+
 async def test_create_no_workspace_task_persists_null_host_and_workspace(
     auth_client: httpx.AsyncClient, db_uri: str
 ) -> None:

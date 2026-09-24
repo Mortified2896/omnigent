@@ -1101,6 +1101,7 @@ def create_app(
     server_config: dict[str, Any] | None = None,
     feature_flags: FeatureFlags | None = None,
     extension_state: ExtensionPluginState | None = None,
+    generated_response_audio_store: Any | None = None,
 ) -> FastAPI:
     """
     Build and return the FastAPI application with all routes mounted.
@@ -1235,6 +1236,13 @@ def create_app(
     )
 
     resolved_server_config = load_server_config() if server_config is None else server_config
+    scheduler_flag = os.environ.get("OMNIGENT_SCHEDULED_TASKS_ENABLED", "true").strip().lower()
+    scheduled_task_execution_enabled = scheduler_flag in {"1", "true", "yes", "on"}
+    if scheduler_flag not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+        _logger.warning(
+            "Unrecognized OMNIGENT_SCHEDULED_TASKS_ENABLED value %r; disabling task execution",
+            scheduler_flag,
+        )
     branding_snapshot = load_branding_snapshot(resolved_server_config)
     title_instructions = session_title_instructions(resolved_server_config)
     resolved_feature_flags = feature_flags or resolve_feature_flags()
@@ -1313,6 +1321,18 @@ def create_app(
     _mcp_pool = ServerMcpPool()
     server_metrics = ServerPerformanceMetrics()
     server_metrics_otel = ServerMetricsOtelPublisher()
+    generated_audio_coordinator = None
+    if generated_response_audio_store is not None:
+        from omnigent.server.generated_response_audio import (
+            GeneratedResponseAudioCoordinator,
+        )
+
+        generated_audio_coordinator = GeneratedResponseAudioCoordinator(
+            audio_store=generated_response_audio_store,
+            conversation_store=conversation_store,
+            artifact_store=artifact_store,
+            tts_url=os.environ.get("OMNIGENT_TTS_URL"),
+        )
 
     @asynccontextmanager
     async def _lifespan(
@@ -1343,6 +1363,9 @@ def create_app(
         from anyio import to_thread as _to_thread
 
         _to_thread.current_default_thread_limiter().total_tokens = 200
+
+        if generated_audio_coordinator is not None:
+            await generated_audio_coordinator.start()
 
         # Initialise usage telemetry (fire-and-forget; no-op when disabled).
         from omnigent.telemetry import init_client as _init_telemetry
@@ -1460,7 +1483,7 @@ def create_app(
         # creates + owner-grants a session, launches its runner, and records
         # the run — all fire-and-forget so the timer re-arms immediately.
         scheduled_task_scheduler: ScheduledTaskScheduler | None = None
-        if scheduled_task_store is not None:
+        if scheduled_task_store is not None and scheduled_task_execution_enabled:
             from omnigent.server.scheduled.fire import FireDeps, build_on_fire, build_run_now
 
             fire_deps = FireDeps(
@@ -1532,6 +1555,8 @@ def create_app(
             # cancel. Only the per-job scheduler holds timers that need stopping.
             if scheduled_task_scheduler is not None:
                 scheduled_task_scheduler.stop()
+            if generated_audio_coordinator is not None:
+                await generated_audio_coordinator.stop()
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task
@@ -1694,7 +1719,11 @@ def create_app(
     # scheduled-task store additionally enables the event-driven
     # run-completion hook (persist_scheduled_run_completion) fired from
     # _publish_status when a fired conversation's turn reaches terminal.
-    session_live_state.configure(conversation_store, scheduled_task_store)
+    session_live_state.configure(
+        conversation_store,
+        scheduled_task_store,
+        generated_audio_coordinator=generated_audio_coordinator,
+    )
     # Extend a managed sandbox while its runner tunnel is live (the managed-path
     # caller for SandboxHostLauncher.keep_alive); no-op without a sandbox config.
     managed_host_keepalive.configure(conversation_store, host_store, sandbox_config)
@@ -2592,6 +2621,7 @@ def create_app(
             # per-session comments fingerprint so the web app refreshes
             # its comment list on external mutations.
             comment_store=comment_store,
+            generated_response_audio_store=generated_response_audio_store,
             # Same allow-list the tunnel router gets: authorizes runner
             # writes to the policy-owned cost_control.* session labels.
             runner_tunnel_tokens=runner_tunnel_tokens,
@@ -2849,6 +2879,7 @@ def create_app(
                 permission_store=permission_store,
                 agent_cache=agent_cache,
                 auth_provider=auth_provider,
+                execution_enabled=scheduled_task_execution_enabled,
             ),
             prefix="/v1",
             tags=["scheduled_tasks"],

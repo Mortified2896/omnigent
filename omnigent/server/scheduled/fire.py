@@ -739,6 +739,19 @@ async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
         )
         if updated is not None:
             conv = updated
+    session_state = dict(conv.session_state or {})
+    if task.codex_web_search_mode is not None:
+        session_state["codex_web_search_mode"] = task.codex_web_search_mode
+    if task.audio_enabled and task.audio_voice_profile:
+        session_state["scheduled_task_audio_enabled"] = True
+        session_state["scheduled_task_audio_voice_profile"] = task.audio_voice_profile
+    if session_state != (conv.session_state or {}):
+        conv.session_state = session_state
+        await asyncio.to_thread(
+            deps.conversation_store.set_session_state,
+            conv.id,
+            conv.session_state,
+        )
     # Stamp terminal-first presentation labels the interactive create path would
     # have set, so a fired session on a terminal harness exposes the
     # Chat/Terminal switcher instead of rendering Chat-only. Stamped last (after

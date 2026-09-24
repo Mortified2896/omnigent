@@ -41,6 +41,7 @@ class _FakeConversation:
     host_id: str | None = None
     git_branch: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    session_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -150,6 +151,7 @@ class FakeConversationStore:
         self._seq = 0
         self.fail_create = fail_create
         self.label_writes: dict[str, dict[str, str]] = {}
+        self.session_state_writes: dict[str, dict[str, Any]] = {}
 
     def create_conversation(self, **kwargs: Any) -> _FakeConversation:
         self.create_workspace_ids.append(current_workspace_id())
@@ -172,6 +174,9 @@ class FakeConversationStore:
 
     def set_labels(self, conversation_id: str, labels: dict[str, str]) -> None:
         self.label_writes[conversation_id] = dict(labels)
+
+    def set_session_state(self, conversation_id: str, session_state: dict[str, Any]) -> None:
+        self.session_state_writes[conversation_id] = dict(session_state)
 
     def get_conversation(self, conversation_id: str) -> _FakeConversation | None:
         return _FakeConversation(id=conversation_id, agent_id="ag_1")
@@ -542,6 +547,35 @@ async def test_task_reasoning_effort_overrides_spec_at_fire() -> None:
 
     assert any(u.get("reasoning_effort") == "low" for u in conv_store.updated)
     assert not any(u.get("reasoning_effort") == "high" for u in conv_store.updated)
+
+
+@pytest.mark.asyncio
+async def test_scheduled_fire_pins_search_and_audio_profile_to_session() -> None:
+    conv_store = FakeConversationStore()
+    store = FakeScheduledTaskStore(
+        rows={
+            "task_1": _task(
+                codex_web_search_mode="live",
+                audio_enabled=True,
+                audio_voice_profile="daily-brief",
+            )
+        }
+    )
+
+    async def _launch(conv: Any, task: Any) -> None:
+        return None
+
+    await build_on_fire(
+        _effort_agent_deps(store, conv_store, reasoning_effort=None),
+        launch_dispatch=_launch,
+    )(0, "task_1")
+    await _drain()
+
+    assert conv_store.session_state_writes["conv_1"] == {
+        "codex_web_search_mode": "live",
+        "scheduled_task_audio_enabled": True,
+        "scheduled_task_audio_voice_profile": "daily-brief",
+    }
 
 
 @pytest.mark.asyncio

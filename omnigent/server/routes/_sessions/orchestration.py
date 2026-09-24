@@ -1098,6 +1098,7 @@ def _build_session_response(
         host_online=host_online,
         host_resumable=host_resumable,
         reasoning_effort=conv.reasoning_effort,
+        codex_web_search_mode=conv.session_state.get("codex_web_search_mode"),
         items=items,
         permission_level=permission_level,
         sub_agent_name=conv.sub_agent_name,

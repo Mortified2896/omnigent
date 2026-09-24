@@ -1,4 +1,5 @@
 import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
+import { GeneratedResponseAudioPlayer } from "@/components/chat/GeneratedResponseAudioPlayer";
 // Bubble rendering, scroll helpers, and the working-indicator cluster for the
 // chat transcript. Extracted from ChatPage.tsx so <Transcript> can import them
 // without the ChatPage ↔ Transcript module cycle. ChatPage re-exports these for
@@ -909,6 +910,13 @@ function AssistantBubble({
                   </MessageAction>
                 )}
               </MessageActions>
+            )}
+            {bubble.lifecycle === "completed" && bubble.responseId && conversationId && (
+              <GeneratedResponseAudioPlayer
+                sessionId={conversationId}
+                responseId={bubble.responseId}
+                pollForNewAudio={isLastAssistant}
+              />
             )}
             {ts && (
               <span

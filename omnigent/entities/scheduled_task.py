@@ -85,6 +85,9 @@ class ScheduledTask:
     model_override: str | None = None
     reasoning_effort: str | None = None
     permission_mode: str | None = None
+    codex_web_search_mode: str | None = None
+    audio_enabled: bool = False
+    audio_voice_profile: str | None = None
     max_cost_usd: float | None = None
     workspace: str | None = None
     base_branch: str | None = None
