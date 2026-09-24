@@ -173,6 +173,11 @@ import click
 from fastapi import HTTPException
 
 from omnigent.db.utils import builtin_agent_id, now_epoch
+from omnigent.server.deployment_quiescence import (
+    AdmissionLease,
+    DeploymentQuiescence,
+    current_admission_lease,
+)
 from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
@@ -428,9 +433,16 @@ class ManagedLaunchTracker:
     launch for the same session begins.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, admission: DeploymentQuiescence | None = None) -> None:
         """Initialize the empty session-id → launch index."""
         self._by_session: dict[str, ManagedLaunch] = {}
+        self._admission = admission
+        self._leases: dict[str, AdmissionLease] = {}
+
+    @property
+    def active_count(self) -> int:
+        """Number of managed host launches that have not settled."""
+        return sum(not entry.settled.is_set() for entry in self._by_session.values())
 
     def begin(self, session_id: str) -> None:
         """
@@ -442,7 +454,26 @@ class ManagedLaunchTracker:
         :param session_id: Session/conversation identifier,
             e.g. ``"conv_abc123"``.
         """
+        parent = current_admission_lease()
+        if parent is not None:
+            lease = parent.fork("managed_host_launch")
+        elif self._admission is not None:
+            lease = self._admission.try_admit("managed_host_launch")
+        else:
+            lease = None
+        if self._admission is not None and lease is None:
+            raise RuntimeError("managed host launch is fenced for deployment")
+        prior = self._by_session.get(session_id)
+        if prior is not None and not prior.settled.is_set():
+            if lease is not None:
+                lease.release()
+            raise RuntimeError("managed host launch is already active")
+        old_lease = self._leases.pop(session_id, None)
+        if old_lease is not None:
+            old_lease.release()
         self._by_session[session_id] = ManagedLaunch(settled=asyncio.Event())
+        if lease is not None:
+            self._leases[session_id] = lease
 
     def get(self, session_id: str) -> ManagedLaunch | None:
         """
@@ -453,6 +484,10 @@ class ManagedLaunchTracker:
             is in flight or recorded as failed for this session.
         """
         return self._by_session.get(session_id)
+
+    def lease_for(self, session_id: str) -> AdmissionLease | None:
+        """Return the launch's admission lease for detached task context."""
+        return self._leases.get(session_id)
 
     def finish(self, session_id: str) -> None:
         """
@@ -465,8 +500,11 @@ class ManagedLaunchTracker:
         :param session_id: Session/conversation identifier.
         """
         entry = self._by_session.pop(session_id, None)
+        lease = self._leases.pop(session_id, None)
         if entry is not None:
             entry.settled.set()
+        if lease is not None:
+            lease.release()
 
     def fail(self, session_id: str, error: str) -> None:
         """
@@ -479,6 +517,9 @@ class ManagedLaunchTracker:
         entry = self._by_session.get(session_id)
         if entry is None:
             return
+        lease = self._leases.pop(session_id, None)
+        if lease is not None:
+            lease.release()
         entry.error = error
         entry.settled.set()
 

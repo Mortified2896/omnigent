@@ -100,6 +100,60 @@ active-work counter and had no external clients. It proves the real package and
 process transition path works in a quiescent disposable instance, not that the
 host can fence or drain a live service safely.
 
+## Server-wide quiescence experiment
+
+This slice adds `omnigent.server.deployment_quiescence` as a process-local,
+fail-closed admission coordinator and a fixed Unix-domain controller protocol.
+The endpoint exists only when an operator explicitly supplies
+`OMNIGENT_DEPLOYMENT_CONTROL_SOCKET` and
+`OMNIGENT_DEPLOYMENT_STATE_ROOT`; it accepts `status`, `fence`, `observe`,
+`verify`, and generation-matched `open_writes` messages. It accepts no command,
+service name, or filesystem path in a request and exposes no browser action.
+When the control socket is configured, a fresh process boots with writes fenced;
+the controller must open that exact boot generation after candidate checks.
+
+Mutating HTTP methods hold admission through handler completion. WebSocket
+connections hold a short handshake lease, and each application message is
+admitted only after the awaited receive returns. A message arriving on a socket
+that was already blocked in `receive()` when the fence closes is rejected
+before it reaches the route. The `/v1/sessions/updates` event stream remains a
+read path. A SQLAlchemy statement boundary adds a transaction lease for
+mutating SQL, and holds it until the checked-out connection returns to its
+pool. A writer with a live admission lease can finish after the fence; a new
+database write without such a parent is rejected. Scheduled fires, deferred
+session-live-state writes, managed launches, and background title tasks use
+their existing counters/registries and leases.
+
+The controller's observation binds a short-lived certificate to the fence and
+process generations, SQLite-backed persistent-state identity and generation,
+content digest, timestamp, and known component observations. SQLite
+`PRAGMA data_version` plus a logical database snapshot detects commits without
+a schema migration. Non-database files contribute content and filesystem
+identity metadata. The external controller must ask the running process to
+re-verify the exact certificate immediately before stopping it; the disposable
+executor also rechecks the persistent-state digest after stop and backup.
+
+This is not yet server-wide proof for a normal connected host/runner
+deployment. An accepted host or runner tunnel is treated as an unacknowledged
+external writer, and even its disconnect does not count as a zero-work
+acknowledgement. A configured host store likewise blocks certificate issuance.
+There is no generic host/runner drain-generation protocol yet. The existing
+runner `app.state.has_active_work()` correctly sees timers, async tools,
+active turns, and parked approvals, but the server cannot query it safely over
+the current tunnel. The local runner timer test exercises that existing
+accounting only; it is not evidence of remote runner quiescence. Unknown or
+unregistered components remain blockers, and this experiment has not proved
+that every non-SQLite file writer in the server is admitted through the same
+coordinator.
+
+A real Uvicorn listener with concurrent HTTP and WebSocket clients now proves
+the blocked-receive race and the in-flight HTTP drain against an Omnigent app
+using its migrated SQLite schema. The test also verifies database-write
+rejection after the fence, state-generation drift detection, and certificate
+invalidation. It runs the server in the pytest process; the existing separate
+disposable A-to-B rehearsal remains the real release-process transition. No
+systemd adapter or live HomeLab path is part of either test.
+
 ## Required activation sequence
 
 A future host adapter must implement the sequence below. The pure plan becoming

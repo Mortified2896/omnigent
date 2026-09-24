@@ -29,6 +29,9 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from omnigent.deployment_quiescence import QuiescenceCertificate
+from omnigent.server.deployment_quiescence import persistent_tree_digest
+
 from . import accepted, core
 
 _TERMINAL_STATUSES = {"committed", "rolled_back", "refused", "recovery_required"}
@@ -245,6 +248,12 @@ class RuntimeAdapter(Protocol):
     def fence_writes(self) -> None:
         """Stop admitting writes while leaving read access available."""
 
+    def quiescence_certificate(self) -> QuiescenceCertificate:
+        """Return fresh exact-generation zero-work evidence after the fence."""
+
+    def verify_quiescence(self, certificate: QuiescenceCertificate) -> None:
+        """Recollect fence, process, work and persistent-state evidence."""
+
     def open_writes(self) -> None:
         """Reopen writes after activation or verified rollback."""
 
@@ -430,19 +439,22 @@ class DisposableExecutor:
                 self._trip(failpoint, "fenced", record)
 
                 self._advance(record, core.ActivationPhase.DRAINING, tx_path, transaction_dir)
-                quiesced = self._wait_for_zero_work(current_release, record)
+                quiesced, certificate = self._wait_for_zero_work(current_release, record)
                 record["quiesced_state_generation"] = quiesced.state_generation
+                record["quiescence_certificate"] = certificate.to_dict()
                 self._advance(record, core.ActivationPhase.QUIESCED, tx_path, transaction_dir)
                 self._trip(failpoint, "quiesced", record)
 
                 # The process is stopped only after every admitted turn has
-                # drained. A stopped process gives the SQLite snapshot a clear
-                # boundary and prevents new local writes during the backup.
+                # drained and the exact certificate is still current. Keep the
+                # evidence check immediately adjacent to the stop operation.
+                self.adapter.verify_quiescence(certificate)
                 self.adapter.stop()
                 if self.adapter.is_running():
                     raise ExecutorError("service remained running after stop")
                 record["service_stopped"] = True
                 self._save_both(record, tx_path, transaction_dir)
+                self._verify_stopped_state(certificate)
                 backup = _create_state_backup(
                     self.layout.state_root,
                     transaction_dir,
@@ -454,6 +466,7 @@ class DisposableExecutor:
                 self._trip(failpoint, "backed_up", record)
 
                 # Repeat byte verification immediately before pointer mutation.
+                self._verify_stopped_state(certificate)
                 candidate_release = self.catalog.load(
                     candidate_sha,
                     expected_digest=candidate_release.identity.acceptance_digest,
@@ -660,7 +673,7 @@ class DisposableExecutor:
         self,
         current: AcceptedRelease,
         record: Mapping[str, Any],
-    ) -> core.RuntimeObservation:
+    ) -> tuple[core.RuntimeObservation, QuiescenceCertificate]:
         deadline = time.monotonic() + self.drain_timeout
         idle_generation: str | None = None
         idle_samples = 0
@@ -688,10 +701,52 @@ class DisposableExecutor:
                 idle_generation = observed.state_generation
                 idle_samples = 1
             if idle_samples >= self.stable_idle_samples:
-                return observed
+                certificate = self.adapter.quiescence_certificate()
+                self._validate_certificate(certificate, observed, record)
+                return observed, certificate
             if time.monotonic() >= deadline:
                 raise DrainTimeout("active work did not reach stable zero before the deadline")
             self.sleep(self.poll_interval)
+
+    def _validate_certificate(
+        self,
+        certificate: QuiescenceCertificate,
+        observed: core.RuntimeObservation,
+        record: Mapping[str, Any],
+    ) -> None:
+        if certificate.fence_generation < 1:
+            raise ExecutorError("quiescence certificate has no fence generation")
+        if certificate.process_generation != observed.process_generation:
+            raise ExecutorError("quiescence certificate belongs to another process")
+        if certificate.process_generation != record["expected"]["current"]["process_generation"]:
+            raise ExecutorError("quiescence certificate process generation changed")
+        if certificate.state_identity != observed.state_identity:
+            raise ExecutorError("quiescence certificate state identity changed")
+        if certificate.state_generation != observed.state_generation:
+            raise ExecutorError("quiescence certificate state generation changed")
+        if not certificate.persistent_state_digest:
+            raise ExecutorError("quiescence certificate has no persistent-state digest")
+        component_names = [component.name for component in certificate.components]
+        if len(component_names) != len(set(component_names)) or not {
+            "admitted_work",
+            "remote_writers",
+        }.issubset(component_names):
+            raise ExecutorError("quiescence certificate is missing required work observations")
+        if any(
+            component.status != "known" or type(component.active_work) is not int
+            for component in certificate.components
+        ):
+            raise ExecutorError("quiescence certificate has an unknown component")
+        if any(component.active_work != 0 for component in certificate.components):
+            raise ExecutorError("quiescence certificate contains active work")
+
+    def _verify_stopped_state(self, certificate: QuiescenceCertificate) -> None:
+        try:
+            digest = persistent_tree_digest(self.layout.state_root)
+        except Exception as exc:
+            raise ExecutorError(f"persistent state could not be revalidated: {exc}") from exc
+        if digest != certificate.persistent_state_digest:
+            raise ExecutorError("persistent state changed after quiescence observation")
 
     def _abort_before_switch(
         self,

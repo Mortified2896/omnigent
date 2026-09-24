@@ -14,6 +14,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field, replace
 
+import pytest
+
+from omnigent.deployment_quiescence import ComponentObservation
+from omnigent.server.deployment_quiescence import DeploymentQuiescence, QuiescenceBlocked
 from omnigent.server.scheduled.scheduler import (
     MISFIRE_GRACE_TIME_S,
     ScheduledTaskScheduler,
@@ -211,6 +215,79 @@ async def test_fire_invokes_on_fire_callback() -> None:
     await scheduler.start()
     await seam.fire_latest()
     assert fired.calls == [(42, "a")]
+
+
+async def test_timer_due_during_fence_is_skipped_and_running_fire_drains() -> None:
+    """A due timer is denied while an already-started fire remains counted."""
+    clock = FakeClock()
+    seam = FakeScheduleSeam()
+    active_started = asyncio.Event()
+    finish_active = asyncio.Event()
+    calls: list[str] = []
+
+    async def on_fire(_workspace_id: int, task_id: str) -> None:
+        calls.append(task_id)
+        if task_id == "active":
+            active_started.set()
+            await finish_active.wait()
+
+    manager = DeploymentQuiescence(
+        required_components=("remote_peer_inventory", "scheduled_fires")
+    )
+    manager.register_component(
+        "remote_peer_inventory",
+        lambda: ComponentObservation("remote_peer_inventory", "none", 0),
+    )
+    scheduler = ScheduledTaskScheduler(
+        store=FakeStore([_task("active"), _task("due")]),
+        on_fire=on_fire,
+        now=clock.now,
+        schedule_call=seam,
+        cancel_call=seam.cancel,
+        admission=manager,
+    )
+    manager.register_component(
+        "scheduled_fires",
+        lambda: ComponentObservation(
+            "scheduled_fires", "scheduler-process", scheduler.active_fire_count
+        ),
+    )
+    await scheduler.start()
+
+    active = asyncio.create_task(scheduler.fire("active"))
+    await asyncio.wait_for(active_started.wait(), timeout=1)
+    manager.fence()
+    with pytest.raises(QuiescenceBlocked, match="scheduled_fires_active:1"):
+        manager.issue_certificate(
+            state_identity="state",
+            state_generation="generation",
+            persistent_state_digest="digest",
+        )
+
+    # The second job's real armed callback becomes due during the fence.
+    clock.advance(60 * 60)
+    await seam.fire_latest()
+    assert calls == ["active"]
+    assert await scheduler.fire("due") is False
+
+    finish_active.set()
+    assert await active is True
+    certificate = manager.issue_certificate(
+        state_identity="state",
+        state_generation="generation",
+        persistent_state_digest="digest",
+    )
+    assert (
+        certificate.components[
+            next(
+                index
+                for index, item in enumerate(certificate.components)
+                if item.name == "scheduled_fires"
+            )
+        ].active_work
+        == 0
+    )
+    scheduler.stop()
 
 
 async def test_rearms_after_firing() -> None:

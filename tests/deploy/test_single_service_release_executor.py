@@ -27,7 +27,9 @@ from deploy.scripts.release_controller.executor import (
     ExecutorError,
 )
 from omnigent.db.utils import get_or_create_engine
+from omnigent.deployment_quiescence import ComponentObservation, QuiescenceCertificate
 from omnigent.entities import MessageData, NewConversationItem
+from omnigent.server.deployment_quiescence import persistent_tree_digest
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 
 SHA_A = "a" * 40
@@ -215,7 +217,9 @@ class FakeRuntime:
         self.conversation_id = conversation_id
         self.process_generation = "pid-7001:start-100"
         self.state_identity = "disposable-state-identity"
-        self.active_work = 0
+        self._activity_generation = 0
+        self._fence_generation = 0
+        self._active_work = 0
         self.active_samples: deque[int] = deque()
         self.fenced = False
         self.running = True
@@ -227,6 +231,7 @@ class FakeRuntime:
         self.candidate_started = False
         self.on_first_idle: Any = None
         self._idle_hook_used = False
+        self.mutate_after_certificate = False
 
     def readiness(self) -> core.ControllerReadiness:
         return core.ControllerReadiness(
@@ -239,6 +244,16 @@ class FakeRuntime:
             rollback_ready=True,
             previous_release_retained=True,
         )
+
+    @property
+    def active_work(self) -> int:
+        return self._active_work
+
+    @active_work.setter
+    def active_work(self, value: int) -> None:
+        if self._active_work != value:
+            self._activity_generation += 1
+        self._active_work = value
 
     def observe(self) -> core.RuntimeObservation:
         if not self.running:
@@ -266,11 +281,52 @@ class FakeRuntime:
 
     def fence_writes(self) -> None:
         self.operations.append("fence")
+        if not self.fenced:
+            self._fence_generation += 1
+            self._activity_generation += 1
         self.fenced = True
 
     def open_writes(self) -> None:
         self.operations.append("open")
+        self._activity_generation += 1
         self.fenced = False
+
+    def quiescence_certificate(self) -> QuiescenceCertificate:
+        observed = self.observe()
+        if not self.fenced or self.active_work != 0:
+            raise RuntimeError("fake runtime is not quiescent")
+        certificate = QuiescenceCertificate(
+            certificate_id=str(uuid4()),
+            fence_generation=self._fence_generation,
+            process_generation=self.process_generation,
+            activity_generation=self._activity_generation,
+            state_identity=self.state_identity,
+            state_generation=str(observed.state_generation),
+            persistent_state_digest=persistent_tree_digest(self.layout.state_root),
+            observed_at=NOW,
+            components=(
+                ComponentObservation("admitted_work", str(self._activity_generation), 0, "known"),
+                ComponentObservation("remote_writers", "none", 0, "known"),
+            ),
+        )
+        if self.mutate_after_certificate:
+            self._activity_generation += 1
+        return certificate
+
+    def verify_quiescence(self, certificate: QuiescenceCertificate) -> None:
+        observed = self.observe()
+        if (
+            not self.fenced
+            or self.active_work != 0
+            or certificate.fence_generation != self._fence_generation
+            or certificate.process_generation != self.process_generation
+            or certificate.activity_generation != self._activity_generation
+            or certificate.state_identity != self.state_identity
+            or certificate.state_generation != observed.state_generation
+            or certificate.persistent_state_digest
+            != persistent_tree_digest(self.layout.state_root)
+        ):
+            raise RuntimeError("fake runtime quiescence evidence changed")
 
     def is_running(self) -> bool:
         return self.running
@@ -327,7 +383,7 @@ def world(
         run_uv_check=False,
         now=lambda: NOW,
         sleep=lambda duration: time.sleep(min(duration, 0.001)),
-        drain_timeout=0.03,
+        drain_timeout=1.0,
         poll_interval=0.001,
     )
     return layout, runtime, executor
@@ -348,12 +404,7 @@ class AcceptedReleaseCatalogForTests:
 
 
 def _state_generation(state_root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(state_root.iterdir()):
-        if path.is_file():
-            digest.update(path.name.encode())
-            digest.update(path.read_bytes())
-    return digest.hexdigest()
+    return persistent_tree_digest(state_root)
 
 
 def _conversation_store(layout: DisposableLayout) -> SqlAlchemyConversationStore:
@@ -459,6 +510,18 @@ def test_work_that_never_drains_refuses_without_state_or_pointer_mutation(world)
     assert _pointer(layout, "current").name == SHA_A
     assert _state_generation(layout.state_root) == before_generation
     assert "stop" not in runtime.operations[len(before_ops) :]
+    assert runtime.fenced is False
+
+
+def test_changed_quiescence_evidence_prevents_executor_stop(world) -> None:
+    """The executor revalidates the server certificate at the stop boundary."""
+    layout, runtime, executor = world
+    runtime.mutate_after_certificate = True
+    transaction = executor.activate(_request(executor))
+
+    assert transaction["status"] == "refused"
+    assert "stop" not in runtime.operations
+    assert _pointer(layout, "current").name == SHA_A
     assert runtime.fenced is False
 
 
