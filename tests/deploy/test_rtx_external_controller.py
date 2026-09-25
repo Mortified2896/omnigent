@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import stat
 import sys
 from pathlib import Path
 
@@ -62,13 +63,14 @@ def fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(external_rtx, "external_controller_guard", lambda: None)
 
     def accepted(path, _digest):
-        if Path(path) == Path("unused") or Path(path).parent.name == NEW:
+        if Path(path).parent.name == NEW:
             return artifact
         if Path(path).parent.name == OLD:
             return old_artifact
         raise Refused("unknown fixture artifact")
 
     monkeypatch.setattr(rtx, "accepted", accepted)
+    monkeypatch.setattr(external_rtx, "_run_as_service", lambda _args: None)
     monkeypatch.setattr(external_rtx, "_health", lambda _: {"status": "ok"})
     monkeypatch.setattr(external_rtx, "_check_headroom", lambda _: None)
 
@@ -94,7 +96,7 @@ def promote(fixture, *, tx_id="external-models-001", expected=OLD):
     return external_rtx.promote(
         target,
         expected,
-        Path("unused"),
+        rtx.ARTIFACTS / NEW / "acceptance-v2.json",
         "c" * 64,
         tx_id,
     )
@@ -154,6 +156,47 @@ def test_candidate_preflight_failure_does_not_stop_target(fixture, monkeypatch):
     assert (digest(target.db), target.current.resolve()) == before
     assert events == []
     assert not list(transactions.glob("*/transaction.json"))
+
+
+def test_promote_repairs_only_candidate_acceptance_permissions_before_stop(fixture, monkeypatch):
+    _, events, _, _ = fixture
+    artifact_root = rtx.ARTIFACTS
+    candidate_directory = artifact_root / NEW
+    candidate_record = candidate_directory / "acceptance-v2.json"
+    original_bytes = candidate_record.read_bytes()
+    artifact_root_mode = stat.S_IMODE(artifact_root.stat().st_mode)
+    previous_directory = artifact_root / OLD
+    previous_directory_mode = stat.S_IMODE(previous_directory.stat().st_mode)
+    previous_record = previous_directory / "acceptance-v2.json"
+    previous_record_mode = stat.S_IMODE(previous_record.stat().st_mode)
+    candidate_directory.chmod(0o700)
+    candidate_record.chmod(0o600)
+
+    permission_checks = []
+
+    def check_as_service(args):
+        permission_checks.append(tuple(args))
+
+    monkeypatch.setattr(external_rtx, "_run_as_service", check_as_service)
+
+    def stop_after_permissions(peer):
+        assert stat.S_IMODE(candidate_directory.stat().st_mode) == 0o755
+        assert stat.S_IMODE(candidate_record.stat().st_mode) == 0o444
+        assert candidate_record.read_bytes() == original_bytes
+        events.append(("stop", peer.instance))
+
+    monkeypatch.setattr(rtx, "stop", stop_after_permissions)
+    result = promote(fixture)
+
+    assert result["status"] == "committed"
+    assert events[0] == ("stop", "O1")
+    assert artifact_root_mode == stat.S_IMODE(artifact_root.stat().st_mode)
+    assert previous_directory_mode == stat.S_IMODE(previous_directory.stat().st_mode)
+    assert previous_record_mode == stat.S_IMODE(previous_record.stat().st_mode)
+    assert permission_checks == [
+        ("runuser", "-u", "hermes", "--", "test", "-x", str(candidate_directory)),
+        ("runuser", "-u", "hermes", "--", "test", "-r", str(candidate_record)),
+    ]
 
 
 def test_recover_marks_preboundary_transaction_refused_without_mutation(fixture, monkeypatch):

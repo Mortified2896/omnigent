@@ -13,6 +13,8 @@ import re
 import shutil
 import signal
 import socket
+import stat
+import subprocess
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -148,6 +150,55 @@ def _auth_overlay_dropin_path(target: Peer) -> Path:
     )
 
 
+def _run_as_service(args: list[str]) -> None:
+    result = subprocess.run(
+        args,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd="/tmp",
+        env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
+    )
+    require(result.returncode == 0, "candidate acceptance is not accessible to hermes")
+
+
+def _ensure_acceptance_readable_by_service(path: Path) -> None:
+    """Expose only the validated candidate record to the hermes service user.
+
+    ``rtx.accepted`` has already verified the immutable, root-owned record and
+    its release.  The server reads that record during startup, so a private
+    0700 artifact directory would make an otherwise valid candidate fail its
+    bounded health check after restart.  Restrict this repair to the one
+    acceptance directory and file; do not chmod the artifact root or release.
+    """
+    require(
+        path.name == "acceptance-v2.json"
+        and path.parent.parent == rtx.ARTIFACTS
+        and _SHA.fullmatch(path.parent.name) is not None,
+        "acceptance path is outside the canonical candidate artifact",
+    )
+    parent = path.parent
+    require(
+        not parent.is_symlink() and stat.S_ISDIR(parent.lstat().st_mode),
+        "candidate acceptance directory must be a real directory",
+    )
+    require(
+        not path.is_symlink() and stat.S_ISREG(path.lstat().st_mode),
+        "candidate acceptance record must be a regular file",
+    )
+
+    parent.chmod(0o755)
+    path.chmod(0o444)
+    require(
+        stat.S_IMODE(parent.lstat().st_mode) == 0o755,
+        "candidate directory mode repair failed",
+    )
+    require(stat.S_IMODE(path.lstat().st_mode) == 0o444, "candidate record mode repair failed")
+    _run_as_service(["runuser", "-u", "hermes", "--", "test", "-x", str(parent)])
+    _run_as_service(["runuser", "-u", "hermes", "--", "test", "-r", str(path)])
+
+
 def promote(
     target: Peer,
     expected_sha: str,
@@ -160,6 +211,9 @@ def promote(
     require(_SHA256.fullmatch(acceptance_digest) is not None, "invalid acceptance digest")
     require(_TX_ID.fullmatch(transaction_id) is not None, "invalid external transaction ID")
     with rtx.locked(rtx.TRANSACTIONS):
+        candidate = rtx.accepted(acceptance_path, acceptance_digest)
+        _ensure_acceptance_readable_by_service(acceptance_path)
+        # The permission-only repair must leave the accepted bytes unchanged.
         candidate = rtx.accepted(acceptance_path, acceptance_digest)
         require(candidate["source_sha"] != expected_sha, "candidate is already active")
         before = rtx.snapshot(target, expected_sha)
