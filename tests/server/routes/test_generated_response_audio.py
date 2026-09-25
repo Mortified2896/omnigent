@@ -13,11 +13,19 @@ from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConver
 from omnigent.stores.generated_response_audio import (
     SqlAlchemyGeneratedResponseAudioStore,
 )
+from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+
+
+class Caller:
+    def get_user_id(self, request):
+        return request.headers.get("x-test-user")
 
 
 def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
     conversations = SqlAlchemyConversationStore(db_uri)
     conversation = conversations.create_conversation()
+    permissions = SqlAlchemyPermissionStore(db_uri)
+    permissions.grant("alice", conversation.id, 1)
     artifact_store = LocalArtifactStore(str(tmp_path / "artifacts"))
     audio_store = SqlAlchemyGeneratedResponseAudioStore(db_uri)
     pending = audio_store.create_pending(conversation.id, "answer-1", "daily-brief")
@@ -40,8 +48,8 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
         conversation_store=conversations,
         artifact_store=artifact_store,
         audio_store=audio_store,
-        auth_provider=None,
-        permission_store=None,
+        auth_provider=Caller(),
+        permission_store=permissions,
     )
     app = FastAPI()
 
@@ -51,7 +59,11 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
 
     app.include_router(router, prefix="/v1")
     with TestClient(app) as client:
-        listing = client.get(f"/v1/sessions/{conversation.id}/generated-audio")
+        url = f"/v1/sessions/{conversation.id}/generated-audio"
+        assert client.get(url).status_code == 401
+        assert client.get(url, headers={"x-test-user": "stranger"}).status_code == 404
+        headers = {"x-test-user": "alice"}
+        listing = client.get(url, headers=headers)
         assert listing.status_code == 200
         assert listing.json()["data"] == [
             {
@@ -63,11 +75,11 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
                 "updated_at": listing.json()["data"][0]["updated_at"],
             }
         ]
-        content = client.get(f"/v1/sessions/{conversation.id}/generated-audio/answer-1/content")
+        content = client.get(
+            f"{url}/answer-1/content",
+            headers=headers,
+        )
         assert content.status_code == 200
         assert content.headers["content-type"] == "audio/wav"
         assert content.content == wav
-        assert (
-            client.get(f"/v1/sessions/{conversation.id}/generated-audio/other/content").status_code
-            == 404
-        )
+        assert client.get(f"{url}/other/content", headers=headers).status_code == 404
