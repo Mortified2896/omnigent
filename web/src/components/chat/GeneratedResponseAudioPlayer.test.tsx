@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GeneratedResponseAudioPlayer } from "./GeneratedResponseAudioPlayer";
 
@@ -26,11 +26,40 @@ function renderPlayer() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   authenticatedFetch.mockReset();
   vi.restoreAllMocks();
 });
 
 describe("GeneratedResponseAudioPlayer", () => {
+  it("discovers audio added more than two minutes after the response mounted", async () => {
+    vi.useFakeTimers();
+    authenticatedFetch.mockResolvedValue(response({ data: [] }));
+    const view = renderPlayer();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    authenticatedFetch.mockResolvedValue(
+      response({
+        data: [
+          {
+            response_id: "response-1",
+            status: "processing",
+            duration_seconds: null,
+            sample_rate: null,
+            error_code: null,
+            updated_at: 1,
+          },
+        ],
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(screen.getByText("Preparing audio…")).toBeInTheDocument();
+    view.unmount();
+  });
+
   it("leaves ordinary responses without an audio row unchanged", async () => {
     authenticatedFetch.mockResolvedValue(response({ data: [] }));
     renderPlayer();

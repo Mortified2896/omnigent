@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/identity";
 
@@ -41,7 +41,6 @@ export function GeneratedResponseAudioPlayer({
   responseId: string;
   pollForNewAudio: boolean;
 }) {
-  const pollUntil = useRef(Date.now() + 120_000).current;
   const listQuery = useQuery({
     queryKey: ["generated-response-audio", sessionId],
     queryFn: () => readGeneratedAudioList(sessionId),
@@ -49,7 +48,9 @@ export function GeneratedResponseAudioPlayer({
     refetchInterval: (query) => {
       const row = query.state.data?.find((item) => item.response_id === responseId);
       if (row?.status === "pending" || row?.status === "processing") return 3_000;
-      if (pollForNewAudio && !row && Date.now() < pollUntil) return 3_000;
+      // A scheduled response can acquire audio after a long generation delay.
+      // Keep checking the latest response while mounted; React Query pauses in background.
+      if (pollForNewAudio && !row) return 30_000;
       return false;
     },
   });
@@ -96,12 +97,15 @@ export function GeneratedResponseAudioPlayer({
     );
   }
   return (
-    <audio
-      className="h-9 w-full max-w-[360px]"
-      controls
-      preload="metadata"
-      src={audioUrl}
-      aria-label="Listen to this response"
-    />
+    <div className="mb-4 flex w-full flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
+      <span className="text-sm font-medium">Listen to this response</span>
+      <audio
+        className="h-9 w-full max-w-[360px]"
+        controls
+        preload="metadata"
+        src={audioUrl}
+        aria-label="Listen to this response"
+      />
+    </div>
   );
 }

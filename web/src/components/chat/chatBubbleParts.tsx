@@ -851,6 +851,17 @@ function AssistantBubble({
         {/* A fold-only bubble takes w-full at the ordinary max-w-3xl cap rather
             than shrink-wrapping to the summary row's ~110px. */}
         <MessageContent className={spansFullColumn || foldOnly ? "w-full" : undefined}>
+          {!foldOnly &&
+            !errorOnly &&
+            bubble.lifecycle === "completed" &&
+            bubble.responseId &&
+            conversationId && (
+              <GeneratedResponseAudioPlayer
+                sessionId={conversationId}
+                responseId={bubble.responseId}
+                pollForNewAudio={isLastAssistant}
+              />
+            )}
           <BlockRenderer
             items={bubble.items}
             sessionStatus={sessionStatus}
@@ -910,13 +921,6 @@ function AssistantBubble({
                   </MessageAction>
                 )}
               </MessageActions>
-            )}
-            {bubble.lifecycle === "completed" && bubble.responseId && conversationId && (
-              <GeneratedResponseAudioPlayer
-                sessionId={conversationId}
-                responseId={bubble.responseId}
-                pollForNewAudio={isLastAssistant}
-              />
             )}
             {ts && (
               <span
