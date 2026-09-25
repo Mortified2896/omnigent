@@ -211,14 +211,19 @@ def promote(
     require(_SHA256.fullmatch(acceptance_digest) is not None, "invalid acceptance digest")
     require(_TX_ID.fullmatch(transaction_id) is not None, "invalid external transaction ID")
     with rtx.locked(rtx.TRANSACTIONS):
-        candidate = rtx.accepted(acceptance_path, acceptance_digest)
+        candidate = rtx.accepted(acceptance_path, acceptance_digest, allow_migration=True)
         _ensure_acceptance_readable_by_service(acceptance_path)
         # The permission-only repair must leave the accepted bytes unchanged.
-        candidate = rtx.accepted(acceptance_path, acceptance_digest)
+        candidate = rtx.accepted(acceptance_path, acceptance_digest, allow_migration=True)
         require(candidate["source_sha"] != expected_sha, "candidate is already active")
         before = rtx.snapshot(target, expected_sha)
         _health(target)
-        require(before["database"]["schema"] == candidate["schema"], "DB schema mismatch")
+        source_schema = (
+            candidate["migration"]["from_schema"]
+            if candidate["schema_policy"] == "rehearsed-migration"
+            else candidate["schema"]
+        )
+        require(before["database"]["schema"] == source_schema, "DB schema mismatch")
         _check_headroom(target)
 
         directory = rtx.TRANSACTIONS / transaction_id
@@ -238,10 +243,13 @@ def promote(
             tx.save(mutation_boundary=True, status="stopping")
             rtx.stop(target)
             tx.save(backup=rtx.backup(target, directory), status="backed_up")
-            rtx.accepted(acceptance_path, acceptance_digest)
+            rtx.accepted(acceptance_path, acceptance_digest, allow_migration=True)
             rtx.switch(target, Path(candidate["runtime"]), tx)
             tx.save(database_mutated=True, status="starting")
             after = rtx.start(target, candidate["source_sha"])
+            require(
+                after["database"]["schema"] == candidate["schema"], "post-start DB schema mismatch"
+            )
             _health(target)
             tx.save(status="committed", target_before=before, target_after=after)
         except BaseException as exc:

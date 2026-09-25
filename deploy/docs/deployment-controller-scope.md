@@ -89,3 +89,19 @@ is: validate the scoped fixes, merge to main, deploy the exact resulting artifac
 and report the live URLs, build identities, checks, and rollback release.
 A draft PR alone is not completion. Authorization does not waive real data-loss
 bugs or enable an unrelated AI scorer, provider change, or chat cleanup.
+
+### External controller: rehearsed schema migrations
+
+The external RTX controller also accepts `rehearsed-migration` artifacts.
+Peer-controlled promotion remains restricted to `same-schema`. Migration
+acceptance must name the exact source and destination Alembic revisions and
+hash a rehearsal record for the same source build. The rehearsal must boot a
+consistent disposable database copy, verify integrity, identity and existing
+rows, and verify backup restoration. Promotion refuses a different live source
+revision before stopping services. It backs up stopped state, lets the accepted
+server perform its normal migration, and verifies the destination revision
+before committing. Any startup or schema failure restores both prior state and
+release. The existing post-commit same-schema rollback command deliberately
+refuses a cross-schema downgrade: restore the recorded stopped-state backup
+under a separately reviewed recovery operation instead; that restoration loses
+writes made after the backup.

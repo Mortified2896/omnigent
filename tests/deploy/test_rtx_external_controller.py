@@ -62,7 +62,7 @@ def fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(rtx, "ARTIFACTS", artifact_root)
     monkeypatch.setattr(external_rtx, "external_controller_guard", lambda: None)
 
-    def accepted(path, _digest):
+    def accepted(path, _digest, **_kwargs):
         if Path(path).parent.name == NEW:
             return artifact
         if Path(path).parent.name == OLD:
@@ -146,7 +146,7 @@ def test_candidate_preflight_failure_does_not_stop_target(fixture, monkeypatch):
     target, events, _, transactions = fixture
     before = digest(target.db), target.current.resolve()
 
-    def refuse(*_):
+    def refuse(*_, **_kwargs):
         raise Refused("artifact mismatch")
 
     monkeypatch.setattr(rtx, "accepted", refuse)
@@ -277,3 +277,49 @@ def test_external_controller_guard_rejects_instance_identity(monkeypatch):
 
     with pytest.raises(Refused, match="instance-controlled"):
         external_rtx.external_controller_guard()
+
+
+def test_rehearsed_migration_checks_source_before_stopping(fixture):
+    _, events, artifact, _ = fixture
+    artifact.update(
+        schema_policy="rehearsed-migration",
+        schema="new-schema",
+        migration={"from_schema": "wrong"},
+    )
+    with pytest.raises(Refused, match="DB schema mismatch"):
+        promote(fixture)
+    assert events == []
+
+
+def test_failed_migration_restores_database_and_release(fixture):
+    target, _, artifact, transactions = fixture
+    artifact.update(
+        schema_policy="rehearsed-migration",
+        schema="new-schema",
+        migration={"from_schema": "schema"},
+    )
+    with pytest.raises(Refused, match="post-start DB schema mismatch"):
+        promote(fixture)
+    assert target.current.resolve().name == OLD
+    assert database_evidence(target)["schema"] == "schema"
+    record = json.loads(next(transactions.glob("*/transaction.json")).read_text())
+    assert record["status"] == "rolled_back"
+
+
+def test_rehearsed_migration_commits_only_expected_schema(fixture, monkeypatch):
+    target, _, artifact, _ = fixture
+    artifact.update(
+        schema_policy="rehearsed-migration",
+        schema="new-schema",
+        migration={"from_schema": "schema"},
+    )
+
+    def migrate(peer, sha):
+        with sqlite3.connect(peer.db) as connection:
+            connection.execute("update alembic_version set version_num='new-schema'")
+        return rtx.snapshot(peer, sha)
+
+    monkeypatch.setattr(rtx, "start", migrate)
+    result = promote(fixture)
+    assert result["status"] == "committed"
+    assert database_evidence(target)["schema"] == "new-schema"
