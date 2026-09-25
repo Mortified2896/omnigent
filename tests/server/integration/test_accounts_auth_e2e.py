@@ -84,6 +84,7 @@ def _build_app(
     )
     from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
     from omnigent.stores.host_store import HostStore
+    from omnigent.stores.project_store.sqlalchemy_store import SqlAlchemyProjectStore
 
     get_or_create_engine(db_url)
     telemetry.init()
@@ -116,8 +117,20 @@ def _build_app(
         comment_store=comment_store,
         permission_store=permission_store,
         host_store=host_store,
+        project_store=SqlAlchemyProjectStore(db_url),
         auth_provider=auth_provider,
         account_store=account_store,
+    )
+
+
+def _enable_trusted_header_overlay(monkeypatch: pytest.MonkeyPatch, target: str = "admin") -> None:
+    """Configure one exact proxy identity for the accounts integration app."""
+    import json
+
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER", "Tailscale-User-Login")
+    monkeypatch.setenv(
+        "OMNIGENT_AUTH_TRUSTED_HEADER_MAP",
+        json.dumps({"Mortified2896@github": target}),
     )
 
 
@@ -291,6 +304,75 @@ async def test_me_without_cookie_returns_401(
     """GET /auth/me without a session cookie returns 401."""
     resp = await client.get("/auth/me")
     assert resp.status_code == 401
+
+
+async def test_trusted_header_overlay_returns_existing_admin_and_preserves_accounts_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mapped HTTP identity is admin; cookies and headerless Bearers still work."""
+    from omnigent.server.oidc import mint_session_cookie
+    from omnigent.stores.project_store.sqlalchemy_store import SqlAlchemyProjectStore
+
+    _enable_trusted_header_overlay(monkeypatch)
+    app = _build_app(tmp_path, monkeypatch, init_admin_password=_ADMIN_PASSWORD)
+    project_store = SqlAlchemyProjectStore(f"sqlite:///{tmp_path}/test.db")
+    existing_project = project_store.create(
+        "a17e0000000000000000000000000001", "Existing admin project", "admin"
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        tailscale = await client.get(
+            "/v1/me", headers={"Tailscale-User-Login": "Mortified2896@github"}
+        )
+        mapped_admin_users = await client.get(
+            "/auth/users", headers={"Tailscale-User-Login": "Mortified2896@github"}
+        )
+        mapped_admin_projects = await client.get(
+            "/v1/projects", headers={"Tailscale-User-Login": "Mortified2896@github"}
+        )
+        missing = await client.get("/v1/me")
+        unknown = await client.get("/v1/me", headers={"Tailscale-User-Login": "unknown@github"})
+        cookies = await _login(client, _ADMIN_USERNAME, _ADMIN_PASSWORD)
+        cookie_auth = await client.get("/v1/me", headers=_cookie_header(cookies))
+        bearer = mint_session_cookie(
+            user_id="admin",
+            cookie_secret=bytes.fromhex(_COOKIE_SECRET_HEX),
+            ttl_hours=8,
+            provider="accounts",
+        )
+        bearer_auth = await client.get("/v1/me", headers={"Authorization": f"Bearer {bearer}"})
+
+    assert tailscale.status_code == 200
+    assert tailscale.json() == {"user_id": "admin", "is_admin": True}
+    assert mapped_admin_users.status_code == 200
+    assert [user["id"] for user in mapped_admin_users.json()["users"]] == ["admin"]
+    assert mapped_admin_projects.status_code == 200
+    assert [project["id"] for project in mapped_admin_projects.json()["data"]] == [
+        existing_project.id
+    ]
+    for response in (missing, unknown):
+        assert response.status_code == 401
+        assert response.json() == {"user_id": None, "login_url": "/login"}
+    assert cookie_auth.status_code == 200
+    assert cookie_auth.json() == {"user_id": "admin", "is_admin": True}
+    assert bearer_auth.status_code == 200
+    assert bearer_auth.json() == {"user_id": "admin", "is_admin": True}
+
+
+async def test_trusted_header_target_must_exist_in_accounts_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A misspelled target fails app startup instead of creating a user."""
+    _enable_trusted_header_overlay(monkeypatch, target="typo-admin")
+
+    with pytest.raises(RuntimeError, match="targets must already exist"):
+        _build_app(tmp_path, monkeypatch, init_admin_password=_ADMIN_PASSWORD)
+
+    from omnigent.server.accounts_store import SqlAlchemyAccountStore
+
+    assert SqlAlchemyAccountStore(f"sqlite:///{tmp_path}/test.db").get_user("typo-admin") is None
 
 
 # ── 5. Invite + register flow ────────────────────────────
