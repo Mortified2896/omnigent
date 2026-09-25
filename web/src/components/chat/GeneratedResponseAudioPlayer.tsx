@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/identity";
+import { getOmnigentHostConfig } from "@/lib/host";
 
 interface GeneratedAudioWire {
   response_id: string;
@@ -55,10 +56,16 @@ export function GeneratedResponseAudioPlayer({
     },
   });
   const entry = listQuery.data?.find((item) => item.response_id === responseId);
+  // Standalone media requests carry same-origin cookies / trusted proxy auth.
+  // Let the browser request byte ranges instead of waiting for a complete WAV.
+  // Embedded hosts still need their custom authenticated transport.
+  const needsBlob = Boolean(getOmnigentHostConfig().fetcher);
+  const contentPath = `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content`;
+  const [mediaFailed, setMediaFailed] = useState(false);
   const contentQuery = useQuery({
     queryKey: ["generated-response-audio-content", sessionId, responseId],
     queryFn: () => readGeneratedAudio(sessionId, responseId),
-    enabled: entry?.status === "ready",
+    enabled: entry?.status === "ready" && needsBlob,
     staleTime: Infinity,
   });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -82,14 +89,14 @@ export function GeneratedResponseAudioPlayer({
       </span>
     );
   }
-  if (entry.status === "failed" || contentQuery.isError) {
+  if (entry.status === "failed" || (needsBlob && contentQuery.isError)) {
     return (
       <span className="text-[11px] text-muted-foreground" role="status">
         Audio unavailable
       </span>
     );
   }
-  if (!audioUrl) {
+  if (needsBlob && !audioUrl) {
     return (
       <span className="text-[11px] text-muted-foreground" role="status">
         Loading audio…
@@ -99,11 +106,22 @@ export function GeneratedResponseAudioPlayer({
   return (
     <div className="mb-4 flex w-full flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
       <span className="text-sm font-medium">Listen to this response</span>
+      {mediaFailed && (
+        <span role="status" className="text-sm text-muted-foreground">
+          Audio could not load. You can{" "}
+          <a className="underline" href={contentPath}>
+            open the recording
+          </a>
+          .
+        </span>
+      )}
       <audio
         className="h-9 w-full max-w-[360px]"
         controls
         preload="metadata"
-        src={audioUrl}
+        src={needsBlob ? (audioUrl ?? undefined) : contentPath}
+        onError={() => setMediaFailed(true)}
+        onCanPlay={() => setMediaFailed(false)}
         aria-label="Listen to this response"
       />
     </div>

@@ -83,3 +83,34 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
         assert content.headers["content-type"] == "audio/wav"
         assert content.content == wav
         assert client.get(f"{url}/other/content", headers=headers).status_code == 404
+
+        content_url = f"{url}/answer-1/content"
+        for byte_range, start, end in [
+            ("bytes=0-1", 0, 1),
+            ("bytes=4-", 4, 11),
+            ("bytes=-4", 8, 11),
+            ("bytes=0-999", 0, 11),
+        ]:
+            partial = client.get(content_url, headers={**headers, "Range": byte_range})
+            assert partial.status_code == 206
+            assert partial.content == wav[start : end + 1]
+            assert partial.headers["content-range"] == f"bytes {start}-{end}/{len(wav)}"
+            assert partial.headers["accept-ranges"] == "bytes"
+            assert int(partial.headers["content-length"]) == end - start + 1
+        for byte_range in ["bytes=99-", "bytes=6-2", "bytes=-0", "bytes=-"]:
+            invalid = client.get(content_url, headers={**headers, "Range": byte_range})
+            assert invalid.status_code == 416
+            assert invalid.headers["content-range"] == f"bytes */{len(wav)}"
+        assert client.get(content_url, headers={"Range": "bytes=0-1"}).status_code == 401
+        assert (
+            client.get(
+                content_url, headers={"x-test-user": "stranger", "Range": "bytes=0-1"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                content_url, headers={**headers, "Range": "bytes=0-1", "If-Range": "stale"}
+            ).status_code
+            == 200
+        )

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GeneratedResponseAudioPlayer } from "./GeneratedResponseAudioPlayer";
 
 const authenticatedFetch = vi.hoisted(() => vi.fn());
+const hostConfig = vi.hoisted(() => ({ fetcher: undefined as undefined | (() => void) }));
+vi.mock("@/lib/host", () => ({ getOmnigentHostConfig: () => hostConfig }));
 vi.mock("@/lib/identity", () => ({ authenticatedFetch }));
 
 function response(body: unknown, blob?: Blob) {
@@ -26,6 +28,7 @@ function renderPlayer() {
 }
 
 afterEach(() => {
+  hostConfig.fetcher = undefined;
   vi.useRealTimers();
   authenticatedFetch.mockReset();
   vi.restoreAllMocks();
@@ -91,7 +94,27 @@ describe("GeneratedResponseAudioPlayer", () => {
     const player = await screen.findByLabelText("Listen to this response");
     expect(player.tagName).toBe("AUDIO");
     expect(player).toHaveAttribute("controls");
-    expect(player).toHaveAttribute("src", "blob:generated-audio");
+    expect(player).toHaveAttribute(
+      "src",
+      "/v1/sessions/session-1/generated-audio/response-1/content",
+    );
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Loading audio…")).not.toBeInTheDocument();
+  });
+
+  it("preserves the authenticated blob transport for embedded hosts", async () => {
+    hostConfig.fetcher = () => undefined;
+    authenticatedFetch
+      .mockResolvedValueOnce(response({ data: [{ response_id: "response-1", status: "ready" }] }))
+      .mockResolvedValueOnce(response({}, new Blob(["wav"], { type: "audio/wav" })));
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:embedded-audio");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    renderPlayer();
+    expect(await screen.findByLabelText("Listen to this response")).toHaveAttribute(
+      "src",
+      "blob:embedded-audio",
+    );
+    expect(authenticatedFetch).toHaveBeenCalledTimes(2);
   });
 
   it("shows only a small failure message when generation failed", async () => {

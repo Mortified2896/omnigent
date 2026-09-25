@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -105,12 +106,31 @@ def register_generated_audio_routes(
                 "Generated response audio artifact not found",
                 code=ErrorCode.NOT_FOUND,
             ) from exc
-        return Response(
-            content=content,
-            media_type="audio/wav",
-            headers={
-                "Content-Disposition": 'inline; filename="response-audio.wav"',
-                "Cache-Control": "private, max-age=31536000, immutable",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        headers = {
+            "Content-Disposition": 'inline; filename="response-audio.wav"',
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+            "Accept-Ranges": "bytes",
+        }
+        # Native mobile players probe and seek with single byte ranges. Always
+        # authorize before returning either content or its size. Unsupported
+        # multipart / range units are ignored, yielding the complete response.
+        size = len(content)
+        range_header = request.headers.get("range", "")
+        match = re.fullmatch(r"bytes=(\d{0,20})-(\d{0,20})", range_header)
+        if match and not request.headers.get("if-range"):
+            first, last = match.groups()
+            start = int(first) if first else max(0, size - int(last or "0"))
+            end = min(int(last), size - 1) if first and last else size - 1
+            if not size or start >= size or end < start or not (first or last):
+                return Response(
+                    status_code=416,
+                    headers={**headers, "Content-Range": f"bytes */{size}"},
+                )
+            return Response(
+                content=content[start : end + 1],
+                status_code=206,
+                media_type="audio/wav",
+                headers={**headers, "Content-Range": f"bytes {start}-{end}/{size}"},
+            )
+        return Response(content=content, media_type="audio/wav", headers=headers)
