@@ -257,3 +257,23 @@ def test_audio_failure_keeps_text_and_next_response_can_generate_audio() -> None
     assert recovered.status == "ready"
     assert recovered.artifact_key in artifact_store.values
     assert artifact_store.values[recovered.artifact_key] == _wav_bytes()
+
+
+def test_synthesis_timeout_covers_long_briefs_below_stale_lease():
+    async def check():
+        coordinator = GeneratedResponseAudioCoordinator(
+            audio_store=SimpleNamespace(
+                recover_processing=lambda: 0, list_pending_all_workspaces=list
+            ),
+            conversation_store=None,
+            artifact_store=None,
+            tts_url="http://tts",
+        )
+        await coordinator.start()
+        try:
+            assert coordinator._client.timeout.read == 1500.0
+            assert coordinator._client.timeout.read < 30 * 60
+        finally:
+            await coordinator.stop()
+
+    asyncio.run(check())

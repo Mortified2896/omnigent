@@ -164,7 +164,9 @@ class GeneratedResponseAudioCoordinator:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=5.0))
+        # Full local 1.7B narration can exceed 15 minutes at the supported
+        # 12k-character ceiling. Stay below the store's 30-minute stale lease.
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(1500.0, connect=5.0))
         await asyncio.to_thread(self.audio_store.recover_processing)
         for row in await asyncio.to_thread(self.audio_store.list_pending_all_workspaces):
             self._queue.put_nowait(
