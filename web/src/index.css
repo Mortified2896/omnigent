@@ -1407,6 +1407,12 @@ aside[aria-label="Workspace"][data-maximized] {
   background-color: color-mix(in oklch, var(--warning) 70%, transparent);
 }
 
+/* Current word in a generated read-along. A CSS Highlight paints the existing
+   Markdown text range without wrapping React-owned nodes or changing layout. */
+::highlight(omnigent-audio-current-word) {
+  background-color: color-mix(in oklch, var(--warning) 28%, transparent);
+}
+
 /* TipTap editor prose styling */
 .tiptap-md-content .ProseMirror {
   outline: none;

@@ -843,6 +843,7 @@ function AssistantBubble({
         from="assistant"
         data-testid="message-bubble"
         data-role="assistant"
+        data-response-id={bubble.responseId}
         data-response-stable-id={bubble.stableId}
         className={
           spansFullColumn ? "max-w-full" : "max-w-3xl min-[2561px]:max-w-[clamp(56rem,30vw,64rem)]"

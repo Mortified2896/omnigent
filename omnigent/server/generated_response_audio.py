@@ -12,11 +12,17 @@ import re
 import wave
 from contextlib import suppress
 from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
 from typing import Any
 
 import httpx
 
 from omnigent.db.db_models import current_workspace_id, workspace_scope
+from omnigent.server.generated_response_audio_timings import (
+    timings_artifact_key,
+    validate_timing_sidecar_bytes,
+)
 
 _logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r"https?://[^\s)\]>]+", re.IGNORECASE)
@@ -132,6 +138,58 @@ def _response_narration(conversation_store: Any, conversation_id: str) -> tuple[
         if getattr(item, "response_id", None) == response_id
     ]
     return response_id, clean_narration("\n".join(chunk for chunk in chunks if chunk))
+
+
+def _response_narration_for_id(
+    conversation_store: Any,
+    conversation_id: str,
+    response_id: str,
+) -> str:
+    """Return normalized spoken text for one exact assistant response."""
+    items_page = conversation_store.list_items(
+        conversation_id=conversation_id,
+        limit=1000,
+        order="desc",
+    )
+    items = getattr(items_page, "data", items_page)
+    chunks = [
+        _assistant_text(item)
+        for item in reversed(items)
+        if getattr(item, "response_id", None) == response_id
+    ]
+    return clean_narration("\n".join(chunk for chunk in chunks if chunk))
+
+
+def _parse_speech_response(content_type: str, content: bytes) -> tuple[bytes, bytes | None]:
+    """Read either the legacy WAV response or an optional WAV/timings bundle."""
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type in {"audio/wav", "audio/x-wav", "audio/wave"}:
+        return content, None
+    if media_type != "multipart/related":
+        raise _PostprocessError("tts_invalid_audio_response")
+    try:
+        envelope = (
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
+            + content
+        )
+        message = BytesParser(policy=policy.default).parsebytes(envelope)
+        if not message.is_multipart():
+            raise ValueError("not multipart")
+        audio: bytes | None = None
+        timings: bytes | None = None
+        for part in message.iter_parts():
+            body = part.get_payload(decode=True)
+            if not isinstance(body, bytes):
+                continue
+            if part.get_content_type() in {"audio/wav", "audio/x-wav", "audio/wave"}:
+                audio = body
+            elif part.get_content_type() == "application/json":
+                timings = body
+        if audio is None:
+            raise ValueError("multipart response has no WAV part")
+        return audio, timings
+    except Exception as exc:
+        raise _PostprocessError("tts_invalid_audio_response") from exc
 
 
 @dataclass(frozen=True)
@@ -284,6 +342,14 @@ class GeneratedResponseAudioCoordinator:
                 )
                 if entry is None:
                     raise _PostprocessError("audio_record_missing")
+                conversation = await asyncio.to_thread(
+                    self.conversation_store.get_conversation,
+                    work.conversation_id,
+                )
+                session_state = getattr(conversation, "session_state", None) or {}
+                backend = session_state.get("scheduled_task_audio_backend", "qwen")
+                if backend not in {"qwen", "kokoro"}:
+                    raise _PostprocessError("tts_invalid_backend")
                 assert self._client is not None
                 result = await self._client.post(
                     f"{self.tts_url}/v1/audio/speech",
@@ -291,6 +357,8 @@ class GeneratedResponseAudioCoordinator:
                         "text": narration,
                         "voice_profile": entry.voice_profile,
                         "language": "English",
+                        "backend": backend,
+                        "include_timings": backend == "kokoro",
                     },
                 )
                 if result.status_code != 200:
@@ -300,8 +368,37 @@ class GeneratedResponseAudioCoordinator:
                     rate = int(result.headers["x-audio-sample-rate"])
                 except (KeyError, ValueError) as exc:
                     raise _PostprocessError("tts_invalid_audio_metadata") from exc
-                payload = result.content
+                payload, timing_payload = _parse_speech_response(
+                    result.headers.get("content-type", "audio/wav"),
+                    result.content,
+                )
                 await asyncio.to_thread(self.artifact_store.put, key, payload)
+                if timing_payload is not None:
+                    try:
+                        sidecar = validate_timing_sidecar_bytes(
+                            timing_payload,
+                            audio=payload,
+                            narration=narration,
+                            expected_duration_seconds=duration,
+                        )
+                    except ValueError as exc:
+                        _logger.warning(
+                            "Ignoring invalid timing metadata for response=%s: %s",
+                            work.response_id,
+                            exc,
+                        )
+                    else:
+                        try:
+                            await asyncio.to_thread(
+                                self.artifact_store.put,
+                                timings_artifact_key(key),
+                                sidecar,
+                            )
+                        except Exception:
+                            _logger.exception(
+                                "Could not store optional timing metadata for response=%s",
+                                work.response_id,
+                            )
                 await asyncio.to_thread(
                     self.audio_store.mark_ready,
                     work.conversation_id,

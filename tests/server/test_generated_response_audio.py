@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json
 import wave
 from types import SimpleNamespace
 
@@ -92,6 +94,9 @@ def test_audio_worker_stores_wav_for_exact_completed_response() -> None:
                 ),
             )
             return SimpleNamespace(data=[item])
+
+        def get_conversation(self, conversation_id: str):
+            return SimpleNamespace(session_state={})
 
     class ArtifactStore:
         def __init__(self) -> None:
@@ -195,6 +200,9 @@ def test_audio_failure_keeps_text_and_next_response_can_generate_audio() -> None
             )
             return SimpleNamespace(data=[item])
 
+        def get_conversation(self, conversation_id: str):
+            return SimpleNamespace(session_state={})
+
     class ArtifactStore:
         def __init__(self) -> None:
             self.values: dict[str, bytes] = {}
@@ -277,3 +285,226 @@ def test_synthesis_timeout_covers_long_briefs_below_stale_lease():
             await coordinator.stop()
 
     asyncio.run(check())
+
+
+def test_optional_timing_bundle_is_stored_beside_audio_and_bound_to_its_hash() -> None:
+    narration = "Hello world."
+    audio = _wav_bytes()
+    timings = {
+        "schema_version": 1,
+        "engine": "kokoro",
+        "audio_sha256": hashlib.sha256(audio).hexdigest(),
+        "narration_sha256": hashlib.sha256(narration.encode()).hexdigest(),
+        "duration_seconds": 0.1,
+        "units": [
+            {
+                "text": "Hello",
+                "narration_start": 0,
+                "narration_end": 5,
+                "start_seconds": 0.0,
+                "end_seconds": 0.05,
+            },
+            {
+                "text": "world",
+                "narration_start": 6,
+                "narration_end": 11,
+                "start_seconds": 0.05,
+                "end_seconds": 0.1,
+            },
+        ],
+    }
+    boundary = "omni-test-boundary"
+    body = (
+        f"--{boundary}\r\nContent-Type: audio/wav\r\n"
+        "Content-Transfer-Encoding: binary\r\n\r\n"
+    ).encode() + audio + (
+        f"\r\n--{boundary}\r\nContent-Type: application/json\r\n"
+        "Content-Transfer-Encoding: binary\r\n\r\n"
+    ).encode() + json.dumps(timings).encode() + f"\r\n--{boundary}--\r\n".encode()
+
+    class AudioStore:
+        row = SimpleNamespace(
+            status="pending",
+            voice_profile="kokoro-heart",
+            artifact_key=None,
+            duration_seconds=None,
+            sample_rate=None,
+            error_code=None,
+        )
+
+        def claim_pending(self, conversation_id: str, response_id: str) -> bool:
+            self.row.status = "processing"
+            return True
+
+        def get(self, conversation_id: str, response_id: str):
+            return self.row
+
+        def mark_ready(self, conversation_id: str, response_id: str, **kwargs: object) -> bool:
+            self.row.status = "ready"
+            for key, value in kwargs.items():
+                setattr(self.row, key, value)
+            return True
+
+        def mark_failed(self, conversation_id: str, response_id: str, error_code: str) -> bool:
+            self.row.status = "failed"
+            self.row.error_code = error_code
+            return True
+
+    class ConversationStore:
+        def list_items(self, **kwargs: object):
+            item = SimpleNamespace(
+                status="completed",
+                response_id="answer-1",
+                data=SimpleNamespace(
+                    role="assistant",
+                    content=[{"type": "output_text", "text": narration}],
+                ),
+            )
+            return SimpleNamespace(data=[item])
+
+        def get_conversation(self, conversation_id: str):
+            return SimpleNamespace(session_state={"scheduled_task_audio_backend": "kokoro"})
+
+    class ArtifactStore:
+        def __init__(self) -> None:
+            self.values: dict[str, bytes] = {}
+
+        def exists(self, key: str) -> bool:
+            return key in self.values
+
+        def get(self, key: str) -> bytes:
+            return self.values[key]
+
+        def put(self, key: str, value: bytes) -> None:
+            self.values[key] = value
+
+    class TtsResponse:
+        status_code = 200
+        headers = {
+            "content-type": f"multipart/related; boundary={boundary}",
+            "x-audio-duration-seconds": "0.1",
+            "x-audio-sample-rate": "24000",
+        }
+        content = body
+
+    class TtsClient:
+        async def post(self, url: str, *, json: dict[str, object]):
+            assert json["backend"] == "kokoro"
+            assert json["include_timings"] is True
+            return TtsResponse()
+
+    audio_store = AudioStore()
+    artifact_store = ArtifactStore()
+    coordinator = GeneratedResponseAudioCoordinator(
+        audio_store=audio_store,
+        conversation_store=ConversationStore(),
+        artifact_store=artifact_store,
+        tts_url="http://tts",
+    )
+    coordinator._client = TtsClient()  # type: ignore[assignment]
+    asyncio.run(coordinator._process(_AudioWork(0, "conversation-5", "answer-1")))
+
+    audio_key = audio_store.row.artifact_key
+    assert audio_store.row.status == "ready"
+    assert artifact_store.values[audio_key] == audio
+    sidecar_key = f"{audio_key}.timings.json"
+    assert sidecar_key in artifact_store.values
+    saved = json.loads(artifact_store.values[sidecar_key])
+    assert saved["audio_sha256"] == hashlib.sha256(audio).hexdigest()
+    assert saved["narration_sha256"] == hashlib.sha256(narration.encode()).hexdigest()
+
+
+def test_invalid_optional_timing_data_does_not_fail_audio() -> None:
+    audio = _wav_bytes()
+    boundary = "omni-bad-timing-boundary"
+    body = (
+        f"--{boundary}\r\nContent-Type: audio/wav\r\n"
+        "Content-Transfer-Encoding: binary\r\n\r\n"
+    ).encode() + audio + (
+        f"\r\n--{boundary}\r\nContent-Type: application/json\r\n"
+        "Content-Transfer-Encoding: binary\r\n\r\n"
+    ).encode() + b"{malformed" + f"\r\n--{boundary}--\r\n".encode()
+
+    class AudioStore:
+        row = SimpleNamespace(
+            status="pending",
+            voice_profile="kokoro-heart",
+            artifact_key=None,
+            duration_seconds=None,
+            sample_rate=None,
+            error_code=None,
+        )
+
+        def claim_pending(self, conversation_id: str, response_id: str) -> bool:
+            self.row.status = "processing"
+            return True
+
+        def get(self, conversation_id: str, response_id: str):
+            return self.row
+
+        def mark_ready(self, conversation_id: str, response_id: str, **kwargs: object) -> bool:
+            self.row.status = "ready"
+            for key, value in kwargs.items():
+                setattr(self.row, key, value)
+            return True
+
+        def mark_failed(self, conversation_id: str, response_id: str, error_code: str) -> bool:
+            self.row.status = "failed"
+            self.row.error_code = error_code
+            return True
+
+    class ConversationStore:
+        def list_items(self, **kwargs: object):
+            item = SimpleNamespace(
+                status="completed",
+                response_id="answer-1",
+                data=SimpleNamespace(
+                    role="assistant",
+                    content=[{"type": "output_text", "text": "Hello world."}],
+                ),
+            )
+            return SimpleNamespace(data=[item])
+
+        def get_conversation(self, conversation_id: str):
+            return SimpleNamespace(session_state={"scheduled_task_audio_backend": "kokoro"})
+
+    class ArtifactStore:
+        def __init__(self) -> None:
+            self.values: dict[str, bytes] = {}
+
+        def exists(self, key: str) -> bool:
+            return key in self.values
+
+        def get(self, key: str) -> bytes:
+            return self.values[key]
+
+        def put(self, key: str, value: bytes) -> None:
+            self.values[key] = value
+
+    class TtsResponse:
+        status_code = 200
+        headers = {
+            "content-type": f"multipart/related; boundary={boundary}",
+            "x-audio-duration-seconds": "0.1",
+            "x-audio-sample-rate": "24000",
+        }
+        content = body
+
+    class TtsClient:
+        async def post(self, url: str, *, json: dict[str, object]):
+            return TtsResponse()
+
+    audio_store = AudioStore()
+    artifact_store = ArtifactStore()
+    coordinator = GeneratedResponseAudioCoordinator(
+        audio_store=audio_store,
+        conversation_store=ConversationStore(),
+        artifact_store=artifact_store,
+        tts_url="http://tts",
+    )
+    coordinator._client = TtsClient()  # type: ignore[assignment]
+    asyncio.run(coordinator._process(_AudioWork(0, "conversation-6", "answer-1")))
+
+    assert audio_store.row.status == "ready"
+    assert artifact_store.values[audio_store.row.artifact_key] == audio
+    assert not any(key.endswith(".timings.json") for key in artifact_store.values)

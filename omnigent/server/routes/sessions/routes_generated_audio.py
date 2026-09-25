@@ -9,6 +9,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.server.generated_response_audio import _response_narration_for_id
+from omnigent.server.generated_response_audio_timings import (
+    timings_artifact_key,
+    validate_timing_sidecar,
+)
 from omnigent.server.auth import LEVEL_READ, AuthProvider
 from omnigent.server.routes._auth_helpers import (
     get_user_id,
@@ -134,3 +139,53 @@ def register_generated_audio_routes(
                 headers={**headers, "Content-Range": f"bytes {start}-{end}/{size}"},
             )
         return Response(content=content, media_type="audio/wav", headers=headers)
+
+    @router.get("/sessions/{session_id}/generated-audio/{response_id}/timings")
+    async def get_generated_audio_timings(
+        request: Request,
+        session_id: str,
+        response_id: str,
+    ) -> Response:
+        await _authorize(request, session_id)
+        store = _require_audio_store()
+        entry = await asyncio.to_thread(store.get, session_id, response_id)
+        if entry is None or entry.status != "ready" or not entry.artifact_key:
+            raise OmnigentError(
+                "Generated response audio timings not found",
+                code=ErrorCode.NOT_FOUND,
+            )
+        try:
+            assert artifact_store is not None
+            audio, payload = await asyncio.gather(
+                asyncio.to_thread(artifact_store.get, entry.artifact_key),
+                asyncio.to_thread(
+                    artifact_store.get,
+                    timings_artifact_key(entry.artifact_key),
+                ),
+            )
+            narration = await asyncio.to_thread(
+                _response_narration_for_id,
+                conversation_store,
+                session_id,
+                response_id,
+            )
+            if not narration:
+                raise ValueError("response narration is unavailable")
+            timings = validate_timing_sidecar(
+                payload,
+                audio=audio,
+                narration=narration,
+                expected_duration_seconds=entry.duration_seconds,
+            )
+        except (KeyError, ValueError) as exc:
+            raise OmnigentError(
+                "Generated response audio timings not found",
+                code=ErrorCode.NOT_FOUND,
+            ) from exc
+        import json
+
+        return Response(
+            content=json.dumps(timings, ensure_ascii=False, separators=(",", ":")),
+            media_type="application/json",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )

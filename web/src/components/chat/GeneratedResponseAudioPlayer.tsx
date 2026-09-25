@@ -1,7 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/identity";
 import { getOmnigentHostConfig } from "@/lib/host";
+import {
+  activeReadAlongUnitIndex,
+  clearReadAlongHighlight,
+  mapReadAlongRanges,
+  setReadAlongHighlight,
+  type ReadAlongUnit,
+} from "./readAlongHighlight";
 
 interface GeneratedAudioWire {
   response_id: string;
@@ -14,6 +21,16 @@ interface GeneratedAudioWire {
 
 interface GeneratedAudioListWire {
   data: GeneratedAudioWire[];
+}
+
+interface GeneratedAudioTimingsWire {
+  schema_version: 1;
+  engine: string;
+  audio_sha256: string;
+  narration_sha256: string;
+  duration_seconds: number;
+  position_unit: "unicode-code-point";
+  units: ReadAlongUnit[];
 }
 
 async function readGeneratedAudioList(sessionId: string): Promise<GeneratedAudioWire[]> {
@@ -30,6 +47,17 @@ async function readGeneratedAudio(sessionId: string, responseId: string): Promis
   );
   if (!response.ok) throw new Error("Could not load generated audio");
   return response.blob();
+}
+
+async function readGeneratedAudioTimings(
+  sessionId: string,
+  responseId: string,
+): Promise<GeneratedAudioTimingsWire> {
+  const response = await authenticatedFetch(
+    `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/timings`,
+  );
+  if (!response.ok) throw new Error("Generated audio timings are unavailable");
+  return (await response.json()) as GeneratedAudioTimingsWire;
 }
 
 /** Compact, response-keyed audio controls; no row means no transcript change. */
@@ -56,6 +84,13 @@ export function GeneratedResponseAudioPlayer({
     },
   });
   const entry = listQuery.data?.find((item) => item.response_id === responseId);
+  const timingsQuery = useQuery({
+    queryKey: ["generated-response-audio-timings", sessionId, responseId],
+    queryFn: () => readGeneratedAudioTimings(sessionId, responseId),
+    enabled: entry?.status === "ready",
+    staleTime: Infinity,
+    retry: false,
+  });
   // Standalone media requests carry same-origin cookies / trusted proxy auth.
   // Let the browser request byte ranges instead of waiting for a complete WAV.
   // Embedded hosts still need their custom authenticated transport.
@@ -69,6 +104,7 @@ export function GeneratedResponseAudioPlayer({
     staleTime: Infinity,
   });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     if (!contentQuery.data) {
@@ -79,6 +115,53 @@ export function GeneratedResponseAudioPlayer({
     setAudioUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [contentQuery.data]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    const bubble = audio?.closest<HTMLElement>("[data-response-id]");
+    const timings = timingsQuery.data;
+    if (!audio || !bubble || bubble.dataset.responseId !== responseId || !timings?.units?.length) {
+      return undefined;
+    }
+    const sections = bubble.querySelectorAll<HTMLElement>('[data-testid="assistant-text-section"]');
+    const mappedRanges = mapReadAlongRanges(sections, timings.units);
+    const rangeByUnit = new Map(mappedRanges.map(({ unitIndex, range }) => [unitIndex, range]));
+    const owner = `${sessionId}:${responseId}`;
+    let lastUnitIndex = -2;
+    clearReadAlongHighlight(owner);
+
+    const updateHighlight = (force = false) => {
+      const unitIndex = activeReadAlongUnitIndex(timings.units, audio.currentTime);
+      if (!force && unitIndex === lastUnitIndex) return;
+      lastUnitIndex = unitIndex;
+      setReadAlongHighlight(owner, rangeByUnit.get(unitIndex) ?? null);
+    };
+    const handlePlay = () => updateHighlight(true);
+    const handleTimeUpdate = () => {
+      if (!audio.paused) updateHighlight();
+    };
+    const handleSeeking = () => updateHighlight(true);
+    const handleEnded = () => {
+      lastUnitIndex = -2;
+      clearReadAlongHighlight(owner);
+    };
+
+    audio.addEventListener("play", handlePlay);
+    audio.addEventListener("timeupdate", handleTimeUpdate);
+    audio.addEventListener("seeking", handleSeeking);
+    audio.addEventListener("seeked", handleSeeking);
+    audio.addEventListener("ended", handleEnded);
+    if (!audio.paused) updateHighlight(true);
+
+    return () => {
+      audio.removeEventListener("play", handlePlay);
+      audio.removeEventListener("timeupdate", handleTimeUpdate);
+      audio.removeEventListener("seeking", handleSeeking);
+      audio.removeEventListener("seeked", handleSeeking);
+      audio.removeEventListener("ended", handleEnded);
+      clearReadAlongHighlight(owner);
+    };
+  }, [responseId, sessionId, timingsQuery.data]);
 
   if (listQuery.isError) return null;
   if (!entry) return null;
@@ -116,6 +199,7 @@ export function GeneratedResponseAudioPlayer({
         </span>
       )}
       <audio
+        ref={audioRef}
         className="h-9 w-full max-w-[360px]"
         controls
         preload="metadata"
