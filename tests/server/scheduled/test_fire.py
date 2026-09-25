@@ -1556,3 +1556,24 @@ async def test_policy_create_failure_does_not_fail_fire() -> None:
     assert len(conv_store.created) == 1
     assert len(launched) == 1
     assert store.runs[0]["status"] == "running"
+
+
+@pytest.mark.parametrize(
+    "agent,expected",
+    [("codex-native-ui", "codex-direct"), ("claude-native-ui", None), (None, None)],
+)
+def test_scheduled_access_lane_is_codex_only(monkeypatch, agent, expected):
+    from omnigent.server.scheduled.fire import _scheduled_codex_access_lane
+
+    monkeypatch.setenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "codex-direct")
+    assert _scheduled_codex_access_lane(agent) == expected
+
+
+def test_scheduled_access_lane_default_and_invalid(monkeypatch):
+    from omnigent.server.scheduled.fire import _scheduled_codex_access_lane
+
+    monkeypatch.delenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", raising=False)
+    assert _scheduled_codex_access_lane("codex-native-ui") is None
+    monkeypatch.setenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "typo")
+    with pytest.raises(ValueError, match="Invalid"):
+        _scheduled_codex_access_lane("codex-native-ui")

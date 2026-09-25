@@ -105,3 +105,10 @@ release. The existing post-commit same-schema rollback command deliberately
 refuses a cross-schema downgrade: restore the recorded stopped-state backup
 under a separately reviewed recovery operation instead; that restoration loses
 writes made after the backup.
+
+Scheduled native Codex runs can set `OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE`
+to an existing supported lane. This stamps the normal conversation access-lane
+label before launch and does not change interactive sessions or host defaults.
+The RTX Daily Brief uses `codex-direct` for vendor-native live search. A catalog
+model ID by itself does not select transport; the gateway and direct catalog
+may advertise the same ID.
