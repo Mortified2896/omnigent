@@ -137,3 +137,123 @@ def test_audio_worker_stores_wav_for_exact_completed_response() -> None:
     assert audio_store.row.artifact_key in artifact_store.values
     assert artifact_store.values[audio_store.row.artifact_key] == _wav_bytes()
     assert audio_store.row.sample_rate == 24_000
+
+
+def test_audio_failure_keeps_text_and_next_response_can_generate_audio() -> None:
+    class AudioStore:
+        def __init__(self) -> None:
+            self.rows: dict[tuple[str, str], SimpleNamespace] = {}
+
+        def create_pending(self, conversation_id: str, response_id: str, voice_profile: str):
+            key = (conversation_id, response_id)
+            if key not in self.rows:
+                self.rows[key] = SimpleNamespace(
+                    status="pending",
+                    voice_profile=voice_profile,
+                    artifact_key=None,
+                    duration_seconds=None,
+                    sample_rate=None,
+                    error_code=None,
+                )
+            return self.rows[key]
+
+        def claim_pending(self, conversation_id: str, response_id: str) -> bool:
+            row = self.rows[(conversation_id, response_id)]
+            if row.status != "pending":
+                return False
+            row.status = "processing"
+            return True
+
+        def get(self, conversation_id: str, response_id: str):
+            return self.rows.get((conversation_id, response_id))
+
+        def mark_failed(self, conversation_id: str, response_id: str, error_code: str) -> bool:
+            row = self.rows[(conversation_id, response_id)]
+            row.status = "failed"
+            row.error_code = error_code
+            return True
+
+        def mark_ready(self, conversation_id: str, response_id: str, **kwargs: object) -> bool:
+            row = self.rows[(conversation_id, response_id)]
+            row.status = "ready"
+            for key, value in kwargs.items():
+                setattr(row, key, value)
+            return True
+
+    class ConversationStore:
+        response_id = "answer-1"
+        text = "This written response remains available when audio fails."
+
+        def list_items(self, **kwargs: object):
+            item = SimpleNamespace(
+                status="completed",
+                response_id=self.response_id,
+                data=SimpleNamespace(
+                    role="assistant",
+                    content=[{"type": "output_text", "text": self.text}],
+                ),
+            )
+            return SimpleNamespace(data=[item])
+
+    class ArtifactStore:
+        def __init__(self) -> None:
+            self.values: dict[str, bytes] = {}
+
+        def exists(self, key: str) -> bool:
+            return key in self.values
+
+        def get(self, key: str) -> bytes:
+            return self.values[key]
+
+        def put(self, key: str, payload: bytes) -> None:
+            self.values[key] = payload
+
+    class TtsResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+            self.headers = {
+                "x-audio-duration-seconds": "0.1",
+                "x-audio-sample-rate": "24000",
+            }
+            self.content = _wav_bytes()
+
+    class TtsClient:
+        def __init__(self) -> None:
+            self.statuses = [503, 200]
+
+        async def post(self, url: str, *, json: dict[str, str]):
+            assert url == "http://tts/v1/audio/speech"
+            return TtsResponse(self.statuses.pop(0))
+
+    audio_store = AudioStore()
+    conversation_store = ConversationStore()
+    artifact_store = ArtifactStore()
+    client = TtsClient()
+    coordinator = GeneratedResponseAudioCoordinator(
+        audio_store=audio_store,
+        conversation_store=conversation_store,
+        artifact_store=artifact_store,
+        tts_url="http://tts",
+    )
+    coordinator._client = client  # type: ignore[assignment]
+
+    audio_store.create_pending("conversation-4", "answer-1", "daily-brief")
+    asyncio.run(coordinator._process(_AudioWork(0, "conversation-4", "answer-1")))
+
+    failed = audio_store.get("conversation-4", "answer-1")
+    assert failed.status == "failed"
+    assert failed.error_code == "tts_http_503"
+    assert conversation_store.text == "This written response remains available when audio fails."
+    assert artifact_store.values == {}
+    # A failed row for the same response stays terminal. A later scheduled
+    # response gets its own row and can generate audio when TTS recovers.
+    failed_retry = audio_store.create_pending("conversation-4", "answer-1", "daily-brief")
+    assert failed_retry.status == "failed"
+    conversation_store.response_id = "answer-2"
+    audio_store.create_pending("conversation-4", "answer-2", "daily-brief")
+    asyncio.run(coordinator._process(_AudioWork(0, "conversation-4", "answer-2")))
+
+    recovered = audio_store.get("conversation-4", "answer-2")
+    assert recovered.status == "ready"
+    assert recovered.artifact_key in artifact_store.values
+    assert artifact_store.values[recovered.artifact_key] == _wav_bytes()

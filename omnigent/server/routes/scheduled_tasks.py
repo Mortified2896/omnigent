@@ -365,6 +365,11 @@ def create_scheduled_tasks_router(
         body: CreateScheduledTaskRequest,
     ) -> dict[str, Any]:
         """Create a scheduled task and arm it on the live scheduler."""
+        if not execution_enabled:
+            raise OmnigentError(
+                "scheduled task execution is disabled on this instance",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
         owner = _owner(request)
         if body.audio_enabled and not body.audio_voice_profile:
             raise OmnigentError(
