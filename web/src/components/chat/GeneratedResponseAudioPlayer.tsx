@@ -95,13 +95,17 @@ export function GeneratedResponseAudioPlayer({
   // Let the browser request byte ranges instead of waiting for a complete WAV.
   // Embedded hosts still need their custom authenticated transport.
   const needsBlob = Boolean(getOmnigentHostConfig().fetcher);
+  const [forceBlobFallback, setForceBlobFallback] = useState(false);
+  const useBlobTransport = needsBlob || forceBlobFallback;
   const contentPath = `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content`;
   const [mediaFailed, setMediaFailed] = useState(false);
+  const blobFallbackPlayback = useRef<{ position: number; resume: boolean } | null>(null);
   const contentQuery = useQuery({
     queryKey: ["generated-response-audio-content", sessionId, responseId],
     queryFn: () => readGeneratedAudio(sessionId, responseId),
-    enabled: entry?.status === "ready" && needsBlob,
+    enabled: entry?.status === "ready" && useBlobTransport,
     staleTime: Infinity,
+    retry: false,
   });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -172,14 +176,25 @@ export function GeneratedResponseAudioPlayer({
       </span>
     );
   }
-  if (entry.status === "failed" || (needsBlob && contentQuery.isError)) {
+  if (entry.status === "failed") {
     return (
       <span className="text-[11px] text-muted-foreground" role="status">
         Audio unavailable
       </span>
     );
   }
-  if (needsBlob && !audioUrl) {
+  if (useBlobTransport && contentQuery.isError) {
+    return (
+      <span className="text-[11px] text-muted-foreground" role="status">
+        Audio could not load. You can{" "}
+        <a className="underline" href={contentPath}>
+          open the recording
+        </a>
+        .
+      </span>
+    );
+  }
+  if (useBlobTransport && !audioUrl) {
     return (
       <span className="text-[11px] text-muted-foreground" role="status">
         Loading audio…
@@ -203,8 +218,34 @@ export function GeneratedResponseAudioPlayer({
         className="h-9 w-full max-w-[360px]"
         controls
         preload="metadata"
-        src={needsBlob ? (audioUrl ?? undefined) : contentPath}
-        onError={() => setMediaFailed(true)}
+        src={useBlobTransport ? (audioUrl ?? undefined) : contentPath}
+        onError={(event) => {
+          if (!useBlobTransport) {
+            const audio = event.currentTarget;
+            blobFallbackPlayback.current = {
+              position: audio.currentTime,
+              resume: !audio.paused && !audio.ended,
+            };
+            setMediaFailed(false);
+            setForceBlobFallback(true);
+            return;
+          }
+          setMediaFailed(true);
+        }}
+        onLoadedMetadata={() => {
+          const pending = blobFallbackPlayback.current;
+          const audio = audioRef.current;
+          if (!pending || !audio) return;
+          blobFallbackPlayback.current = null;
+          if (
+            Number.isFinite(pending.position) &&
+            pending.position > 0 &&
+            (!Number.isFinite(audio.duration) || pending.position < audio.duration)
+          ) {
+            audio.currentTime = pending.position;
+          }
+          if (pending.resume) void audio.play().catch(() => undefined);
+        }}
         onCanPlay={() => setMediaFailed(false)}
         aria-label="Listen to this response"
       />
