@@ -4178,6 +4178,9 @@ def server(
         SqlAlchemyConversationStore,
     )
     from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
+    from omnigent.stores.generated_response_audio import (
+        SqlAlchemyGeneratedResponseAudioStore,
+    )
     from omnigent.stores.policy_store.sqlalchemy_store import SqlAlchemyPolicyStore
 
     cfg = _load_config(config_path)
@@ -4224,6 +4227,7 @@ def server(
     policy_store = SqlAlchemyPolicyStore(db_uri)
     permission_store = SqlAlchemyPermissionStore(db_uri)
     scheduled_task_store = SqlAlchemyScheduledTaskStore(db_uri)
+    generated_response_audio_store = SqlAlchemyGeneratedResponseAudioStore(db_uri)
     project_store = SqlAlchemyProjectStore(db_uri)
     # The advisor store shares the normal application engine; its table is
     # installed by the standard Alembic chain (never create_all here).
@@ -4396,6 +4400,7 @@ def server(
         runner_tunnel_tokens=_runner_tunnel_tokens,
         permission_store=permission_store,
         scheduled_task_store=scheduled_task_store,
+        generated_response_audio_store=generated_response_audio_store,
         project_store=project_store,
         model_advisor_store=model_advisor_store,
         auth_provider=auth_provider,

@@ -48,6 +48,19 @@ def test_next_fire_daily() -> None:
     assert got == _dt(2026, 3, 11, 9, 0)
 
 
+def test_daily_07_hong_kong_occurrences_convert_to_utc() -> None:
+    hkt = ZoneInfo("Asia/Hong_Kong")
+    rule = "FREQ=DAILY;BYHOUR=7;BYMINUTE=0"
+
+    first = get_next_fire_time(rule, _dt(2026, 9, 24, 22, 59), hkt)
+    second = get_next_fire_time(rule, _dt(2026, 9, 24, 23, 1), hkt)
+
+    assert first == _dt(2026, 9, 25, 7, 0, tz=hkt)
+    assert first.astimezone(UTC) == _dt(2026, 9, 24, 23, 0)
+    assert second == _dt(2026, 9, 26, 7, 0, tz=hkt)
+    assert second.astimezone(UTC) == _dt(2026, 9, 25, 23, 0)
+
+
 def test_next_fire_weekly_weekdays_rolls_over_weekend() -> None:
     # 2026-01-03 is a Saturday; the next weekday fire is Monday the 5th.
     got = get_next_fire_time(

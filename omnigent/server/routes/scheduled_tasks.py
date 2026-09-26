@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Query, Request
@@ -57,6 +57,9 @@ class CreateScheduledTaskRequest(BaseModel):
     # Native-harness permission mode (Claude Code), e.g. "acceptEdits". The fire
     # path derives the runner's --permission-mode launch arg from it.
     permission_mode: str | None = None
+    codex_web_search_mode: Literal["live", "cached", "indexed", "disabled"] | None = None
+    audio_enabled: bool = False
+    audio_voice_profile: str | None = Field(default=None, min_length=1, max_length=64)
     max_cost_usd: float | None = Field(default=None, gt=0)
     # Optional: no PINNED host/workspace. When both are unset the fire path
     # resolves the owner's online host at fire time and defaults the workspace to
@@ -85,6 +88,9 @@ class UpdateScheduledTaskRequest(BaseModel):
     model_override: str | None = None
     reasoning_effort: str | None = None
     permission_mode: str | None = None
+    codex_web_search_mode: Literal["live", "cached", "indexed", "disabled"] | None = None
+    audio_enabled: bool | None = None
+    audio_voice_profile: str | None = Field(default=None, min_length=1, max_length=64)
     max_cost_usd: float | None = Field(default=None, gt=0)  # null clears the cap
     workspace: str | None = Field(default=None, min_length=1)
     host_id: str | None = Field(default=None, min_length=1)
@@ -136,6 +142,9 @@ def _to_response(
         "model_override": task.model_override,
         "reasoning_effort": task.reasoning_effort,
         "permission_mode": task.permission_mode,
+        "codex_web_search_mode": task.codex_web_search_mode,
+        "audio_enabled": task.audio_enabled,
+        "audio_voice_profile": task.audio_voice_profile,
         "max_cost_usd": task.max_cost_usd,
         "workspace": task.workspace,
         "host_id": task.host_id,
@@ -185,6 +194,47 @@ def _validate_timezone_or_400(timezone: str) -> None:
         ) from exc
 
 
+async def _validate_codex_search_mode_agent(
+    mode: str | None,
+    *,
+    user_id: str | None,
+    agent_id: str,
+    agent_store: AgentStore,
+    conversation_store: ConversationStore,
+    permission_store: PermissionStore | None,
+    agent_cache: Any | None,
+) -> None:
+    """Ensure a native Codex setting is not persisted on another harness."""
+    if mode is None or agent_cache is None:
+        return
+    agent = await validate_session_agent(
+        user_id=user_id,
+        agent_id=agent_id,
+        agent_store=agent_store,
+        permission_store=permission_store,
+        conversation_store=conversation_store,
+    )
+    if agent is None or getattr(agent, "bundle_location", None) is None:
+        return
+    from omnigent.harness_aliases import canonicalize_harness
+
+    try:
+        loaded = await asyncio.to_thread(agent_cache.load, agent.id, agent.bundle_location)
+        executor = getattr(loaded.spec, "executor", None)
+        raw_harness = None
+        if executor is not None:
+            raw_harness = executor.config.get("harness") or executor.type
+        harness = canonicalize_harness(raw_harness) or raw_harness
+    except Exception:
+        _logger.exception("Failed to load agent spec while validating Codex web search")
+        return
+    if harness != "codex-native":
+        raise OmnigentError(
+            "codex_web_search_mode is only supported for codex-native agents",
+            code=ErrorCode.INVALID_INPUT,
+        )
+
+
 def create_scheduled_tasks_router(
     store: ScheduledTaskStore,
     *,
@@ -193,6 +243,7 @@ def create_scheduled_tasks_router(
     permission_store: PermissionStore | None = None,
     agent_cache: Any | None = None,
     auth_provider: AuthProvider | None = None,
+    execution_enabled: bool = True,
 ) -> APIRouter:
     """Build the scheduled-tasks router.
 
@@ -314,10 +365,29 @@ def create_scheduled_tasks_router(
         body: CreateScheduledTaskRequest,
     ) -> dict[str, Any]:
         """Create a scheduled task and arm it on the live scheduler."""
+        if not execution_enabled:
+            raise OmnigentError(
+                "scheduled task execution is disabled on this instance",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
         owner = _owner(request)
+        if body.audio_enabled and not body.audio_voice_profile:
+            raise OmnigentError(
+                "audio_voice_profile is required when audio_enabled is true",
+                code=ErrorCode.INVALID_INPUT,
+            )
         _validate_rrule_or_400(body.rrule)
         _validate_timezone_or_400(body.timezone)
         permission_mode = validate_session_permission_mode(body.permission_mode)
+        await _validate_codex_search_mode_agent(
+            body.codex_web_search_mode,
+            user_id=None if owner == RESERVED_USER_LOCAL else owner,
+            agent_id=body.agent_id,
+            agent_store=agent_store,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            agent_cache=agent_cache,
+        )
         workspace, model_override, reasoning_effort = await _validate_launch_inputs(
             request,
             owner=owner,
@@ -339,6 +409,9 @@ def create_scheduled_tasks_router(
             model_override=model_override,
             reasoning_effort=reasoning_effort,
             permission_mode=permission_mode,
+            codex_web_search_mode=body.codex_web_search_mode,
+            audio_enabled=body.audio_enabled,
+            audio_voice_profile=body.audio_voice_profile,
             max_cost_usd=body.max_cost_usd,
             workspace=workspace,
             host_id=body.host_id,
@@ -471,6 +544,11 @@ def create_scheduled_tasks_router(
         owner = _owner(request)
         owner_id = None if owner == RESERVED_USER_LOCAL else owner
         task = _require_owned(scheduled_task_id, owner_id)
+        if not execution_enabled:
+            raise OmnigentError(
+                "scheduled task execution is disabled on this instance",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
         run_now = getattr(request.app.state, "scheduled_task_run_now", None)
         if run_now is None:
             raise OmnigentError(
@@ -502,6 +580,16 @@ def create_scheduled_tasks_router(
         if body.timezone is not None:
             _validate_timezone_or_400(body.timezone)
         fields = body.model_dump(exclude_unset=True)
+        audio_enabled = fields.get("audio_enabled", existing.audio_enabled)
+        audio_voice_profile = fields.get(
+            "audio_voice_profile",
+            existing.audio_voice_profile,
+        )
+        if audio_enabled and not audio_voice_profile:
+            raise OmnigentError(
+                "audio_voice_profile is required when audio_enabled is true",
+                code=ErrorCode.INVALID_INPUT,
+            )
         target_agent_id = fields.get("agent_id") or existing.agent_id
         agent_changed = target_agent_id != existing.agent_id
         if agent_changed:
@@ -509,8 +597,23 @@ def create_scheduled_tasks_router(
             # it: a model id is provider-bound and permission_mode is Claude-only.
             # Clear whichever the caller did not resend so a switched task never
             # fires the new harness with the old one's flags.
-            for stale in ("model_override", "reasoning_effort", "permission_mode"):
+            for stale in (
+                "model_override",
+                "reasoning_effort",
+                "permission_mode",
+                "codex_web_search_mode",
+            ):
                 fields.setdefault(stale, None)
+        search_mode = fields.get("codex_web_search_mode", existing.codex_web_search_mode)
+        await _validate_codex_search_mode_agent(
+            search_mode,
+            user_id=owner_id,
+            agent_id=target_agent_id,
+            agent_store=agent_store,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            agent_cache=agent_cache,
+        )
         if {"model_override", "reasoning_effort"}.intersection(fields):
             model_override, reasoning_effort = validate_session_model_metadata(
                 model_override=fields.get("model_override", existing.model_override),

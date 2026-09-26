@@ -2115,6 +2115,7 @@ class SessionResponse(BaseModel):
     host_online: bool | None = None
     host_resumable: bool = False
     reasoning_effort: str | None = None
+    codex_web_search_mode: Literal["live", "cached", "indexed", "disabled"] | None = None
     items: list[ConversationItem] = Field(default_factory=list)
     permission_level: int | None = None
     sub_agent_name: str | None = None

@@ -61,6 +61,9 @@ def test_scheduled_tasks_columns(db_engine: Engine) -> None:
         "model_override",
         "reasoning_effort",
         "permission_mode",
+        "codex_web_search_mode",
+        "audio_enabled",
+        "audio_voice_profile",
         "max_cost_usd",
         "workspace",
         "base_branch",
@@ -89,6 +92,32 @@ def test_scheduled_task_runs_columns(db_engine: Engine) -> None:
         "finished_at",
         "error",
         "error_code",
+    }
+
+
+def test_generated_response_audio_schema(db_engine: Engine) -> None:
+    """Generated audio is keyed by workspace, conversation, and response."""
+    inspector = sa.inspect(db_engine)
+    columns = {column["name"] for column in inspector.get_columns("generated_response_audio")}
+    assert columns == {
+        "workspace_id",
+        "conversation_id",
+        "response_id",
+        "status",
+        "voice_profile",
+        "artifact_key",
+        "duration_seconds",
+        "sample_rate",
+        "error_code",
+        "updated_at",
+    }
+    assert inspector.get_pk_constraint("generated_response_audio")["constrained_columns"] == [
+        "workspace_id",
+        "conversation_id",
+        "response_id",
+    ]
+    assert "ix_generated_response_audio_conversation" in {
+        index["name"] for index in inspector.get_indexes("generated_response_audio")
     }
 
 

@@ -1,5 +1,8 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import type * as Identity from "@/lib/identity";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatStore } from "@/store/chatStore";
 import type { Bubble } from "@/lib/renderItems";
 import type { SessionLiveness } from "@/hooks/useSessionLiveness";
@@ -9,6 +12,19 @@ import {
   RunnerStartingIndicator,
   SandboxFailedIndicator,
 } from "./ChatIndicators";
+
+const mockedAuthenticatedFetch = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof Identity>()),
+  authenticatedFetch: mockedAuthenticatedFetch,
+}));
+
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 // Render-level coverage for the chat surface's status bands and bubble
 // dispatcher. These exercise the branches that the pure-helper tests can't:
@@ -21,6 +37,7 @@ afterEach(() => {
   // so a leftover launch band can't bleed into the next test.
   useChatStore.setState({ sandboxStatus: null });
   cleanup();
+  mockedAuthenticatedFetch.mockReset();
 });
 
 describe("SandboxFailedIndicator", () => {
@@ -164,6 +181,10 @@ describe("BubbleView dispatch", () => {
     // Explicitly settled: the fold-only cases below turn on `possiblyLive`
     // being false, so they must not ride on the store's default status.
     useChatStore.setState({ conversationId: "conv_test", sessionStatus: "idle" });
+    mockedAuthenticatedFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [] }),
+    });
   });
 
   type AssistantBubble = Extract<Bubble, { kind: "assistant" }>;

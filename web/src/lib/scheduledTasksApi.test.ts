@@ -37,6 +37,9 @@ const TASK_WIRE = {
   updated_at: 1_700_000_100,
   model_override: null,
   reasoning_effort: null,
+  codex_web_search_mode: "live",
+  audio_enabled: true,
+  audio_voice_profile: "daily-brief",
   workspace: null,
   host_id: null,
   state: "active",
@@ -70,6 +73,9 @@ describe("listScheduledTasks", () => {
       state: "active",
       hostId: null,
       workspace: null,
+      codexWebSearchMode: "live",
+      audioEnabled: true,
+      audioVoiceProfile: "daily-brief",
     });
   });
 
@@ -161,6 +167,24 @@ describe("createScheduledTask", () => {
     expect(body.host_id).toBe("host_1");
     expect(body.workspace).toBe("/home/me/repo");
   });
+
+  it("persists task-scoped live search and audio preferences", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(TASK_WIRE));
+    await createScheduledTask({
+      name: "daily brief",
+      prompt: "brief",
+      rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+      agentId: "codex-native",
+      codexWebSearchMode: "live",
+      audioEnabled: true,
+      audioVoiceProfile: "daily-brief",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      codex_web_search_mode: "live",
+      audio_enabled: true,
+      audio_voice_profile: "daily-brief",
+    });
+  });
 });
 
 describe("updateScheduledTask", () => {
@@ -172,6 +196,20 @@ describe("updateScheduledTask", () => {
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body)).toEqual({ state: "paused" });
     expect(updated.state).toBe("paused");
+  });
+
+  it("can clear or disable task-scoped search and audio preferences", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(TASK_WIRE));
+    await updateScheduledTask("st_1", {
+      codexWebSearchMode: null,
+      audioEnabled: false,
+      audioVoiceProfile: null,
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      codex_web_search_mode: null,
+      audio_enabled: false,
+      audio_voice_profile: null,
+    });
   });
 });
 

@@ -17,6 +17,7 @@ export type ScheduledTaskState = "active" | "paused";
 /** Terminal + in-flight statuses a single run can hold. */
 export type ScheduledTaskRunStatus =
   "scheduled" | "running" | "succeeded" | "failed" | "skipped" | "incomplete";
+export type CodexWebSearchMode = "live" | "cached" | "indexed" | "disabled";
 
 /**
  * A scheduled task, camelCased from the server's `_to_response` shape. The
@@ -44,6 +45,9 @@ export interface ScheduledTask {
    * `--permission-mode` launch arg from it at fire time.
    */
   permissionMode: string | null;
+  codexWebSearchMode?: CodexWebSearchMode | null;
+  audioEnabled?: boolean;
+  audioVoiceProfile?: string | null;
   /** Pinned absolute workspace, or `null` (server defaults to the host home). */
   workspace: string | null;
   /** Pinned host, or `null` (server resolves the connected host at fire time). */
@@ -92,6 +96,9 @@ export interface CreateScheduledTaskInput {
   reasoningEffort?: string | null;
   /** Native-harness permission mode (Claude Code); omit for the agent default. */
   permissionMode?: string | null;
+  codexWebSearchMode?: CodexWebSearchMode | null;
+  audioEnabled?: boolean;
+  audioVoiceProfile?: string | null;
   /** Optional pinned workspace; only valid together with `hostId`. */
   workspace?: string | null;
   /** Optional pinned host. */
@@ -118,6 +125,9 @@ export interface UpdateScheduledTaskInput {
   modelOverride?: string | null;
   reasoningEffort?: string | null;
   permissionMode?: string | null;
+  codexWebSearchMode?: CodexWebSearchMode | null;
+  audioEnabled?: boolean;
+  audioVoiceProfile?: string | null;
   workspace?: string;
   hostId?: string;
   state?: ScheduledTaskState;
@@ -137,6 +147,9 @@ interface ScheduledTaskWire {
   model_override: string | null;
   reasoning_effort: string | null;
   permission_mode: string | null;
+  codex_web_search_mode: "live" | "cached" | "indexed" | "disabled" | null;
+  audio_enabled: boolean;
+  audio_voice_profile: string | null;
   workspace: string | null;
   host_id: string | null;
   state: ScheduledTaskState;
@@ -212,6 +225,9 @@ function taskFromWire(wire: ScheduledTaskWire): ScheduledTask {
     modelOverride: wire.model_override,
     reasoningEffort: wire.reasoning_effort,
     permissionMode: wire.permission_mode,
+    codexWebSearchMode: wire.codex_web_search_mode,
+    audioEnabled: wire.audio_enabled,
+    audioVoiceProfile: wire.audio_voice_profile,
     workspace: wire.workspace,
     hostId: wire.host_id,
     state: wire.state,
@@ -272,6 +288,9 @@ export async function createScheduledTask(input: CreateScheduledTaskInput): Prom
   if (input.modelOverride != null) body.model_override = input.modelOverride;
   if (input.reasoningEffort != null) body.reasoning_effort = input.reasoningEffort;
   if (input.permissionMode != null) body.permission_mode = input.permissionMode;
+  if (input.codexWebSearchMode != null) body.codex_web_search_mode = input.codexWebSearchMode;
+  if (input.audioEnabled !== undefined) body.audio_enabled = input.audioEnabled;
+  if (input.audioVoiceProfile !== undefined) body.audio_voice_profile = input.audioVoiceProfile;
   if (input.workspace != null) body.workspace = input.workspace;
   if (input.hostId != null) body.host_id = input.hostId;
   const res = await authenticatedFetch("/v1/scheduled-tasks", {
@@ -300,6 +319,9 @@ export async function updateScheduledTask(
   if (input.modelOverride !== undefined) body.model_override = input.modelOverride;
   if (input.reasoningEffort !== undefined) body.reasoning_effort = input.reasoningEffort;
   if (input.permissionMode !== undefined) body.permission_mode = input.permissionMode;
+  if (input.codexWebSearchMode !== undefined) body.codex_web_search_mode = input.codexWebSearchMode;
+  if (input.audioEnabled !== undefined) body.audio_enabled = input.audioEnabled;
+  if (input.audioVoiceProfile !== undefined) body.audio_voice_profile = input.audioVoiceProfile;
   if (input.workspace !== undefined) body.workspace = input.workspace;
   if (input.hostId !== undefined) body.host_id = input.hostId;
   if (input.state !== undefined) body.state = input.state;

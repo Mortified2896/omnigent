@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -714,6 +715,20 @@ async def _presentation_labels(deps: FireDeps, task: ScheduledTask) -> dict[str,
         return {}
 
 
+def _scheduled_codex_access_lane(agent_name: str | None) -> str | None:
+    """Apply the deployment's scheduled-only lane without changing chat defaults."""
+    from omnigent.native.native_coding_agents import native_coding_agent_for_agent_name
+    from omnigent.stores.conversation_store import CODEX_ACCESS_LANES
+
+    native = native_coding_agent_for_agent_name(agent_name)
+    if native is None or native.harness != "codex-native":
+        return None
+    lane = os.getenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "").strip()
+    if lane and lane not in CODEX_ACCESS_LANES:
+        raise ValueError("Invalid OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE")
+    return lane or None
+
+
 async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
     """Create a conversation bound to the task's agent, carrying the stored spec."""
     # Connected-host, existing-workspace runs create the conversation directly.
@@ -739,12 +754,31 @@ async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
         )
         if updated is not None:
             conv = updated
+    session_state = dict(conv.session_state or {})
+    if task.codex_web_search_mode is not None:
+        session_state["codex_web_search_mode"] = task.codex_web_search_mode
+    if task.audio_enabled and task.audio_voice_profile:
+        session_state["scheduled_task_audio_enabled"] = True
+        session_state["scheduled_task_audio_voice_profile"] = task.audio_voice_profile
+    if session_state != (conv.session_state or {}):
+        conv.session_state = session_state
+        await asyncio.to_thread(
+            deps.conversation_store.set_session_state,
+            conv.id,
+            conv.session_state,
+        )
     # Stamp terminal-first presentation labels the interactive create path would
     # have set, so a fired session on a terminal harness exposes the
     # Chat/Terminal switcher instead of rendering Chat-only. Stamped last (after
     # the override reload above) so the labels land on the conversation returned
     # to the launch/dispatch caller, not a stale pre-label reload of it.
     labels = await _presentation_labels(deps, task)
+    agent = await asyncio.to_thread(deps.agent_store.get, task.agent_id)
+    lane = _scheduled_codex_access_lane(getattr(agent, "name", None))
+    if lane:
+        from omnigent.stores.conversation_store import CODEX_ACCESS_LANE_LABEL_KEY
+
+        labels[CODEX_ACCESS_LANE_LABEL_KEY] = lane
     if labels:
         await asyncio.to_thread(deps.conversation_store.set_labels, conv.id, labels)
         conv.labels.update(labels)

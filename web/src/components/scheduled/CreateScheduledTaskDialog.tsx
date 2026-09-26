@@ -95,6 +95,9 @@ export function CreateScheduledTaskDialog({
   const [pickedModel, setPickedModel] = useState<string>("");
   const [pickedEffort, setPickedEffort] = useState<string>("");
   const [pickedPermission, setPickedPermission] = useState<string>("");
+  const [pickedWebSearchMode, setPickedWebSearchMode] = useState<
+    NonNullable<ScheduledTask["codexWebSearchMode"]> | ""
+  >("");
 
   const agentList = useMemo(
     () => sortAgentsForDisplay((agents ?? []).filter((a) => !HIDDEN_PICKER_AGENTS.has(a.name))),
@@ -138,17 +141,17 @@ export function CreateScheduledTaskDialog({
     setPickedModel(backToOriginal ? (editingTask?.modelOverride ?? "") : "");
     setPickedEffort(backToOriginal ? (editingTask?.reasoningEffort ?? "") : "");
     setPickedPermission(backToOriginal ? (editingTask?.permissionMode ?? "") : "");
+    setPickedWebSearchMode(backToOriginal ? (editingTask?.codexWebSearchMode ?? "") : "");
   }
 
-  // Model + effort are surfaced only for native coding agents that carry the
-  // model/effort surface — the same `permissionMode` capability the interactive
-  // dialog gates its Model/Effort/Permissions block on (Claude Code). Agents
-  // without it (plain SDK agents like Polly, or native harnesses with no
-  // model-picker surface) show no model/effort controls, exactly like
-  // interactive. Resolved from the full agent list so a task bound to an agent
-  // the picker hides still gates on its real capabilities.
+  // Resolve capabilities from the full agent list so hidden agent rows retain
+  // their correct model, Codex search, and Claude permission controls.
   const modelEffortAgent = agents?.find((a) => a.id === effectiveAgentId);
-  const showModelEffort = nativeAgentHasCapability(modelEffortAgent, "permissionMode");
+  const showModelEffort =
+    nativeAgentHasCapability(modelEffortAgent, "permissionMode") ||
+    modelEffortAgent?.harness === "codex-native";
+  const showPermissionMode = nativeAgentHasCapability(modelEffortAgent, "permissionMode");
+  const showCodexSearch = modelEffortAgent?.harness === "codex-native";
 
   // ── Nested dropdown dismiss guard ─────────────────────────────────────────
   // The agent picker and host/schedule Selects portal dropdowns OUTSIDE DialogContent.
@@ -213,6 +216,7 @@ export function CreateScheduledTaskDialog({
         setPickedModel(editingTask.modelOverride ?? "");
         setPickedEffort(editingTask.reasoningEffort ?? "");
         setPickedPermission(editingTask.permissionMode ?? "");
+        setPickedWebSearchMode(editingTask.codexWebSearchMode ?? "");
         setSchedule(parsedSchedule ?? DEFAULT_SCHEDULE_MODEL);
         setScheduleUnsupported(parsedSchedule === null);
         setHostId(editingTask.hostId ?? "");
@@ -224,6 +228,7 @@ export function CreateScheduledTaskDialog({
         setPickedModel("");
         setPickedEffort("");
         setPickedPermission("");
+        setPickedWebSearchMode("");
         setSchedule(DEFAULT_SCHEDULE_MODEL);
         setScheduleUnsupported(false);
         setHostId("");
@@ -271,6 +276,7 @@ export function CreateScheduledTaskDialog({
     setPickedModel("");
     setPickedEffort("");
     setPickedPermission("");
+    setPickedWebSearchMode("");
     setSchedule(DEFAULT_SCHEDULE_MODEL);
     setHostId("");
     setWorkspace("");
@@ -303,7 +309,9 @@ export function CreateScheduledTaskDialog({
           ? {
               modelOverride: pickedModel === "" ? null : pickedModel,
               reasoningEffort: pickedEffort === "" ? null : pickedEffort,
-              permissionMode: pickedPermission === "" ? null : pickedPermission,
+              ...(showPermissionMode
+                ? { permissionMode: pickedPermission === "" ? null : pickedPermission }
+                : {}),
             }
           : {};
         await updateMutation.mutateAsync({
@@ -311,6 +319,9 @@ export function CreateScheduledTaskDialog({
           input: {
             ...input,
             ...overrides,
+            ...(showCodexSearch
+              ? { codexWebSearchMode: pickedWebSearchMode === "" ? null : pickedWebSearchMode }
+              : {}),
             // Only on a real switch: sending the unchanged agent is a server-side
             // no-op, but omitting it keeps the PATCH honest about what changed.
             ...(agentChanged && effectiveAgentId !== null ? { agentId: effectiveAgentId } : {}),
@@ -326,8 +337,15 @@ export function CreateScheduledTaskDialog({
           // the create uses the agent's configured defaults.
           ...(showModelEffort && pickedModel !== "" ? { modelOverride: pickedModel } : {}),
           ...(showModelEffort && pickedEffort !== "" ? { reasoningEffort: pickedEffort } : {}),
-          ...(showModelEffort && pickedPermission !== ""
+          ...(showPermissionMode && pickedPermission !== ""
             ? { permissionMode: pickedPermission }
+            : {}),
+          ...(showCodexSearch && pickedWebSearchMode !== ""
+            ? {
+                codexWebSearchMode: pickedWebSearchMode as NonNullable<
+                  ScheduledTask["codexWebSearchMode"]
+                >,
+              }
             : {}),
         });
       }
@@ -458,25 +476,32 @@ export function CreateScheduledTaskDialog({
             )}
           </div>
 
-          {/* Model + reasoning effort + permission mode — only for native
-              coding agents that carry the model/effort surface (Claude Code).
-              Unselected controls fall back to the agent's configured defaults. */}
+          {/* Model, effort, Codex search, and Claude permission controls are
+              capability-gated and scoped to the selected native harness. */}
           {showModelEffort && (
             <div data-testid="task-model-effort-field">
               <ModelEffortFields
                 model={pickedModel}
                 effort={pickedEffort}
                 permissionMode={pickedPermission}
+                webSearchMode={pickedWebSearchMode}
                 hostId={hostId}
+                harness={modelEffortAgent?.harness ?? ""}
+                showPermissionMode={showPermissionMode}
                 onModelChange={setPickedModel}
                 onEffortChange={setPickedEffort}
                 onPermissionModeChange={setPickedPermission}
+                onWebSearchModeChange={(mode) =>
+                  setPickedWebSearchMode(
+                    mode as NonNullable<ScheduledTask["codexWebSearchMode"]> | "",
+                  )
+                }
                 onSelectOpenChange={handleSelectOpenChange}
               />
               <p className="mt-1.5 text-sm text-muted-foreground">
-                Leave on Default to use the agent&apos;s configured model, effort, and permission
-                mode. Automations run unattended, so a prompting mode (Manual or Plan) will wait for
-                approval that never comes.
+                Default inherits the agent setting. Web search and model overrides apply only to
+                this scheduled task. Automations run unattended, so a prompting Claude permission
+                mode will wait for approval that never comes.
               </p>
             </div>
           )}

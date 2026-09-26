@@ -2210,6 +2210,40 @@ class TestPinCodexConfigReasoningEffort:
         )
 
 
+class TestPinCodexConfigWebSearch:
+    """Scheduled search mode stays private to the session's Codex config."""
+
+    def test_materializes_symlink_and_preserves_shared_default(self, tmp_path: Path) -> None:
+        from omnigent.harnesses.codex_native.app_server import (
+            _pin_codex_config_web_search_mode,
+        )
+
+        shared = tmp_path / "shared-config.toml"
+        shared.write_text(
+            'model = "gpt-6-astra"\nweb_search = "cached"\n',
+            encoding="utf-8",
+        )
+        home = tmp_path / "codex-home"
+        home.mkdir()
+        (home / "config.toml").symlink_to(shared)
+
+        _pin_codex_config_web_search_mode(home, "live")
+
+        assert not (home / "config.toml").is_symlink()
+        session_config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+        assert session_config["web_search"] == "live"
+        assert session_config["model"] == "gpt-6-astra"
+        assert tomllib.loads(shared.read_text(encoding="utf-8"))["web_search"] == "cached"
+
+    def test_rejects_unrecognized_mode(self, tmp_path: Path) -> None:
+        from omnigent.harnesses.codex_native.app_server import (
+            _pin_codex_config_web_search_mode,
+        )
+
+        with pytest.raises(ValueError, match="unsupported Codex web_search mode"):
+            _pin_codex_config_web_search_mode(tmp_path, "provider-search")
+
+
 # --- Subagent-routing hook trust ---------------------------------------
 #
 # Empirically (codex-cli 0.145.0) ``--dangerously-bypass-hook-trust`` does

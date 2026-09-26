@@ -154,7 +154,7 @@ def snapshot(peer: Peer, expected_sha: str) -> dict:
     }
 
 
-def accepted(path: Path, expected_digest: str) -> dict:
+def accepted(path: Path, expected_digest: str, *, allow_migration: bool = False) -> dict:
     trusted(path)
     record = json.loads(path.read_text())
     require(canonical_digest(record) == expected_digest, "accepted-artifact mismatch")
@@ -170,7 +170,39 @@ def accepted(path: Path, expected_digest: str) -> dict:
         resource = runtime / relative
         trusted(resource)
         require(digest(resource) == expected, f"artifact changed: {name}")
-    require(record["schema_policy"] == "same-schema", "unsupported migration policy")
+    policy = record["schema_policy"]
+    require(
+        policy == "same-schema" or (allow_migration and policy == "rehearsed-migration"),
+        "unsupported migration policy",
+    )
+    if policy == "rehearsed-migration":
+        migration = record.get("migration", {})
+        require(
+            isinstance(migration.get("from_schema"), str) and bool(migration["from_schema"]),
+            "missing migration source schema",
+        )
+        require(migration.get("to_schema") == record["schema"], "migration target schema mismatch")
+        evidence_name = migration.get("evidence_path", "")
+        require(evidence_name in record["hashes"], "migration rehearsal evidence is not hashed")
+        evidence = json.loads((runtime / evidence_name).read_text())
+        require(evidence.get("source_sha") == sha, "migration rehearsal build mismatch")
+        require(
+            evidence.get("from_schema") == migration["from_schema"]
+            and evidence.get("to_schema") == record["schema"],
+            "migration rehearsal schema mismatch",
+        )
+        require(
+            all(
+                evidence.get(key) is True
+                for key in (
+                    "integrity",
+                    "identity_preserved",
+                    "existing_rows_preserved",
+                    "rollback_restore_verified",
+                )
+            ),
+            "incomplete migration rehearsal",
+        )
     require(
         all(
             record["checks"].get(k) is True

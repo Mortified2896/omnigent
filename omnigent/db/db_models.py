@@ -1527,6 +1527,11 @@ class SqlScheduledTask(OmnigentBase):
     # (Claude Code). The fire path converts it to the runner's
     # ``--permission-mode`` launch arg. NULL = use the agent default.
     permission_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Session-scoped native Codex web-search mode; NULL inherits the Codex
+    # installation default. Validated by the REST boundary.
+    codex_web_search_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    audio_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    audio_voice_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Per-firing cost budget in USD. When set, the fire path attaches a
     # cost_budget policy to each spawned session. NULL = no per-firing cap.
     max_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1657,6 +1662,42 @@ class SqlScheduledTaskRun(OmnigentBase):
             "ix_scheduled_task_runs_conversation_id",
             "workspace_id",
             "conversation_id",
+        ),
+    )
+
+
+class SqlGeneratedResponseAudio(OmnigentBase):
+    """Durable generated-audio state keyed to one exact assistant response."""
+
+    __tablename__ = "generated_response_audio"
+
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+    conversation_id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
+    response_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    voice_profile: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sample_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'ready', 'failed')",
+            name="ck_generated_response_audio_status",
+        ),
+        Index(
+            "ix_generated_response_audio_conversation",
+            "workspace_id",
+            "conversation_id",
+            "updated_at",
         ),
     )
 

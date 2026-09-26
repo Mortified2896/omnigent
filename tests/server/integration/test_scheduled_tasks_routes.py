@@ -55,6 +55,10 @@ def _stub_host_workspace_validation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def auth_app(runtime_init: None, db_uri: str, tmp_path: Path) -> FastAPI:
+    return _build_auth_app(db_uri, tmp_path)
+
+
+def _build_auth_app(db_uri: str, tmp_path: Path) -> FastAPI:
     from omnigent.server.auth import UnifiedAuthProvider
     from omnigent.stores.host_store import HostStore
 
@@ -73,6 +77,17 @@ def auth_app(runtime_init: None, db_uri: str, tmp_path: Path) -> FastAPI:
         host_store=HostStore(db_uri),
         auth_provider=UnifiedAuthProvider(source="header"),
     )
+
+
+@pytest.fixture()
+def disabled_auth_app(
+    runtime_init: None,
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> FastAPI:
+    monkeypatch.setenv("OMNIGENT_SCHEDULED_TASKS_ENABLED", "false")
+    return _build_auth_app(db_uri, tmp_path)
 
 
 def _register_host(app: FastAPI, host_id: str, owner: str) -> None:
@@ -102,6 +117,28 @@ async def auth_client(
     # routes can sync to it.
     async with auth_app.router.lifespan_context(auth_app):
         transport = httpx.ASGITransport(app=auth_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+    mock_llm.release_all()
+    set_harness_process_manager(None)
+    await pm.shutdown()
+
+
+@pytest_asyncio.fixture()
+async def disabled_auth_client(
+    disabled_auth_app: FastAPI,
+    mock_llm: ControllableMockClient,
+    tmp_path: Path,
+) -> AsyncIterator[httpx.AsyncClient]:
+    from omnigent.runtime import set_harness_process_manager
+    from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
+
+    pm = HarnessProcessManager(tmp_parent=tmp_path / "harness_pm_disabled")
+    await pm.start()
+    set_harness_process_manager(pm)
+    async with disabled_auth_app.router.lifespan_context(disabled_auth_app):
+        transport = httpx.ASGITransport(app=disabled_auth_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             yield c
 
@@ -157,6 +194,75 @@ async def test_create_lists_and_gets(auth_client: httpx.AsyncClient, db_uri: str
     got = await auth_client.get(f"/v1/scheduled-tasks/{task_id}", headers=_headers())
     assert got.status_code == 200
     assert got.json()["id"] == task_id
+
+
+async def test_disabled_instance_rejects_creation_without_persisting(
+    disabled_auth_client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    _make_user(db_uri)
+    response = await disabled_auth_client.post(
+        "/v1/scheduled-tasks",
+        json=_create_body(),
+        headers=_headers(),
+    )
+    assert response.status_code == 503, response.text
+    assert SqlAlchemyScheduledTaskStore(db_uri).list(owner_user_id="alice@example.com") == []
+
+
+async def test_disabled_instance_rejects_run_now(
+    disabled_auth_client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    _make_user(db_uri)
+    task = SqlAlchemyScheduledTaskStore(db_uri).create(
+        scheduled_task_id="d" * 32,
+        name="disabled task",
+        prompt="do not run",
+        rrule=_VALID_RRULE,
+        user_id="alice@example.com",
+        agent_id=builtin_agent_id(CLAUDE_NATIVE_AGENT_NAME),
+        timezone="UTC",
+        workspace="/repo",
+        host_id="4b653f6031f35d168cc0b37caa1306d1",
+    )
+    response = await disabled_auth_client.post(
+        f"/v1/scheduled-tasks/{task.id}/run",
+        headers=_headers(),
+    )
+    assert response.status_code == 503, response.text
+
+
+async def test_audio_preferences_require_and_round_trip_voice_profile(
+    auth_client: httpx.AsyncClient, db_uri: str
+) -> None:
+    _make_user(db_uri)
+    missing_profile = await auth_client.post(
+        "/v1/scheduled-tasks",
+        json=_create_body(audio_enabled=True),
+        headers=_headers(),
+    )
+    assert missing_profile.status_code == 400
+    assert "audio_voice_profile" in missing_profile.text
+
+    created = await auth_client.post(
+        "/v1/scheduled-tasks",
+        json=_create_body(audio_enabled=True, audio_voice_profile="daily-brief"),
+        headers=_headers(),
+    )
+    assert created.status_code == 200, created.text
+    task = created.json()
+    assert task["audio_enabled"] is True
+    assert task["audio_voice_profile"] == "daily-brief"
+
+    cleared = await auth_client.patch(
+        f"/v1/scheduled-tasks/{task['id']}",
+        json={"audio_enabled": False, "audio_voice_profile": None},
+        headers=_headers(),
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["audio_enabled"] is False
+    assert cleared.json()["audio_voice_profile"] is None
 
 
 async def test_create_no_workspace_task_persists_null_host_and_workspace(
