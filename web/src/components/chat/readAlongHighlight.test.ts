@@ -88,6 +88,32 @@ describe("read-along timing lookup", () => {
     ]);
   });
 
+  it("does not let collapsed work narration steal words from the final answer", () => {
+    const section = document.createElement("div");
+    section.innerHTML =
+      "<h2>Daily briefing</h2><p>Current sources and repository evidence deserve attention.</p>";
+    const hidden = ["I", "check", "current", "sources", "and", "repository"];
+    const visible = [
+      "Daily",
+      "briefing",
+      "Current",
+      "sources",
+      "and",
+      "repository",
+      "evidence",
+      "deserve",
+      "attention",
+    ];
+    const mapped = mapReadAlongRanges(
+      [section],
+      [...hidden, ...visible].map((text, i) => unit(text, i, i + 1)),
+    );
+    expect(mapped.map(({ unitIndex }) => unitIndex)).toEqual(
+      visible.map((_, i) => hidden.length + i),
+    );
+    expect(mapped.map(({ range }) => range.toString())).toEqual(visible);
+  });
+
   it("leaves rendered text untouched when CSS Custom Highlight is unavailable", () => {
     vi.stubGlobal("CSS", undefined);
     vi.stubGlobal("Highlight", undefined);

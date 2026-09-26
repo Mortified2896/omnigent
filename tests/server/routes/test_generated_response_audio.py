@@ -27,7 +27,7 @@ class Caller:
         return request.headers.get("x-test-user")
 
 
-def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
+def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path, monkeypatch) -> None:
     conversations = SqlAlchemyConversationStore(db_uri)
     conversation = conversations.create_conversation()
     permissions = SqlAlchemyPermissionStore(db_uri)
@@ -90,6 +90,30 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path) -> None:
         assert content.content == wav
         assert client.get(f"{url}/other/content", headers=headers).status_code == 404
         assert client.get(f"{url}/answer-1/timings", headers=headers).status_code == 404
+
+        from omnigent.server.routes.sessions import routes_generated_audio as routes
+
+        compressed = b"ID3example compressed audio"
+        monkeypatch.setattr(routes, "mobile_playback_copy", lambda store, source: compressed)
+        mobile_url = f"{url}/answer-1/content?format=mp3"
+        assert client.get(mobile_url).status_code == 401
+        assert client.get(mobile_url, headers={"x-test-user": "stranger"}).status_code == 404
+        mobile = client.get(mobile_url, headers=headers)
+        assert mobile.content == compressed
+        assert mobile.headers["content-type"] == "audio/mpeg"
+        partial = client.get(mobile_url, headers={**headers, "Range": "bytes=0-1"})
+        assert partial.status_code == 206
+        assert partial.content == compressed[:2]
+        assert partial.headers["content-range"] == f"bytes 0-1/{len(compressed)}"
+
+        def unavailable(*args):
+            raise FileNotFoundError("ffmpeg unavailable")
+
+        monkeypatch.setattr(routes, "mobile_playback_copy", unavailable)
+        fallback = client.get(mobile_url, headers=headers)
+        assert fallback.status_code == 200
+        assert fallback.content == wav
+        assert fallback.headers["content-type"] == "audio/wav"
 
         content_url = f"{url}/answer-1/content"
         for byte_range, start, end in [
@@ -190,7 +214,9 @@ def test_timing_route_authorizes_and_rejects_missing_malformed_or_stale_sidecars
     base = f"/v1/sessions/{conversation.id}/generated-audio/answer-1"
     with TestClient(app) as client:
         assert client.get(f"{base}/timings").status_code == 401
-        assert client.get(f"{base}/timings", headers={"x-test-user": "stranger"}).status_code == 404
+        assert (
+            client.get(f"{base}/timings", headers={"x-test-user": "stranger"}).status_code == 404
+        )
         headers = {"x-test-user": "alice"}
         assert client.get(f"{base}/timings", headers=headers).status_code == 404
         assert client.get(f"{base}/content", headers=headers).content == wav
@@ -234,3 +260,27 @@ def test_timing_route_authorizes_and_rejects_missing_malformed_or_stale_sidecars
         artifact_store.put(sidecar_key, b"{malformed")
         assert client.get(f"{base}/timings", headers=headers).status_code == 404
         assert client.get(f"{base}/content", headers=headers).content == wav
+
+
+def test_mobile_playback_cache_is_bound_to_source_and_keeps_wav(tmp_path, monkeypatch):
+    from omnigent.server import generated_audio_playback as playback
+    from omnigent.server.generated_audio_playback import mobile_playback_copy
+
+    store = LocalArtifactStore(str(tmp_path / "artifacts"))
+    calls = []
+
+    def encode(command, **kwargs):
+        calls.append(kwargs["input"])
+        from pathlib import Path
+
+        Path(command[-1]).write_bytes(b"ID3" + kwargs["input"])
+
+    monkeypatch.setattr(playback.subprocess, "run", encode)
+    source = b"canonical WAV"
+    store.put("original.wav", source)
+    assert mobile_playback_copy(store, source) == b"ID3" + source
+    assert mobile_playback_copy(store, source) == b"ID3" + source
+    assert len(calls) == 1
+    assert mobile_playback_copy(store, b"changed WAV") == b"ID3changed WAV"
+    assert len(calls) == 2
+    assert store.get("original.wav") == source

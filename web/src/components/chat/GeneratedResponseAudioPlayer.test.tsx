@@ -173,7 +173,7 @@ describe("GeneratedResponseAudioPlayer", () => {
     expect(player).toHaveAttribute("controls");
     expect(player).toHaveAttribute(
       "src",
-      "/v1/sessions/session-1/generated-audio/response-1/content",
+      "/v1/sessions/session-1/generated-audio/response-1/content?format=mp3",
     );
     expect(authenticatedFetch).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Loading audio…")).not.toBeInTheDocument();
@@ -185,7 +185,7 @@ describe("GeneratedResponseAudioPlayer", () => {
       Promise.resolve(
         String(url).endsWith("/timings")
           ? { ok: false, json: async () => ({}) }
-          : String(url).endsWith("/content")
+          : String(url).endsWith("/content?format=mp3")
             ? response({}, new Blob(["wav"], { type: "audio/wav" }))
             : response({ data: [readyAudioRow("response-1")] }),
       ),
@@ -218,6 +218,51 @@ describe("GeneratedResponseAudioPlayer", () => {
     renderPlayer();
     expect(await screen.findByText("Audio unavailable")).toBeInTheDocument();
     expect(screen.queryByLabelText("Listen to this response")).not.toBeInTheDocument();
+  });
+
+  it("retries an interrupted fallback and reattaches word highlighting", async () => {
+    installHighlightApi();
+    let failures = 1;
+    authenticatedFetch.mockImplementation((url: string) => {
+      if (url.endsWith("/timings")) return Promise.resolve(response(timings(["Hello", "world"])));
+      if (url.includes("/content?")) {
+        if (failures-- > 0) return Promise.reject(new TypeError("Load failed"));
+        return Promise.resolve(response({}, new Blob(["mp3"], { type: "audio/mpeg" })));
+      }
+      return Promise.resolve(response({ data: [readyAudioRow("response-1")] }));
+    });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:retry-audio");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const view = renderPlayer();
+    const original = await screen.findByLabelText("Listen to this response");
+    fireEvent.error(original);
+    fireEvent.click(await screen.findByText("Retry audio"));
+    const restored = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    expect(restored).toHaveAttribute("src", "blob:retry-audio");
+    restored.currentTime = 1.2;
+    fireEvent.seeked(restored);
+    expect(currentHighlightText()).toEqual(["world"]);
+    view.unmount();
+    expect(currentHighlightText()).toEqual([]);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:retry-audio");
+  });
+
+  it("maps Markdown that mounts after timings and media", async () => {
+    installHighlightApi();
+    authenticatedFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/timings")
+          ? response(timings(["Hello", "world"]))
+          : response({ data: [readyAudioRow("response-1")] }),
+      ),
+    );
+    renderPlayer("response-1", "");
+    const audio = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    audio.currentTime = 1.2;
+    fireEvent.seeked(audio);
+    expect(currentHighlightText()).toEqual([]);
+    screen.getByTestId("assistant-text-section").textContent = "Hello world.";
+    await waitFor(() => expect(currentHighlightText()).toEqual(["world"]));
   });
 
   it("advances on playback and seeking, retains the paused word, then clears at end", async () => {

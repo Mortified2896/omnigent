@@ -43,9 +43,9 @@ async function readGeneratedAudioList(sessionId: string): Promise<GeneratedAudio
 
 async function readGeneratedAudio(sessionId: string, responseId: string): Promise<Blob> {
   const response = await authenticatedFetch(
-    `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content`,
+    `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content?format=mp3`,
   );
-  if (!response.ok) throw new Error("Could not load generated audio");
+  if (!response.ok) throw new Error(`Audio request failed (HTTP ${response.status})`);
   return response.blob();
 }
 
@@ -97,18 +97,18 @@ export function GeneratedResponseAudioPlayer({
   const needsBlob = Boolean(getOmnigentHostConfig().fetcher);
   const [forceBlobFallback, setForceBlobFallback] = useState(false);
   const useBlobTransport = needsBlob || forceBlobFallback;
-  const contentPath = `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content`;
+  const contentPath = `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content?format=mp3`;
   const [mediaFailed, setMediaFailed] = useState(false);
   const blobFallbackPlayback = useRef<{ position: number; resume: boolean } | null>(null);
   const contentQuery = useQuery({
-    queryKey: ["generated-response-audio-content", sessionId, responseId],
+    queryKey: ["generated-response-audio-content", sessionId, responseId, "mp3"],
     queryFn: () => readGeneratedAudio(sessionId, responseId),
     enabled: entry?.status === "ready" && useBlobTransport,
     staleTime: Infinity,
     retry: false,
   });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (!contentQuery.data) {
@@ -121,15 +121,13 @@ export function GeneratedResponseAudioPlayer({
   }, [contentQuery.data]);
 
   useEffect(() => {
-    const audio = audioRef.current;
+    const audio = audioElement;
     const bubble = audio?.closest<HTMLElement>("[data-response-id]");
     const timings = timingsQuery.data;
     if (!audio || !bubble || bubble.dataset.responseId !== responseId || !timings?.units?.length) {
       return undefined;
     }
-    const sections = bubble.querySelectorAll<HTMLElement>('[data-testid="assistant-text-section"]');
-    const mappedRanges = mapReadAlongRanges(sections, timings.units);
-    const rangeByUnit = new Map(mappedRanges.map(({ unitIndex, range }) => [unitIndex, range]));
+    let rangeByUnit = new Map<number, Range>();
     const owner = `${sessionId}:${responseId}`;
     let lastUnitIndex = -2;
     clearReadAlongHighlight(owner);
@@ -149,6 +147,30 @@ export function GeneratedResponseAudioPlayer({
       lastUnitIndex = -2;
       clearReadAlongHighlight(owner);
     };
+    // Markdown loads lazily, and collapsed work sections can mount later.
+    // Rebuild only when text DOM changes, never for each playback tick.
+    const rebuildRanges = () => {
+      const sections = bubble.querySelectorAll<HTMLElement>(
+        '[data-testid="assistant-text-section"]',
+      );
+      rangeByUnit = new Map(
+        mapReadAlongRanges(sections, timings.units).map(({ unitIndex, range }) => [
+          unitIndex,
+          range,
+        ]),
+      );
+      if (lastUnitIndex !== -2) updateHighlight(true);
+    };
+    rebuildRanges();
+    let rebuildFrame: number | null = null;
+    const observer = new MutationObserver(() => {
+      if (rebuildFrame !== null) return;
+      rebuildFrame = requestAnimationFrame(() => {
+        rebuildFrame = null;
+        rebuildRanges();
+      });
+    });
+    observer.observe(bubble, { childList: true, characterData: true, subtree: true });
 
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("timeupdate", handleTimeUpdate);
@@ -158,6 +180,8 @@ export function GeneratedResponseAudioPlayer({
     if (!audio.paused) updateHighlight(true);
 
     return () => {
+      observer.disconnect();
+      if (rebuildFrame !== null) cancelAnimationFrame(rebuildFrame);
       audio.removeEventListener("play", handlePlay);
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("seeking", handleSeeking);
@@ -165,7 +189,7 @@ export function GeneratedResponseAudioPlayer({
       audio.removeEventListener("ended", handleEnded);
       clearReadAlongHighlight(owner);
     };
-  }, [responseId, sessionId, timingsQuery.data]);
+  }, [audioElement, responseId, sessionId, timingsQuery.data]);
 
   if (listQuery.isError) return null;
   if (!entry) return null;
@@ -185,13 +209,17 @@ export function GeneratedResponseAudioPlayer({
   }
   if (useBlobTransport && contentQuery.isError) {
     return (
-      <span className="text-[11px] text-muted-foreground" role="status">
-        Audio could not load. You can{" "}
-        <a className="underline" href={contentPath}>
-          open the recording
-        </a>
-        .
-      </span>
+      <div className="mb-4 flex flex-col gap-2 text-sm text-muted-foreground" role="status">
+        <span>Audio download was interrupted.</span>
+        <div className="flex gap-3">
+          <button className="underline" onClick={() => void contentQuery.refetch()}>
+            Retry audio
+          </button>
+          <a className="underline" href={contentPath}>
+            Open the recording
+          </a>
+        </div>
+      </div>
     );
   }
   if (useBlobTransport && !audioUrl) {
@@ -214,7 +242,7 @@ export function GeneratedResponseAudioPlayer({
         </span>
       )}
       <audio
-        ref={audioRef}
+        ref={setAudioElement}
         className="h-9 w-full max-w-[360px]"
         controls
         preload="metadata"
@@ -234,7 +262,7 @@ export function GeneratedResponseAudioPlayer({
         }}
         onLoadedMetadata={() => {
           const pending = blobFallbackPlayback.current;
-          const audio = audioRef.current;
+          const audio = audioElement;
           if (!pending || !audio) return;
           blobFallbackPlayback.current = null;
           if (

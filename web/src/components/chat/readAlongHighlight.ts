@@ -50,9 +50,8 @@ const BLOCK_TAGS = new Set([
   "UL",
 ]);
 const WORD_RE = /[\p{L}\p{M}\p{N}]+/gu;
-const MAX_VISIBLE_LOOKAHEAD = 64;
 const MAX_COMPOUND_PARTS = 8;
-const MAX_FUTURE_SCORE_UNITS = 5;
+const MAX_ALIGNMENT_CELLS = 16_000_000;
 
 function wordKey(value: string): string {
   return value
@@ -155,38 +154,6 @@ function matchWordAt(
   return null;
 }
 
-function futureMatchScore(
-  units: ReadAlongUnit[],
-  firstUnitIndex: number,
-  words: VisibleWord[],
-  text: string,
-  firstVisibleIndex: number,
-): number {
-  let score = 0;
-  let cursor = firstVisibleIndex;
-  for (
-    let unitIndex = firstUnitIndex;
-    unitIndex < units.length && score < MAX_FUTURE_SCORE_UNITS;
-    unitIndex += 1
-  ) {
-    const key = wordKey(units[unitIndex]!.text);
-    if (!key) continue;
-    const limit = Math.min(words.length, cursor + MAX_VISIBLE_LOOKAHEAD);
-    let matched = false;
-    for (let index = cursor; index < limit; index += 1) {
-      const span = matchWordAt(words, text, index, key);
-      if (span) {
-        score += 1;
-        cursor = span.last + 1;
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) break;
-  }
-  return score;
-}
-
 function createRange(
   document: Document,
   positions: (TextPosition | null)[],
@@ -233,29 +200,52 @@ export function mapReadAlongRanges(
   const document = sectionList[0]?.ownerDocument;
   if (!document || words.length === 0) return mapped;
 
-  let visibleCursor = 0;
-  for (let unitIndex = 0; unitIndex < units.length; unitIndex += 1) {
-    const key = wordKey(units[unitIndex]!.text);
-    if (!key) continue;
-    const limit = Math.min(words.length, visibleCursor + MAX_VISIBLE_LOOKAHEAD);
-    let best: { first: number; last: number; score: number } | null = null;
-    for (let index = visibleCursor; index < limit; index += 1) {
-      const span = matchWordAt(words, text, index, key);
-      if (!span) continue;
-      const score = futureMatchScore(units, unitIndex + 1, words, text, span.last + 1);
-      if (!best || score > best.score) best = { ...span, score };
-      if (score === MAX_FUTURE_SCORE_UNITS) break;
+  // Align the entire sequence rather than greedily matching an early word.
+  // Narrated work notes may be collapsed while the final answer is visible;
+  // their repeated words must not consume matches belonging to the answer.
+  const width = words.length + 1;
+  const cells = (units.length + 1) * width;
+  // Fail open to ordinary audio for unusually large responses, bounding memory.
+  if (cells > MAX_ALIGNMENT_CELLS) return mapped;
+  const scores = new Uint16Array(cells);
+  const keys = units.map((unit) => wordKey(unit.text));
+  const spanAt = (unitIndex: number, visibleIndex: number) =>
+    keys[unitIndex]!.startsWith(words[visibleIndex]!.key)
+      ? matchWordAt(words, text, visibleIndex, keys[unitIndex]!)
+      : null;
+  for (let i = units.length - 1; i >= 0; i -= 1) {
+    for (let j = words.length - 1; j >= 0; j -= 1) {
+      const span = spanAt(i, j);
+      scores[i * width + j] = Math.max(
+        scores[(i + 1) * width + j]!,
+        scores[i * width + j + 1]!,
+        span ? 1 + scores[(i + 1) * width + span.last + 1]! : 0,
+      );
     }
-    if (!best) continue;
-    const range = createRange(
-      document,
-      combinedPositions,
-      words[best.first]!.start,
-      words[best.last]!.end,
-    );
-    if (range) {
-      mapped.push({ unitIndex, range });
-      visibleCursor = best.last + 1;
+  }
+  let i = 0;
+  let j = 0;
+  while (i < units.length && j < words.length) {
+    const score = scores[i * width + j]!;
+    // Prefer skipping narration on a tie: hidden preambles should not steal
+    // identical words from the visible final answer that follows them.
+    if (score === scores[(i + 1) * width + j]) {
+      i += 1;
+      continue;
+    }
+    const span = spanAt(i, j);
+    if (span && score === 1 + scores[(i + 1) * width + span.last + 1]!) {
+      const range = createRange(
+        document,
+        combinedPositions,
+        words[j]!.start,
+        words[span.last]!.end,
+      );
+      if (range) mapped.push({ unitIndex: i, range });
+      i += 1;
+      j = span.last + 1;
+    } else {
+      j += 1;
     }
   }
   return mapped;

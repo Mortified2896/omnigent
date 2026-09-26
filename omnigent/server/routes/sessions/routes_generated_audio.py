@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import subprocess
+from typing import Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.server.auth import LEVEL_READ, AuthProvider
+from omnigent.server.generated_audio_playback import mobile_playback_copy
 from omnigent.server.generated_response_audio import _response_narration_for_id
 from omnigent.server.generated_response_audio_timings import (
     timings_artifact_key,
     validate_timing_sidecar,
 )
-from omnigent.server.auth import LEVEL_READ, AuthProvider
 from omnigent.server.routes._auth_helpers import (
     get_user_id,
     require_access_and_level,
@@ -94,6 +98,7 @@ def register_generated_audio_routes(
         request: Request,
         session_id: str,
         response_id: str,
+        format: Literal["wav", "mp3"] = "wav",
     ) -> Response:
         await _authorize(request, session_id)
         store = _require_audio_store()
@@ -111,8 +116,20 @@ def register_generated_audio_routes(
                 "Generated response audio artifact not found",
                 code=ErrorCode.NOT_FOUND,
             ) from exc
+        media_type = "audio/wav"
+        extension = "wav"
+        if format == "mp3":
+            try:
+                content = await asyncio.to_thread(mobile_playback_copy, artifact_store, content)
+                media_type = "audio/mpeg"
+                extension = "mp3"
+            except (OSError, ValueError, subprocess.SubprocessError):
+                # Optional optimization: encoder absence/failure cannot hide audio.
+                logging.getLogger(__name__).warning(
+                    "Mobile audio encoding unavailable; serving WAV"
+                )
         headers = {
-            "Content-Disposition": 'inline; filename="response-audio.wav"',
+            "Content-Disposition": f'inline; filename="response-audio.{extension}"',
             "Cache-Control": "private, max-age=31536000, immutable",
             "X-Content-Type-Options": "nosniff",
             "Accept-Ranges": "bytes",
@@ -135,10 +152,10 @@ def register_generated_audio_routes(
             return Response(
                 content=content[start : end + 1],
                 status_code=206,
-                media_type="audio/wav",
+                media_type=media_type,
                 headers={**headers, "Content-Range": f"bytes {start}-{end}/{size}"},
             )
-        return Response(content=content, media_type="audio/wav", headers=headers)
+        return Response(content=content, media_type=media_type, headers=headers)
 
     @router.get("/sessions/{session_id}/generated-audio/{response_id}/timings")
     async def get_generated_audio_timings(
