@@ -4673,7 +4673,7 @@ export function NewChatLandingScreen() {
                 />
               </div>
               <div
-                className="col-span-3 col-start-1 row-start-1 flex min-w-0 flex-wrap items-center gap-1 border-b border-border pb-1 md:col-span-1 md:col-start-2 md:justify-end md:gap-2 md:border-0 md:pb-0"
+                className="col-span-3 col-start-1 row-start-1 grid grid-cols-[auto_minmax(0,1fr)] min-w-0 items-center gap-1 border-b border-border pb-1 md:col-span-1 md:col-start-2 md:flex md:flex-wrap md:justify-end md:gap-2 md:border-0 md:pb-0"
                 data-testid="new-chat-landing-primary-actions"
               >
                 <div className="flex min-w-0 max-w-full items-center rounded-lg transition-colors has-[button:not(:disabled)]:hover:bg-muted dark:has-[button:not(:disabled)]:hover:bg-muted/50 has-aria-expanded:bg-muted dark:has-aria-expanded:bg-muted/50 [&>button]:bg-transparent!">
@@ -4756,7 +4756,7 @@ export function NewChatLandingScreen() {
                 </div>
                 {selectedAgent && (
                   <div
-                    className="flex shrink-0 flex-nowrap items-center gap-1"
+                    className="grid min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:shrink-0"
                     data-testid="new-chat-landing-model-effort"
                   >
                     {(supportsModelPicker || selectedNativeHarness === "codex-native") &&
@@ -4868,7 +4868,7 @@ export function NewChatLandingScreen() {
                           }}
                         >
                           <SelectTrigger
-                            className="data-[size=default]:h-9 w-24 min-w-0 px-2 md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+                            className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
                             data-testid="new-chat-landing-inline-effort"
                             aria-label="Reasoning effort"
                           >

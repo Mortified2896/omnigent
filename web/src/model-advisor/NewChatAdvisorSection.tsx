@@ -544,16 +544,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       {editor.draft?.enabled && advisorModelTarget
         ? createPortal(
             <div
-              className="flex w-full min-w-0 basis-full flex-wrap items-center gap-1"
+              className="col-span-2 grid w-full min-w-0 grid-cols-subgrid items-center gap-1 md:flex md:basis-full md:flex-wrap"
               data-testid="model-advisor-composer-choice"
             >
               <label
                 htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-                className="min-w-0 flex-1 text-xs text-muted-foreground"
+                className="min-w-0 text-xs text-muted-foreground md:flex-1"
               >
                 Recommender
               </label>
-              <div className="flex shrink-0 flex-nowrap items-center gap-1">
+              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:shrink-0">
                 <SearchableModelPicker
                   id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
                   value={advisorModelValue}
@@ -586,7 +586,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                   }
                 >
                   <SelectTrigger
-                    className="data-[size=default]:h-9 w-24 min-w-0 px-2 md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+                    className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
                     aria-label="Recommender reasoning effort"
                     data-testid="model-advisor-advisor-effort"
                   >
@@ -606,7 +606,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                 </Select>
               </div>
               {savedAdvisorUnavailable ? (
-                <p role="alert" className="text-xs text-destructive">
+                <p role="alert" className="col-span-2 text-xs text-destructive">
                   The saved advisor model is unavailable from this host. Choose a valid model and
                   reasoning level to continue.
                 </p>

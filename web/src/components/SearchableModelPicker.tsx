@@ -118,7 +118,7 @@ export function SearchableModelPicker({
           disabled={disabled}
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
-            compact ? "h-9 w-28 max-w-full sm:w-60 md:h-8" : "w-full",
+            compact ? "h-9 w-full min-w-0 max-w-full px-2 md:h-8 md:w-60" : "w-full",
           )}
           data-testid={testId}
         >
