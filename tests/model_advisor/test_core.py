@@ -91,7 +91,7 @@ class AdvisorCoreTests(unittest.TestCase):
         )
 
     def test_pool_requires_nonempty_immutable_membership(self) -> None:
-        for rows in ((), [self.human], (object(),)):
+        for rows in ((), [self.human], ("not-a-candidate",)):
             with self.subTest(rows=rows), self.assertRaises(AdvisorContractError):
                 PoolSnapshot("catalog-1", rows)
 
