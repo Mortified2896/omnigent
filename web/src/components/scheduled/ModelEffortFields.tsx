@@ -25,10 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  CLAUDE_NATIVE_EFFORTS,
-  MODEL_SELECT_DEFAULT,
-} from "@/components/HarnessConfigControls";
+import { CLAUDE_NATIVE_EFFORTS, MODEL_SELECT_DEFAULT } from "@/components/HarnessConfigControls";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import { CLAUDE_NATIVE_PERMISSION_MODES } from "@/lib/claudePermissionMode";
 import { useHostModelOptions } from "@/hooks/useHosts";

@@ -2936,8 +2936,8 @@ export function NewChatLandingScreen() {
         ? EFFORT_UNAVAILABLE_PLACEHOLDER
         : !pickedEffort
           ? EFFORT_UNAVAILABLE_PLACEHOLDER
-      : (CLAUDE_NATIVE_EFFORTS.find((e) => e.value === pickedEffort)?.label ??
-        EFFORT_UNAVAILABLE_PLACEHOLDER);
+          : (CLAUDE_NATIVE_EFFORTS.find((e) => e.value === pickedEffort)?.label ??
+            EFFORT_UNAVAILABLE_PLACEHOLDER);
       const permissionValue =
         CLAUDE_NATIVE_PERMISSION_MODES.find((m) => m.value === permissionMode)?.label ??
         permissionMode;

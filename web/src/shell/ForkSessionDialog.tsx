@@ -283,9 +283,7 @@ function ForkRunConfig({
     // Seed only an effort the picker can display; a source value outside the
     // offered vocabulary (e.g. "minimal") uses the no-override placeholder.
     const effort = sameFamilyAsSource ? sourceSession?.reasoningEffort : null;
-    return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort)
-      ? effort
-      : "";
+    return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort) ? effort : "";
   }, [sameFamilyAsSource, sourceSession]);
   const seededPermission = useMemo(() => {
     // Permission mode rides terminal_launch_args, which the backend copies
