@@ -31,7 +31,9 @@ class Project:
         workspace, harness, model, reasoning effort, git base-branch, …), or an
         empty dict when none are stored. The key vocabulary is owned by the
         client; the store persists and returns it whole. These are hints the
-        new-chat dialog pre-fills, not enforced requirements.
+        new-chat dialog pre-fills, not enforced requirements. The optional
+    ``scheduled_task_ids`` list binds automation IDs to this project for
+    automatic filing, scoped to the project owner and tenant.
     """
 
     id: str

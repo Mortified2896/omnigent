@@ -130,6 +130,7 @@ class FireDeps:
     tunnel_registry: Any | None = None
     file_store: Any | None = None
     artifact_store: Any | None = None
+    project_store: Any | None = None
 
 
 def _prompt_event(prompt: str) -> SessionEventInput:
@@ -731,6 +732,29 @@ def _scheduled_codex_access_lane(agent_name: str | None) -> str | None:
     return lane or None
 
 
+async def _scheduled_project_id(deps: FireDeps, task: ScheduledTask) -> str | None:
+    """Resolve an explicit task binding among this owner's projects only.
+
+    Project config may contain ``scheduled_task_ids``, a list of automation
+    IDs whose new sessions should be filed here. Names are never matched.
+    The project store also enforces the current workspace scope. Missing or
+    ambiguous bindings leave the session unfiled rather than guessing a target.
+    """
+    if deps.project_store is None:
+        return None
+    projects = await asyncio.to_thread(deps.project_store.list, user_id=task.user_id)
+    matches = []
+    for project in projects:
+        bindings = project.config.get("scheduled_task_ids")
+        if isinstance(bindings, list) and task.id in bindings:
+            matches.append(project.id)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        _logger.warning("scheduled fire: ambiguous project binding for task %s", task.id)
+    return None
+
+
 async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int) -> Conversation:
     """Create a conversation bound to the task's agent, carrying the stored spec."""
     # Connected-host, existing-workspace runs create the conversation directly.
@@ -742,6 +766,7 @@ async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int
         deps.conversation_store.create_conversation,
         agent_id=task.agent_id,
         title=title,
+        project_id=await _scheduled_project_id(deps, task),
         host_id=task.host_id,
         workspace=task.workspace,
         terminal_launch_args=await _permission_mode_launch_args(deps, task),

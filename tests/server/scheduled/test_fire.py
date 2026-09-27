@@ -1597,3 +1597,47 @@ async def test_session_title_includes_run_date_in_task_timezone(
     task = _task(name="daily-brief", timezone=timezone)
     await _create_session(deps, task, 1790463600)
     assert store.created[0]["title"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bindings,expected", [([], None), (["task_1"], "project_1"), (["other"], None)]
+)
+async def test_scheduled_project_binding_is_explicit_and_owner_scoped(
+    bindings: list[str], expected: str | None
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from omnigent.server.scheduled.fire import _create_session
+
+    store = FakeConversationStore()
+    projects = Mock()
+    projects.list.return_value = [
+        SimpleNamespace(id="project_1", config={"scheduled_task_ids": bindings})
+    ]
+    deps = _deps(FakeScheduledTaskStore(), conversation_store=store)
+    deps.project_store = projects
+    task = _task(user_id="owner")
+    await _create_session(deps, task, 1790463600)
+    projects.list.assert_called_once_with(user_id="owner")
+    assert store.created[0]["project_id"] == expected
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_or_malformed_project_binding_never_guesses() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from omnigent.server.scheduled.fire import _scheduled_project_id
+
+    deps = _deps(FakeScheduledTaskStore())
+    deps.project_store = Mock()
+    for configs in [
+        [{"scheduled_task_ids": "task_1"}],
+        [{"scheduled_task_ids": ["task_1"]}, {"scheduled_task_ids": ["task_1"]}],
+    ]:
+        deps.project_store.list.return_value = [
+            SimpleNamespace(id=f"project_{i}", config=config) for i, config in enumerate(configs)
+        ]
+        assert await _scheduled_project_id(deps, _task()) is None

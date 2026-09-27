@@ -1513,6 +1513,7 @@ def create_app(
 
             fire_deps = FireDeps(
                 scheduled_task_store=scheduled_task_store,
+                project_store=project_store,
                 agent_store=agent_store,
                 conversation_store=conversation_store,
                 permission_store=permission_store,
