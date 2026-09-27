@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import wave
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 from fastapi import APIRouter, FastAPI, Request
@@ -58,6 +59,8 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path, monkeypat
         permission_store=permissions,
     )
     app = FastAPI()
+    retry = AsyncMock(return_value=True)
+    app.state.generated_audio_coordinator = SimpleNamespace(retry_failed=retry)
 
     @app.exception_handler(OmnigentError)
     async def _handle_error(request: Request, exc: OmnigentError):
@@ -68,6 +71,14 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path, monkeypat
         url = f"/v1/sessions/{conversation.id}/generated-audio"
         assert client.get(url).status_code == 401
         assert client.get(url, headers={"x-test-user": "stranger"}).status_code == 404
+        retry_url = f"{url}/answer-1/retry"
+        assert client.post(retry_url).status_code == 401
+        assert client.post(retry_url, headers={"x-test-user": "stranger"}).status_code == 404
+        assert client.post(retry_url, headers={"x-test-user": "alice"}).status_code == 403
+        retry.assert_not_called()
+        permissions.grant("editor", conversation.id, 2)
+        assert client.post(retry_url, headers={"x-test-user": "editor"}).json() == {"queued": True}
+        retry.assert_awaited_once_with(conversation.id, "answer-1")
         headers = {"x-test-user": "alice"}
         listing = client.get(url, headers=headers)
         assert listing.status_code == 200

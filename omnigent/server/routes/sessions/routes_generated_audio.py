@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.server.auth import LEVEL_READ, AuthProvider
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, AuthProvider
 from omnigent.server.generated_audio_playback import mobile_playback_copy
 from omnigent.server.generated_response_audio import _response_narration_for_id
 from omnigent.server.generated_response_audio_timings import (
@@ -73,6 +73,26 @@ def register_generated_audio_routes(
                     "Session not found",
                     code=ErrorCode.NOT_FOUND,
                 )
+
+    @router.post("/sessions/{session_id}/generated-audio/{response_id}/retry")
+    async def retry_generated_audio(
+        request: Request, session_id: str, response_id: str
+    ) -> dict[str, object]:
+        await require_access_and_level(
+            get_user_id(request, auth_provider),
+            session_id,
+            LEVEL_EDIT,
+            permission_store,
+            conversation_store,
+        )
+        store = _require_audio_store()
+        if await asyncio.to_thread(store.get, session_id, response_id) is None:
+            raise OmnigentError("Generated response audio not found", code=ErrorCode.NOT_FOUND)
+        coordinator = getattr(request.app.state, "generated_audio_coordinator", None)
+        if coordinator is None:
+            raise OmnigentError("Audio worker unavailable", code=ErrorCode.RUNNER_UNAVAILABLE)
+        queued = await coordinator.retry_failed(session_id, response_id)
+        return {"queued": queued}
 
     @router.get("/sessions/{session_id}/generated-audio")
     async def list_generated_audio(request: Request, session_id: str) -> dict[str, object]:

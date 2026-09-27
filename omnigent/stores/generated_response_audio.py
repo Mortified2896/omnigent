@@ -109,6 +109,19 @@ class SqlAlchemyGeneratedResponseAudioStore:
             )
             return [_to_entity(row) for row in rows]
 
+    def retry_failed(self, conversation_id: str, response_id: str) -> bool:
+        """Atomically requeue only a failed response; never duplicate active work."""
+        with self._session("retry_failed_audio") as session:
+            result = session.execute(
+                update(SqlGeneratedResponseAudio)
+                .where(SqlGeneratedResponseAudio.workspace_id == current_workspace_id())
+                .where(SqlGeneratedResponseAudio.conversation_id == conversation_id)
+                .where(SqlGeneratedResponseAudio.response_id == response_id)
+                .where(SqlGeneratedResponseAudio.status == "failed")
+                .values(status="pending", error_code=None, updated_at=now_epoch())
+            )
+            return result.rowcount == 1
+
     def claim_pending(self, conversation_id: str, response_id: str) -> bool:
         with self._session("claim_generated_audio") as session:
             result = session.execute(

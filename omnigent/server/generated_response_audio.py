@@ -168,10 +168,7 @@ def _parse_speech_response(content_type: str, content: bytes) -> tuple[bytes, by
     if media_type != "multipart/related":
         raise _PostprocessError("tts_invalid_audio_response")
     try:
-        envelope = (
-            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
-            + content
-        )
+        envelope = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + content
         message = BytesParser(policy=policy.default).parsebytes(envelope)
         if not message.is_multipart():
             raise ValueError("not multipart")
@@ -261,6 +258,15 @@ class GeneratedResponseAudioCoordinator:
         if entry.status in {"ready", "failed", "processing"}:
             return
         self._enqueue(_AudioWork(current_workspace_id(), conversation_id, response_id))
+
+    async def retry_failed(self, conversation_id: str, response_id: str) -> bool:
+        """Queue one explicit retry using the saved response and voice selection."""
+        retried = await asyncio.to_thread(
+            self.audio_store.retry_failed, conversation_id, response_id
+        )
+        if retried:
+            self._enqueue(_AudioWork(current_workspace_id(), conversation_id, response_id))
+        return retried
 
     def _enqueue(self, work: _AudioWork) -> None:
         loop, queue = self._loop, self._queue

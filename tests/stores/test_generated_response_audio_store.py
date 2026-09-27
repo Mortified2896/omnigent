@@ -62,3 +62,18 @@ def test_recovery_leaves_recent_processing_job_alone(db_uri: str) -> None:
     assert store.recover_processing() == 1
     assert store.get(conversation_id, "stale-response").status == "pending"
     assert store.get(conversation_id, "active-response").status == "processing"
+
+
+def test_retry_failed_is_response_scoped_and_idempotent(db_uri: str) -> None:
+    store = SqlAlchemyGeneratedResponseAudioStore(db_uri)
+    cid = "d" * 32
+    store.create_pending(cid, "answer", "daily-brief")
+    assert not store.retry_failed(cid, "answer")
+    store.mark_failed(cid, "answer", "tts_http_503")
+    assert not store.retry_failed(cid, "missing")
+    assert store.retry_failed(cid, "answer")
+    assert not store.retry_failed(cid, "answer")
+    row = store.get(cid, "answer")
+    assert row.status == "pending"
+    assert row.error_code is None
+    assert row.voice_profile == "daily-brief"

@@ -1391,6 +1391,7 @@ def create_app(
 
         if generated_audio_coordinator is not None:
             await generated_audio_coordinator.start()
+        app_inst.state.generated_audio_coordinator = generated_audio_coordinator
 
         # Initialise usage telemetry (fire-and-forget; no-op when disabled).
         from omnigent.telemetry import init_client as _init_telemetry
