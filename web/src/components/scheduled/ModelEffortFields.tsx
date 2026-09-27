@@ -6,8 +6,8 @@
 // smart-routing / cost-control / per-turn dynamic model loading — all
 // disproportionate for a saved scheduled task). It reuses the SHARED source of
 // truth for the option lists: CLAUDE_NATIVE_MODELS (the version-agnostic model
-// aliases) and CLAUDE_NATIVE_EFFORTS + the MODEL_SELECT_DEFAULT /
-// EFFORT_SELECT_NONE sentinels from HarnessConfigControls, so the choices never
+// aliases) and CLAUDE_NATIVE_EFFORTS + the MODEL_SELECT_DEFAULT sentinel from
+// HarnessConfigControls, so the choices never
 // drift from the interactive dialog.
 //
 // The parent gates rendering on the selected agent's capability
@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/select";
 import {
   CLAUDE_NATIVE_EFFORTS,
-  EFFORT_SELECT_NONE,
   MODEL_SELECT_DEFAULT,
 } from "@/components/HarnessConfigControls";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
@@ -111,21 +110,20 @@ export function ModelEffortFields({
         <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid="task-effort-control">
           <Label htmlFor="task-effort">Effort</Label>
           <Select
-            value={effort === "" ? EFFORT_SELECT_NONE : effort}
+            value={effort}
             componentId="tasks.scheduled.effort"
             valueHasNoPii
-            onValueChange={(v) => onEffortChange(v === EFFORT_SELECT_NONE ? "" : v)}
+            onValueChange={onEffortChange}
             onOpenChange={onSelectOpenChange}
           >
             <SelectTrigger id="task-effort" data-testid="task-effort-trigger" className="w-full">
-              <SelectValue />
+              <SelectValue placeholder="—" />
             </SelectTrigger>
             <SelectContent
               position="popper"
               align="start"
               className="w-(--radix-select-trigger-width)"
             >
-              <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
               {CLAUDE_NATIVE_EFFORTS.map((e) => (
                 <SelectItem key={e.value} value={e.value}>
                   {e.label}

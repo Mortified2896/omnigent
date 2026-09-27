@@ -195,7 +195,6 @@ import {
 } from "@/components/ui/select";
 import {
   ConfigRow,
-  EFFORT_SELECT_NONE,
   EFFORT_UNAVAILABLE_PLACEHOLDER,
   MODEL_SELECT_DEFAULT,
   MODEL_SELECT_SMART,
@@ -4690,8 +4689,8 @@ function SessionConfigModal({
                 // Routing picks the model (and its effort) per turn, so an
                 // explicit effort is meaningless: the row is frozen and reads as
                 // an em-dash placeholder (Radix shows it for the empty value).
-                value={draftRoutingOn ? "" : (displayedEffort ?? EFFORT_SELECT_NONE)}
-                onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? null : v)}
+                value={draftRoutingOn ? "" : (displayedEffort ?? "")}
+                onValueChange={(v) => setDraftEffort(v || null)}
                 disabled={draftRoutingOn || approvalLocked}
                 componentId="chat.composer.effort"
                 valueHasNoPii
@@ -4708,7 +4707,6 @@ function SessionConfigModal({
                   align="start"
                   className="w-(--radix-select-trigger-width)"
                 >
-                  <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
                   {(approvalLocked ? displayedEffortLevels : draftEffortLevels).map((level) => (
                     <SelectItem
                       key={level}
@@ -5067,7 +5065,7 @@ function useSessionConfigSummary({
   // effort per turn, so a pinned effort doesn't apply and would mislead.
   if (showEffort && !routingOn) {
     const effortValue = formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex");
-    rows.push({ label: "Effort", value: effortValue ?? "Default" });
+    rows.push({ label: "Effort", value: effortValue ?? EFFORT_UNAVAILABLE_PLACEHOLDER });
   }
   if (!routingOn) {
     const source =

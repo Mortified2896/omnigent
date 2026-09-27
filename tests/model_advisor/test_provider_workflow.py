@@ -63,6 +63,7 @@ def frozen_round() -> LogicalFrozenRound:
         host_id="host",
         round_id="round-1",
         settings_revision="settings-1",
+        catalog_revision="catalog-1",
         task="Explain the task.",
         preferences=PREFERENCES,
         catalog=CATALOG,
@@ -82,6 +83,7 @@ def test_advisor_input_is_transport_neutral_and_human_independent() -> None:
         host_id="host",
         round_id="round-2",
         settings_revision="settings-1",
+        catalog_revision="catalog-1",
         task="Explain the task.",
         preferences=direct,
         catalog=CATALOG,
@@ -100,6 +102,84 @@ def test_advisor_engine_can_be_independent_of_answer_pool() -> None:
     assert frozen.advisor.choice_id not in {choice.choice_id for choice in frozen.pool}
     assert frozen.advisor_transport.choice == frozen.advisor
     assert LogicalFrozenRound.from_payload(frozen.to_payload()) == frozen
+
+
+def test_v3_freezes_qualified_enabled_and_exact_prompt_pools_separately() -> None:
+    frozen = frozen_round()
+    prompt_ids = {candidate["candidate_id"] for candidate in frozen.advisor_input()["candidates"]}
+    assert {choice.choice_id for choice in frozen.qualified_pool} == {
+        choice.choice_id for choice in CATALOG
+    }
+    assert frozen.user_enabled_pool == frozen.pool
+    assert prompt_ids == {choice.choice_id for choice in frozen.pool}
+    assert frozen.catalog_revision == "catalog-1"
+    assert frozen.preferences_snapshot is not None
+    assert frozen.preferences_snapshot.to_payload()["schema_version"] == 3
+    assert frozen.decision_context_payload()["advisor_visible_choice_ids"] == sorted(prompt_ids)
+    assert frozen.decision_context_payload()["human_choice_id"] == GLM_HIGH.choice_id
+
+
+def test_disabled_advisor_model_stays_qualified_but_outside_answer_prompt() -> None:
+    disabled = replace(
+        PREFERENCES,
+        openai=replace(
+            PREFERENCES.openai,
+            disabled_model_ids=(OPENAI_LOW.model_id,),
+        ),
+    )
+    frozen = freeze_logical_round(
+        owner_id="owner",
+        host_id="host",
+        round_id="disabled-advisor",
+        settings_revision="settings-2",
+        catalog_revision="catalog-1",
+        task="Explain the task.",
+        preferences=disabled,
+        catalog=CATALOG,
+        routes_by_choice=ROUTES,
+        human_choice_id=GLM_HIGH.choice_id,
+    )
+    assert frozen.advisor == OPENAI_HIGH
+    assert frozen.advisor.choice_id not in {choice.choice_id for choice in frozen.pool}
+    assert (OPENAI_LOW.choice_id, "model_disabled") in frozen.excluded_choices
+    assert (OPENAI_HIGH.choice_id, "model_disabled") in frozen.excluded_choices
+    assert frozen.preferences_snapshot is not None
+    assert frozen.preferences_snapshot.openai.selected_choice_ids == (OPENAI_LOW.choice_id,)
+
+
+def test_old_v2_frozen_round_remains_readable_under_its_original_shape() -> None:
+    current = frozen_round().to_payload()
+    legacy = {
+        key: value
+        for key, value in current.items()
+        if key
+        not in {
+            "catalog_revision",
+            "qualified_pool",
+            "user_enabled_pool",
+            "excluded_choices",
+            "preferences_snapshot",
+        }
+    }
+    legacy["schema_version"] = 2
+    decoded = LogicalFrozenRound.from_payload(legacy)
+    assert decoded.schema_version == 2
+    assert decoded.to_payload() == legacy
+    assert decoded.decision_context_payload() is None
+
+
+def test_trace_attributes_are_compact_and_digest_exact_visible_choices() -> None:
+    frozen = frozen_round()
+    attributes = frozen.trace_attributes()
+    assert attributes["advisor.catalog_revision"] == "catalog-1"
+    assert attributes["advisor.settings_revision"] == "settings-1"
+    assert attributes["advisor.qualified_pool_size"] == len(CATALOG)
+    assert attributes["advisor.visible_pool_size"] == len(frozen.pool)
+    assert attributes["advisor.visible_pool_digest"] == frozen.visible_pool_digest
+    assert attributes["advisor.human_choice_id"] == GLM_HIGH.choice_id
+    assert attributes["advisor.executor_choice_id"] == OPENAI_HIGH.choice_id
+    assert all(not isinstance(value, (list, dict, tuple)) for value in attributes.values())
+    assert "advisor_visible_pool" not in attributes
 
 
 def test_logical_review_and_override_keep_original_assignment() -> None:

@@ -63,6 +63,7 @@ class _FakeRegistry:
         self._models = models
         self.sent: list[Any] = []
         self.advisor_calls = 0
+        self.advisor_requests: list[dict[str, Any]] = []
 
     def get(self, _host_id: str) -> _FakeConnection | None:
         return self._conn
@@ -82,6 +83,7 @@ class _FakeRegistry:
             result = {"status": "ok", "models": [dict(row) for row in models]}
         elif isinstance(frame, HostAdvisorCallFrame):
             self.advisor_calls += 1
+            self.advisor_requests.append(frame.request)
             future = conn.pending_advisor_calls.pop(frame.request_id, None)
             result = conn.reply
         else:  # pragma: no cover - test guard
@@ -214,6 +216,7 @@ def test_build_host_catalog_groups_explicit_equivalent_provider_routes() -> None
     openai = next(option for option in catalog.logical_options if option.choice == PROVIDER_OPENAI)
     assert set(openai.model_ids) == {"gpt-5.5", "codex/gpt-5.5"}
     assert set(openai.access_lanes) == {"codex-direct", "omniroute"}
+    assert set(openai.default_access_lanes) == {"codex-direct", "omniroute"}
     assert {route.transport for route in catalog.routes_by_choice[PROVIDER_OPENAI.choice_id]} == {
         "direct",
         "omniroute",
@@ -310,6 +313,32 @@ def test_codex_direct_gpt_6_luna_uses_its_canonical_choice() -> None:
         == {"direct"}
         for option in catalog.logical_options
     )
+
+
+def test_logical_catalog_exposes_default_reasoning_lanes() -> None:
+    from omnigent.server.model_advisor_service import build_host_catalog
+
+    catalog = build_host_catalog(
+        [
+            {
+                "id": "codex/gpt-5.6-luna",
+                "model": "codex/gpt-5.6-luna",
+                "displayName": "GPT-5.6-Luna",
+                "accessLane": "codex-direct",
+                "defaultReasoningEffort": "medium",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "medium", "isDefault": True},
+                ],
+            }
+        ]
+    )
+
+    defaults = {
+        option.choice.reasoning_effort: option.default_access_lanes
+        for option in catalog.logical_options
+    }
+    assert defaults == {"low": (), "medium": ("codex-direct",)}
 
 
 def _candidate_id(lane: str, model: str, effort: str) -> str:
@@ -426,7 +455,7 @@ def test_preferences_roundtrip_and_owner_isolation(db_uri) -> None:
         loaded = client.get("/v1/model-advisor/preferences?host_id=host_1", headers=ALICE).json()
         assert loaded["version"] == 1
         assert loaded["preferences"]["advisor_candidate_id"] == ADVISOR_ID
-        assert loaded["logical_preferences"]["schema_version"] == 2
+        assert loaded["logical_preferences"]["schema_version"] == 3
         assert loaded["logical_preferences"]["route_review_required"] == ["openai", "glm"]
 
         # Another (valid) identity that does not own the host is forbidden
@@ -525,7 +554,8 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
         assert payload["state"] in {"advisor_pending", "awaiting_confirmation"}
         round_id = payload["round_id"]
 
-        # The frozen snapshot (full task + pool) must never reach the browser.
+        # The private frozen record (owner, full task and routing evidence)
+        # remains server-side; the public review has no private record field.
         assert "frozen" not in create.text
         assert "Write the acceptance suite" not in create.text
 
@@ -627,7 +657,7 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
             headers=JSON_ALICE,
         )
         assert saved.status_code == 200
-        assert saved.json()["preferences"]["schema_version"] == 2
+        assert saved.json()["preferences"]["schema_version"] == 3
         catalog = client.get("/v1/model-advisor/catalog?host_id=host_1", headers=ALICE).json()
         assert len(catalog["logical_options"]) == 2
         assert set(catalog["logical_options"][0]["model_ids"]) in (
@@ -684,6 +714,114 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
             "answer",
         ]
         assert attempts[-1]["connection_id"] == "omniroute-glm-coding-plan"
+        context = confirm.json()["decision_context"]
+        assert context["recommendation_choice_id"] == PROVIDER_OPENAI.choice_id
+        assert context["assigned_choice_id"] == PROVIDER_GLM.choice_id
+        assert context["execution_choice_id"] == PROVIDER_GLM.choice_id
+        assert context["actual_execution_choice_id"] == PROVIDER_GLM.choice_id
+        assert context["actual_route"]["transport"] == "omniroute"
+
+
+def test_v3_round_persists_qualified_and_exact_advisor_visible_pools(db_uri) -> None:
+    reply = {
+        "status": "ok",
+        "raw_output": json.dumps(
+            {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "The enabled choice fits."}
+        ),
+        "latency_ms": 120,
+    }
+    client, registry = client_for(
+        db_uri,
+        reply=reply,
+        randbelow=lambda _bound: 0,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+    )
+    preferences = {
+        "schema_version": 3,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "disabled_model_ids": [],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_GLM.choice_id],
+                "disabled_model_ids": ["glm-5.3"],
+                "transport_preference": "direct_only",
+            },
+        },
+        # The advisor executor remains independent from answer-pool switches.
+        "advisor_choice_id": PROVIDER_GLM.choice_id,
+        "human_probability_percent": 35,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    with client:
+        saved = client.put(
+            "/v1/model-advisor/preferences",
+            json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+            headers=JSON_ALICE,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["preferences"]["providers"]["glm"]["disabled_model_ids"] == ["glm-5.3"]
+        created = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Choose among the enabled answers",
+                "human_choice_id": PROVIDER_OPENAI.choice_id,
+                "submission_key": "v3-context",
+            },
+            headers=JSON_ALICE,
+        )
+        assert created.status_code == 200
+        payload = _settle(client, created.json()["round_id"])
+        replay = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Choose among the enabled answers",
+                "human_choice_id": PROVIDER_OPENAI.choice_id,
+                "submission_key": "v3-context",
+            },
+            headers=JSON_ALICE,
+        )
+        assert replay.status_code == 200
+        assert replay.json()["round_id"] == payload["round_id"]
+        assert registry.advisor_calls == 1
+
+    context = payload["decision_context"]
+    prompt_candidates = registry.advisor_requests[0]["candidates"]
+    qualified_ids = set(context["qualified_choice_ids"])
+    visible_ids = set(context["advisor_visible_choice_ids"])
+    prompt_ids = {candidate["candidate_id"] for candidate in prompt_candidates}
+    assert context["schema_version"] == 3
+    assert context["catalog_revision"]
+    assert context["settings_revision"].startswith("prefs-v1-")
+    assert qualified_ids == {PROVIDER_OPENAI.choice_id, PROVIDER_GLM.choice_id}
+    assert visible_ids == prompt_ids == {PROVIDER_OPENAI.choice_id}
+    assert context["user_enabled_choice_ids"] == context["advisor_visible_choice_ids"]
+    assert context["advisor_executor_choice_id"] == PROVIDER_GLM.choice_id
+    assert context["advisor_executor_model_id"] == "glm-5.3"
+    assert context["human_choice_id"] == PROVIDER_OPENAI.choice_id
+    assert context["excluded_choices"] == [
+        {
+            "choice_id": PROVIDER_GLM.choice_id,
+            "reason": "model_disabled",
+            "choice": {
+                "choice_id": PROVIDER_GLM.choice_id,
+                "provider": "glm",
+                "model_id": "glm-5.3",
+                "reasoning_effort": "high",
+            },
+        }
+    ]
+    assert len(context["visible_pool_digest"]) == 64
 
 
 def test_provider_grouped_round_uses_typed_pre_dispatch_fallback(db_uri) -> None:

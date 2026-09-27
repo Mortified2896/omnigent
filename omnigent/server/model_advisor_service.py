@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from fastapi import HTTPException
+from opentelemetry import trace
 
 from omnigent.entities.conversation import Conversation
 from omnigent.model_advisor_core import AccessClass, AdvisorContractError, Candidate, PoolSnapshot
@@ -71,6 +72,29 @@ from omnigent.stores.conversation_store import (
 from omnigent.stores.host_store import HostStore
 
 _logger = logging.getLogger("omnigent.server.model_advisor")
+
+
+def _set_observational_attributes(span: Any, attributes: dict[str, str | int]) -> None:
+    """Apply compact OTel metadata without making tracing part of decisions."""
+    for key, value in attributes.items():
+        try:
+            span.set_attribute(key, value)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            _logger.debug("Could not set advisor trace attribute %s", key, exc_info=True)
+
+
+def _set_review_trace_attributes(span: Any, review: object) -> None:
+    if not isinstance(review, dict):
+        return
+    assigned = review.get("original_assignment")
+    attributes: dict[str, str | int] = {}
+    recommendation = review.get("advisor_choice_id")
+    if isinstance(recommendation, str):
+        attributes["advisor.recommendation_choice_id"] = recommendation
+    if isinstance(assigned, dict) and isinstance(assigned.get("selected_choice_id"), str):
+        attributes["advisor.assigned_choice_id"] = assigned["selected_choice_id"]
+    _set_observational_attributes(span, attributes)
+
 
 RESERVED_USER_LOCAL = "local"
 
@@ -193,12 +217,13 @@ class CatalogOption:
 
 @dataclass(frozen=True)
 class LogicalCatalogOption:
-    """One canonical provider/checkpoint/effort choice for v2 clients."""
+    """One canonical provider/checkpoint/effort choice for logical clients."""
 
     choice: LogicalChoice
     display_name: str
     model_ids: tuple[str, ...]
     access_lanes: tuple[str, ...]
+    default_access_lanes: tuple[str, ...] = ()
     available: bool = True
     unavailable_reason: str | None = None
 
@@ -265,6 +290,7 @@ def build_host_catalog(models: list[dict[str, Any]]) -> HostCatalog:
     logical_display_names: dict[str, str] = {}
     logical_aliases: dict[str, set[str]] = {}
     logical_lanes: dict[str, set[str]] = {}
+    logical_default_lanes: dict[str, set[str]] = {}
     legacy_candidate_to_choice: dict[str, LogicalChoice] = {}
     for row in models:
         if not isinstance(row, dict):
@@ -328,6 +354,10 @@ def build_host_catalog(models: list[dict[str, Any]]) -> HostCatalog:
                     logical_display_names.setdefault(choice.choice_id, display_name)
                     logical_aliases.setdefault(choice.choice_id, set()).add(model_id.strip())
                     logical_lanes.setdefault(choice.choice_id, set()).add(candidate.lane_id)
+                    if is_default:
+                        logical_default_lanes.setdefault(choice.choice_id, set()).add(
+                            candidate.lane_id
+                        )
                     legacy_candidate_to_choice[candidate.candidate_id] = choice
             except ProviderPolicyError:
                 # The v1 route can remain available to old rounds while an
@@ -352,6 +382,7 @@ def build_host_catalog(models: list[dict[str, Any]]) -> HostCatalog:
             ),
             model_ids=tuple(sorted(logical_aliases[choice.choice_id])),
             access_lanes=tuple(sorted(logical_lanes[choice.choice_id])),
+            default_access_lanes=tuple(sorted(logical_default_lanes.get(choice.choice_id, set()))),
         )
         for choice in logical_choices
     )
@@ -537,7 +568,7 @@ class ModelAdvisorService:
         if record.payload.get("schema_version") == 1:
             # Migration is a read-time projection.  The v1 record and every
             # historical lane-pinned round remain untouched until the owner
-            # explicitly saves the v2 settings after reviewing connections.
+            # explicitly saves the current settings after reviewing connections.
             try:
                 catalog = await self.load_catalog(user_id, host_id)
                 logical_preferences = migrate_v1(
@@ -546,7 +577,7 @@ class ModelAdvisorService:
                 )
             except (HTTPException, AdvisorContractError, ProviderPolicyError):
                 logical_preferences = None
-        elif record.payload.get("schema_version") == 2:
+        elif record.payload.get("schema_version") in (2, 3):
             try:
                 logical_preferences = ProviderPreferences.from_payload(record.payload)
             except ProviderPolicyError:
@@ -652,7 +683,7 @@ class ModelAdvisorService:
         logical_preferences: ProviderPreferences | None = None,
     ) -> dict[str, Any]:
         payload = record.payload
-        if payload.get("schema_version") == 2:
+        if payload.get("schema_version") in (2, 3):
             stored_preferences: dict[str, Any] = dict(payload)
         else:
             stored_preferences = {
@@ -726,12 +757,12 @@ class ModelAdvisorService:
                     "No saved provider-grouped advisor settings for this host; save defaults first"
                 ),
             )
-        if record.payload.get("schema_version") != 2:
+        if record.payload.get("schema_version") not in (2, 3):
             raise HTTPException(
                 status_code=422,
                 detail=(
                     "Review the migrated provider settings and save them before "
-                    "starting a v2 round"
+                    "starting a provider-grouped round"
                 ),
             )
         try:
@@ -772,7 +803,7 @@ class ModelAdvisorService:
         identity_key = submission_key or "implicit"
         submission_identity = document_digest(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "owner": owner,
                 "host": host_id,
                 "profile": profile,
@@ -792,6 +823,7 @@ class ModelAdvisorService:
                 host_id=host_id,
                 round_id=round_id,
                 settings_revision=settings_revision,
+                catalog_revision=catalog.catalog_revision,
                 task=task,
                 preferences=frozen_preferences,
                 catalog=catalog.logical_choices,
@@ -821,9 +853,16 @@ class ModelAdvisorService:
     def _schedule_provider_advisor(
         self, owner: str, host_id: str, round_id: str, frozen: LogicalFrozenRound
     ) -> None:
-        """Run one v2 advisor call using the frozen physical transport plan."""
+        """Run one advisor call using the frozen physical transport plan."""
 
         async def _run() -> None:
+            with trace.get_tracer(__name__).start_as_current_span(
+                "model_advisor.advisor_decision"
+            ) as span:
+                _set_observational_attributes(span, frozen.trace_attributes())
+                await _run_advisor(span)
+
+        async def _run_advisor(span: Any) -> None:
             route = frozen.advisor_transport.primary
 
             async def record_attempt(status: str, *, reason: str | None = None) -> None:
@@ -879,7 +918,7 @@ class ModelAdvisorService:
                 return
             await record_attempt("completed")
             try:
-                await asyncio.to_thread(
+                claim = await asyncio.to_thread(
                     self.repository.finish_provider_advice,
                     owner,
                     host_id,
@@ -888,6 +927,8 @@ class ModelAdvisorService:
                     randbelow=self._randbelow,
                     overhead=self._advisor_overhead(result),
                 )
+                if claim.acquired:
+                    _set_review_trace_attributes(span, claim.record.payload.get("review"))
             except AdvisorConflict:
                 return
             except (LogicalAdvisorError, ProviderPolicyError) as exc:
@@ -1130,10 +1171,23 @@ class ModelAdvisorService:
             "etag": record.etag,
             "failure_reason": payload.get("failure_reason"),
         }
+        decision_context: dict[str, Any] | None = None
+        raw_frozen = payload.get("frozen")
+        if payload.get("schema_version") == 2 and isinstance(raw_frozen, dict):
+            frozen = LogicalFrozenRound.from_payload(raw_frozen)
+            context = frozen.decision_context_payload()
+            if context is not None:
+                decision_context = context
         review = payload.get("review")
         if isinstance(review, dict):
             if payload.get("schema_version") == 2:
                 decision = LogicalReviewDecision.from_payload(review)
+                if decision_context is not None:
+                    decision_context["recommendation_choice_id"] = decision.advisor_choice_id
+                    decision_context["assigned_choice_id"] = (
+                        decision.original_assignment.selected_choice_id
+                    )
+                    decision_context["execution_choice_id"] = decision.execution_choice_id
                 projection["review"] = {
                     "schema_version": 2,
                     "round_fingerprint": decision.round_fingerprint,
@@ -1177,8 +1231,32 @@ class ModelAdvisorService:
         if payload.get("schema_version") == 2:
             if isinstance(payload.get("execution_plan"), dict):
                 projection["execution_plan"] = payload["execution_plan"]
+                if decision_context is not None:
+                    raw_choice = payload["execution_plan"].get("choice")
+                    if isinstance(raw_choice, dict):
+                        execution_choice = LogicalChoice(**raw_choice)
+                        decision_context["actual_execution_choice_id"] = execution_choice.choice_id
             if isinstance(payload.get("transport_attempts"), list):
                 projection["transport_attempts"] = payload["transport_attempts"]
+                if decision_context is not None:
+                    actual_route = next(
+                        (
+                            attempt
+                            for attempt in reversed(payload["transport_attempts"])
+                            if isinstance(attempt, dict)
+                            and attempt.get("phase") == "answer"
+                            and attempt.get("status") == "session_bound"
+                        ),
+                        None,
+                    )
+                    if actual_route is not None:
+                        decision_context["actual_route"] = {
+                            key: actual_route[key]
+                            for key in ("transport", "route_id", "model", "effort")
+                            if isinstance(actual_route.get(key), str)
+                        }
+        if decision_context is not None:
+            projection["decision_context"] = decision_context
         return projection
 
     async def confirm_round(

@@ -12,18 +12,19 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, cast
 
 from omnigent.model_advisor_provider_policy import (
+    ExclusionReason,
     LogicalChoice,
     Preference,
     ProviderPreferences,
     QualifiedRoute,
     TransportPlan,
     advisor_input,
-    effective_pool,
     plan_transport,
     resolve_advisor,
+    selection_snapshot,
 )
 from omnigent.model_advisor_workflow import canonical_json, document_digest, task_fingerprint
 
@@ -87,7 +88,7 @@ def parse_logical_advisor_result(
 
 @dataclass(frozen=True)
 class LogicalFrozenRound:
-    """A v2 round whose semantic choices contain no transport identity."""
+    """A frozen logical round; v3 adds immutable decision-context evidence."""
 
     owner_id: str
     host_id: str
@@ -100,7 +101,12 @@ class LogicalFrozenRound:
     human_probability_percent: int
     transport_preferences: tuple[tuple[str, Preference], ...]
     advisor_transport: TransportPlan
-    schema_version: Literal[2] = 2
+    schema_version: Literal[2, 3] = 3
+    catalog_revision: str | None = None
+    qualified_pool: tuple[LogicalChoice, ...] = ()
+    user_enabled_pool: tuple[LogicalChoice, ...] = ()
+    excluded_choices: tuple[tuple[str, ExclusionReason], ...] = ()
+    preferences_snapshot: ProviderPreferences | None = None
 
     def __post_init__(self) -> None:
         for value in (self.owner_id, self.host_id, self.round_id, self.settings_revision):
@@ -122,7 +128,7 @@ class LogicalFrozenRound:
             or not 0 <= self.human_probability_percent <= 100
         ):
             raise LogicalAdvisorError("Invalid assignment probability")
-        if self.schema_version != 2:
+        if self.schema_version not in (2, 3):
             raise LogicalAdvisorError("Unsupported logical round version")
         if len(self.transport_preferences) != 2 or {
             provider for provider, _ in self.transport_preferences
@@ -134,10 +140,122 @@ class LogicalFrozenRound:
                 "direct_only",
             }:
                 raise LogicalAdvisorError("Invalid frozen connection preference")
+        if self.schema_version == 2:
+            if (
+                self.catalog_revision is not None
+                or self.qualified_pool
+                or self.user_enabled_pool
+                or self.excluded_choices
+                or self.preferences_snapshot is not None
+            ):
+                raise LogicalAdvisorError("A v2 frozen round cannot carry v3 decision context")
+        else:
+            _id(self.catalog_revision)
+            if not isinstance(self.preferences_snapshot, ProviderPreferences):
+                raise LogicalAdvisorError("V3 frozen round requires a preferences snapshot")
+            if self.preferences_snapshot.to_payload().get("schema_version") != 3:
+                raise LogicalAdvisorError("V3 frozen round requires schema-v3 preferences")
+            for collection, label in (
+                (self.qualified_pool, "qualified"),
+                (self.user_enabled_pool, "user-enabled"),
+            ):
+                if not isinstance(collection, tuple) or not collection:
+                    raise LogicalAdvisorError(f"V3 round requires a nonempty {label} pool")
+                if any(not isinstance(choice, LogicalChoice) for choice in collection):
+                    raise LogicalAdvisorError(f"Invalid {label} choice snapshot")
+                if len({choice.choice_id for choice in collection}) != len(collection):
+                    raise LogicalAdvisorError(f"Duplicate {label} choice snapshot")
+            qualified_ids = {choice.choice_id for choice in self.qualified_pool}
+            user_enabled_ids = {choice.choice_id for choice in self.user_enabled_pool}
+            visible_ids = {choice.choice_id for choice in self.pool}
+            if not user_enabled_ids <= qualified_ids:
+                raise LogicalAdvisorError("User-enabled choices exceed the qualified catalog")
+            if visible_ids != user_enabled_ids:
+                raise LogicalAdvisorError("Advisor-visible pool must match user-enabled choices")
+            if not visible_ids <= qualified_ids:
+                raise LogicalAdvisorError("Advisor-visible choices exceed the qualified catalog")
+            if self.advisor.choice_id not in qualified_ids:
+                raise LogicalAdvisorError("Advisor executor is outside the qualified catalog")
+            if any(
+                reason
+                not in {
+                    "provider_disabled",
+                    "model_disabled",
+                    "reasoning_not_selected",
+                    "unavailable_from_live_catalog",
+                }
+                for _choice_id, reason in self.excluded_choices
+            ):
+                raise LogicalAdvisorError("Invalid frozen choice exclusion reason")
+            exclusion_ids = [choice_id for choice_id, _reason in self.excluded_choices]
+            if len(set(exclusion_ids)) != len(exclusion_ids):
+                raise LogicalAdvisorError("Duplicate frozen choice exclusion")
 
     @property
     def fingerprint(self) -> str:
-        return document_digest({"policy_version": "visible-advisor-v2", **self.to_payload()})
+        policy = "visible-advisor-v2" if self.schema_version == 2 else "visible-advisor-v3"
+        return document_digest({"policy_version": policy, **self.to_payload()})
+
+    @property
+    def visible_pool_digest(self) -> str:
+        return document_digest(sorted(choice.choice_id for choice in self.pool))
+
+    def trace_attributes(self) -> dict[str, str | int]:
+        """Compact, bounded span attributes; full snapshots stay in the DB."""
+        if self.schema_version != 3:
+            return {}
+        return {
+            "advisor.catalog_revision": self.catalog_revision or "",
+            "advisor.settings_revision": self.settings_revision,
+            "advisor.settings_schema_version": 3,
+            "advisor.qualified_pool_size": len(self.qualified_pool),
+            "advisor.visible_pool_size": len(self.pool),
+            "advisor.visible_pool_digest": self.visible_pool_digest,
+            "advisor.human_choice_id": self.human_choice_id,
+            "advisor.executor_choice_id": self.advisor.choice_id,
+            "advisor.executor_model_id": self.advisor.model_id,
+        }
+
+    def decision_context_payload(self) -> dict[str, object] | None:
+        """Return the inspectable non-secret projection for new v3 rounds."""
+        if self.schema_version != 3 or self.preferences_snapshot is None:
+            return None
+
+        def snapshot(choice: LogicalChoice) -> dict[str, str]:
+            return {
+                "choice_id": choice.choice_id,
+                "provider": choice.provider,
+                "model_id": choice.model_id,
+                "reasoning_effort": choice.reasoning_effort,
+            }
+
+        qualified_by_id = {choice.choice_id: choice for choice in self.qualified_pool}
+        excluded = []
+        for choice_id, reason in self.excluded_choices:
+            choice = qualified_by_id.get(choice_id)
+            entry: dict[str, object] = {"choice_id": choice_id, "reason": reason}
+            if choice is not None:
+                entry["choice"] = snapshot(choice)
+            excluded.append(entry)
+        return {
+            "schema_version": 3,
+            "catalog_revision": self.catalog_revision,
+            "settings_revision": self.settings_revision,
+            "preferences_snapshot": self.preferences_snapshot.to_payload(),
+            "qualified_choice_ids": sorted(qualified_by_id),
+            "qualified_pool": [snapshot(choice) for choice in self.qualified_pool],
+            "user_enabled_choice_ids": sorted(
+                choice.choice_id for choice in self.user_enabled_pool
+            ),
+            "user_enabled_pool": [snapshot(choice) for choice in self.user_enabled_pool],
+            "advisor_visible_choice_ids": sorted(choice.choice_id for choice in self.pool),
+            "advisor_visible_pool": [snapshot(choice) for choice in self.pool],
+            "excluded_choices": excluded,
+            "visible_pool_digest": self.visible_pool_digest,
+            "human_choice_id": self.human_choice_id,
+            "advisor_executor_choice_id": self.advisor.choice_id,
+            "advisor_executor_model_id": self.advisor.model_id,
+        }
 
     def advisor_input(self) -> dict[str, object]:
         # Routes, account keys, preferences and the human proposal are absent
@@ -151,8 +269,8 @@ class LogicalFrozenRound:
         raise LogicalAdvisorError("Missing frozen provider preference")
 
     def to_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": 2,
+        payload: dict[str, object] = {
+            "schema_version": self.schema_version,
             "owner_id": self.owner_id,
             "host_id": self.host_id,
             "round_id": self.round_id,
@@ -176,11 +294,69 @@ class LogicalFrozenRound:
             "transport_preferences": [list(item) for item in self.transport_preferences],
             "advisor_transport": self.advisor_transport.to_payload(),
         }
+        if self.schema_version == 3:
+            payload.update(
+                {
+                    "catalog_revision": self.catalog_revision,
+                    "qualified_pool": [
+                        {
+                            "provider": choice.provider,
+                            "model_id": choice.model_id,
+                            "reasoning_effort": choice.reasoning_effort,
+                        }
+                        for choice in self.qualified_pool
+                    ],
+                    "user_enabled_pool": [
+                        {
+                            "provider": choice.provider,
+                            "model_id": choice.model_id,
+                            "reasoning_effort": choice.reasoning_effort,
+                        }
+                        for choice in self.user_enabled_pool
+                    ],
+                    "excluded_choices": [
+                        {"choice_id": choice_id, "reason": reason}
+                        for choice_id, reason in self.excluded_choices
+                    ],
+                    "preferences_snapshot": self.preferences_snapshot.to_payload()
+                    if self.preferences_snapshot is not None
+                    else None,
+                }
+            )
+        return payload
 
     @classmethod
     def from_payload(cls, payload: dict) -> LogicalFrozenRound:
-        if not isinstance(payload, dict) or payload.get("schema_version") != 2:
-            raise LogicalAdvisorError("Expected a v2 logical frozen round")
+        if not isinstance(payload, dict) or payload.get("schema_version") not in (2, 3):
+            raise LogicalAdvisorError("Expected a v2 or v3 logical frozen round")
+        version = payload["schema_version"]
+        common_keys = {
+            "schema_version",
+            "owner_id",
+            "host_id",
+            "round_id",
+            "settings_revision",
+            "task",
+            "pool",
+            "advisor",
+            "human_choice_id",
+            "human_probability_percent",
+            "transport_preferences",
+            "advisor_transport",
+        }
+        extra_keys = (
+            {
+                "catalog_revision",
+                "qualified_pool",
+                "user_enabled_pool",
+                "excluded_choices",
+                "preferences_snapshot",
+            }
+            if version == 3
+            else set()
+        )
+        if set(payload) != common_keys | extra_keys:
+            raise LogicalAdvisorError("Unexpected logical frozen round shape")
         raw_pool = payload.get("pool")
         if not isinstance(raw_pool, list):
             raise LogicalAdvisorError("Invalid logical frozen pool")
@@ -191,13 +367,46 @@ class LogicalFrozenRound:
         if not isinstance(raw_preferences, list):
             raise LogicalAdvisorError("Invalid frozen connection preferences")
         preferences = tuple(
-            (str(item[0]), str(item[1]))
+            (str(item[0]), cast(Preference, str(item[1])))
             for item in raw_preferences
             if isinstance(item, list) and len(item) == 2
         )
         if len(preferences) != len(raw_preferences):
             raise LogicalAdvisorError("Invalid frozen connection preference")
         advisor = LogicalChoice(**payload["advisor"])
+        qualified_pool: tuple[LogicalChoice, ...] = ()
+        user_enabled_pool: tuple[LogicalChoice, ...] = ()
+        excluded_choices: tuple[tuple[str, ExclusionReason], ...] = ()
+        preferences_snapshot = None
+        if version == 3:
+            raw_qualified = payload["qualified_pool"]
+            raw_user_enabled = payload["user_enabled_pool"]
+            raw_excluded = payload["excluded_choices"]
+            if not isinstance(raw_qualified, list) or not isinstance(raw_user_enabled, list):
+                raise LogicalAdvisorError("Invalid v3 qualified or enabled choice snapshot")
+            if not isinstance(raw_excluded, list):
+                raise LogicalAdvisorError("Invalid v3 excluded choice list")
+            qualified_pool = tuple(
+                LogicalChoice(**choice) for choice in raw_qualified if isinstance(choice, dict)
+            )
+            user_enabled_pool = tuple(
+                LogicalChoice(**choice) for choice in raw_user_enabled if isinstance(choice, dict)
+            )
+            if len(qualified_pool) != len(raw_qualified) or len(user_enabled_pool) != len(
+                raw_user_enabled
+            ):
+                raise LogicalAdvisorError("Invalid v3 logical choice snapshot")
+            parsed_excluded = []
+            for value in raw_excluded:
+                if not isinstance(value, dict) or set(value) != {"choice_id", "reason"}:
+                    raise LogicalAdvisorError("Invalid v3 choice exclusion")
+                _id(value["choice_id"])
+                parsed_excluded.append((value["choice_id"], value["reason"]))
+            excluded_choices = tuple(parsed_excluded)
+            raw_preferences = payload["preferences_snapshot"]
+            if not isinstance(raw_preferences, dict) or raw_preferences.get("schema_version") != 3:
+                raise LogicalAdvisorError("Expected schema-v3 preferences snapshot")
+            preferences_snapshot = ProviderPreferences.from_payload(raw_preferences)
         return cls(
             owner_id=payload["owner_id"],
             host_id=payload["host_id"],
@@ -210,6 +419,12 @@ class LogicalFrozenRound:
             human_probability_percent=payload["human_probability_percent"],
             transport_preferences=preferences,
             advisor_transport=TransportPlan.from_payload(payload["advisor_transport"]),
+            schema_version=version,
+            catalog_revision=payload.get("catalog_revision"),
+            qualified_pool=qualified_pool,
+            user_enabled_pool=user_enabled_pool,
+            excluded_choices=excluded_choices,
+            preferences_snapshot=preferences_snapshot,
         )
 
 
@@ -219,6 +434,7 @@ def freeze_logical_round(
     host_id: str,
     round_id: str,
     settings_revision: str,
+    catalog_revision: str,
     task: str,
     preferences: ProviderPreferences,
     catalog: tuple[LogicalChoice, ...],
@@ -226,7 +442,7 @@ def freeze_logical_round(
     human_choice_id: str,
 ) -> LogicalFrozenRound:
     """Freeze the logical pool and advisor route before the single call."""
-    pool = effective_pool(preferences, catalog)
+    pool, exclusions = selection_snapshot(preferences, catalog)
     by_id = {choice.choice_id: choice for choice in pool}
     if human_choice_id not in by_id:
         raise LogicalAdvisorError("Human choice is outside the active logical answer pool")
@@ -252,6 +468,12 @@ def freeze_logical_round(
             ("glm", preferences.glm.transport_preference),
         ),
         advisor_transport=advisor_plan,
+        schema_version=3,
+        catalog_revision=catalog_revision,
+        qualified_pool=tuple(sorted(catalog, key=lambda choice: choice.choice_id)),
+        user_enabled_pool=pool,
+        excluded_choices=exclusions,
+        preferences_snapshot=preferences,
     )
 
 

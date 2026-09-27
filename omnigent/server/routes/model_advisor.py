@@ -3,7 +3,8 @@
 Mounted only when the ``model_advisor`` release feature is enabled, so the
 API is invisible (404) while the gate is off. Every route derives the owner
 from authentication, verifies host ownership, and projects public DTOs —
-the private frozen round snapshot never reaches a browser.
+the private frozen round record stays server-side while a bounded, non-secret
+decision-context projection exposes the choices and revisions for inspection.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from omnigent.model_advisor_core import AdvisorContractError
 from omnigent.model_advisor_provider_policy import ProviderPolicyError, ProviderPreferences
@@ -39,22 +40,41 @@ class AdvisorPreferencesBody(BaseModel):
 
 
 class ProviderSelectionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool
     collapsed: bool
     selected_choice_ids: list[str] = Field(max_length=128)
+    # Present only in v3. V2 payloads keep their exact prior meaning and are
+    # upgraded by the strict policy parser with an empty disabled-model list.
+    disabled_model_ids: list[str] | None = Field(default=None, max_length=128)
     transport_preference: Literal["omniroute_preferred", "direct_only"]
 
 
 class ProviderPreferencesBody(BaseModel):
-    """V2 logical settings; route/account metadata never comes from this DTO."""
+    """V2/v3 logical settings; route/account metadata never comes from this DTO."""
 
-    schema_version: Literal[2]
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[2, 3]
     enabled: bool
     providers: dict[str, ProviderSelectionBody]
     advisor_choice_id: str | None = None
     human_probability_percent: int = Field(ge=0, le=100, default=50)
     unresolved_legacy_ids: list[str] = Field(max_length=128, default_factory=list)
     route_review_required: list[Literal["openai", "glm"]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_versioned_model_switches(self) -> ProviderPreferencesBody:
+        for value in self.providers.values():
+            has_model_switches = "disabled_model_ids" in value.model_fields_set
+            if self.schema_version == 2 and has_model_switches:
+                raise ValueError("disabled_model_ids requires preference schema v3")
+            if self.schema_version == 3 and (
+                not has_model_switches or value.disabled_model_ids is None
+            ):
+                raise ValueError("schema v3 requires disabled_model_ids for each provider")
+        return self
 
 
 class SavePreferencesRequest(BaseModel):
@@ -128,7 +148,7 @@ def create_model_advisor_router(
     ) -> AdvisorPreferences | ProviderPreferences:
         if isinstance(body, ProviderPreferencesBody):
             try:
-                return ProviderPreferences.from_payload(body.model_dump())
+                return ProviderPreferences.from_payload(body.model_dump(exclude_none=True))
             except ProviderPolicyError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         try:
@@ -170,6 +190,7 @@ def create_model_advisor_router(
                     "reasoning_effort": option.choice.reasoning_effort,
                     "model_ids": list(option.model_ids),
                     "access_lanes": list(option.access_lanes),
+                    "default_access_lanes": list(option.default_access_lanes),
                     "available": option.available,
                     "unavailable_reason": option.unavailable_reason,
                 }
