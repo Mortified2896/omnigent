@@ -28,6 +28,13 @@ import {
   ProviderAdvisorReview,
   type ProviderReviewView,
 } from "@/model-advisor/ProviderAdvisorReview";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
 const POLL_INTERVAL_MS = 1500;
@@ -129,17 +136,29 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const savedAdvisorUnavailable = Boolean(
     editor.draft?.advisor_choice_id && (!savedAdvisor || !savedAdvisor.available),
   );
+  const advisorModelKey = (option: LogicalOption) =>
+    JSON.stringify([option.provider, option.model_id]);
+  const advisorModelValue = savedAdvisor
+    ? advisorModelKey(savedAdvisor)
+    : (editor.draft?.advisor_choice_id ?? "");
+  const advisorEfforts = options.filter(
+    (option) => savedAdvisor && advisorModelKey(option) === advisorModelKey(savedAdvisor),
+  );
   const advisorOptions = useMemo<ModelPickerOption[]>(() => {
-    const result = options.map((option) => ({
-      id: option.model_id,
-      selectionId: option.choice_id,
-      displayName: `${option.display_name} · ${effortLabel(option.reasoning_effort)}`,
-      groupLabel: PROVIDER_LABELS[option.provider],
-      description: `${option.model_id} · ${option.provider} · ${effortLabel(option.reasoning_effort)}`,
-      disabledReason: option.available
+    const models = new Map<string, LogicalOption[]>();
+    for (const option of options) {
+      const key = JSON.stringify([option.provider, option.model_id]);
+      models.set(key, [...(models.get(key) ?? []), option]);
+    }
+    const result: ModelPickerOption[] = Array.from(models, ([key, choices]) => ({
+      id: choices[0].model_id,
+      selectionId: key,
+      displayName: choices[0].display_name,
+      groupLabel: PROVIDER_LABELS[choices[0].provider],
+      disabledReason: choices.some((option) => option.available)
         ? undefined
-        : (option.unavailable_reason ?? "Unavailable from the current host catalog"),
-      keywords: [option.model_id, option.provider, option.reasoning_effort, ...option.model_ids],
+        : "Unavailable from the current host catalog",
+      keywords: choices.flatMap((option) => option.model_ids),
     }));
     if (!savedAdvisor && editor.draft?.advisor_choice_id) {
       result.unshift({
@@ -147,9 +166,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         selectionId: editor.draft.advisor_choice_id,
         displayName: "Saved advisor model unavailable",
         groupLabel: "Unavailable",
-        description: "Choose an available advisor model explicitly",
-        disabledReason: "Choose an available advisor model explicitly",
-        keywords: [],
+        disabledReason: "Choose an available recommender model explicitly",
       });
     }
     return result;
@@ -527,39 +544,73 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       {editor.draft?.enabled && advisorModelTarget
         ? createPortal(
             <div
-              className="flex w-full min-w-0 basis-full flex-col items-start gap-1"
+              className="flex w-full min-w-0 basis-full flex-wrap items-center gap-1"
               data-testid="model-advisor-composer-choice"
             >
               <label
                 htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-                className="text-xs text-muted-foreground"
+                className="min-w-0 flex-1 text-xs text-muted-foreground"
               >
-                Advisor model
+                Recommender
               </label>
-              <SearchableModelPicker
-                id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-                value={editor.draft.advisor_choice_id ?? ""}
-                options={advisorOptions}
-                loading={false}
-                includeDefault={false}
-                placeholder="Choose advisor model + reasoning…"
-                ariaLabel="Advisor model"
-                testId="model-advisor-advisor-choice"
-                searchTestId="model-advisor-advisor-choice-search"
-                disabled={round.busy}
-                onValueChange={(choiceId) =>
-                  editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
-                }
-              />
+              <div className="flex shrink-0 flex-nowrap items-center gap-1">
+                <SearchableModelPicker
+                  id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+                  value={advisorModelValue}
+                  options={advisorOptions}
+                  loading={false}
+                  compact
+                  includeDefault={false}
+                  placeholder="Choose model…"
+                  ariaLabel="Recommender model"
+                  testId="model-advisor-advisor-choice"
+                  searchTestId="model-advisor-advisor-choice-search"
+                  disabled={round.busy}
+                  onValueChange={(modelKey) => {
+                    const choices = options.filter(
+                      (option) => advisorModelKey(option) === modelKey && option.available,
+                    );
+                    const choice =
+                      choices.find(
+                        (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
+                      ) ?? choices[0];
+                    if (editor.draft && choice)
+                      handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+                  }}
+                />
+                <Select
+                  value={savedAdvisor?.choice_id ?? ""}
+                  disabled={round.busy || !savedAdvisor}
+                  onValueChange={(choiceId) =>
+                    editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
+                  }
+                >
+                  <SelectTrigger
+                    className="data-[size=default]:h-9 w-24 min-w-0 px-2 md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+                    aria-label="Recommender reasoning effort"
+                    data-testid="model-advisor-advisor-effort"
+                  >
+                    <SelectValue placeholder="Reasoning" />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    {advisorEfforts.map((option) => (
+                      <SelectItem
+                        key={option.choice_id}
+                        value={option.choice_id}
+                        disabled={!option.available}
+                      >
+                        {effortLabel(option.reasoning_effort)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               {savedAdvisorUnavailable ? (
                 <p role="alert" className="text-xs text-destructive">
                   The saved advisor model is unavailable from this host. Choose a valid model and
                   reasoning level to continue.
                 </p>
               ) : null}
-              <p className="text-xs text-muted-foreground">
-                Answer-pool switches do not disable this advisor selection.
-              </p>
             </div>,
             advisorModelTarget,
           )

@@ -237,7 +237,7 @@ it("hydrates saved provider-grouped settings and shows enabled panel", async () 
     name: /Compare my choice with the advisor/,
   }) as HTMLInputElement;
   expect(checkbox.checked).toBe(true);
-  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GLM-5.3 · High");
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GLM-5.3");
   expect(screen.queryByText("Your model and reasoning")).toBeNull();
   expect(screen.queryByTestId("model-advisor-human-choice")).toBeNull();
   const advisorPicker = screen.getByTestId("model-advisor-advisor-choice");
@@ -246,6 +246,30 @@ it("hydrates saved provider-grouped settings and shows enabled panel", async () 
     advisorPicker.compareDocumentPosition(allowedAnswers) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(await screen.findByText(/Save defaults/)).toBeDefined();
+});
+
+it("selects recommender reasoning independently and persists the logical choice", async () => {
+  catalog.logical_options = [
+    LOGICAL_A,
+    LOGICAL_B,
+    {
+      ...LOGICAL_B,
+      choice_id: "choice-glm-medium",
+      reasoning_effort: "medium",
+    },
+  ];
+  mountSection();
+  await screen.findByRole("combobox", { name: "Recommender model" });
+  expect(screen.getByText("Recommender", { exact: true })).toBeDefined();
+  fireEvent.click(screen.getByRole("combobox", { name: "Recommender reasoning effort" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Medium" }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GLM-5.3");
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await waitFor(() => {
+    const saved = api.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(saved).toBeDefined();
+    expect(JSON.parse(saved![1].body).preferences.advisor_choice_id).toBe("choice-glm-medium");
+  });
 });
 
 it("keeps provider and model switches from erasing remembered reasoning", async () => {
@@ -288,11 +312,9 @@ it("allows an answer-disabled model as the independent advisor choice", async ()
   fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }));
   const advisor = screen.getByTestId("model-advisor-advisor-choice");
   fireEvent.click(advisor);
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5 · Medium/ }));
-  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5 · Medium");
-  expect(
-    screen.getByText(/Answer-pool switches do not disable this advisor selection/),
-  ).toBeTruthy();
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
 });
 
 it("does not replace a saved advisor choice missing from the live host catalog", async () => {

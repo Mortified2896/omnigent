@@ -256,6 +256,13 @@ async def _drive_composer_proposal(base_url: str, session_id: str, tmp_path: Pat
             advisor_picker = page.get_by_test_id("model-advisor-advisor-choice")
             advisor_box = await advisor_picker.bounding_box()
             assert advisor_box is not None and model_box["y"] < advisor_box["y"]
+            await expect(page.get_by_text("Recommender", exact=True)).to_be_visible()
+            advisor_effort_box = await page.get_by_test_id(
+                "model-advisor-advisor-effort"
+            ).bounding_box()
+            assert advisor_effort_box is not None
+            assert abs(advisor_box["y"] - advisor_effort_box["y"]) < 2
+            assert advisor_box["width"] == model_box["width"]
             assert (
                 await page.get_by_test_id("model-advisor-composer-choice")
                 .get_by_test_id("model-advisor-advisor-choice")

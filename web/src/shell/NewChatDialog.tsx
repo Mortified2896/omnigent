@@ -4868,7 +4868,7 @@ export function NewChatLandingScreen() {
                           }}
                         >
                           <SelectTrigger
-                            className="h-9 w-24 min-w-0 px-2 md:h-8 md:w-auto md:min-w-24 md:px-2.5"
+                            className="data-[size=default]:h-9 w-24 min-w-0 px-2 md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
                             data-testid="new-chat-landing-inline-effort"
                             aria-label="Reasoning effort"
                           >
