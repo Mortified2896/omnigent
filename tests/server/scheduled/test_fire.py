@@ -1577,3 +1577,23 @@ def test_scheduled_access_lane_default_and_invalid(monkeypatch):
     monkeypatch.setenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "typo")
     with pytest.raises(ValueError, match="Invalid"):
         _scheduled_codex_access_lane("codex-native-ui")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timezone", "expected"),
+    [
+        ("Asia/Hong_Kong", "daily-brief — September 27, 2026"),
+        ("UTC", "daily-brief — September 26, 2026"),
+    ],
+)
+async def test_session_title_includes_run_date_in_task_timezone(
+    timezone: str, expected: str
+) -> None:
+    from omnigent.server.scheduled.fire import _create_session
+
+    store = FakeConversationStore()
+    deps = _deps(FakeScheduledTaskStore(), conversation_store=store)
+    task = _task(name="daily-brief", timezone=timezone)
+    await _create_session(deps, task, 1790463600)
+    assert store.created[0]["title"] == expected

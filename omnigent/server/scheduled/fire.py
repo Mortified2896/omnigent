@@ -51,7 +51,9 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from omnigent.db.db_models import workspace_scope
 from omnigent.entities import Conversation, ScheduledTask
@@ -418,7 +420,7 @@ async def _run_fire_for_task(
             return
 
         try:
-            conv = await _create_session(deps, effective)
+            conv = await _create_session(deps, effective, scheduled_at)
         except Exception:
             _logger.exception("scheduled fire: failed to create session for task %s", task.id)
             await _record_run(
@@ -729,15 +731,17 @@ def _scheduled_codex_access_lane(agent_name: str | None) -> str | None:
     return lane or None
 
 
-async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
+async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int) -> Conversation:
     """Create a conversation bound to the task's agent, carrying the stored spec."""
     # Connected-host, existing-workspace runs create the conversation directly.
     # Future execution modes such as managed sandbox, branch selection, and
     # replay/backfill must use shared session-create orchestration.
+    run_date = datetime.fromtimestamp(scheduled_at, ZoneInfo(task.timezone))
+    title = f"{task.name} — {run_date:%B} {run_date.day}, {run_date.year}"
     conv: Conversation = await asyncio.to_thread(
         deps.conversation_store.create_conversation,
         agent_id=task.agent_id,
-        title=task.name,
+        title=title,
         host_id=task.host_id,
         workspace=task.workspace,
         terminal_launch_args=await _permission_mode_launch_args(deps, task),
