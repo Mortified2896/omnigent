@@ -153,10 +153,27 @@
   margin-top: 12px;
 }
 .advisor-providers .advisor-model-row legend {
-  float: left;
-  width: 34%;
-  padding-right: 12px;
-  line-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  float: none;
+  width: 100%;
+  line-height: 1.25;
+}
+.advisor-model-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.advisor-model-switch input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
 }
 .advisor-efforts {
   display: flex;
@@ -184,25 +201,6 @@
 }
 .advisor-unavailable-label {
   font-size: 0.7rem;
-}
-.advisor-providers .advisor-own-model {
-  border: 1px solid #cbd2dc;
-  padding: 12px;
-  margin: 18px 0;
-  border-radius: 12px;
-}
-.advisor-own-model label {
-  display: block;
-  font-size: 0.875rem;
-}
-.advisor-own-model select {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  border: 1px solid #cbd2dc;
-  border-radius: 8px;
-  margin: 8px 0;
-  padding: 8px;
 }
 .advisor-providers .advisor-balance {
   width: 100%;

@@ -970,8 +970,12 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     const model = screen.getByTestId("new-chat-landing-inline-model");
-    expect(model).toHaveClass("w-40", "max-w-full", "sm:w-60");
+    expect(model).toHaveClass("w-28", "max-w-full", "sm:w-60");
     expect(primaryActions).toContainElement(model);
+    expect(screen.getByTestId("new-chat-landing-model-effort")).toContainElement(model);
+    expect(screen.getByTestId("new-chat-landing-model-effort")).toContainElement(
+      screen.getByTestId("new-chat-landing-inline-effort"),
+    );
     expect(primaryActions).toContainElement(screen.getByTestId("new-chat-landing-inline-effort"));
     expect(screen.getByTestId("new-chat-landing-actions")).toContainElement(
       screen.getByTestId("new-chat-landing-submit"),
@@ -1507,7 +1511,7 @@ describe("NewChatLandingScreen", () => {
     ]);
   });
 
-  it("uses the advisor as the only model surface while enabled and restores the composer pick when disabled", async () => {
+  it("keeps the normal composer model and reasoning selectors while the advisor is enabled", async () => {
     const advisorOptions: LogicalOption[] = [
       {
         choice_id: "choice-openai-medium",
@@ -1586,6 +1590,7 @@ describe("NewChatLandingScreen", () => {
     expect(advisorSwitch.checked).toBe(false);
     expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy();
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
+    expect(screen.queryByTestId("model-advisor-advisor-choice")).toBeNull();
     expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
 
     openSelect("new-chat-landing-inline-model");
@@ -1597,13 +1602,12 @@ describe("NewChatLandingScreen", () => {
     await waitFor(() =>
       expect(screen.getByText("Allowed answers — shared by you and the advisor")).toBeTruthy(),
     );
-    expect(screen.queryByTestId("new-chat-landing-inline-model")).toBeNull();
-    expect(screen.queryByTestId("new-chat-landing-inline-effort")).toBeNull();
-    await waitFor(() =>
-      expect(screen.getByLabelText("Your model and reasoning")).toHaveValue(
-        advisorOptions[0].choice_id,
-      ),
-    );
+    expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("GPT-5.5");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Medium");
+    expect(screen.queryByTestId("model-advisor-human-choice")).toBeNull();
+    expect(screen.queryByText("Your model and reasoning")).toBeNull();
+    const advisorPicker = screen.getByTestId("model-advisor-advisor-choice");
+    expect(screen.getByTestId("model-advisor-composer-choice")).toContainElement(advisorPicker);
 
     fireEvent.click(screen.getByRole("switch", { name: /Compare my choice with the advisor/ }));
     await waitFor(() =>
@@ -1617,6 +1621,7 @@ describe("NewChatLandingScreen", () => {
     );
     await waitFor(() => expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy());
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
+    expect(screen.queryByTestId("model-advisor-advisor-choice")).toBeNull();
     expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
   });
 

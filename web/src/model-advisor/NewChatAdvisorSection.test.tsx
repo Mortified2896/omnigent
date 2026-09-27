@@ -32,6 +32,7 @@ const LOGICAL_A = {
   reasoning_effort: "medium",
   model_ids: ["gpt-5.5", "codex/gpt-5.5"],
   access_lanes: ["codex-direct", "omniroute"],
+  default_access_lanes: ["codex-direct"],
   available: true,
 };
 const LOGICAL_B = {
@@ -73,6 +74,7 @@ let prefsDto: Record<string, unknown>;
 let roundState: string;
 let rounds: Record<string, Record<string, unknown>>;
 let failNext: number | null;
+let advisorModelTarget: HTMLDivElement;
 
 function roundPayload(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -89,6 +91,8 @@ function roundPayload(id: string, overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   api.mockReset();
+  advisorModelTarget = document.createElement("div");
+  document.body.appendChild(advisorModelTarget);
   catalog = {
     object: "model_advisor.catalog",
     catalog_revision: "rev1",
@@ -198,7 +202,10 @@ beforeEach(() => {
     throw new Error(`Unexpected API call: ${url}`);
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  advisorModelTarget.remove();
+});
 
 const GLM_PICK = { model: "glm-5.3", accessLane: "glm-direct", effort: "high" };
 
@@ -210,6 +217,7 @@ function mountSection(overrides: Partial<Parameters<typeof NewChatAdvisorSection
       humanPick={GLM_PICK}
       launchAgentId="ag_1"
       launchWorkspace="/repo"
+      advisorModelTarget={advisorModelTarget}
       onLaunched={() => {}}
       {...overrides}
     />,
@@ -229,10 +237,77 @@ it("hydrates saved provider-grouped settings and shows enabled panel", async () 
     name: /Compare my choice with the advisor/,
   }) as HTMLInputElement;
   expect(checkbox.checked).toBe(true);
-  expect(screen.getByLabelText("Choose the advisor independently")).toHaveValue(
-    LOGICAL_B.choice_id,
-  );
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GLM-5.3 · High");
+  expect(screen.queryByText("Your model and reasoning")).toBeNull();
+  expect(screen.queryByTestId("model-advisor-human-choice")).toBeNull();
+  const advisorPicker = screen.getByTestId("model-advisor-advisor-choice");
+  const allowedAnswers = screen.getByText("Allowed answers — shared by you and the advisor");
+  expect(
+    advisorPicker.compareDocumentPosition(allowedAnswers) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
   expect(await screen.findByText(/Save defaults/)).toBeDefined();
+});
+
+it("keeps provider and model switches from erasing remembered reasoning", async () => {
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+
+  const terra = screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }) as HTMLInputElement;
+  const effort = screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement;
+  expect(terra.checked).toBe(true);
+  expect(effort.checked).toBe(true);
+
+  fireEvent.click(terra);
+  expect(
+    (screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }) as HTMLInputElement).checked,
+  ).toBe(false);
+  expect(
+    (screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement).checked,
+  ).toBe(true);
+  expect(screen.getByRole("status")).toHaveTextContent("1 active combinations");
+
+  const openai = screen.getByRole("switch", { name: "Enable OpenAI answers" }) as HTMLInputElement;
+  fireEvent.click(openai);
+  expect(
+    (screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement).checked,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("switch", { name: "Enable OpenAI answers" }));
+  expect(
+    (screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }) as HTMLInputElement).checked,
+  ).toBe(false);
+
+  fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }));
+  expect(
+    (screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement).checked,
+  ).toBe(true);
+});
+
+it("allows an answer-disabled model as the independent advisor choice", async () => {
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }));
+  const advisor = screen.getByTestId("model-advisor-advisor-choice");
+  fireEvent.click(advisor);
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5 · Medium/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5 · Medium");
+  expect(
+    screen.getByText(/Answer-pool switches do not disable this advisor selection/),
+  ).toBeTruthy();
+});
+
+it("does not replace a saved advisor choice missing from the live host catalog", async () => {
+  prefsDto = {
+    ...prefsDto,
+    logical_preferences: { ...V2_PREFERENCES, advisor_choice_id: "saved-choice-missing" },
+  };
+  mountSection();
+  await screen.findByText(/saved advisor model is unavailable from this host/i);
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent(
+    "Saved advisor model unavailable",
+  );
+  expect(
+    (screen.getByRole("button", { name: "Get recommendation" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
 });
 
 it("ignores hydration responses from a host that is no longer selected", async () => {
@@ -267,6 +342,7 @@ it("ignores hydration responses from a host that is no longer selected", async (
       humanPick={GLM_PICK}
       launchAgentId="ag_1"
       launchWorkspace="/repo"
+      advisorModelTarget={advisorModelTarget}
       onLaunched={() => {}}
     />,
   );
@@ -305,7 +381,7 @@ it("reserves a logical round on Get recommendation and shows the review", async 
   expect(body.human_choice_id).toBe(LOGICAL_B.choice_id);
   expect(body.human_candidate_id).toBeUndefined();
   expect(body.submission_key).toEqual(expect.any(String));
-  expect(body.preferences.schema_version).toBe(2);
+  expect(body.preferences.schema_version).toBe(3);
 });
 
 it("does not reserve a round without the composer prompt", async () => {
@@ -337,6 +413,70 @@ it("requires the exact lane, model, and reasoning effort", async () => {
   const button = screen.getByRole("button", { name: "Get recommendation" }) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
   expect(screen.getByText(/Choose an allowed model/)).toBeDefined();
+});
+
+it("maps the composer Default effort to the host catalog's lane-specific default choice", async () => {
+  mountSection({
+    humanPick: { model: "codex/gpt-5.5", accessLane: "codex-direct", effort: "" },
+  });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  await waitFor(() => expect(screen.getByLabelText("Review model assignment")).toBeDefined());
+  const posted = api.mock.calls.find(
+    ([url, options]) => url === "/v1/model-advisor/rounds" && options?.method === "POST",
+  );
+  assert(posted !== undefined);
+  expect(JSON.parse((posted[1] as RequestInit).body as string).human_choice_id).toBe(
+    LOGICAL_A.choice_id,
+  );
+});
+
+it("uses the current composer model and reasoning choice when creating each round", async () => {
+  const view = mountSection({
+    humanPick: { model: "glm-5.3", accessLane: "glm-direct", effort: "high" },
+  });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  await waitFor(() => expect(screen.getByLabelText("Review model assignment")).toBeDefined());
+
+  let posted = api.mock.calls.find(
+    ([url, options]) => url === "/v1/model-advisor/rounds" && options?.method === "POST",
+  );
+  assert(posted !== undefined);
+  expect(JSON.parse((posted[1] as RequestInit).body as string).human_choice_id).toBe(
+    LOGICAL_B.choice_id,
+  );
+
+  view.rerender(
+    <NewChatAdvisorSection
+      hostId="host_1"
+      task="Write a test suite"
+      humanPick={{ model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" }}
+      launchAgentId="ag_1"
+      launchWorkspace="/repo"
+      advisorModelTarget={advisorModelTarget}
+      onLaunched={() => {}}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Get recommendation" }).hasAttribute("disabled"),
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  await waitFor(() =>
+    expect(
+      api.mock.calls.filter(
+        ([url, options]) => url === "/v1/model-advisor/rounds" && options?.method === "POST",
+      ),
+    ).toHaveLength(2),
+  );
+  posted = api.mock.calls.filter(
+    ([url, options]) => url === "/v1/model-advisor/rounds" && options?.method === "POST",
+  )[1];
+  expect(JSON.parse((posted[1] as RequestInit).body as string).human_choice_id).toBe(
+    LOGICAL_A.choice_id,
+  );
 });
 
 it("confirms the logical assignment and reports the bound session", async () => {
