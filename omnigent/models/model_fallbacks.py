@@ -24,6 +24,58 @@ class StaticModelFallback:
     discovery_gap: str
 
 
+# Exact Advisor wire-id → canonical-id pairs, stored as adjacent strings in
+# each owned record. These provider spellings are lane-qualified from live
+# catalog probes and must not become prefix-based model classification.
+_ADVISOR_OPENAI_ROUTE_ALIASES: dict[str, StaticModelFallback] = {
+    "omniroute": StaticModelFallback(
+        model_ids=(
+            "codex/gpt-6-astra",
+            "gpt-6-astra",
+            "codex/gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "codex/gpt-5.6-terra",
+            "gpt-5.6-terra",
+            "codex/gpt-5.6-luna",
+            "gpt-5.6-luna",
+            "codex/gpt-5.5",
+            "gpt-5.5",
+        ),
+        owner="Model Advisor route qualification (omnigent.server.model_advisor_service)",
+        provenance="lane-qualified live Codex and OmniRoute catalogs on the RTX host",
+        discovery_gap=(
+            "provider-prefixed wire ids are not interchangeable by prefix; each exact pair "
+            "requires both lane probes to establish equivalence"
+        ),
+    ),
+    "direct": StaticModelFallback(
+        model_ids=(
+            "codex/gpt-6-astra",
+            "gpt-6-astra",
+            "codex/gpt-6-luna",
+            "gpt-6-luna",
+            "codex/gpt-5.6-luna",
+            "gpt-5.6-luna",
+        ),
+        owner="Model Advisor route qualification (omnigent.server.model_advisor_service)",
+        provenance="lane-qualified live Codex catalog on the RTX host",
+        discovery_gap=(
+            "provider-prefixed wire ids are not interchangeable by prefix; each exact pair "
+            "requires a direct-lane probe to establish equivalence"
+        ),
+    ),
+}
+
+
+def advisor_openai_route_aliases(transport: str) -> dict[str, str]:
+    """Return exact owned wire-id → canonical-id pairs for one transport."""
+    record = _ADVISOR_OPENAI_ROUTE_ALIASES.get(transport)
+    if record is None:
+        raise ValueError(f"unknown Advisor OpenAI transport: {transport}")
+    pairs = zip(record.model_ids[::2], record.model_ids[1::2], strict=True)
+    return dict(pairs)
+
+
 #: Curated preference ORDER for codex's current arms — a ranking hint only
 #: (preferred first), consumed by the Databricks live-discovery ranker to
 #: sort servable ids. It never invents picker rows: ids absent from the live

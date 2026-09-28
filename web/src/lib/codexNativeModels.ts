@@ -72,12 +72,15 @@ export function isCodexNativeModel(
 }
 
 /**
- * Effort levels for the currently selected Codex model.
+ * Explicit effort levels for the currently selected Codex model.
  *
  * Codex's ``isDefault`` is a static property of its bundled catalog, not the
  * model a session launched with, so it cannot stand in for an unresolved
  * model — it would offer levels the running model rejects. An unknown model
  * yields no levels and the caller hides the picker until the model resolves.
+ * The catalog's ``default`` sentinel means "use the model's configured
+ * default" rather than an explicit reasoning level, so it is omitted from the
+ * picker while every other catalog-provided level is kept.
  *
  * @param options - Codex model options from the session snapshot.
  * @param currentModel - Active override or bound model id.
@@ -94,7 +97,12 @@ export function codexEffortLevelsForModel(
     new Set(
       efforts
         .map((option) => option.reasoningEffort)
-        .filter((effort): effort is string => typeof effort === "string" && effort.length > 0),
+        .filter(
+          (effort): effort is string =>
+            typeof effort === "string" &&
+            effort.length > 0 &&
+            effort.trim().toLowerCase() !== "default",
+        ),
     ),
   );
 }

@@ -970,8 +970,12 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     const model = screen.getByTestId("new-chat-landing-inline-model");
-    expect(model).toHaveClass("w-40", "max-w-full", "sm:w-60");
+    expect(model).toHaveClass("w-28", "max-w-full", "sm:w-60");
     expect(primaryActions).toContainElement(model);
+    expect(screen.getByTestId("new-chat-landing-model-effort")).toContainElement(model);
+    expect(screen.getByTestId("new-chat-landing-model-effort")).toContainElement(
+      screen.getByTestId("new-chat-landing-inline-effort"),
+    );
     expect(primaryActions).toContainElement(screen.getByTestId("new-chat-landing-inline-effort"));
     expect(screen.getByTestId("new-chat-landing-actions")).toContainElement(
       screen.getByTestId("new-chat-landing-submit"),
@@ -1482,22 +1486,23 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByText("Read only")).toBeTruthy();
   });
 
-  it("shows GPT-5.6 Luna's exact effort capabilities plus Default in the inline selector", () => {
+  it("shows GPT-5.6 Luna's exact effort capabilities without a Default choice", () => {
     renderLanding();
     selectAgent("a2");
 
     openSelect("new-chat-landing-inline-model");
     expect(screen.getByText("OmniRoute")).toBeTruthy();
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
-      "GPT-5.6 Luna",
-      "GPT-5.5",
-    ]);
+    expect(screen.getByRole("option", { name: "Default" })).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("option")
+        .filter((option) => option.hasAttribute("data-access-lane"))
+        .map((option) => option.textContent),
+    ).toEqual(["GPT-5.6 Luna", "GPT-5.5"]);
     fireEvent.click(screen.getByText("GPT-5.6 Luna"));
 
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
       "None",
       "Low",
       "Medium",
@@ -1507,7 +1512,7 @@ describe("NewChatLandingScreen", () => {
     ]);
   });
 
-  it("uses the advisor as the only model surface while enabled and restores the composer pick when disabled", async () => {
+  it("keeps the normal composer model and reasoning selectors while the advisor is enabled", async () => {
     const advisorOptions: LogicalOption[] = [
       {
         choice_id: "choice-openai-medium",
@@ -1586,6 +1591,7 @@ describe("NewChatLandingScreen", () => {
     expect(advisorSwitch.checked).toBe(false);
     expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy();
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
+    expect(screen.queryByTestId("model-advisor-advisor-choice")).toBeNull();
     expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
 
     openSelect("new-chat-landing-inline-model");
@@ -1597,13 +1603,12 @@ describe("NewChatLandingScreen", () => {
     await waitFor(() =>
       expect(screen.getByText("Allowed answers — shared by you and the advisor")).toBeTruthy(),
     );
-    expect(screen.queryByTestId("new-chat-landing-inline-model")).toBeNull();
-    expect(screen.queryByTestId("new-chat-landing-inline-effort")).toBeNull();
-    await waitFor(() =>
-      expect(screen.getByLabelText("Your model and reasoning")).toHaveValue(
-        advisorOptions[0].choice_id,
-      ),
-    );
+    expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("GPT-5.5");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Medium");
+    expect(screen.queryByTestId("model-advisor-human-choice")).toBeNull();
+    expect(screen.queryByText("Your model and reasoning")).toBeNull();
+    const advisorPicker = screen.getByTestId("model-advisor-advisor-choice");
+    expect(screen.getByTestId("model-advisor-composer-choice")).toContainElement(advisorPicker);
 
     fireEvent.click(screen.getByRole("switch", { name: /Compare my choice with the advisor/ }));
     await waitFor(() =>
@@ -1617,6 +1622,7 @@ describe("NewChatLandingScreen", () => {
     );
     await waitFor(() => expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy());
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
+    expect(screen.queryByTestId("model-advisor-advisor-choice")).toBeNull();
     expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
   });
 
@@ -1628,7 +1634,6 @@ describe("NewChatLandingScreen", () => {
 
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
       "None",
       "Low",
       "Medium",
@@ -1764,7 +1769,6 @@ describe("NewChatLandingScreen", () => {
     // fixture) and persisted for the next session.
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
       "Low",
       "High",
       "Max",
@@ -1855,7 +1859,7 @@ describe("NewChatLandingScreen", () => {
     closeMenu();
   });
 
-  it("omits model and effort launch overrides when both inline selectors are Default", async () => {
+  it("omits model and effort launch overrides when no explicit choices are selected", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ id: "conv_new" }),
@@ -1864,7 +1868,7 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     expect(screen.getByTestId("new-chat-landing-inline-model").textContent).toContain("Default");
-    expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Default");
+    expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("—");
     const { raw, body } = await submitAndReadBody();
     expect(body.model_override).toBeUndefined();
     expect(body.reasoning_effort).toBeUndefined();
@@ -1872,7 +1876,7 @@ describe("NewChatLandingScreen", () => {
     expect(raw).not.toContain("reasoning_effort");
   });
 
-  it("resets Luna Max to Default when switching to GPT-5.5", async () => {
+  it("clears Luna Max when switching to GPT-5.5", async () => {
     renderLanding();
     selectAgent("a2");
     openSelect("new-chat-landing-inline-model");
@@ -1884,7 +1888,7 @@ describe("NewChatLandingScreen", () => {
     openSelect("new-chat-landing-inline-model");
     fireEvent.click(screen.getByText("GPT-5.5"));
     await waitFor(() =>
-      expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Default"),
+      expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("—"),
     );
   });
 
@@ -3430,9 +3434,8 @@ describe("NewChatLandingScreen agent picker + config gear", () => {
     expect(tooltip.textContent).toContain("Permissions:");
     expect(tooltip.textContent).toContain("Plan");
     expect(tooltip.textContent).toContain("Model:");
-    // Unset effort reads "Default" (mirrors the modal), never the "—" sentinel.
-    expect(tooltip.textContent).toContain("Effort: Default");
-    expect(tooltip.textContent).not.toContain("—");
+    // Unset effort is visible as no explicit level, not as a selectable Default.
+    expect(tooltip.textContent).toContain("Effort: —");
   });
 
   it("reflects an armed Codex bypass as the Approval value in the gear tooltip", async () => {
@@ -4562,8 +4565,12 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
     expect(body.smart_routing_message).toBe("refactor the auth module");
     // The placeholder the server rebinds off.
     expect(body.agent_id).toBe("a1");
-    // Nothing that describes the placeholder's own CLI may ride along.
-    expect(body.labels).toBeUndefined();
+    // The placeholder's CLI labels don't ride along, but its routing state is
+    // persisted so the UI can report which router/backend owns the run.
+    expect(body.labels).toEqual({
+      "omnigent.routing_backend": "databricks-aigw",
+      "omnigent.routing_policy": "native",
+    });
     expect(body.terminal_launch_args).toBeUndefined();
     expect(body.model_override).toBeUndefined();
     expect(body.reasoning_effort).toBeUndefined();
@@ -5085,7 +5092,10 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
       // A pinned model would silently disable routing for the whole session.
       expect(body.model_override).toBeUndefined();
       expect(body.reasoning_effort).toBeUndefined();
-      expect(body.labels).toBeUndefined();
+      expect(body.labels).toEqual({
+        "omnigent.routing_backend": "unavailable",
+        "omnigent.routing_policy": "native",
+      });
       expect(body.terminal_launch_args).toBeUndefined();
       // A bundle agent arms at create and routes on the first message event —
       // its harness isn't decided yet, so there is nothing to route here.

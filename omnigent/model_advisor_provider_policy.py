@@ -16,6 +16,12 @@ from typing import Literal
 Provider = Literal["openai", "glm"]
 Transport = Literal["omniroute", "direct"]
 Preference = Literal["omniroute_preferred", "direct_only"]
+ExclusionReason = Literal[
+    "provider_disabled",
+    "model_disabled",
+    "reasoning_not_selected",
+    "unavailable_from_live_catalog",
+]
 PROVIDERS: tuple[Provider, ...] = ("openai", "glm")
 
 
@@ -74,11 +80,13 @@ class ProviderSelection:
     collapsed: bool = False
     selected_choice_ids: tuple[str, ...] = ()
     transport_preference: Preference = "omniroute_preferred"
+    disabled_model_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool or type(self.collapsed) is not bool:
             raise ProviderPolicyError("Provider switches must be boolean")
         _ids(self.selected_choice_ids)
+        _ids(self.disabled_model_ids)
         if self.transport_preference not in ("omniroute_preferred", "direct_only"):
             raise ProviderPolicyError("Unsupported transport preference")
 
@@ -132,11 +140,12 @@ class ProviderPreferences:
                 "enabled": value.enabled,
                 "collapsed": value.collapsed,
                 "selected_choice_ids": list(value.selected_choice_ids),
+                "disabled_model_ids": list(value.disabled_model_ids),
                 "transport_preference": value.transport_preference,
             }
 
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "enabled": self.enabled,
             "providers": {"openai": group(self.openai), "glm": group(self.glm)},
             "advisor_choice_id": self.advisor_choice_id,
@@ -158,7 +167,8 @@ class ProviderPreferences:
         }
         if not isinstance(payload, dict) or set(payload) != keys:
             raise ProviderPolicyError("Unexpected preferences shape")
-        if type(payload["schema_version"]) is not int or payload["schema_version"] != 2:
+        version = payload["schema_version"]
+        if type(version) is not int or version not in (2, 3):
             raise ProviderPolicyError("Unsupported preferences schema")
         groups = payload["providers"]
         if not isinstance(groups, dict) or set(groups) != set(PROVIDERS):
@@ -166,23 +176,27 @@ class ProviderPreferences:
         parsed = {}
         for provider in PROVIDERS:
             value = groups[provider]
+            expected_group_keys = {
+                "enabled",
+                "collapsed",
+                "selected_choice_ids",
+                "transport_preference",
+            }
+            if version == 3:
+                expected_group_keys.add("disabled_model_ids")
             if (
                 not isinstance(value, dict)
-                or set(value)
-                != {
-                    "enabled",
-                    "collapsed",
-                    "selected_choice_ids",
-                    "transport_preference",
-                }
+                or set(value) != expected_group_keys
                 or not isinstance(value["selected_choice_ids"], list)
+                or (version == 3 and not isinstance(value["disabled_model_ids"], list))
             ):
                 raise ProviderPolicyError("Unexpected provider settings")
             parsed[provider] = ProviderSelection(
-                value["enabled"],
-                value["collapsed"],
-                tuple(value["selected_choice_ids"]),
-                value["transport_preference"],
+                enabled=value["enabled"],
+                collapsed=value["collapsed"],
+                selected_choice_ids=tuple(value["selected_choice_ids"]),
+                transport_preference=value["transport_preference"],
+                disabled_model_ids=tuple(value.get("disabled_model_ids", ())),
             )
         if not all(
             isinstance(payload[key], list)
@@ -212,22 +226,56 @@ def effective_pool(
         return ()
     if preferences.unresolved_legacy_ids or preferences.route_review_required:
         raise ProviderPolicyError("Review migrated selections/route policy before a new round")
+    return selection_snapshot(preferences, catalog)[0]
+
+
+def selection_snapshot(
+    preferences: ProviderPreferences, catalog: tuple[LogicalChoice, ...]
+) -> tuple[tuple[LogicalChoice, ...], tuple[tuple[str, ExclusionReason], ...]]:
+    """Return user-enabled choices and bounded reasons for excluded choices.
+
+    The qualified input is the live, server-built host catalog. Provider and
+    model switches mask remembered reasoning IDs; they never delete memory.
+    An active stale ID is an error so the server never silently shrinks or
+    substitutes the requested answer pool.
+    """
+    if not preferences.enabled:
+        return (), ()
     by_id = {row.choice_id: row for row in catalog}
     if len(by_id) != len(catalog):
         raise ProviderPolicyError("Catalog contains duplicate logical choices")
-    result = []
+    result: list[LogicalChoice] = []
+    excluded: dict[str, ExclusionReason] = {}
     for group in PROVIDERS:
         selected = preferences.group(group)
-        if not selected.enabled:
-            continue
+        selected_ids = set(selected.selected_choice_ids)
+        for choice in catalog:
+            if choice.provider != group:
+                continue
+            if not selected.enabled:
+                excluded[choice.choice_id] = "provider_disabled"
+            elif choice.model_id in selected.disabled_model_ids:
+                excluded[choice.choice_id] = "model_disabled"
+            elif choice.choice_id not in selected_ids:
+                excluded[choice.choice_id] = "reasoning_not_selected"
+            else:
+                result.append(choice)
         for choice_id in selected.selected_choice_ids:
             row = by_id.get(choice_id)
-            if row is None or row.provider != group:
+            if row is None:
+                if selected.enabled:
+                    raise ProviderPolicyError(
+                        "An active saved choice is unavailable from the live catalog"
+                    )
+                excluded[choice_id] = "unavailable_from_live_catalog"
+            elif row.provider != group:
                 raise ProviderPolicyError("Saved choice is missing or in the wrong provider")
-            result.append(row)
     if not result:
         raise ProviderPolicyError("No active answer combinations")
-    return tuple(sorted(result, key=lambda row: row.choice_id))
+    return (
+        tuple(sorted(result, key=lambda row: row.choice_id)),
+        tuple(sorted(excluded.items())),
+    )
 
 
 def advisor_input(task: str, choices: tuple[LogicalChoice, ...]) -> dict:

@@ -1,4 +1,4 @@
-"""Synthetic, provider-free v2 contracts. No inference or live catalog claims."""
+"""Synthetic provider-choice contracts. No inference or live catalog claims."""
 
 import json
 from dataclasses import replace
@@ -54,6 +54,49 @@ def test_off_on_restores_only_selected_combinations():
     assert off.openai.selected_choice_ids == PREFS.openai.selected_choice_ids
     assert effective_pool(off, CATALOG) == (GLM_HIGH,)
     assert off.toggle_provider("openai", True).to_payload() == before
+
+
+def test_model_off_masks_all_reasoning_choices_without_erasing_memory():
+    off = replace(
+        PREFS,
+        openai=replace(PREFS.openai, disabled_model_ids=(OPENAI_LOW.model_id,)),
+    )
+    assert off.openai.selected_choice_ids == PREFS.openai.selected_choice_ids
+    assert effective_pool(off, CATALOG) == (GLM_HIGH,)
+    assert ProviderPreferences.from_payload(json.loads(json.dumps(off.to_payload()))) == off
+    restored = replace(off, openai=replace(off.openai, disabled_model_ids=()))
+    assert restored.to_payload() == PREFS.to_payload()
+
+
+def test_v2_preferences_migrate_to_v3_without_changing_old_meaning():
+    old = PREFS.to_payload()
+    old["schema_version"] = 2
+    for group in old["providers"].values():
+        group.pop("disabled_model_ids")
+    old["providers"]["openai"].update(enabled=False, collapsed=True)
+    old["providers"]["glm"].update(transport_preference="direct_only")
+    old["unresolved_legacy_ids"] = ["legacy-unresolved"]
+    old["route_review_required"] = ["glm"]
+    migrated = ProviderPreferences.from_payload(old)
+    assert migrated.openai.selected_choice_ids == PREFS.openai.selected_choice_ids
+    assert migrated.openai.enabled is False
+    assert migrated.openai.collapsed is True
+    assert migrated.openai.transport_preference == PREFS.openai.transport_preference
+    assert migrated.glm.transport_preference == "direct_only"
+    assert migrated.advisor_choice_id == PREFS.advisor_choice_id
+    assert migrated.human_probability_percent == PREFS.human_probability_percent
+    assert migrated.unresolved_legacy_ids == ("legacy-unresolved",)
+    assert migrated.route_review_required == ("glm",)
+    expected = {
+        **old,
+        "schema_version": 3,
+        "providers": {
+            provider: {**group, "disabled_model_ids": []}
+            for provider, group in old["providers"].items()
+        },
+    }
+    assert migrated.to_payload() == expected
+    assert migrated.openai.disabled_model_ids == ()
 
 
 def test_pause_retains_advisor_and_ignores_collapse():

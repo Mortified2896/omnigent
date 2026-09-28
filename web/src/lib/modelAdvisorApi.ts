@@ -3,12 +3,14 @@
  * task text and launch context. Conflicts surface as AdvisorConflictError.
  */
 import { authenticatedFetch } from "@/lib/identity";
+import { normalizeProviderPreferences } from "@/model-advisor/providerPreferences";
 import type { ReviewView } from "@/model-advisor/ModelAdvisorPanel";
 import type { AdvisorOption, AdvisorPreferences, SavedPreferences } from "@/model-advisor/editor";
 import type {
   LogicalOption,
   ProviderGroup,
   ProviderPreferences,
+  ProviderPreferencesDto,
 } from "@/model-advisor/providerPreferences";
 
 interface ErrorBody {
@@ -78,6 +80,7 @@ export interface LogicalOptionDto {
   reasoning_effort: string;
   model_ids: string[];
   access_lanes: string[];
+  default_access_lanes?: string[];
   available: boolean;
   unavailable_reason?: string | null;
 }
@@ -88,7 +91,7 @@ export interface PreferencesDto {
   etag: string | null;
   state: string;
   preferences: AdvisorPreferences | null;
-  logical_preferences?: ProviderPreferences | null;
+  logical_preferences?: ProviderPreferencesDto | null;
 }
 
 export interface RoundReviewDto {
@@ -145,6 +148,55 @@ export interface RoundDto {
     reason?: string;
   };
   transport_attempts?: Record<string, unknown>[];
+  decision_context?: {
+    schema_version: 3;
+    catalog_revision: string;
+    settings_revision: string;
+    preferences_snapshot: ProviderPreferences;
+    qualified_choice_ids: string[];
+    qualified_pool: {
+      choice_id: string;
+      provider: ProviderGroup;
+      model_id: string;
+      reasoning_effort: string;
+    }[];
+    user_enabled_choice_ids: string[];
+    user_enabled_pool: {
+      choice_id: string;
+      provider: ProviderGroup;
+      model_id: string;
+      reasoning_effort: string;
+    }[];
+    advisor_visible_choice_ids: string[];
+    advisor_visible_pool: {
+      choice_id: string;
+      provider: ProviderGroup;
+      model_id: string;
+      reasoning_effort: string;
+    }[];
+    excluded_choices: {
+      choice_id: string;
+      reason:
+        | "provider_disabled"
+        | "model_disabled"
+        | "reasoning_not_selected"
+        | "unavailable_from_live_catalog";
+      choice?: {
+        provider: ProviderGroup;
+        model_id: string;
+        reasoning_effort: string;
+      };
+    }[];
+    visible_pool_digest: string;
+    human_choice_id: string;
+    advisor_executor_choice_id: string;
+    advisor_executor_model_id: string;
+    recommendation_choice_id?: string;
+    assigned_choice_id?: string;
+    execution_choice_id?: string;
+    actual_execution_choice_id?: string;
+    actual_route?: Record<string, unknown>;
+  };
   advisor_overhead?: {
     latency_ms: number | null;
     input_tokens: number | null;
@@ -332,6 +384,7 @@ export function toLogicalOptions(catalog: CatalogDto): LogicalOption[] {
     reasoning_effort: option.reasoning_effort,
     model_ids: option.model_ids,
     access_lanes: option.access_lanes,
+    default_access_lanes: option.default_access_lanes ?? [],
     available: option.available,
     unavailable_reason: option.unavailable_reason ?? undefined,
   }));
@@ -374,5 +427,9 @@ export function toSavedProviderPreferences(dto: PreferencesDto): SavedProviderPr
   ) {
     return null;
   }
-  return { version: dto.version, etag: dto.etag, preferences: dto.logical_preferences };
+  return {
+    version: dto.version,
+    etag: dto.etag,
+    preferences: normalizeProviderPreferences(dto.logical_preferences),
+  };
 }

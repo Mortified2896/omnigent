@@ -62,7 +62,6 @@ import {
 import {
   CLAUDE_NATIVE_EFFORTS,
   DescribedSelect,
-  EFFORT_SELECT_NONE,
   MODEL_SELECT_DEFAULT,
   RoutingModelSelect,
   defaultModelLabel,
@@ -282,12 +281,9 @@ function ForkRunConfig({
   }, [sameFamilyAsSource, sourceSession, modelOptions]);
   const seededEffort = useMemo(() => {
     // Seed only an effort the picker can display; a source value outside the
-    // offered vocabulary (e.g. "minimal") falls back to Default rather than
-    // leaving the Select on an empty, unselectable value.
+    // offered vocabulary (e.g. "minimal") uses the no-override placeholder.
     const effort = sameFamilyAsSource ? sourceSession?.reasoningEffort : null;
-    return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort)
-      ? effort
-      : EFFORT_SELECT_NONE;
+    return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort) ? effort : "";
   }, [sameFamilyAsSource, sourceSession]);
   const seededPermission = useMemo(() => {
     // Permission mode rides terminal_launch_args, which the backend copies
@@ -350,8 +346,8 @@ function ForkRunConfig({
   // model absent from the host's catalog) leaves the Model row on its "Default"
   // placeholder, but because it's untouched we send NOTHING rather than
   // `model_override: "default"` — so a fast clone can't silently reset the
-  // source's model. Only a deliberate pick emits an explicit value (including
-  // an explicit "Default", which then means clear-to-agent-default).
+  // source's model. The effort control offers concrete levels only, so an
+  // untouched effort keeps the same inherit / reset behavior.
   const [touched, setTouched] = useState({
     model: false,
     effort: false,
@@ -402,7 +398,7 @@ function ForkRunConfig({
     }
     if (hasPermission) {
       if (touched.effort) {
-        value.reasoningEffort = effort === EFFORT_SELECT_NONE ? "default" : effort;
+        value.reasoningEffort = effort;
       }
       if (touched.permission) {
         value.terminalLaunchArgs =
@@ -487,10 +483,9 @@ function ForkRunConfig({
                 data-testid="fork-session-config-effort"
                 aria-label="Reasoning effort"
               >
-                <SelectValue />
+                <SelectValue placeholder="—" />
               </SelectTrigger>
               <SelectContent position="popper" align="start">
-                <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
                 {CLAUDE_NATIVE_EFFORTS.map((e) => (
                   <SelectItem key={e.value} value={e.value}>
                     {e.label}

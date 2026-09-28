@@ -1,5 +1,5 @@
 /** Controlled provider-group settings section registered in the live composer.
- * Parent owns authenticated v2 API loading/saving and a scope-stable idPrefix.
+ * Parent owns authenticated preference loading/saving and a scope-stable idPrefix.
  * Deliberately no logos, no "manage models" gate and no transport in model choice.
  */
 import type { LogicalOption, ProviderPreferences, ProviderGroup } from "./providerPreferences";
@@ -11,6 +11,7 @@ import {
   groupModels,
   selectTransport,
   toggleEffort,
+  toggleModel,
   toggleProvider,
   updateProvider,
 } from "./providerPreferences";
@@ -20,20 +21,16 @@ export interface ProviderSettingsPanelProps {
   idPrefix: string;
   value: ProviderPreferences | null;
   options: readonly LogicalOption[];
-  humanChoiceId: string | null;
   dirty: boolean;
   busy?: boolean;
   error?: string | null;
   onChange: (preferences: ProviderPreferences) => void;
-  onHumanChoiceChange: (choice: LogicalOption | null) => void;
   onSave: () => void;
 }
 
 export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
-  const { value, options, busy = false, idPrefix, onChange, onHumanChoiceChange } = props;
+  const { value, options, busy = false, idPrefix, onChange } = props;
   if (!value) return <p role="status">Loading saved advisor settings…</p>;
-  const knownIds = new Set(options.map((option) => option.choice_id));
-  const humanChoice = options.find((option) => option.choice_id === props.humanChoiceId);
   const switchControl = (
     <label className="advisor-switch">
       <input
@@ -84,85 +81,6 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
             onChange={onChange}
           />
         ))}
-        <fieldset className="advisor-own-model">
-          <legend>Your model and reasoning</legend>
-          <label htmlFor={`${idPrefix}-human`}>Choose the model you would normally run</label>
-          <select
-            id={`${idPrefix}-human`}
-            aria-label="Your model and reasoning"
-            data-testid="model-advisor-human-choice"
-            value={props.humanChoiceId ?? ""}
-            onChange={(event) =>
-              onHumanChoiceChange(
-                options.find((option) => option.choice_id === event.currentTarget.value) ?? null,
-              )
-            }
-          >
-            <option value="">Choose your model + reasoning…</option>
-            {props.humanChoiceId && !knownIds.has(props.humanChoiceId) ? (
-              <option value={props.humanChoiceId} disabled>
-                Saved human choice unavailable — choose explicitly
-              </option>
-            ) : null}
-            {PROVIDER_GROUPS.map((provider) => (
-              <optgroup key={provider} label={PROVIDER_LABELS[provider]}>
-                {groupModels(options, provider).flatMap((model) =>
-                  model.options.map((option) => (
-                    <option
-                      key={option.choice_id}
-                      value={option.choice_id}
-                      disabled={!option.available}
-                    >
-                      {model.display_name} · {effortLabel(option.reasoning_effort)}
-                      {!option.available ? " — unavailable" : ""}
-                    </option>
-                  )),
-                )}
-              </optgroup>
-            ))}
-          </select>
-          <p>
-            This is your proposal. The advisor chooses independently from the allowed answer pool.
-            {humanChoice && !humanChoice.available
-              ? ` ${humanChoice.unavailable_reason ?? "Unavailable"}.`
-              : ""}
-          </p>
-        </fieldset>
-        <fieldset className="advisor-own-model">
-          <legend>Advisor model and reasoning</legend>
-          <label htmlFor={`${idPrefix}-advisor`}>Choose the advisor independently</label>
-          <select
-            id={`${idPrefix}-advisor`}
-            value={value.advisor_choice_id ?? ""}
-            onChange={(event) =>
-              onChange({ ...value, advisor_choice_id: event.currentTarget.value || null })
-            }
-          >
-            <option value="">Choose advisor model + reasoning…</option>
-            {value.advisor_choice_id && !knownIds.has(value.advisor_choice_id) ? (
-              <option value={value.advisor_choice_id} disabled>
-                Saved advisor unavailable — choose explicitly
-              </option>
-            ) : null}
-            {PROVIDER_GROUPS.map((provider) => (
-              <optgroup key={provider} label={PROVIDER_LABELS[provider]}>
-                {groupModels(options, provider).flatMap((model) =>
-                  model.options.map((option) => (
-                    <option
-                      key={option.choice_id}
-                      value={option.choice_id}
-                      disabled={!option.available}
-                    >
-                      {model.display_name} · {effortLabel(option.reasoning_effort)}
-                      {!option.available ? " — unavailable" : ""}
-                    </option>
-                  )),
-                )}
-              </optgroup>
-            ))}
-          </select>
-          <p>Turning off a provider above pauses its answer choices, not this advisor.</p>
-        </fieldset>
         <label htmlFor={`${idPrefix}-balance`}>
           Decision balance: {value.human_probability_percent}% me /{" "}
           {100 - value.human_probability_percent}% advisor
@@ -204,7 +122,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
           </fieldset>
         ) : null}
         <footer>
-          <span role="status">{activeChoiceIds(value).length} active combinations</span>
+          <span role="status">{activeChoiceIds(value, options).length} active combinations</span>
           <button type="button" disabled={!props.dirty} onClick={props.onSave}>
             Save defaults
           </button>
@@ -240,6 +158,7 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
     models.flatMap((model) => model.options.map((option) => option.choice_id)),
   );
   const missing = selected.selected_choice_ids.filter((id) => !visibleIds.has(id));
+  const rememberedCombinationCount = selected.selected_choice_ids.length;
   const panelId = `${idPrefix}-${provider}-models`;
   const titleId = `${idPrefix}-${provider}-title`;
   return (
@@ -271,7 +190,8 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
           <span>{selected.enabled ? "On" : "Off"}</span>
         </label>
         <p className="advisor-provider-summary">
-          {selected.selected_choice_ids.length} combinations remembered
+          {rememberedCombinationCount}{" "}
+          {rememberedCombinationCount === 1 ? "combination" : "combinations"} remembered
           {selected.enabled ? "" : " · paused"}
         </p>
       </div>
@@ -329,7 +249,24 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
         ) : null}
         {models.map((model) => (
           <fieldset key={model.model_id} className="advisor-model-row">
-            <legend>{model.display_name}</legend>
+            <legend>
+              <span>{model.display_name}</span>
+              <label className="advisor-model-switch">
+                <span className="sr-only">Enable {model.display_name} answers</span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={!selected.disabled_model_ids.includes(model.model_id)}
+                  aria-label={`Enable ${model.display_name} answers`}
+                  onChange={(event) =>
+                    onChange(
+                      toggleModel(value, provider, model.model_id, event.currentTarget.checked),
+                    )
+                  }
+                />
+                <span>{selected.disabled_model_ids.includes(model.model_id) ? "Off" : "On"}</span>
+              </label>
+            </legend>
             <div className="advisor-efforts">
               {model.options.map((option) => {
                 const checked = selected.selected_choice_ids.includes(option.choice_id);
