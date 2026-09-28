@@ -57,6 +57,8 @@ export interface NewChatAdvisorSectionProps {
   humanPick: HumanModelPick | null;
   launchAgentId: string | null;
   launchWorkspace: string | null;
+  continueSessionId?: string | null;
+  onFlowStateChange?: (busy: boolean, reviewVisible: boolean) => void;
   advisorModelTarget?: HTMLElement | null;
   onLaunched: (sessionId: string) => void;
 }
@@ -110,6 +112,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     humanPick,
     launchAgentId,
     launchWorkspace,
+    continueSessionId = null,
+    onFlowStateChange,
     advisorModelTarget,
     onLaunched,
   } = props;
@@ -482,12 +486,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             host,
             current.round_id,
             current.version,
-            { agent_id: launchAgentId, workspace: launchWorkspace },
+            {
+              agent_id: launchAgentId,
+              workspace: launchWorkspace,
+              ...(continueSessionId ? { continue_session_id: continueSessionId } : {}),
+            },
             overrideId,
             reason,
           );
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
-          setRound({ round: dto, busy: false, error: null });
+          setRound({ round: dto, busy: false, error: dto.launch_error ?? null });
           if (dto.execution.session_id !== null) onLaunched(dto.execution.session_id);
         } catch (cause) {
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
@@ -499,7 +507,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         }
       })();
     },
-    [hostId, isCurrentScope, launchAgentId, launchWorkspace, onLaunched, round.busy, round.round],
+    [
+      continueSessionId,
+      hostId,
+      isCurrentScope,
+      launchAgentId,
+      launchWorkspace,
+      onLaunched,
+      round.busy,
+      round.round,
+    ],
   );
 
   const handleCancel = useCallback(() => {
@@ -528,6 +545,9 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const reviewVisible =
     round.round !== null &&
     (round.round.state === "awaiting_confirmation" || round.round.state === "dispatch_claimed");
+  useEffect(() => {
+    onFlowStateChange?.(round.busy, reviewVisible);
+  }, [onFlowStateChange, reviewVisible, round.busy]);
   if (hostId === null) return null;
   if (catalogError !== null)
     return (

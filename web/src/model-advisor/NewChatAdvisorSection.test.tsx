@@ -170,13 +170,14 @@ beforeEach(() => {
         if (body.expected_version !== rounds[id]?.version) {
           return Response.json({ detail: "Review changed" }, { status: 409 });
         }
+        const sessionId = body.launch.continue_session_id ?? "conv_new";
         rounds[id] = {
           ...rounds[id],
           state: "dispatch_bound",
           version: (rounds[id]?.version as number) + 1,
-          execution: { session_id: "conv_new", uncertain: false },
+          execution: { session_id: sessionId, uncertain: false },
           requested_execution: {
-            session_id: "conv_new",
+            session_id: sessionId,
             model: "glm/glm-5.3",
             reasoning_effort: "high",
             access_lane: "omniroute",
@@ -511,6 +512,24 @@ it("confirms the logical assignment and reports the bound session", async () => 
   await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
   expect(screen.getByText(/Requested: glm\/glm-5\.3/)).toBeDefined();
   expect(screen.getByText(/Actual: unknown\/unverified/)).toBeDefined();
+});
+
+it("confirms an in-chat round against the same session", async () => {
+  const onLaunched = vi.fn();
+  mountSection({ continueSessionId: "conv_existing", onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  await screen.findByLabelText("Review model assignment");
+  fireEvent.click(screen.getByRole("button", { name: "Run selected model" }));
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_existing"));
+  const confirm = api.mock.calls.find(
+    ([url]) => typeof url === "string" && url.endsWith("/confirm"),
+  );
+  assert(confirm !== undefined);
+  const body = JSON.parse((confirm[1] as RequestInit).body as string);
+  expect(body.launch.continue_session_id).toBe("conv_existing");
+  expect(body.launch.agent_id).toBe("ag_1");
+  expect(body.launch.workspace).toBe("/repo");
 });
 
 it("marks an explicit logical override and still launches", async () => {

@@ -325,6 +325,8 @@ export interface RoundLaunchParams {
   agent_id: string;
   workspace: string;
   terminal_launch_args?: string[] | null;
+  /** Apply this confirmed round to an existing editable chat, preserving its history. */
+  continue_session_id?: string;
 }
 
 export async function confirmRound(

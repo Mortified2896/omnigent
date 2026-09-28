@@ -2797,12 +2797,30 @@ def create_app(
             # the (session, project-warnings) tuple the public route unpacks.
             return session
 
+        def _model_advisor_session_authorizer(
+            user_id: str | None,
+            session_id: str,
+        ) -> bool:
+            if permission_store is None:
+                return user_id is None
+            from omnigent.server.auth import LEVEL_EDIT
+            from omnigent.server.permissions import check_session_access
+
+            return check_session_access(
+                user_id,
+                session_id,
+                LEVEL_EDIT,
+                permission_store,
+                conversation_store,
+            )
+
         model_advisor_service = ModelAdvisorService(
             repository=model_advisor_store,
             host_store=host_store,
             host_registry=host_registry,
             conversation_store=conversation_store,
             session_launcher=_model_advisor_session_launcher,
+            session_authorizer=_model_advisor_session_authorizer,
         )
         app.include_router(
             create_model_advisor_router(

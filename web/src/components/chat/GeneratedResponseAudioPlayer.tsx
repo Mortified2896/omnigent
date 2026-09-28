@@ -212,7 +212,7 @@ export function GeneratedResponseAudioPlayer({
       <div className="mb-4 flex flex-col gap-2 text-sm text-muted-foreground" role="status">
         <span>Audio download was interrupted.</span>
         <div className="flex gap-3">
-          <button className="underline" onClick={() => void contentQuery.refetch()}>
+          <button type="button" className="underline" onClick={() => void contentQuery.refetch()}>
             Retry audio
           </button>
           <a className="underline" href={contentPath}>

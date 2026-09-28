@@ -12,6 +12,40 @@ const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
 let fail: boolean;
 let outcomes: Record<string, unknown>[];
+const advisorRound = {
+  object: "model_advisor.round",
+  round_id: "round-test",
+  state: "completed",
+  version: 1,
+  etag: "etag",
+  failure_reason: null,
+  review: {
+    round_fingerprint: "fingerprint",
+    human_choice_id: "choice-gpt",
+    advisor_choice_id: "choice-gpt",
+    rationale: "Both selections matched and provide the requested reasoning depth.",
+    assigned_choice_id: "choice-gpt",
+    assigned_arm: "same",
+    human_probability_percent: 50,
+    overridden: false,
+    override_reason: null,
+    comparison_group: "task",
+  },
+  execution: { session_id: "session", uncertain: false },
+  decision_context: {
+    schema_version: 3,
+    qualified_pool: [
+      {
+        choice_id: "choice-gpt",
+        provider: "openai",
+        model_id: "gpt-6-sol",
+        reasoning_effort: "high",
+      },
+    ],
+    user_enabled_pool: [],
+    advisor_visible_pool: [],
+  },
+};
 beforeEach(() => {
   outcomes = [];
   fail = false;
@@ -19,6 +53,7 @@ beforeEach(() => {
   api.mockImplementation(async (_url: string, options?: RequestInit) => {
     if (options?.method && fail) return new Response(null, { status: 500 });
     if (_url.endsWith("/task-experiment")) return Response.json(outcomes);
+    if (_url.includes("/model-advisor/rounds/")) return Response.json(advisorRound);
     if (_url.includes("/task-outcomes/")) {
       const row = {
         id: String(outcomes.length),
@@ -34,14 +69,14 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
-function mount() {
+function mount(hostId: string | null = null, responseId = "answer") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
-      <ResponseFeedbackProvider sessionId="session">
-        <ResponseFeedbackActions responseId="answer" />
+      <ResponseFeedbackProvider sessionId="session" hostId={hostId}>
+        <ResponseFeedbackActions responseId={responseId} />
       </ResponseFeedbackProvider>
     </QueryClientProvider>,
   );
@@ -136,6 +171,36 @@ it("appends human comment and tag revisions", async () => {
     comment: "Tests still need to pass.",
     tags: ["Tests/verification", "Regression"],
   });
+});
+
+it("shows the model used, advisor agreement, rationale, and response trace key", async () => {
+  outcomes = [
+    {
+      id: "outcome-1",
+      kind: "outcome",
+      response_id: "resp_answer_123",
+      outcome: "success",
+      model_attribution: {
+        requested_model: "gpt-6-sol",
+        actual_model: "gpt-6-sol-2026-09-20",
+        model_status: "observed",
+        model_source: "response_usage",
+        reasoning_effort: "high",
+        access_lane: "openai-direct",
+        advisor_round_id: "round-test",
+      },
+    },
+  ];
+  mount("host-test", "resp_answer_123");
+
+  const details = await screen.findByTestId("model-attribution");
+  expect(details.textContent).toContain("Reported model used: gpt-6-sol-2026-09-20");
+  await waitFor(() => expect(details.textContent).toContain("Your choice and the advisor agreed"));
+  expect(details.textContent).toContain("Your choice: gpt-6-sol · openai · high");
+  expect(details.textContent).toContain(
+    "Reasoning: Both selections matched and provide the requested reasoning depth.",
+  );
+  expect(details.textContent).toContain("resp_answer_123");
 });
 
 it("keeps the saved outcome when a revision fails", async () => {

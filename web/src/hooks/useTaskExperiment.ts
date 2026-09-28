@@ -19,6 +19,15 @@ export interface ExperimentEvent {
   evidence?: string[];
   review_source?: "human" | "model";
   provenance?: Record<string, unknown>;
+  model_attribution?: {
+    requested_model: string | null;
+    actual_model: string | null;
+    model_status: "observed" | "unknown";
+    model_source: "response_usage" | "session_reported" | "unknown";
+    reasoning_effort: string | null;
+    access_lane: string | null;
+    advisor_round_id: string | null;
+  } | null;
   created_at: number;
 }
 const key = (sessionId: string) => ["task-experiment", getCurrentUserId(), sessionId];

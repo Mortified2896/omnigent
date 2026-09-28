@@ -59,6 +59,7 @@ from omnigent.host.frames import (
 )
 from omnigent.llms.context_window import resolve_effective_context_window
 from omnigent.models.model_metadata import concrete_reported_model
+from omnigent.server.response_attribution import response_attribution_item
 from omnigent.native.native_coding_agents import (
     native_coding_agent_for_agent_name,
     native_coding_agent_for_harness,
@@ -6692,17 +6693,24 @@ async def _relay_runner_stream_once(
                             _latency_ms = (time.monotonic() - _turn_start_s) * 1000
                         _turn_start_s = None
                         _response = event.get("response")
+                        _response_id = (
+                            _response.get("id")
+                            if isinstance(_response, dict)
+                            and isinstance(_response.get("id"), str)
+                            else current_response_id
+                        )
                         _resp_usage = (
                             _response.get("usage") or {} if isinstance(_response, dict) else {}
                         )
                         _turn_in = _resp_usage.get("input_tokens")
                         _turn_out = _resp_usage.get("output_tokens")
                         _turn_cost = _resp_usage.get("cost_usd")
-                        _turn_model: str | None = _resp_usage.get("model") or current_model or None
+                        _turn_model = concrete_reported_model(_resp_usage.get("model"))
                         _tel_emit(
                             _TelTurnEndEvent(
                                 installation_id=_get_installation_id(),
                                 session_id=session_id,
+                                response_id=_response_id,
                                 status=_turn_status,
                                 latency_ms=_latency_ms,
                                 model=_turn_model,
@@ -6716,6 +6724,50 @@ async def _relay_runner_stream_once(
                             )
                         )
                         if evt_type == "response.completed":
+                            if isinstance(_response_id, str) and _response_id:
+                                try:
+                                    _conv = await asyncio.to_thread(
+                                        conversation_store.get_conversation,
+                                        session_id,
+                                    )
+                                    _labels = _conv.labels or {} if _conv is not None else {}
+                                    _attribution_item = response_attribution_item(
+                                        conversation_id=session_id,
+                                        response_id=_response_id,
+                                        requested_model=(
+                                            _conv.model_override if _conv is not None else None
+                                        ),
+                                        actual_model=_turn_model,
+                                        model_source=(
+                                            "response_usage" if _turn_model else "unknown"
+                                        ),
+                                        reasoning_effort=(
+                                            _conv.reasoning_effort if _conv is not None else None
+                                        ),
+                                        access_lane=(
+                                            _labels.get("omnigent.access_lane")
+                                            if isinstance(_labels.get("omnigent.access_lane"), str)
+                                            else None
+                                        ),
+                                        advisor_round_id=(
+                                            _labels.get(ADVISOR_ROUND_LABEL_KEY)
+                                            if isinstance(
+                                                _labels.get(ADVISOR_ROUND_LABEL_KEY), str
+                                            )
+                                            else None
+                                        ),
+                                    )
+                                    await asyncio.to_thread(
+                                        conversation_store.append,
+                                        session_id,
+                                        [_attribution_item],
+                                    )
+                                except Exception:
+                                    _logger.warning(
+                                        "Could not persist response model attribution for %s",
+                                        _response_id,
+                                        exc_info=True,
+                                    )
                             # Push the server-computed cost AND token breakdown
                             # to the web client's session indicator, rolled up
                             # over the spawn subtree. The session's own event

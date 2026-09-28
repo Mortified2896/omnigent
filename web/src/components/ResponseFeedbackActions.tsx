@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Bubble } from "@/lib/renderItems";
@@ -9,18 +10,23 @@ import {
   type TaskOutcome,
 } from "@/hooks/useTaskExperiment";
 import { ResponseScoringActions } from "./ResponseScoringActions";
+import { fetchRound, type RoundDto } from "@/lib/modelAdvisorApi";
+import { getCurrentUserId } from "@/lib/identity";
 
 const FeedbackContext = createContext<{
   sessionId: string;
+  hostId: string | null;
   human: Map<string, ExperimentEvent>;
   ready: boolean;
 } | null>(null);
 
 export function ResponseFeedbackProvider({
   sessionId,
+  hostId = null,
   children,
 }: {
   sessionId: string;
+  hostId?: string | null;
   children: React.ReactNode;
 }) {
   const experiment = useTaskExperiment(sessionId);
@@ -29,8 +35,8 @@ export function ResponseFeedbackProvider({
     for (const row of experiment.data ?? []) {
       if (row.kind === "outcome" && row.outcome) human.set(row.response_id, row);
     }
-    return { sessionId, human, ready: experiment.isSuccess };
-  }, [sessionId, experiment.data, experiment.isSuccess]);
+    return { sessionId, hostId, human, ready: experiment.isSuccess };
+  }, [sessionId, hostId, experiment.data, experiment.isSuccess]);
   return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;
 }
 
@@ -58,6 +64,7 @@ export function ResponseFeedbackActions({ responseId }: { responseId: string }) 
     <OutcomeEditor
       key={`${context.sessionId}:${responseId}:${human?.id ?? "new"}`}
       sessionId={context.sessionId}
+      hostId={context.hostId}
       responseId={responseId}
       human={human}
       ready={context.ready}
@@ -105,11 +112,13 @@ const REVIEW_TAGS = [
 
 function OutcomeEditor({
   sessionId,
+  hostId,
   responseId,
   human,
   ready,
 }: {
   sessionId: string;
+  hostId: string | null;
   responseId: string;
   human?: ExperimentEvent;
   ready: boolean;
@@ -178,6 +187,11 @@ function OutcomeEditor({
           className="space-y-2 rounded-md border border-border/70 p-2"
           data-testid="human-review-details"
         >
+          <ModelAttributionDetails
+            responseId={responseId}
+            hostId={hostId}
+            attribution={human?.model_attribution ?? null}
+          />
           <p className="text-xs text-muted-foreground">
             Tags and comments are for your review, not scoring-AI input.
           </p>
@@ -277,5 +291,98 @@ function OutcomeEditor({
         </span>
       )}
     </div>
+  );
+}
+
+function choiceLabel(round: RoundDto, choiceId: string | undefined): string | null {
+  if (!choiceId) return null;
+  const pools = [
+    round.decision_context?.qualified_pool ?? [],
+    round.decision_context?.user_enabled_pool ?? [],
+    round.decision_context?.advisor_visible_pool ?? [],
+  ];
+  const choice = pools.flat().find((candidate) => candidate.choice_id === choiceId);
+  return choice ? `${choice.model_id} · ${choice.provider} · ${choice.reasoning_effort}` : choiceId;
+}
+
+function ModelAttributionDetails({
+  responseId,
+  hostId,
+  attribution,
+}: {
+  responseId: string;
+  hostId: string | null;
+  attribution: ExperimentEvent["model_attribution"];
+}) {
+  const roundId = attribution?.advisor_round_id ?? null;
+  const roundQuery = useQuery({
+    queryKey: ["model-advisor-round", getCurrentUserId(), hostId, roundId],
+    queryFn: () => fetchRound(hostId!, roundId!),
+    enabled: Boolean(hostId && roundId),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const round = roundQuery.data;
+  const review = round?.review;
+  const armLabel =
+    review?.assigned_arm === "same"
+      ? "Your choice and the advisor agreed"
+      : review?.assigned_arm === "advisor"
+        ? "Advisor’s choice was selected"
+        : review?.assigned_arm === "human"
+          ? "Your choice was selected"
+          : null;
+  const humanChoice = round
+    ? choiceLabel(round, review?.human_choice_id ?? review?.human_candidate_id)
+    : null;
+  const advisorChoice = round
+    ? choiceLabel(round, review?.advisor_choice_id ?? review?.advisor_candidate_id)
+    : null;
+
+  return (
+    <section
+      className="space-y-1 rounded-md border border-border/70 bg-muted/20 p-2"
+      aria-label="Model attribution"
+      data-testid="model-attribution"
+    >
+      <p className="text-xs font-medium">Model and decision</p>
+      {attribution?.actual_model ? (
+        <p className="text-xs">
+          Reported model used: <span className="font-medium">{attribution.actual_model}</span>
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Actual model was not reported by the harness.
+        </p>
+      )}
+      {attribution?.requested_model && (
+        <p className="text-xs text-muted-foreground">
+          Configured model: {attribution.requested_model}
+        </p>
+      )}
+      {attribution?.reasoning_effort && (
+        <p className="text-xs text-muted-foreground">
+          Requested reasoning: {attribution.reasoning_effort}
+        </p>
+      )}
+      {armLabel && <p className="text-xs">{armLabel}</p>}
+      {roundQuery.isLoading && roundId && (
+        <p className="text-xs text-muted-foreground">Loading advisor rationale…</p>
+      )}
+      {review && (
+        <div className="space-y-1 text-xs text-muted-foreground">
+          {humanChoice && <p>Your choice: {humanChoice}</p>}
+          {advisorChoice && <p>Advisor recommendation: {advisorChoice}</p>}
+          <p>Reasoning: {review.rationale}</p>
+          {review.overridden && review.override_reason && <p>Override: {review.override_reason}</p>}
+        </div>
+      )}
+      {roundQuery.isError && roundId && (
+        <p className="text-xs text-muted-foreground">Advisor rationale is unavailable.</p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Response / trace key: <code className="break-all">{responseId}</code>
+      </p>
+    </section>
   );
 }

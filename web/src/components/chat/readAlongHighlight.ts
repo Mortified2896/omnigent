@@ -280,6 +280,78 @@ interface HighlightRegistryLike {
 const HIGHLIGHT_NAME = "omnigent-audio-current-word";
 let activeOwner: string | null = null;
 let activeHighlight: HighlightLike | null = null;
+let fallbackHost: HTMLDivElement | null = null;
+let fallbackRange: Range | null = null;
+let fallbackWindow: Window | null = null;
+
+function updateFallbackOverlay(): void {
+  if (!fallbackHost || !fallbackRange) return;
+  const document = fallbackHost.ownerDocument;
+  fallbackHost.replaceChildren();
+  for (const rect of Array.from(fallbackRange.getClientRects())) {
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const mark = document.createElement("span");
+    mark.setAttribute("aria-hidden", "true");
+    mark.style.left = `${rect.left}px`;
+    mark.style.top = `${rect.top}px`;
+    mark.style.width = `${rect.width}px`;
+    mark.style.height = `${rect.height}px`;
+    fallbackHost.append(mark);
+  }
+}
+
+function clearFallbackOverlay(): void {
+  if (fallbackWindow) {
+    fallbackWindow.removeEventListener("scroll", updateFallbackOverlay, true);
+    fallbackWindow.removeEventListener("resize", updateFallbackOverlay);
+  }
+  fallbackHost?.remove();
+  fallbackHost = null;
+  fallbackRange = null;
+  fallbackWindow = null;
+}
+
+function paintFallbackOverlay(owner: string, range: Range): boolean {
+  const document = range.startContainer.ownerDocument;
+  if (!document) return false;
+  const view = document.defaultView;
+  if (!view || !document.body || typeof range.getClientRects !== "function") return false;
+  try {
+    if (fallbackHost?.ownerDocument !== document) clearFallbackOverlay();
+    if (!fallbackHost) {
+      fallbackHost = document.createElement("div");
+      fallbackHost.className = "omnigent-read-along-fallback";
+      fallbackHost.dataset.owner = owner;
+      fallbackHost.setAttribute("aria-hidden", "true");
+      document.body.append(fallbackHost);
+      fallbackWindow = view;
+      view.addEventListener("scroll", updateFallbackOverlay, true);
+      view.addEventListener("resize", updateFallbackOverlay);
+    }
+    fallbackRange = range;
+    updateFallbackOverlay();
+    return true;
+  } catch {
+    clearFallbackOverlay();
+    return false;
+  }
+}
+
+function clearActiveHighlight(): void {
+  try {
+    activeHighlight?.clear();
+  } catch {
+    // An embedded renderer may expose a partial Custom Highlight API.
+  }
+  try {
+    highlightApi()?.registry.delete(HIGHLIGHT_NAME);
+  } catch {
+    // The overlay fallback below is still independently removable.
+  }
+  clearFallbackOverlay();
+  activeOwner = null;
+  activeHighlight = null;
+}
 
 function highlightApi(): {
   registry: HighlightRegistryLike;
@@ -293,45 +365,46 @@ function highlightApi(): {
   return { registry: css.highlights, create: constructor };
 }
 
-/** Apply one range in the browser's global registry, scoped to a player owner. */
+/** Paint one range without changing React-owned Markdown nodes. */
 export function setReadAlongHighlight(owner: string, range: Range | null): boolean {
   const api = highlightApi();
-  if (!api) return false;
-  try {
-    if (!range) {
-      if (activeOwner === owner) {
-        activeHighlight?.clear();
-        api.registry.delete(HIGHLIGHT_NAME);
-        activeOwner = null;
-        activeHighlight = null;
-      }
-      return true;
-    }
-    if (!activeHighlight) {
-      const HighlightConstructor = api.create;
-      activeHighlight = new HighlightConstructor();
-    }
-    activeHighlight.clear();
-    activeHighlight.add(range);
-    api.registry.set(HIGHLIGHT_NAME, activeHighlight);
-    activeOwner = owner;
+  if (activeOwner !== null && activeOwner !== owner) clearActiveHighlight();
+  if (!range) {
+    if (activeOwner === owner) clearActiveHighlight();
     return true;
-  } catch {
-    // Some embedded WebViews expose CSS.highlights without a working registry.
-    return false;
   }
+
+  if (api) {
+    try {
+      clearFallbackOverlay();
+      if (!activeHighlight) {
+        const HighlightConstructor = api.create;
+        activeHighlight = new HighlightConstructor();
+      }
+      activeHighlight.clear();
+      activeHighlight.add(range);
+      api.registry.set(HIGHLIGHT_NAME, activeHighlight);
+      activeOwner = owner;
+      return true;
+    } catch {
+      // Embedded WebViews may expose CSS.highlights without a working registry.
+      activeHighlight?.clear();
+      try {
+        api.registry.delete(HIGHLIGHT_NAME);
+      } catch {
+        // Try the DOM-rect fallback even when registry cleanup also fails.
+      }
+      activeHighlight = null;
+    }
+  }
+
+  const painted = paintFallbackOverlay(owner, range);
+  if (painted) activeOwner = owner;
+  return painted;
 }
 
 /** A stale player's cleanup must not remove a newer response's highlight. */
 export function clearReadAlongHighlight(owner: string): void {
   if (activeOwner !== owner) return;
-  const api = highlightApi();
-  try {
-    activeHighlight?.clear();
-    api?.registry.delete(HIGHLIGHT_NAME);
-  } catch {
-    // The text and native audio controls remain usable without highlighting.
-  }
-  activeOwner = null;
-  activeHighlight = null;
+  clearActiveHighlight();
 }

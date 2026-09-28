@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -93,8 +94,25 @@ class _FakeRegistry:
 
 
 class _FakeConversationStore:
+    def __init__(self, conversation: Any = None) -> None:
+        self.conversation = conversation
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
     def get_conversation(self, session_id: str) -> Any:
+        if self.conversation is not None and self.conversation.id == session_id:
+            return self.conversation
         return None
+
+    def update_conversation(self, session_id: str, **updates: Any) -> Any:
+        self.updates.append((session_id, updates))
+        if self.conversation is None or self.conversation.id != session_id:
+            return None
+        self.conversation.model_override = updates.get("model_override")
+        self.conversation.reasoning_effort = updates.get("reasoning_effort")
+        if updates.get("_unset_reported_model"):
+            self.conversation.reported_model = None
+        self.conversation.labels.update(updates.get("labels") or {})
+        return self.conversation
 
 
 class _FakeSession:
@@ -393,6 +411,8 @@ def client_for(
     launcher: Any = None,
     randbelow: Any = None,
     catalog_models: list[dict[str, Any]] | None = None,
+    conversation_store: Any = None,
+    session_authorizer: Any = None,
 ) -> tuple[TestClient, _FakeRegistry]:
     repository = AdvisorRepository(get_or_create_engine(db_uri))
     conn = _FakeConnection(reply if reply is not None else dict(ADVISOR_OK_REPLY))
@@ -404,9 +424,10 @@ def client_for(
         repository=repository,
         host_store=_FakeHostStore(hosts or [_FakeHost("host_1", "alice@test")]),
         host_registry=registry,
-        conversation_store=_FakeConversationStore(),
+        conversation_store=conversation_store or _FakeConversationStore(),
         session_launcher=launcher
         or (lambda body, *, user_id, request=None: _async_session(_FakeSession())),
+        session_authorizer=session_authorizer,
         **service_kwargs,
     )
     app = FastAPI()
@@ -720,6 +741,113 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
         assert context["execution_choice_id"] == PROVIDER_GLM.choice_id
         assert context["actual_execution_choice_id"] == PROVIDER_GLM.choice_id
         assert context["actual_route"]["transport"] == "omniroute"
+
+
+def test_provider_grouped_round_updates_the_same_idle_session(db_uri) -> None:
+    conversation = SimpleNamespace(
+        id="conv_existing",
+        host_id="host_1",
+        agent_id="ag_1",
+        workspace="/repo",
+        kind="default",
+        live_status="idle",
+        labels={"omnigent.access_lane": "codex-direct"},
+        model_override="gpt-5.5",
+        reasoning_effort="medium",
+        reported_model="previous-turn-model",
+    )
+    store = _FakeConversationStore(conversation)
+    launches: list[Any] = []
+
+    async def launcher(body: Any, *, user_id: str | None, request: Any = None) -> Any:
+        launches.append(body)
+        return _FakeSession()
+
+    client, _registry = client_for(
+        db_uri,
+        reply={
+            "status": "ok",
+            "raw_output": json.dumps(
+                {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "This follow-up needs it."}
+            ),
+            "latency_ms": 100,
+        },
+        launcher=launcher,
+        randbelow=lambda _bound: 0,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+        conversation_store=store,
+        session_authorizer=lambda user_id, session_id: (
+            user_id == "alice@test" and session_id == "conv_existing"
+        ),
+    )
+    preferences = {
+        "schema_version": 2,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_GLM.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+        },
+        "advisor_choice_id": PROVIDER_OPENAI.choice_id,
+        "human_probability_percent": 50,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    with client:
+        saved = client.put(
+            "/v1/model-advisor/preferences",
+            json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+            headers=JSON_ALICE,
+        )
+        assert saved.status_code == 200
+        created = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Review this follow-up",
+                "human_choice_id": PROVIDER_GLM.choice_id,
+                "submission_key": "in-chat-followup",
+            },
+            headers=JSON_ALICE,
+        )
+        assert created.status_code == 200
+        payload = _settle(client, created.json()["round_id"])
+        confirmed = client.post(
+            f"/v1/model-advisor/rounds/{payload['round_id']}/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": payload["version"],
+                "launch": {
+                    "agent_id": "ag_1",
+                    "workspace": "/repo",
+                    "continue_session_id": "conv_existing",
+                },
+            },
+            headers=JSON_ALICE,
+        )
+
+    assert confirmed.status_code == 200
+    result = confirmed.json()
+    assert result["state"] == "dispatch_bound"
+    assert result["execution"]["session_id"] == "conv_existing"
+    assert launches == []
+    assert len(store.updates) == 1
+    session_id, updates = store.updates[0]
+    assert session_id == "conv_existing"
+    assert updates["require_idle"] is True
+    assert updates["_unset_reported_model"] is True
+    assert updates["labels"]["omnigent.advisor.round_id"] == payload["round_id"]
+    assert conversation.model_override == result["requested_execution"]["model"]
+    assert conversation.reported_model is None
 
 
 def test_v3_round_persists_qualified_and_exact_advisor_visible_pools(db_uri) -> None:

@@ -68,6 +68,7 @@ from omnigent.stores.conversation_store import (
     ADVISOR_LOGICAL_CHOICE_LABEL_KEY,
     ADVISOR_ROUND_LABEL_KEY,
     ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
+    ConversationBusyError,
     ConversationStore,
 )
 from omnigent.stores.host_store import HostStore
@@ -463,6 +464,7 @@ class ModelAdvisorService:
         host_registry: HostRegistry,
         conversation_store: ConversationStore,
         session_launcher: Callable[..., Any],
+        session_authorizer: Callable[[str | None, str], bool] | None = None,
         randbelow: Callable[[int], int] = secrets.randbelow,
     ) -> None:
         self.repository = repository
@@ -470,6 +472,7 @@ class ModelAdvisorService:
         self._host_registry = host_registry
         self._conversation_store = conversation_store
         self._session_launcher = session_launcher
+        self._session_authorizer = session_authorizer
         self._randbelow = randbelow
         self._background_tasks: set[asyncio.Task[None]] = set()
 
@@ -1276,6 +1279,11 @@ class ModelAdvisorService:
                 launch=launch,
                 request=request,
             )
+        if launch.get("continue_session_id") is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="In-chat advisor routing requires provider-grouped round settings",
+            )
         catalog = await self.load_catalog(user_id, host_id)
         try:
             claim = await asyncio.to_thread(
@@ -1429,7 +1437,7 @@ class ModelAdvisorService:
         if not isinstance(workspace, str) or not workspace:
             raise RuntimeError("A workspace is required to launch the round")
 
-        def body_for(route: QualifiedRoute) -> SessionCreateRequest:
+        def labels_for(route: QualifiedRoute) -> dict[str, str]:
             labels = {
                 ADVISOR_ROUND_LABEL_KEY: frozen.round_id,
                 ADVISOR_ROUND_FINGERPRINT_LABEL_KEY: frozen.fingerprint,
@@ -1450,6 +1458,40 @@ class ModelAdvisorService:
             }
             if route.route_id:
                 labels["omnigent.access_lane"] = route.route_id
+            return labels
+
+        continue_session_id = launch.get("continue_session_id")
+        if continue_session_id is not None:
+            if not isinstance(continue_session_id, str) or not continue_session_id:
+                raise RuntimeError("continue_session_id must be a nonempty session id")
+            await self._apply_provider_route_to_session(
+                user_id=user_id,
+                host_id=host_id,
+                session_id=continue_session_id,
+                agent_id=launch["agent_id"],
+                workspace=workspace,
+                route=plan.primary,
+                labels=labels_for(plan.primary),
+            )
+            await asyncio.to_thread(
+                self.repository.record_provider_transport_attempt,
+                frozen.owner_id,
+                frozen.host_id,
+                frozen.round_id,
+                attempt={
+                    "phase": "answer",
+                    "transport": plan.primary.transport,
+                    "route_id": plan.primary.route_id,
+                    "connection_id": plan.primary.connection_id,
+                    "model": plan.primary.wire_model,
+                    "effort": plan.primary.wire_effort,
+                    "status": "route_applied_to_session",
+                },
+            )
+            return continue_session_id, plan.primary
+
+        def body_for(route: QualifiedRoute) -> SessionCreateRequest:
+            labels = labels_for(route)
             return SessionCreateRequest(
                 agent_id=launch["agent_id"],
                 initial_items=[
@@ -1620,6 +1662,76 @@ class ModelAdvisorService:
                 },
             )
             raise
+
+    async def _apply_provider_route_to_session(
+        self,
+        *,
+        user_id: str | None,
+        host_id: str,
+        session_id: str,
+        agent_id: str,
+        workspace: str,
+        route: QualifiedRoute,
+        labels: dict[str, str],
+    ) -> None:
+        """Apply a confirmed advisor route to an editable, idle host session."""
+        from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY
+
+        if self._session_authorizer is None or not await asyncio.to_thread(
+            self._session_authorizer, user_id, session_id
+        ):
+            raise HTTPException(status_code=403, detail="session edit access is required")
+        conv = await asyncio.to_thread(self._conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        if (
+            conv.host_id != host_id
+            or conv.agent_id != agent_id
+            or conv.workspace != workspace
+            or conv.kind != "default"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="The advisor round must target the same host, agent, and workspace",
+            )
+        if conv.live_status in {"running", "waiting"}:
+            raise HTTPException(status_code=409, detail="Wait for the current response to finish")
+
+        # Existing advisor labels are trusted only when their owner-scoped
+        # round record is bound to this exact session. This prevents a caller
+        # from taking over someone else's advisor-pinned conversation by
+        # supplying its id to an otherwise valid round.
+        prior_round_id = (conv.labels or {}).get(ADVISOR_ROUND_LABEL_KEY)
+        if prior_round_id:
+            prior = await asyncio.to_thread(
+                self.repository.load_round,
+                self.owner_id(user_id),
+                host_id,
+                prior_round_id,
+            )
+            if prior is None or prior.payload.get("execution_session_id") != session_id:
+                raise HTTPException(status_code=403, detail="session is not bound to your advisor round")
+
+        try:
+            updated = await asyncio.to_thread(
+                self._conversation_store.update_conversation,
+                session_id,
+                model_override=route.wire_model,
+                reasoning_effort=(
+                    None if route.wire_effort == "not_applicable" else route.wire_effort
+                ),
+                _unset_reasoning_effort=route.wire_effort == "not_applicable",
+                _unset_reported_model=True,
+                labels=labels,
+                require_idle=True,
+            )
+        except ConversationBusyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Wait for the current response to finish",
+            ) from exc
+        if updated is None:
+            raise HTTPException(status_code=404, detail="session not found")
 
     async def _launch_executor(
         self,

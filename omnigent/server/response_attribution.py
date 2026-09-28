@@ -1,0 +1,95 @@
+"""Durable, response-scoped model and advisor attribution."""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any, Literal
+
+from omnigent.entities.conversation import NewConversationItem, ResourceEventData
+from omnigent.stores.conversation_store import ConversationStore
+
+RESOURCE_TYPE = "response-execution"
+ModelSource = Literal["response_usage", "session_reported", "unknown"]
+
+
+def response_attribution_item(
+    *,
+    conversation_id: str,
+    response_id: str,
+    requested_model: str | None,
+    actual_model: str | None,
+    model_source: ModelSource,
+    reasoning_effort: str | None = None,
+    access_lane: str | None = None,
+    advisor_round_id: str | None = None,
+) -> NewConversationItem:
+    """Build an idempotent event linked to the exact assistant response."""
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "conversation_id": conversation_id,
+        "response_id": response_id,
+        "requested_model": requested_model,
+        "actual_model": actual_model,
+        "model_status": "observed" if actual_model else "unknown",
+        "model_source": model_source,
+        "reasoning_effort": reasoning_effort,
+        "access_lane": access_lane,
+        "advisor_round_id": advisor_round_id,
+    }
+    return NewConversationItem(
+        type="resource_event",
+        response_id=response_id,
+        stable_id=uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"response-execution:{conversation_id}:{response_id}",
+        ).hex,
+        data=ResourceEventData(
+            event_type="response.execution.completed",
+            resource_id=response_id,
+            resource_type=RESOURCE_TYPE,
+            resource=payload,
+        ),
+    )
+
+
+def list_response_attributions(
+    store: ConversationStore,
+    conversation_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Return response execution records without mixing them into outcomes."""
+    result: dict[str, dict[str, Any]] = {}
+    after = None
+    while True:
+        page = store.list_items(
+            conversation_id,
+            type="resource_event",
+            limit=100,
+            after=after,
+        )
+        for item in page.data:
+            data = item.data
+            if not isinstance(data, ResourceEventData) or data.resource_type != RESOURCE_TYPE:
+                continue
+            payload = data.resource or {}
+            response_id = payload.get("response_id")
+            if (
+                payload.get("conversation_id") != conversation_id
+                or not isinstance(response_id, str)
+                or response_id != item.response_id
+            ):
+                continue
+            result[response_id] = {
+                key: payload.get(key)
+                for key in (
+                    "requested_model",
+                    "actual_model",
+                    "model_status",
+                    "model_source",
+                    "reasoning_effort",
+                    "access_lane",
+                    "advisor_round_id",
+                )
+            }
+        if not page.has_more:
+            return result
+        after = page.data[-1].id

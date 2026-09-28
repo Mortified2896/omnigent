@@ -1413,6 +1413,26 @@ aside[aria-label="Workspace"][data-maximized] {
   background-color: color-mix(in oklch, var(--warning) 28%, transparent);
 }
 
+/* Embedded browsers may not implement CSS Custom Highlights. The fallback
+   paints range rectangles in a pointer-transparent layer without wrapping the
+   Markdown nodes that React owns. */
+.omnigent-read-along-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+}
+.omnigent-read-along-fallback > span {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(245, 185, 45, 0.34);
+  mix-blend-mode: multiply;
+}
+.dark .omnigent-read-along-fallback > span {
+  background: rgba(245, 185, 45, 0.23);
+  mix-blend-mode: screen;
+}
+
 /* TipTap editor prose styling */
 .tiptap-md-content .ProseMirror {
   outline: none;

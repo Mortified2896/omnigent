@@ -114,17 +114,33 @@ describe("read-along timing lookup", () => {
     expect(mapped.map(({ range }) => range.toString())).toEqual(visible);
   });
 
-  it("leaves rendered text untouched when CSS Custom Highlight is unavailable", () => {
+  it("paints a fallback overlay when CSS Custom Highlight is unavailable", () => {
     vi.stubGlobal("CSS", undefined);
     vi.stubGlobal("Highlight", undefined);
     const section = document.createElement("p");
     section.textContent = "Audio still works without the read-along API.";
     const range = document.createRange();
     range.selectNodeContents(section.firstChild!);
+    Object.defineProperty(range, "getClientRects", {
+      configurable: true,
+      value: () => [new DOMRect(12, 20, 188, 16)],
+    });
 
-    expect(setReadAlongHighlight("unsupported", range)).toBe(false);
+    expect(setReadAlongHighlight("unsupported", range)).toBe(true);
+    const overlay = document.querySelector<HTMLElement>(".omnigent-read-along-fallback");
+    expect(overlay).not.toBeNull();
+    expect(overlay?.dataset.owner).toBe("unsupported");
+    expect(overlay?.firstElementChild).toMatchObject({
+      style: expect.objectContaining({
+        left: "12px",
+        top: "20px",
+        width: "188px",
+        height: "16px",
+      }),
+    });
     expect(section.textContent).toBe("Audio still works without the read-along API.");
     expect(section.childNodes).toHaveLength(1);
     clearReadAlongHighlight("unsupported");
+    expect(document.querySelector(".omnigent-read-along-fallback")).toBeNull();
   });
 });

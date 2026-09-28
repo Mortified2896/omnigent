@@ -27,6 +27,7 @@ from omnigent.session_import import (
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
 from omnigent.stores.conversation_store import sqlalchemy_store as conversation_store_module
+from omnigent.stores.conversation_store import ConversationBusyError
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
@@ -372,6 +373,43 @@ def test_reported_model_round_trips_beside_the_request(
     fetched = conversation_store.get_conversation(conv.id)
     assert fetched is not None
     assert fetched.reported_model == "claude-opus-4-8[1m]"
+
+
+def test_confirmed_route_update_is_atomic_and_requires_idle_session(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    conversation_store.update_conversation(
+        conv.id,
+        model_override="old-model",
+        reported_model="old-reported-model",
+    )
+    conversation_store.set_session_live_status(conv.id, "running")
+    with pytest.raises(ConversationBusyError):
+        conversation_store.update_conversation(
+            conv.id,
+            model_override="new-model",
+            labels={"omnigent.advisor.round_id": "round-new"},
+            require_idle=True,
+        )
+
+    unchanged = conversation_store.get_conversation(conv.id)
+    assert unchanged is not None
+    assert unchanged.model_override == "old-model"
+    assert unchanged.labels.get("omnigent.advisor.round_id") is None
+
+    conversation_store.set_session_live_status(conv.id, "idle")
+    updated = conversation_store.update_conversation(
+        conv.id,
+        model_override="new-model",
+        _unset_reported_model=True,
+        labels={"omnigent.advisor.round_id": "round-new"},
+        require_idle=True,
+    )
+    assert updated is not None
+    assert updated.model_override == "new-model"
+    assert updated.reported_model is None
+    assert updated.labels["omnigent.advisor.round_id"] == "round-new"
 
 
 def test_update_archived_round_trip(
