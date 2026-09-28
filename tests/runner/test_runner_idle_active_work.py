@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 
+from omnigent.deployment_quiescence import ComponentObservation
 from omnigent.runner import create_runner_app, pending_approvals
 from omnigent.runner._entry import _run_inactivity_monitor
 from omnigent.runner.app import (
@@ -22,6 +23,7 @@ from omnigent.runner.app import (
     register_timer,
     unregister_timer,
 )
+from omnigent.server.deployment_quiescence import DeploymentQuiescence, QuiescenceBlocked
 from tests.runner.helpers import NullServerClient
 
 
@@ -319,3 +321,54 @@ async def test_drain_session_streams_enqueues_done_sentinel() -> None:
     finally:
         _session_event_queues_ref.pop("conv_drain_a", None)
         _session_event_queues_ref.pop("conv_drain_b", None)
+
+
+@pytest.mark.asyncio
+async def test_runner_active_work_blocks_deployment_quiescence_until_timer_finishes() -> None:
+    """The existing runner idle registry supplies a real timer work signal."""
+    app = _scaffold_app()
+    finish = asyncio.Event()
+    task = asyncio.create_task(finish.wait(), name="deployment-runner-timer")
+    register_timer("conv_deploy", "timer_deploy", task)
+
+    manager = DeploymentQuiescence(
+        required_components=("remote_peer_inventory", "runner_active_work")
+    )
+    manager.register_component(
+        "remote_peer_inventory",
+        lambda: ComponentObservation("remote_peer_inventory", "no-remote-peer", 0),
+    )
+    manager.register_component(
+        "runner_active_work",
+        lambda: ComponentObservation(
+            "runner_active_work",
+            "runner-app-state",
+            int(app.state.has_active_work()),
+        ),
+    )
+    manager.fence()
+    with pytest.raises(QuiescenceBlocked, match="runner_active_work_active:1"):
+        manager.issue_certificate(
+            state_identity="state",
+            state_generation="generation",
+            persistent_state_digest="digest",
+        )
+
+    finish.set()
+    await task
+    unregister_timer("conv_deploy", "timer_deploy")
+    certificate = manager.issue_certificate(
+        state_identity="state",
+        state_generation="generation",
+        persistent_state_digest="digest",
+    )
+    assert (
+        certificate.components[
+            next(
+                index
+                for index, item in enumerate(certificate.components)
+                if item.name == "runner_active_work"
+            )
+        ].active_work
+        == 0
+    )

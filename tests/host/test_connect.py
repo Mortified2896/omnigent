@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -33,6 +34,9 @@ from omnigent.host.frames import (
     HostConnectionErrorFrame,
     HostCreateDirFrame,
     HostCreateDirResultFrame,
+    HostDeploymentDrainAckFrame,
+    HostDeploymentDrainFrame,
+    HostDeploymentReopenFrame,
     HostDetectCredentialsFrame,
     HostDetectCredentialsResultFrame,
     HostHarnessReadinessFrame,
@@ -6275,3 +6279,82 @@ async def test_glm_same_model_id_on_both_lanes_stays_distinct(monkeypatch) -> No
     ]
     # Both (id, lane) identities are pickable and listed as routable.
     assert result.routable_models.count("glm-5.3") == 2
+
+
+async def test_host_drain_waits_for_host_operation_and_rejects_runner_launch() -> None:
+    host = _make_host_process()
+    tunnel = _RecordingWS()
+    finish_operation = asyncio.Event()
+
+    async def wait_for_operation() -> None:
+        await finish_operation.wait()
+
+    operation = asyncio.create_task(wait_for_operation())
+    host._frame_tasks.add(operation)
+    request = HostDeploymentDrainFrame(9, "server-process-1", "drain-9")
+
+    assert host._handle_deployment_control(cast(Any, tunnel), encode_host_frame(request))
+    await asyncio.sleep(0.07)
+    assert not tunnel.sent
+
+    finish_operation.set()
+    await operation
+    host._frame_tasks.discard(operation)
+    assert host._deployment_drain_ack_task is not None
+    await asyncio.wait_for(host._deployment_drain_ack_task, timeout=1)
+    ack = decode_host_frame(tunnel.sent[-1])
+    assert isinstance(ack, HostDeploymentDrainAckFrame)
+    assert ack.fence_generation == 9
+    assert ack.server_process_generation == "server-process-1"
+    assert ack.remote_process_generation == host._process_generation
+    assert ack.active_work == 0
+
+    launch = HostLaunchRunnerFrame(
+        request_id="late-launch",
+        binding_token="binding-token",
+        workspace="/temporary/workspace",
+    )
+    await host._reject_frame_while_drained(cast(Any, tunnel), encode_host_frame(launch))
+    result = decode_host_frame(tunnel.sent[-1])
+    assert isinstance(result, HostLaunchRunnerResultFrame)
+    assert result.status == "failed"
+    assert result.runner_id is None
+
+    reopen = HostDeploymentReopenFrame(9, "server-process-1", "drain-9")
+    assert host._handle_deployment_control(cast(Any, tunnel), encode_host_frame(reopen))
+    assert host._deployment_drain is None
+    _cleanup_host(host)
+
+
+async def test_host_drain_ack_waits_for_inflight_background_state_write() -> None:
+    host = _make_host_process()
+
+    class _BlockedSendWS:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.started.set()
+            await self.release.wait()
+            self.sent.append(data)
+
+    tunnel = _BlockedSendWS()
+    host._ws = cast(Any, tunnel)
+    report_task = asyncio.create_task(host._report_runner_exit("runner-17", "test exit"))
+    await asyncio.wait_for(tunnel.started.wait(), timeout=1)
+
+    request = HostDeploymentDrainFrame(10, "server-process-1", "drain-10")
+    assert host._handle_deployment_control(cast(Any, tunnel), encode_host_frame(request))
+    await asyncio.sleep(0.07)
+    assert not tunnel.sent
+
+    tunnel.release.set()
+    await report_task
+    assert host._deployment_drain_ack_task is not None
+    await asyncio.wait_for(host._deployment_drain_ack_task, timeout=1)
+    sent = [decode_host_frame(raw) for raw in tunnel.sent]
+    assert isinstance(sent[0], HostRunnerExitedFrame)
+    assert isinstance(sent[1], HostDeploymentDrainAckFrame)
+    _cleanup_host(host)

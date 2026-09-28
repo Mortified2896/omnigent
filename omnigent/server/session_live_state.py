@@ -39,11 +39,16 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from omnigent.db.enum_codecs import SESSION_LIVE_STATUS
+from omnigent.server.deployment_quiescence import (
+    DeploymentQuiescence,
+    current_admission_lease,
+)
 
 if TYPE_CHECKING:
     from omnigent.stores import ConversationStore
@@ -65,6 +70,9 @@ _store: ConversationStore | None = None
 _scheduled_task_store: ScheduledTaskStore | None = None
 # Single worker => writes apply in submission order (see module docstring).
 _executor: ThreadPoolExecutor | None = None
+_admission: DeploymentQuiescence | None = None
+_pending_lock = threading.Lock()
+_pending_writes = 0
 # Last status seen per session, for dedupe — the value whose write was
 # enqueued, or (for an unencodable status) the value whose warning was
 # already logged, so repeats of either are suppressed. Unbounded like the
@@ -77,6 +85,8 @@ _last_pending: dict[str, int] = {}
 def configure(
     store: ConversationStore | None,
     scheduled_task_store: ScheduledTaskStore | None = None,
+    *,
+    admission: DeploymentQuiescence | None = None,
 ) -> None:
     """
     Wire (or clear) the stores live-state writes go to.
@@ -87,9 +97,10 @@ def configure(
         the event-driven run-completion hook
         (:func:`persist_scheduled_run_completion`); ``None`` disables it.
     """
-    global _store, _scheduled_task_store
+    global _store, _scheduled_task_store, _admission
     _store = store
     _scheduled_task_store = scheduled_task_store
+    _admission = admission
     _last_status.clear()
     _last_pending.clear()
 
@@ -102,6 +113,12 @@ def conversation_store() -> ConversationStore | None:
         persistence is disabled (tests / non-server processes).
     """
     return _store
+
+
+def pending_work_count() -> int:
+    """Return queued plus executing live-state store writes."""
+    with _pending_lock:
+        return _pending_writes
 
 
 def submit(description: str, fn, *args, on_failure=None) -> None:  # type: ignore[no-untyped-def]
@@ -126,21 +143,53 @@ def submit(description: str, fn, *args, on_failure=None) -> None:  # type: ignor
         dropped write's value can be re-attempted by the next identical
         publish instead of being swallowed.
     """
-    global _executor
+    global _executor, _pending_writes
+    parent = current_admission_lease()
+    if parent is not None:
+        lease = parent.fork("session_live_state")
+    elif _admission is not None:
+        lease = _admission.try_admit("session_live_state")
+    else:
+        lease = None
+    if _admission is not None and lease is None:
+        # This is best-effort display metadata. It must not run after the fence;
+        # the rejected attempt still advances the coordinator's activity epoch.
+        return
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="session-live-state")
 
-    ctx = contextvars.copy_context()
+    if lease is None:
+        ctx = contextvars.copy_context()
+    else:
+        with lease.activate():
+            ctx = contextvars.copy_context()
+    with _pending_lock:
+        _pending_writes += 1
 
     def _run() -> None:
+        nonlocal lease
         try:
             fn(*args)
         except Exception:  # noqa: BLE001 — best-effort display state
             _logger.warning("session live-state write failed (%s)", description, exc_info=True)
             if on_failure is not None:
                 on_failure()
+        finally:
+            global _pending_writes
+            with _pending_lock:
+                _pending_writes -= 1
+            if lease is not None:
+                lease.release()
+                lease = None
 
-    _executor.submit(ctx.run, _run)
+    try:
+        _executor.submit(ctx.run, _run)
+    except BaseException:
+        with _pending_lock:
+            _pending_writes -= 1
+        if lease is not None:
+            lease.release()
+        raise
 
 
 def persist_live_status(session_id: str, status: str) -> None:

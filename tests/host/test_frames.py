@@ -13,6 +13,9 @@ from omnigent.host.frames import (
     HostCreateDirResultFrame,
     HostCreateWorktreeFrame,
     HostCreateWorktreeResultFrame,
+    HostDeploymentDrainAckFrame,
+    HostDeploymentDrainFrame,
+    HostDeploymentReopenFrame,
     HostDetectCredentialsFrame,
     HostDetectCredentialsResultFrame,
     HostFsRequestFrame,
@@ -73,7 +76,6 @@ def test_import_local_frames_round_trip() -> None:
         source="codex",
         session_id="0198d07d-session",
     )
-
     session = decode_host_frame(
         encode_host_frame(
             HostImportLocalSessionFrame(
@@ -1697,3 +1699,17 @@ def test_fs_result_null_payload_round_trip() -> None:
     assert isinstance(decoded, HostFsResultFrame)
     assert decoded.payload is None
     assert decoded.error_status == 500
+
+
+def test_host_deployment_drain_frames_round_trip_and_old_hello_is_unknown() -> None:
+    request = HostDeploymentDrainFrame(4, "server-process", "request-1")
+    ack = HostDeploymentDrainAckFrame(4, "server-process", "request-1", "host-process", 0)
+    reopen = HostDeploymentReopenFrame(4, "server-process", "request-1")
+    assert decode_host_frame(encode_host_frame(request)) == request
+    assert decode_host_frame(encode_host_frame(ack)) == ack
+    assert decode_host_frame(encode_host_frame(reopen)) == reopen
+
+    old_hello = HostHelloFrame(version="0.1.0", frame_protocol_version=1, name="host")
+    decoded_hello = decode_host_frame(encode_host_frame(old_hello))
+    assert isinstance(decoded_hello, HostHelloFrame)
+    assert decoded_hello.process_generation is None

@@ -36,6 +36,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from omnigent.entities import ScheduledTask
+from omnigent.server.deployment_quiescence import DeploymentQuiescence
 from omnigent.server.scheduled.rrule import (
     RRuleTrigger,
     RRuleValidationError,
@@ -122,12 +123,14 @@ class ScheduledTaskScheduler:
         now: Callable[[], float] = time.time,
         schedule_call: Callable[[float, Callable[[], Any]], Any] | None = None,
         cancel_call: Callable[[Any], None] | None = None,
+        admission: DeploymentQuiescence | None = None,
     ) -> None:
         self._store = store
         self._on_fire = on_fire
         self._now = now
         self._schedule_call = schedule_call or _default_schedule_call
         self._cancel_call = cancel_call or _default_cancel_call
+        self._admission = admission
         self._jobs: dict[_JobKey, _Job] = {}
         self._started = False
 
@@ -205,6 +208,13 @@ class ScheduledTaskScheduler:
     def is_started(self) -> bool:
         """Whether :meth:`start` has run."""
         return self._started
+
+    @property
+    def active_fire_count(self) -> int:
+        """Number of timer callbacks currently executing in this process."""
+        local_running = sum(job.running for job in self._jobs.values())
+        pending_timer_tasks = sum(not task.done() for task in _PENDING_FIRES)
+        return local_running + pending_timer_tasks
 
     def next_run_at(self, task_id: str) -> str | None:
         """ISO-8601 timestamp of a task's next fire, or ``None`` if not armed."""
@@ -292,6 +302,12 @@ class ScheduledTaskScheduler:
         if job.running:
             _logger.debug("scheduler: task %s still running, skipping tick", job.task_id)
             return False
+        lease = self._admission.try_admit("scheduled_fire") if self._admission else None
+        if self._admission is not None and lease is None:
+            _logger.info(
+                "scheduler: task %s skipped because deployment writes are fenced", job.task_id
+            )
+            return False
         now_epoch = self._now()
         if now_epoch - scheduled_epoch > MISFIRE_GRACE_TIME_S:
             _logger.info(
@@ -299,16 +315,24 @@ class ScheduledTaskScheduler:
                 job.task_id,
                 now_epoch - scheduled_epoch,
             )
+            if lease is not None:
+                lease.release()
             return False
         job.running = True
         try:
-            await self._on_fire(job.workspace_id, job.task_id)
+            if lease is None:
+                await self._on_fire(job.workspace_id, job.task_id)
+            else:
+                with lease.activate():
+                    await self._on_fire(job.workspace_id, job.task_id)
             return True
         except Exception:
             _logger.exception("scheduler: on_fire for task %s failed", job.task_id)
             return False
         finally:
             job.running = False
+            if lease is not None:
+                lease.release()
 
 
 # Strong references to in-flight fire coroutines. ``loop.create_task`` only

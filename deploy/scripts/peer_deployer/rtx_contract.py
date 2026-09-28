@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from release_controller.accepted import canonical_digest as _canonical_digest
+
 
 class Refused(RuntimeError):
     """An unproven deployment boundary must fail closed."""
@@ -27,9 +29,7 @@ def digest(path: Path) -> str:
 
 
 def canonical_digest(value: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return _canonical_digest(value)
 
 
 def durable_json(path: Path, value: dict[str, Any], *, exclusive: bool = False) -> None:

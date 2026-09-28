@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +18,11 @@ from omnigent.entities.conversation import (
 from omnigent.harness_aliases import canonicalize_harness
 from omnigent.harness_plugins import background_title_generators
 from omnigent.runner.background_titles.service import FOLLOW_USER_LANGUAGE_TITLE_INSTRUCTION
+from omnigent.server.deployment_quiescence import (
+    AdmissionLease,
+    DeploymentQuiescence,
+    current_admission_lease,
+)
 from omnigent.stores.conversation_store import ConversationStore
 
 if TYPE_CHECKING:
@@ -28,6 +33,16 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 BACKGROUND_SESSION_TITLES_HEADER = "x-omnigent-background-session-titles"
+
+
+def _create_task_with_lease(
+    awaitable: Coroutine[Any, Any, None], lease: AdmissionLease | None, name: str
+) -> asyncio.Task[None]:
+    """Copy the persistent-work lease into a detached task's context."""
+    if lease is None:
+        return asyncio.create_task(awaitable, name=name)
+    with lease.activate():
+        return asyncio.create_task(awaitable, name=name)
 
 
 def background_session_titles_enabled(headers: Mapping[str, str]) -> bool:
@@ -134,6 +149,7 @@ class BackgroundSessionTitleCoordinator:
         seed_wait_seconds: float = 15.0,
         max_concurrency: int = 4,
         additional_instructions: str | None = None,
+        admission: DeploymentQuiescence | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be at least 1")
@@ -142,8 +158,10 @@ class BackgroundSessionTitleCoordinator:
         self._timeout_seconds = timeout_seconds
         self._seed_wait_seconds = seed_wait_seconds
         self._additional_instructions = additional_instructions
+        self._admission = admission
         self._generation_slots = asyncio.Semaphore(max_concurrency)
         self._pending: set[asyncio.Task[None]] = set()
+        self._leases: dict[asyncio.Task[None], AdmissionLease] = {}
         self._scheduled_session_ids: set[str] = set()
         self._scheduled_task_summary_ids: set[str] = set()
 
@@ -161,8 +179,11 @@ class BackgroundSessionTitleCoordinator:
         """Schedule at most one title attempt and return without awaiting it."""
         if session_id in self._scheduled_session_ids:
             return
+        lease = self._acquire_lease()
+        if self._admission is not None and lease is None:
+            return
         self._scheduled_session_ids.add(session_id)
-        task = asyncio.create_task(
+        task = _create_task_with_lease(
             self._run(
                 request=BackgroundTitleRequest(
                     session_id=session_id,
@@ -175,12 +196,16 @@ class BackgroundSessionTitleCoordinator:
                 ),
                 expected_seed_title=expected_seed_title,
             ),
-            name=f"background-session-title-{session_id}",
+            lease,
+            f"background-session-title-{session_id}",
         )
         self._pending.add(task)
+        if lease is not None:
+            self._leases[task] = lease
 
         def _discard(completed: asyncio.Task[None]) -> None:
             self._pending.discard(completed)
+            self._release_lease(completed)
             self._scheduled_session_ids.discard(session_id)
 
         task.add_done_callback(_discard)
@@ -198,8 +223,11 @@ class BackgroundSessionTitleCoordinator:
         """Schedule a task-summary attempt for a child session."""
         if session_id in self._scheduled_task_summary_ids:
             return
+        lease = self._acquire_lease()
+        if self._admission is not None and lease is None:
+            return
         self._scheduled_task_summary_ids.add(session_id)
-        task = asyncio.create_task(
+        task = _create_task_with_lease(
             self._run_task_summary(
                 request=BackgroundTitleRequest(
                     session_id=session_id,
@@ -210,12 +238,16 @@ class BackgroundSessionTitleCoordinator:
                     sub_agent_name=sub_agent_name,
                 ),
             ),
-            name=f"background-task-summary-{session_id}",
+            lease,
+            f"background-task-summary-{session_id}",
         )
         self._pending.add(task)
+        if lease is not None:
+            self._leases[task] = lease
 
         def _discard(completed: asyncio.Task[None]) -> None:
             self._pending.discard(completed)
+            self._release_lease(completed)
             self._scheduled_task_summary_ids.discard(session_id)
 
         task.add_done_callback(_discard)
@@ -225,6 +257,11 @@ class BackgroundSessionTitleCoordinator:
         if self._pending:
             await asyncio.gather(*tuple(self._pending))
 
+    @property
+    def pending_work_count(self) -> int:
+        """Number of detached title tasks that may still persist a title."""
+        return sum(not task.done() for task in self._pending)
+
     async def shutdown(self) -> None:
         """Cancel and drain pending title jobs during server shutdown."""
         pending = tuple(self._pending)
@@ -232,6 +269,19 @@ class BackgroundSessionTitleCoordinator:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+
+    def _acquire_lease(self) -> AdmissionLease | None:
+        parent = current_admission_lease()
+        if parent is not None:
+            return parent.fork("background_session_title")
+        if self._admission is not None:
+            return self._admission.try_admit("background_session_title")
+        return None
+
+    def _release_lease(self, task: asyncio.Task[None]) -> None:
+        lease = self._leases.pop(task, None)
+        if lease is not None:
+            lease.release()
 
     async def _run(
         self,

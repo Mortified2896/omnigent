@@ -12,6 +12,9 @@ import json
 import pytest
 
 from omnigent.runner.transports.ws_tunnel.frames import (
+    DeploymentDrainAckFrame,
+    DeploymentDrainFrame,
+    DeploymentReopenFrame,
     FrameKind,
     HelloFrame,
     PingFrame,
@@ -59,6 +62,21 @@ def test_hello_round_trip_with_direct_attach_advert() -> None:
     assert isinstance(decoded, HelloFrame)
     assert decoded.direct_attach_port == 54321
     assert decoded.direct_attach_token == "tok_abc"
+
+
+def test_deployment_drain_frames_round_trip_and_legacy_hello_is_unknown() -> None:
+    request = DeploymentDrainFrame(4, "server-process", "request-1")
+    ack = DeploymentDrainAckFrame(4, "server-process", "request-1", "runner-process", 0)
+    reopen = DeploymentReopenFrame(4, "server-process", "request-1")
+    assert decode_frame(encode_frame(request)) == request
+    assert decode_frame(encode_frame(ack)) == ack
+    assert decode_frame(encode_frame(reopen)) == reopen
+
+    old_hello = decode_frame(
+        encode_frame(HelloFrame(runner_version="0.1.0", frame_protocol_version=1))
+    )
+    assert isinstance(old_hello, HelloFrame)
+    assert old_hello.process_generation is None
 
 
 def test_hello_without_advert_omits_direct_attach_keys_on_wire() -> None:

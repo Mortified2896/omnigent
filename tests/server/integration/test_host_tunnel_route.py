@@ -14,6 +14,8 @@ from omnigent.db.db_models import SqlHost
 from omnigent.db.utils import get_or_create_engine, now_epoch
 from omnigent.host.frames import (
     HostConnectionErrorFrame,
+    HostDeploymentDrainAckFrame,
+    HostDeploymentDrainFrame,
     HostHarnessReadinessFrame,
     HostHelloFrame,
     HostLaunchRunnerResultFrame,
@@ -21,6 +23,11 @@ from omnigent.host.frames import (
     encode_host_frame,
 )
 from omnigent.server.auth import AuthProvider
+from omnigent.server.deployment_quiescence import (
+    DeploymentFenceMiddleware,
+    DeploymentQuiescence,
+    QuiescenceBlocked,
+)
 from omnigent.server.host_registry import HostRegistry
 from omnigent.server.routes.host_tunnel import create_host_tunnel_router
 from omnigent.stores.host_store import HostStore
@@ -77,11 +84,13 @@ async def _connect_route(
 def _make_hello(
     name: str = "test-laptop",
     runners: list[str] | None = None,
+    process_generation: str | None = None,
 ) -> str:
     """Encode a HostHelloFrame for tests.
 
     :param name: Human-readable host name.
     :param runners: Live runner IDs, defaults to empty.
+    :param process_generation: Process identity advertised for drain ACKs.
     :returns: JSON-encoded hello frame string.
     """
     return encode_host_frame(
@@ -90,6 +99,7 @@ def _make_hello(
             frame_protocol_version=1,
             name=name,
             runners=runners or [],
+            process_generation=process_generation,
         )
     )
 
@@ -118,6 +128,7 @@ async def _send_hello_and_wait(
     host_id: str = _HOST_ID,
     name: str = "test-laptop",
     runners: list[str] | None = None,
+    process_generation: str | None = None,
 ) -> None:
     """Send hello and wait for registration.
 
@@ -126,9 +137,13 @@ async def _send_hello_and_wait(
     :param host_id: Expected host_id in the registry.
     :param name: Host name for the hello frame.
     :param runners: Live runner IDs for the hello frame.
+    :param process_generation: Process identity advertised for drain ACKs.
     """
     await communicator.send_input(
-        {"type": "websocket.receive", "text": _make_hello(name, runners)},
+        {
+            "type": "websocket.receive",
+            "text": _make_hello(name, runners, process_generation),
+        },
     )
     await asyncio.wait_for(
         _wait_registered(registry, host_id),
@@ -286,6 +301,81 @@ async def test_host_tunnel_deregisters_on_disconnect(
     await asyncio.sleep(0.1)
 
     assert registry.get(_HOST_ID) is None
+
+
+async def test_host_tunnel_ack_is_required_for_server_quiescence_certificate(
+    db_uri: str,
+) -> None:
+    manager = DeploymentQuiescence()
+    registry = HostRegistry()
+    store = HostStore(db_uri)
+    app = FastAPI()
+    app.include_router(
+        create_host_tunnel_router(registry, store, quiescence=manager),
+        prefix="/v1",
+    )
+    app.add_middleware(DeploymentFenceMiddleware, coordinator=manager)
+    communicator = await _connect_route(app, _TUNNEL_PATH)
+    await _send_hello_and_wait(
+        communicator,
+        registry,
+        process_generation="host-process-test",
+    )
+    generation = manager.fence()
+    certificate_args = {
+        "state_identity": "state-id",
+        "state_generation": "state-generation",
+        "persistent_state_digest": "state-digest",
+    }
+
+    async with asyncio.timeout(2):
+        while True:
+            try:
+                manager.issue_certificate(**certificate_args)
+            except QuiescenceBlocked as exc:
+                if "remote_peer_drain_pending" in exc.blockers:
+                    break
+            await asyncio.sleep(0.01)
+
+    drain_raw = (await communicator.receive_output(timeout=1.0))["text"]
+    drain = decode_host_frame(drain_raw)
+    assert isinstance(drain, HostDeploymentDrainFrame)
+    assert drain.fence_generation == generation
+    assert drain.server_process_generation == manager.process_generation
+    await communicator.send_input(
+        {
+            "type": "websocket.receive",
+            "text": encode_host_frame(
+                HostDeploymentDrainAckFrame(
+                    fence_generation=drain.fence_generation,
+                    server_process_generation=drain.server_process_generation,
+                    request_id=drain.request_id,
+                    remote_process_generation="host-process-test",
+                    active_work=0,
+                )
+            ),
+        }
+    )
+    async with asyncio.timeout(1):
+        while manager.remote_peer_observation().status != "known":
+            await asyncio.sleep(0.01)
+
+    certificate = manager.issue_certificate(**certificate_args)
+    manager.verify_certificate(
+        certificate.certificate_id,
+        state_identity="state-id",
+        state_generation="state-generation",
+    )
+    await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
+    async with asyncio.timeout(1):
+        while registry.get(_HOST_ID) is not None:
+            await asyncio.sleep(0.01)
+    with pytest.raises(QuiescenceBlocked, match="certificate_unknown_or_invalidated"):
+        manager.verify_certificate(
+            certificate.certificate_id,
+            state_identity="state-id",
+            state_generation="state-generation",
+        )
 
 
 async def test_host_tunnel_upserts_db_on_connect(

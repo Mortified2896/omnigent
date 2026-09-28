@@ -20,8 +20,10 @@ import logging
 import os
 import random
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TypeAlias
 from urllib.parse import quote, urlsplit, urlunsplit
+from uuid import uuid4
 
 from starlette.types import ASGIApp, Message, Scope
 from websockets.exceptions import ConnectionClosedOK, InvalidURI, WebSocketException
@@ -34,6 +36,9 @@ from omnigent.runner.identity import (
     RUNNER_TUNNEL_TOKEN_HEADER,
 )
 from omnigent.runner.transports.ws_tunnel.frames import (
+    DeploymentDrainAckFrame,
+    DeploymentDrainFrame,
+    DeploymentReopenFrame,
     HelloFrame,
     PingFrame,
     PongFrame,
@@ -145,6 +150,19 @@ _AUTH_REDIRECT_SCHEMES = {"http", "https"}
 # slept through a token's lifetime) never kills a live session — this
 # mirrors the host tunnel's ``_LOGIN_REDIRECT_FATAL_ATTEMPTS`` posture.
 _LOGIN_REDIRECT_FATAL_ATTEMPTS = 3
+
+
+@dataclass
+class _DeploymentDrainState:
+    """Per-tunnel state for one exact server drain request."""
+
+    process_generation: str
+    request: DeploymentDrainFrame | None = None
+    ack_task: asyncio.Task[None] | None = None
+
+    @property
+    def drained(self) -> bool:
+        return self.request is not None
 
 
 async def dispatch_via_asgi(
@@ -352,6 +370,9 @@ async def serve_tunnel(
     :returns: Returns when *shutdown_event* triggers a graceful shutdown;
         otherwise never returns during normal operation.
     """
+    # Generate after runner startup, not at module import: a host zygote may
+    # fork a preloaded module and each child needs its own process generation.
+    runner_process_generation = str(uuid4())
     delay_s = _INITIAL_RECONNECT_DELAY_S
     tunnel_url = _tunnel_url(server_url, runner_id)
     # Set on the first accepted WS upgrade. Distinguishes a runner that
@@ -420,6 +441,7 @@ async def serve_tunnel(
                 on_resume_note=_note_resume_from_suspend,
                 direct_attach_port=direct_attach_port,
                 direct_attach_token=direct_attach_token,
+                process_generation=runner_process_generation,
                 **activity_kwargs,
             )
             # A graceful shutdown drains and closes the connection cleanly,
@@ -766,6 +788,7 @@ async def _serve_tunnel_once(
     on_resume_note: Callable[[], None] | None = None,
     direct_attach_port: int | None = None,
     direct_attach_token: str | None = None,
+    process_generation: str | None = None,
 ) -> None:
     """Serve one WebSocket connection until it closes.
 
@@ -803,6 +826,8 @@ async def _serve_tunnel_once(
 
     dispatch_tasks: dict[str, asyncio.Task[None]] = {}
     ws_channels: dict[str, _RunnerWSChannel] = {}
+    process_generation = process_generation or str(uuid4())
+    drain_state = _DeploymentDrainState(process_generation)
     # Identify as a first-party client so the server's WebSocket origin
     # guard (CSWSH protection) allows the handshake — this runner is not a
     # browser and would otherwise rely on the permissive missing-origin
@@ -856,6 +881,7 @@ async def _serve_tunnel_once(
             runner_version,
             direct_attach_port=direct_attach_port,
             direct_attach_token=direct_attach_token,
+            process_generation=process_generation,
         )
         _logger.info(
             "runner %s connected to %s",
@@ -900,6 +926,7 @@ async def _serve_tunnel_once(
                         dispatch_tasks,
                         ws_channels,
                         on_activity=on_activity,
+                        drain_state=drain_state,
                     )
             else:
                 # Race reads against the shutdown signal. When it fires,
@@ -963,6 +990,7 @@ async def _serve_tunnel_once(
                             dispatch_tasks,
                             ws_channels,
                             on_activity=on_activity,
+                            drain_state=drain_state,
                         )
                 finally:
                     shutdown_wait.cancel()
@@ -974,6 +1002,10 @@ async def _serve_tunnel_once(
                 await suspend_task
             await _cancel_dispatch_tasks(dispatch_tasks)
             await _cancel_ws_channels(ws_channels)
+            if drain_state.ack_task is not None:
+                drain_state.ack_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await drain_state.ack_task
 
 
 async def _graceful_drain(
@@ -1037,6 +1069,7 @@ async def _send_hello(
     *,
     direct_attach_port: int | None = None,
     direct_attach_token: str | None = None,
+    process_generation: str | None = None,
 ) -> None:
     """Send the runner's opening hello frame.
 
@@ -1069,6 +1102,7 @@ async def _send_hello(
                 telemetry_opt_out=_tel_opt_out,
                 direct_attach_port=direct_attach_port,
                 direct_attach_token=direct_attach_token,
+                process_generation=process_generation or str(uuid4()),
                 harnesses=[
                     "claude-native",
                     "claude-sdk",
@@ -1091,6 +1125,7 @@ async def _handle_tunnel_frame(
     ws_channels: dict[str, _RunnerWSChannel],
     *,
     on_activity: Callable[[], None] | None = None,
+    drain_state: _DeploymentDrainState | None = None,
 ) -> None:
     """Handle one server-to-runner tunnel frame.
 
@@ -1119,7 +1154,62 @@ async def _handle_tunnel_frame(
         return
     if isinstance(frame, PingFrame):
         await send_text(encode_frame(PongFrame(ts=frame.ts)))
+    elif isinstance(frame, DeploymentDrainFrame):
+        if drain_state is None:
+            return
+        current = drain_state.request
+        if current is not None:
+            if (
+                current.server_process_generation == frame.server_process_generation
+                and current.fence_generation > frame.fence_generation
+            ):
+                return
+            if (
+                current.server_process_generation == frame.server_process_generation
+                and current.fence_generation == frame.fence_generation
+                and current.request_id != frame.request_id
+            ):
+                return
+        drain_state.request = frame
+        if drain_state.ack_task is None or drain_state.ack_task.done():
+            drain_state.ack_task = asyncio.create_task(
+                _acknowledge_runner_drain(
+                    app,
+                    frame,
+                    drain_state.process_generation,
+                    send_text,
+                    dispatch_tasks,
+                    ws_channels,
+                    drain_state,
+                ),
+                name=f"runner-deployment-drain:{frame.fence_generation}",
+            )
+    elif isinstance(frame, DeploymentReopenFrame):
+        if drain_state is None or drain_state.request is None:
+            return
+        current = drain_state.request
+        if (
+            current.fence_generation == frame.fence_generation
+            and current.server_process_generation == frame.server_process_generation
+            and current.request_id == frame.request_id
+        ):
+            drain_state.request = None
+            if drain_state.ack_task is not None:
+                drain_state.ack_task.cancel()
+                drain_state.ack_task = None
     elif isinstance(frame, RequestFrame):
+        if drain_state is not None and drain_state.drained:
+            await send_text(
+                encode_frame(
+                    ResponseHeadFrame(
+                        id=frame.id,
+                        status=423,
+                        headers=[["content-length", "0"]],
+                    )
+                )
+            )
+            await send_text(encode_frame(ResponseEndFrame(id=frame.id)))
+            return
         if on_activity is not None:
             on_activity()
         task = asyncio.create_task(
@@ -1135,6 +1225,17 @@ async def _handle_tunnel_frame(
         if dispatch_task is not None:
             dispatch_task.cancel()
     elif isinstance(frame, WSOpenFrame):
+        if drain_state is not None and drain_state.drained:
+            await send_text(
+                encode_frame(
+                    WSCloseFrame(
+                        ch_id=frame.ch_id,
+                        code=1013,
+                        reason="runner is drained for deployment",
+                    )
+                )
+            )
+            return
         if on_activity is not None:
             on_activity()
         opened_channel = _RunnerWSChannel(ch_id=frame.ch_id, send_text=send_text)
@@ -1145,6 +1246,8 @@ async def _handle_tunnel_frame(
         )
         opened_channel.task.add_done_callback(_forget_ws_channel(ws_channels, frame.ch_id))
     elif isinstance(frame, WSFrame):
+        if drain_state is not None and drain_state.drained:
+            return
         if on_activity is not None:
             on_activity()
         active_channel = ws_channels.get(frame.ch_id)
@@ -1192,6 +1295,42 @@ async def _cancel_dispatch_tasks(dispatch_tasks: dict[str, asyncio.Task[None]]) 
     for task in dispatch_tasks.values():
         task.cancel()
     await asyncio.gather(*dispatch_tasks.values(), return_exceptions=True)
+
+
+async def _acknowledge_runner_drain(
+    app: _ASGIApp,
+    request: DeploymentDrainFrame,
+    process_generation: str,
+    send_text: Callable[[str], Awaitable[None]],
+    dispatch_tasks: dict[str, asyncio.Task[None]],
+    ws_channels: dict[str, _RunnerWSChannel],
+    drain_state: _DeploymentDrainState,
+) -> None:
+    """Wait for Omnigent's existing work registry and tunnel tasks to go idle."""
+    app_state = getattr(app, "state", None)
+    has_active_work = getattr(app_state, "has_active_work", None)
+    while drain_state.request == request:
+        try:
+            # The runner's existing predicate includes turns, async tools,
+            # registered timers, pending approvals, and process-manager work.
+            # Missing or broken accounting is unknown and must never ACK idle.
+            active = has_active_work() if callable(has_active_work) else True
+        except Exception:  # noqa: BLE001 - runtime accounting failures block drain.
+            active = True
+        if type(active) is bool and not active and not dispatch_tasks and not ws_channels:
+            await send_text(
+                encode_frame(
+                    DeploymentDrainAckFrame(
+                        fence_generation=request.fence_generation,
+                        server_process_generation=request.server_process_generation,
+                        request_id=request.request_id,
+                        remote_process_generation=process_generation,
+                        active_work=0,
+                    )
+                )
+            )
+            return
+        await asyncio.sleep(0.05)
 
 
 class _RunnerWSChannel:

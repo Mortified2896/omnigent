@@ -65,6 +65,14 @@ from omnigent.server.background_session_titles import (
     BackgroundSessionTitleCoordinator,
     RunnerBackgroundTitleGenerator,
 )
+from omnigent.server.deployment_quiescence import (
+    ComponentObservation,
+    DeploymentControlSocket,
+    DeploymentFenceMiddleware,
+    DeploymentQuiescence,
+    bind_sqlalchemy_write_admission,
+    persistent_state_source,
+)
 from omnigent.server.feature_flags import Feature, FeatureFlags, resolve_feature_flags
 from omnigent.server.managed_hosts import ManagedSandboxDeployment
 from omnigent.server.managed_sandbox_reaper import ManagedSandboxReaper
@@ -1294,10 +1302,22 @@ def create_app(
         tunnel_registry,
         server_version=_server_version(),
     )
+    deployment_control_enabled = bool(os.environ.get("OMNIGENT_DEPLOYMENT_CONTROL_SOCKET"))
+    deployment_quiescence = DeploymentQuiescence(
+        required_components=(
+            "scheduled_fires",
+            "session_live_state",
+            "managed_launches",
+            "background_titles",
+            "remote_peer_inventory",
+        ),
+        start_fenced=deployment_control_enabled,
+    )
     background_title_coordinator = BackgroundSessionTitleCoordinator(
         conversation_store,
         RunnerBackgroundTitleGenerator(runner_router),
         additional_instructions=title_instructions,
+        admission=deployment_quiescence,
     )
     # Shared between the host tunnel (which records ``host.runner_exited``
     # reports from daemons) and the runner status endpoint (which surfaces
@@ -1477,15 +1497,18 @@ def create_app(
                 file_store=file_store,
                 artifact_store=artifact_store,
             )
-            on_fire = build_on_fire(fire_deps)
+            on_fire = build_on_fire(fire_deps, admission=deployment_quiescence)
             # The manual "run now" trigger reuses the same fire path (dispatch /
             # preflight / in-flight guard) as the scheduler; it only differs in
             # allowing a paused task to fire. Exposed on app.state for the
             # POST /v1/scheduled-tasks/{id}/run route.
-            app_inst.state.scheduled_task_run_now = build_run_now(fire_deps)
+            app_inst.state.scheduled_task_run_now = build_run_now(
+                fire_deps, admission=deployment_quiescence
+            )
             scheduled_task_scheduler = ScheduledTaskScheduler(
                 store=scheduled_task_store,
                 on_fire=on_fire,
+                admission=deployment_quiescence,
             )
             app_inst.state.scheduled_task_scheduler = scheduled_task_scheduler
             # Scheduled tasks are a non-critical subsystem: a failure loading the
@@ -1522,9 +1545,45 @@ def create_app(
                 app_inst.state.managed_sandbox_reaper = managed_sandbox_reaper
                 await managed_sandbox_reaper.start()
 
+        deployment_control: DeploymentControlSocket | None = None
+        state_stores = (
+            agent_store,
+            file_store,
+            conversation_store,
+            artifact_store,
+            comment_store,
+            policy_store,
+            permission_store,
+            project_store,
+            scheduled_task_store,
+            host_store,
+            account_store,
+            model_advisor_store,
+        )
+        unbind_sqlalchemy_writes = bind_sqlalchemy_write_admission(
+            deployment_quiescence, state_stores
+        )
         try:
+            control_path = os.environ.get("OMNIGENT_DEPLOYMENT_CONTROL_SOCKET")
+            if control_path:
+                state_root = os.environ.get("OMNIGENT_DEPLOYMENT_STATE_ROOT")
+                if not state_root:
+                    raise RuntimeError(
+                        "deployment control requires OMNIGENT_DEPLOYMENT_STATE_ROOT"
+                    )
+                state_source = persistent_state_source(
+                    Path(state_root),
+                    state_stores,
+                )
+                deployment_control = DeploymentControlSocket(
+                    Path(control_path), deployment_quiescence, state_source
+                )
+                await deployment_control.start()
+                app_inst.state.deployment_control = deployment_control
             yield
         finally:
+            if deployment_control is not None:
+                await deployment_control.close()
             if managed_sandbox_reaper is not None:
                 await managed_sandbox_reaper.shutdown()
             # Run completion is event-driven (the _publish_status hook) plus a
@@ -1557,6 +1616,7 @@ def create_app(
             # endpoint. Best-effort — individual close failures are logged
             # inside shutdown_all().
             await _mcp_pool.shutdown_all()
+            unbind_sqlalchemy_writes()
 
     app = FastAPI(title="Omnigent Server", lifespan=_lifespan)
     from omnigent.runtime import telemetry
@@ -1571,6 +1631,7 @@ def create_app(
     app.state.background_title_coordinator = background_title_coordinator
     app.state.host_registry = host_registry
     app.state.host_store = host_store
+    app.state.deployment_quiescence = deployment_quiescence
     app.state.agent_store = agent_store
     app.state.sandbox_config = sandbox_config
     app.state.branding_snapshot = branding_snapshot
@@ -1670,7 +1731,7 @@ def create_app(
     # it regardless of whether managed hosts are configured.
     from omnigent.server.managed_hosts import ManagedLaunchTracker
 
-    app.state.managed_launches = ManagedLaunchTracker()
+    app.state.managed_launches = ManagedLaunchTracker(admission=deployment_quiescence)
     app.state.server_metrics = server_metrics
     app.state.server_metrics_otel = server_metrics_otel
     app.add_middleware(_WebSocketMetricsMiddleware, metrics=server_metrics)
@@ -1694,11 +1755,55 @@ def create_app(
     # scheduled-task store additionally enables the event-driven
     # run-completion hook (persist_scheduled_run_completion) fired from
     # _publish_status when a fired conversation's turn reaches terminal.
-    session_live_state.configure(conversation_store, scheduled_task_store)
+    session_live_state.configure(
+        conversation_store,
+        scheduled_task_store,
+        admission=deployment_quiescence,
+    )
     # Extend a managed sandbox while its runner tunnel is live (the managed-path
     # caller for SandboxHostLauncher.keep_alive); no-op without a sandbox config.
     managed_host_keepalive.configure(conversation_store, host_store, sandbox_config)
     pending_elicitations.set_count_persist_hook(session_live_state.persist_pending_count)
+
+    def _quiescence_component(name: str, active_work: int) -> ComponentObservation:
+        return ComponentObservation(
+            name=name,
+            generation=deployment_quiescence.process_generation,
+            active_work=active_work,
+        )
+
+    def _remote_peer_inventory() -> ComponentObservation:
+        # Only peers connected to this exact server generation participate.
+        # While fenced, new tunnel handshakes are refused, so configured but
+        # offline machines cannot acquire write capability for this fence.
+        return deployment_quiescence.remote_peer_observation()
+
+    def _scheduled_fire_count() -> int:
+        scheduler = getattr(app.state, "scheduled_task_scheduler", None)
+        return scheduler.active_fire_count if scheduler is not None else 0
+
+    deployment_quiescence.register_component(
+        "scheduled_fires",
+        lambda: _quiescence_component("scheduled_fires", _scheduled_fire_count()),
+    )
+    deployment_quiescence.register_component(
+        "session_live_state",
+        lambda: _quiescence_component(
+            "session_live_state", session_live_state.pending_work_count()
+        ),
+    )
+    deployment_quiescence.register_component(
+        "managed_launches",
+        lambda: _quiescence_component("managed_launches", app.state.managed_launches.active_count),
+    )
+    deployment_quiescence.register_component(
+        "background_titles",
+        lambda: _quiescence_component(
+            "background_titles", background_title_coordinator.pending_work_count
+        ),
+    )
+    deployment_quiescence.register_component("remote_peer_inventory", _remote_peer_inventory)
+    deployment_quiescence.seal_components()
 
     @app.middleware("http")
     async def _record_server_metrics(
@@ -3200,6 +3305,7 @@ def create_app(
             auth_provider=auth_provider,
             runner_exit_reports=runner_exit_reports,
             resolve_managed_runner_owner=_resolve_managed_runner_owner,
+            quiescence=deployment_quiescence,
         ),
         prefix="/v1",
         tags=["runners"],
@@ -3225,6 +3331,7 @@ def create_app(
                 auth_provider=auth_provider,
                 runner_exit_reports=runner_exit_reports,
                 on_runner_exited=_on_runner_exited,
+                quiescence=deployment_quiescence,
                 on_host_connect=_on_hosts_changed,
                 on_host_disconnect=_on_hosts_changed,
                 on_host_update=_on_hosts_changed,
@@ -3518,6 +3625,11 @@ def create_app(
         async def root() -> FileResponse:
             """Serve the API-only landing page (no web UI bundle present)."""
             return FileResponse(_API_ONLY_LANDING_HTML, media_type="text/html")
+
+    # Added last so the controller admission boundary runs outside auth,
+    # metrics and route middleware. The external Unix-socket controller uses
+    # this same coordinator; no browser route can fence or reopen writes.
+    app.add_middleware(DeploymentFenceMiddleware, coordinator=deployment_quiescence)
 
     return app
 

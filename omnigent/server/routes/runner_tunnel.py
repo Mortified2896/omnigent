@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from ipaddress import ip_address
+from uuid import uuid4
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
@@ -27,6 +29,9 @@ from omnigent.debug_logging import debug_event
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.runner.transports.ws_tunnel.frames import (
+    DeploymentDrainAckFrame,
+    DeploymentDrainFrame,
+    DeploymentReopenFrame,
     HelloFrame,
     PingFrame,
     PongFrame,
@@ -38,6 +43,12 @@ from omnigent.runner.transports.ws_tunnel.frames import (
 from omnigent.runner.transports.ws_tunnel.registry import RunnerSession, TunnelRegistry
 from omnigent.server import managed_host_keepalive, session_live_state, shutdown_state
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.deployment_quiescence import (
+    DeploymentQuiescence,
+    RemoteDrainCommand,
+    release_remote_handshake_admission,
+    without_admission_lease,
+)
 from omnigent.server.host_registry import RunnerExitReports
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -162,6 +173,7 @@ def create_runner_tunnel_router(
     auth_provider: AuthProvider | None = None,
     runner_exit_reports: RunnerExitReports | None = None,
     resolve_managed_runner_owner: Callable[[str], str | None] | None = None,
+    quiescence: DeploymentQuiescence | None = None,
 ) -> APIRouter:
     """Build the router hosting the ``/runners/{id}/tunnel`` WS endpoint.
 
@@ -200,6 +212,8 @@ def create_runner_tunnel_router(
         runner-side analog of the host tunnel's ``resolve_launch_token``.
         ``None`` disables the lookup (an unauthenticated non-loopback
         peer is then rejected, the prior behavior).
+    :param quiescence: Optional deployment fence for generation-bound remote
+        drain participation.
     :returns: A FastAPI router with the tunnel endpoint.
     """
     router = APIRouter()
@@ -441,6 +455,7 @@ def create_runner_tunnel_router(
 
         await ws.accept()
         session: RunnerSession | None = None
+        remote_peer_token: str | None = None
         try:
             # 3. Receive hello frame.
             raw = await ws.receive_text()
@@ -462,11 +477,60 @@ def create_runner_tunnel_router(
                 )
                 return
 
+            # Register with the deployment fence before replacing a live
+            # registry entry. A peer reconnecting during drain is refused.
+            loop = asyncio.get_running_loop()
+            session_holder: list[RunnerSession] = []
+            pending_commands: list[RemoteDrainCommand] = []
+            command_lock = threading.Lock()
+
+            def send_deployment_command(command: RemoteDrainCommand) -> None:
+                if command.operation == "drain":
+                    outgoing = DeploymentDrainFrame(
+                        command.fence_generation,
+                        command.server_process_generation,
+                        command.request_id,
+                    )
+                else:
+                    outgoing = DeploymentReopenFrame(
+                        command.fence_generation,
+                        command.server_process_generation,
+                        command.request_id,
+                    )
+                data = encode_frame(outgoing)
+                with command_lock:
+                    if not session_holder:
+                        pending_commands.append(command)
+                        return
+                    connection = session_holder[0]
+                loop.call_soon_threadsafe(connection.outbound_queue.put_nowait, data)
+
+            if quiescence is not None:
+                remote_peer_token = quiescence.register_remote_peer(
+                    kind="runner",
+                    identity=runner_id,
+                    tunnel_generation=uuid4().hex,
+                    process_generation=frame.process_generation,
+                    send_command=send_deployment_command,
+                )
+                if remote_peer_token is None:
+                    await ws.close(
+                        code=1013,
+                        reason="runner reconnect refused during deployment drain",
+                    )
+                    return
+
             # 5. Register — the authenticated tunnel owner was resolved
             #    (and an unauthenticated non-loopback peer already
             #    rejected) before ``accept()`` above, so runner-binding
             #    checks can enforce ownership.
             session = registry.register(runner_id, ws, frame, owner=tunnel_owner)
+            with command_lock:
+                session_holder.append(session)
+                queued_commands = tuple(pending_commands)
+                pending_commands.clear()
+            for command in queued_commands:
+                send_deployment_command(command)
             _logger.info(
                 "Runner %s connected (version=%s, harnesses=%s)",
                 runner_id,
@@ -487,18 +551,32 @@ def create_runner_tunnel_router(
             # hook can perform real tunnel I/O — without the sender
             # loop running, any ``WSTunnelTransport``-backed request
             # the hook makes would deadlock on its response future.
-            sender_task = asyncio.create_task(
-                _sender_loop(ws, session),
-                name=f"tunnel-sender:{runner_id}",
-            )
-            ping_task = asyncio.create_task(
-                _ping_loop(ws, session, runner_id, registry),
-                name=f"tunnel-ping:{runner_id}",
-            )
-            receive_task = asyncio.create_task(
-                _receive_loop(ws, session, runner_id, registry),
-                name=f"tunnel-receive:{runner_id}",
-            )
+            with without_admission_lease():
+                sender_task = asyncio.create_task(
+                    _sender_loop(ws, session),
+                    name=f"tunnel-sender:{runner_id}",
+                )
+                ping_task = asyncio.create_task(
+                    _ping_loop(
+                        ws,
+                        session,
+                        runner_id,
+                        registry,
+                        quiescence=quiescence,
+                    ),
+                    name=f"tunnel-ping:{runner_id}",
+                )
+                receive_task = asyncio.create_task(
+                    _receive_loop(
+                        ws,
+                        session,
+                        runner_id,
+                        registry,
+                        quiescence=quiescence,
+                        remote_peer_token=remote_peer_token,
+                    ),
+                    name=f"tunnel-receive:{runner_id}",
+                )
 
             if on_runner_connect is not None:
                 # Bounded so a slow / hung hook can't stall WS
@@ -521,6 +599,10 @@ def create_runner_tunnel_router(
                         "on_runner_connect callback failed for %s",
                         runner_id,
                     )
+
+            # Keep the admission lease through the callback: it may launch
+            # or reconcile session work before the tunnel is fully registered.
+            release_remote_handshake_admission()
 
             try:
                 done, _pending = await asyncio.wait(
@@ -576,6 +658,8 @@ def create_runner_tunnel_router(
                     return_exceptions=True,
                 )
                 registry.deregister(runner_id, session)
+                if quiescence is not None and remote_peer_token is not None:
+                    quiescence.unregister_remote_peer(remote_peer_token)
                 if on_runner_disconnect is not None:
                     try:
                         await on_runner_disconnect(runner_id)
@@ -607,6 +691,8 @@ def create_runner_tunnel_router(
                         "on_runner_disconnect callback failed for %s",
                         runner_id,
                     )
+            if quiescence is not None and remote_peer_token is not None:
+                quiescence.unregister_remote_peer(remote_peer_token)
         except Exception:
             _logger.exception(
                 "Tunnel error for runner %s",
@@ -617,6 +703,8 @@ def create_runner_tunnel_router(
                 registry.deregister(runner_id, session)
             else:
                 registry.deregister(runner_id)
+            if quiescence is not None and remote_peer_token is not None:
+                quiescence.unregister_remote_peer(remote_peer_token)
             if on_runner_disconnect is not None:
                 try:
                     await on_runner_disconnect(runner_id)
@@ -671,6 +759,9 @@ async def _receive_loop(
     session: RunnerSession,
     runner_id: str,
     registry: TunnelRegistry,
+    *,
+    quiescence: DeploymentQuiescence | None = None,
+    remote_peer_token: str | None = None,
 ) -> None:
     """Receive runner frames and route response frames.
 
@@ -710,6 +801,30 @@ async def _receive_loop(
                 int(time.time() * 1000) - resp_frame.ts,
             )
             continue
+        if isinstance(resp_frame, DeploymentDrainAckFrame):
+            if quiescence is not None and remote_peer_token is not None:
+                accepted = quiescence.acknowledge_remote_drain(
+                    remote_peer_token,
+                    fence_generation=resp_frame.fence_generation,
+                    server_process_generation=resp_frame.server_process_generation,
+                    request_id=resp_frame.request_id,
+                    remote_process_generation=resp_frame.remote_process_generation,
+                    active_work=resp_frame.active_work,
+                )
+                if not accepted:
+                    _logger.warning(
+                        "runner %s sent a stale or invalid deployment drain ACK",
+                        runner_id,
+                    )
+            continue
+        if (
+            quiescence is not None
+            and remote_peer_token is not None
+            and quiescence.remote_peer_acknowledged(remote_peer_token)
+        ):
+            quiescence.invalidate_remote_peer_ack(remote_peer_token)
+            _logger.warning("runner %s sent work after its deployment drain ACK", runner_id)
+            continue
         if isinstance(resp_frame, (WSFrame, WSCloseFrame)):
             registry.route_ws_inbound(runner_id, resp_frame, session=session)
             continue
@@ -722,6 +837,8 @@ async def _ping_loop(
     session: RunnerSession,
     runner_id: str,
     registry: TunnelRegistry,
+    *,
+    quiescence: DeploymentQuiescence | None = None,
 ) -> None:
     """Send pings every PING_INTERVAL_S; declare dead after misses.
 
@@ -766,10 +883,11 @@ async def _ping_loop(
         # freshness gate keeps the runner in the online set cross-replica.
         # Best-effort and deduplicated inside the chokepoint; the enqueue
         # inherits this handler's workspace scope via copy_context.
-        session_live_state.touch_runner_liveness([runner_id])
-        # A live runner tunnel is also the signal that this sandbox is still
-        # in use; rate-limited inside, so calling it per ping is fine.
-        managed_host_keepalive.touch(runner_id)
+        if quiescence is None or not quiescence.fenced:
+            session_live_state.touch_runner_liveness([runner_id])
+            # A live runner tunnel is also the signal that this sandbox is
+            # still in use; rate-limited inside, so per-ping calls are fine.
+            managed_host_keepalive.touch(runner_id)
         try:
             await registry.send_text(
                 session,
