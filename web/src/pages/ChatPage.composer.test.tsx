@@ -2583,9 +2583,9 @@ describe("Composer config gear", () => {
     fireEvent.click(document.querySelector('[data-testid="composer-config-model"]') as Element);
     fireEvent.click(document.querySelector('[data-model-id="gpt-5.6-luna"]') as Element);
 
-    // The picked ultra is dropped (back to Default) and no longer offered,
+    // The picked ultra is dropped (back to unset) and no longer offered,
     // while Luna's own max stays.
-    expect(screen.getByTestId("composer-config-effort")).toHaveTextContent("Default");
+    expect(screen.getByTestId("composer-config-effort")).toHaveTextContent("—");
     fireEvent.click(document.querySelector('[data-testid="composer-config-effort"]') as Element);
     expect(document.querySelector('[data-effort-level="ultra"]')).toBeNull();
     expect(document.querySelector('[data-effort-level="max"]')).not.toBeNull();

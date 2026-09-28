@@ -1,24 +1,22 @@
-"""E2E (hermetic): the new-session gear must offer Codex reasoning effort.
+"""E2E (hermetic): the new-session Codex effort menu omits Default.
 
-When creating a new Codex session in the Web UI, the composer gear's config
-modal used to show Model + Approval rows but no reasoning-effort selector,
-while the gear of an existing Codex session (the ``composer-config-effort``
-row, driven by the same per-model ``supportedReasoningEfforts`` metadata)
-does let effort be picked. The new-session composer must expose the Codex
-effort selector before the session starts, consistent with the
-existing-session composer.
+The inline new-session effort menu is driven by the selected Codex model's
+live ``supportedReasoningEfforts`` catalog. It must keep catalog-specific
+levels, including levels added by newer Codex versions, while omitting the
+non-specific ``default`` sentinel.
 
 The driving surface is the real SPA in a browser; only the server edges the
 landing screen consults (hosts, agents, model-options) are faked, exactly like
 the sibling tests in ``test_start_session.py``. The stubbed Codex catalog
-advertises per-model effort ladders — the metadata the in-session gear builds
-its Effort row from — so the levels are available to the landing screen; the
-failure is that the new-session modal never renders a control for them.
+includes the non-specific ``default`` entry alongside model-specific efforts;
+the mobile test confirms only the sentinel is removed and explicit levels
+still reach the create request.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -28,6 +26,7 @@ from tests.e2e_ui.start_session.test_start_session import (
     _HOST_ID,
     _codex_native_agents_body,
     _open_entry_config,
+    _pick_config_select,
     _register_common_routes,
     _run_in_fresh_loop,
     _save_config,
@@ -45,38 +44,37 @@ _CODEX_HOST_ROWS = [
         "isDefault": True,
         "defaultReasoningEffort": "medium",
         "supportedReasoningEfforts": [
+            {"reasoningEffort": "default", "description": "Default"},
             {"reasoningEffort": "low", "description": "Fastest"},
             {"reasoningEffort": "medium", "description": "Balanced"},
             {"reasoningEffort": "high", "description": "Most thorough"},
+            {"reasoningEffort": "xhigh", "description": "Extra thorough"},
+            {"reasoningEffort": "max", "description": "Maximum"},
         ],
     },
     {
         "id": "gpt-live-fast",
         "displayName": "GPT Live Fast",
         "supportedReasoningEfforts": [
+            {"reasoningEffort": "default", "description": "Default"},
             {"reasoningEffort": "low", "description": "Fastest"},
             {"reasoningEffort": "medium", "description": "Balanced"},
+            {"reasoningEffort": "high", "description": "Most thorough"},
+            {"reasoningEffort": "xhigh", "description": "Extra thorough"},
+            {"reasoningEffort": "max", "description": "Maximum"},
         ],
     },
 ]
 
 
-def test_new_codex_session_gear_offers_reasoning_effort(
+def test_new_codex_session_effort_omits_default_and_keeps_catalog_levels(
     seeded_session: tuple[str, str],
 ) -> None:
-    """The new-session config modal lets a Codex reasoning effort be picked.
+    """The inline menu uses the selected model's explicit catalog efforts.
 
-    With a Codex agent selected on the new-chat landing screen, the gear
-    modal must render a reasoning-effort selector (as it already does for
-    Claude Code and Pi, and as the in-session Codex gear does), the
-    catalog-advertised levels must be selectable, and the picked level must
-    ride the create call as ``reasoning_effort`` — the field the
-    codex-native launch path already consumes
-    (``config.extra["reasoning_effort"]``), and the same field the Claude
-    landing row commits.
-
-    Red while the bug lives: the Codex branch of ``HarnessConfigModal``
-    renders only Model + Approval rows, so no effort control ever appears.
+    A ``default`` row in the model catalog is not a specific reasoning level,
+    so the picker omits it. Model-specific levels remain selectable and the
+    selected one reaches the new-session request.
 
     :param seeded_session: ``(base_url, session_id)`` from the spawned server.
     """
@@ -90,7 +88,11 @@ async def _drive_codex_effort_prelaunch(base_url: str, session_id: str) -> None:
         # Explicit context so the `finally` can close IT before the browser —
         # closing only the browser can drop an in-flight video recording
         # (OMNIGENT_E2E_RECORD_DIR) on the floor as a 0-byte file.
-        context = await browser.new_context()
+        context = await browser.new_context(
+            viewport={"width": 390, "height": 844},
+            is_mobile=True,
+            has_touch=True,
+        )
         page = await context.new_page()
         try:
             create_bodies: list[dict[str, Any]] = []
@@ -139,46 +141,44 @@ async def _drive_codex_effort_prelaunch(base_url: str, session_id: str) -> None:
 
             modal = page.get_by_test_id("new-chat-landing-config-modal")
             await expect(modal).to_be_visible()
-            # Sanity: the Codex branch resolved the host catalog — the Model
-            # row names the catalog default — so the effort metadata riding
-            # the same response was available to the modal too.
-            await expect(page.get_by_test_id("new-chat-landing-config-model")).to_contain_text(
-                "Default (GPT Live Default)"
-            )
+            # The Model row names the catalog's default id, confirming that the
+            # host catalog response also supplies the effort ladder.
+            model = page.get_by_test_id("new-chat-landing-config-model")
+            await expect(model).to_contain_text("Default (gpt-live-default)")
+            await _pick_config_select(page, "new-chat-landing-config-model", "gpt-live-fast")
+            await _save_config(page)
 
-            # THE BUG: no reasoning-effort control exists in the Codex
-            # new-session modal. Locate it the way a user finds it — an
-            # effort/thinking select inside the modal — plus the sibling
-            # rows' testid, so any reasonable fix (reusing the Claude row's
-            # testid or adding a codex-specific one) turns this green.
-            effort = (
-                modal.get_by_role(
-                    "combobox",
-                    name=re.compile(r"(reasoning\s+)?effort|thinking level", re.IGNORECASE),
-                )
-                .or_(modal.get_by_test_id("new-chat-landing-config-effort"))
-                .first
-            )
+            # This compact menu above the composer is the phone-visible
+            # selector. It uses the same selected-model catalog ladder.
+            effort = page.get_by_test_id("new-chat-landing-inline-effort")
             await expect(effort).to_be_visible()
-            await expect(effort).to_be_enabled()
-
-            # The catalog's ladder must actually be selectable: pick "high"
-            # (advertised by the default model's supportedReasoningEfforts).
             await effort.click()
+            proof_screenshot = os.environ.get("OMNIGENT_E2E_PROOF_SCREENSHOT")
+            if proof_screenshot:
+                await page.screenshot(path=proof_screenshot)
+            await expect(
+                page.get_by_role("option", name=re.compile(r"^default$", re.IGNORECASE))
+            ).to_have_count(0)
+            levels = await page.get_by_role("option").all_text_contents()
+            assert [level.strip() for level in levels] == [
+                "Low",
+                "Medium",
+                "High",
+                "XHigh",
+                "Max",
+            ]
             option = page.get_by_role("option", name=re.compile(r"^high$", re.IGNORECASE))
             await expect(option).to_be_visible()
             await option.click()
             await expect(effort).to_contain_text(re.compile(r"high", re.IGNORECASE))
-            await _save_config(page)
 
-            # The pick must take effect: it rides the create call as
-            # ``reasoning_effort``, exactly like the Claude Code landing row
-            # (test_start_session_select_effort asserts the same field).
+            # The specific pick must reach the new-session request.
             await page.get_by_test_id("new-chat-landing-input").fill("set up the project")
             await page.get_by_test_id("new-chat-landing-submit").click()
             await _wait_until(lambda: len(create_bodies) == 1)
             body = create_bodies[0]
             assert body["agent_id"] == "ag_codex_e2e", body
+            assert body.get("model_override") == "gpt-live-fast", body
             assert body.get("reasoning_effort") == "high", body
         finally:
             await context.close()

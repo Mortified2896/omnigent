@@ -58,7 +58,6 @@ import {
   CLAUDE_NATIVE_EFFORTS,
   ConfigRow,
   DescribedSelect,
-  EFFORT_SELECT_NONE,
   EFFORT_UNAVAILABLE_PLACEHOLDER,
   MODEL_SELECT_DEFAULT,
   MODEL_SELECT_SMART,
@@ -1707,8 +1706,8 @@ function HarnessConfigModal({
                   // turn, so an explicit effort is meaningless: the row is
                   // frozen and reads as an em-dash placeholder. Radix shows the
                   // placeholder for the empty value, which no item can carry.
-                  value={smartRoutingOn ? "" : draftEffort || EFFORT_SELECT_NONE}
-                  onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? "" : v)}
+                  value={smartRoutingOn ? "" : draftEffort}
+                  onValueChange={setDraftEffort}
                   disabled={smartRoutingOn}
                 >
                   <SelectTrigger
@@ -1723,7 +1722,6 @@ function HarnessConfigModal({
                     align="start"
                     className="w-(--radix-select-trigger-width) [&_[data-slot=select-item]]:pl-2.5"
                   >
-                    <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
                     {CLAUDE_NATIVE_EFFORTS.map((e) => (
                       <SelectItem key={e.value} value={e.value}>
                         {e.label}
@@ -2937,8 +2935,9 @@ export function NewChatLandingScreen() {
       const effortValue = routingOn
         ? EFFORT_UNAVAILABLE_PLACEHOLDER
         : !pickedEffort
-          ? "Default"
-          : (CLAUDE_NATIVE_EFFORTS.find((e) => e.value === pickedEffort)?.label ?? "Default");
+          ? EFFORT_UNAVAILABLE_PLACEHOLDER
+          : (CLAUDE_NATIVE_EFFORTS.find((e) => e.value === pickedEffort)?.label ??
+            EFFORT_UNAVAILABLE_PLACEHOLDER);
       const permissionValue =
         CLAUDE_NATIVE_PERMISSION_MODES.find((m) => m.value === permissionMode)?.label ??
         permissionMode;
@@ -4859,12 +4858,11 @@ export function NewChatLandingScreen() {
                       !o3RoutingSelected &&
                       costControlMode !== "on" && (
                         <Select
-                          value={pickedEffort || EFFORT_SELECT_NONE}
+                          value={pickedEffort}
                           disabled={creating}
                           onValueChange={(value) => {
-                            const effort = value === EFFORT_SELECT_NONE ? "" : value;
-                            setPickedEffort(effort);
-                            writeHarnessOption(selectedNativeHarness, { effort });
+                            setPickedEffort(value);
+                            writeHarnessOption(selectedNativeHarness, { effort: value });
                           }}
                         >
                           <SelectTrigger
@@ -4872,10 +4870,9 @@ export function NewChatLandingScreen() {
                             data-testid="new-chat-landing-inline-effort"
                             aria-label="Reasoning effort"
                           >
-                            <SelectValue />
+                            <SelectValue placeholder={EFFORT_UNAVAILABLE_PLACEHOLDER} />
                           </SelectTrigger>
                           <SelectContent align="start">
-                            <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
                             {codexEffortLevels.map((effort) => (
                               <SelectItem key={effort} value={effort}>
                                 {effort === "xhigh"

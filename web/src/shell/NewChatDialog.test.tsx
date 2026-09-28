@@ -1486,22 +1486,17 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByText("Read only")).toBeTruthy();
   });
 
-  it("shows GPT-5.6 Luna's exact effort capabilities plus Default in the inline selector", () => {
+  it("shows GPT-5.6 Luna's catalog effort levels without Default in the inline selector", () => {
     renderLanding();
     selectAgent("a2");
 
     openSelect("new-chat-landing-inline-model");
     expect(screen.getByText("OmniRoute")).toBeTruthy();
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
-      "GPT-5.6 Luna",
-      "GPT-5.5",
-    ]);
+    expect(screen.getByRole("option", { name: "GPT-5.6 Luna" })).toBeTruthy();
     fireEvent.click(screen.getByText("GPT-5.6 Luna"));
 
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
       "None",
       "Low",
       "Medium",
@@ -1633,7 +1628,6 @@ describe("NewChatLandingScreen", () => {
 
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
       "None",
       "Low",
       "Medium",
@@ -1769,7 +1763,6 @@ describe("NewChatLandingScreen", () => {
     // fixture) and persisted for the next session.
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Default",
       "Low",
       "High",
       "Max",
@@ -1860,7 +1853,7 @@ describe("NewChatLandingScreen", () => {
     closeMenu();
   });
 
-  it("omits model and effort launch overrides when both inline selectors are Default", async () => {
+  it("omits model and effort launch overrides when no inline overrides are selected", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ id: "conv_new" }),
@@ -1869,7 +1862,7 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     expect(screen.getByTestId("new-chat-landing-inline-model").textContent).toContain("Default");
-    expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Default");
+    expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("—");
     const { raw, body } = await submitAndReadBody();
     expect(body.model_override).toBeUndefined();
     expect(body.reasoning_effort).toBeUndefined();
@@ -1877,7 +1870,7 @@ describe("NewChatLandingScreen", () => {
     expect(raw).not.toContain("reasoning_effort");
   });
 
-  it("resets Luna Max to Default when switching to GPT-5.5", async () => {
+  it("clears Luna Max when switching to GPT-5.5", async () => {
     renderLanding();
     selectAgent("a2");
     openSelect("new-chat-landing-inline-model");
@@ -1889,7 +1882,7 @@ describe("NewChatLandingScreen", () => {
     openSelect("new-chat-landing-inline-model");
     fireEvent.click(screen.getByText("GPT-5.5"));
     await waitFor(() =>
-      expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("Default"),
+      expect(screen.getByTestId("new-chat-landing-inline-effort").textContent).toContain("—"),
     );
   });
 
@@ -3435,9 +3428,8 @@ describe("NewChatLandingScreen agent picker + config gear", () => {
     expect(tooltip.textContent).toContain("Permissions:");
     expect(tooltip.textContent).toContain("Plan");
     expect(tooltip.textContent).toContain("Model:");
-    // Unset effort reads "Default" (mirrors the modal), never the "—" sentinel.
-    expect(tooltip.textContent).toContain("Effort: Default");
-    expect(tooltip.textContent).not.toContain("—");
+    // An unset effort is shown as unavailable, never as a selectable Default.
+    expect(tooltip.textContent).toContain("Effort: —");
   });
 
   it("reflects an armed Codex bypass as the Approval value in the gear tooltip", async () => {
