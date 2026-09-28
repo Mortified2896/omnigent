@@ -405,6 +405,80 @@ def _ensure_agents_sdk() -> ModuleType:
         ) from exc
 
 
+def _attach_http_response_observer(
+    client: AsyncOpenAIClient,
+    observer: Callable[[httpx.Response], None] | None,
+) -> None:
+    """Attach a best-effort response hook without replacing OpenAI's HTTP client.
+
+    Keeping the SDK-created transport preserves its timeout, pooling, proxy and
+    retry defaults. The hook is additive and inert for endpoints that do not
+    emit OmniRoute provenance headers.
+    """
+    if observer is None:
+        return
+    transport = getattr(client, "_client", None)
+    event_hooks = getattr(transport, "event_hooks", None)
+    if not isinstance(event_hooks, dict):
+        logger.warning("OpenAI HTTP response hooks unavailable; route provenance disabled")
+        return
+
+    async def _on_response(response: httpx.Response) -> None:
+        observer(response)
+
+    event_hooks.setdefault("response", []).append(_on_response)
+
+
+@dataclass
+class _OmniRouteResponseProvenance:
+    """Correlate OmniRoute response headers back to Agents SDK model calls.
+
+    The Agents SDK preserves the transport x-request-id on ModelResponse.
+    Mapping by that id avoids cross-session races when one harness process is
+    serving concurrent conversations.
+    """
+
+    by_request_id: dict[str, str]
+
+    @classmethod
+    def create(cls) -> "_OmniRouteResponseProvenance":
+        return cls(by_request_id={})
+
+    def observe(self, response: httpx.Response) -> None:
+        request_id = (response.headers.get("x-request-id") or "").strip()
+        provider = (
+            response.headers.get("x-omniroute-selected-provider")
+            or response.headers.get("x-omniroute-provider")
+            or ""
+        ).strip()
+        selected_model = (
+            response.headers.get("x-omniroute-selected-model")
+            or response.headers.get("x-omniroute-model")
+            or ""
+        ).strip()
+        if not request_id or not selected_model:
+            return
+        if provider and not selected_model.startswith(f"{provider}/"):
+            selected_model = f"{provider}/{selected_model}"
+        self.by_request_id[request_id] = selected_model
+        # Bound diagnostic state even if an SDK call never reaches turn
+        # completion (disconnect/cancellation).
+        while len(self.by_request_id) > 256:
+            self.by_request_id.pop(next(iter(self.by_request_id)))
+
+    def pop_model_for(self, raw_responses: object) -> str | None:
+        responses = raw_responses if isinstance(raw_responses, Sequence) else ()
+        selected: str | None = None
+        for response in responses:
+            request_id = getattr(response, "request_id", None)
+            if not isinstance(request_id, str) or not request_id:
+                continue
+            route_model = self.by_request_id.pop(request_id, None)
+            if route_model:
+                selected = route_model
+        return selected
+
+
 def _get_openai_async_client(
     profile: str | None = None,
     api_key: str | None = None,
@@ -413,6 +487,7 @@ def _get_openai_async_client(
     host_override: str | None = None,
     databricks_auth_command: str | None = None,
     model: str | None = None,
+    response_observer: Callable[[httpx.Response], None] | None = None,
 ) -> AsyncOpenAIClient:
     """Construct an AsyncOpenAI client for direct or Databricks-hosted use.
 
@@ -447,6 +522,8 @@ def _get_openai_async_client(
         explicit ``profile`` selects Databricks regardless of this value.
         Without a profile, only legacy ``"databricks-"`` names enable
         ambient Databricks credential fallback.
+    :param response_observer: Optional transport response callback used to
+        capture provider provenance headers. It never changes routing.
     :raises DatabricksAuthError: When an explicit ``profile`` is given,
         authentication fails, and no ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``
         env-var fallbacks are available.
@@ -464,6 +541,11 @@ def _get_openai_async_client(
     policy = retry_policy if retry_policy is not None else RetryPolicy()
     retry_kwargs = policy.openai.kwargs()
 
+    def _new_client(**kwargs: Any) -> AsyncOpenAIClient:  # type: ignore[explicit-any]
+        client = AsyncOpenAI(**kwargs)
+        _attach_http_response_observer(client, response_observer)
+        return client
+
     if host_override:
         if base_url_override is None:
             raise OSError(
@@ -476,7 +558,7 @@ def _get_openai_async_client(
                 "HARNESS_OPENAI_AGENTS_GATEWAY_AUTH_COMMAND."
             )
         host = host_override.rstrip("/")
-        return AsyncOpenAI(
+        return _new_client(
             base_url=base_url_override,
             api_key=_OPENAI_KEY_PLACEHOLDER,
             http_client=httpx.AsyncClient(auth=_ShellCommandBearerAuth(databricks_auth_command)),
@@ -500,7 +582,7 @@ def _get_openai_async_client(
     # every turn even when the override is lost. base_url=None still defaults
     # to api.openai.com for a genuine OpenAI key with no gateway configured.
     if api_key and api_key.strip():
-        return AsyncOpenAI(
+        return _new_client(
             api_key=api_key,
             base_url=base_url_override or os.environ.get("OPENAI_BASE_URL") or None,
             **retry_kwargs,
@@ -520,7 +602,7 @@ def _get_openai_async_client(
 
         try:
             auth, host = _resolve_databricks_auth(profile)
-            return AsyncOpenAI(
+            return _new_client(
                 base_url=base_url_override or _databricks_openai_base_url(host),
                 api_key=_OPENAI_KEY_PLACEHOLDER,
                 http_client=httpx.AsyncClient(auth=auth),
@@ -550,7 +632,7 @@ def _get_openai_async_client(
             )
 
     if os.environ.get("OPENAI_BASE_URL"):
-        return AsyncOpenAI(
+        return _new_client(
             base_url=os.environ["OPENAI_BASE_URL"],
             api_key=os.environ.get("OPENAI_API_KEY", _OPENAI_KEY_PLACEHOLDER),
             **retry_kwargs,
@@ -558,7 +640,7 @@ def _get_openai_async_client(
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if api_key:
-        return AsyncOpenAI(api_key=api_key, **retry_kwargs)
+        return _new_client(api_key=api_key, **retry_kwargs)
 
     # Without an explicit profile, only legacy Databricks model names opt in
     # to ambient Databricks credentials.
@@ -584,7 +666,7 @@ def _get_openai_async_client(
             "the package (`pip install 'omnigent[databricks]'`) or set "
             "OPENAI_API_KEY/OPENAI_BASE_URL for non-Databricks OpenAI access."
         ) from exc
-    return AsyncOpenAI(
+    return _new_client(
         base_url=base_url_override or _databricks_openai_base_url(host),
         api_key=_OPENAI_KEY_PLACEHOLDER,
         http_client=httpx.AsyncClient(auth=auth),
@@ -1083,6 +1165,7 @@ class OpenAIAgentsSDKExecutor(Executor):
         if reasoning_item_id_policy not in (None, "preserve", "omit"):
             raise ValueError("reasoning_item_id_policy must be 'preserve', 'omit', or unset")
         self._retry_policy = retry_policy if retry_policy is not None else RetryPolicy()
+        self._omniroute_provenance = _OmniRouteResponseProvenance.create()
         raw_client = (
             client
             if client is not None
@@ -1094,6 +1177,7 @@ class OpenAIAgentsSDKExecutor(Executor):
                 host_override=gateway_host,
                 databricks_auth_command=gateway_auth_command,
                 model=model,
+                response_observer=self._omniroute_provenance.observe,
             )
         )
         # Wrap the chat.completions path to strip list-type delta.content
@@ -1872,13 +1956,16 @@ class OpenAIAgentsSDKExecutor(Executor):
             last_total = getattr(last_r.usage, "total_tokens", 0) or 0
             context_tok = last_total if last_total else last_in + last_out
             if in_tok or out_tok:
+                reported_model = self._omniroute_provenance.pop_model_for(raw_responses) or model
                 turn_usage = {
                     "input_tokens": in_tok - cached_tok,  # non-cached portion
                     "output_tokens": out_tok,
                     "total_tokens": total_tok if total_tok else in_tok + out_tok,
                     "context_tokens": context_tok,
-                    # Harness-reported model for cost pricing when the spec pins no model.
-                    "model": model,
+                    # For OmniRoute, expose the concrete per-request route rather
+                    # than only the requested Combo id. Other providers keep the
+                    # existing requested-model behavior.
+                    "model": reported_model,
                 }
                 if cached_tok:
                     turn_usage["cache_read_input_tokens"] = cached_tok

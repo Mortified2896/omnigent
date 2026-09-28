@@ -1,0 +1,28 @@
+spec_version: 1
+name: omniroute-free-chat
+description: >
+  Conversation-only OpenAI Agents SDK agent routed through OmniRoute's
+  custom/free-chat-smart free-only Combo. No filesystem, shell, MCP,
+  sub-agent, async-work, or timer tools are exposed.
+
+executor:
+  harness: openai-agents
+  model: custom/free-chat-smart
+  use_responses: true
+  auth:
+    type: provider
+    name: omniroute-free-chat
+
+# Keep the runtime surface genuinely conversational. Omitting tools/os_env
+# removes explicit function/MCP/OS tools; async:false prevents Omnigent's
+# convenience background-work tools from being added implicitly.
+async: false
+timers: false
+cancellable: true
+
+prompt: |
+  You are a general conversational assistant.
+  Answer the user's questions directly and clearly.
+  This session intentionally has no external tools, filesystem access,
+  shell access, sub-agents, or background work. Never claim that you used
+  tools or inspected live external state when you did not.

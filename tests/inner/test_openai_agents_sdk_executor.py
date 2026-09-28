@@ -146,9 +146,11 @@ class _FakeRawResponse:
     Minimal stand-in for the openai-agents SDK ModelResponse object.
 
     :param usage: Token usage for this LLM call.
+    :param request_id: Optional transport x-request-id propagated by the SDK.
     """
 
     usage: _FakeUsage
+    request_id: str | None = None
 
 
 class _FakeResult:
@@ -3183,5 +3185,98 @@ def test_no_compaction_item_no_compaction_event() -> None:
 
         compaction_events = [e for e in events if isinstance(e, CompactionComplete)]
         assert len(compaction_events) == 0
+
+    _run(_t())
+
+
+def test_turn_usage_reports_omniroute_selected_model() -> None:
+    """OmniRoute's concrete route replaces only the display/usage model.
+
+    The request still targets the configured Combo. Correlation uses the SDK's
+    per-response request_id, so concurrent sessions cannot steal each other's
+    selected-model provenance.
+    """
+
+    async def _t() -> None:
+        _FakeRunner.last_calls = []
+        raw = _FakeRawResponse(
+            usage=_FakeUsage(input_tokens=100, output_tokens=20, total_tokens=120),
+            request_id="req-free-chat-1",
+        )
+        _FakeRunner.next_result = _FakeResult(
+            events=[],
+            final_output="hello",
+            raw_responses=[raw],
+        )
+        executor = OpenAIAgentsSDKExecutor(
+            client=object(),
+            model="custom/free-chat-smart",
+        )
+        executor._omniroute_provenance.observe(
+            httpx.Response(
+                200,
+                headers={
+                    "x-request-id": "req-free-chat-1",
+                    "x-omniroute-selected-provider": "groq",
+                    "x-omniroute-selected-model": "openai/gpt-oss-120b",
+                },
+                request=httpx.Request("POST", "http://omniroute.test/v1/responses"),
+            )
+        )
+        with patch(
+            "omnigent.inner.openai_agents_sdk_executor._ensure_agents_sdk",
+            return_value=_fake_agents_sdk(),
+        ):
+            events = [
+                event
+                async for event in executor.run_turn(
+                    [{"role": "user", "content": "hi", "session_id": "s1"}],
+                    [],
+                    "Be concise.",
+                    ExecutorConfig(model=None),
+                )
+            ]
+
+        turn_complete = next(event for event in events if isinstance(event, TurnComplete))
+        assert turn_complete.usage is not None
+        assert turn_complete.usage["model"] == "groq/openai/gpt-oss-120b"
+        # Provenance is consumed once, preventing stale route display later.
+        assert "req-free-chat-1" not in executor._omniroute_provenance.by_request_id
+
+    _run(_t())
+
+
+def test_turn_usage_keeps_requested_model_without_omniroute_headers() -> None:
+    """Non-OmniRoute Agents SDK callers retain the previous model behavior."""
+
+    async def _t() -> None:
+        _FakeRunner.last_calls = []
+        _FakeRunner.next_result = _FakeResult(
+            events=[],
+            final_output="hello",
+            raw_responses=[
+                _FakeRawResponse(
+                    usage=_FakeUsage(input_tokens=10, output_tokens=2, total_tokens=12),
+                    request_id="req-openai-1",
+                )
+            ],
+        )
+        executor = OpenAIAgentsSDKExecutor(client=object(), model="gpt-test")
+        with patch(
+            "omnigent.inner.openai_agents_sdk_executor._ensure_agents_sdk",
+            return_value=_fake_agents_sdk(),
+        ):
+            events = [
+                event
+                async for event in executor.run_turn(
+                    [{"role": "user", "content": "hi", "session_id": "s1"}],
+                    [],
+                    "Be concise.",
+                    ExecutorConfig(model=None),
+                )
+            ]
+        turn_complete = next(event for event in events if isinstance(event, TurnComplete))
+        assert turn_complete.usage is not None
+        assert turn_complete.usage["model"] == "gpt-test"
 
     _run(_t())
