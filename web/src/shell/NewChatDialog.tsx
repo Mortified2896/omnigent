@@ -3618,7 +3618,7 @@ export function NewChatLandingScreen() {
       ? nativeRoutingReason
       : null;
   const canSubmit =
-    routingUnavailableReason === null &&
+    (!o3RoutingSelected || routingUnavailableReason === null) &&
     message.trim().length > 0 &&
     selectedAgent != null &&
     (sandboxSelected ? sandboxRepoValid : !!selectedHostId && workspaceValid) &&

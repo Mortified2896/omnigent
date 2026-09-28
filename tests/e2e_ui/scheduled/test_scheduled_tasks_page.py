@@ -448,12 +448,13 @@ def test_scheduled_task_model_effort_controls_visible_for_capable_agent(
     page: Page,
     live_server: str,
 ) -> None:
-    """The Model/Effort row shows for Claude Code, both reading 'Default'.
+    """The Model/Effort row shows for Claude Code, with effort unset.
 
     Claude Code carries the ``permissionMode`` capability the dialog gates the
     model/effort surface on, so opening the create dialog (which defaults to
-    Claude Code) renders ``task-model-effort-row`` with both the model and
-    effort triggers defaulting to the "Default" sentinel — nothing overridden.
+    Claude Code) renders ``task-model-effort-row``. The model and permission
+    triggers use the "Default" sentinel; the unselected reasoning effort is
+    shown as an em dash.
     """
     page.goto(f"{live_server}/tasks")
     _open_create_dialog(page)
@@ -466,7 +467,7 @@ def test_scheduled_task_model_effort_controls_visible_for_capable_agent(
     expect(effort_trigger).to_be_visible()
     expect(permission_trigger).to_be_visible()
     expect(model_trigger).to_have_text("Default")
-    expect(effort_trigger).to_have_text("Default")
+    expect(effort_trigger).to_have_text("—")
     expect(permission_trigger).to_have_text("Default")
 
 
@@ -543,18 +544,19 @@ def test_scheduled_task_create_default_omits_model_and_effort(
     page: Page,
     live_server: str,
 ) -> None:
-    """Leaving both controls on 'Default' persists null model/effort.
+    """Leaving model and effort unselected persists null overrides.
 
     A create that never touches the model/effort controls must omit both fields
     so the row inherits the agent's configured model + effort. Confirms the
-    "Default" sentinel maps to a null override (not the literal sentinel string).
+    model's "Default" sentinel and the effort's em-dash placeholder both map to
+    null overrides (not literal sentinel strings).
     """
     page.goto(f"{live_server}/tasks")
     _open_create_dialog(page)
 
     page.get_by_test_id("task-name-input").fill("Default model effort")
     page.get_by_test_id("task-prompt-input").fill("Summarize the day.")
-    # Controls left on their default "Default" sentinel — no pick.
+    # Leave model at "Default" and effort at its em-dash placeholder — no pick.
     page.get_by_test_id("create-scheduled-task-submit").click()
 
     expect(_row_by_name(page, "Default model effort")).to_be_visible(timeout=30_000)
@@ -573,7 +575,7 @@ def test_scheduled_task_edit_prefills_model_and_effort(
     Seeds a Claude Code task carrying ``model_override="opus"`` +
     ``reasoning_effort="high"``, opens its Edit dialog, and asserts the
     ``task-model-trigger`` / ``task-effort-trigger`` render the stored picks
-    ("Opus" / "High"), not the "Default" sentinel — the round-trip the create
+    ("Opus" / "High"), not their unselected placeholders — the round-trip the create
     test's persistence feeds into.
     """
     claude_agent_id = _builtin_agent_id(live_server, "claude-native-ui")

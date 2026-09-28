@@ -1486,12 +1486,19 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByText("Read only")).toBeTruthy();
   });
 
-  it("shows GPT-5.6 Luna's catalog effort levels without Default in the inline selector", () => {
+  it("shows GPT-5.6 Luna's exact effort capabilities in the inline selector", () => {
     renderLanding();
     selectAgent("a2");
 
     openSelect("new-chat-landing-inline-model");
     expect(screen.getByText("OmniRoute")).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Default" })).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("option")
+        .filter((option) => option.hasAttribute("data-access-lane"))
+        .map((option) => option.textContent),
+    ).toEqual(["GPT-5.6 Luna", "GPT-5.5"]);
     expect(screen.getByRole("option", { name: "GPT-5.6 Luna" })).toBeTruthy();
     fireEvent.click(screen.getByText("GPT-5.6 Luna"));
 
@@ -3428,7 +3435,7 @@ describe("NewChatLandingScreen agent picker + config gear", () => {
     expect(tooltip.textContent).toContain("Permissions:");
     expect(tooltip.textContent).toContain("Plan");
     expect(tooltip.textContent).toContain("Model:");
-    // An unset effort is shown as unavailable, never as a selectable Default.
+    // Unset effort is shown as unavailable, never as a selectable Default.
     expect(tooltip.textContent).toContain("Effort: —");
   });
 
@@ -4559,8 +4566,12 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
     expect(body.smart_routing_message).toBe("refactor the auth module");
     // The placeholder the server rebinds off.
     expect(body.agent_id).toBe("a1");
-    // Nothing that describes the placeholder's own CLI may ride along.
-    expect(body.labels).toBeUndefined();
+    // The placeholder's CLI labels don't ride along, but its routing state is
+    // persisted so the UI can report which router/backend owns the run.
+    expect(body.labels).toEqual({
+      "omnigent.routing_backend": "databricks-aigw",
+      "omnigent.routing_policy": "native",
+    });
     expect(body.terminal_launch_args).toBeUndefined();
     expect(body.model_override).toBeUndefined();
     expect(body.reasoning_effort).toBeUndefined();
@@ -5082,7 +5093,10 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
       // A pinned model would silently disable routing for the whole session.
       expect(body.model_override).toBeUndefined();
       expect(body.reasoning_effort).toBeUndefined();
-      expect(body.labels).toBeUndefined();
+      expect(body.labels).toEqual({
+        "omnigent.routing_backend": "unavailable",
+        "omnigent.routing_policy": "native",
+      });
       expect(body.terminal_launch_args).toBeUndefined();
       // A bundle agent arms at create and routes on the first message event —
       // its harness isn't decided yet, so there is nothing to route here.

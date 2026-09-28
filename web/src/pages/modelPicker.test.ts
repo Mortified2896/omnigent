@@ -116,7 +116,7 @@ describe("Codex model-list helpers", () => {
     ]);
   });
 
-  it("orders known effort levels and keeps unknown catalog levels", () => {
+  it("omits the default sentinel, orders known levels, and keeps unknown catalog levels", () => {
     const catalogWithDefaultAndFutureEffort: NativeModelOption[] = [
       {
         id: "gpt-next",

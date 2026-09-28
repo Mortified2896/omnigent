@@ -60,6 +60,7 @@ from omnigent.model_advisor_workflow import (
     freeze_round,
     stable_candidate_id,
 )
+from omnigent.models.model_fallbacks import advisor_openai_route_aliases
 from omnigent.server.host_registry import HostRegistry
 from omnigent.stores.conversation_store import (
     ADVISOR_CONNECTION_LABEL_KEY,
@@ -115,21 +116,11 @@ _OMNIROUTE_GLM: tuple[AccessClass, str, str] = ("glm_plan", "omniroute", "omniro
 # provider classifier.  They are derived from the live Codex and OmniRoute
 # catalogs on the RTX host.  A new gateway spelling must be added only after
 # both sides have been qualified by their lane probes.
-_OPENAI_OMNIROUTE_TO_CANONICAL: dict[str, str] = {
-    "codex/gpt-6-astra": "gpt-6-astra",
-    "codex/gpt-5.6-sol": "gpt-5.6-sol",
-    "codex/gpt-5.6-terra": "gpt-5.6-terra",
-    "codex/gpt-5.6-luna": "gpt-5.6-luna",
-    "codex/gpt-5.5": "gpt-5.5",
-}
+_OPENAI_OMNIROUTE_TO_CANONICAL = advisor_openai_route_aliases("omniroute")
 # Codex Direct can report provider-prefixed ids too. Keep these exact direct
 # aliases separate from the OmniRoute map: a direct row does not qualify a
 # gateway route, and the prefix alone is not proof that two rows are equivalent.
-_OPENAI_DIRECT_TO_CANONICAL: dict[str, str] = {
-    "codex/gpt-6-astra": "gpt-6-astra",
-    "codex/gpt-6-luna": "gpt-6-luna",
-    "codex/gpt-5.6-luna": "gpt-5.6-luna",
-}
+_OPENAI_DIRECT_TO_CANONICAL = advisor_openai_route_aliases("direct")
 from omnigent.models.glm_model_vocabulary import (  # noqa: E402
     GLM_DIRECT_MODELS,
     GLM_OMNIROUTE_ROUTES,

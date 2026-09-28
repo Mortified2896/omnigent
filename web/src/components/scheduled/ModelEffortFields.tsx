@@ -127,14 +127,14 @@ export function ModelEffortFields({
         <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid="task-effort-control">
           <Label htmlFor="task-effort">Effort</Label>
           <Select
-            value={effort === "" ? EFFORT_SELECT_NONE : effort}
+            value={effort}
             componentId="tasks.scheduled.effort"
             valueHasNoPii
             onValueChange={(value) => onEffortChange(value === EFFORT_SELECT_NONE ? "" : value)}
             onOpenChange={onSelectOpenChange}
           >
             <SelectTrigger id="task-effort" data-testid="task-effort-trigger" className="w-full">
-              <SelectValue />
+              <SelectValue placeholder="—" />
             </SelectTrigger>
             <SelectContent
               position="popper"
