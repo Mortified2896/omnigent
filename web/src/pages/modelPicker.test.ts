@@ -116,6 +116,25 @@ describe("Codex model-list helpers", () => {
     ]);
   });
 
+  it("omits the default sentinel and keeps new catalog effort levels", () => {
+    const catalogWithDefaultAndFutureEffort: NativeModelOption[] = [
+      {
+        id: "gpt-next",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "default" },
+          { reasoningEffort: "low" },
+          { reasoningEffort: "ultra" },
+          { reasoningEffort: "Default" },
+        ],
+      },
+    ];
+
+    expect(codexEffortLevelsForModel(catalogWithDefaultAndFutureEffort, "gpt-next")).toEqual([
+      "low",
+      "ultra",
+    ]);
+  });
+
   it("resolves a catalog-spelled session model onto its Codex row", () => {
     // A Databricks launch records `databricks-gpt-5-6-luna` while Codex lists
     // `gpt-5.6-luna`, so comparing the spellings verbatim finds nothing and the

@@ -1710,15 +1710,15 @@ async def _drive_model_effort(base_url: str, session_id: str) -> None:
                 state="visible", timeout=30_000
             )
             # Claude Code auto-selects; open its config modal, which carries the
-            # model + effort selects. No default is forced, so both the model and
-            # effort selects sit at "Default" (unselected) — an untouched picker
-            # omits the override and Claude Code uses its own configured model.
-            # Verify the unselected defaults, then make an explicit pick.
+            # model + effort selects. No default is forced: the model sits at
+            # "Default" and the unselected effort is shown as an em dash. An
+            # untouched picker omits the override and Claude Code uses its own
+            # configured model. Verify the unselected state, then make a pick.
             await _open_entry_config(page, "ag_claude_e2e")
             model = page.get_by_test_id("new-chat-landing-config-model")
             effort = page.get_by_test_id("new-chat-landing-config-effort")
             await expect(model).to_contain_text("Default")
-            await expect(effort).to_contain_text("Default")
+            await expect(effort).to_contain_text("—")
 
             # Pick model + effort in the same modal visit (each select commits to
             # a local draft; Save commits both at once). The model rows carry the
@@ -1815,12 +1815,11 @@ async def _drive_codex_model(base_url: str, session_id: str) -> None:
             )
             await _open_entry_config(page, "ag_codex_e2e")
             model = page.get_by_test_id("new-chat-landing-config-model")
-            # The Default row names the catalog's default by its DISPLAY name —
-            # the same shared labeling the in-session gear uses.
-            await expect(model).to_contain_text("Default (GPT Live Default)")
-            # Codex options render decorated display names (same as claude),
-            # so pick by the display name; the create still sends the id.
-            await _pick_config_select(page, "new-chat-landing-config-model", "GPT Live Fast")
+            # The Default row names the catalog's default id.
+            await expect(model).to_contain_text("Default (gpt-live-default)")
+            # The config select labels Codex rows by their model ids; the
+            # create request carries that same id as its override.
+            await _pick_config_select(page, "new-chat-landing-config-model", "gpt-live-fast")
             await _save_config(page)
 
             await page.get_by_test_id("new-chat-landing-input").fill("set up the project")
