@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -17,6 +19,227 @@ def _force_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
     # The broker host integrations are sandbox-only; default every test to the
     # in-sandbox path. The not-in-sandbox no-op test clears IS_SANDBOX explicitly.
     monkeypatch.setenv("IS_SANDBOX", "1")
+
+
+class _FakeProxy:
+    """Minimal direct-proxy handle for session-surface tests."""
+
+    def __init__(self, tmp_path: Path, port: int) -> None:
+        self.auth_token = f"proxy-auth-{port}"
+        self.relay_port = port
+        self.ca_bundle_path = tmp_path / f"ca-{port}.pem"
+        self.ca_bundle_path.write_text("test-ca", encoding="utf-8")
+        self.socket_path = tmp_path / f"proxy-{port}.sock"
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _fake_external_broker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    port: int = 41001,
+) -> tuple[h.GithubSessionBroker, dict[str, str], str, Path]:
+    """Create a broker with a fake proxy but real session assets/scripts."""
+    monkeypatch.delenv("IS_SANDBOX", raising=False)
+    home = tmp_path / "home"
+    ssh_dir = home / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519").write_text("raw-ssh-private-key", encoding="utf-8")
+    (home / ".git-credentials").write_text(
+        "https://raw-git-token@example.test", encoding="utf-8"
+    )
+    (home / ".netrc").write_text(
+        "machine github.com login x password raw-netrc-token", encoding="utf-8"
+    )
+    gh_dir = home / ".config" / "gh"
+    gh_dir.mkdir(parents=True)
+    (gh_dir / "hosts.yml").write_text("oauth_token: raw-gh-token", encoding="utf-8")
+
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_gh.chmod(0o700)
+    monkeypatch.setattr(
+        h.shutil,
+        "which",
+        lambda name, path=None: (
+            "/usr/bin/bwrap" if name == "bwrap" else str(fake_gh) if name == "gh" else None
+        ),
+    )
+    monkeypatch.setattr(h, "_host_github_token", lambda _env: "gho-raw-host-token")
+    monkeypatch.setattr(h, "_read_global_git_value", lambda _key: "owner@example.com")
+    proxy = _FakeProxy(tmp_path, port)
+    monkeypatch.setattr(h, "start_egress_proxy", lambda **_kwargs: proxy)
+    broker = h.GithubSessionBroker.create(
+        {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "PATH": "/usr/bin",
+        }
+    )
+    assert broker is not None
+    return broker, broker.runner_env(), "gho-raw-host-token", ssh_dir
+
+
+def test_external_session_masks_ssh_and_keeps_raw_credentials_out_of_assets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    broker, runner_env, raw_token, ssh_dir = _fake_external_broker(monkeypatch, tmp_path)
+    try:
+        wrapped = broker.wrap_runner_command(["python3", "-c", "pass"])
+        assert str(ssh_dir) in wrapped
+        assert "--unshare-pid" in wrapped
+        assert "--unshare-uts" in wrapped
+        assert "--unshare-ipc" in wrapped
+        assert "--proc" in wrapped
+        assert "SSH_AUTH_SOCK" not in runner_env
+        assert runner_env["GH_TOKEN"] == runner_env[h.GITHUB_SESSION_TOKEN_ENV]
+        assert runner_env["GIT_CONFIG_GLOBAL"] == runner_env[h.GITHUB_SESSION_GIT_CONFIG_ENV]
+        assert runner_env["PATH"].startswith(runner_env[h.GITHUB_SESSION_BIN_ENV])
+        assert raw_token not in runner_env.values()
+        for path in Path(runner_env[h.GITHUB_SESSION_ROOT_ENV]).rglob("*"):
+            if path.is_file():
+                assert raw_token.encode() not in path.read_bytes()
+                assert b"raw-ssh-private-key" not in path.read_bytes()
+    finally:
+        broker.close()
+
+
+def test_external_session_git_helper_and_ssh_url_rewrite_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    broker, runner_env, raw_token, _ssh_dir = _fake_external_broker(monkeypatch, tmp_path)
+    try:
+        child_env = h.github_session_child_env({**runner_env, "PATH": "/usr/bin"})
+        credential = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            text=True,
+            capture_output=True,
+            check=True,
+            env=child_env,
+        )
+        assert "username=x-access-token" in credential.stdout
+        assert child_env[h.GITHUB_SESSION_TOKEN_ENV] in credential.stdout
+        assert raw_token not in credential.stdout
+
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:Mortified2896/omnigent.git",
+            ],
+            check=True,
+        )
+        rewritten = subprocess.run(
+            ["git", "-C", str(repo), "ls-remote", "--get-url", "origin"],
+            text=True,
+            capture_output=True,
+            check=True,
+            env=child_env,
+        )
+        assert rewritten.stdout.strip() == "https://github.com/Mortified2896/omnigent.git"
+    finally:
+        broker.close()
+
+
+def test_external_session_gh_wrapper_uses_synthetic_auth_and_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    broker, runner_env, raw_token, _ssh_dir = _fake_external_broker(monkeypatch, tmp_path)
+    capture = tmp_path / "gh-env.txt"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        (
+            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$GH_TOKEN\" \"$HTTPS_PROXY\" "
+            "\"$SSL_CERT_FILE\" > \"$CAPTURE\"\n"
+        ),
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o700)
+    # The helper asset points at the fake path selected during broker setup;
+    # replace its final executable with the capture script in place.
+    wrapper = Path(runner_env[h.GITHUB_SESSION_BIN_ENV]) / "gh"
+    child_env = h.github_session_child_env({**runner_env, "PATH": "/usr/bin"})
+    child_env["CAPTURE"] = str(capture)
+    try:
+        subprocess.run([str(wrapper), "pr", "create"], env=child_env, check=True)
+        values = capture.read_text(encoding="utf-8").splitlines()
+        assert values[0] == child_env[h.GITHUB_SESSION_TOKEN_ENV]
+        assert values[1] == child_env[h.GITHUB_SESSION_PROXY_ENV]
+        assert values[2] == child_env[h.GITHUB_SESSION_CA_ENV]
+        assert raw_token not in capture.read_text(encoding="utf-8")
+    finally:
+        broker.close()
+
+
+def test_external_sessions_are_isolated_and_do_not_touch_host_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    broker_a, env_a, _raw_a, _ssh_a = _fake_external_broker(
+        monkeypatch, tmp_path / "a", port=41011
+    )
+    broker_b, env_b, _raw_b, _ssh_b = _fake_external_broker(
+        monkeypatch, tmp_path / "b", port=41012
+    )
+    try:
+        assert env_a[h.GITHUB_SESSION_ROOT_ENV] != env_b[h.GITHUB_SESSION_ROOT_ENV]
+        assert env_a[h.GITHUB_SESSION_TOKEN_ENV] != env_b[h.GITHUB_SESSION_TOKEN_ENV]
+        assert env_a[h.GITHUB_SESSION_PROXY_ENV] != env_b[h.GITHUB_SESSION_PROXY_ENV]
+        assert (tmp_path / "a" / "home" / ".config" / "gh" / "hosts.yml").read_text(
+            encoding="utf-8"
+        ) == "oauth_token: raw-gh-token"
+        assert (tmp_path / "b" / "home" / ".config" / "gh" / "hosts.yml").read_text(
+            encoding="utf-8"
+        ) == "oauth_token: raw-gh-token"
+    finally:
+        broker_a.close()
+        broker_b.close()
+
+
+def test_external_broker_is_noop_without_host_github_auth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("IS_SANDBOX", raising=False)
+    monkeypatch.setattr(h, "_host_github_token", lambda _env: None)
+    called = False
+
+    def _unexpected_proxy(**_kwargs: object) -> None:
+        nonlocal called
+        called = True
+        raise AssertionError("proxy must not start without host GitHub auth")
+
+    monkeypatch.setattr(h, "start_egress_proxy", _unexpected_proxy)
+    assert h.GithubSessionBroker.create({"PATH": "/usr/bin", "HOME": str(tmp_path)}) is None
+    assert called is False
+
+
+def test_managed_session_does_not_adopt_external_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IS_SANDBOX", "1")
+    parent = {
+        "IS_SANDBOX": "1",
+        h.GITHUB_SESSION_ACTIVE_ENV: "1",
+        h.GITHUB_SESSION_ROOT_ENV: "/tmp/session",
+        h.GITHUB_SESSION_PROXY_ENV: "http://proxy",
+        h.GITHUB_SESSION_CA_ENV: "/tmp/ca.pem",
+        h.GITHUB_SESSION_GIT_CONFIG_ENV: "/tmp/gitconfig",
+        h.GITHUB_SESSION_GH_CONFIG_ENV: "/tmp/gh",
+        h.GITHUB_SESSION_TOKEN_ENV: "oa_cred_should_not_cross",
+        h.GITHUB_SESSION_BIN_ENV: "/tmp/bin",
+    }
+
+    assert h.github_session_child_env(parent) == {}
+    assert h.GithubSessionBroker.create(parent) is None
 
 
 def test_get_prints_credentials_for_github(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -129,6 +129,7 @@ def start_egress_proxy(
     allow_private_destinations: bool,
     require_auth: bool,
     credential_rewrites: Sequence[CredentialRewriteRule] | None = None,
+    direct: bool = False,
 ) -> EgressProxyHandle:
     """Start the parent-side MITM egress proxy.
 
@@ -156,6 +157,11 @@ def start_egress_proxy(
         injection by default, plus synthetic-placeholder swap for entries
         that opted into ``inject_env`` (secretless ``credential_proxy``
         support).
+    :param direct: When ``True``, listen on a loopback TCP port directly
+        instead of starting the Unix-socket + in-sandbox relay pair. This is
+        reserved for a trusted external host session whose child processes
+        share the host network namespace; the ordinary sandbox callers keep
+        the default ``False`` path.
     :returns: A live :class:`EgressProxyHandle`. Caller must invoke
         :meth:`EgressProxyHandle.stop` on cleanup.
     :raises OSError: On Windows, where the L7 egress proxy (a Unix-socket
@@ -220,30 +226,47 @@ def start_egress_proxy(
 
     def _run_proxy() -> None:
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(proxy.start_unix(str(socket_path)))
+        if direct:
+            loop.run_until_complete(proxy.start_tcp())
+        else:
+            loop.run_until_complete(proxy.start_unix(str(socket_path)))
         started.set()
         loop.run_forever()
 
     thread = threading.Thread(target=_run_proxy, name="egress-proxy", daemon=True)
     thread.start()
     started.wait(timeout=10)
+    if not started.is_set():
+        # A bind/TLS initialization failure in the proxy thread must not leave
+        # the caller with a handle that points at a dead listener. The thread
+        # will have surfaced the exception through its own traceback; turn it
+        # into a bounded startup failure here and let the caller clean up its
+        # private tmpdir.
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=3)
+        raise RuntimeError("egress proxy did not start within 10 seconds")
 
-    # Pick a random ephemeral port. Bind+close-immediately to ask
-    # the kernel for a free port; a same-host attacker racing to
-    # rebind has a sub-millisecond window. The relay's own bind
-    # (in start_relay) fails loud if the race is lost — aborts
-    # the helper / terminal launcher rather than running unprotected.
-    #
-    # On Linux bwrap this happens INSIDE the network namespace
-    # which is empty, so the bind always succeeds and the race
-    # doesn't apply. On macOS seatbelt the bind shares the host's
-    # loopback so the race window matters.
-    sock_probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    try:
-        sock_probe.bind(("127.0.0.1", 0))
-        relay_port = sock_probe.getsockname()[1]
-    finally:
-        sock_probe.close()
+    if direct:
+        # ``start_tcp`` already asked the kernel for the port and keeps the
+        # listening socket open, so there is no bind/close race here.
+        relay_port = proxy.port
+    else:
+        # Pick a random ephemeral port. Bind+close-immediately to ask
+        # the kernel for a free port; a same-host attacker racing to
+        # rebind has a sub-millisecond window. The relay's own bind
+        # (in start_relay) fails loud if the race is lost — aborts
+        # the helper / terminal launcher rather than running unprotected.
+        #
+        # On Linux bwrap this happens INSIDE the network namespace
+        # which is empty, so the bind always succeeds and the race
+        # doesn't apply. On macOS seatbelt the bind shares the host's
+        # loopback so the race window matters.
+        sock_probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        try:
+            sock_probe.bind(("127.0.0.1", 0))
+            relay_port = sock_probe.getsockname()[1]
+        finally:
+            sock_probe.close()
 
     return EgressProxyHandle(
         relay_port=relay_port,

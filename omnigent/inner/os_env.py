@@ -45,6 +45,7 @@ from .sandbox import (
     reachable_roots,
     resolve_sandbox,
     set_temp_env,
+    with_additional_read_roots,
     with_additional_write_roots,
 )
 
@@ -224,7 +225,15 @@ def build_helper_env(
         # Opted out of sandboxing (incl. env filtering): mirror parent
         # env, but still drop the runner-auth secret — opting out of the
         # sandbox must not also hand the agent the binding token.
-        return strip_runner_auth_secrets(parent_env)
+        env = strip_runner_auth_secrets(parent_env)
+        # The trusted external-host GitHub broker is session-scoped. Its
+        # values are synthetic/path-only coordinates, so explicitly add them
+        # after the normal allowlist boundary; managed sandboxes return no
+        # external coordinates from this helper.
+        from omnigent.git_credential_github import github_session_child_env
+
+        env.update(github_session_child_env(parent_env))
+        return strip_runner_auth_secrets(env)
 
     allowed = set(_DEFAULT_ENV_PASSTHROUGH)
     if sandbox.env_passthrough is not None:
@@ -238,6 +247,9 @@ def build_helper_env(
     # The default allowlist already excludes the runner-auth secrets,
     # but strip again so a spec author can't re-admit one by naming it
     # in ``sandbox.env_passthrough``.
+    from omnigent.git_credential_github import github_session_child_env
+
+    env.update(github_session_child_env(parent_env))
     return strip_runner_auth_secrets(env)
 
 
@@ -943,6 +955,16 @@ def create_os_environment(spec: OSEnvSpec | None) -> OSEnvironment | None:
         _copy_tree(cwd, effective_cwd)
         cwd = effective_cwd
     sandbox = resolve_sandbox(spec, cwd)
+    if sandbox.active:
+        # Active external sessions run their GitHub helper/config assets from
+        # a host-created, mode-700 directory. Grant only that directory to the
+        # child namespace; the host's ~/.ssh and ~/.config/gh remain outside
+        # the sandbox and are also masked at the runner boundary.
+        from omnigent.git_credential_github import github_session_read_root
+
+        session_root = github_session_read_root(os.environ)
+        if session_root is not None:
+            sandbox = with_additional_read_roots(sandbox, [session_root])
     if spec.start_in_scratch and not sandbox.active:
         raise ValueError(
             "os_env.start_in_scratch requires an active sandbox; "

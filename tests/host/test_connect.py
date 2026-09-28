@@ -447,6 +447,82 @@ async def test_handle_launch_spawns_subprocess(
     _cleanup_host(host)
 
 
+async def test_external_github_broker_is_attached_without_ambient_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Trusted external launches receive only the broker's session surface."""
+    host = _make_host_process()
+    host._enable_trusted_external_github_broker = True
+    host._auth_token_factory = lambda: "host-bootstrap-bearer"
+    host._auth_token_factory_resolved = True
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+
+    class _FakeGithubSession:
+        def __init__(self) -> None:
+            self.closed = False
+            self.wrapped: list[str] | None = None
+
+        def runner_env(self) -> dict[str, str]:
+            return {
+                "OMNIGENT_GITHUB_SESSION_ACTIVE": "1",
+                "GH_TOKEN": "oa_cred_session",
+                "GITHUB_TOKEN": "oa_cred_session",
+                "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+                "GIT_CONFIG_NOSYSTEM": "1",
+            }
+
+        def wrap_runner_command(self, argv: list[str]) -> list[str]:
+            self.wrapped = list(argv)
+            return ["bwrap", *argv]
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = _FakeGithubSession()
+    monkeypatch.setattr(
+        "omnigent.host.connect.GithubSessionBroker.create",
+        lambda _env: session,
+    )
+    monkeypatch.setenv("GIT_TOKEN", "raw-host-git-token")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "real-gh"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "real-gitconfig"))
+
+    spawned_env: dict[str, str] = {}
+    original_popen = subprocess.Popen
+
+    def _fake_popen(args: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+        del args
+        spawned_env.update(kwargs["env"])
+        return original_popen(
+            ["sleep", "10"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    frame = HostLaunchRunnerFrame(
+        request_id="req_external_github",
+        binding_token="test_external_token",
+        workspace=str(workspace),
+    )
+    with patch("omnigent.host.connect.subprocess.Popen", side_effect=_fake_popen):
+        result = await host._handle_launch(frame)
+
+    assert result.status == "launched"
+    assert session.wrapped == [sys.executable, "-P", "-m", "omnigent.runner._entry"]
+    assert spawned_env["GH_TOKEN"] == "oa_cred_session"
+    assert spawned_env["GIT_CONFIG_GLOBAL"] == str(tmp_path / "gitconfig")
+    assert "raw-host-git-token" not in spawned_env.values()
+    assert spawned_env.get("SSH_AUTH_SOCK") is None
+    assert spawned_env.get("GH_CONFIG_DIR") is None
+    assert host._runners[result.runner_id].github_session is session
+
+    _cleanup_host(host)
+    assert session.closed is True
+
+
 async def test_handle_launch_fails_for_bad_workspace() -> None:
     """
     Verify that _handle_launch returns status='failed' when the

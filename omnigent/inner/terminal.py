@@ -40,6 +40,7 @@ from .sandbox import (
     create_exec_launcher,
     create_private_tmpdir,
     resolve_sandbox,
+    with_additional_read_roots,
     with_additional_write_roots,
     with_denied_unix_sockets,
 )
@@ -1062,6 +1063,13 @@ class TerminalInstance:
         env.pop("OMNIGENT_TMUX_SOCK", None)
         # Apply per-terminal env overrides (takes precedence over inherited env).
         env.update(self.env)
+        # Apply the trusted external-host GitHub session after terminal
+        # overrides so a stale/raw GH_TOKEN from a harness spec cannot replace
+        # the synthetic session credential. ``env_unset`` below remains the
+        # final caller-controlled removal boundary.
+        from omnigent.git_credential_github import github_session_child_env
+
+        env.update(github_session_child_env(os.environ))
         # Strip vars the caller asked us not to leak into the terminal —
         # ambient values like ``DATABRICKS_CONFIG_PROFILE`` would otherwise
         # propagate to the terminal's children (including MCP servers),
@@ -2077,6 +2085,11 @@ def create_terminal_instance(
         if sandbox_spec.type != "none":
             sandbox = resolve_sandbox(effective_os_env_spec, cwd)
             if sandbox.active:
+                from omnigent.git_credential_github import github_session_read_root
+
+                session_root = github_session_read_root(os.environ)
+                if session_root is not None:
+                    sandbox = with_additional_read_roots(sandbox, [session_root])
                 # Add the private dir to write roots so a forked working
                 # tree (``private_dir/root``) and the instance dir stay
                 # writable inside the pane.

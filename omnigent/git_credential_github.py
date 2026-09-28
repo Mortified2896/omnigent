@@ -42,12 +42,15 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import secrets
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import httpx
@@ -55,11 +58,59 @@ import yaml
 
 from omnigent.host.identity import HOST_TOKEN_ENV_VAR as _HOST_TOKEN_ENV_VAR
 from omnigent.host.identity import MANAGED_HOST_TOKEN_HEADER
+from omnigent.inner.credential_proxy import (
+    SYNTHETIC_CREDENTIAL_PREFIX,
+    CredentialRewriteRule,
+)
+from omnigent.inner.egress.controller import EgressProxyHandle, start_egress_proxy
+from omnigent.inner.sandbox import cleanup_private_tmpdir
 
 _TIMEOUT_S = 15.0
 
+# Opaque, per-runner coordinates for the trusted external-host GitHub session.
+# These names are deliberately kept separate from the ordinary HTTP proxy
+# variables: the runner receives only these paths/placeholders plus the
+# session-local Git/GH aliases, while child processes opt into standard proxy
+# variables only for the GitHub command that needs them.
+GITHUB_SESSION_ACTIVE_ENV = "OMNIGENT_GITHUB_SESSION_ACTIVE"
+GITHUB_SESSION_ROOT_ENV = "OMNIGENT_GITHUB_SESSION_ROOT"
+GITHUB_SESSION_PROXY_ENV = "OMNIGENT_GITHUB_SESSION_PROXY_URL"
+GITHUB_SESSION_CA_ENV = "OMNIGENT_GITHUB_SESSION_CA_BUNDLE"
+GITHUB_SESSION_GIT_CONFIG_ENV = "OMNIGENT_GITHUB_SESSION_GIT_CONFIG"
+GITHUB_SESSION_GH_CONFIG_ENV = "OMNIGENT_GITHUB_SESSION_GH_CONFIG"
+GITHUB_SESSION_TOKEN_ENV = "OMNIGENT_GITHUB_SESSION_TOKEN"
+GITHUB_SESSION_BIN_ENV = "OMNIGENT_GITHUB_SESSION_BIN"
 
-def _in_sandbox() -> bool:
+_GITHUB_SESSION_REQUIRED_ENV = (
+    GITHUB_SESSION_ROOT_ENV,
+    GITHUB_SESSION_PROXY_ENV,
+    GITHUB_SESSION_CA_ENV,
+    GITHUB_SESSION_GIT_CONFIG_ENV,
+    GITHUB_SESSION_GH_CONFIG_ENV,
+    GITHUB_SESSION_TOKEN_ENV,
+    GITHUB_SESSION_BIN_ENV,
+)
+
+# The proxy is intentionally narrower than a general-purpose GitHub API
+# tunnel. Git smart HTTP needs GET/HEAD/POST on github.com; the normal PR
+# panel/workflow needs read API access plus the REST/GraphQL calls used by gh.
+# Existing shell/GitHub policy checks still gate force-push and destructive
+# commands before they execute.
+_TRUSTED_GITHUB_EGRESS_RULES = (
+    "GET,HEAD,POST github.com/**",
+    "GET api.github.com/user",
+    "GET api.github.com/user/**",
+    "GET api.github.com/rate_limit",
+    "GET api.github.com/repos/*/*",
+    "GET api.github.com/repos/*/*/**",
+    "POST api.github.com/repos/*/*/pulls",
+    # gh pr list/view/create uses GitHub's GraphQL endpoint for repository
+    # metadata and pull-request queries in addition to REST /pulls.
+    "POST api.github.com/graphql",
+)
+
+
+def _in_sandbox(env: Mapping[str, str] | None = None) -> bool:
     """Whether we're running inside a managed sandbox (host image sets ``IS_SANDBOX=1``).
 
     The broker host integrations auto-materialize the owner's credentials into
@@ -69,7 +120,460 @@ def _in_sandbox() -> bool:
     be a no-op there. ``IS_SANDBOX=1`` is baked into the managed host image and
     the k8s pod spec; it is absent on a local host.
     """
-    return (os.environ.get("IS_SANDBOX") or "").strip() == "1"
+    source = os.environ if env is None else env
+    return (source.get("IS_SANDBOX") or "").strip() == "1"
+
+
+def _gh_config_dir_for_env(env: Mapping[str, str]) -> Path:
+    """Resolve the host ``gh`` config directory without changing the env."""
+    override = (env.get("GH_CONFIG_DIR") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    home = Path(env.get("HOME") or str(Path.home())).expanduser()
+    return Path(env.get("XDG_CONFIG_HOME") or (home / ".config")) / "gh"
+
+
+def _host_github_token(env: Mapping[str, str]) -> str | None:
+    """Read the already-configured host ``gh`` token into trusted memory.
+
+    The command's stdout is captured and never logged, serialized, or passed
+    to a runner. A failure is deliberately indistinguishable from an
+    unconfigured host so external sessions continue to work normally without
+    GitHub auth when it is unavailable.
+    """
+    gh = shutil.which("gh", path=env.get("PATH"))
+    if gh is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [gh, "auth", "token", "--hostname", "github.com"],
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_S,
+            check=False,
+            env=dict(env),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    token = (completed.stdout or "").strip()
+    if not token or any(char.isspace() for char in token):
+        return None
+    return token
+
+
+class _GithubTokenProvider:
+    """Refresh the host token in memory without exposing it to the runner."""
+
+    def __init__(self, initial: str, env: Mapping[str, str]) -> None:
+        self._token: str | None = initial
+        self._env = dict(env)
+        self._last_refresh = time.monotonic()
+        self._lock = threading.Lock()
+
+    def resolve(self) -> str:
+        """Return the current token, refreshing it at most every five minutes."""
+        with self._lock:
+            if self._token is None:
+                raise ValueError("GitHub session token provider is closed")
+            if time.monotonic() - self._last_refresh >= 300.0:
+                refreshed = _host_github_token(self._env)
+                if refreshed:
+                    self._token = refreshed
+                self._last_refresh = time.monotonic()
+            return self._token
+
+    def close(self) -> None:
+        """Drop the in-memory token and its host environment snapshot."""
+        with self._lock:
+            self._token = None
+            self._env.clear()
+
+
+def _session_env_values(parent_env: Mapping[str, str]) -> dict[str, str]:
+    """Return validated opaque session coordinates, or an empty mapping."""
+    if (parent_env.get(GITHUB_SESSION_ACTIVE_ENV) or "").strip() != "1":
+        return {}
+    if (parent_env.get("IS_SANDBOX") or "").strip() == "1":
+        # The managed broker has its own endpoint and must never inherit an
+        # external host's loopback proxy, even if an operator accidentally
+        # forwards these names into a managed runner.
+        return {}
+    values = {name: (parent_env.get(name) or "") for name in _GITHUB_SESSION_REQUIRED_ENV}
+    if any(not value for value in values.values()):
+        return {}
+    root = Path(values[GITHUB_SESSION_ROOT_ENV])
+    if not root.is_absolute():
+        return {}
+    token = values[GITHUB_SESSION_TOKEN_ENV]
+    if not token.startswith(SYNTHETIC_CREDENTIAL_PREFIX):
+        return {}
+    return values
+
+
+def github_session_read_root(parent_env: Mapping[str, str]) -> Path | None:
+    """Return the session asset root that an active sandbox may read."""
+    values = _session_env_values(parent_env)
+    return Path(values[GITHUB_SESSION_ROOT_ENV]) if values else None
+
+
+def github_session_child_env(parent_env: Mapping[str, str]) -> dict[str, str]:
+    """Build child-only Git/GitHub env from opaque runner coordinates.
+
+    No raw GitHub credential or host dotfile is copied. The returned mapping
+    contains a synthetic token, session-local config paths, and a per-session
+    proxy URL carrying only the proxy's ephemeral authentication token.
+    Standard ``HTTP_PROXY`` variables are intentionally not set here: doing so
+    would route unrelated model traffic through a GitHub-only proxy.
+    """
+    values = _session_env_values(parent_env)
+    if not values:
+        return {}
+    path = parent_env.get("PATH", "")
+    session_bin = values[GITHUB_SESSION_BIN_ENV]
+    child: dict[str, str] = {
+        **values,
+        "GH_TOKEN": values[GITHUB_SESSION_TOKEN_ENV],
+        "GITHUB_TOKEN": values[GITHUB_SESSION_TOKEN_ENV],
+        "GH_CONFIG_DIR": values[GITHUB_SESSION_GH_CONFIG_ENV],
+        "GIT_CONFIG_GLOBAL": values[GITHUB_SESSION_GIT_CONFIG_ENV],
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "PATH": f"{session_bin}{os.pathsep}{path}" if path else session_bin,
+    }
+    return child
+
+
+def github_session_http_env(parent_env: Mapping[str, str]) -> dict[str, str]:
+    """Return standard proxy/CA variables for one GitHub API subprocess."""
+    values = _session_env_values(parent_env)
+    if not values:
+        return {}
+    proxy = values[GITHUB_SESSION_PROXY_ENV]
+    bundle = values[GITHUB_SESSION_CA_ENV]
+    return {
+        "HTTP_PROXY": proxy,
+        "HTTPS_PROXY": proxy,
+        "http_proxy": proxy,
+        "https_proxy": proxy,
+        "SSL_CERT_FILE": bundle,
+        "REQUESTS_CA_BUNDLE": bundle,
+        "CURL_CA_BUNDLE": bundle,
+        "GIT_SSL_CAINFO": bundle,
+    }
+
+
+class GithubSessionBroker:
+    """Per-runner external-host GitHub broker.
+
+    The host reads its existing ``gh`` login once, keeps the real token in the
+    host process, and starts a direct loopback egress proxy. The runner gets a
+    fresh synthetic credential, an isolated Git config/helper, and a masked
+    view of host credential directories. Managed sandboxes never construct this
+    class; their existing server-backed broker remains unchanged.
+    """
+
+    def __init__(
+        self,
+        *,
+        root: Path,
+        proxy: EgressProxyHandle,
+        provider: _GithubTokenProvider,
+        synthetic: str,
+        runner_env: dict[str, str],
+        masked_paths: tuple[Path, ...],
+        bwrap: str,
+    ) -> None:
+        self._root = root
+        self._proxy = proxy
+        self._provider = provider
+        self._synthetic = synthetic
+        self._runner_env = runner_env
+        self._masked_paths = masked_paths
+        self._bwrap = bwrap
+        self._closed = False
+
+    @classmethod
+    def create(cls, parent_env: Mapping[str, str] | None = None) -> GithubSessionBroker | None:
+        """Create a broker when the trusted host has usable GitHub auth."""
+        env = dict(parent_env or os.environ)
+        if _in_sandbox(env):
+            return None
+        bwrap = shutil.which("bwrap", path=env.get("PATH"))
+        # The external path is fail-closed when the host cannot provide the
+        # same filesystem masking guarantee as RTX Linux. Normal coding
+        # sessions still start; they simply retain their existing no-GitHub-
+        # broker behavior on unsupported hosts.
+        if bwrap is None:
+            return None
+        token = _host_github_token(env)
+        if token is None:
+            return None
+
+        root = Path(tempfile.mkdtemp(prefix="omnigent-github-session-"))
+        os.chmod(root, 0o700)
+        provider = _GithubTokenProvider(token, env)
+        synthetic = f"{SYNTHETIC_CREDENTIAL_PREFIX}{secrets.token_urlsafe(24)}"
+        rewrites = [
+            CredentialRewriteRule(
+                host="github.com",
+                scheme="basic",
+                synthetic=synthetic,
+                username="x-access-token",
+                secret_provider=provider.resolve,
+            ),
+            CredentialRewriteRule(
+                host="api.github.com",
+                scheme="token",
+                synthetic=synthetic,
+                secret_provider=provider.resolve,
+            ),
+        ]
+        proxy: EgressProxyHandle | None = None
+        try:
+            proxy = start_egress_proxy(
+                rules=_TRUSTED_GITHUB_EGRESS_RULES,
+                tmpdir=root,
+                allow_private_destinations=False,
+                require_auth=True,
+                credential_rewrites=rewrites,
+                direct=True,
+            )
+            if not proxy.auth_token:
+                raise RuntimeError("external GitHub proxy did not create auth")
+            broker = cls.__new__(cls)
+            broker._root = root
+            broker._proxy = proxy
+            broker._provider = provider
+            broker._synthetic = synthetic
+            broker._bwrap = bwrap
+            broker._closed = False
+            broker._masked_paths = broker._host_mask_paths(env)
+            broker._write_assets(env)
+            broker._runner_env = broker._build_runner_env(env)
+            return broker
+        except Exception:  # noqa: BLE001 — broker setup is best-effort
+            if proxy is not None:
+                with contextlib.suppress(Exception):
+                    proxy.stop()
+            provider.close()
+            cleanup_private_tmpdir(root)
+            return None
+
+    def _host_mask_paths(self, env: Mapping[str, str]) -> tuple[Path, ...]:
+        """Choose only credential surfaces to hide in the runner namespace."""
+        home = Path(env.get("HOME") or str(Path.home())).expanduser()
+        xdg = Path(env.get("XDG_CONFIG_HOME") or (home / ".config")).expanduser()
+        candidates = (
+            home / ".ssh",
+            _gh_config_dir_for_env(env),
+            home / ".gitconfig",
+            home / ".git-credentials",
+            home / ".netrc",
+            xdg / "git",
+        )
+        unique: list[Path] = []
+        configured_paths = [
+            Path(value).expanduser()
+            for key in ("GIT_CONFIG_GLOBAL", "NETRC")
+            if (value := (env.get(key) or "").strip())
+            and Path(value).expanduser().is_absolute()
+        ]
+        for path in (*candidates, *configured_paths):
+            resolved = path.expanduser()
+            if resolved not in unique and (resolved.exists() or resolved.parent.exists()):
+                unique.append(resolved)
+        return tuple(unique)
+
+    def _write_assets(self, env: Mapping[str, str]) -> None:
+        """Materialize placeholder-only Git/gh assets in the private root."""
+        assert self._proxy.auth_token is not None
+        bin_dir = self._root / "bin"
+        gh_dir = self._root / "gh-config"
+        bin_dir.mkdir(mode=0o700)
+        gh_dir.mkdir(mode=0o700)
+
+        gh = shutil.which("gh", path=env.get("PATH"))
+        if gh is None:  # guarded by _host_github_token, defensive only
+            raise RuntimeError("gh disappeared while creating GitHub session")
+        proxy_url = (
+            f"http://omnigent:{self._proxy.auth_token}@127.0.0.1:{self._proxy.relay_port}"
+        )
+        ca_bundle = str(self._proxy.ca_bundle_path)
+        git_config = self._root / "gitconfig"
+        user_lines: list[str] = []
+        for key in ("user.name", "user.email"):
+            value = _read_global_git_value(key)
+            if value:
+                section, name = key.split(".", 1)
+                if not user_lines:
+                    user_lines.append(f"[{section}]")
+                user_lines.append(f"{name} = {_git_config_value(value)}")
+        config_lines = [
+            *user_lines,
+            '[credential "https://github.com/"]',
+            "    helper =",
+            "    helper = omnigent-session",
+            '[url "https://github.com/"]',
+            "    insteadOf = git@github.com:",
+            "    insteadOf = ssh://git@github.com/",
+            "    insteadOf = git+ssh://git@github.com/",
+            '[http "https://github.com/"]',
+            f"    proxy = {proxy_url}",
+            f"    sslCAInfo = {ca_bundle}",
+            "",
+        ]
+        git_config.write_text("\n".join(config_lines), encoding="utf-8")
+        os.chmod(git_config, 0o600)
+
+        helper = bin_dir / "git-credential-omnigent-session"
+        helper.write_text(
+            """#!/bin/sh
+case "${1-get}" in
+  get)
+    protocol=
+    host=
+    while IFS='=' read -r key value; do
+      [ -z "$key" ] && break
+      case "$key" in
+        protocol) protocol=$value ;;
+        host) host=$value ;;
+      esac
+    done
+    [ "$protocol" = "https" ] || exit 0
+    [ "$host" = "github.com" ] || exit 0
+    [ -n "${OMNIGENT_GITHUB_SESSION_TOKEN:-}" ] || exit 0
+    printf 'username=x-access-token\\npassword=%s\\n\\n' "$OMNIGENT_GITHUB_SESSION_TOKEN"
+    ;;
+  store|erase)
+    exit 0
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        os.chmod(helper, 0o700)
+
+        gh_wrapper = bin_dir / "gh"
+        gh_wrapper.write_text(
+            """#!/bin/sh
+set -eu
+proxy=${OMNIGENT_GITHUB_SESSION_PROXY_URL:?}
+bundle=${OMNIGENT_GITHUB_SESSION_CA_BUNDLE:?}
+export HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy"
+export http_proxy="$proxy" https_proxy="$proxy"
+export SSL_CERT_FILE="$bundle" REQUESTS_CA_BUNDLE="$bundle"
+export CURL_CA_BUNDLE="$bundle" GIT_SSL_CAINFO="$bundle"
+exec """
+            + shlex.quote(gh)
+            + " \"$@\"\n",
+            encoding="utf-8",
+        )
+        os.chmod(gh_wrapper, 0o700)
+
+    def _build_runner_env(self, parent_env: Mapping[str, str]) -> dict[str, str]:
+        """Build the runner's opaque and synthetic session environment."""
+        bin_dir = self._root / "bin"
+        path = parent_env.get("PATH", "")
+        return {
+            GITHUB_SESSION_ACTIVE_ENV: "1",
+            GITHUB_SESSION_ROOT_ENV: str(self._root),
+            GITHUB_SESSION_PROXY_ENV: (
+                f"http://omnigent:{self._proxy.auth_token}@127.0.0.1:{self._proxy.relay_port}"
+            ),
+            GITHUB_SESSION_CA_ENV: str(self._proxy.ca_bundle_path),
+            GITHUB_SESSION_GIT_CONFIG_ENV: str(self._root / "gitconfig"),
+            GITHUB_SESSION_GH_CONFIG_ENV: str(self._root / "gh-config"),
+            GITHUB_SESSION_TOKEN_ENV: self._synthetic,
+            GITHUB_SESSION_BIN_ENV: str(bin_dir),
+            # These are safe session values, not host credentials. Keeping
+            # them on the runner itself means direct/native coding-agent
+            # subprocesses get ordinary Git/gh behavior too; filtered shell
+            # and helper paths rebuild the same values with their own
+            # allowlist boundary.
+            "GH_TOKEN": self._synthetic,
+            "GITHUB_TOKEN": self._synthetic,
+            "GH_CONFIG_DIR": str(self._root / "gh-config"),
+            "GIT_CONFIG_GLOBAL": str(self._root / "gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "PATH": f"{bin_dir}{os.pathsep}{path}" if path else str(bin_dir),
+        }
+
+    def runner_env(self) -> dict[str, str]:
+        """Return a copy of the non-secret environment handed to the runner."""
+        return dict(self._runner_env)
+
+    def wrap_runner_command(self, argv: Sequence[str]) -> list[str]:
+        """Run the external runner with host credential directories masked."""
+        # This is a trusted-host containment layer, not the managed sandbox's
+        # policy backend. Still give the runner a private PID view: without
+        # it, a same-UID process could inspect the host daemon through /proc
+        # and use its root mount namespace to walk around these masks.
+        command = [
+            self._bwrap,
+            "--die-with-parent",
+            "--unshare-pid",
+            "--unshare-uts",
+            "--unshare-ipc",
+            "--new-session",
+            "--bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+        ]
+        for path in self._masked_paths:
+            if path.is_dir():
+                command.extend(("--tmpfs", str(path)))
+            elif path.exists():
+                command.extend(("--bind", "/dev/null", str(path)))
+        command.extend(("--", *argv))
+        return command
+
+    def close(self) -> None:
+        """Stop the proxy, drop the real token, and remove session assets."""
+        if self._closed:
+            return
+        self._closed = True
+        with contextlib.suppress(Exception):
+            self._proxy.stop()
+        self._provider.close()
+        self._runner_env.clear()
+        cleanup_private_tmpdir(self._root)
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+
+def _git_config_value(value: str) -> str:
+    """Quote a host Git identity safely for the session config."""
+    if any(char in value for char in "\r\n"):
+        return '""'
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _read_global_git_value(key: str) -> str | None:
+    """Read one non-secret identity field without changing host config."""
+    try:
+        result = subprocess.run(
+            ["git", "config", "--global", "--get", key],
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    value = (result.stdout or "").strip()
+    return value or None
 
 
 def _read_git_request() -> dict[str, str]:
