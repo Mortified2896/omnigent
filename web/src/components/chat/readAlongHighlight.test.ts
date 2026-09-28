@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activeReadAlongUnitIndex,
   clearReadAlongHighlight,
+  estimateReadAlongUnits,
   mapReadAlongRanges,
   setReadAlongHighlight,
   type ReadAlongUnit,
@@ -20,6 +21,21 @@ function unit(text: string, start: number, end: number): ReadAlongUnit {
 }
 
 describe("read-along timing lookup", () => {
+  it("estimates ordered word timings from visible narration and audio duration", () => {
+    const section = document.createElement("div");
+    section.textContent = "Hi 👋, world.";
+
+    const units = estimateReadAlongUnits([section], 4);
+
+    expect(units.map(({ text }) => text)).toEqual(["Hi", "world"]);
+    expect(units[0]?.narration_start).toBe(0);
+    // Offsets use Unicode code points, so the emoji counts as one character.
+    expect(units[1]?.narration_start).toBe(6);
+    expect(units[0]!.end_seconds).toBeLessThan(units[1]!.start_seconds);
+    expect(units[1]!.end_seconds).toBeCloseTo(4);
+    expect(estimateReadAlongUnits([section], 0)).toEqual([]);
+  });
+
   it("uses binary-search-compatible boundaries and leaves gaps clear", () => {
     const units = [unit("first", 0, 0.4), unit("second", 0.5, 0.9), unit("third", 1.1, 1.5)];
     expect(activeReadAlongUnitIndex(units, 0)).toBe(0);

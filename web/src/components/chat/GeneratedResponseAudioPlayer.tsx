@@ -5,6 +5,7 @@ import { getOmnigentHostConfig } from "@/lib/host";
 import {
   activeReadAlongUnitIndex,
   clearReadAlongHighlight,
+  estimateReadAlongUnits,
   mapReadAlongRanges,
   setReadAlongHighlight,
   type ReadAlongUnit,
@@ -124,16 +125,23 @@ export function GeneratedResponseAudioPlayer({
     const audio = audioElement;
     const bubble = audio?.closest<HTMLElement>("[data-response-id]");
     const timings = timingsQuery.data;
-    if (!audio || !bubble || bubble.dataset.responseId !== responseId || !timings?.units?.length) {
+    if (!audio || !bubble || bubble.dataset.responseId !== responseId) {
       return undefined;
     }
+    const getSections = () =>
+      bubble.querySelectorAll<HTMLElement>('[data-testid="assistant-text-section"]');
+    const getUnits = (sections = getSections()) =>
+      timings?.units?.length
+        ? timings.units
+        : estimateReadAlongUnits(sections, entry?.duration_seconds ?? audio.duration);
+    let units = getUnits();
     let rangeByUnit = new Map<number, Range>();
     const owner = `${sessionId}:${responseId}`;
     let lastUnitIndex = -2;
     clearReadAlongHighlight(owner);
 
     const updateHighlight = (force = false) => {
-      const unitIndex = activeReadAlongUnitIndex(timings.units, audio.currentTime);
+      const unitIndex = activeReadAlongUnitIndex(units, audio.currentTime);
       if (!force && unitIndex === lastUnitIndex) return;
       lastUnitIndex = unitIndex;
       setReadAlongHighlight(owner, rangeByUnit.get(unitIndex) ?? null);
@@ -150,16 +158,19 @@ export function GeneratedResponseAudioPlayer({
     // Markdown loads lazily, and collapsed work sections can mount later.
     // Rebuild only when text DOM changes, never for each playback tick.
     const rebuildRanges = () => {
-      const sections = bubble.querySelectorAll<HTMLElement>(
-        '[data-testid="assistant-text-section"]',
-      );
+      const sections = getSections();
+      units = getUnits(sections);
       rangeByUnit = new Map(
-        mapReadAlongRanges(sections, timings.units).map(({ unitIndex, range }) => [
+        mapReadAlongRanges(sections, units).map(({ unitIndex, range }) => [
           unitIndex,
           range,
         ]),
       );
       if (lastUnitIndex !== -2) updateHighlight(true);
+    };
+    const handleMetadata = () => {
+      rebuildRanges();
+      updateHighlight(true);
     };
     rebuildRanges();
     let rebuildFrame: number | null = null;
@@ -173,6 +184,7 @@ export function GeneratedResponseAudioPlayer({
     observer.observe(bubble, { childList: true, characterData: true, subtree: true });
 
     audio.addEventListener("play", handlePlay);
+    audio.addEventListener("loadedmetadata", handleMetadata);
     audio.addEventListener("timeupdate", handleTimeUpdate);
     audio.addEventListener("seeking", handleSeeking);
     audio.addEventListener("seeked", handleSeeking);
@@ -183,13 +195,14 @@ export function GeneratedResponseAudioPlayer({
       observer.disconnect();
       if (rebuildFrame !== null) cancelAnimationFrame(rebuildFrame);
       audio.removeEventListener("play", handlePlay);
+      audio.removeEventListener("loadedmetadata", handleMetadata);
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("seeking", handleSeeking);
       audio.removeEventListener("seeked", handleSeeking);
       audio.removeEventListener("ended", handleEnded);
       clearReadAlongHighlight(owner);
     };
-  }, [audioElement, responseId, sessionId, timingsQuery.data]);
+  }, [audioElement, entry?.duration_seconds, responseId, sessionId, timingsQuery.data]);
 
   if (listQuery.isError) return null;
   if (!entry) return null;

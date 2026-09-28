@@ -308,7 +308,7 @@ describe("GeneratedResponseAudioPlayer", () => {
     expect(currentHighlightText()).toEqual([]);
   });
 
-  it("keeps audio usable when the optional timing sidecar is missing", async () => {
+  it("estimates word highlighting when the optional timing sidecar is missing", async () => {
     installHighlightApi();
     authenticatedFetch.mockImplementation((url: string) =>
       Promise.resolve(
@@ -318,10 +318,12 @@ describe("GeneratedResponseAudioPlayer", () => {
       ),
     );
     renderPlayer();
-    const player = await screen.findByLabelText("Listen to this response");
+    const player = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
     expect(player).toHaveAttribute("controls");
     expect(screen.queryByText("Audio unavailable")).not.toBeInTheDocument();
-    expect(currentHighlightText()).toEqual([]);
+    player.currentTime = 1.5;
+    fireEvent.seeking(player);
+    expect(currentHighlightText()).toEqual(["world"]);
   });
 
   it("keeps two response players isolated and removes only the unmounted owner", async () => {

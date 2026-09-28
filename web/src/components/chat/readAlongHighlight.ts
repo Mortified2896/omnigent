@@ -11,6 +11,85 @@ export interface VisibleReadAlongRange {
   range: Range;
 }
 
+/**
+ * Estimate word timing when a speech backend returns audio without a timing
+ * sidecar. Precise provider timings always take precedence in the player.
+ */
+export function estimateReadAlongUnits(
+  sections: Iterable<Element>,
+  durationSeconds: number,
+): ReadAlongUnit[] {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return [];
+
+  const sectionList = Array.from(sections);
+  const chunks: string[] = [];
+  let previousBlock = "";
+  for (const section of sectionList) {
+    const flattened = flattenVisibleText(section);
+    if (!flattened.text) continue;
+    const nextText = flattened.text;
+    if (previousBlock && !/\s/u.test(previousBlock) && !/^\s/u.test(nextText)) {
+      chunks.push(" ");
+    }
+    chunks.push(nextText);
+    previousBlock = nextText;
+  }
+
+  const text = chunks.join("");
+  const matches = Array.from(text.matchAll(WORD_RE));
+  if (matches.length === 0) return [];
+
+  const weights = matches.map((match, index) => {
+    const word = match[0];
+    const start = match.index ?? 0;
+    const end = start + word.length;
+    const nextStart = matches[index + 1]?.index ?? text.length;
+    const followingPunctuation = text.slice(end, nextStart);
+    const syllables = (word.match(/[aeiouy]+/giu) ?? []).length;
+    const spoken = Math.max(1, Array.from(word).length + Math.max(0, syllables - 1) * 0.35);
+    const pause = index + 1 < matches.length && /[.!?…。！？]/u.test(followingPunctuation)
+      ? 1.1
+      : index + 1 < matches.length && /[,;:，；：]/u.test(followingPunctuation)
+        ? 0.45
+        : 0;
+    return { start, end, spoken, pause };
+  });
+  const totalWeight = weights.reduce((total, weight) => total + weight.spoken + weight.pause, 0);
+  if (totalWeight <= 0) return [];
+
+  // Build the Unicode code-point offsets once; the sidecar schema uses these
+  // offsets even though the client maps the words against the rendered text.
+  const codePointOffsets = new Uint32Array(text.length + 1);
+  let codePointOffset = 0;
+  for (let offset = 0; offset < text.length; ) {
+    const codePoint = text.codePointAt(offset) ?? 0;
+    const width = codePoint > 0xffff ? 2 : 1;
+    codePointOffsets[offset] = codePointOffset;
+    if (width === 2) codePointOffsets[offset + 1] = codePointOffset;
+    offset += width;
+    codePointOffset += 1;
+    codePointOffsets[offset] = codePointOffset;
+  }
+
+  const scale = durationSeconds / totalWeight;
+  let elapsed = 0;
+  return matches.map((match, index) => {
+    const word = match[0];
+    const weight = weights[index]!;
+    const startSeconds = elapsed;
+    elapsed += weight.spoken * scale;
+    const endSeconds = elapsed;
+    elapsed += weight.pause * scale;
+    return {
+      text: word,
+      narration_start: codePointOffsets[weight.start] ?? 0,
+      narration_end: codePointOffsets[weight.end] ?? 0,
+      start_seconds: startSeconds,
+      end_seconds: endSeconds,
+    };
+  });
+}
+
 interface VisibleWord {
   key: string;
   start: number;
