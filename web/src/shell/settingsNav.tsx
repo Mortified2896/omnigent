@@ -17,6 +17,7 @@ import {
   PaletteIcon,
   SettingsIcon,
   Share2Icon,
+  ServerIcon,
   ShieldCheckIcon,
   TerminalIcon,
   UserCogIcon,
@@ -30,6 +31,7 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { isElectronShell } from "@/lib/nativeBridge";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_ROW } from "./sidebarStyles";
+import { RuntimeIdentityLabel } from "@/components/RuntimeIdentityLabel";
 
 export type SettingsSectionId =
   | "appearance"
@@ -42,6 +44,7 @@ export type SettingsSectionId =
   | "members"
   | "policies"
   | "sharing"
+  | "deployment"
   | "archived"
   | "cli"
   | "updates";
@@ -57,6 +60,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
   "members",
   "policies",
   "sharing",
+  "deployment",
   "archived",
   "cli",
   "updates",
@@ -132,15 +136,18 @@ export function settingsNavGroups(
   // `accountsEnabled`) so the surface also appears under OIDC/SSO, the one
   // mode where there's otherwise no admin chrome at all. Members runs
   // read-only under OIDC (no password actions); Policies is identical.
-  if (isAdmin) {
+  if (isAdmin || isSingleUser) {
     // Members (manage other accounts) and Sharing (grant sessions to other
     // users) have no meaning in single-user mode — there are no other users —
     // so drop both from the nav there. Policies stays: global policies apply
     // to a solo user's own sessions too.
     const adminItems: SettingsNavItem[] = [];
-    if (!isSingleUser) adminItems.push({ id: "members", label: "Members", icon: UsersIcon });
-    adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
-    if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });
+    if (isAdmin && !isSingleUser)
+      adminItems.push({ id: "members", label: "Members", icon: UsersIcon });
+    if (isAdmin) adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
+    if (isAdmin && !isSingleUser)
+      adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });
+    adminItems.push({ id: "deployment", label: "Deployment", icon: ServerIcon });
     groups.push({ title: "Admin", items: adminItems });
   }
   groups.push({
@@ -253,6 +260,7 @@ export function SettingsSidebarBody({
           </Link>
         </Button>
       </div>
+      <RuntimeIdentityLabel className="mt-1" />
       <nav className="flex flex-1 flex-col gap-4 overflow-y-auto px-3 py-3">
         {groups.map((group) => (
           <div key={group.title} className="flex flex-col gap-0">

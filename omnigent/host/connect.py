@@ -34,6 +34,7 @@ from omnigent.debug_logging import (
     PRIMARY_SESSION_ID_ENV_VAR,
     USER_ID_ENV_VAR,
 )
+from omnigent.deployment_fence import write_fence_active
 from omnigent.gateway_inference import gateway_inference_map
 from omnigent.harness_aliases import canonicalize_harness, is_claude_sdk_harness_name
 from omnigent.harness_availability import HARNESS_BINARY_MISSING, HarnessAvailability
@@ -3785,6 +3786,12 @@ class HostProcess:
             while True:
                 if self._lifecycle_lost.is_set():
                     break
+                if write_fence_active():
+                    # The external controller owns the deployment boundary.
+                    # Do not reconnect or launch work while this process's
+                    # instance-local fence is present.
+                    await asyncio.sleep(0.25)
+                    continue
                 try:
                     await self._connect_and_serve()
                     backoff = _RECONNECT_BASE_S
@@ -4235,6 +4242,9 @@ class HostProcess:
 
     async def _serve_frames(self, ws: websockets.asyncio.client.ClientConnection) -> None:
         """Send the cached host hello, then service frames until disconnect."""
+        if write_fence_active():
+            await ws.close(code=1013, reason="deployment fenced")
+            return
         _tel_opt_out = False
         try:
             from omnigent.telemetry.client import is_disabled as _tel_disabled
@@ -4294,6 +4304,9 @@ class HostProcess:
             while True:
                 raw = await ws.recv()
                 self._conn_frame_received = True
+                if write_fence_active():
+                    await ws.close(code=1013, reason="deployment fenced")
+                    return
                 if isinstance(raw, str):
                     # Connection-control frames decide whether this receive
                     # loop exits or reconnects, so handle them inline. Ordinary
@@ -4405,6 +4418,9 @@ class HostProcess:
         :returns: None.
         """
         try:
+            if write_fence_active():
+                await ws.close(code=1013, reason="deployment fenced")
+                return
             await self._handle_raw_message(ws, raw)
         except ConnectionClosed:
             # The tunnel died while this frame was in flight; the reconnect
@@ -4469,6 +4485,9 @@ class HostProcess:
             ignored.
         :returns: None.
         """
+        if write_fence_active():
+            await ws.close(code=1013, reason="deployment fenced")
+            return
         if isinstance(frame, HostConnectionErrorFrame):
             # Defensive for direct callers; production handles this inline in
             # _serve_frames so detached request tasks cannot swallow it.

@@ -139,6 +139,7 @@ def _make(
     clock: FakeClock | None = None,
     seam: FakeScheduleSeam | None = None,
     on_fire=None,
+    write_admission=None,
 ) -> tuple[ScheduledTaskScheduler, FakeClock, FakeScheduleSeam, FiredRecord]:
     fired = fired or FiredRecord()
     clock = clock or FakeClock()
@@ -149,6 +150,7 @@ def _make(
         now=clock.now,
         schedule_call=seam,
         cancel_call=seam.cancel,
+        write_admission=write_admission,
     )
     return scheduler, clock, seam, fired
 
@@ -211,6 +213,16 @@ async def test_fire_invokes_on_fire_callback() -> None:
     await scheduler.start()
     await seam.fire_latest()
     assert fired.calls == [(42, "a")]
+
+
+async def test_fire_skips_when_deployment_writes_are_fenced() -> None:
+    scheduler, _clock, _seam, fired = _make(
+        [_task("a")], write_admission=lambda: False
+    )
+    await scheduler.start()
+
+    assert await scheduler.fire("a") is False
+    assert fired.calls == []
 
 
 async def test_rearms_after_firing() -> None:
