@@ -1325,3 +1325,61 @@ async def test_relay_does_not_fail_turn_during_server_shutdown(
         sessions_module._runner_relay_tasks.clear()
         sessions_module._session_status_cache.pop(session_id, None)
         session_stream.close(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+async def test_advisor_binding_ignores_native_scaffold_response(db_uri: str, native: bool) -> None:
+    from omnigent.runtime import session_stream
+    from omnigent.server.response_attribution import (
+        bind_response_advisor_round,
+        list_response_attributions,
+    )
+    from omnigent.server.routes import sessions as sessions_module
+    from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY
+
+    store = SqlAlchemyConversationStore(db_uri)
+    labels = {ADVISOR_ROUND_LABEL_KEY: "round_for_real_answer"}
+    if native:
+        from omnigent.native.native_coding_agents import CODEX_NATIVE_CODING_AGENT
+
+        labels["omnigent.wrapper"] = CODEX_NATIVE_CODING_AGENT.wrapper_label
+    conv = store.create_conversation()
+    store.update_conversation(conv.id, labels=labels)
+    release = asyncio.Event()
+    client = _ScriptedRunnerClient(
+        release,
+        [
+            {"type": "response.in_progress", "response": {"id": "scaffold_response"}},
+            {"type": "response.completed", "response": {"id": "scaffold_response"}},
+        ],
+    )
+    try:
+        handle = await sessions_module._ensure_runner_relay_ready(
+            conv.id,
+            "advisor_relay_test",
+            client,
+            conversation_store=store,
+        )
+        assert handle is not None
+        release.set()
+        await asyncio.wait_for(handle.task, timeout=_TASK_TIMEOUT_S)
+        attributions = list_response_attributions(store, conv.id)
+        if native:
+            assert attributions == {}
+            assert (
+                bind_response_advisor_round(
+                    store, conv.id, "native_answer", "round_for_real_answer"
+                )
+                == "round_for_real_answer"
+            )
+        else:
+            assert attributions["scaffold_response"]["advisor_round_id"] == "round_for_real_answer"
+            assert (
+                bind_response_advisor_round(store, conv.id, "next_answer", "round_for_real_answer")
+                is None
+            )
+    finally:
+        release.set()
+        sessions_module._runner_relay_tasks.pop(conv.id, None)
+        session_stream.close(conv.id)
