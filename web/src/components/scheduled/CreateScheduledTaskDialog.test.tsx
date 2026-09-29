@@ -90,6 +90,22 @@ vi.mock("@/shell/NewChatDialog", () => ({
       </button>
       <button
         type="button"
+        data-testid="pick-harness-codex"
+        onClick={() =>
+          onSelectAgent({
+            id: "ag_codex_native",
+            name: "codex-native-ui",
+            display_name: "Codex",
+            description: null,
+            harness: "codex-native",
+            skills: [],
+          })
+        }
+      >
+        pick codex harness
+      </button>
+      <button
+        type="button"
         data-testid="pick-agent-polly"
         onClick={() =>
           onSelectAgent({
@@ -141,6 +157,14 @@ const AGENTS: AvailableAgent[] = [
     display_name: "Claude Code",
     description: null,
     harness: "claude-native",
+    skills: [],
+  },
+  {
+    id: "ag_codex_native",
+    name: "codex-native-ui",
+    display_name: "Codex",
+    description: null,
+    harness: "codex-native",
     skills: [],
   },
 ];
@@ -830,6 +854,84 @@ describe("CreateScheduledTaskDialog model + effort controls", () => {
     expect(input.modelOverride).toBeNull();
     expect(input.reasoningEffort).toBe("high");
     expect(input.permissionMode).toBe("plan");
+  });
+});
+
+describe("CreateScheduledTaskDialog Codex controls", () => {
+  const codexModelOptions = [
+    {
+      id: "codex-model-id",
+      displayName: "Codex Example",
+      isDefault: true,
+      supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(hostsHook.useHostModelOptions).mockReturnValue({
+      data: codexModelOptions,
+    } as unknown as ReturnType<typeof hostsHook.useHostModelOptions>);
+  });
+
+  it("uses the host catalog and adds Codex search without Claude permission controls", async () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId("pick-harness-codex"));
+    expect(screen.getByTestId("task-model-trigger")).toBeInTheDocument();
+    expect(screen.getByTestId("task-effort-trigger")).toBeInTheDocument();
+    expect(screen.getByTestId("task-web-search-trigger")).toBeInTheDocument();
+    expect(screen.queryByTestId("task-permission-trigger")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("task-name-input"), { target: { value: "N" } });
+    fireEvent.change(screen.getByTestId("task-prompt-input"), { target: { value: "P" } });
+    fireEvent.keyDown(screen.getByTestId("task-model-trigger"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Codex Example" }));
+    fireEvent.keyDown(screen.getByTestId("task-effort-trigger"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Low" }));
+    fireEvent.keyDown(screen.getByTestId("task-web-search-trigger"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Live" }));
+    fireEvent.click(screen.getByTestId("create-scheduled-task-submit"));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    const input = mutateAsync.mock.calls[0][0];
+    expect(input).toMatchObject({
+      agentId: "ag_codex_native",
+      modelOverride: "codex-model-id",
+      reasoningEffort: "low",
+      codexWebSearchMode: "live",
+    });
+    expect(input).not.toHaveProperty("permissionMode");
+  });
+
+  it("prefills and clears Codex task overrides without adding permission fields", async () => {
+    render(
+      <CreateScheduledTaskDialog
+        open
+        onOpenChange={vi.fn()}
+        editingTask={scheduledTask({
+          agentId: "ag_codex_native",
+          modelOverride: "codex-model-id",
+          reasoningEffort: "low",
+          codexWebSearchMode: "live",
+        })}
+      />,
+    );
+    expect(screen.getByTestId("task-model-trigger")).toHaveTextContent("Codex Example");
+    expect(screen.getByTestId("task-effort-trigger")).toHaveTextContent("Low");
+    expect(screen.getByTestId("task-web-search-trigger")).toHaveTextContent("Live");
+    expect(screen.queryByTestId("task-permission-trigger")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByTestId("task-model-trigger"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+    fireEvent.keyDown(screen.getByTestId("task-web-search-trigger"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+    fireEvent.click(screen.getByTestId("create-scheduled-task-submit"));
+
+    await waitFor(() => expect(updateMutateAsync).toHaveBeenCalledTimes(1));
+    const { input } = updateMutateAsync.mock.calls[0][0];
+    expect(input.modelOverride).toBeNull();
+    expect(input.reasoningEffort).toBe("low");
+    expect(input.codexWebSearchMode).toBeNull();
+    expect(input).not.toHaveProperty("permissionMode");
   });
 });
 

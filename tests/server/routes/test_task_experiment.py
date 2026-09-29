@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from omnigent.entities import MessageData, NewConversationItem
+from omnigent.server.response_attribution import response_attribution_item
 from omnigent.errors import OmnigentError
 from omnigent.server.routes.sessions.routes_feedback import register_feedback_routes
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
@@ -38,6 +39,19 @@ def test_outcome_api_reload_and_validation(conversation_store):
     store = conversation_store
     conv = store.create_conversation()
     seed_answer(store, conv.id)
+    store.append(
+        conv.id,
+        [
+            response_attribution_item(
+                conversation_id=conv.id,
+                response_id="answer",
+                requested_model="gpt-6-sol",
+                actual_model="gpt-6-sol-2026-09-20",
+                model_source="response_usage",
+                advisor_round_id="round-123",
+            )
+        ],
+    )
     app = FastAPI()
     router = APIRouter()
     register_feedback_routes(router, conversation_store=store)
@@ -47,7 +61,12 @@ def test_outcome_api_reload_and_validation(conversation_store):
         for outcome in ("not_sure", "success", "partial", "failed"):
             response = client.put(f"{url}/task-outcomes/answer", json={"outcome": outcome})
             assert response.status_code == 200
-            assert client.get(f"{url}/task-experiment").json()[-1]["outcome"] == outcome
+            saved = response.json()
+            assert saved["outcome"] == outcome
+            assert saved["model_attribution"]["actual_model"] == "gpt-6-sol-2026-09-20"
+            listed = client.get(f"{url}/task-experiment").json()[-1]
+            assert listed["outcome"] == outcome
+            assert listed["model_attribution"]["advisor_round_id"] == "round-123"
         assert (
             client.put(f"{url}/task-outcomes/answer", json={"outcome": "maybe"}).status_code == 422
         )

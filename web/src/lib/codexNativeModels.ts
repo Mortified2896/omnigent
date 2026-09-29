@@ -2,6 +2,18 @@ import type { NativeModelOption } from "./types";
 
 /** Catalog prefixes a gateway model id carries, mirroring the server's fold. */
 const CATALOG_PREFIXES = ["databricks-", "system.ai."] as const;
+const CODEX_EFFORT_LEVEL_ORDER = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+const CODEX_EFFORT_LEVEL_RANK = new Map<string, number>(
+  CODEX_EFFORT_LEVEL_ORDER.map((effort, index) => [effort, index]),
+);
 
 /**
  * Fold a model id to the spelling Codex row ids compare in.
@@ -104,5 +116,11 @@ export function codexEffortLevelsForModel(
             effort.trim().toLowerCase() !== "default",
         ),
     ),
-  );
+  ).sort((left, right) => {
+    const leftRank = CODEX_EFFORT_LEVEL_RANK.get(left.trim().toLowerCase());
+    const rightRank = CODEX_EFFORT_LEVEL_RANK.get(right.trim().toLowerCase());
+    if (leftRank === undefined) return rightRank === undefined ? 0 : 1;
+    if (rightRank === undefined) return -1;
+    return leftRank - rightRank;
+  });
 }

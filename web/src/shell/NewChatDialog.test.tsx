@@ -1486,7 +1486,7 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByText("Read only")).toBeTruthy();
   });
 
-  it("shows GPT-5.6 Luna's exact effort capabilities without a Default choice", () => {
+  it("shows GPT-5.6 Luna's exact effort capabilities in the inline selector", () => {
     renderLanding();
     selectAgent("a2");
 
@@ -1499,6 +1499,7 @@ describe("NewChatLandingScreen", () => {
         .filter((option) => option.hasAttribute("data-access-lane"))
         .map((option) => option.textContent),
     ).toEqual(["GPT-5.6 Luna", "GPT-5.5"]);
+    expect(screen.getByRole("option", { name: "GPT-5.6 Luna" })).toBeTruthy();
     fireEvent.click(screen.getByText("GPT-5.6 Luna"));
 
     openSelect("new-chat-landing-inline-effort");
@@ -1859,7 +1860,7 @@ describe("NewChatLandingScreen", () => {
     closeMenu();
   });
 
-  it("omits model and effort launch overrides when no explicit choices are selected", async () => {
+  it("omits model and effort launch overrides when no inline overrides are selected", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ id: "conv_new" }),
@@ -3434,7 +3435,7 @@ describe("NewChatLandingScreen agent picker + config gear", () => {
     expect(tooltip.textContent).toContain("Permissions:");
     expect(tooltip.textContent).toContain("Plan");
     expect(tooltip.textContent).toContain("Model:");
-    // Unset effort is visible as no explicit level, not as a selectable Default.
+    // Unset effort is shown as unavailable, never as a selectable Default.
     expect(tooltip.textContent).toContain("Effort: —");
   });
 

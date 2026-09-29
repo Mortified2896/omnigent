@@ -90,6 +90,7 @@ from omnigent.stores.conversation_store import (
     _INSTANCE_SCOPED_LABEL_KEYS,
     ARCHIVED_AT_LABEL_KEY,
     CODEX_ACCESS_LANE_LABEL_KEY,
+    ConversationBusyError,
     FORK_CARRY_HISTORY_LABEL_KEY,
     FORK_SOURCE_EXTERNAL_SESSION_LABEL_KEY,
     FORK_SOURCE_LABEL_KEY,
@@ -3067,6 +3068,9 @@ class SqlAlchemyConversationStore(ConversationStore):
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
         reported_model: str | None = None,
+        _unset_reported_model: bool = False,
+        labels: dict[str, str] | None = None,
+        require_idle: bool = False,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
@@ -3084,9 +3088,13 @@ class SqlAlchemyConversationStore(ConversationStore):
         :param _unset_model_override: When ``True``, clear
             ``model_override`` to ``None``.
         :param reported_model: The model the harness last reported the
-            session is actually on, verbatim, e.g.
-            ``"claude-opus-4-8[1m]"``. ``None`` leaves unchanged.
-            No ``_unset`` variant — reports only ever move forward.
+            session is actually on, verbatim. ``None`` leaves unchanged.
+        :param _unset_reported_model: Clear the prior runtime report as part
+            of a confirmed route change.
+        :param labels: Labels to upsert atomically with the conversation
+            fields. ``None`` leaves labels unchanged.
+        :param require_idle: Reject a live or waiting session while holding
+            its conversation lock.
         :param cost_control_mode_override: Per-session cost-control
             switch, ``"on"`` or ``"off"``. ``None`` leaves unchanged.
         :param _unset_cost_control_mode_override: When ``True``, clear
@@ -3123,6 +3131,25 @@ class SqlAlchemyConversationStore(ConversationStore):
             row = ap_sess.get(SqlConversation, (current_workspace_id(), conversation_id))
             if not row:
                 return None
+            if require_idle:
+                metadata_key = (current_workspace_id(), conversation_id)
+                if self._conv_engine is self._engine:
+                    live_meta = ap_sess.get(SqlConversationMetadata, metadata_key)
+                    live_status = decode_session_live_status(live_meta.live_status) if live_meta else None
+                else:
+                    # Status writers take the same AP conversation lock before
+                    # touching the split metadata database, so the read stays
+                    # serialized even though both databases cannot share a
+                    # transaction.
+                    with self._session("update_conversation_check_live_status") as meta_sess:
+                        live_meta = meta_sess.get(SqlConversationMetadata, metadata_key)
+                        live_status = (
+                            decode_session_live_status(live_meta.live_status)
+                            if live_meta
+                            else None
+                        )
+                if live_status in {"running", "waiting"}:
+                    raise ConversationBusyError("conversation has an active response")
             ap_changed = False
             if title is not None:
                 row.title = title or ""
@@ -3143,7 +3170,10 @@ class SqlAlchemyConversationStore(ConversationStore):
             elif model_override is not None:
                 overrides["model_override"] = model_override
                 overrides_changed = True
-            if reported_model is not None:
+            if _unset_reported_model:
+                overrides["reported_model"] = None
+                overrides_changed = True
+            elif reported_model is not None:
                 overrides["reported_model"] = reported_model
                 overrides_changed = True
             if _unset_cost_control_mode_override:
@@ -3191,6 +3221,9 @@ class SqlAlchemyConversationStore(ConversationStore):
                         )
                     )
                 row.archived = archived
+                ap_changed = True
+            if labels:
+                _upsert_labels(ap_sess, conversation_id, labels, now)
                 ap_changed = True
             if ap_changed:
                 # ``updated_at`` is also the conditional-mutation version;

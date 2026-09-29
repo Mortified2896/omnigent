@@ -1,4 +1,5 @@
 import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
+import { GeneratedResponseAudioPlayer } from "@/components/chat/GeneratedResponseAudioPlayer";
 // Bubble rendering, scroll helpers, and the working-indicator cluster for the
 // chat transcript. Extracted from ChatPage.tsx so <Transcript> can import them
 // without the ChatPage ↔ Transcript module cycle. ChatPage re-exports these for
@@ -842,6 +843,7 @@ function AssistantBubble({
         from="assistant"
         data-testid="message-bubble"
         data-role="assistant"
+        data-response-id={bubble.responseId}
         data-response-stable-id={bubble.stableId}
         className={
           spansFullColumn ? "max-w-full" : "max-w-3xl min-[2561px]:max-w-[clamp(56rem,30vw,64rem)]"
@@ -850,6 +852,17 @@ function AssistantBubble({
         {/* A fold-only bubble takes w-full at the ordinary max-w-3xl cap rather
             than shrink-wrapping to the summary row's ~110px. */}
         <MessageContent className={spansFullColumn || foldOnly ? "w-full" : undefined}>
+          {!foldOnly &&
+            !errorOnly &&
+            bubble.lifecycle === "completed" &&
+            bubble.responseId &&
+            conversationId && (
+              <GeneratedResponseAudioPlayer
+                sessionId={conversationId}
+                responseId={bubble.responseId}
+                pollForNewAudio={isLastAssistant}
+              />
+            )}
           <BlockRenderer
             items={bubble.items}
             sessionStatus={sessionStatus}

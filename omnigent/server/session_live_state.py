@@ -41,7 +41,7 @@ import contextvars
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from omnigent.db.enum_codecs import SESSION_LIVE_STATUS
 
@@ -63,6 +63,7 @@ _store: ConversationStore | None = None
 # alongside ``_store`` by :func:`configure`; ``None`` disables the hook (the
 # runner process and unit tests that never configure it are unaffected).
 _scheduled_task_store: ScheduledTaskStore | None = None
+_generated_audio_coordinator: Any | None = None
 # Single worker => writes apply in submission order (see module docstring).
 _executor: ThreadPoolExecutor | None = None
 # Last status seen per session, for dedupe — the value whose write was
@@ -77,6 +78,8 @@ _last_pending: dict[str, int] = {}
 def configure(
     store: ConversationStore | None,
     scheduled_task_store: ScheduledTaskStore | None = None,
+    *,
+    generated_audio_coordinator: Any | None = None,
 ) -> None:
     """
     Wire (or clear) the stores live-state writes go to.
@@ -87,9 +90,10 @@ def configure(
         the event-driven run-completion hook
         (:func:`persist_scheduled_run_completion`); ``None`` disables it.
     """
-    global _store, _scheduled_task_store
+    global _store, _scheduled_task_store, _generated_audio_coordinator
     _store = store
     _scheduled_task_store = scheduled_task_store
+    _generated_audio_coordinator = generated_audio_coordinator
     _last_status.clear()
     _last_pending.clear()
 
@@ -236,13 +240,19 @@ def persist_scheduled_run_completion(
             # Not a scheduled fire, or its run is already terminal — nothing to
             # do. This is the common case (interactive sessions).
             return
-        store.update_run(
+        transitioned = store.update_run(
             run.id,
             status=run_status,
             finished_at=int(time.time()),
             error=error,
             error_code=error_code,
         )
+        if (
+            transitioned is not None
+            and run_status == "succeeded"
+            and _generated_audio_coordinator is not None
+        ):
+            _generated_audio_coordinator.enqueue_completed_scheduled_response(conversation_id)
 
     submit("scheduled_run_completion", _transition)
 

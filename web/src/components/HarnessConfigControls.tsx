@@ -17,6 +17,9 @@ import { cn } from "@/lib/utils";
 // intelligent router picks per turn.
 export const MODEL_SELECT_DEFAULT = "__default__";
 export const MODEL_SELECT_SMART = "__smart__";
+// Sentinel for forms where leaving effort unset intentionally delegates to
+// the harness default (scheduled and forked sessions).
+export const EFFORT_SELECT_NONE = "__none__";
 // Placeholder for an unset effort or a frozen row when the router picks the
 // model and effort per turn.
 export const EFFORT_UNAVAILABLE_PLACEHOLDER = "—";

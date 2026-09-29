@@ -55,6 +55,8 @@ class SessionStoppedEvent:
 
     :param installation_id: Server-side installation ID.
     :param session_id: Omnigent conversation/session identifier.
+    :param response_id: Response identifier that ties this event to the
+        response item and its trace attributes, when the harness reported one.
     :param anon_user_id: First 16 hex chars of ``sha256("<installation_id>:<user_id>")``.
     """
 
@@ -122,6 +124,7 @@ class TurnEndEvent:
 
     installation_id: str | None
     session_id: str
+    response_id: str | None
     status: str
     latency_ms: float | None
     model: str | None

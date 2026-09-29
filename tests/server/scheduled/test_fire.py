@@ -41,6 +41,7 @@ class _FakeConversation:
     host_id: str | None = None
     git_branch: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    session_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -150,6 +151,7 @@ class FakeConversationStore:
         self._seq = 0
         self.fail_create = fail_create
         self.label_writes: dict[str, dict[str, str]] = {}
+        self.session_state_writes: dict[str, dict[str, Any]] = {}
 
     def create_conversation(self, **kwargs: Any) -> _FakeConversation:
         self.create_workspace_ids.append(current_workspace_id())
@@ -172,6 +174,9 @@ class FakeConversationStore:
 
     def set_labels(self, conversation_id: str, labels: dict[str, str]) -> None:
         self.label_writes[conversation_id] = dict(labels)
+
+    def set_session_state(self, conversation_id: str, session_state: dict[str, Any]) -> None:
+        self.session_state_writes[conversation_id] = dict(session_state)
 
     def get_conversation(self, conversation_id: str) -> _FakeConversation | None:
         return _FakeConversation(id=conversation_id, agent_id="ag_1")
@@ -542,6 +547,37 @@ async def test_task_reasoning_effort_overrides_spec_at_fire() -> None:
 
     assert any(u.get("reasoning_effort") == "low" for u in conv_store.updated)
     assert not any(u.get("reasoning_effort") == "high" for u in conv_store.updated)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", ["daily-brief", "kokoro-heart"])
+async def test_scheduled_fire_pins_search_and_audio_profile_to_session(profile: str) -> None:
+    conv_store = FakeConversationStore()
+    store = FakeScheduledTaskStore(
+        rows={
+            "task_1": _task(
+                codex_web_search_mode="live",
+                audio_enabled=True,
+                audio_voice_profile=profile,
+            )
+        }
+    )
+
+    async def _launch(conv: Any, task: Any) -> None:
+        return None
+
+    await build_on_fire(
+        _effort_agent_deps(store, conv_store, reasoning_effort=None),
+        launch_dispatch=_launch,
+    )(0, "task_1")
+    await _drain()
+
+    assert conv_store.session_state_writes["conv_1"] == {
+        "codex_web_search_mode": "live",
+        "scheduled_task_audio_enabled": True,
+        "scheduled_task_audio_voice_profile": "kokoro-heart",
+        "scheduled_task_audio_backend": "kokoro",
+    }
 
 
 @pytest.mark.asyncio
@@ -1522,3 +1558,88 @@ async def test_policy_create_failure_does_not_fail_fire() -> None:
     assert len(conv_store.created) == 1
     assert len(launched) == 1
     assert store.runs[0]["status"] == "running"
+
+
+@pytest.mark.parametrize(
+    "agent,expected",
+    [("codex-native-ui", "codex-direct"), ("claude-native-ui", None), (None, None)],
+)
+def test_scheduled_access_lane_is_codex_only(monkeypatch, agent, expected):
+    from omnigent.server.scheduled.fire import _scheduled_codex_access_lane
+
+    monkeypatch.setenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "codex-direct")
+    assert _scheduled_codex_access_lane(agent) == expected
+
+
+def test_scheduled_access_lane_default_and_invalid(monkeypatch):
+    from omnigent.server.scheduled.fire import _scheduled_codex_access_lane
+
+    monkeypatch.delenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", raising=False)
+    assert _scheduled_codex_access_lane("codex-native-ui") is None
+    monkeypatch.setenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "typo")
+    with pytest.raises(ValueError, match="Invalid"):
+        _scheduled_codex_access_lane("codex-native-ui")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timezone", "expected"),
+    [
+        ("Asia/Hong_Kong", "daily-brief — September 27, 2026"),
+        ("UTC", "daily-brief — September 26, 2026"),
+    ],
+)
+async def test_session_title_includes_run_date_in_task_timezone(
+    timezone: str, expected: str
+) -> None:
+    from omnigent.server.scheduled.fire import _create_session
+
+    store = FakeConversationStore()
+    deps = _deps(FakeScheduledTaskStore(), conversation_store=store)
+    task = _task(name="daily-brief", timezone=timezone)
+    await _create_session(deps, task, 1790463600)
+    assert store.created[0]["title"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bindings,expected", [([], None), (["task_1"], "project_1"), (["other"], None)]
+)
+async def test_scheduled_project_binding_is_explicit_and_owner_scoped(
+    bindings: list[str], expected: str | None
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from omnigent.server.scheduled.fire import _create_session
+
+    store = FakeConversationStore()
+    projects = Mock()
+    projects.list.return_value = [
+        SimpleNamespace(id="project_1", config={"scheduled_task_ids": bindings})
+    ]
+    deps = _deps(FakeScheduledTaskStore(), conversation_store=store)
+    deps.project_store = projects
+    task = _task(user_id="owner")
+    await _create_session(deps, task, 1790463600)
+    projects.list.assert_called_once_with(user_id="owner")
+    assert store.created[0]["project_id"] == expected
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_or_malformed_project_binding_never_guesses() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from omnigent.server.scheduled.fire import _scheduled_project_id
+
+    deps = _deps(FakeScheduledTaskStore())
+    deps.project_store = Mock()
+    for configs in [
+        [{"scheduled_task_ids": "task_1"}],
+        [{"scheduled_task_ids": ["task_1"]}, {"scheduled_task_ids": ["task_1"]}],
+    ]:
+        deps.project_store.list.return_value = [
+            SimpleNamespace(id=f"project_{i}", config=config) for i, config in enumerate(configs)
+        ]
+        assert await _scheduled_project_id(deps, _task()) is None

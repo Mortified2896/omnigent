@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import omnigent.server.routes.sessions as sessions_routes
+from omnigent.server.accounts_config import AccountsConfig
 from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
 from omnigent.server.routes.sessions import SessionLiveness, create_sessions_router
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
@@ -151,6 +152,59 @@ def _seed_session(
     permission_store.ensure_user(owner)
     permission_store.grant(owner, conv.id, LEVEL_OWNER)
     return conv.id
+
+
+def test_accounts_trusted_header_authenticates_websocket_and_keeps_admin_owned_session(
+    stores: tuple[SqlAlchemyConversationStore, SqlAlchemyAgentStore, SqlAlchemyPermissionStore],
+) -> None:
+    """The same mapped accounts identity authenticates WS and sees old ownership."""
+    conversation_store, agent_store, permission_store = stores
+    session_id = _seed_session(stores, owner="admin", title="existing-admin-session")
+    auth_provider = UnifiedAuthProvider(
+        source="accounts",
+        accounts_config=AccountsConfig(
+            cookie_secret=b"x" * 32,
+            session_ttl_hours=8,
+            base_url="http://localhost:8000",
+            init_admin_password=None,
+            invite_ttl_seconds=3600,
+            magic_ttl_seconds=600,
+        ),
+        trusted_header_name="Tailscale-User-Login",
+        trusted_header_map={"Mortified2896@github": "admin"},
+    )
+    ws_app = FastAPI()
+    ws_app.include_router(
+        create_sessions_router(
+            conversation_store=conversation_store,
+            agent_store=agent_store,
+            auth_provider=auth_provider,
+            permission_store=permission_store,
+        ),
+        prefix="/v1",
+    )
+
+    with TestClient(ws_app) as client:
+        with client.websocket_connect(
+            "/v1/sessions/updates",
+            headers={"Tailscale-User-Login": "Mortified2896@github"},
+        ) as ws:
+            ws.send_text(json.dumps({"type": "watch", "session_ids": [session_id]}))
+            snapshot = json.loads(ws.receive_text())
+            assert snapshot["type"] == "snapshot"
+            assert [item["title"] for item in snapshot["items"]] == ["existing-admin-session"]
+
+        for header_value in (None, "unknown@github"):
+            headers = {} if header_value is None else {"Tailscale-User-Login": header_value}
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with client.websocket_connect("/v1/sessions/updates", headers=headers):
+                    pass
+            assert exc_info.value.code == 1008
+
+    # This provider returns the existing account id. The existing ownership
+    # grant remains under that id; the overlay performs no migration.
+    grants = permission_store.list_for_user("admin")
+    assert [grant.conversation_id for grant in grants] == [session_id]
 
 
 def _recv_until(ws: object, wanted: set[str], *, max_frames: int = 50) -> dict[str, object]:

@@ -143,6 +143,30 @@ async def test_lifespan_without_store_has_no_scheduler(
         assert getattr(app.state, "scheduled_task_scheduler", None) is None
 
 
+async def test_lifespan_disabled_instance_does_not_start_scheduler(
+    runtime_init: None,
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_SCHEDULED_TASKS_ENABLED", "false")
+    store = SqlAlchemyScheduledTaskStore(db_uri)
+    store.create(
+        scheduled_task_id=_uid("disabled-scheduler"),
+        name="disabled task",
+        prompt="do not run",
+        rrule="FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+        user_id=None,
+        agent_id=_uid("agent-1"),
+        timezone="UTC",
+    )
+    app = _build_app(db_uri, tmp_path, scheduled_task_store=store)
+
+    async with app.router.lifespan_context(app):
+        assert getattr(app.state, "scheduled_task_scheduler", None) is None
+        assert not hasattr(app.state, "scheduled_task_run_now")
+
+
 async def test_lifespan_skips_paused_task(
     runtime_init: None,
     db_uri: str,

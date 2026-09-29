@@ -46,11 +46,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from omnigent.db.db_models import workspace_scope
 from omnigent.entities import Conversation, ScheduledTask
@@ -62,6 +65,7 @@ from omnigent.server.routes._session_create_validation import (
     validate_session_model_metadata,
     validate_session_permission_mode,
 )
+from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND, scheduled_audio_voice
 from omnigent.server.schemas import SessionEventInput
 
 _logger = logging.getLogger(__name__)
@@ -127,6 +131,7 @@ class FireDeps:
     tunnel_registry: Any | None = None
     file_store: Any | None = None
     artifact_store: Any | None = None
+    project_store: Any | None = None
 
 
 def _prompt_event(prompt: str) -> SessionEventInput:
@@ -417,7 +422,7 @@ async def _run_fire_for_task(
             return
 
         try:
-            conv = await _create_session(deps, effective)
+            conv = await _create_session(deps, effective, scheduled_at)
         except Exception:
             _logger.exception("scheduled fire: failed to create session for task %s", task.id)
             await _record_run(
@@ -714,15 +719,55 @@ async def _presentation_labels(deps: FireDeps, task: ScheduledTask) -> dict[str,
         return {}
 
 
-async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
+def _scheduled_codex_access_lane(agent_name: str | None) -> str | None:
+    """Apply the deployment's scheduled-only lane without changing chat defaults."""
+    from omnigent.native.native_coding_agents import native_coding_agent_for_agent_name
+    from omnigent.stores.conversation_store import CODEX_ACCESS_LANES
+
+    native = native_coding_agent_for_agent_name(agent_name)
+    if native is None or native.harness != "codex-native":
+        return None
+    lane = os.getenv("OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE", "").strip()
+    if lane and lane not in CODEX_ACCESS_LANES:
+        raise ValueError("Invalid OMNIGENT_SCHEDULED_CODEX_ACCESS_LANE")
+    return lane or None
+
+
+async def _scheduled_project_id(deps: FireDeps, task: ScheduledTask) -> str | None:
+    """Resolve an explicit task binding among this owner's projects only.
+
+    Project config may contain ``scheduled_task_ids``, a list of automation
+    IDs whose new sessions should be filed here. Names are never matched.
+    The project store also enforces the current workspace scope. Missing or
+    ambiguous bindings leave the session unfiled rather than guessing a target.
+    """
+    if deps.project_store is None:
+        return None
+    projects = await asyncio.to_thread(deps.project_store.list, user_id=task.user_id)
+    matches = []
+    for project in projects:
+        bindings = project.config.get("scheduled_task_ids")
+        if isinstance(bindings, list) and task.id in bindings:
+            matches.append(project.id)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        _logger.warning("scheduled fire: ambiguous project binding for task %s", task.id)
+    return None
+
+
+async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int) -> Conversation:
     """Create a conversation bound to the task's agent, carrying the stored spec."""
     # Connected-host, existing-workspace runs create the conversation directly.
     # Future execution modes such as managed sandbox, branch selection, and
     # replay/backfill must use shared session-create orchestration.
+    run_date = datetime.fromtimestamp(scheduled_at, ZoneInfo(task.timezone))
+    title = f"{task.name} — {run_date:%B} {run_date.day}, {run_date.year}"
     conv: Conversation = await asyncio.to_thread(
         deps.conversation_store.create_conversation,
         agent_id=task.agent_id,
-        title=task.name,
+        title=title,
+        project_id=await _scheduled_project_id(deps, task),
         host_id=task.host_id,
         workspace=task.workspace,
         terminal_launch_args=await _permission_mode_launch_args(deps, task),
@@ -739,12 +784,34 @@ async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
         )
         if updated is not None:
             conv = updated
+    session_state = dict(conv.session_state or {})
+    if task.codex_web_search_mode is not None:
+        session_state["codex_web_search_mode"] = task.codex_web_search_mode
+    if task.audio_enabled and task.audio_voice_profile:
+        session_state["scheduled_task_audio_enabled"] = True
+        session_state["scheduled_task_audio_voice_profile"] = scheduled_audio_voice(
+            task.audio_voice_profile
+        )
+        session_state["scheduled_task_audio_backend"] = SCHEDULED_AUDIO_BACKEND
+    if session_state != (conv.session_state or {}):
+        conv.session_state = session_state
+        await asyncio.to_thread(
+            deps.conversation_store.set_session_state,
+            conv.id,
+            conv.session_state,
+        )
     # Stamp terminal-first presentation labels the interactive create path would
     # have set, so a fired session on a terminal harness exposes the
     # Chat/Terminal switcher instead of rendering Chat-only. Stamped last (after
     # the override reload above) so the labels land on the conversation returned
     # to the launch/dispatch caller, not a stale pre-label reload of it.
     labels = await _presentation_labels(deps, task)
+    agent = await asyncio.to_thread(deps.agent_store.get, task.agent_id)
+    lane = _scheduled_codex_access_lane(getattr(agent, "name", None))
+    if lane:
+        from omnigent.stores.conversation_store import CODEX_ACCESS_LANE_LABEL_KEY
+
+        labels[CODEX_ACCESS_LANE_LABEL_KEY] = lane
     if labels:
         await asyncio.to_thread(deps.conversation_store.set_labels, conv.id, labels)
         conv.labels.update(labels)

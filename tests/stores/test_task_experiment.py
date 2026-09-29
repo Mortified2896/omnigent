@@ -10,6 +10,10 @@ from omnigent.server.task_experiment import (
     normalize_tags,
     save_outcome,
 )
+from omnigent.server.response_attribution import (
+    list_response_attributions,
+    response_attribution_item,
+)
 from omnigent.stores.conversation_store import InvalidFeedbackTargetError
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 
@@ -94,3 +98,47 @@ def test_event_pagination_and_idempotency(conversation_store):
     rows = list_experiment_events(store, conv.id)
     assert len(rows) == 121
     assert rows[0]["outcome"] == "not_sure"
+
+
+def test_response_attribution_is_durable_and_attached_to_human_outcome(conversation_store):
+    store = conversation_store
+    conv = store.create_conversation()
+    store.append(
+        conv.id,
+        [
+            NewConversationItem(
+                type="message",
+                response_id="resp_123",
+                data=MessageData(
+                    role="assistant",
+                    agent="test",
+                    content=[{"type": "output_text", "text": "Done"}],
+                ),
+            ),
+            response_attribution_item(
+                conversation_id=conv.id,
+                response_id="resp_123",
+                requested_model="gpt-6-sol",
+                actual_model="gpt-6-sol-2026-09-20",
+                model_source="response_usage",
+                reasoning_effort="high",
+                access_lane="openai-direct",
+                advisor_round_id="round_123",
+            ),
+        ],
+    )
+
+    reopened = SqlAlchemyConversationStore(store.storage_location)
+    attribution = list_response_attributions(reopened, conv.id)["resp_123"]
+    outcome = save_outcome(reopened, conv.id, "resp_123", "alice", "success")
+
+    assert attribution == {
+        "requested_model": "gpt-6-sol",
+        "actual_model": "gpt-6-sol-2026-09-20",
+        "model_status": "observed",
+        "model_source": "response_usage",
+        "reasoning_effort": "high",
+        "access_lane": "openai-direct",
+        "advisor_round_id": "round_123",
+    }
+    assert outcome["model_attribution"] == attribution

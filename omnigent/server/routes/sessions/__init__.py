@@ -798,6 +798,7 @@ def create_sessions_router(
     project_store: ProjectStore | None = None,
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     internal_session_hooks: dict[str, Callable[..., Any]] | None = None,
+    generated_response_audio_store: Any | None = None,
 ) -> APIRouter:
     """
     Factory that builds the sessions router.
@@ -847,6 +848,8 @@ def create_sessions_router(
         can refresh its comment list when another user or the agent
         mutates comments. ``None`` (e.g. in focused tests or servers
         without comments wired) emits the no-comments shape.
+    :param generated_response_audio_store: Optional durable status store for
+        response-scoped audio. ``None`` keeps the audio endpoint unavailable.
     :param runner_tunnel_tokens: The server's runner tunnel-token
         allow-list (same value the tunnel router receives), used to
         authorize runner writes to the policy-owned ``cost_control.*``
@@ -876,6 +879,9 @@ def create_sessions_router(
     from omnigent.server.routes.sessions.routes_elicitations import register_elicitations_routes
     from omnigent.server.routes.sessions.routes_events import register_events_routes
     from omnigent.server.routes.sessions.routes_feedback import register_feedback_routes
+    from omnigent.server.routes.sessions.routes_generated_audio import (
+        register_generated_audio_routes,
+    )
     from omnigent.server.routes.sessions.routes_hooks import register_hooks_routes
     from omnigent.server.routes.sessions.routes_items import register_items_routes
     from omnigent.server.routes.sessions.routes_permissions import register_permissions_routes
@@ -922,6 +928,15 @@ def create_sessions_router(
         router,
         conversation_store=conversation_store,
         agent_store=agent_store,
+        auth_provider=auth_provider,
+        permission_store=permission_store,
+    )
+
+    register_generated_audio_routes(
+        router,
+        conversation_store=conversation_store,
+        artifact_store=artifact_store,
+        audio_store=generated_response_audio_store,
         auth_provider=auth_provider,
         permission_store=permission_store,
     )

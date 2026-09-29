@@ -20,8 +20,10 @@ from omnigent.host.frames import (
     decode_host_frame,
     encode_host_frame,
 )
-from omnigent.server.auth import AuthProvider
+from omnigent.server.accounts_config import AccountsConfig
+from omnigent.server.auth import AuthProvider, UnifiedAuthProvider
 from omnigent.server.host_registry import HostRegistry
+from omnigent.server.oidc import mint_session_cookie
 from omnigent.server.routes.host_tunnel import create_host_tunnel_router
 from omnigent.stores.host_store import HostStore
 
@@ -35,12 +37,14 @@ def _websocket_scope(
     path: str,
     *,
     client_host: str = "127.0.0.1",
+    headers: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Build an ASGI WebSocket scope for a test path.
 
     :param path: WebSocket path, e.g.
         ``"/v1/hosts/1444b179a19322377dcc75cf7fcd1bd2/tunnel"``.
     :param client_host: ASGI client host, e.g. ``"127.0.0.1"``.
+    :param headers: Optional HTTP handshake headers.
     :returns: A minimal ASGI WebSocket scope accepted by FastAPI.
     """
     return {
@@ -50,7 +54,10 @@ def _websocket_scope(
         "path": path,
         "raw_path": path.encode("ascii"),
         "query_string": b"",
-        "headers": [],
+        "headers": [
+            (name.lower().encode("latin-1"), value.encode("latin-1"))
+            for name, value in (headers or {}).items()
+        ],
         "client": (client_host, 50000),
         "server": ("testserver", 80),
         "subprotocols": [],
@@ -60,6 +67,8 @@ def _websocket_scope(
 async def _connect_route(
     app: FastAPI,
     path: str,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> ApplicationCommunicator:
     """Connect an ASGI WebSocket communicator to the host tunnel.
 
@@ -67,7 +76,7 @@ async def _connect_route(
     :param path: WebSocket path.
     :returns: The connected ASGI communicator.
     """
-    communicator = ApplicationCommunicator(app, _websocket_scope(path))
+    communicator = ApplicationCommunicator(app, _websocket_scope(path, headers=headers))
     await communicator.send_input({"type": "websocket.connect"})
     accepted = await communicator.receive_output(timeout=1.0)
     assert accepted["type"] == "websocket.accept", f"Expected {path} to accept; got {accepted!r}"
@@ -109,6 +118,57 @@ def host_app(db_uri: str) -> tuple[FastAPI, HostRegistry, HostStore]:
         prefix="/v1",
     )
     return app, registry, store
+
+
+async def test_accounts_bearer_without_proxy_header_still_authenticates_host_tunnel(
+    db_uri: str,
+) -> None:
+    """Existing host Bearer auth works with the accounts header overlay enabled."""
+    cookie_secret = b"x" * 32
+    auth_provider = UnifiedAuthProvider(
+        source="accounts",
+        accounts_config=AccountsConfig(
+            cookie_secret=cookie_secret,
+            session_ttl_hours=8,
+            base_url="http://localhost:8000",
+            init_admin_password=None,
+            invite_ttl_seconds=3600,
+            magic_ttl_seconds=600,
+        ),
+        trusted_header_name="Tailscale-User-Login",
+        trusted_header_map={"Mortified2896@github": "admin"},
+    )
+    registry = HostRegistry()
+    store = HostStore(db_uri)
+    app = FastAPI()
+    app.include_router(
+        create_host_tunnel_router(
+            registry,
+            store,
+            auth_provider=auth_provider,
+            local_single_user=False,
+        ),
+        prefix="/v1",
+    )
+    bearer = mint_session_cookie(
+        user_id="admin",
+        cookie_secret=cookie_secret,
+        ttl_hours=8,
+        provider="accounts",
+    )
+
+    communicator = await _connect_route(
+        app,
+        _TUNNEL_PATH,
+        headers={"Authorization": f"Bearer {bearer}"},
+    )
+    try:
+        await _send_hello_and_wait(communicator, registry)
+        host = store.get_host(_HOST_ID)
+        assert host is not None
+        assert host.user_id == "admin"
+    finally:
+        await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
 
 
 async def _send_hello_and_wait(

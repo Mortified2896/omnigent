@@ -6,6 +6,7 @@ import uuid
 from typing import Literal
 
 from omnigent.entities.conversation import NewConversationItem, ResourceEventData
+from omnigent.server.response_attribution import list_response_attributions
 from omnigent.stores.conversation_store import ConversationStore
 
 RESOURCE_TYPE = "task-success-experiment"
@@ -172,6 +173,9 @@ def save_outcome(
                     "comment": normalized_comment,
                     "tags": normalized_tags,
                     "review_source": "human",
+                    "model_attribution": list_response_attributions(store, conversation_id).get(
+                        response_id
+                    ),
                 },
             )
         ],

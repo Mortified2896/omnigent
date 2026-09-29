@@ -479,6 +479,7 @@ class _CodexNativeLaunchConfig:
     terminal_launch_args: list[str] | None
     model_override: str | None
     reasoning_effort: str | None
+    codex_web_search_mode: str | None
     access_lane: str | None
     external_session_id: str | None
     fork_source_id: str | None
@@ -1170,6 +1171,11 @@ async def _codex_native_launch_config(
     reasoning_effort = snapshot.get("reasoning_effort")
     if reasoning_effort is not None and not isinstance(reasoning_effort, str):
         raise RuntimeError(f"Invalid reasoning_effort for Codex session {session_id!r}.")
+    codex_web_search_mode = snapshot.get("codex_web_search_mode")
+    if codex_web_search_mode is not None and codex_web_search_mode not in {
+        "live", "cached", "indexed", "disabled"
+    }:
+        raise RuntimeError(f"Invalid codex_web_search_mode for session {session_id!r}.")
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
@@ -1321,6 +1327,7 @@ async def _codex_native_launch_config(
         terminal_launch_args=terminal_launch_args,
         model_override=model_override,
         reasoning_effort=reasoning_effort,
+        codex_web_search_mode=codex_web_search_mode,
         access_lane=access_lane,
         external_session_id=external_session_id,
         fork_source_id=fork_source_id,
@@ -4686,6 +4693,7 @@ async def _auto_create_codex_terminal(
         cwd=Path(workspace),
         model=_codex_launch.model,
         reasoning_effort=launch_config.reasoning_effort,
+        web_search_mode=launch_config.codex_web_search_mode,
         profile=_codex_launch.profile,
         extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
         env_passthrough=_codex_launch.env_passthrough,

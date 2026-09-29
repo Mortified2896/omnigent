@@ -54,6 +54,9 @@ def _to_entity(row: SqlScheduledTask) -> ScheduledTask:
         model_override=row.model_override,
         reasoning_effort=row.reasoning_effort,
         permission_mode=row.permission_mode,
+        codex_web_search_mode=row.codex_web_search_mode,
+        audio_enabled=row.audio_enabled,
+        audio_voice_profile=row.audio_voice_profile,
         max_cost_usd=row.max_cost_usd,
         workspace=row.workspace,
         base_branch=row.base_branch,
@@ -130,6 +133,9 @@ class SqlAlchemyScheduledTaskStore(ScheduledTaskStore):
         model_override: str | None = None,
         reasoning_effort: str | None = None,
         permission_mode: str | None = None,
+        codex_web_search_mode: str | None = None,
+        audio_enabled: bool = False,
+        audio_voice_profile: str | None = None,
         max_cost_usd: float | None = None,
         workspace: str | None = None,
         host_id: str | None = None,
@@ -147,6 +153,9 @@ class SqlAlchemyScheduledTaskStore(ScheduledTaskStore):
             model_override=model_override,
             reasoning_effort=reasoning_effort,
             permission_mode=permission_mode,
+            codex_web_search_mode=codex_web_search_mode,
+            audio_enabled=audio_enabled,
+            audio_voice_profile=audio_voice_profile,
             max_cost_usd=max_cost_usd,
             workspace=workspace,
             base_branch=None,
@@ -254,6 +263,9 @@ class SqlAlchemyScheduledTaskStore(ScheduledTaskStore):
         model_override: str | None = _UNSET,
         reasoning_effort: str | None = _UNSET,
         permission_mode: str | None = _UNSET,
+        codex_web_search_mode: str | None = _UNSET,
+        audio_enabled: bool | None = None,
+        audio_voice_profile: str | None = _UNSET,
         max_cost_usd: float | None = _UNSET,
         workspace: str | None = None,
         host_id: str | None = _UNSET,
@@ -302,6 +314,21 @@ class SqlAlchemyScheduledTaskStore(ScheduledTaskStore):
                 changed = True
             if permission_mode is not _UNSET and row.permission_mode != permission_mode:
                 row.permission_mode = permission_mode
+                changed = True
+            if (
+                codex_web_search_mode is not _UNSET
+                and row.codex_web_search_mode != codex_web_search_mode
+            ):
+                row.codex_web_search_mode = codex_web_search_mode
+                changed = True
+            if audio_enabled is not None and row.audio_enabled != audio_enabled:
+                row.audio_enabled = audio_enabled
+                changed = True
+            if (
+                audio_voice_profile is not _UNSET
+                and row.audio_voice_profile != audio_voice_profile
+            ):
+                row.audio_voice_profile = audio_voice_profile
                 changed = True
             if max_cost_usd is not _UNSET and row.max_cost_usd != max_cost_usd:
                 row.max_cost_usd = max_cost_usd

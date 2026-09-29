@@ -212,6 +212,7 @@ from omnigent.server.schemas import (
     SessionEventInput,
 )
 from omnigent.server.session_version import SessionMutationFingerprint, session_etag
+from omnigent.server.response_attribution import response_attribution_item
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY, PINNED_LABEL_KEY
@@ -1330,6 +1331,47 @@ def register_events_routes(
                 background_tasks=bg_tasks,
                 blocked_on=blocked_on,
             )
+            if status == "idle" and isinstance(response_id, str) and response_id:
+                try:
+                    _labels = conv.labels or {}
+                    _reported_model = conv.reported_model
+                    _attribution_item = response_attribution_item(
+                        conversation_id=session_id,
+                        response_id=response_id,
+                        requested_model=conv.model_override,
+                        actual_model=(
+                            _reported_model
+                            if isinstance(_reported_model, str) and _reported_model
+                            else None
+                        ),
+                        model_source=(
+                            "session_reported"
+                            if isinstance(_reported_model, str) and _reported_model
+                            else "unknown"
+                        ),
+                        reasoning_effort=conv.reasoning_effort,
+                        access_lane=(
+                            _labels.get("omnigent.access_lane")
+                            if isinstance(_labels.get("omnigent.access_lane"), str)
+                            else None
+                        ),
+                        advisor_round_id=(
+                            _labels.get(ADVISOR_ROUND_LABEL_KEY)
+                            if isinstance(_labels.get(ADVISOR_ROUND_LABEL_KEY), str)
+                            else None
+                        ),
+                    )
+                    await asyncio.to_thread(
+                        conversation_store.append,
+                        session_id,
+                        [_attribution_item],
+                    )
+                except Exception:
+                    _logger.warning(
+                        "Could not persist native response model attribution for %s",
+                        response_id,
+                        exc_info=True,
+                    )
             # Emit a turn-end telemetry event for native harnesses. "idle"
             # means the turn completed normally; "failed" means it errored.
             # No latency or token deltas are available on this path.
@@ -1338,6 +1380,7 @@ def register_events_routes(
                     _TelTurnEndEvent(
                         installation_id=_get_installation_id(),
                         session_id=session_id,
+                        response_id=response_id,
                         status="completed" if status == "idle" else "failed",
                         latency_ms=None,
                         model=None,

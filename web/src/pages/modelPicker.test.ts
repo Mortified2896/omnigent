@@ -116,14 +116,20 @@ describe("Codex model-list helpers", () => {
     ]);
   });
 
-  it("omits the default sentinel and keeps new catalog effort levels", () => {
+  it("omits the default sentinel, orders known levels, and keeps unknown catalog levels", () => {
     const catalogWithDefaultAndFutureEffort: NativeModelOption[] = [
       {
         id: "gpt-next",
         supportedReasoningEfforts: [
           { reasoningEffort: "default" },
+          { reasoningEffort: "medium" },
           { reasoningEffort: "low" },
+          { reasoningEffort: "xhigh" },
+          { reasoningEffort: "high" },
+          { reasoningEffort: "experimental-b" },
+          { reasoningEffort: "max" },
           { reasoningEffort: "ultra" },
+          { reasoningEffort: "experimental-a" },
           { reasoningEffort: "Default" },
         ],
       },
@@ -131,7 +137,13 @@ describe("Codex model-list helpers", () => {
 
     expect(codexEffortLevelsForModel(catalogWithDefaultAndFutureEffort, "gpt-next")).toEqual([
       "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
       "ultra",
+      "experimental-b",
+      "experimental-a",
     ]);
   });
 

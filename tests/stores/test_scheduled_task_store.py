@@ -53,6 +53,9 @@ def test_create_returns_scheduled_task_with_all_fields(
         model_override="claude-opus-4-7",
         reasoning_effort="high",
         permission_mode="acceptEdits",
+        codex_web_search_mode="live",
+        audio_enabled=True,
+        audio_voice_profile="daily-brief",
         workspace="/home/alice/repo",
         host_id=_uid("host_abc123"),
     )
@@ -67,6 +70,9 @@ def test_create_returns_scheduled_task_with_all_fields(
     assert task.model_override == "claude-opus-4-7"
     assert task.reasoning_effort == "high"
     assert task.permission_mode == "acceptEdits"
+    assert task.codex_web_search_mode == "live"
+    assert task.audio_enabled is True
+    assert task.audio_voice_profile == "daily-brief"
     assert task.workspace == "/home/alice/repo"
     assert task.base_branch is None
     assert task.execution_target == "connected_host"
@@ -92,6 +98,9 @@ def test_create_minimal_defaults(store: SqlAlchemyScheduledTaskStore) -> None:
     assert task.model_override is None
     assert task.reasoning_effort is None
     assert task.permission_mode is None
+    assert task.codex_web_search_mode is None
+    assert task.audio_enabled is False
+    assert task.audio_voice_profile is None
     assert task.workspace is None
     assert task.base_branch is None
     assert task.execution_target == "connected_host"

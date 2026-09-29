@@ -3,6 +3,7 @@ import type * as UseSessionModule from "@/hooks/useSession";
 import type * as UseHostsModule from "@/hooks/useHosts";
 import type * as RunnerHealthProviderModule from "@/hooks/RunnerHealthProvider";
 import type * as AgentLabelsModule from "@/lib/agentLabels";
+import type * as IdentityModule from "@/lib/identity";
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
@@ -24,6 +25,12 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
   };
 });
 const sessionLabels = vi.hoisted(() => ({ value: {} as Record<string, string> }));
+const advisorFetch = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof IdentityModule>()),
+  authenticatedFetch: advisorFetch,
+}));
 
 // ComposerStatusLine's PR link reads GitHub info via a TanStack query; stub it
 // (default: no PR) so bare Composer renders don't need a QueryClientProvider.
@@ -168,6 +175,85 @@ describe("Composer session drafts", () => {
 
     fireEvent.submit(textarea().closest("form")!);
     await waitFor(() => expect(hasSessionDraft("conv_draft")).toBe(false));
+  });
+});
+
+describe("Model Advisor in an existing chat", () => {
+  beforeEach(() => {
+    useChatStore.setState({ conversationId: "conv_chat_advisor" });
+    advisorFetch.mockReset();
+  });
+
+  afterEach(() => cleanup());
+
+  it("keeps a follow-up in the composer while its same-session review opens", async () => {
+    advisorFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/model-advisor/catalog")) {
+        return Response.json({
+          object: "model_advisor.catalog",
+          catalog_revision: "rev-1",
+          options: [],
+          logical_options: [],
+        });
+      }
+      if (url.includes("/model-advisor/preferences")) {
+        const disabled = {
+          enabled: false,
+          collapsed: true,
+          selected_choice_ids: [],
+          disabled_model_ids: [],
+          transport_preference: "omniroute_preferred",
+        };
+        return Response.json({
+          object: "model_advisor.preferences",
+          version: 1,
+          etag: '"prefs-1"',
+          state: "saved",
+          logical_preferences: {
+            schema_version: 3,
+            enabled: false,
+            providers: { openai: disabled, glm: disabled },
+            advisor_choice_id: null,
+            human_probability_percent: 50,
+            unresolved_legacy_ids: [],
+            route_review_required: [],
+          },
+        });
+      }
+      throw new Error(`Unexpected advisor request: ${url}`);
+    });
+    const onSend = vi.fn();
+    renderWithTooltips(
+      <Composer
+        {...composerProps({
+          onSend,
+          modelPickerKind: "codex",
+          advisorHostId: "host_1",
+          advisorAgentId: "ag_1",
+          advisorWorkspace: "/repo",
+          advisorHumanPick: {
+            model: "gpt-5.5",
+            accessLane: "codex-direct",
+            effort: "medium",
+          },
+        })}
+      />,
+    );
+
+    const toggle = screen.getByTestId("chat-model-advisor-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(textarea(), { target: { value: "Continue the analysis" } });
+    fireEvent.submit(textarea().closest("form")!);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Choose a model for this follow-up" }),
+    ).toBeDefined();
+    expect(screen.getByLabelText("Message the agent")).toHaveValue("Continue the analysis");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByTestId("model-advisor-section")).toBeInTheDocument();
   });
 });
 
@@ -2583,7 +2669,7 @@ describe("Composer config gear", () => {
     fireEvent.click(document.querySelector('[data-testid="composer-config-model"]') as Element);
     fireEvent.click(document.querySelector('[data-model-id="gpt-5.6-luna"]') as Element);
 
-    // The picked ultra is dropped (back to Default) and no longer offered,
+    // The picked ultra is dropped (back to unset) and no longer offered,
     // while Luna's own max stays.
     expect(screen.getByTestId("composer-config-effort")).toHaveTextContent("—");
     fireEvent.click(document.querySelector('[data-testid="composer-config-effort"]') as Element);

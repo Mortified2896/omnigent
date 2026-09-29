@@ -16,6 +16,7 @@ still reach the create request.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -47,6 +48,8 @@ _CODEX_HOST_ROWS = [
             {"reasoningEffort": "low", "description": "Fastest"},
             {"reasoningEffort": "medium", "description": "Balanced"},
             {"reasoningEffort": "high", "description": "Most thorough"},
+            {"reasoningEffort": "xhigh", "description": "Extra thorough"},
+            {"reasoningEffort": "max", "description": "Maximum"},
         ],
     },
     {
@@ -57,6 +60,8 @@ _CODEX_HOST_ROWS = [
             {"reasoningEffort": "low", "description": "Fastest"},
             {"reasoningEffort": "medium", "description": "Balanced"},
             {"reasoningEffort": "high", "description": "Most thorough"},
+            {"reasoningEffort": "xhigh", "description": "Extra thorough"},
+            {"reasoningEffort": "max", "description": "Maximum"},
         ],
     },
 ]
@@ -148,9 +153,20 @@ async def _drive_codex_effort_prelaunch(base_url: str, session_id: str) -> None:
             effort = page.get_by_test_id("new-chat-landing-inline-effort")
             await expect(effort).to_be_visible()
             await effort.click()
+            proof_screenshot = os.environ.get("OMNIGENT_E2E_PROOF_SCREENSHOT")
+            if proof_screenshot:
+                await page.screenshot(path=proof_screenshot)
             await expect(
                 page.get_by_role("option", name=re.compile(r"^default$", re.IGNORECASE))
             ).to_have_count(0)
+            levels = await page.get_by_role("option").all_text_contents()
+            assert [level.strip() for level in levels] == [
+                "Low",
+                "Medium",
+                "High",
+                "XHigh",
+                "Max",
+            ]
             option = page.get_by_role("option", name=re.compile(r"^high$", re.IGNORECASE))
             await expect(option).to_be_visible()
             await option.click()

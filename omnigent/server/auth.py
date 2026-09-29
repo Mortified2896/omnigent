@@ -28,11 +28,13 @@ and closed over by route factories — no per-request import cost.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import os
+import re
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -115,6 +117,14 @@ _DEFAULT_AUTH_HEADER = "X-Forwarded-Email"
 # email used everywhere else. Unset (the default) strips nothing. See
 # :func:`resolve_auth_header_strip_prefix`.
 _AUTH_HEADER_STRIP_PREFIX_ENV = "OMNIGENT_AUTH_HEADER_STRIP_PREFIX"
+
+# Optional reverse-proxy identity overlay for accounts auth. The configured
+# proxy identity is mapped to an existing Omnigent account; it is never used
+# as a new account ID. The proxy must strip client-supplied copies of this
+# header before injecting its authenticated identity.
+_AUTH_TRUSTED_HEADER_ENV = "OMNIGENT_AUTH_TRUSTED_HEADER"
+_AUTH_TRUSTED_HEADER_MAP_ENV = "OMNIGENT_AUTH_TRUSTED_HEADER_MAP"
+_HTTP_TOKEN_RE = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 
 LEVEL_READ = 1
 LEVEL_EDIT = 2
@@ -319,6 +329,126 @@ def resolve_auth_header_strip_prefix() -> str:
     return os.environ.get(_AUTH_HEADER_STRIP_PREFIX_ENV, "").strip()
 
 
+def _validate_trusted_header_config(
+    header_name: str | None,
+    identity_map: Mapping[str, str] | None,
+    *,
+    source: str,
+) -> dict[str, str]:
+    """Validate the optional trusted-proxy identity overlay.
+
+    The overlay is deliberately restricted to accounts auth. Its mapping is
+    finite and exact: a proxy-supplied identity can select only a configured,
+    pre-existing Omnigent account. Reserved internal identities cannot be
+    selected as targets.
+
+    :param header_name: The single header name supplied by the proxy.
+    :param identity_map: Exact external-identity → Omnigent-user mapping.
+    :param source: Active auth provider source.
+    :returns: A defensive copy of the validated mapping (empty when disabled).
+    :raises ValueError: If the overlay is incomplete or unsafe.
+    """
+    if header_name is None and identity_map is None:
+        return {}
+    if not isinstance(header_name, str) or not header_name:
+        raise ValueError(
+            f"{_AUTH_TRUSTED_HEADER_ENV} and {_AUTH_TRUSTED_HEADER_MAP_ENV} "
+            "must be configured together"
+        )
+    if identity_map is None or not isinstance(identity_map, Mapping) or not identity_map:
+        raise ValueError(
+            f"{_AUTH_TRUSTED_HEADER_ENV} requires a non-empty JSON object in "
+            f"{_AUTH_TRUSTED_HEADER_MAP_ENV}"
+        )
+    if source != "accounts":
+        raise ValueError(
+            f"{_AUTH_TRUSTED_HEADER_ENV} is supported only with OMNIGENT_AUTH_PROVIDER=accounts"
+        )
+    if _HTTP_TOKEN_RE.fullmatch(header_name) is None:
+        raise ValueError(f"{_AUTH_TRUSTED_HEADER_ENV} must be a valid HTTP header name")
+
+    validated: dict[str, str] = {}
+    for external_identity, user_id in identity_map.items():
+        if (
+            not isinstance(external_identity, str)
+            or not external_identity
+            or external_identity != external_identity.strip()
+            or len(external_identity) > 512
+        ):
+            raise ValueError("trusted-header source identities must be non-empty exact strings")
+        if external_identity in _RESERVED_USERS:
+            raise ValueError("trusted-header source identities cannot be reserved identities")
+        if (
+            not isinstance(user_id, str)
+            or not user_id
+            or user_id != user_id.strip()
+            or len(user_id) > 128
+        ):
+            raise ValueError("trusted-header targets must be non-empty Omnigent user IDs")
+        if user_id in _RESERVED_USERS:
+            raise ValueError("trusted-header targets cannot be reserved identities")
+        validated[external_identity] = user_id
+    return validated
+
+
+def resolve_auth_trusted_header() -> tuple[str | None, dict[str, str]]:
+    """Parse the opt-in trusted-proxy header mapping from the environment.
+
+    The mapping uses one deliberately narrow format: a JSON object whose
+    string keys are exact proxy identities and whose string values are
+    existing Omnigent user IDs, for example
+    ``{"person@example.com":"admin"}``. Duplicate JSON keys and all other
+    JSON shapes fail closed.
+
+    :returns: ``(None, {})`` when disabled, else the configured header and map.
+    :raises RuntimeError: If configuration is incomplete or malformed.
+    """
+    raw_header = os.environ.get(_AUTH_TRUSTED_HEADER_ENV)
+    raw_map = os.environ.get(_AUTH_TRUSTED_HEADER_MAP_ENV)
+    if not raw_header and not raw_map:
+        return None, {}
+    if not raw_header or not raw_map:
+        raise RuntimeError(
+            f"{_AUTH_TRUSTED_HEADER_ENV} and {_AUTH_TRUSTED_HEADER_MAP_ENV} "
+            "must be configured together"
+        )
+
+    header_name = raw_header.strip()
+    if not header_name:
+        raise RuntimeError(f"{_AUTH_TRUSTED_HEADER_ENV} cannot be empty")
+
+    def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = value
+        return result
+
+    try:
+        raw_identity_map = json.loads(raw_map, object_pairs_hook=_unique_object)
+    except (json.JSONDecodeError, ValueError):
+        raise RuntimeError(
+            f"{_AUTH_TRUSTED_HEADER_MAP_ENV} must be a JSON object of string identities"
+        ) from None
+    if not isinstance(raw_identity_map, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in raw_identity_map.items()
+    ):
+        raise RuntimeError(
+            f"{_AUTH_TRUSTED_HEADER_MAP_ENV} must be a JSON object of string identities"
+        )
+    try:
+        identity_map = _validate_trusted_header_config(
+            header_name,
+            raw_identity_map,
+            source=resolve_auth_source(),
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    return header_name, identity_map
+
+
 def _auth_enabled() -> bool:
     """Whether multi-user auth is opted in via the enable switch.
 
@@ -415,10 +545,11 @@ class UnifiedAuthProvider(AuthProvider):
     """Unified authentication provider that supports header-based,
     OIDC, and accounts cookie-based identity extraction.
 
-    Exactly one source is active per deployment, selected by
-    ``OMNIGENT_AUTH_PROVIDER``. OIDC and accounts modes share
-    the same cookie machinery — the difference is only in how the
-    cookie was minted (OIDC IdP callback vs ``/auth/login``).
+    ``OMNIGENT_AUTH_PROVIDER`` selects the base source. OIDC and accounts
+    modes share the same cookie machinery — the difference is only in how
+    the cookie was minted (OIDC IdP callback vs ``/auth/login``). Accounts
+    mode may additionally opt into one trusted-proxy header with a finite,
+    exact identity mapping; all other requests keep using cookie/Bearer auth.
 
     :param source: The active identity source: ``"header"``,
         ``"oidc"``, or ``"accounts"``.
@@ -448,6 +579,12 @@ class UnifiedAuthProvider(AuthProvider):
         back to ``""`` (strip nothing; see
         :func:`resolve_auth_header_strip_prefix`). Only consulted in
         header mode. Tests pass an explicit prefix.
+    :param trusted_header_name: Optional reverse-proxy identity header
+        used alongside accounts auth. Its source values are looked up
+        exactly in ``trusted_header_map``.
+    :param trusted_header_map: Exact external-identity → existing
+        Omnigent-user mapping used only with accounts auth. The proxy must
+        strip client-supplied copies of the configured header.
     """
 
     def __init__(
@@ -458,10 +595,18 @@ class UnifiedAuthProvider(AuthProvider):
         local_single_user: bool | None = None,
         header_name: str | None = None,
         header_strip_prefix: str | None = None,
+        trusted_header_name: str | None = None,
+        trusted_header_map: Mapping[str, str] | None = None,
     ) -> None:
         self._source = source
         self._oidc_config = oidc_config
         self._accounts_config = accounts_config
+        self._trusted_header_map = _validate_trusted_header_config(
+            trusted_header_name,
+            trusted_header_map,
+            source=source,
+        )
+        self._trusted_header_name = trusted_header_name
         self._local_single_user = (
             local_single_user if local_single_user is not None else local_single_user_enabled()
         )
@@ -516,12 +661,24 @@ class UnifiedAuthProvider(AuthProvider):
         - ``"oidc"`` / ``"accounts"``: Read ``__Host-ap_session``
           cookie, validate HS256 signature and expiry, return
           ``sub`` claim.
+        - ``"accounts"`` with the optional trusted-header overlay:
+          an exact configured proxy identity maps to its existing
+          Omnigent account before falling back to the same cookie/Bearer
+          validation used when the overlay is disabled.
 
         :param request: The incoming HTTP request or WebSocket
             handshake (both are ``HTTPConnection``).
         :returns: Authenticated user ID, or ``None`` (→ 401).
         """
-        if self._source in ("oidc", "accounts"):
+        if self._source == "accounts":
+            if self._trusted_header_name is not None:
+                proxy_identity = request.headers.get(self._trusted_header_name)
+                if proxy_identity is not None:
+                    mapped_user = self._trusted_header_map.get(proxy_identity)
+                    if mapped_user is not None:
+                        return mapped_user
+            return self._check_cookie(request)
+        if self._source == "oidc":
             return self._check_cookie(request)
         return self._check_header(request)
 
@@ -737,6 +894,16 @@ def create_auth_provider() -> AuthProvider:
     (``OMNIGENT_AUTH_ENABLED`` is the opt-in gate: header is the
     shipped default, so the var is an enable switch, not a kill switch.)
 
+    The optional trusted-header overlay is enabled only in accounts mode
+    by setting both ``OMNIGENT_AUTH_TRUSTED_HEADER`` and
+    ``OMNIGENT_AUTH_TRUSTED_HEADER_MAP``. The latter must be a JSON object
+    mapping exact external identities to existing Omnigent user IDs. A
+    configured target is checked against the accounts store during app
+    construction; no user is created or migrated by this feature. Configure
+    this only behind an ingress that strips client-supplied copies of the
+    identity header. For Tailscale Serve, keep the backend loopback-only and
+    do not use Funnel.
+
     Validates the source's required env vars at startup (fail
     loud) — OIDC fetches the discovery document, accounts decodes
     the cookie secret.
@@ -750,6 +917,8 @@ def create_auth_provider() -> AuthProvider:
         raise RuntimeError(
             f"Unknown OMNIGENT_AUTH_PROVIDER={source!r}. Valid: 'header', 'oidc', 'accounts'"
         )
+
+    trusted_header_name, trusted_header_map = resolve_auth_trusted_header()
 
     oidc_config: OIDCConfig | None = None
     accounts_config: AccountsConfig | None = None
@@ -771,6 +940,8 @@ def create_auth_provider() -> AuthProvider:
         source=source,
         oidc_config=oidc_config,
         accounts_config=accounts_config,
+        trusted_header_name=trusted_header_name,
+        trusted_header_map=trusted_header_map or None,
     )
 
 

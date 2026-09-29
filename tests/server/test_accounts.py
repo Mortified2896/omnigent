@@ -66,6 +66,8 @@ def _clear_ambient_oidc_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     set it explicitly *after* this fixture runs.
     """
     monkeypatch.delenv("OMNIGENT_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("OMNIGENT_AUTH_TRUSTED_HEADER", raising=False)
+    monkeypatch.delenv("OMNIGENT_AUTH_TRUSTED_HEADER_MAP", raising=False)
 
 
 # ── Password helper (unit) ────────────────────────────────────────
@@ -349,6 +351,141 @@ def test_accounts_source_accepts_bearer_token_for_cli() -> None:
     request = _FakeReq(headers={"Authorization": f"Bearer {token}"})
 
     assert provider.get_user_id(request) == "admin"
+
+
+def test_trusted_header_overlay_maps_exact_identity_to_existing_user() -> None:
+    """A configured proxy identity resolves to the existing account ID."""
+    provider = UnifiedAuthProvider(
+        source="accounts",
+        accounts_config=_make_accounts_config(),
+        trusted_header_name="Tailscale-User-Login",
+        trusted_header_map={"Mortified2896@github": "admin"},
+    )
+
+    request = _FakeReq(headers={"Tailscale-User-Login": "Mortified2896@github"})
+
+    assert provider.get_user_id(request) == "admin"
+    assert provider.login_url == "/login"
+
+
+def test_trusted_header_overlay_is_exact_and_falls_through_to_accounts_auth() -> None:
+    """Unmapped values do not become users; valid Bearers still work unchanged."""
+    from omnigent.server.oidc import mint_session_cookie
+
+    provider = UnifiedAuthProvider(
+        source="accounts",
+        accounts_config=_make_accounts_config(),
+        trusted_header_name="Tailscale-User-Login",
+        trusted_header_map={"Mortified2896@github": "admin"},
+    )
+    unknown = _FakeReq(headers={"Tailscale-User-Login": "someone-else@github"})
+    case_mismatch = _FakeReq(headers={"Tailscale-User-Login": "mortified2896@github"})
+    assert provider.get_user_id(unknown) is None
+    assert provider.get_user_id(case_mismatch) is None
+
+    bearer = mint_session_cookie(
+        user_id="admin", cookie_secret=_TEST_COOKIE_SECRET, ttl_hours=8, provider="accounts"
+    )
+    bearer_request = _FakeReq(
+        headers={
+            "Authorization": f"Bearer {bearer}",
+            "Tailscale-User-Login": "someone-else@github",
+        }
+    )
+    assert provider.get_user_id(bearer_request) == "admin"
+
+
+def test_trusted_header_overlay_keeps_cookie_authentication() -> None:
+    """The accounts cookie remains a fallback when the proxy header is absent."""
+    from omnigent.server.oidc import mint_session_cookie
+
+    provider = UnifiedAuthProvider(
+        source="accounts",
+        accounts_config=_make_accounts_config(),
+        trusted_header_name="Tailscale-User-Login",
+        trusted_header_map={"Mortified2896@github": "admin"},
+    )
+    cookie = mint_session_cookie(
+        user_id="admin", cookie_secret=_TEST_COOKIE_SECRET, ttl_hours=8, provider="accounts"
+    )
+
+    request = _FakeReq(cookies={provider._accounts_config.session_cookie_name: cookie})
+
+    assert provider.get_user_id(request) == "admin"
+
+
+def _set_accounts_factory_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_COOKIE_SECRET", _TEST_COOKIE_SECRET.hex())
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", "http://localhost:8000")
+
+
+def test_trusted_header_config_is_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_accounts_factory_env(monkeypatch)
+
+    provider = create_auth_provider()
+
+    assert isinstance(provider, UnifiedAuthProvider)
+    assert provider._trusted_header_name is None
+    assert provider._trusted_header_map == {}
+
+
+def test_trusted_header_factory_parses_explicit_json_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_accounts_factory_env(monkeypatch)
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER", "Tailscale-User-Login")
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER_MAP", '{"Mortified2896@github":"admin"}')
+
+    provider = create_auth_provider()
+
+    assert isinstance(provider, UnifiedAuthProvider)
+    assert (
+        provider.get_user_id(_FakeReq(headers={"Tailscale-User-Login": "Mortified2896@github"}))
+        == "admin"
+    )
+
+
+@pytest.mark.parametrize(
+    ("header_name", "identity_map"),
+    [
+        ("Tailscale-User-Login", "not-json"),
+        ("Tailscale-User-Login", "[]"),
+        ("Tailscale-User-Login", '{"x":"admin","x":"other"}'),
+        ("Tailscale-User-Login", '{"x":1}'),
+        ("Tailscale-User-Login", '{"x":"local"}'),
+        ("Tailscale-User-Login", '{"x":"__public__"}'),
+        ("Tailscale-User-Login", '{"local":"admin"}'),
+        ("Tailscale-User-Login", "{}"),
+    ],
+)
+def test_trusted_header_factory_rejects_malformed_or_reserved_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    header_name: str,
+    identity_map: str,
+) -> None:
+    _set_accounts_factory_env(monkeypatch)
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER", header_name)
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER_MAP", identity_map)
+
+    with pytest.raises(RuntimeError, match=r"trusted-header|JSON object"):
+        create_auth_provider()
+
+
+def test_trusted_header_factory_rejects_incomplete_or_non_accounts_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_accounts_factory_env(monkeypatch)
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER", "Tailscale-User-Login")
+    with pytest.raises(RuntimeError, match="configured together"):
+        create_auth_provider()
+
+    monkeypatch.setenv("OMNIGENT_AUTH_TRUSTED_HEADER_MAP", '{"external":"admin"}')
+    monkeypatch.setenv("OMNIGENT_AUTH_PROVIDER", "header")
+    with pytest.raises(RuntimeError, match="only with OMNIGENT_AUTH_PROVIDER=accounts"):
+        create_auth_provider()
 
 
 def test_accounts_source_login_url_points_at_spa() -> None:

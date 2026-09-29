@@ -305,6 +305,10 @@ class ConversationNotFoundError(Exception):
     """
 
 
+class ConversationBusyError(Exception):
+    """Raised when a caller requires an idle session but a turn is active."""
+
+
 class ConversationAlreadyExistsError(Exception):
     """Raised when a caller-supplied conversation id is already in use."""
 
@@ -879,6 +883,9 @@ class ConversationStore(ABC):
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
         reported_model: str | None = None,
+        _unset_reported_model: bool = False,
+        labels: dict[str, str] | None = None,
+        require_idle: bool = False,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
@@ -888,9 +895,13 @@ class ConversationStore(ABC):
         and ``harness_override``,
         ``None`` means "leave unchanged". To explicitly clear them
         back to ``None``, pass
-        the matching ``_unset_*`` flag. ``reported_model`` (the model
-        the harness last reported, verbatim) has no ``_unset`` variant:
-        reports only ever move forward.
+        the matching ``_unset_*`` flag. ``_unset_reported_model`` is used
+        with a server-confirmed route change so the previous turn's report
+        is not shown as evidence for the next route. ``labels`` upserts
+        guardrail metadata in the same transaction.
+
+        :param require_idle: Reject running or waiting sessions while holding
+            the conversation lock.
 
         :param conversation_id: Unique conversation identifier,
             e.g. ``"conv_abc123"``.
