@@ -2973,6 +2973,7 @@ async def _sync_model_change(
     *,
     session_id: str,
     forwarder_state: _CodexForwarderState,
+    force_report: bool = False,
 ) -> None:
     """
     Mirror a Codex TUI ``/model`` switch to Omnigent (web picker + cost gate).
@@ -2982,22 +2983,27 @@ async def _sync_model_change(
     truth for codex — see ``read_codex_config_model``) at subscription and at
     each ``turn/started``, and also by ``thread/settings/updated`` when Codex
     emits one. When that differs from the last-mirrored ``posted_model``
-    baseline, POST an
-    ``external_model_change`` event so the Omnigent server persists
-    ``conv.model_override`` — which keeps the web model dropdown in sync and
-    lets the cost-budget policy re-evaluate against the new model. Codex
-    model ids are stable per model (unlike Claude's per-turn concrete id),
-    so the raw id is posted as-is. Best-effort: a failed post leaves the
-    baseline unchanged so the next settings update retries.
+    baseline, POST an ``external_model_change`` event so the Omnigent server
+    persists ``conv.model_override`` — which keeps the web model dropdown in
+    sync and lets the cost-budget policy re-evaluate against the new model.
+    ``force_report`` reasserts the model at turn start even when the local
+    baseline matches: an advisor route can clear the previous server report
+    while leaving Codex on the same model, and the response attribution needs
+    a fresh report for that turn. Codex model ids are stable per model
+    (unlike Claude's per-turn concrete id), so the raw id is posted as-is.
+    Best-effort: a failed post leaves the baseline unchanged so the next
+    settings update retries.
 
     :param client: HTTP client for Omnigent event posts.
     :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
     :param forwarder_state: Mutable forwarder state carrying the current
         model and the last-mirrored baseline.
+    :param force_report: Whether to reassert an unchanged model to refresh
+        server-side per-response attribution before a new turn.
     :returns: None.
     """
     model = forwarder_state.model
-    if not model or model == forwarder_state.posted_model:
+    if not model or (model == forwarder_state.posted_model and not force_report):
         return
     response = await _post_session_event(
         client,
@@ -3184,7 +3190,10 @@ async def _maybe_handle_turn_event(
             _refresh_model_from_config(bridge_dir, forwarder_state)
             _refresh_developer_instructions_from_config(bridge_dir, forwarder_state)
             await _sync_model_change(
-                client, session_id=session_id, forwarder_state=forwarder_state
+                client,
+                session_id=session_id,
+                forwarder_state=forwarder_state,
+                force_report=True,
             )
             _start_codex_turn_span(session_id, params, forwarder_state)
         return True
