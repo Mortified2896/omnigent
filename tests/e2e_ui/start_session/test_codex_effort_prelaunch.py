@@ -1,4 +1,4 @@
-"""E2E (hermetic): the new-session Codex effort menu omits Default.
+"""E2E (hermetic): new-session Codex model and effort defaults.
 
 The inline new-session effort menu is driven by the selected Codex model's
 live ``supportedReasoningEfforts`` catalog. It must keep catalog-specific
@@ -80,6 +80,88 @@ def test_new_codex_session_effort_omits_default_and_keeps_catalog_levels(
     """
     base_url, session_id = seeded_session
     _run_in_fresh_loop(_drive_codex_effort_prelaunch(base_url, session_id))
+
+
+def test_fresh_codex_session_defaults_to_gpt6_luna_max(
+    seeded_session: tuple[str, str],
+) -> None:
+    """A fresh Codex composer selects GPT-6-Luna Max and submits both picks."""
+    base_url, session_id = seeded_session
+    _run_in_fresh_loop(_drive_fresh_codex_luna_max(base_url, session_id))
+
+
+async def _drive_fresh_codex_luna_max(base_url: str, session_id: str) -> None:
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page(viewport={"width": 1280, "height": 900})
+        try:
+            create_bodies: list[dict[str, Any]] = []
+            await _register_common_routes(
+                page,
+                created_session_id=session_id,
+                create_bodies=create_bodies,
+                agents_body=_codex_native_agents_body(),
+            )
+
+            async def handle_agent_scan(route: Route) -> None:
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"data": []}),
+                )
+
+            async def handle_model_options(route: Route) -> None:
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "models": [
+                                {
+                                    "id": "codex/gpt-6-luna",
+                                    "displayName": "GPT-6-Luna",
+                                    "accessLane": "omniroute",
+                                    "groupLabel": "OmniRoute",
+                                    "supportedReasoningEfforts": [
+                                        {"reasoningEffort": "low", "description": "Low"},
+                                        {"reasoningEffort": "max", "description": "Max"},
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                )
+
+            await page.route(re.compile(r"/v1/sessions\?.*kind=any"), handle_agent_scan)
+            await page.route(
+                f"**/v1/hosts/{_HOST_ID}/harnesses/codex-native/model-options",
+                handle_model_options,
+            )
+            await page.add_init_script(
+                f"""window.localStorage.setItem(
+                    "omnigent:recent-workspaces",
+                    JSON.stringify({{ {_HOST_ID}: ["/work/repo"] }})
+                );"""
+            )
+            await page.goto(f"{base_url}/")
+            await page.get_by_test_id("new-chat-landing-input").wait_for(
+                state="visible", timeout=30_000
+            )
+            model = page.get_by_test_id("new-chat-landing-inline-model")
+            effort = page.get_by_test_id("new-chat-landing-inline-effort")
+            await expect(model).to_contain_text("GPT-6-Luna")
+            await expect(effort).to_contain_text("Max")
+
+            await page.get_by_test_id("new-chat-landing-input").fill("start a fresh Codex task")
+            await page.get_by_test_id("new-chat-landing-submit").click()
+            await _wait_until(lambda: len(create_bodies) == 1)
+            body = create_bodies[0]
+            assert body["agent_id"] == "ag_codex_e2e", body
+            assert body.get("model_override") == "codex/gpt-6-luna", body
+            assert body.get("reasoning_effort") == "max", body
+            assert (body.get("labels") or {}).get("omnigent.access_lane") == "omniroute", body
+        finally:
+            await browser.close()
 
 
 async def _drive_codex_effort_prelaunch(base_url: str, session_id: str) -> None:

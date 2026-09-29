@@ -370,6 +370,21 @@ const O3_ROUTING_PROPOSAL_LABEL_KEY = "o3.routing.proposal_id";
 const O3_ROUTING_MODEL_ID = "__omniroute_o3__";
 const NATIVE_ROUTING_MODEL_ID = "__omnigent_smart_routing__";
 type CodexAccessLane = NonNullable<NativeModelOption["accessLane"]>;
+
+const CODEX_STANDARD_MODEL_ID = "codex/gpt-6-luna";
+const CODEX_STANDARD_REASONING_EFFORT = "max";
+
+function standardCodexModelOption(
+  options: readonly NativeModelOption[],
+): NativeModelOption | undefined {
+  const lunaOptions = options.filter(
+    (option) =>
+      option.id === CODEX_STANDARD_MODEL_ID &&
+      codexEffortLevelsForModel([option], option.id).includes(CODEX_STANDARD_REASONING_EFFORT),
+  );
+  return lunaOptions.find((option) => option.isDefault) ?? lunaOptions[0];
+}
+
 function codexSelectionIdentity(model: string, accessLane: CodexAccessLane | null): string {
   return modelOptionSelectionIdentity({ id: model, accessLane: accessLane ?? undefined });
 }
@@ -2854,6 +2869,29 @@ export function NewChatLandingScreen() {
       setPickedEffort("");
     }
   }, [selectedNativeHarness, hostCodexModelsLoading, codexEffortLevels, pickedEffort]);
+  // Apply Luna's standard Max effort only after the selected model has made
+  // that level part of the mounted Select options. Seeding model and effort in
+  // one effect can briefly render a Max value without a matching SelectItem;
+  // Radix clears that value and emits onValueChange("") during the catalog
+  // handoff.
+  useEffect(() => {
+    if (
+      selectedNativeHarness !== "codex-native" ||
+      hostCodexModelsLoading ||
+      selectedCodexOption?.id !== CODEX_STANDARD_MODEL_ID ||
+      pickedEffort ||
+      !codexEffortLevels.includes(CODEX_STANDARD_REASONING_EFFORT)
+    ) {
+      return;
+    }
+    setPickedEffort(CODEX_STANDARD_REASONING_EFFORT);
+  }, [
+    selectedNativeHarness,
+    hostCodexModelsLoading,
+    selectedCodexOption?.id,
+    pickedEffort,
+    codexEffortLevels,
+  ]);
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
   // The selected native harness, used to persist/seed its option knobs (mode /
   // model / effort), which are harness-specific. null for non-native agents,
@@ -3052,6 +3090,12 @@ export function NewChatLandingScreen() {
     const storedRoutingOn =
       stored.routingPolicy === "native" ||
       (stored.routingPolicy === undefined && stored.routing === "on");
+    const storedAccessLane =
+      stored.accessLane === "omniroute" ||
+      stored.accessLane === "codex-direct" ||
+      stored.accessLane === "glm-direct"
+        ? stored.accessLane
+        : null;
     if (selectedNativeHarness === "pi-native") {
       setPickedModel(
         stored.model != null && piModelOptions.some((model) => model.id === stored.model)
@@ -3088,25 +3132,28 @@ export function NewChatLandingScreen() {
       // Claude Code before the harness switch).
       const storedCodexOption =
         !storedRoutingOn && selectedNativeHarness === "codex-native" && stored.model != null
-          ? findCodexOption(
-              codexModelOptions,
-              stored.model,
-              stored.accessLane === "omniroute" ||
-                stored.accessLane === "codex-direct" ||
-                stored.accessLane === "glm-direct"
-                ? stored.accessLane
-                : null,
+          ? codexModelOptions.find(
+              (option) =>
+                option.id === stored.model &&
+                (!storedAccessLane || option.accessLane === storedAccessLane),
             )
           : undefined;
-      setPickedCodexModel(storedCodexOption?.id ?? "", storedCodexOption?.accessLane ?? null);
+      const standardOption =
+        !storedRoutingOn && selectedNativeHarness === "codex-native"
+          ? standardCodexModelOption(codexModelOptions)
+          : undefined;
+      const seededCodexOption = storedCodexOption ?? standardOption;
+      const seededEffortLevels = seededCodexOption
+        ? codexEffortLevelsForModel([seededCodexOption], seededCodexOption.id)
+        : [];
+      setPickedCodexModel(seededCodexOption?.id ?? "", seededCodexOption?.accessLane ?? null);
       setPickedEffort(
-        !storedRoutingOn &&
-          stored.effort &&
-          codexEffortLevelsForModel(codexModelOptions, storedCodexOption?.id ?? null).includes(
-            stored.effort,
-          )
+        stored.effort && seededEffortLevels.includes(stored.effort)
           ? stored.effort
-          : "",
+          : seededCodexOption?.id === CODEX_STANDARD_MODEL_ID &&
+              seededEffortLevels.includes(CODEX_STANDARD_REASONING_EFFORT)
+            ? CODEX_STANDARD_REASONING_EFFORT
+            : "",
       );
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));

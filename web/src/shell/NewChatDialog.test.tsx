@@ -1645,6 +1645,48 @@ describe("NewChatLandingScreen", () => {
     expect(screen.queryByText("Minimal")).toBeNull();
   });
 
+  it("starts a fresh Codex chat on GPT-6-Luna Max when the host advertises it", async () => {
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? {
+              data: [
+                {
+                  id: "codex/gpt-6-luna",
+                  displayName: "GPT-6-Luna",
+                  accessLane: "codex-direct" as const,
+                  groupLabel: "Codex Subscription — Direct",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Low" },
+                    { reasoningEffort: "max", description: "Max" },
+                  ],
+                  isDefault: true,
+                },
+              ],
+              isLoading: false,
+              isError: false,
+            }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_luna_max_default" }),
+    } as unknown as Response);
+
+    renderLanding();
+    selectAgent("a2");
+
+    expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("GPT-6-Luna");
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max"),
+    );
+
+    const { body } = await submitAndReadBody();
+    expect(body.model_override).toBe("codex/gpt-6-luna");
+    expect(body.reasoning_effort).toBe("max");
+    expect((body.labels as Record<string, string>)["omnigent.access_lane"]).toBe("codex-direct");
+  });
+
   it("sends the Luna model and Max effort in the launch payload", async () => {
     authenticatedFetchMock.mockResolvedValue({
       ok: true,
