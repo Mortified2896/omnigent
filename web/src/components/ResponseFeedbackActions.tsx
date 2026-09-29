@@ -11,7 +11,8 @@ import {
 } from "@/hooks/useTaskExperiment";
 import { ResponseScoringActions } from "./ResponseScoringActions";
 import { fetchRound, type RoundDto } from "@/lib/modelAdvisorApi";
-import { getCurrentUserId } from "@/lib/identity";
+import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
+import { useSessionScoringPolicy } from "@/hooks/useScoringEligibility";
 
 const FeedbackContext = createContext<{
   sessionId: string;
@@ -124,6 +125,10 @@ function OutcomeEditor({
   ready: boolean;
 }) {
   const mutation = useSaveTaskOutcome(sessionId, responseId);
+  const scoringPolicy = useSessionScoringPolicy(sessionId);
+  const excludedFromScoring =
+    scoringPolicy.data?.score_eligible === false ||
+    scoringPolicy.data?.responses?.[responseId]?.score_eligible === false;
   const outcome = human?.outcome;
   const [comment, setComment] = useState(human?.comment ?? "");
   const [tags, setTags] = useState<string[]>(human?.tags ?? []);
@@ -182,16 +187,20 @@ function OutcomeEditor({
 
       <ResponseScoringActions sessionId={sessionId} responseId={responseId} />
 
+      {(outcome || excludedFromScoring) && (
+        <ModelAttributionDetails
+          responseId={responseId}
+          sessionId={sessionId}
+          hostId={hostId}
+          attribution={human?.model_attribution ?? null}
+        />
+      )}
+
       {outcome && (
         <div
           className="space-y-2 rounded-md border border-border/70 p-2"
           data-testid="human-review-details"
         >
-          <ModelAttributionDetails
-            responseId={responseId}
-            hostId={hostId}
-            attribution={human?.model_attribution ?? null}
-          />
           <p className="text-xs text-muted-foreground">
             Tags and comments are for your review, not scoring-AI input.
           </p>
@@ -307,14 +316,30 @@ function choiceLabel(round: RoundDto, choiceId: string | undefined): string | nu
 
 function ModelAttributionDetails({
   responseId,
+  sessionId,
   hostId,
   attribution,
 }: {
   responseId: string;
+  sessionId: string;
   hostId: string | null;
   attribution: ExperimentEvent["model_attribution"];
 }) {
-  const roundId = attribution?.advisor_round_id ?? null;
+  const attributionQuery = useQuery({
+    queryKey: ["response-model-attribution", sessionId, responseId],
+    queryFn: async () => {
+      const response = await authenticatedFetch(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/response-attribution/${encodeURIComponent(responseId)}`,
+      );
+      if (!response.ok) throw new Error("Could not load response model attribution");
+      return (await response.json()) as NonNullable<ExperimentEvent["model_attribution"]> | null;
+    },
+    enabled: !attribution,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const responseAttribution = attribution ?? attributionQuery.data ?? null;
+  const roundId = responseAttribution?.advisor_round_id ?? null;
   const roundQuery = useQuery({
     queryKey: ["model-advisor-round", getCurrentUserId(), hostId, roundId],
     queryFn: () => fetchRound(hostId!, roundId!),
@@ -346,23 +371,32 @@ function ModelAttributionDetails({
       data-testid="model-attribution"
     >
       <p className="text-xs font-medium">Model and decision</p>
-      {attribution?.actual_model ? (
+      {responseAttribution?.actual_model ? (
         <p className="text-xs">
-          Reported model used: <span className="font-medium">{attribution.actual_model}</span>
+          Reported model used:{" "}
+          <span className="font-medium">{responseAttribution.actual_model}</span>
         </p>
+      ) : responseAttribution?.model_status === "unknown" ? (
+        <p className="text-xs text-muted-foreground">
+          The harness did not report the model used for this response.
+        </p>
+      ) : attributionQuery.isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading response model details…</p>
+      ) : attributionQuery.isError ? (
+        <p className="text-xs text-muted-foreground">Response model details are unavailable.</p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Actual model was not reported by the harness.
+          No execution details were saved for this response.
         </p>
       )}
-      {attribution?.requested_model && (
+      {responseAttribution?.requested_model && (
         <p className="text-xs text-muted-foreground">
-          Configured model: {attribution.requested_model}
+          Configured model: {responseAttribution.requested_model}
         </p>
       )}
-      {attribution?.reasoning_effort && (
+      {responseAttribution?.reasoning_effort && (
         <p className="text-xs text-muted-foreground">
-          Requested reasoning: {attribution.reasoning_effort}
+          Requested reasoning: {responseAttribution.reasoning_effort}
         </p>
       )}
       {armLabel && <p className="text-xs">{armLabel}</p>}

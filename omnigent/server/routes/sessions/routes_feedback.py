@@ -8,9 +8,9 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.response_attribution import list_response_attributions
 from omnigent.server.routes._auth_helpers import get_user_id, require_access_and_level
 from omnigent.server.routes._errors import session_not_found
-from omnigent.server.response_attribution import list_response_attributions
 from omnigent.server.task_experiment import Outcome, list_experiment_events, save_outcome
 from omnigent.server.task_scoring import (
     ExclusionReason,
@@ -119,6 +119,18 @@ def register_feedback_routes(
                 row["model_attribution"] = attributions[row["response_id"]]
         # Human revisions are caller-scoped and visible only to their author.
         return [row for row in rows if row["created_by"] == user]
+
+    @router.get("/sessions/{session_id}/response-attribution/{response_id}")
+    async def get_response_attribution(
+        request: Request, session_id: str, response_id: str
+    ) -> dict | None:
+        await caller(request, session_id, LEVEL_READ)
+        attributions = await asyncio.to_thread(
+            list_response_attributions,
+            conversation_store,
+            session_id,
+        )
+        return attributions.get(response_id)
 
     @router.put("/sessions/{session_id}/task-outcomes/{response_id}")
     async def put_outcome(
