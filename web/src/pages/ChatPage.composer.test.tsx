@@ -264,7 +264,7 @@ describe("Model Advisor in an existing chat", () => {
     fireEvent.click(screen.getByTestId("chat-model-advisor-toggle"));
     fireEvent.change(textarea(), { target: { value: "Continue" } });
     fireEvent.submit(textarea().closest("form")!);
-    fireEvent.click(await screen.findByRole("button", { name: "Get recommendation" }));
+    expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Run selected model" }));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("Continue", undefined));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

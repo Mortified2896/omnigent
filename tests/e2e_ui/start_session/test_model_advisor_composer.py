@@ -31,8 +31,8 @@ _CATALOG = {
             "display_name": "GPT-5.5",
             "reasoning_effort": "medium",
             "model_ids": ["gpt-5.5"],
-            "access_lanes": ["codex-direct"],
-            "default_access_lanes": ["codex-direct"],
+            "access_lanes": ["omniroute"],
+            "default_access_lanes": ["omniroute"],
             "available": True,
         },
         {
@@ -299,6 +299,7 @@ async def _drive_composer_proposal(
             await expect(
                 page.get_by_text("The GLM checkpoint is a good comparison.")
             ).to_be_visible()
+            await expect(page.get_by_role("button", name="Get recommendation", exact=True)).to_have_count(0)
             assert create_bodies == [], "Normal Send bypassed the enabled Advisor"
             assert len(round_posts) == 1
             assert round_posts[0]["human_choice_id"] == _OPENAI_CHOICE_ID

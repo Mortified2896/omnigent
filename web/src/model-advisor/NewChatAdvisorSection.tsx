@@ -278,8 +278,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               (lane) =>
                 (humanPick.accessLane === null || lane === humanPick.accessLane) &&
                 option.access_lanes.includes(lane),
-            )) &&
-        (humanPick.accessLane === null || option.access_lanes.includes(humanPick.accessLane)),
+            )),
     );
     return matches.length === 1 ? matches[0].choice_id : null;
   }, [humanPick, options]);
@@ -599,6 +598,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     }),
     [catalogError, editor.draft, handlePropose, reviewVisible, round.busy],
   );
+  // Follow-up Send has already requested review. Start it once after its
+  // saved settings load; there is no second submission button in the dialog.
+  const submissionFeedbackRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!continueSessionId && (round.busy || reviewVisible || round.error)) {
+      submissionFeedbackRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    }
+  }, [continueSessionId, round.busy, reviewVisible, round.error]);
+  const autoSubmittedIdentity = useRef<string | null>(null);
+  useEffect(() => {
+    if (!continueSessionId || !editor.draft || validation !== null || catalogError !== null) return;
+    const identity = submissionIdentity.current;
+    if (!identity || autoSubmittedIdentity.current === identity) return;
+    autoSubmittedIdentity.current = identity;
+    handlePropose();
+  }, [continueSessionId, editor.draft, validation, catalogError, handlePropose]);
   if (hostId === null) return null;
   if (catalogError !== null)
     return (
@@ -699,15 +714,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           onSave={handleSave}
         />
         {editor.draft?.enabled ? (
-          <div className="space-y-2">
-            <button
-              type="button"
-              className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
-              disabled={round.busy || validation !== null}
-              onClick={handlePropose}
-            >
-              {round.busy ? "Preparing recommendation…" : "Get recommendation"}
-            </button>
+          <div className="space-y-2" ref={submissionFeedbackRef}>
+            {round.busy ? <p role="status">Preparing recommendation…</p> : null}
             {validation ? (
               <p role="status" className="text-sm text-muted-foreground">
                 {validation}
