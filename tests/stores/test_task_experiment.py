@@ -3,16 +3,16 @@
 import pytest
 
 from omnigent.entities import MessageData, NewConversationItem
+from omnigent.server.response_attribution import (
+    list_response_attributions,
+    response_attribution_item,
+)
 from omnigent.server.task_experiment import (
     experiment_item,
     first_attempt_success,
     list_experiment_events,
     normalize_tags,
     save_outcome,
-)
-from omnigent.server.response_attribution import (
-    list_response_attributions,
-    response_attribution_item,
 )
 from omnigent.stores.conversation_store import InvalidFeedbackTargetError
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
@@ -142,3 +142,40 @@ def test_response_attribution_is_durable_and_attached_to_human_outcome(conversat
         "advisor_round_id": "round_123",
     }
     assert outcome["model_attribution"] == attribution
+
+
+def test_advisor_decision_is_bound_once_even_when_response_fails(conversation_store):
+    from omnigent.server.response_attribution import bind_response_advisor_round
+
+    store = conversation_store
+    conv = store.create_conversation()
+    assert bind_response_advisor_round(store, conv.id, "failed_turn", "round_1") == "round_1"
+    # No completion attribution is emitted for this failed response.
+    reopened = SqlAlchemyConversationStore(store.storage_location)
+    assert bind_response_advisor_round(reopened, conv.id, "off_turn", "round_1") is None
+    assert bind_response_advisor_round(reopened, conv.id, "failed_turn", "round_1") == "round_1"
+    # Replayed events cannot retrofit a newer decision onto an ordinary turn.
+    assert bind_response_advisor_round(reopened, conv.id, "off_turn", "round_2") is None
+    assert bind_response_advisor_round(reopened, conv.id, "on_again", "round_2") == "round_2"
+
+
+def test_existing_response_attribution_consumes_legacy_advisor_round(conversation_store):
+    from omnigent.server.response_attribution import bind_response_advisor_round
+
+    store = conversation_store
+    conv = store.create_conversation()
+    store.append(
+        conv.id,
+        [
+            response_attribution_item(
+                conversation_id=conv.id,
+                response_id="old_turn",
+                requested_model="gpt-6-luna",
+                actual_model="gpt-6-luna",
+                model_source="session_reported",
+                advisor_round_id="old_round",
+            )
+        ],
+    )
+    assert bind_response_advisor_round(store, conv.id, "new_off_turn", "old_round") is None
+    assert bind_response_advisor_round(store, conv.id, "old_turn", "old_round") == "old_round"

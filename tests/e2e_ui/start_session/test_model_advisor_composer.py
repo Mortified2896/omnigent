@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 from playwright.async_api import Route, async_playwright, expect
 
 from tests.e2e_ui.start_session.test_start_session import (
@@ -30,8 +31,8 @@ _CATALOG = {
             "display_name": "GPT-5.5",
             "reasoning_effort": "medium",
             "model_ids": ["gpt-5.5"],
-            "access_lanes": ["codex-direct"],
-            "default_access_lanes": ["codex-direct"],
+            "access_lanes": ["omniroute"],
+            "default_access_lanes": ["omniroute"],
             "available": True,
         },
         {
@@ -73,15 +74,18 @@ _SAVED_PREFERENCES = {
 }
 
 
+@pytest.mark.parametrize("submit_method", ["button", "enter"])
 def test_model_advisor_composer_pick_becomes_human_proposal(
-    seeded_session: tuple[str, str], tmp_path: Path
+    seeded_session: tuple[str, str], tmp_path: Path, submit_method: str
 ) -> None:
     """Keep the composer selectors visible and submit their logical proposal."""
     base_url, session_id = seeded_session
-    _run_in_fresh_loop(_drive_composer_proposal(base_url, session_id, tmp_path))
+    _run_in_fresh_loop(_drive_composer_proposal(base_url, session_id, tmp_path, submit_method))
 
 
-async def _drive_composer_proposal(base_url: str, session_id: str, tmp_path: Path) -> None:
+async def _drive_composer_proposal(
+    base_url: str, session_id: str, tmp_path: Path, submit_method: str
+) -> None:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
         context = await browser.new_context(
@@ -93,10 +97,11 @@ async def _drive_composer_proposal(base_url: str, session_id: str, tmp_path: Pat
         page = await context.new_page()
         try:
             round_posts: list[dict[str, Any]] = []
+            create_bodies: list[dict[str, Any]] = []
             await _register_common_routes(
                 page,
                 created_session_id=session_id,
-                create_bodies=[],
+                create_bodies=create_bodies,
                 agents_body=_codex_native_agents_body(),
             )
 
@@ -252,7 +257,9 @@ async def _drive_composer_proposal(base_url: str, session_id: str, tmp_path: Pat
             assert abs(agent_box["y"] - model_box["y"]) < 3
             assert abs(gear_box["y"] - model_box["y"]) < 3
             assert abs(model_box["y"] - effort_box["y"]) < 2
-            assert model_box["width"] <= 112
+            assert model_box["x"] >= 0
+            assert effort_box["x"] + effort_box["width"] <= 390
+            assert model_box["x"] + model_box["width"] <= effort_box["x"] + 1
             advisor_picker = page.get_by_test_id("model-advisor-advisor-choice")
             advisor_box = await advisor_picker.bounding_box()
             assert advisor_box is not None and model_box["y"] < advisor_box["y"]
@@ -285,10 +292,15 @@ async def _drive_composer_proposal(base_url: str, session_id: str, tmp_path: Pat
             await page.screenshot(path=str(tmp_path / "model-advisor-composer-desktop.png"))
             await page.set_viewport_size({"width": 390, "height": 844})
             await page.get_by_test_id("new-chat-landing-input").fill("Compare the selected models")
-            await page.get_by_role("button", name="Get recommendation").click()
+            if submit_method == "enter":
+                await page.get_by_test_id("new-chat-landing-input").press("Enter")
+            else:
+                await page.get_by_test_id("new-chat-landing-submit").click()
             await expect(
                 page.get_by_text("The GLM checkpoint is a good comparison.")
             ).to_be_visible()
+            await expect(page.get_by_role("button", name="Get recommendation", exact=True)).to_have_count(0)
+            assert create_bodies == [], "Normal Send bypassed the enabled Advisor"
             assert len(round_posts) == 1
             assert round_posts[0]["human_choice_id"] == _OPENAI_CHOICE_ID
             assert round_posts[0]["preferences"]["schema_version"] == 3

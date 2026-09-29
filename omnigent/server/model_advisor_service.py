@@ -61,6 +61,7 @@ from omnigent.model_advisor_workflow import (
     freeze_round,
     stable_candidate_id,
 )
+from omnigent.models.codex_model_vocabulary import native_codex_model_slug
 from omnigent.models.model_fallbacks import advisor_openai_route_aliases
 from omnigent.server.host_registry import HostRegistry
 from omnigent.stores.conversation_store import (
@@ -345,7 +346,9 @@ def build_host_catalog(models: list[dict[str, Any]]) -> HostCatalog:
                     ):
                         current.append(route)
                     logical_display_names.setdefault(choice.choice_id, display_name)
-                    logical_aliases.setdefault(choice.choice_id, set()).add(model_id.strip())
+                    logical_aliases.setdefault(choice.choice_id, set()).update(
+                        (model_id.strip(), route.wire_model)
+                    )
                     logical_lanes.setdefault(choice.choice_id, set()).add(candidate.lane_id)
                     if is_default:
                         logical_default_lanes.setdefault(choice.choice_id, set()).add(
@@ -442,7 +445,13 @@ def _logical_choice_for_row(
         choice=choice,
         transport=transport,
         route_id=lane,
-        wire_model=model_id,
+        # A direct Codex settings update accepts the native slug. Keep the
+        # qualified alias only for transports that actually require it.
+        wire_model=(
+            native_codex_model_slug(model_id)
+            if provider == "openai" and transport == "direct"
+            else model_id
+        ),
         wire_effort=effort,
         entitlement_kind="chatgpt_plan" if provider == "openai" else "glm_plan",
         entitlement_key=entitlement_key,

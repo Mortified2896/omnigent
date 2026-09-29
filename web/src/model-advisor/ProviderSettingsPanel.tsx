@@ -23,6 +23,7 @@ export interface ProviderSettingsPanelProps {
   options: readonly LogicalOption[];
   dirty: boolean;
   busy?: boolean;
+  enabledLocked?: boolean;
   error?: string | null;
   onChange: (preferences: ProviderPreferences) => void;
   onSave: () => void;
@@ -38,7 +39,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
         role="switch"
         aria-label="Compare my choice with the advisor"
         checked={value.enabled}
-        disabled={busy}
+        disabled={busy || props.enabledLocked}
         onChange={(event) => onChange({ ...value, enabled: event.currentTarget.checked })}
       />
       <span>{value.enabled ? "ON" : "OFF"}</span>

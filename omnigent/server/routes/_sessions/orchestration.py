@@ -59,7 +59,6 @@ from omnigent.host.frames import (
 )
 from omnigent.llms.context_window import resolve_effective_context_window
 from omnigent.models.model_metadata import concrete_reported_model
-from omnigent.server.response_attribution import response_attribution_item
 from omnigent.native.native_coding_agents import (
     native_coding_agent_for_agent_name,
     native_coding_agent_for_harness,
@@ -124,6 +123,10 @@ from omnigent.server.managed_hosts import (
     RepoWorkspace,
     host_resume_supported,
     host_sandbox_is_running,
+)
+from omnigent.server.response_attribution import (
+    bind_response_advisor_round,
+    response_attribution_item,
 )
 from omnigent.server.routes._auth_helpers import (
     attribution_user as _attribution_user,
@@ -6442,6 +6445,24 @@ async def _relay_runner_stream_once(
                         _rid = resp_obj.get("id")
                         if isinstance(_rid, str) and _rid:
                             current_response_id = _rid
+                            _advisor_conv = await asyncio.to_thread(
+                                conversation_store.get_conversation, session_id
+                            )
+                            # Native terminal scaffolding emits a synthetic
+                            # response before the native harness emits its real
+                            # response ID. Only the native status path owns that
+                            # turn's Advisor decision and model attribution.
+                            if (
+                                _advisor_conv is not None
+                                and _native_coding_agent_for_session(_advisor_conv) is None
+                            ):
+                                await asyncio.to_thread(
+                                    bind_response_advisor_round,
+                                    conversation_store,
+                                    session_id,
+                                    _rid,
+                                    (_advisor_conv.labels or {}).get(ADVISOR_ROUND_LABEL_KEY),
+                                )
                         _model = resp_obj.get("model")
                         if isinstance(_model, str) and _model:
                             current_model = _model
@@ -6695,8 +6716,7 @@ async def _relay_runner_stream_once(
                         _response = event.get("response")
                         _response_id = (
                             _response.get("id")
-                            if isinstance(_response, dict)
-                            and isinstance(_response.get("id"), str)
+                            if isinstance(_response, dict) and isinstance(_response.get("id"), str)
                             else current_response_id
                         )
                         _resp_usage = (
@@ -6730,38 +6750,46 @@ async def _relay_runner_stream_once(
                                         conversation_store.get_conversation,
                                         session_id,
                                     )
-                                    _labels = _conv.labels or {} if _conv is not None else {}
-                                    _attribution_item = response_attribution_item(
-                                        conversation_id=session_id,
-                                        response_id=_response_id,
-                                        requested_model=(
-                                            _conv.model_override if _conv is not None else None
-                                        ),
-                                        actual_model=_turn_model,
-                                        model_source=(
-                                            "response_usage" if _turn_model else "unknown"
-                                        ),
-                                        reasoning_effort=(
-                                            _conv.reasoning_effort if _conv is not None else None
-                                        ),
-                                        access_lane=(
-                                            _labels.get("omnigent.access_lane")
-                                            if isinstance(_labels.get("omnigent.access_lane"), str)
-                                            else None
-                                        ),
-                                        advisor_round_id=(
-                                            _labels.get(ADVISOR_ROUND_LABEL_KEY)
-                                            if isinstance(
-                                                _labels.get(ADVISOR_ROUND_LABEL_KEY), str
-                                            )
-                                            else None
-                                        ),
-                                    )
-                                    await asyncio.to_thread(
-                                        conversation_store.append,
-                                        session_id,
-                                        [_attribution_item],
-                                    )
+                                    if (
+                                        _conv is not None
+                                        and _native_coding_agent_for_session(_conv) is None
+                                    ):
+                                        _labels = _conv.labels or {} if _conv is not None else {}
+                                        _attribution_item = response_attribution_item(
+                                            conversation_id=session_id,
+                                            response_id=_response_id,
+                                            requested_model=(
+                                                _conv.model_override if _conv is not None else None
+                                            ),
+                                            actual_model=_turn_model,
+                                            model_source=(
+                                                "response_usage" if _turn_model else "unknown"
+                                            ),
+                                            reasoning_effort=(
+                                                _conv.reasoning_effort
+                                                if _conv is not None
+                                                else None
+                                            ),
+                                            access_lane=(
+                                                _labels.get("omnigent.access_lane")
+                                                if isinstance(
+                                                    _labels.get("omnigent.access_lane"), str
+                                                )
+                                                else None
+                                            ),
+                                            advisor_round_id=await asyncio.to_thread(
+                                                bind_response_advisor_round,
+                                                conversation_store,
+                                                session_id,
+                                                _response_id,
+                                                _labels.get(ADVISOR_ROUND_LABEL_KEY),
+                                            ),
+                                        )
+                                        await asyncio.to_thread(
+                                            conversation_store.append,
+                                            session_id,
+                                            [_attribution_item],
+                                        )
                                 except Exception:
                                     _logger.warning(
                                         "Could not persist response model attribution for %s",

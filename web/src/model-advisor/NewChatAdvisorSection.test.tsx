@@ -1,6 +1,23 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createRef } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NewChatAdvisorSection } from "./NewChatAdvisorSection";
+import {
+  NewChatAdvisorSection as AdvisorSection,
+  type AdvisorSubmitHandle,
+} from "./NewChatAdvisorSection";
+
+let composerSubmitRef = createRef<AdvisorSubmitHandle>();
+function NewChatAdvisorSection(props: Parameters<typeof AdvisorSection>[0]) {
+  return <AdvisorSection submitRef={composerSubmitRef} {...props} />;
+}
+function send() {
+  act(() => {
+    composerSubmitRef.current!.submit();
+  });
+}
+beforeEach(() => {
+  composerSubmitRef = createRef<AdvisorSubmitHandle>();
+});
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
@@ -328,9 +345,7 @@ it("does not replace a saved advisor choice missing from the live host catalog",
   expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent(
     "Saved advisor model unavailable",
   );
-  expect(
-    (screen.getByRole("button", { name: "Get recommendation" }) as HTMLButtonElement).disabled,
-  ).toBe(true);
+  expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
 });
 
 it("ignores hydration responses from a host that is no longer selected", async () => {
@@ -392,7 +407,7 @@ it("surfaces a catalog failure as a visible reason", async () => {
 it("reserves a logical round on Get recommendation and shows the review", async () => {
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await waitFor(() => expect(screen.getByLabelText("Review model assignment")).toBeDefined());
   expect(screen.getByText(/Advisor recommendation:/)).toBeDefined();
   expect(screen.getByText(/Hard task, use the stronger logical choice\./)).toBeDefined();
@@ -410,7 +425,7 @@ it("reserves a logical round on Get recommendation and shows the review", async 
 it("does not reserve a round without the composer prompt", async () => {
   mountSection({ task: "   " });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await waitFor(() => expect(screen.getByRole("status")).toBeDefined());
   expect(screen.getByText(/Write the task before asking/)).toBeDefined();
   const posted = api.mock.calls.find(([url]) => url === "/v1/model-advisor/rounds");
@@ -420,10 +435,9 @@ it("does not reserve a round without the composer prompt", async () => {
 it("disables Get recommendation when the composer pick is outside the pool", async () => {
   mountSection({ humanPick: { model: "unknown-model", accessLane: null, effort: "" } });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  const button = screen.getByRole("button", { name: "Get recommendation" }) as HTMLButtonElement;
-  expect(button.disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
   expect(screen.getByText(/Choose an allowed model/)).toBeDefined();
-  fireEvent.click(button);
+  send();
   const posted = api.mock.calls.find(([url]) => url === "/v1/model-advisor/rounds");
   expect(posted).toBeUndefined();
 });
@@ -433,8 +447,7 @@ it("requires the exact lane, model, and reasoning effort", async () => {
     humanPick: { model: OPTION_A.model_id, accessLane: OPTION_A.lane_id, effort: "high" },
   });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  const button = screen.getByRole("button", { name: "Get recommendation" }) as HTMLButtonElement;
-  expect(button.disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
   expect(screen.getByText(/Choose an allowed model/)).toBeDefined();
 });
 
@@ -443,7 +456,7 @@ it("maps the composer Default effort to the host catalog's lane-specific default
     humanPick: { model: "codex/gpt-5.5", accessLane: "codex-direct", effort: "" },
   });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await waitFor(() => expect(screen.getByLabelText("Review model assignment")).toBeDefined());
   const posted = api.mock.calls.find(
     ([url, options]) => url === "/v1/model-advisor/rounds" && options?.method === "POST",
@@ -459,7 +472,7 @@ it("uses the current composer model and reasoning choice when creating each roun
     humanPick: { model: "glm-5.3", accessLane: "glm-direct", effort: "high" },
   });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await waitFor(() => expect(screen.getByLabelText("Review model assignment")).toBeDefined());
 
   let posted = api.mock.calls.find(
@@ -482,11 +495,9 @@ it("uses the current composer model and reasoning choice when creating each roun
     />,
   );
   await waitFor(() =>
-    expect(
-      screen.getByRole("button", { name: "Get recommendation" }).hasAttribute("disabled"),
-    ).toBe(false),
+    expect(screen.queryByLabelText("Review model assignment")).not.toBeInTheDocument(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await waitFor(() =>
     expect(
       api.mock.calls.filter(
@@ -506,7 +517,7 @@ it("confirms the logical assignment and reports the bound session", async () => 
   const onLaunched = vi.fn();
   mountSection({ onLaunched });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await screen.findByLabelText("Review model assignment");
   fireEvent.click(screen.getByRole("button", { name: "Run selected model" }));
   await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
@@ -518,7 +529,7 @@ it("confirms an in-chat round against the same session", async () => {
   const onLaunched = vi.fn();
   mountSection({ continueSessionId: "conv_existing", onLaunched });
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await screen.findByLabelText("Review model assignment");
   fireEvent.click(screen.getByRole("button", { name: "Run selected model" }));
   await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_existing"));
@@ -535,7 +546,7 @@ it("confirms an in-chat round against the same session", async () => {
 it("marks an explicit logical override and still launches", async () => {
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("button", { name: "Get recommendation" }));
+  send();
   await screen.findByLabelText("Review model assignment");
   fireEvent.click(screen.getByRole("checkbox", { name: /Override this assignment/ }));
   const select = screen.getByLabelText("Run instead");
@@ -568,4 +579,74 @@ it("surfaces a save conflict without overwriting the draft", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
   await waitFor(() => expect(screen.getByRole("alert")).toBeDefined());
   expect(screen.getByText(/changed elsewhere/i)).toBeDefined();
+});
+
+it("normal Send is owned by Advisor and cannot bypass a pending review", async () => {
+  const submitRef = createRef<AdvisorSubmitHandle>();
+  mountSection({ submitRef });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  let handled = false;
+  act(() => {
+    handled = submitRef.current!.submit();
+  });
+  expect(handled).toBe(true);
+  await screen.findByText("Hard task, use the stronger logical choice.");
+  act(() => {
+    expect(submitRef.current!.submit()).toBe(true);
+  });
+  expect(
+    api.mock.calls.filter(
+      ([url, init]) => String(url).endsWith("/rounds") && init?.method === "POST",
+    ),
+  ).toHaveLength(1);
+});
+
+it("normal Send falls through only when Advisor is explicitly off", async () => {
+  const submitRef = createRef<AdvisorSubmitHandle>();
+  mountSection({ submitRef });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("switch", { name: "Compare my choice with the advisor" }));
+  act(() => {
+    expect(submitRef.current!.submit()).toBe(false);
+  });
+  expect(api.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+});
+
+it("does not silently send while saved Advisor settings are loading", () => {
+  api.mockImplementation(() => new Promise(() => {}));
+  const submitRef = createRef<AdvisorSubmitHandle>();
+  mountSection({ submitRef });
+  act(() => {
+    expect(submitRef.current!.submit()).toBe(true);
+  });
+  expect(screen.getByText(/Wait for advisor settings/)).toBeInTheDocument();
+});
+
+it("an enabled follow-up uses its composer choice even when saved defaults are off", async () => {
+  prefsDto = { ...prefsDto, logical_preferences: { ...V2_PREFERENCES, enabled: false } };
+  mountSection({ continueSessionId: "existing" });
+  const toggle = await screen.findByRole("switch", { name: "Compare my choice with the advisor" });
+  expect(toggle).toBeChecked();
+  expect(toggle).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
+  await screen.findByLabelText("Review model assignment");
+});
+
+it("resolves an explicit model and effort independently of a stale composer connection", async () => {
+  mountSection({
+    humanPick: {
+      model: "gpt-5.5",
+      effort: "medium",
+      accessLane: "unavailable-previous-connection",
+    },
+  });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  expect(screen.queryByText(/Choose an allowed model/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
+  send();
+  await screen.findByLabelText("Review model assignment");
+  const posted = api.mock.calls.find(
+    ([url, init]) => url === "/v1/model-advisor/rounds" && init?.method === "POST",
+  );
+  expect(JSON.parse(posted![1].body).human_choice_id).toBe(LOGICAL_A.choice_id);
 });

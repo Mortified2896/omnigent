@@ -63,7 +63,10 @@ from omnigent.server.background_session_titles import (
     schedule_background_child_task_summary,
 )
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
-from omnigent.server.response_attribution import response_attribution_item
+from omnigent.server.response_attribution import (
+    bind_response_advisor_round,
+    response_attribution_item,
+)
 from omnigent.server.routes._auth_helpers import (
     attribution_user as _attribution_user,
 )
@@ -1363,6 +1366,18 @@ def register_events_routes(
                 background_tasks=bg_tasks,
                 blocked_on=blocked_on,
             )
+            if (
+                status in {"running", "idle", "failed"}
+                and isinstance(response_id, str)
+                and response_id
+            ):
+                await asyncio.to_thread(
+                    bind_response_advisor_round,
+                    conversation_store,
+                    session_id,
+                    response_id,
+                    (conv.labels or {}).get(ADVISOR_ROUND_LABEL_KEY),
+                )
             if status == "idle" and isinstance(response_id, str) and response_id:
                 try:
                     _labels = conv.labels or {}
@@ -1387,10 +1402,12 @@ def register_events_routes(
                             if isinstance(_labels.get("omnigent.access_lane"), str)
                             else None
                         ),
-                        advisor_round_id=(
-                            _labels.get(ADVISOR_ROUND_LABEL_KEY)
-                            if isinstance(_labels.get(ADVISOR_ROUND_LABEL_KEY), str)
-                            else None
+                        advisor_round_id=await asyncio.to_thread(
+                            bind_response_advisor_round,
+                            conversation_store,
+                            session_id,
+                            response_id,
+                            _labels.get(ADVISOR_ROUND_LABEL_KEY),
                         ),
                     )
                     await asyncio.to_thread(
