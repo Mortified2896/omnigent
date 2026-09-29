@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnigent.model_advisor_binding import encode_transport_binding_label
 from omnigent.model_advisor_provider_policy import LogicalChoice
 from omnigent.runner.app import _codex_native_launch_config
 
@@ -276,18 +277,27 @@ async def test_v2_advisor_binding_is_checked_at_native_launch(
         "fallback": None,
         "reason": "omniroute_preferred",
     }
+    labels = {
+        "omnigent.advisor.round_id": "adviseround-v2",
+        "omnigent.advisor.logical_choice_id": choice.choice_id,
+        "omnigent.advisor.connection_id": "omniroute-codex-oauth",
+        "omnigent.access_lane": "omniroute",
+    }
+    labels.update(
+        encode_transport_binding_label("omnigent.advisor.transport_plan", json.dumps(plan))
+    )
+    labels.update(
+        encode_transport_binding_label("omnigent.advisor.dispatch_route", json.dumps(route))
+    )
+    assert len(json.dumps(plan)) > 256
+    assert len(json.dumps(route)) > 256
+    assert all(len(value) <= 256 for value in labels.values())
+
     snapshot = {
         "workspace": "/tmp/repo",
         "model_override": "gpt-5.5",
         "reasoning_effort": "low",
-        "labels": {
-            "omnigent.advisor.round_id": "adviseround-v2",
-            "omnigent.advisor.logical_choice_id": choice.choice_id,
-            "omnigent.advisor.transport_plan": json.dumps(plan),
-            "omnigent.advisor.dispatch_route": json.dumps(route),
-            "omnigent.advisor.connection_id": "omniroute-codex-oauth",
-            "omnigent.access_lane": "omniroute",
-        },
+        "labels": labels,
     }
 
     cfg = await _run(_Client(_Resp(200, snapshot)))

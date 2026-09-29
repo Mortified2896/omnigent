@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from omnigent.db.utils import get_or_create_engine
 from omnigent.errors import OmnigentError
+from omnigent.model_advisor_binding import decode_transport_binding_label
 from omnigent.model_advisor_provider_policy import LogicalChoice
 from omnigent.model_advisor_repository import AdvisorRepository
 from omnigent.server.auth import AuthProvider
@@ -720,13 +721,17 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
         assert body.labels["omnigent.advisor.logical_choice_id"] == PROVIDER_GLM.choice_id
         assert body.labels["omnigent.access_lane"] == "omniroute"
         assert body.labels["omnigent.advisor.connection_id"] == "omniroute-glm-coding-plan"
-        assert json.loads(body.labels["omnigent.advisor.dispatch_route"])["connection_id"] == (
-            "omniroute-glm-coding-plan"
+        dispatch_route = decode_transport_binding_label(
+            body.labels, "omnigent.advisor.dispatch_route"
         )
-        assert (
-            json.loads(body.labels["omnigent.advisor.transport_plan"])["primary"]["transport"]
-            == "omniroute"
+        transport_plan = decode_transport_binding_label(
+            body.labels, "omnigent.advisor.transport_plan"
         )
+        assert isinstance(dispatch_route, str)
+        assert isinstance(transport_plan, str)
+        assert json.loads(dispatch_route)["connection_id"] == "omniroute-glm-coding-plan"
+        assert json.loads(transport_plan)["primary"]["transport"] == "omniroute"
+        assert all(len(value) <= 256 for value in body.labels.values())
         attempts = confirm.json()["transport_attempts"]
         assert [attempt["phase"] for attempt in attempts] == [
             "advisor",
@@ -768,7 +773,10 @@ def test_provider_grouped_round_updates_the_same_idle_session(db_uri) -> None:
         reply={
             "status": "ok",
             "raw_output": json.dumps(
-                {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "This follow-up needs it."}
+                {
+                    "candidate_id": PROVIDER_OPENAI.choice_id,
+                    "rationale": "This follow-up needs it.",
+                }
             ),
             "latency_ms": 100,
         },

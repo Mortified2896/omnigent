@@ -1173,7 +1173,10 @@ async def _codex_native_launch_config(
         raise RuntimeError(f"Invalid reasoning_effort for Codex session {session_id!r}.")
     codex_web_search_mode = snapshot.get("codex_web_search_mode")
     if codex_web_search_mode is not None and codex_web_search_mode not in {
-        "live", "cached", "indexed", "disabled"
+        "live",
+        "cached",
+        "indexed",
+        "disabled",
     }:
         raise RuntimeError(f"Invalid codex_web_search_mode for session {session_id!r}.")
     external_session_id = snapshot.get("external_session_id")
@@ -1193,6 +1196,7 @@ async def _codex_native_launch_config(
     # Fork directives stamped on a clone at fork time. Only consulted when
     # the clone has no external_session_id of its own yet (see the
     # fork-source branch in _auto_create_codex_terminal); inert otherwise.
+    from omnigent.model_advisor_binding import decode_transport_binding_label
     from omnigent.runner.subagent_routing import routing_class_from_snapshot
     from omnigent.stores.conversation_store import (
         ADVISOR_CONNECTION_LABEL_KEY,
@@ -1241,8 +1245,15 @@ async def _codex_native_launch_config(
         if isinstance(_advisor_round, str) and _advisor_round:
             advisor_round_id = _advisor_round
         raw_logical_choice = labels.get(ADVISOR_LOGICAL_CHOICE_LABEL_KEY)
-        raw_plan = labels.get(ADVISOR_TRANSPORT_PLAN_LABEL_KEY)
-        raw_dispatch_route = labels.get(ADVISOR_DISPATCH_ROUTE_LABEL_KEY)
+        try:
+            raw_plan = decode_transport_binding_label(labels, ADVISOR_TRANSPORT_PLAN_LABEL_KEY)
+            raw_dispatch_route = decode_transport_binding_label(
+                labels, ADVISOR_DISPATCH_ROUTE_LABEL_KEY
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Advisor session {session_id!r} has invalid transport binding JSON."
+            ) from exc
         raw_connection = labels.get(ADVISOR_CONNECTION_LABEL_KEY)
         raw_access_lane = labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
         if raw_access_lane is not None:
