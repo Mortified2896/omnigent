@@ -2640,7 +2640,10 @@ function ComposerImpl({
   const [planModeBusy, setPlanModeBusy] = useState(false);
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
-  const [advisorFlowLocked, setAdvisorFlowLocked] = useState(false);
+  const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
+  // A closing review can report one final busy state during its exit.
+  // Only an open dialog may lock the composer toggle.
+  const advisorFlowLocked = advisorDialogOpen && advisorReviewLocked;
   const [pendingAdvisorSend, setPendingAdvisorSend] = useState<{
     sessionId: string;
     task: string;
