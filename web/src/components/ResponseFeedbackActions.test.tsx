@@ -18,6 +18,7 @@ let scoringPolicy: {
   retention: string | null;
   responses: Record<string, unknown>;
 };
+let advisorRoundAttached: boolean;
 const advisorRound = {
   object: "model_advisor.round",
   round_id: "round-test",
@@ -27,11 +28,11 @@ const advisorRound = {
   failure_reason: null,
   review: {
     round_fingerprint: "fingerprint",
-    human_choice_id: "choice-gpt",
+    human_choice_id: "choice-human",
     advisor_choice_id: "choice-gpt",
-    rationale: "Both selections matched and provide the requested reasoning depth.",
+    rationale: "This task needs the stronger reasoning level for a reliable implementation.",
     assigned_choice_id: "choice-gpt",
-    assigned_arm: "same",
+    assigned_arm: "advisor",
     human_probability_percent: 50,
     overridden: false,
     override_reason: null,
@@ -41,6 +42,12 @@ const advisorRound = {
   decision_context: {
     schema_version: 3,
     qualified_pool: [
+      {
+        choice_id: "choice-human",
+        provider: "glm",
+        model_id: "glm-5.3",
+        reasoning_effort: "low",
+      },
       {
         choice_id: "choice-gpt",
         provider: "openai",
@@ -55,6 +62,7 @@ const advisorRound = {
 beforeEach(() => {
   outcomes = [];
   fail = false;
+  advisorRoundAttached = true;
   scoringPolicy = { score_eligible: true, is_test: false, retention: null, responses: {} };
   api.mockReset();
   api.mockImplementation(async (_url: string, options?: RequestInit) => {
@@ -69,7 +77,7 @@ beforeEach(() => {
         model_source: "response_usage",
         reasoning_effort: "high",
         access_lane: "openai-direct",
-        advisor_round_id: "round-test",
+        advisor_round_id: advisorRoundAttached ? "round-test" : null,
       });
     if (_url.includes("/model-advisor/rounds/")) return Response.json(advisorRound);
     if (_url.includes("/scoring-eligibility/")) {
@@ -196,7 +204,7 @@ it("appends human comment and tag revisions", async () => {
   });
 });
 
-it("shows the model used, advisor agreement, rationale, and response trace key", async () => {
+it("shows the model used, both choices, the assigned model, rationale, and trace key", async () => {
   outcomes = [
     {
       id: "outcome-1",
@@ -218,10 +226,12 @@ it("shows the model used, advisor agreement, rationale, and response trace key",
 
   const details = await screen.findByTestId("model-attribution");
   expect(details.textContent).toContain("Reported model used: gpt-6-sol-2026-09-20");
-  await waitFor(() => expect(details.textContent).toContain("Your choice and the advisor agreed"));
-  expect(details.textContent).toContain("Your choice: gpt-6-sol · openai · high");
+  await waitFor(() => expect(details.textContent).toContain("Advisor’s choice was selected"));
+  expect(details.textContent).toContain("Your choice: glm-5.3 · glm · low");
+  expect(details.textContent).toContain("Advisor recommendation: gpt-6-sol · openai · high");
+  expect(details.textContent).toContain("Assigned model: gpt-6-sol · openai · high");
   expect(details.textContent).toContain(
-    "Reasoning: Both selections matched and provide the requested reasoning depth.",
+    "Advisor reasoning: This task needs the stronger reasoning level for a reliable implementation.",
   );
   expect(details.textContent).toContain("resp_answer_123");
 });
@@ -234,12 +244,27 @@ it("shows response model and advisor details when an unrated answer is excluded"
   await waitFor(() =>
     expect(details.textContent).toContain("Reported model used: gpt-6-sol-2026-09-20"),
   );
-  await waitFor(() => expect(details.textContent).toContain("Your choice and the advisor agreed"));
-  expect(details.textContent).toContain("Your choice: gpt-6-sol · openai · high");
+  await waitFor(() => expect(details.textContent).toContain("Advisor’s choice was selected"));
+  expect(details.textContent).toContain("Your choice: glm-5.3 · glm · low");
+  expect(details.textContent).toContain("Advisor recommendation: gpt-6-sol · openai · high");
   expect(details.textContent).toContain(
-    "Reasoning: Both selections matched and provide the requested reasoning depth.",
+    "Advisor reasoning: This task needs the stronger reasoning level for a reliable implementation.",
   );
   expect(screen.queryByTestId("human-review-details")).toBeNull();
+});
+
+it("says plainly when no advisor recommendation was recorded for the response", async () => {
+  advisorRoundAttached = false;
+  mount("host-test");
+  fireEvent.click(await screen.findByRole("button", { name: "Do not score" }));
+
+  const details = await screen.findByTestId("model-attribution");
+  await waitFor(() =>
+    expect(details.textContent).toContain("Model Advisor was not used for this response."),
+  );
+  expect(details.textContent).toContain(
+    "Turn on Advisor before sending a message to record its model choice and reasoning.",
+  );
 });
 
 it("keeps the saved outcome when a revision fails", async () => {

@@ -2869,6 +2869,29 @@ export function NewChatLandingScreen() {
       setPickedEffort("");
     }
   }, [selectedNativeHarness, hostCodexModelsLoading, codexEffortLevels, pickedEffort]);
+  // Apply Luna's standard Max effort only after the selected model has made
+  // that level part of the mounted Select options. Seeding model and effort in
+  // one effect can briefly render a Max value without a matching SelectItem;
+  // Radix clears that value and emits onValueChange("") during the catalog
+  // handoff.
+  useEffect(() => {
+    if (
+      selectedNativeHarness !== "codex-native" ||
+      hostCodexModelsLoading ||
+      selectedCodexOption?.id !== CODEX_STANDARD_MODEL_ID ||
+      pickedEffort ||
+      !codexEffortLevels.includes(CODEX_STANDARD_REASONING_EFFORT)
+    ) {
+      return;
+    }
+    setPickedEffort(CODEX_STANDARD_REASONING_EFFORT);
+  }, [
+    selectedNativeHarness,
+    hostCodexModelsLoading,
+    selectedCodexOption?.id,
+    pickedEffort,
+    codexEffortLevels,
+  ]);
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
   // The selected native harness, used to persist/seed its option knobs (mode /
   // model / effort), which are harness-specific. null for non-native agents,

@@ -1677,7 +1677,9 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("GPT-6-Luna");
-    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max"),
+    );
 
     const { body } = await submitAndReadBody();
     expect(body.model_override).toBe("codex/gpt-6-luna");

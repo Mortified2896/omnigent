@@ -363,6 +363,9 @@ function ModelAttributionDetails({
   const advisorChoice = round
     ? choiceLabel(round, review?.advisor_choice_id ?? review?.advisor_candidate_id)
     : null;
+  const assignedChoice = round
+    ? choiceLabel(round, review?.assigned_choice_id ?? review?.assigned_candidate_id)
+    : null;
 
   return (
     <section
@@ -403,11 +406,23 @@ function ModelAttributionDetails({
       {roundQuery.isLoading && roundId && (
         <p className="text-xs text-muted-foreground">Loading advisor rationale…</p>
       )}
+      {responseAttribution && !roundId && (
+        <div className="space-y-1 text-xs text-muted-foreground">
+          <p>Model Advisor was not used for this response.</p>
+          <p>Turn on Advisor before sending a message to record its model choice and reasoning.</p>
+        </div>
+      )}
+      {roundId && !hostId && (
+        <p className="text-xs text-muted-foreground">
+          Advisor decision details are unavailable because this session has no host binding.
+        </p>
+      )}
       {review && (
         <div className="space-y-1 text-xs text-muted-foreground">
           {humanChoice && <p>Your choice: {humanChoice}</p>}
           {advisorChoice && <p>Advisor recommendation: {advisorChoice}</p>}
-          <p>Reasoning: {review.rationale}</p>
+          {assignedChoice && <p>Assigned model: {assignedChoice}</p>}
+          <p>Advisor reasoning: {review.rationale}</p>
           {review.overridden && review.override_reason && <p>Override: {review.override_reason}</p>}
         </div>
       )}
