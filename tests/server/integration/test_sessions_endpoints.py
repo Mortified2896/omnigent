@@ -37,7 +37,11 @@ from omnigent.server.routes._sessions.helpers import (
     _RunnerForwardResult,
 )
 from omnigent.spec.types import SkillSpec
-from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY
+from omnigent.stores.conversation_store import (
+    ADVISOR_ROUND_LABEL_KEY,
+    CODEX_ACCESS_LANE_DIRECT,
+    CODEX_ACCESS_LANE_LABEL_KEY,
+)
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
@@ -6994,6 +6998,54 @@ async def test_model_advisor_session_rejects_follow_up_route_changes(
     assert unchanged is not None
     assert unchanged.model_override == "gpt-5.3-codex"
     assert unchanged.reasoning_effort == "medium"
+
+
+async def test_model_advisor_accepts_native_codex_model_report_for_assigned_slug(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex may report its native slug for the same pinned catalog model."""
+    published: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.session_stream.publish",
+        lambda sid, event: published.append((sid, event)),
+    )
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+    store = SqlAlchemyConversationStore(db_uri)
+    store.set_labels(
+        sid,
+        {
+            ADVISOR_ROUND_LABEL_KEY: "adviseround-codex-alias",
+            CODEX_ACCESS_LANE_LABEL_KEY: CODEX_ACCESS_LANE_DIRECT,
+        },
+    )
+    store.update_conversation(
+        sid,
+        model_override="codex/gpt-5-6-luna",
+        reasoning_effort="low",
+    )
+
+    report = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={"type": "external_model_change", "data": {"model": "gpt-5.6-luna"}},
+    )
+    assert report.status_code == 202, report.text
+    snapshot = (await client.get(f"/v1/sessions/{sid}")).json()
+    assert snapshot["llm_model"] == "gpt-5.6-luna"
+    assert snapshot["model_override"] == "codex/gpt-5-6-luna"
+    assert published[-1][1]["model"] == "gpt-5.6-luna"
+
+    changed_model = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={"type": "external_model_change", "data": {"model": "gpt-5.6-terra"}},
+    )
+    assert changed_model.status_code == 409, changed_model.text
+    unchanged = store.get_conversation(sid)
+    assert unchanged is not None
+    assert unchanged.reported_model == "gpt-5.6-luna"
 
 
 @pytest.mark.parametrize("sentinel", ["<synthetic>", " <synthetic> "])
