@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from omnigent.entities import MessageData, NewConversationItem
-from omnigent.server.response_attribution import response_attribution_item
 from omnigent.errors import OmnigentError
+from omnigent.server.response_attribution import response_attribution_item
 from omnigent.server.routes.sessions.routes_feedback import register_feedback_routes
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
@@ -67,6 +67,10 @@ def test_outcome_api_reload_and_validation(conversation_store):
             listed = client.get(f"{url}/task-experiment").json()[-1]
             assert listed["outcome"] == outcome
             assert listed["model_attribution"]["advisor_round_id"] == "round-123"
+        attribution = client.get(f"{url}/response-attribution/answer")
+        assert attribution.status_code == 200
+        assert attribution.json()["actual_model"] == "gpt-6-sol-2026-09-20"
+        assert client.get(f"{url}/response-attribution/missing").json() is None
         assert (
             client.put(f"{url}/task-outcomes/answer", json={"outcome": "maybe"}).status_code == 422
         )
@@ -92,6 +96,18 @@ def test_outcome_routes_are_caller_scoped(db_uri):
     conv = store.create_conversation()
     other = store.create_conversation()
     seed_answer(store, conv.id)
+    store.append(
+        conv.id,
+        [
+            response_attribution_item(
+                conversation_id=conv.id,
+                response_id="answer",
+                requested_model="gpt-6-sol",
+                actual_model="gpt-6-sol-2026-09-20",
+                model_source="response_usage",
+            )
+        ],
+    )
     for user, level in [("alice", 2), ("bob", 2), ("reader", 1)]:
         permissions.grant(user, conv.id, level)
         permissions.grant(user, other.id, level)
@@ -114,9 +130,20 @@ def test_outcome_routes_are_caller_scoped(db_uri):
         alice = {"x-test-user": "alice"}
         reader = {"x-test-user": "reader"}
         assert client.get(f"{url}/task-experiment").status_code == 401
+        assert client.get(f"{url}/response-attribution/answer").status_code == 401
         assert (
             client.get(f"{url}/task-experiment", headers={"x-test-user": "stranger"}).status_code
             == 404
+        )
+        assert (
+            client.get(
+                f"{url}/response-attribution/answer", headers={"x-test-user": "stranger"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(f"{url}/response-attribution/answer", headers=alice).json()["actual_model"]
+            == "gpt-6-sol-2026-09-20"
         )
         success = {"outcome": "success"}
         assert (

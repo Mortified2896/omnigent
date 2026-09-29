@@ -12,6 +12,12 @@ const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
 let fail: boolean;
 let outcomes: Record<string, unknown>[];
+let scoringPolicy: {
+  score_eligible: boolean;
+  is_test: boolean;
+  retention: string | null;
+  responses: Record<string, unknown>;
+};
 const advisorRound = {
   object: "model_advisor.round",
   round_id: "round-test",
@@ -49,11 +55,28 @@ const advisorRound = {
 beforeEach(() => {
   outcomes = [];
   fail = false;
+  scoringPolicy = { score_eligible: true, is_test: false, retention: null, responses: {} };
   api.mockReset();
   api.mockImplementation(async (_url: string, options?: RequestInit) => {
     if (options?.method && fail) return new Response(null, { status: 500 });
     if (_url.endsWith("/task-experiment")) return Response.json(outcomes);
+    if (_url.endsWith("/scoring-policy")) return Response.json(scoringPolicy);
+    if (_url.includes("/response-attribution/"))
+      return Response.json({
+        requested_model: "gpt-6-sol",
+        actual_model: "gpt-6-sol-2026-09-20",
+        model_status: "observed",
+        model_source: "response_usage",
+        reasoning_effort: "high",
+        access_lane: "openai-direct",
+        advisor_round_id: "round-test",
+      });
     if (_url.includes("/model-advisor/rounds/")) return Response.json(advisorRound);
+    if (_url.includes("/scoring-eligibility/")) {
+      const setting = JSON.parse(options!.body as string);
+      scoringPolicy = { ...scoringPolicy, responses: { answer: setting } };
+      return Response.json(setting);
+    }
     if (_url.includes("/task-outcomes/")) {
       const row = {
         id: String(outcomes.length),
@@ -201,6 +224,22 @@ it("shows the model used, advisor agreement, rationale, and response trace key",
     "Reasoning: Both selections matched and provide the requested reasoning depth.",
   );
   expect(details.textContent).toContain("resp_answer_123");
+});
+
+it("shows response model and advisor details when an unrated answer is excluded", async () => {
+  mount("host-test");
+  fireEvent.click(await screen.findByRole("button", { name: "Do not score" }));
+
+  const details = await screen.findByTestId("model-attribution");
+  await waitFor(() =>
+    expect(details.textContent).toContain("Reported model used: gpt-6-sol-2026-09-20"),
+  );
+  await waitFor(() => expect(details.textContent).toContain("Your choice and the advisor agreed"));
+  expect(details.textContent).toContain("Your choice: gpt-6-sol · openai · high");
+  expect(details.textContent).toContain(
+    "Reasoning: Both selections matched and provide the requested reasoning depth.",
+  );
+  expect(screen.queryByTestId("human-review-details")).toBeNull();
 });
 
 it("keeps the saved outcome when a revision fails", async () => {

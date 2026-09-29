@@ -47,11 +47,12 @@ export function estimateReadAlongUnits(
     const followingPunctuation = text.slice(end, nextStart);
     const syllables = (word.match(/[aeiouy]+/giu) ?? []).length;
     const spoken = Math.max(1, Array.from(word).length + Math.max(0, syllables - 1) * 0.35);
-    const pause = index + 1 < matches.length && /[.!?…。！？]/u.test(followingPunctuation)
-      ? 1.1
-      : index + 1 < matches.length && /[,;:，；：]/u.test(followingPunctuation)
-        ? 0.45
-        : 0;
+    const pause =
+      index + 1 < matches.length && /[.!?…。！？]/u.test(followingPunctuation)
+        ? 1.1
+        : index + 1 < matches.length && /[,;:，；：]/u.test(followingPunctuation)
+          ? 0.45
+          : 0;
     return { start, end, spoken, pause };
   });
   const totalWeight = weights.reduce((total, weight) => total + weight.spoken + weight.pause, 0);
@@ -61,7 +62,7 @@ export function estimateReadAlongUnits(
   // offsets even though the client maps the words against the rendered text.
   const codePointOffsets = new Uint32Array(text.length + 1);
   let codePointOffset = 0;
-  for (let offset = 0; offset < text.length; ) {
+  for (let offset = 0; offset < text.length;) {
     const codePoint = text.codePointAt(offset) ?? 0;
     const width = codePoint > 0xffff ? 2 : 1;
     codePointOffsets[offset] = codePointOffset;
