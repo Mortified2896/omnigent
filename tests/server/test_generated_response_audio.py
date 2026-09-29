@@ -9,6 +9,8 @@ import json
 import wave
 from types import SimpleNamespace
 
+import pytest
+
 from omnigent.server.generated_response_audio import (
     GeneratedResponseAudioCoordinator,
     _AudioWork,
@@ -46,7 +48,8 @@ print('ignore this')
     assert "print" not in spoken
 
 
-def test_audio_worker_stores_wav_for_exact_completed_response() -> None:
+@pytest.mark.parametrize("legacy_backend", [None, "qwen", "kokoro"])
+def test_audio_worker_stores_wav_for_exact_completed_response(legacy_backend: str | None) -> None:
     class AudioStore:
         def __init__(self) -> None:
             self.row = SimpleNamespace(
@@ -96,7 +99,7 @@ def test_audio_worker_stores_wav_for_exact_completed_response() -> None:
             return SimpleNamespace(data=[item])
 
         def get_conversation(self, conversation_id: str):
-            return SimpleNamespace(session_state={})
+            return SimpleNamespace(session_state={"scheduled_task_audio_backend": legacy_backend})
 
     class ArtifactStore:
         def __init__(self) -> None:
@@ -122,7 +125,9 @@ def test_audio_worker_stores_wav_for_exact_completed_response() -> None:
     class TtsClient:
         async def post(self, url: str, *, json: dict[str, str]):
             assert url == "http://tts/v1/audio/speech"
-            assert json["voice_profile"] == "daily-brief"
+            assert json["voice_profile"] == "kokoro-heart"
+            assert json["backend"] == "kokoro"
+            assert json["include_timings"] is True
             assert "current findings" in json["text"]
             return TtsResponse()
 
@@ -315,12 +320,17 @@ def test_optional_timing_bundle_is_stored_beside_audio_and_bound_to_its_hash() -
     }
     boundary = "omni-test-boundary"
     body = (
-        f"--{boundary}\r\nContent-Type: audio/wav\r\n"
-        "Content-Transfer-Encoding: binary\r\n\r\n"
-    ).encode() + audio + (
-        f"\r\n--{boundary}\r\nContent-Type: application/json\r\n"
-        "Content-Transfer-Encoding: binary\r\n\r\n"
-    ).encode() + json.dumps(timings).encode() + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\nContent-Type: audio/wav\r\nContent-Transfer-Encoding: binary\r\n\r\n"
+        ).encode()
+        + audio
+        + (
+            f"\r\n--{boundary}\r\nContent-Type: application/json\r\n"
+            "Content-Transfer-Encoding: binary\r\n\r\n"
+        ).encode()
+        + json.dumps(timings).encode()
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
 
     class AudioStore:
         row = SimpleNamespace(
@@ -418,12 +428,17 @@ def test_invalid_optional_timing_data_does_not_fail_audio() -> None:
     audio = _wav_bytes()
     boundary = "omni-bad-timing-boundary"
     body = (
-        f"--{boundary}\r\nContent-Type: audio/wav\r\n"
-        "Content-Transfer-Encoding: binary\r\n\r\n"
-    ).encode() + audio + (
-        f"\r\n--{boundary}\r\nContent-Type: application/json\r\n"
-        "Content-Transfer-Encoding: binary\r\n\r\n"
-    ).encode() + b"{malformed" + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\nContent-Type: audio/wav\r\nContent-Transfer-Encoding: binary\r\n\r\n"
+        ).encode()
+        + audio
+        + (
+            f"\r\n--{boundary}\r\nContent-Type: application/json\r\n"
+            "Content-Transfer-Encoding: binary\r\n\r\n"
+        ).encode()
+        + b"{malformed"
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
 
     class AudioStore:
         row = SimpleNamespace(

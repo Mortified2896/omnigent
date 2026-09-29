@@ -41,3 +41,20 @@ Today's exact 582.65-second recording was 27,967,244 bytes as PCM WAV and
 size by 83%; it does not claim to repair the phone's network connection.
 Original WAVs, Qwen recordings, narration, schedules, and voice settings remain
 untouched. Actual iPhone confirmation is still required after O1 deployment.
+
+## Scheduled Kokoro policy
+
+New scheduled sessions explicitly select the Kokoro backend. The legacy
+`daily-brief` voice profile resolves to `kokoro-heart` both at session creation
+and during audio generation/retry. Generated scheduled audio always requests
+Kokoro and native timings, including for sessions that lack the backend field
+or still carry a historical Qwen value. There is no Qwen fallback on failure.
+Existing ready recordings remain playable.
+
+On RTX, `OMNIGENT_TTS_URL` points to the shared Hatchet gateway on loopback
+port 7790. The gateway submits `omnigent-text-to-speech` to its single-slot
+worker and returns the timing multipart body unchanged. The coordinator logs
+the returned Hatchet run ID with the response ID for tracing. The daily trigger
+is owned by Omnigent's RRULE scheduler; Hatchet owns queued speech execution.
+Validate both the next scheduled fire and a real Kokoro job with native timings
+when accepting a deployment, rather than relying on the TTS health response.

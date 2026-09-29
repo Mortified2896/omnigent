@@ -23,6 +23,7 @@ from omnigent.server.generated_response_audio_timings import (
     timings_artifact_key,
     validate_timing_sidecar_bytes,
 )
+from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND, scheduled_audio_voice
 
 _logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r"https?://[^\s)\]>]+", re.IGNORECASE)
@@ -254,7 +255,9 @@ class GeneratedResponseAudioCoordinator:
         response_id, narration = _response_narration(self.conversation_store, conversation_id)
         if response_id is None or not narration:
             return
-        entry = self.audio_store.create_pending(conversation_id, response_id, voice_profile)
+        entry = self.audio_store.create_pending(
+            conversation_id, response_id, scheduled_audio_voice(voice_profile)
+        )
         if entry.status in {"ready", "failed", "processing"}:
             return
         self._enqueue(_AudioWork(current_workspace_id(), conversation_id, response_id))
@@ -348,27 +351,27 @@ class GeneratedResponseAudioCoordinator:
                 )
                 if entry is None:
                     raise _PostprocessError("audio_record_missing")
-                conversation = await asyncio.to_thread(
-                    self.conversation_store.get_conversation,
-                    work.conversation_id,
-                )
-                session_state = getattr(conversation, "session_state", None) or {}
-                backend = session_state.get("scheduled_task_audio_backend", "qwen")
-                if backend not in {"qwen", "kokoro"}:
-                    raise _PostprocessError("tts_invalid_backend")
+                # Scheduled narration always uses Kokoro's native word timings.
+                # Legacy session state must never restore the old Qwen default.
                 assert self._client is not None
                 result = await self._client.post(
                     f"{self.tts_url}/v1/audio/speech",
                     json={
                         "text": narration,
-                        "voice_profile": entry.voice_profile,
+                        "voice_profile": scheduled_audio_voice(entry.voice_profile),
                         "language": "English",
-                        "backend": backend,
-                        "include_timings": backend == "kokoro",
+                        "backend": SCHEDULED_AUDIO_BACKEND,
+                        "include_timings": True,
                     },
                 )
                 if result.status_code != 200:
                     raise _PostprocessError(f"tts_http_{result.status_code}")
+                _logger.info(
+                    "Scheduled audio response=%s backend=%s hatchet_run_id=%s",
+                    work.response_id,
+                    SCHEDULED_AUDIO_BACKEND,
+                    result.headers.get("x-hatchet-run-id", "unavailable"),
+                )
                 try:
                     duration = float(result.headers["x-audio-duration-seconds"])
                     rate = int(result.headers["x-audio-sample-rate"])

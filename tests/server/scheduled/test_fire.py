@@ -550,14 +550,15 @@ async def test_task_reasoning_effort_overrides_spec_at_fire() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scheduled_fire_pins_search_and_audio_profile_to_session() -> None:
+@pytest.mark.parametrize("profile", ["daily-brief", "kokoro-heart"])
+async def test_scheduled_fire_pins_search_and_audio_profile_to_session(profile: str) -> None:
     conv_store = FakeConversationStore()
     store = FakeScheduledTaskStore(
         rows={
             "task_1": _task(
                 codex_web_search_mode="live",
                 audio_enabled=True,
-                audio_voice_profile="daily-brief",
+                audio_voice_profile=profile,
             )
         }
     )
@@ -574,7 +575,8 @@ async def test_scheduled_fire_pins_search_and_audio_profile_to_session() -> None
     assert conv_store.session_state_writes["conv_1"] == {
         "codex_web_search_mode": "live",
         "scheduled_task_audio_enabled": True,
-        "scheduled_task_audio_voice_profile": "daily-brief",
+        "scheduled_task_audio_voice_profile": "kokoro-heart",
+        "scheduled_task_audio_backend": "kokoro",
     }
 
 

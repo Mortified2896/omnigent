@@ -65,6 +65,7 @@ from omnigent.server.routes._session_create_validation import (
     validate_session_model_metadata,
     validate_session_permission_mode,
 )
+from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND, scheduled_audio_voice
 from omnigent.server.schemas import SessionEventInput
 
 _logger = logging.getLogger(__name__)
@@ -788,7 +789,10 @@ async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int
         session_state["codex_web_search_mode"] = task.codex_web_search_mode
     if task.audio_enabled and task.audio_voice_profile:
         session_state["scheduled_task_audio_enabled"] = True
-        session_state["scheduled_task_audio_voice_profile"] = task.audio_voice_profile
+        session_state["scheduled_task_audio_voice_profile"] = scheduled_audio_voice(
+            task.audio_voice_profile
+        )
+        session_state["scheduled_task_audio_backend"] = SCHEDULED_AUDIO_BACKEND
     if session_state != (conv.session_state or {}):
         conv.session_state = session_state
         await asyncio.to_thread(
