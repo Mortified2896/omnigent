@@ -63,6 +63,7 @@ from omnigent.server.background_session_titles import (
     schedule_background_child_task_summary,
 )
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
+from omnigent.server.response_attribution import response_attribution_item
 from omnigent.server.routes._auth_helpers import (
     attribution_user as _attribution_user,
 )
@@ -212,10 +213,14 @@ from omnigent.server.schemas import (
     SessionEventInput,
 )
 from omnigent.server.session_version import SessionMutationFingerprint, session_etag
-from omnigent.server.response_attribution import response_attribution_item
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
-from omnigent.stores.conversation_store import ADVISOR_ROUND_LABEL_KEY, PINNED_LABEL_KEY
+from omnigent.stores.conversation_store import (
+    ADVISOR_ROUND_LABEL_KEY,
+    CODEX_ACCESS_LANE_DIRECT,
+    CODEX_ACCESS_LANE_LABEL_KEY,
+    PINNED_LABEL_KEY,
+)
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.host_store import host_is_live
 from omnigent.stores.permission_store import PermissionStore
@@ -245,6 +250,33 @@ _TRANSIENT_AUDIT_EVENT_TYPES = frozenset(
         _EXTERNAL_SESSION_USAGE_TYPE,
     }
 )
+
+
+def _reported_model_matches_advisor_assignment(
+    labels: dict[str, str], requested_model: str | None, reported_model: object
+) -> bool:
+    """Allow Codex's native spelling of the exact advisor-pinned model."""
+    if reported_model == requested_model:
+        return True
+    if (
+        not isinstance(requested_model, str)
+        or not isinstance(reported_model, str)
+        or labels.get(CODEX_ACCESS_LANE_LABEL_KEY) != CODEX_ACCESS_LANE_DIRECT
+    ):
+        return False
+
+    # Advisor stores Codex candidates as ``codex/<catalog-id>`` to bind the
+    # native transport. Codex reports its native slug, without that route
+    # prefix, and may dot-separate the version. Use the same vocabulary
+    # comparison as the exact Codex launch check.
+    from omnigent.models.codex_model_vocabulary import (
+        comparable_model_id,
+        native_codex_model_slug,
+    )
+
+    return comparable_model_id(native_codex_model_slug(reported_model)) == comparable_model_id(
+        native_codex_model_slug(requested_model)
+    )
 
 
 def _retry_recovery_lock(session_id: str) -> asyncio.Lock:
@@ -1509,9 +1541,14 @@ def register_events_routes(
         if body.type == _EXTERNAL_MODEL_CHANGE_TYPE:
             from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
 
+            advisor_labels = conv.labels or {}
             if (
-                ADVISOR_ROUND_LABEL_KEY in (conv.labels or {})
-                and body.data.get("model") != conv.model_override
+                ADVISOR_ROUND_LABEL_KEY in advisor_labels
+                and not _reported_model_matches_advisor_assignment(
+                    advisor_labels,
+                    conv.model_override,
+                    body.data.get("model"),
+                )
             ):
                 raise OmnigentError(
                     "Model Advisor sessions are pinned to their confirmed model; start a new "
@@ -1519,7 +1556,7 @@ def register_events_routes(
                     code=ErrorCode.CONFLICT,
                 )
             protect_recorded_policy(
-                conv.labels or {},
+                advisor_labels,
                 {"model_override": conv.model_override},
                 {"model_override": body.data.get("model")},
             )
