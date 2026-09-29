@@ -93,3 +93,70 @@ def list_response_attributions(
         if not page.has_more:
             return result
         after = page.data[-1].id
+
+
+def bind_response_advisor_round(
+    store: ConversationStore,
+    conversation_id: str,
+    response_id: str,
+    advisor_round_id: str | None,
+) -> str | None:
+    """Consume a confirmed decision once, including turns that later fail.
+
+    Session labels retain route provenance for authorization and transport;
+    they are not evidence that the advisor reviewed every later message.
+    Persist the binding at response start so a failed turn cannot leak its
+    decision into the next ordinary message. Replayed lifecycle events keep
+    their original binding, including an explicit no-advisor binding.
+    """
+    binding_type = "response-advisor-binding"
+    used_rounds: set[str] = set()
+    after = None
+    while True:
+        page = store.list_items(conversation_id, type="resource_event", limit=100, after=after)
+        for item in page.data:
+            data = item.data
+            if not isinstance(data, ResourceEventData):
+                continue
+            if data.resource_type not in {binding_type, RESOURCE_TYPE}:
+                continue
+            payload = data.resource or {}
+            if payload.get("conversation_id") != conversation_id:
+                continue
+            bound_response = payload.get("response_id")
+            if not isinstance(bound_response, str) or bound_response != item.response_id:
+                continue
+            bound_round = payload.get("advisor_round_id")
+            if bound_response == response_id:
+                return bound_round if isinstance(bound_round, str) else None
+            if isinstance(bound_round, str):
+                used_rounds.add(bound_round)
+        if not page.has_more:
+            break
+        after = page.data[-1].id
+    selected = (
+        advisor_round_id if advisor_round_id and advisor_round_id not in used_rounds else None
+    )
+    store.append(
+        conversation_id,
+        [
+            NewConversationItem(
+                type="resource_event",
+                response_id=response_id,
+                stable_id=uuid.uuid5(
+                    uuid.NAMESPACE_URL, f"response-advisor-binding:{conversation_id}:{response_id}"
+                ).hex,
+                data=ResourceEventData(
+                    event_type="response.advisor.bound",
+                    resource_id=response_id,
+                    resource_type=binding_type,
+                    resource={
+                        "conversation_id": conversation_id,
+                        "response_id": response_id,
+                        "advisor_round_id": selected,
+                    },
+                ),
+            )
+        ],
+    )
+    return selected
