@@ -1,5 +1,13 @@
 /** Live Model Advisor controller for the new-chat composer. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -51,7 +59,14 @@ export interface HumanModelPick {
   effort: string;
 }
 
+export interface AdvisorSubmitHandle {
+  /** True means Advisor owns this send, including loading/error/review states. */
+  submit: () => boolean;
+}
+
 export interface NewChatAdvisorSectionProps {
+  submitRef?: Ref<AdvisorSubmitHandle>;
+  submissionBlockReason?: string | null;
   hostId: string | null;
   task: string;
   humanPick: HumanModelPick | null;
@@ -107,6 +122,8 @@ function providerReview(round: RoundDto | null): ProviderReviewView | null {
 
 export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const {
+    submitRef,
+    submissionBlockReason,
     hostId,
     task,
     humanPick,
@@ -220,9 +237,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         setOptions(toLogicalOptions(catalog));
         const saved = toSavedProviderPreferences(prefs);
         if (saved) {
-          setEditor({ saved, draft: saved.preferences, dirty: false, error: null });
+          setEditor({
+            saved,
+            draft: continueSessionId ? { ...saved.preferences, enabled: true } : saved.preferences,
+            dirty: false,
+            error: null,
+          });
         } else {
-          const empty = emptyProviderPreferences();
+          const empty = { ...emptyProviderPreferences(), enabled: Boolean(continueSessionId) };
           setEditor({
             saved: { version: prefs.version, etag: prefs.etag ?? "", preferences: empty },
             draft: empty,
@@ -241,7 +263,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     return () => {
       cancelled = true;
     };
-  }, [hostId, isCurrentScope, stopPolling]);
+  }, [hostId, continueSessionId, isCurrentScope, stopPolling]);
 
   const resolveHumanChoice = useCallback((): string | null => {
     if (!humanPick || humanPick.model === "") return null;
@@ -374,7 +396,12 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         );
         const saved = toSavedProviderPreferences(dto);
         if (saved && isCurrentScope(host, generation))
-          setEditor({ saved, draft: saved.preferences, dirty: false, error: null });
+          setEditor({
+            saved,
+            draft: continueSessionId ? { ...saved.preferences, enabled: true } : saved.preferences,
+            dirty: false,
+            error: null,
+          });
       } catch (cause) {
         if (!isCurrentScope(host, generation)) return;
         if (cause instanceof AdvisorConflictError) {
@@ -403,11 +430,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         }));
       }
     })();
-  }, [editor.draft, editor.saved?.version, hostId, isCurrentScope]);
+  }, [continueSessionId, editor.draft, editor.saved?.version, hostId, isCurrentScope]);
 
   const handlePropose = useCallback(() => {
     if (hostId === null || round.busy || !editor.draft || validation !== null) {
       if (validation !== null) setRound({ round: null, busy: false, error: validation });
+      return;
+    }
+    if (submissionBlockReason) {
+      setRound({ round: null, busy: false, error: submissionBlockReason });
       return;
     }
     if (task.trim() === "") {
@@ -461,6 +492,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     resolveHumanChoice,
     round.busy,
     task,
+    submissionBlockReason,
     validation,
   ]);
 
@@ -548,6 +580,25 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   useEffect(() => {
     onFlowStateChange?.(round.busy, reviewVisible);
   }, [onFlowStateChange, reviewVisible, round.busy]);
+  useImperativeHandle(
+    submitRef,
+    () => ({
+      submit: () => {
+        if (!editor.draft || catalogError !== null) {
+          setRound({
+            round: null,
+            busy: false,
+            error: catalogError ?? "Wait for advisor settings to load before sending.",
+          });
+          return true;
+        }
+        if (!editor.draft.enabled) return false;
+        if (!round.busy && !reviewVisible) handlePropose();
+        return true;
+      },
+    }),
+    [catalogError, editor.draft, handlePropose, reviewVisible, round.busy],
+  );
   if (hostId === null) return null;
   if (catalogError !== null)
     return (
@@ -642,6 +693,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           options={options}
           dirty={editor.dirty}
           busy={round.busy}
+          enabledLocked={Boolean(continueSessionId)}
           error={editor.error}
           onChange={handleChange}
           onSave={handleSave}

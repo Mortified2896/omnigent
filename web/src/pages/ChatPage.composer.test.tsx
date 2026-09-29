@@ -182,6 +182,7 @@ describe("Model Advisor in an existing chat", () => {
   beforeEach(() => {
     useChatStore.setState({ conversationId: "conv_chat_advisor" });
     advisorFetch.mockReset();
+    localStorage.clear();
   });
 
   afterEach(() => cleanup());
@@ -254,6 +255,19 @@ describe("Model Advisor in an existing chat", () => {
     expect(screen.getByLabelText("Message the agent")).toHaveValue("Continue the analysis");
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.getByTestId("model-advisor-section")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("switch", { name: "Compare my choice with the advisor" }),
+      ).toBeChecked(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    act(() => useChatStore.setState({ conversationId: "another_chat" }));
+    expect(screen.getByTestId("chat-model-advisor-toggle")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    act(() => useChatStore.setState({ conversationId: "conv_chat_advisor" }));
+    expect(screen.getByTestId("chat-model-advisor-toggle")).toHaveAttribute("aria-pressed", "true");
   });
 });
 

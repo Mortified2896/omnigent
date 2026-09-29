@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createRef } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NewChatAdvisorSection } from "./NewChatAdvisorSection";
+import { NewChatAdvisorSection, type AdvisorSubmitHandle } from "./NewChatAdvisorSection";
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
@@ -568,4 +569,54 @@ it("surfaces a save conflict without overwriting the draft", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
   await waitFor(() => expect(screen.getByRole("alert")).toBeDefined());
   expect(screen.getByText(/changed elsewhere/i)).toBeDefined();
+});
+
+it("normal Send is owned by Advisor and cannot bypass a pending review", async () => {
+  const submitRef = createRef<AdvisorSubmitHandle>();
+  mountSection({ submitRef });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  let handled = false;
+  act(() => {
+    handled = submitRef.current!.submit();
+  });
+  expect(handled).toBe(true);
+  await screen.findByText("Hard task, use the stronger logical choice.");
+  act(() => {
+    expect(submitRef.current!.submit()).toBe(true);
+  });
+  expect(
+    api.mock.calls.filter(
+      ([url, init]) => String(url).endsWith("/rounds") && init?.method === "POST",
+    ),
+  ).toHaveLength(1);
+});
+
+it("normal Send falls through only when Advisor is explicitly off", async () => {
+  const submitRef = createRef<AdvisorSubmitHandle>();
+  mountSection({ submitRef });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("switch", { name: "Compare my choice with the advisor" }));
+  act(() => {
+    expect(submitRef.current!.submit()).toBe(false);
+  });
+  expect(api.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+});
+
+it("does not silently send while saved Advisor settings are loading", () => {
+  api.mockImplementation(() => new Promise(() => {}));
+  const submitRef = createRef<AdvisorSubmitHandle>();
+  mountSection({ submitRef });
+  act(() => {
+    expect(submitRef.current!.submit()).toBe(true);
+  });
+  expect(screen.getByText(/Wait for advisor settings/)).toBeInTheDocument();
+});
+
+it("an enabled follow-up uses its composer choice even when saved defaults are off", async () => {
+  prefsDto = { ...prefsDto, logical_preferences: { ...V2_PREFERENCES, enabled: false } };
+  mountSection({ continueSessionId: "existing" });
+  const toggle = await screen.findByRole("switch", { name: "Compare my choice with the advisor" });
+  expect(toggle).toBeChecked();
+  expect(toggle).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Get recommendation" })).toBeEnabled();
 });

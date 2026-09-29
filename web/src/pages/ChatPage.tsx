@@ -230,6 +230,10 @@ import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { ConnectionIndicator } from "./ChatIndicators";
 import { CHAT_COLUMN_WIDTH } from "./chatLayout";
 import { Transcript } from "@/components/chat/Transcript";
+import {
+  readSessionAdvisorEnabled,
+  writeSessionAdvisorEnabled,
+} from "@/model-advisor/sessionAdvisorPreference";
 import { NewChatAdvisorSection, type HumanModelPick } from "@/model-advisor/NewChatAdvisorSection";
 
 /** Server-info as consumers see it: the probe's result, or "loading". */
@@ -2750,11 +2754,11 @@ function ComposerImpl({
   const advisorWaitingForResponse = pendingAdvisorSend !== null && !advisorDialogOpen;
 
   useEffect(() => {
-    setAdvisorEnabled(false);
+    setAdvisorEnabled(readSessionAdvisorEnabled(advisorHostId, conversationId));
     setAdvisorDialogOpen(false);
     setAdvisorFlowLocked(false);
     setPendingAdvisorSend(null);
-  }, [conversationId]);
+  }, [advisorHostId, conversationId]);
 
   useEffect(() => {
     if (pendingAdvisorSend && pendingAdvisorSend.sessionId === conversationId && !isWorking) {
@@ -3947,6 +3951,8 @@ function ComposerImpl({
                     data-testid="chat-model-advisor-toggle"
                     data-active={advisorEnabled ? "true" : undefined}
                     onClick={() => {
+                      if (advisorHostId && conversationId)
+                        writeSessionAdvisorEnabled(advisorHostId, conversationId, !advisorEnabled);
                       if (advisorEnabled) {
                         setAdvisorEnabled(false);
                         setPendingAdvisorSend(null);
@@ -3958,7 +3964,9 @@ function ComposerImpl({
                     }}
                   >
                     <SparklesIcon className="size-3.5" />
-                    <span className="hidden @lg/composer-actions:inline">Advisor</span>
+                    <span className="hidden @lg/composer-actions:inline">
+                      Advisor {advisorEnabled ? "on" : "off"}
+                    </span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>

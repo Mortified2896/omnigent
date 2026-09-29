@@ -79,7 +79,11 @@ import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { attachmentKey } from "@/lib/attachments";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
-import { NewChatAdvisorSection } from "@/model-advisor/NewChatAdvisorSection";
+import { writeSessionAdvisorEnabled } from "@/model-advisor/sessionAdvisorPreference";
+import {
+  NewChatAdvisorSection,
+  type AdvisorSubmitHandle,
+} from "@/model-advisor/NewChatAdvisorSection";
 import { HarnessSetupDialog } from "@/shell/HarnessSetupDialog";
 import {
   harnessUnavailableReasonOnHost,
@@ -2081,6 +2085,7 @@ export function NewChatLandingScreen() {
   // gated section owns its own API lifecycle; nothing provider-backed starts
   // from this component.
   const modelAdvisorEnabled = isFeatureEnabled(info, "model_advisor");
+  const advisorSubmitRef = useRef<AdvisorSubmitHandle>(null);
   const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
   // Which router can answer a pick. The external AI-Gateway router only covers
   // a family the host runs through the gateway; the built-in judge covers any
@@ -2426,10 +2431,12 @@ export function NewChatLandingScreen() {
   // confirmed assignment, so follow it exactly like a finished create.
   const handleAdvisorLaunched = useCallback(
     (sessionId: string) => {
+      submittedRef.current = true;
       landingDraft = null;
+      if (selectedHostId) writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
       if (onScreenRef.current) navigate(`/c/${sessionId}`);
     },
-    [navigate],
+    [navigate, selectedHostId],
   );
   useEffect(() => {
     if (
@@ -3887,6 +3894,11 @@ export function NewChatLandingScreen() {
     // and form-submit paths that call this directly can't create a session with
     // a blank message, host, agent, or workspace.
     if (!canSubmit) return;
+    // The visible Advisor switch owns both Send and Enter. Never fall through
+    // to ordinary creation while preferences load or a review is pending.
+    if (modelAdvisorEnabled && !o3RoutingSelected && !approvedProposal) {
+      if (!advisorSubmitRef.current || advisorSubmitRef.current.submit()) return;
+    }
     const o3Approved = approvedProposal !== undefined;
     if (o3Approved && !o3RoutingSelected) return;
     const storedDraft = readO3RoutingDraft() ?? o3Draft;
@@ -5610,8 +5622,17 @@ export function NewChatLandingScreen() {
 
           {modelAdvisorEnabled && (
             <NewChatAdvisorSection
+              submitRef={advisorSubmitRef}
+              submissionBlockReason={
+                files.length > 0
+                  ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
+                  : null
+              }
               hostId={selectedHostId}
-              task={message}
+              task={
+                buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
+                sanitizeInitialPrompt(message)
+              }
               advisorModelTarget={advisorModelTarget}
               humanPick={
                 pickedModel !== ""
