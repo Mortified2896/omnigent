@@ -161,10 +161,7 @@ export function GeneratedResponseAudioPlayer({
       const sections = getSections();
       units = getUnits(sections);
       rangeByUnit = new Map(
-        mapReadAlongRanges(sections, units).map(({ unitIndex, range }) => [
-          unitIndex,
-          range,
-        ]),
+        mapReadAlongRanges(sections, units).map(({ unitIndex, range }) => [unitIndex, range]),
       );
       if (lastUnitIndex !== -2) updateHighlight(true);
     };
