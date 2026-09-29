@@ -8,9 +8,11 @@ each ``turn/started`` the forwarder reads it (``_refresh_model_from_config``,
 which delegates to the shared ``read_codex_config_model`` in the bridge
 module) onto ``_CodexForwarderState.model`` and mirrors it to the Omnigent server
 as an ``external_model_change`` event (→ persisted ``conv.model_override``)
-so the cost-budget policy resolves the selected model. The startup/spawn
-model IS mirrored (so Omnigent learns the session's model even when unchanged);
-only an already-mirrored value is not re-posted.
+so the cost-budget policy resolves the selected model. At turn start it
+reasserts the current model even when unchanged: a Model Advisor route can
+clear the prior server report while leaving Codex on the same model, and
+response attribution needs a fresh report for that turn. Unchanged settings
+notifications remain deduplicated.
 """
 
 from __future__ import annotations
@@ -99,10 +101,10 @@ async def test_sync_model_change_posts_on_change() -> None:
 
 @pytest.mark.asyncio
 async def test_sync_model_change_no_post_when_unchanged() -> None:
-    """Model equal to the baseline (seeded spawn default) does not post.
+    """Unchanged model settings notifications remain deduplicated.
 
-    Prevents the spawn/startup model from being echoed back to Omnigent as a
-    spurious "change" (which would also fire on every settings update).
+    Turn starts explicitly force a report; ordinary thread-settings updates
+    do not echo the same value as a spurious change.
     """
     client = _RecordingClient()
     state = _state(model="gpt-5.5", posted_model="gpt-5.5")
@@ -110,6 +112,50 @@ async def test_sync_model_change_no_post_when_unchanged() -> None:
     await fwd._sync_model_change(client, session_id="conv_x", forwarder_state=state)
 
     assert client.posts == []
+
+
+@pytest.mark.asyncio
+async def test_turn_start_reasserts_unchanged_model_for_response_attribution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new turn re-reports the active model even if it matches the baseline.
+
+    Advisor routing clears the prior server-side reported model before the
+    next response. Reasserting the Codex thread's current model at turn start
+    lets that response persist fresh, response-scoped attribution.
+    """
+    client = _RecordingClient()
+    state = _state(model="codex/gpt-6-luna", posted_model="codex/gpt-6-luna")
+    monkeypatch.setattr(fwd, "_handle_turn_started", AsyncMock())
+    monkeypatch.setattr(fwd, "_refresh_model_from_config", lambda *_args: None)
+    monkeypatch.setattr(fwd, "_refresh_developer_instructions_from_config", lambda *_args: None)
+    monkeypatch.setattr(fwd, "_start_codex_turn_span", lambda *_args: None)
+
+    handled = await fwd._maybe_handle_turn_event(
+        client,
+        session_id="conv_x",
+        bridge_dir=tmp_path,
+        method="turn/started",
+        params={"turn": {"id": "turn_1"}},
+        usage_coalescer=None,  # type: ignore[arg-type]
+        delta_coalescer=None,
+        elicitation_tracker=None,  # type: ignore[arg-type]
+        codex_client=None,
+        forwarder_state=state,
+    )
+
+    assert handled is True
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_model_change",
+                "data": {"model": "codex/gpt-6-luna"},
+            },
+        )
+    ]
+    assert state.posted_model == "codex/gpt-6-luna"
 
 
 @pytest.mark.asyncio
