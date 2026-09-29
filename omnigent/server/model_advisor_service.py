@@ -34,6 +34,7 @@ from fastapi import HTTPException
 from opentelemetry import trace
 
 from omnigent.entities.conversation import Conversation
+from omnigent.model_advisor_binding import encode_transport_binding_label
 from omnigent.model_advisor_core import AccessClass, AdvisorContractError, Candidate, PoolSnapshot
 from omnigent.model_advisor_provider_policy import (
     LogicalChoice,
@@ -1443,14 +1444,16 @@ class ModelAdvisorService:
                 ADVISOR_ROUND_FINGERPRINT_LABEL_KEY: frozen.fingerprint,
                 ADVISOR_ROUND_GROUP_LABEL_KEY: review.comparison_group,
                 ADVISOR_LOGICAL_CHOICE_LABEL_KEY: plan.choice.choice_id,
-                ADVISOR_TRANSPORT_PLAN_LABEL_KEY: json.dumps(
-                    plan.to_payload(), sort_keys=True, separators=(",", ":")
+                **encode_transport_binding_label(
+                    ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
+                    json.dumps(plan.to_payload(), sort_keys=True, separators=(",", ":")),
                 ),
                 # The full plan remains the immutable audit contract; this
                 # per-attempt route identifies which qualified leg the runner
                 # must bind for this concrete session.
-                ADVISOR_DISPATCH_ROUTE_LABEL_KEY: json.dumps(
-                    route.to_payload(), sort_keys=True, separators=(",", ":")
+                **encode_transport_binding_label(
+                    ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
+                    json.dumps(route.to_payload(), sort_keys=True, separators=(",", ":")),
                 ),
                 # The lane is the transport family; the attested connection
                 # binds the selected account/plan within that family.
@@ -1710,7 +1713,9 @@ class ModelAdvisorService:
                 prior_round_id,
             )
             if prior is None or prior.payload.get("execution_session_id") != session_id:
-                raise HTTPException(status_code=403, detail="session is not bound to your advisor round")
+                raise HTTPException(
+                    status_code=403, detail="session is not bound to your advisor round"
+                )
 
         try:
             updated = await asyncio.to_thread(
