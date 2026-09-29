@@ -290,7 +290,16 @@ def test_codex_prefixed_direct_models_group_with_the_same_omniroute_checkpoint()
             ]
             assert len(matches) == 1
             logical = matches[0]
-            assert logical.model_ids == (f"codex/{canonical}",)
+            assert set(logical.model_ids) == {f"codex/{canonical}", canonical}
+            routes = catalog.routes_by_choice[logical.choice.choice_id]
+            assert (
+                next(route for route in routes if route.transport == "direct").wire_model
+                == canonical
+            )
+            assert (
+                next(route for route in routes if route.transport == "omniroute").wire_model
+                == f"codex/{canonical}"
+            )
             assert set(logical.access_lanes) == {"codex-direct", "omniroute"}
             assert {
                 route.transport for route in catalog.routes_by_choice[logical.choice.choice_id]
@@ -325,7 +334,15 @@ def test_codex_direct_gpt_6_luna_uses_its_canonical_choice() -> None:
         "xhigh",
         "max",
     }
-    assert all(option.model_ids == ("codex/gpt-6-luna",) for option in catalog.logical_options)
+    assert all(
+        set(option.model_ids) == {"codex/gpt-6-luna", "gpt-6-luna"}
+        for option in catalog.logical_options
+    )
+    assert all(
+        route.wire_model == "gpt-6-luna"
+        for routes in catalog.routes_by_choice.values()
+        for route in routes
+    )
     assert all(option.access_lanes == ("codex-direct",) for option in catalog.logical_options)
     assert all(
         {route.transport for route in catalog.routes_by_choice[option.choice.choice_id]}
