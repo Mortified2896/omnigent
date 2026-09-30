@@ -306,3 +306,16 @@ it("keeps unsaved comment and tags when changing the outcome", async () => {
     }),
   );
 });
+
+it("keeps advisor attribution hidden until the response is rated", async () => {
+  mount("host-test");
+  const rate = await screen.findByRole("button", { name: "Success" });
+  expect(screen.queryByTestId("model-attribution")).not.toBeInTheDocument();
+  expect(api.mock.calls.some(([url]) => String(url).includes("/model-advisor/rounds/"))).toBe(
+    false,
+  );
+  await waitFor(() => expect(rate).toBeEnabled());
+  fireEvent.click(rate);
+  const details = await screen.findByTestId("model-attribution");
+  await waitFor(() => expect(details).toHaveTextContent("Advisor’s choice was selected"));
+});

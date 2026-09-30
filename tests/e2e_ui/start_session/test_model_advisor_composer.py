@@ -98,6 +98,7 @@ async def _drive_composer_proposal(
         try:
             round_posts: list[dict[str, Any]] = []
             create_bodies: list[dict[str, Any]] = []
+            confirmations: list[dict[str, Any]] = []
             await _register_common_routes(
                 page,
                 created_session_id=session_id,
@@ -197,6 +198,21 @@ async def _drive_composer_proposal(
                     },
                 )
 
+            async def handle_advisor_confirm(route: Route) -> None:
+                confirmations.append(route.request.post_data_json)
+                await route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    json={
+                        "object": "model_advisor.round",
+                        "round_id": "adviseround-e2e",
+                        "state": "dispatch_bound",
+                        "version": 2,
+                        "execution": {"session_id": session_id, "uncertain": False},
+                    },
+                )
+
+            await page.route("**/v1/model-advisor/rounds/*/confirm", handle_advisor_confirm)
             await page.route("**/v1/info", handle_info)
             await page.route(re.compile(r"/v1/sessions\?.*kind=any"), handle_agent_scan)
             await page.route(
@@ -296,10 +312,18 @@ async def _drive_composer_proposal(
                 await page.get_by_test_id("new-chat-landing-input").press("Enter")
             else:
                 await page.get_by_test_id("new-chat-landing-submit").click()
+            await page.wait_for_url(f"**/c/{session_id}")
+            await expect(page.get_by_role("button", name="Run selected model")).to_have_count(0)
             await expect(
                 page.get_by_text("The GLM checkpoint is a good comparison.")
-            ).to_be_visible()
-            await expect(page.get_by_role("button", name="Get recommendation", exact=True)).to_have_count(0)
+            ).to_have_count(0)
+            assert len(confirmations) == 1
+            assert confirmations[0]["override_candidate_id"] is None
+            assert confirmations[0]["reason"] is None
+            await page.screenshot(path=str(tmp_path / "model-advisor-auto-run.png"))
+            await expect(
+                page.get_by_role("button", name="Get recommendation", exact=True)
+            ).to_have_count(0)
             assert create_bodies == [], "Normal Send bypassed the enabled Advisor"
             assert len(round_posts) == 1
             assert round_posts[0]["human_choice_id"] == _OPENAI_CHOICE_ID
