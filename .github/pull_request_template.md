@@ -1,92 +1,19 @@
 <!--
-For AI-written descriptions:
-- Follow this template (Related issue, Summary, Test Plan, Demo, Type of change, Test coverage, Coverage notes).
-- Keep it concise; reviewers skim long descriptions.
-- For non-trivial changes, include an ELI5 and a diagram (ASCII or mermaid).
-- Keep every section and checkbox row in place so reviewers can skim them.
-- For UI changes (the "UI / frontend change" box below), fill in the Demo
-  section: attach a screenshot or screen recording of the new behaviour.
+Custom fork: follow AGENTS.md and the task's requested delivery.
+Describe only relevant evidence; no mandatory issue, diagram, demo, or new E2E
+just to fill this template. Add an issue link or visuals when genuinely useful.
+Do not claim unrun tests or bypass enforced CI/repository protections.
 -->
-
-## Related issue
-
-<!--
-Link the issue this PR addresses with a closing keyword so GitHub auto-links it
-(and closes it on merge): e.g. `Closes #123`. One issue per PR. Linking also
-gives this PR the issue's priority in the review queue. If an older, still-open
-community PR already closes the same issue, the newer one may be auto-closed as
-a duplicate (maintainer PRs are exempt).
-
-If this is either a `Refactor / chore`, `Docs`, or `Test / CI` *Type of change* 
-below, then no issue is required to be associated. 
--->
-
-Closes #
 
 ## Summary
 
-<!-- What changed and why, in 1-3 bullets or a short paragraph. -->
+<!-- What changed and why. -->
 
-## Test Plan
+## Validation
 
-<!-- How was this change tested? Describe the steps, commands, or scenarios used to verify it. Include a screenshot or recording where helpful. -->
+<!-- Exact commands/checks and results. State anything not run and why. -->
 
-## Demo
+## Risks / remaining work
 
-<!--
-Choose the evidence format that applies. UI / frontend changes require video or
-images. For non-visual changes, put reproducible evidence here or in Test Plan.
--->
-
-- [ ] Visual demo attached below
-- [ ] Non-visual evidence provided below or in Test Plan
-- [ ] Not applicable — no behavioral change
-
-## Type of change
-
-- [ ] Bug fix
-- [ ] Feature
-- [ ] UI / frontend change
-- [ ] Refactor / chore
-- [ ] Docs
-- [ ] Test / CI
-- [ ] Breaking change
-
-## Test coverage
-
-<!-- Check all that apply. Be honest: reviewers and agents use this to spot coverage gaps. -->
-
-- [ ] Unit tests added / updated
-- [ ] Integration tests added / updated
-- [ ] E2E tests added / updated
-- [ ] Manual verification completed
-- [ ] Existing tests cover this change
-- [ ] Not applicable
-
-## Coverage notes
-
-<!--
-Optional — but required if you checked "Manual verification completed" or
-"Not applicable" above. Describe what you verified manually, or why automated
-test coverage is not needed for this change.
--->
-
-## Changelog
-
-<!--
-One line, in the user's voice, describing the user-facing change. The category
-is taken from the "Type of change" boxes above (e.g. UI / frontend change renders
-as "[UI] <your line>"), so don't repeat it here — just describe the change. The
-PR link is added for you.
-
-Lower the bar than docs: DO keep this for small features and UX changes
-(moved/renamed buttons, new flags, copy tweaks).
-
-DELETE THIS WHOLE SECTION if the change isn't noteworthy (CI, refactors,
-test-only changes, dependency bumps with no user impact) — it will simply be
-left out of the changelog. A Breaking change must always keep this section.
-
-Example:  `omnigent run --watch` reruns an agent when files change
--->
-
-<Add a line to describe the change, else delete this section>
+<!-- Material risks, unverified behavior, or remaining work; use None if applicable.
+A PR is not a merge, deployment, or live-acceptance claim. -->

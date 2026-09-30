@@ -1,8 +1,39 @@
 # Agent guidance
 
-See `CONTRIBUTING.md` for the normal contributor workflow.
+`Mortified2896/omnigent` is the development and publication target. Ordinary
+work uses the selected coding harness directly; Polly or another orchestrator
+is not required. This file defines the fork's default repository workflow.
 
-For HomeLab deployment, read HomeLab `docs/codex-server-workflow.md` when the task touches live runtime state. Do not rely on the removed/nonexistent `docs/omnigent-current-topology.md` path or historical eval/wiring runbooks as current topology authority; discover live state on the verified host.
+## Ordinary source work
+
+- Read applicable agent instructions, the relevant source, and nearby tests.
+  Expand inspection only when the task or evidence requires it. Do not load
+  contribution archives, delivery/deployment runbooks, designs, or history as a
+  startup checklist. Source-only work does not require SSH or live O1/O2 checks.
+- Make the smallest coherent change. Reuse a suitable existing task worktree
+  and installed tools; isolate work when branches, concurrent agents, or dirty
+  files would otherwise collide. Do not bootstrap the full stack by default.
+- Validate the changed behavior at the smallest useful scope. Add a focused
+  regression test for a bug or a genuine coverage gap. Use integration/browser
+  tests when they catch risks a unit test cannot; a small UI change does not
+  automatically require E2E tests, screenshots, or recordings. Docs-only work
+  normally needs a diff and relevant link/instruction checks, not an app build.
+  Broaden checks for auth, security, schemas, or cross-cutting behavior; small
+  diffs are not automatically low risk. Do not bypass existing hooks/checks.
+- Follow the requested delivery and applicable session instructions. This repo
+  does not additionally require an issue, PR, independent reviewer, diagram,
+  demo, or full-repository test/lint run for every task. When a PR is needed,
+  report the change, checks actually run, and material risks; upstream
+  contributor ceremony is not a prerequisite for ordinary fork work.
+- `CONTRIBUTING.md` is a short entry point, not another mandatory read.
+  `CONTRIBUTING.upstream.md` preserves the inherited guide for targeted setup
+  reference or an explicitly requested upstream contribution. Do not load it
+  by default; for an upstream PR, verify upstream's current requirements.
+- Report what changed, exact verification, and anything unverified. A prose
+  policy change does not disable CI or repository protection: report an
+  enforced conflicting gate rather than bypassing it or claiming it is gone.
+
+## Always preserve
 
 Before source mutation, verify the repository, branch/base, worktree status, and push target. `omnigent-ai/omnigent` is read-only unless the owner explicitly requests an upstream contribution.
 
@@ -12,9 +43,15 @@ Preserve unrelated changes. Do not merge, deploy, release, replace databases, or
 
 Before continuing another agent's branch, fetch the current GitHub refs and fast-forward the correct task branch where possible. Compare its head and base to GitHub; do not work from chat SHAs alone, reset dirty work, or blindly merge another feature branch.
 
+## Task-specific guidance — read only when relevant
+
+For HomeLab deployment, read HomeLab `docs/codex-server-workflow.md` when the task touches live runtime state. Do not rely on the removed/nonexistent `docs/omnigent-current-topology.md` path or historical eval/wiring runbooks as current topology authority; discover live state on the verified host.
+
 For task scoring and live acceptance chats, follow `docs/task-scoring-and-test-sessions.md`: human tags/comments/outcomes are not scoring-AI input; keep automated reviewers disabled until their safety and outbound-input contracts are proven. Mark test chats at creation, retain inspection evidence, and never clean up unmarked or non-manifest-owned chats.
 
 ## Deployment controller scope
+
+Apply this section only to live deployment tasks, not source-only work.
 
 Read `deploy/docs/deployment-controller-scope.md` before applying an O1/O2 deployment rule. The peer-supervision rule applies only to updates controlled from inside an Omnigent instance. Independent Codex (Mac app or CLI), ZCode, and operator/SSH sessions are external controllers: they may perform owner-authorized deployments of O1 and O2 directly, without an O1/O2 supervisor task, peer approval, or a TARGET/SUPERVISOR pair. Running on the same physical server does not by itself make a controller part of O1/O2.
 
