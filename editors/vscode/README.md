@@ -60,5 +60,7 @@ src/
 └── discovery/          # local-server discovery (pidfile / health / liveness)
 ```
 
-Licensed under Apache-2.0 (see `LICENSE`). Contributions require a DCO sign-off
-(`git commit -s`), per the repository `CONTRIBUTING.md`.
+Licensed under Apache-2.0 (see `LICENSE`). Follow the fork workflow in
+[AGENTS.md](../../AGENTS.md); [CONTRIBUTING.md](../../CONTRIBUTING.md) links to
+the upstream DCO reference when preparing an explicitly requested upstream
+contribution. Existing enforced repository checks still apply.
