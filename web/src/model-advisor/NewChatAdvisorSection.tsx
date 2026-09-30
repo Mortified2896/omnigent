@@ -67,6 +67,8 @@ export interface AdvisorSubmitHandle {
 export interface NewChatAdvisorSectionProps {
   submitRef?: Ref<AdvisorSubmitHandle>;
   submissionBlockReason?: string | null;
+  /** Reserved for choices that need explicit approval before execution. */
+  requireConfirmation?: boolean;
   hostId: string | null;
   task: string;
   humanPick: HumanModelPick | null;
@@ -124,6 +126,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const {
     submitRef,
     submissionBlockReason,
+    requireConfirmation = false,
     hostId,
     task,
     humanPick,
@@ -573,12 +576,40 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   }, [hostId, isCurrentScope, round.busy, round.round]);
 
   const review = providerReview(round.round);
-  const reviewVisible =
+  const awaitingLaunch =
     round.round !== null &&
     (round.round.state === "awaiting_confirmation" || round.round.state === "dispatch_claimed");
+  const reviewVisible = requireConfirmation && awaitingLaunch;
+  const autoLaunchAttempts = useRef(new Set<string>());
   useEffect(() => {
-    onFlowStateChange?.(round.busy, reviewVisible);
-  }, [onFlowStateChange, reviewVisible, round.busy]);
+    const current = round.round;
+    if (
+      requireConfirmation ||
+      round.busy ||
+      round.error ||
+      current?.state !== "awaiting_confirmation" ||
+      current.launch_error ||
+      current.execution.uncertain
+    )
+      return;
+    const identity = `${hostId}:${current.round_id}`;
+    if (autoLaunchAttempts.current.has(identity)) return;
+    autoLaunchAttempts.current.add(identity);
+    handleConfirm(null, null);
+  }, [requireConfirmation, round, hostId, launchAgentId, launchWorkspace, handleConfirm]);
+  useEffect(() => {
+    onFlowStateChange?.(
+      round.busy || (!requireConfirmation && awaitingLaunch && !round.error),
+      reviewVisible,
+    );
+  }, [
+    onFlowStateChange,
+    reviewVisible,
+    round.busy,
+    round.error,
+    requireConfirmation,
+    awaitingLaunch,
+  ]);
   useImperativeHandle(
     submitRef,
     () => ({
@@ -592,11 +623,11 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           return true;
         }
         if (!editor.draft.enabled) return false;
-        if (!round.busy && !reviewVisible) handlePropose();
+        if (!round.busy && !awaitingLaunch) handlePropose();
         return true;
       },
     }),
-    [catalogError, editor.draft, handlePropose, reviewVisible, round.busy],
+    [catalogError, editor.draft, handlePropose, awaitingLaunch, round.busy],
   );
   // Follow-up Send has already requested review. Start it once after its
   // saved settings load; there is no second submission button in the dialog.
@@ -738,9 +769,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           />
         ) : null}
         {!reviewVisible && round.error !== null ? (
-          <p className="text-sm text-destructive" role="alert">
-            {round.error}
-          </p>
+          <div>
+            <p className="text-sm text-destructive" role="alert">
+              {round.error}
+            </p>
+            {round.round?.state === "awaiting_confirmation" && !round.round.execution.uncertain ? (
+              <button type="button" disabled={round.busy} onClick={() => handleConfirm(null, null)}>
+                Retry launch
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {round.round?.state === "blocked" ? (
           <p className="text-sm text-amber-600 dark:text-amber-500" role="alert">
@@ -755,7 +793,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             and will not retry automatically.
           </p>
         ) : null}
-        {round.round?.requested_execution ? (
+        {requireConfirmation && round.round?.requested_execution ? (
           <p className="text-xs text-muted-foreground">
             Requested: {round.round.requested_execution.model ?? "unknown model"}
             {round.round.requested_execution.reasoning_effort
@@ -767,7 +805,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             .
           </p>
         ) : null}
-        {round.round?.actual_execution ? (
+        {requireConfirmation && round.round?.actual_execution ? (
           <p className="text-xs text-muted-foreground">
             Actual:{" "}
             {round.round.actual_execution.status === "observed"

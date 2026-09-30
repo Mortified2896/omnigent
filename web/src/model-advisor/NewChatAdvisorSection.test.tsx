@@ -230,6 +230,7 @@ const GLM_PICK = { model: "glm-5.3", accessLane: "glm-direct", effort: "high" };
 function mountSection(overrides: Partial<Parameters<typeof NewChatAdvisorSection>[0]> = {}) {
   return render(
     <NewChatAdvisorSection
+      requireConfirmation
       hostId="host_1"
       task="Write a test suite"
       humanPick={GLM_PICK}
@@ -649,4 +650,51 @@ it("resolves an explicit model and effort independently of a stale composer conn
     ([url, init]) => url === "/v1/model-advisor/rounds" && init?.method === "POST",
   );
   expect(JSON.parse(posted![1].body).human_choice_id).toBe(LOGICAL_A.choice_id);
+});
+
+it("normal Send automatically runs the assignment once without revealing it", async () => {
+  const onLaunched = vi.fn();
+  const view = mountSection({ requireConfirmation: false, onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  send();
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
+  expect(screen.queryByLabelText("Review model assignment")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Hard task, use/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Requested:/)).not.toBeInTheDocument();
+  const confirms = api.mock.calls.filter(([url]) => String(url).endsWith("/confirm"));
+  expect(confirms).toHaveLength(1);
+  const body = JSON.parse(confirms[0][1].body);
+  expect(body.override_candidate_id).toBeNull();
+  expect(body.reason).toBeNull();
+  view.unmount();
+});
+
+it("automatically runs follow-ups against their existing session", async () => {
+  const onLaunched = vi.fn();
+  mountSection({ requireConfirmation: false, continueSessionId: "existing", onLaunched });
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("existing"));
+  expect(screen.queryByRole("button", { name: "Run selected model" })).not.toBeInTheDocument();
+  expect(api.mock.calls.filter(([url]) => String(url).endsWith("/confirm"))).toHaveLength(1);
+});
+
+it("does not automatically repeat a failed launch and allows an explicit retry", async () => {
+  const original = api.getMockImplementation()!;
+  let attempts = 0;
+  api.mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/confirm") && ++attempts === 1) {
+      return Response.json({ detail: "Launch unavailable" }, { status: 503 });
+    }
+    return original(url, init);
+  });
+  const onLaunched = vi.fn();
+  mountSection({ requireConfirmation: false, onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  await screen.findByText("Launch unavailable");
+  expect(attempts).toBe(1);
+  expect(onLaunched).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry launch" }));
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
+  expect(attempts).toBe(2);
 });
