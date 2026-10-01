@@ -3976,8 +3976,8 @@ function ComposerImpl({
                 </TooltipTrigger>
                 <TooltipContent>
                   {advisorEnabled
-                    ? "Turn off Advisor review for follow-up messages"
-                    : "Review and choose a model before each follow-up"}
+                    ? "Turn off Advisor for follow-up messages"
+                    : "Let Advisor choose the model for each follow-up"}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -4199,8 +4199,8 @@ function ComposerImpl({
           <DialogHeader>
             <DialogTitle>Choose a model for this follow-up</DialogTitle>
             <DialogDescription>
-              Model Advisor reviews the message text before it is sent. Attachments remain in the
-              composer and go to the selected answer model after you confirm.
+              Model Advisor selects a model before sending. Models marked for approval wait for your
+              confirmation or override. Attachments go to the selected answer model.
             </DialogDescription>
           </DialogHeader>
           <div ref={setAdvisorFeedbackTarget} />
