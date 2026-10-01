@@ -123,7 +123,7 @@ def _response_narration(conversation_store: Any, conversation_id: str) -> tuple[
         limit=1000,
         order="desc",
     )
-    items = getattr(items_page, "data", items_page)
+    items = getattr(items_page, "data", items_page) or []
     response_id = None
     for item in items:
         if getattr(item, "status", None) != "completed":
@@ -152,7 +152,7 @@ def _response_narration_for_id(
         limit=1000,
         order="desc",
     )
-    items = getattr(items_page, "data", items_page)
+    items = getattr(items_page, "data", items_page) or []
     chunks = [
         _assistant_text(item)
         for item in reversed(items)
