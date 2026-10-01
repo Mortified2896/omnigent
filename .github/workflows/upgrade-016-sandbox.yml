@@ -47,7 +47,7 @@ jobs:
       CANDIDATE_SHA: ${{ github.sha }}
       UPSTREAM_SHA: 82a74473ee4c01163c4269f4296b10a158f0e47e
       SOURCE: ${{ matrix.source }}
-      EVIDENCE: ${{ runner.temp }}/upgrade-016-sandbox
+      EVIDENCE: /tmp/upgrade-016-sandbox-${{ github.run_id }}-${{ matrix.source }}
     steps:
       - name: Check out candidate and its failure manifest
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -209,6 +209,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: upgrade-016-sandbox-${{ matrix.source }}-${{ github.sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/upgrade-016-sandbox/
+          path: ${{ env.EVIDENCE }}/
           retention-days: 7
           if-no-files-found: error
