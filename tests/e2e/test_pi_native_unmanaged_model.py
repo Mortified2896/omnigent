@@ -418,7 +418,7 @@ def unmanaged_pi_host(
 
 
 # Requires the 0.14.0 contract added in upstream 43d95edee.
-@pytest.mark.min_server_version("0.14.0")
+@pytest.mark.min_server_version("0.6.0")
 @pytest.mark.min_runner_version("0.14.0")
 def test_facet1_prelaunch_model_options_offer_the_hosts_pi_models(
     unmanaged_pi_host: _UnmanagedPiHost,
@@ -449,7 +449,7 @@ def test_facet1_prelaunch_model_options_offer_the_hosts_pi_models(
 
 
 # Requires the 0.14.0 contract added in upstream 43d95edee.
-@pytest.mark.min_server_version("0.14.0")
+@pytest.mark.min_server_version("0.6.0")
 @pytest.mark.min_runner_version("0.14.0")
 def test_facet2_spec_pinned_model_reaches_the_launched_pi(
     unmanaged_pi_host: _UnmanagedPiHost,

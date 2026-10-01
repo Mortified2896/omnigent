@@ -78,7 +78,8 @@ def credential_upstream(
 
 
 @pytest.mark.timeout(300)
-# Requires the 0.15.0 contract added in upstream 8877e51b6.
+# Refresh-source validation and transport require upstream 301ec602d (0.15).
+@pytest.mark.min_server_version("0.15.0")
 @pytest.mark.min_runner_version("0.15.0")
 def test_claude_sdk_credential_proxy_survives_transport_and_renews(
     http_client: httpx.Client,

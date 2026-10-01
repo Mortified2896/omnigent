@@ -488,7 +488,7 @@ def test_cli_imports_recent_codex_chats_as_batch(live_server: str, tmp_path: Pat
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 # Requires the 0.8.0 contract added in upstream 6935fce64.
-@pytest.mark.min_server_version("0.6.0")
+@pytest.mark.min_server_version("0.8.0")
 def test_cli_force_replaces_imported_chat(
     live_server: str,
     tmp_path: Path,
