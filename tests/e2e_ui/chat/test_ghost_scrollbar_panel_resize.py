@@ -214,11 +214,11 @@ def test_fully_visible_transcript_paints_no_scrollbar(
     thumb at rest — and the thumb's geometry must never imply hidden content
     that does not exist (the report's wrong-"scrollbar height" half)."""
     base_url, session_id = seeded_session
-    # 140 words: still fits the viewport with ~180px to spare, but on the
+    # 110 words: fits with the current outcome/scoring controls too, but on the
     # unfixed build the spacer's +8px phantom range exists already at rest,
     # so the (constant-height) thumb renders parked near the track's bottom —
     # advertising a screenful of hidden content below when there is none.
-    _seed_single_turn(session_id, words=140)
+    _seed_single_turn(session_id, words=110)
 
     page.set_viewport_size(_VIEWPORT)
     page.goto(f"{base_url}/c/{session_id}")

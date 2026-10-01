@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import asc, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import (
@@ -27,6 +28,16 @@ class GeneratedResponseAudio:
     sample_rate: int | None
     error_code: str | None
     updated_at: int
+
+
+def _affected_rows(result: object) -> int:
+    """Require a known UPDATE row count before committing an audio state change."""
+    if not isinstance(result, CursorResult):
+        raise TypeError("generated audio update did not return a CursorResult")
+    count = result.rowcount
+    if count < 0:
+        raise RuntimeError("generated audio update returned an unknown row count")
+    return count
 
 
 def _to_entity(row: SqlGeneratedResponseAudio) -> GeneratedResponseAudio:
@@ -120,7 +131,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.status == "failed")
                 .values(status="pending", error_code=None, updated_at=now_epoch())
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
 
     def claim_pending(self, conversation_id: str, response_id: str) -> bool:
         with self._session("claim_generated_audio") as session:
@@ -132,7 +143,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.status == "pending")
                 .values(status="processing", updated_at=now_epoch())
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
 
     def recover_processing(self) -> int:
         """Recover only jobs stale for 30 minutes after a worker/server crash.
@@ -149,7 +160,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.updated_at < stale_before)
                 .values(status="pending", updated_at=now_epoch())
             )
-            return int(result.rowcount or 0)
+            return _affected_rows(result)
 
     def list_pending_all_workspaces(self) -> list[GeneratedResponseAudio]:
         with self._session("list_pending_generated_audio") as session:
@@ -192,7 +203,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                     updated_at=now_epoch(),
                 )
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
 
     def mark_failed(self, conversation_id: str, response_id: str, error_code: str) -> bool:
         with self._session("fail_generated_audio") as session:
@@ -204,4 +215,4 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.status.in_(("pending", "processing")))
                 .values(status="failed", error_code=error_code[:64], updated_at=now_epoch())
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1

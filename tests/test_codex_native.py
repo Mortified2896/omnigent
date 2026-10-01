@@ -3636,9 +3636,11 @@ def test_forwarder_posts_codex_usage_live_per_frame(
     assert posts_after_usage_updates[0]["data"] == {
         "context_window": 200_000,
         "cumulative_input_tokens": 100,
+        "context_tokens": 100,
     }
     assert posts_after_usage_updates[1]["data"] == {
         "cumulative_input_tokens": 150,
+        "context_tokens": 150,
     }
     # Text still streams via its own coalescer — the per-frame usage posts
     # neither swallowed nor blocked it.

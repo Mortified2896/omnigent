@@ -119,8 +119,7 @@ def test_finalizer_preserves_after_conditional_delete_race(
         e2e_conftest.httpx,
         "delete",
         lambda *args, **kwargs: (
-            delete_calls.append((args, kwargs))
-            or SimpleNamespace(status_code=412)
+            delete_calls.append((args, kwargs)) or SimpleNamespace(status_code=412)
         ),
     )
 

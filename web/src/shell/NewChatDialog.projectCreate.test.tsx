@@ -312,6 +312,7 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
     expect(body.host_id).toBe("host_1");
     expect(body.workspace).toBe(RECENT_WORKSPACE);
     expect(body.labels).toEqual({
+      "omnigent.routing_policy": "manual",
       "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
     });
   });

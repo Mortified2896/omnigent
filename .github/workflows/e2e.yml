@@ -59,9 +59,14 @@ jobs:
   # don't need the full suite — just exit fast.
   gate:
     if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-      github.event.label.name == 'skip-security-scan'
+      (github.event_name != 'schedule' ||
+       github.repository == 'omnigent-ai/omnigent' ||
+       vars.ENABLE_SCHEDULED_E2E == 'true') &&
+      (
+        github.event_name != 'pull_request' ||
+        (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+        github.event.label.name == 'skip-security-scan'
+      )
     uses: ./.github/workflows/security-gate.yml
 
   # Shard matrix (e2e-shard-matrix.sh, shared with e2e-ui.yml). Fork PRs run by
@@ -99,6 +104,9 @@ jobs:
     # Draft PRs resolve to an EMPTY matrix in `setup`, so no shard runs for
     # them. Fork PRs DO run (mock LLM, no secrets) -- same as ci.yml.
     needs: setup
+    # GitHub evaluates job-level if before expanding strategy.matrix. An empty
+    # include list must be skipped here, not passed to matrix expansion.
+    if: needs.setup.outputs.matrix != '{"include":[]}'
     runs-on: ubuntu-latest
     # Job-level cap (composite-action run steps can't set timeout-minutes):
     # ~30 min of tests + setup, replacing the old per-step 30-min backstop.

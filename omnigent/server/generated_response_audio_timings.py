@@ -9,7 +9,6 @@ import re
 import unicodedata
 from typing import Any
 
-
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_SIDECAR_BYTES = 8 * 1024 * 1024
 _MAX_UNITS = 100_000

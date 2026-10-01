@@ -157,7 +157,7 @@ def test_workspace_isolation(conversation_store):
 
 
 def test_database_rejects_invalid_rating(conversation_store):
-    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.exc import IntegrityError, OperationalError
 
     from omnigent.db.db_models import SqlResponseFeedback
 
@@ -165,5 +165,8 @@ def test_database_rejects_invalid_rating(conversation_store):
     conv = store.create_conversation()
     answer(store, conv.id)
     store.put_response_feedback(conv.id, "response", "local", 1)
-    with pytest.raises(IntegrityError), store._conv_session("test_rating_constraint") as session:
-        session.execute(update(SqlResponseFeedback).values(rating=0))
+    # mysqlclient classifies MySQL CHECK violation 3819 as OperationalError.
+    with pytest.raises((IntegrityError, OperationalError)) as caught:
+        with store._conv_session("test_rating_constraint") as session:
+            session.execute(update(SqlResponseFeedback).values(rating=0))
+    assert "ck_response_feedback_rating" in str(caught.value)

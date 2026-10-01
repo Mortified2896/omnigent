@@ -185,6 +185,8 @@ def test_scan_allows_named_non_model_identifiers(tmp_path: Path) -> None:
         'SOURCE_POOL_NAME = "custom/o3-codex-pool"\n'
         'ADVISER_COMBO_NAME = "custom/o3-routing-adviser"\n'
         'STATE_DIRECTORY_NAME = "o3-routing-review"\n'
+        '_O1_SERVICE_CGROUP = "omnigent-o1"\n'
+        '_O2_SERVICE_CGROUP = "omnigent-o2"\n'
     )
 
     assert scan(registry) == []

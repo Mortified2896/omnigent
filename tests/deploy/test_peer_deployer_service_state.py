@@ -13,20 +13,16 @@ These tests specifically cover:
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SERVICE_STATE = (
-    REPO_ROOT / "deploy" / "scripts" / "peer_deployer" / "service_state.py"
-)
+SERVICE_STATE = REPO_ROOT / "deploy" / "scripts" / "peer_deployer" / "service_state.py"
 SPEC = importlib.util.spec_from_file_location("peer_deployer_service_state", SERVICE_STATE)
 assert SPEC is not None and SPEC.loader is not None
 service_state = importlib.util.module_from_spec(SPEC)
@@ -36,6 +32,7 @@ SPEC.loader.exec_module(service_state)
 # ---------------------------------------------------------------------------
 # Direct unit tests of the helper module.
 # ---------------------------------------------------------------------------
+
 
 class FakeCompleted:
     def __init__(self, stdout: str, stderr: str = "", returncode: int = 0):
@@ -167,6 +164,7 @@ def test_is_inactive_treats_unknown_as_inactive(monkeypatch: pytest.MonkeyPatch)
     classifies unknown units as inactive. This guarantees that a
     missing unit does not silently succeed a deployment gate.
     """
+
     def fake_run(cmd, **kwargs):
         # First call is `is_known` (systemctl cat), returns no files.
         # Subsequent calls also return no state.
@@ -179,6 +177,7 @@ def test_is_inactive_treats_unknown_as_inactive(monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------------------
 # Regression tests for the broken `is-active | grep` pattern under pipefail.
 # ---------------------------------------------------------------------------
+
 
 class TestPipefailRegression:
     """The 2026-08-08 incident used:
@@ -197,13 +196,17 @@ class TestPipefailRegression:
         # We pick a unit that is genuinely inactive on the host.
         # Some hosts have unit "fail2ban.service" installed but inactive.
         candidate = "omnigent-test-pipefail-regression.service"
-        with open(os.devnull, "w") as devnull:
+        with open(os.devnull, "w"):
             # Use a fake unit that doesn't exist; systemctl is-active
             # returns exit 3 for unknown units (active: inactive).
             proc = subprocess.run(
-                ["bash", "-c", f"set -o pipefail; systemctl is-active {candidate} | grep -q '^inactive$' && echo MATCHED || echo MISSED"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                [
+                    "bash",
+                    "-c",
+                    f"set -o pipefail; systemctl is-active {candidate} | grep -q "
+                    f"'^inactive$' && echo MATCHED || echo MISSED",
+                ],
+                capture_output=True,
                 text=True,
             )
         # The buggy pipeline cannot determine "inactive" because
@@ -226,7 +229,9 @@ class TestPipefailRegression:
         candidate = "dbus.service"
         active = subprocess.run(
             ["systemctl", "is-active", candidate],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if active.stdout.strip() != "active":
             pytest.skip("dbus.service is not active here")
@@ -237,8 +242,14 @@ class TestPipefailRegression:
         # not because grep didn't match but because pipefail
         # propagated systemctl's exit 3.
         proc = subprocess.run(
-            ["bash", "-c", f"set -o pipefail; systemctl is-active {candidate} | grep -q '^inactive$' && echo IDLE || echo RUNNING"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            [
+                "bash",
+                "-c",
+                f"set -o pipefail; systemctl is-active {candidate} | grep -q '^inactive$' "
+                f"&& echo IDLE || echo RUNNING",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert "RUNNING" in proc.stdout
 
@@ -246,6 +257,7 @@ class TestPipefailRegression:
 # ---------------------------------------------------------------------------
 # Direct invocation of the bash library.
 # ---------------------------------------------------------------------------
+
 
 class TestBashLibrary:
     """Verify the vetted bash library distinguishes states correctly."""
@@ -264,7 +276,8 @@ class TestBashLibrary:
         bash, lib = sourced
         return subprocess.run(
             [bash, "-c", f"set -euo pipefail; source {lib}; {snippet}"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
 
     def test_is_active_strict_returns_truthy_for_active(self, sourced) -> None:
@@ -272,7 +285,9 @@ class TestBashLibrary:
             pytest.skip("systemctl not available")
         active = subprocess.run(
             ["systemctl", "is-active", "dbus.service"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if active.stdout.strip() != "active":
             pytest.skip("dbus.service is not active here")
@@ -294,7 +309,8 @@ class TestBashLibrary:
             pytest.skip("systemctl not available")
         proc = self._run(
             sourced,
-            "is_inactive_strict omnigent-does-not-exist-test-only.service && echo IDLE || echo NOT-INACTIVE",
+            "is_inactive_strict omnigent-does-not-exist-test-only.service && echo "
+            "IDLE || echo NOT-INACTIVE",
         )
         assert proc.returncode == 0
         assert "IDLE" in proc.stdout

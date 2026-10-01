@@ -99,7 +99,7 @@ def _scroll_to_distance_from_bottom(page: Page, distance: int) -> dict:
                 'textarea[aria-label="Message the agent"]'
             ).closest('form');
             const scroller = form.parentElement.querySelector('[role="log"] > div');
-            scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+            scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
             scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight - distance;
             scroller.dispatchEvent(new Event('scroll'));
             return {
@@ -585,6 +585,12 @@ def test_composer_growth_reflows_transcript_without_covering_output(
         composer.press("Backspace")
     _settled_geometry(page)
     _append_streamed_output(page, 120)
+    _settled_geometry(page)
+    # Output can start a pending stick-to-bottom animation. Escape it before
+    # measuring the native reader scroll; otherwise a queued frame moves the
+    # target between our measurement and the scroll write.
+    page.locator('[role="log"] > div').first.hover()
+    page.mouse.wheel(0, -70)
     after_more_output = _settled_geometry(page)
     user_distance = after_more_output["distanceFromBottom"] + 70
     _scroll_to_distance_from_bottom(page, user_distance)

@@ -771,7 +771,10 @@ describe("NewChatLandingScreen create flow", () => {
       workspace: SEEDED_WORKSPACE,
     });
     // A plain YAML agent carries no terminal-wrapper labels.
-    expect(body.labels).toEqual({ "omnigent.routing_policy": "manual" });
+    expect(body.labels).toEqual({
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
+      "omnigent.routing_policy": "manual",
+    });
 
     // On success the screen routes to the freshly created session.
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/c/conv_new"));
@@ -805,6 +808,37 @@ describe("NewChatLandingScreen create flow", () => {
     );
   });
 
+  it.each([true, false])(
+    "keeps a newer parked draft when an older create settles (success=%s)",
+    async (success) => {
+      let settle!: (response: Response) => void;
+      vi.mocked(authenticatedFetch).mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          settle = resolve;
+        }),
+      );
+      renderLanding();
+      await waitForWorkspaceSeed();
+      typeMessage("older submitted task");
+      fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+      await waitFor(() => expect(authenticatedFetch).toHaveBeenCalled());
+      cleanup();
+      renderLanding();
+      typeMessage("newer parked task");
+      cleanup();
+      await act(async () => {
+        settle({
+          ok: success,
+          status: success ? 200 : 500,
+          json: async () => ({ id: "conv_old" }),
+          text: async () => "old create failed",
+        } as Response);
+      });
+      renderLanding();
+      expect(screen.getByTestId("new-chat-landing-input")).toHaveValue("newer parked task");
+    },
+  );
+
   it("recognizes only the session it just asked for among the stream's pushes", async () => {
     vi.mocked(authenticatedFetch).mockReturnValueOnce(
       new Promise<Response>(() => {}) as ReturnType<typeof authenticatedFetch>,
@@ -817,22 +851,24 @@ describe("NewChatLandingScreen create flow", () => {
 
     await waitFor(() => expect(pushMatchers).toHaveLength(1));
     const isOurs = pushMatchers[0]!;
+    const [, request] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const token = JSON.parse(request.body as string).labels["omnigent.client_create_token"];
     const ours: SessionListWireItem = {
+      labels: { "omnigent.client_create_token": token },
       id: "conv_mine",
       agent_id: "ag_hello",
       host_id: "host_1",
     };
     expect(isOurs(ours)).toBe(true);
 
-    // The stream announces every session that becomes visible to this user and
-    // restates the ones already on screen, so each of these would otherwise be
-    // mistaken for the create's own row: a session started elsewhere on another
-    // agent or host, a sub-agent child (never what a create returns), and a row
-    // this tab was already showing.
-    expect(isOurs({ ...ours, agent_id: "ag_other" })).toBe(false);
-    expect(isOurs({ ...ours, host_id: "host_2" })).toBe(false);
+    // A concurrent create on the same agent and host must not steal navigation.
+    expect(isOurs({ ...ours, labels: {} })).toBe(false);
+    expect(isOurs({ ...ours, labels: { "omnigent.client_create_token": "another-create" } })).toBe(
+      false,
+    );
     expect(isOurs({ ...ours, parent_session_id: "conv_parent" })).toBe(false);
-    expect(isOurs({ ...ours, id: "conv_existing" })).toBe(false);
+    // The server may default-fill a changed project agent/host; the token remains authoritative.
+    expect(isOurs({ ...ours, agent_id: "ag_other", host_id: "host_2" })).toBe(true);
   });
 
   it("shows a busy spinner on the submit button while the create is in flight", async () => {
@@ -1160,6 +1196,7 @@ describe("NewChatLandingScreen create flow", () => {
     // the UI keys off to render the terminal wrapper. Dropping them would make
     // a native Claude Code session render as a plain chat.
     expect(body.labels).toEqual({
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
       "omnigent.routing_policy": "manual",
       "omnigent.ui": "terminal",
       "omnigent.wrapper": "claude-code-native-ui",
@@ -1188,6 +1225,7 @@ describe("NewChatLandingScreen create flow", () => {
     // agent name (unlike claude, whose wrapper is "claude-code-native-ui").
     // The runner/server key off exactly this value to boot the agy terminal.
     expect(body.labels).toEqual({
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
       "omnigent.routing_policy": "manual",
       "omnigent.ui": "terminal",
       "omnigent.wrapper": "antigravity-native-ui",

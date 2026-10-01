@@ -16,6 +16,7 @@ generic operations on:
   * paths in O2's release root
   * empty / whitespace / NUL-byte paths
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -34,7 +35,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -99,30 +101,33 @@ def _restore_o2_deployment_root(original: Path) -> None:
 class TestIntrinsicForbidden:
     """The intrinsic-forbidden list must always be rejected."""
 
-    @pytest.mark.parametrize("path", [
-        Path("/"),
-        Path("/opt"),
-        Path("/opt/omnigent"),
-        Path("/opt/omnigent/venv"),
-        Path("/opt/omnigent-production"),
-        Path("/var"),
-        Path("/var/lib"),
-        Path("/var/lib/omnigent"),
-        Path("/var/lib/omnigent-production"),
-        Path("/etc"),
-        Path("/etc/systemd"),
-        Path("/etc/omnigent"),
-        Path("/etc/omnigent-production"),
-        Path("/home"),
-        Path("/root"),
-        Path("/tmp"),
-        Path("/usr"),
-        Path("/bin"),
-        Path("/proc"),
-        Path("/sys"),
-        Path("/dev"),
-        Path("/run"),
-    ])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            Path("/"),
+            Path("/opt"),
+            Path("/opt/omnigent"),
+            Path("/opt/omnigent/venv"),
+            Path("/opt/omnigent-production"),
+            Path("/var"),
+            Path("/var/lib"),
+            Path("/var/lib/omnigent"),
+            Path("/var/lib/omnigent-production"),
+            Path("/etc"),
+            Path("/etc/systemd"),
+            Path("/etc/omnigent"),
+            Path("/etc/omnigent-production"),
+            Path("/home"),
+            Path("/root"),
+            Path("/tmp"),
+            Path("/usr"),
+            Path("/bin"),
+            Path("/proc"),
+            Path("/sys"),
+            Path("/dev"),
+            Path("/run"),
+        ],
+    )
     def test_intrinsic_forbidden_rejected(self, path: Path) -> None:
         with pytest.raises(path_safety.PathSafetyError):
             path_safety.assert_on_allowlist(
@@ -133,7 +138,8 @@ class TestIntrinsicForbidden:
             )
 
     def test_o1_venv_is_intrinsic_forbidden(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """The canonical O1 active runtime path is forbidden."""
         original = _set_o1_deployment_root(tmp_path)
@@ -155,26 +161,33 @@ class TestTraversalAndEmptyPaths:
     def test_rejects_empty_path(self) -> None:
         with pytest.raises(path_safety.PathSafetyError, match="empty"):
             path_safety.assert_on_allowlist(
-                "", operation="delete",
-                target=identity.O1, supervisor=identity.O2,
+                "",
+                operation="delete",
+                target=identity.O1,
+                supervisor=identity.O2,
             )
 
     def test_rejects_whitespace_path(self) -> None:
         with pytest.raises(path_safety.PathSafetyError):
             path_safety.assert_on_allowlist(
-                "   ", operation="delete",
-                target=identity.O1, supervisor=identity.O2,
+                "   ",
+                operation="delete",
+                target=identity.O1,
+                supervisor=identity.O2,
             )
 
     def test_rejects_path_with_nul(self) -> None:
         with pytest.raises(path_safety.PathSafetyError, match="NUL"):
             path_safety.assert_on_allowlist(
-                "/opt/omnigent\x00/test", operation="delete",
-                target=identity.O1, supervisor=identity.O2,
+                "/opt/omnigent\x00/test",
+                operation="delete",
+                target=identity.O1,
+                supervisor=identity.O2,
             )
 
     def test_rejects_double_dot_even_in_valid_subpath(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A path that uses '..' to escape its parent is rejected."""
         original = _set_o1_deployment_root(tmp_path)
@@ -182,14 +195,17 @@ class TestTraversalAndEmptyPaths:
             sneaky = identity.O1.deployment_root / "staging" / "tx1" / ".." / ".." / "venv"
             with pytest.raises(path_safety.PathSafetyError):
                 path_safety.assert_on_allowlist(
-                    sneaky, operation="delete",
-                    target=identity.O1, supervisor=identity.O2,
+                    sneaky,
+                    operation="delete",
+                    target=identity.O1,
+                    supervisor=identity.O2,
                 )
         finally:
             _restore_o1_deployment_root(original)
 
     def test_rejects_symlink_to_protected_path(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A symlink to a protected path is rejected."""
         original = _set_o1_deployment_root(tmp_path)
@@ -201,8 +217,10 @@ class TestTraversalAndEmptyPaths:
             os.symlink(protected, safe_looking)
             with pytest.raises(path_safety.PathSafetyError, match="active runtime"):
                 path_safety.assert_on_allowlist(
-                    safe_looking, operation="delete",
-                    target=identity.O1, supervisor=identity.O2,
+                    safe_looking,
+                    operation="delete",
+                    target=identity.O1,
+                    supervisor=identity.O2,
                 )
         finally:
             _restore_o1_deployment_root(original)
@@ -212,7 +230,8 @@ class TestO2Protection:
     """O2's deployment root, release, and DB are protected."""
 
     def test_o2_deployment_root_protected(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """The O2 deployment root itself is protected."""
         with pytest.raises(path_safety.PathSafetyError, match="intrinsic-forbidden"):
@@ -224,7 +243,8 @@ class TestO2Protection:
             )
 
     def test_o2_release_path_protected(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A path under O2's releases/ is protected against deletion."""
         original = _set_o2_deployment_root(tmp_path)
@@ -234,14 +254,17 @@ class TestO2Protection:
             release.mkdir(parents=True, exist_ok=True)
             with pytest.raises(path_safety.PathSafetyError, match="O2"):
                 path_safety.assert_on_allowlist(
-                    release, operation="delete",
-                    target=identity.O1, supervisor=identity.O2,
+                    release,
+                    operation="delete",
+                    target=identity.O1,
+                    supervisor=identity.O2,
                 )
         finally:
             _restore_o2_deployment_root(original)
 
     def test_o2_db_path_protected(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A path under O2's DB home is protected."""
         original = _set_o2_deployment_root(tmp_path)
@@ -256,8 +279,10 @@ class TestO2Protection:
             db.write_text("x")
             with pytest.raises(path_safety.PathSafetyError, match="O2"):
                 path_safety.assert_on_allowlist(
-                    db, operation="delete",
-                    target=identity.O1, supervisor=identity.O2,
+                    db,
+                    operation="delete",
+                    target=identity.O1,
+                    supervisor=identity.O2,
                 )
         finally:
             _restore_o2_deployment_root(original)

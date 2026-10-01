@@ -134,8 +134,9 @@ runs:
         venv="$RUNNER_TEMP/ui-server-env"
         git worktree add --detach "$src" "$tag"
         uv venv --python 3.12 "$venv"
-        uv pip install --python "$venv/bin/python" \
-          -e "$src" -e "$src/sdks/python-client" -e "$src/sdks/ui"
+        # Preserve the release's dependency graph as well as its source.
+        UV_PROJECT_ENVIRONMENT="$venv" uv sync --project "$src" --locked \
+          --extra all --no-dev --python "$venv/bin/python"
         "$venv/bin/omnigent" --version
         echo "OMNIGENT_COMPAT_SERVER_PYTHON=$venv/bin/python" >> "$GITHUB_ENV"
         echo "OMNIGENT_COMPAT_SERVER_VERSION=${tag#v}" >> "$GITHUB_ENV"
@@ -155,11 +156,19 @@ runs:
         fi
         src="$RUNNER_TEMP/ui-spa-src"
         git worktree add --detach "$src" "$tag"
-        # Build the old SPA in its own directory. pnpm install uses the
-        # old lock file; the build output lands in web/dist/ inside src.
+        # Use the package manager recorded by the release checkout. Older
+        # releases use npm's per-web lock; current releases use pnpm's root lock.
         cd "$src"
-        pnpm install --frozen-lockfile --filter web
-        pnpm --filter web run build
+        if [ -f pnpm-lock.yaml ]; then
+          pnpm install --frozen-lockfile --filter web
+          pnpm --filter web run build
+        elif [ -f web/package-lock.json ]; then
+          # The npm-era release lock was generated with this peer mode.
+          npm --prefix web ci --legacy-peer-deps
+          npm --prefix web run build
+        else
+          echo "No supported locked SPA install in $tag" >&2; exit 1
+        fi
         # vite.config.ts writes to ../omnigent/server/static/web-ui relative
         # to web/ — resolve to the absolute path inside the old checkout.
         built=$(cd web && node -e "const p=require('./vite.config.ts')" 2>/dev/null \

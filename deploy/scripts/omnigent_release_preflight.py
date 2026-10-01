@@ -117,13 +117,15 @@ def inspect_wheel(wheel: Path, expected_sha: str) -> dict[str, str]:
             # and use a lighter check that only proves the wheel is
             # a valid omnigent SDK at the same release SHA.
             metadata_names = sorted(
-                name for name in names
+                name
+                for name in names
                 if re.fullmatch(r"omnigent_[a-z_]+-[^/]+\.dist-info/METADATA", name)
                 or re.fullmatch(r"omnigent-[^/]+\.dist-info/METADATA", name)
             )
             if len(metadata_names) != 1:
                 raise PreflightError(
-                    f"wheel must contain exactly one omnigent* dist-info METADATA, found {metadata_names}"
+                    f"wheel must contain exactly one omnigent* dist-info METADATA, "
+                    f"found {metadata_names}"
                 )
             metadata = Parser().parsestr(archive.read(metadata_names[0]).decode())
             name = (metadata.get("Name") or "").lower()
@@ -141,7 +143,8 @@ def inspect_wheel(wheel: Path, expected_sha: str) -> dict[str, str]:
                 built_sha = _literal_assignment(archive.read(build_info).decode(), "COMMIT_SHA")
                 if built_sha != expected_sha:
                     raise PreflightError(
-                        f"wheel commit SHA {built_sha!r} does not match requested SHA {expected_sha}"
+                        f"wheel commit SHA {built_sha!r} does not match requested "
+                        f"SHA {expected_sha}"
                     )
                 prefix = "omnigent/server/static/web-ui/"
                 _validate_spa(names, lambda name: archive.read(name).decode(), prefix)

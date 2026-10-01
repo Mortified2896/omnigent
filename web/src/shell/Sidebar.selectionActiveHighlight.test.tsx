@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { forwardRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useChatStore } from "@/store/chatStore";
 import type { Conversation } from "@/hooks/useConversations";
 import type { Session } from "@/lib/types";
 import { type OmnigentLinkProps, reactRouterRouting, RoutingProvider } from "@/lib/routing";
@@ -142,13 +143,23 @@ function renderAt(initialEntry: string, holdRoute = false) {
   );
 }
 
+const originalSwitchTo = useChatStore.getState().switchTo;
+const switchTo = vi.fn<typeof originalSwitchTo>().mockResolvedValue(undefined);
+
 beforeEach(() => {
+  // These row-only tests do not mount ChatPage or initialize its stream client.
+  // Assert the navigation boundary without starting a real session bind.
+  switchTo.mockClear();
+  useChatStore.setState({ switchTo });
   useConvMock.mockReset();
   getSessionSlimMock.mockReset();
   localStorage.clear();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useChatStore.setState({ switchTo: originalSwitchTo });
+});
 
 function rowFor(id: string): HTMLElement {
   return screen.getByRole("link", { name: new RegExp(id) });
@@ -163,10 +174,23 @@ describe("sidebar active highlight in selection mode", () => {
     await waitFor(() => expect(rowFor("conv_active")).toHaveClass("bg-[var(--sidebar-active)]"));
 
     fireEvent.click(rowFor("conv_other"));
+    expect(switchTo).toHaveBeenCalledWith("conv_other");
 
     expect(rowFor("conv_other")).toHaveClass("bg-[var(--sidebar-active)]");
     expect(rowFor("conv_active")).not.toHaveClass("bg-[var(--sidebar-active)]");
   });
+
+  it.each(["ctrlKey", "metaKey", "shiftKey", "altKey"])(
+    "does not bind the current tab for a %s-modified click",
+    async (modifier) => {
+      mockConversations([topLevelConv("conv_active"), topLevelConv("conv_other")]);
+      getSessionSlimMock.mockImplementation((id: string) => Promise.resolve(snapshot(id, null)));
+      renderAt("/c/conv_active", true);
+      await waitFor(() => expect(rowFor("conv_active")).toHaveClass("bg-[var(--sidebar-active)]"));
+      fireEvent.click(rowFor("conv_other"), { [modifier]: true });
+      expect(switchTo).not.toHaveBeenCalled();
+    },
+  );
 
   it("drops the active-session highlight once selection mode is on", async () => {
     mockConversations([topLevelConv("conv_active"), topLevelConv("conv_other")]);
@@ -197,6 +221,7 @@ describe("sidebar active highlight in selection mode", () => {
     // Explicitly select the OTHER row — it gets the highlight; the active row
     // stays unhighlighted because it wasn't selected.
     fireEvent.click(rowFor("conv_other"));
+    expect(switchTo).not.toHaveBeenCalled();
     await waitFor(() => expect(rowFor("conv_other")).toHaveClass("bg-[var(--sidebar-active)]"));
     expect(rowFor("conv_active")).not.toHaveClass("bg-[var(--sidebar-active)]");
   });

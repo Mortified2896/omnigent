@@ -131,22 +131,19 @@ def test_settings_import_panel_imports_one_session_by_id(
     }
 
 
-def test_empty_landing_import_button_opens_settings(
+def test_empty_landing_settings_entry_opens_import(
     page: Page,
     live_server: str,
 ) -> None:
-    """Empty landing: the single import button navigates into Settings › Import."""
+    """Reach import from the current landing's Settings entry and section link."""
     page.route(_SESSIONS_RE, lambda r: _fulfill_json(r, _EMPTY_LIST_BODY))
     page.route("**/v1/hosts", lambda r: _fulfill_json(r, {"hosts": []}))
 
     page.goto(f"{live_server}/")
 
     expect(page.get_by_test_id("new-chat-landing")).to_be_visible(timeout=30_000)
-    # No sessions yet, so the landing offers the single import affordance.
-    import_button = page.get_by_test_id("landing-import-sessions")
-    expect(import_button).to_be_visible(timeout=30_000)
-    expect(import_button).to_contain_text("Import your recent sessions")
-    import_button.click()
+    page.get_by_role("link", name="Settings", exact=True).click()
+    page.get_by_role("link", name="Import sessions", exact=True).click()
 
     page.wait_for_url("**/settings/import", timeout=30_000)
     # With no online host the panel shows the connect-a-machine notice, proving

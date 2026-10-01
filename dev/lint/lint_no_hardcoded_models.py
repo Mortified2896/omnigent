@@ -78,6 +78,8 @@ NON_MODEL_IDENTIFIER_NAMES = frozenset(
         "O3_PROFILE_FINGERPRINT_KEY",
         "READINESS_FILENAME",
         "READINESS_MANIFEST_FILENAME",
+        "_O1_SERVICE_CGROUP",
+        "_O2_SERVICE_CGROUP",
     }
 )
 
@@ -253,9 +255,19 @@ def _audited_candidate_model_literals(tree: ast.Module) -> set[ast.Constant]:
 
 
 def _non_model_identifier_literals(tree: ast.Module) -> set[ast.Constant]:
-    """Return explicitly named Combo and state-directory identifiers."""
+    """Return named non-model identifiers, with exact values for service cgroups."""
     assignments = _module_string_assignments(tree)
-    return {literal for name, literal in assignments.items() if name in NON_MODEL_IDENTIFIER_NAMES}
+    exempt: set[ast.Constant] = set()
+    for name, literal in assignments.items():
+        if name not in NON_MODEL_IDENTIFIER_NAMES:
+            continue
+        if name in {"_O1_SERVICE_CGROUP", "_O2_SERVICE_CGROUP"}:
+            # A service alias must not become a general model-literal escape hatch.
+            instance_id = name.split("_")[1].lower()
+            if literal.value != f"omnigent-{instance_id}":
+                continue
+        exempt.add(literal)
+    return exempt
 
 
 def _docstring_nodes(tree: ast.Module) -> set[ast.Constant]:

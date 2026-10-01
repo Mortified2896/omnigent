@@ -55,6 +55,7 @@ Anything else is rejected. This includes:
   * empty paths
   * paths owned by the O2 home (DB, artifacts, logs)
 """
+
 from __future__ import annotations
 
 import os
@@ -124,10 +125,7 @@ def _is_protected_root(path: Path) -> bool:
     their descendants. (E.g. /opt/omnigent/venv is protected,
     but /opt/omnigent/staging/<TX_ID> is not.)
     """
-    for forbidden in INTRINSIC_FORBIDDEN:
-        if path == forbidden:
-            return True
-    return False
+    return any(path == forbidden for forbidden in INTRINSIC_FORBIDDEN)
 
 
 def _normalize(path: Path | str) -> Path:
@@ -183,9 +181,7 @@ def assert_on_allowlist(
 
     # Exact-match protection for intrinsic-forbidden paths.
     if _is_protected_root(normalized):
-        raise PathSafetyError(
-            f"REFUSED: {normalized} is an intrinsic-forbidden path"
-        )
+        raise PathSafetyError(f"REFUSED: {normalized} is an intrinsic-forbidden path")
 
     # Resolve through symlinks. Nonexistent paths are handled
     # by the caller; we deliberately raise to force the caller
@@ -193,17 +189,13 @@ def assert_on_allowlist(
     try:
         resolved = _resolve(normalized)
     except OSError as exc:
-        raise PathSafetyError(
-            f"REFUSED: cannot resolve {normalized}: {exc}"
-        ) from exc
+        raise PathSafetyError(f"REFUSED: cannot resolve {normalized}: {exc}") from exc
 
     # Post-resolution forbidden check: even if the input path
     # was not intrinsic-forbidden, the resolved path may be
     # an intrinsic-forbidden path (e.g. via a symlink).
     if _is_protected_root(resolved):
-        raise PathSafetyError(
-            f"REFUSED: {path} resolves to intrinsic-forbidden {resolved}"
-        )
+        raise PathSafetyError(f"REFUSED: {path} resolves to intrinsic-forbidden {resolved}")
 
     # Intersect with the allowed-roots list, if any.
     if allowed_roots is not None:
@@ -229,21 +221,18 @@ def assert_on_allowlist(
         o1_venv = target.deployment_root / "venv"
         if resolved == _resolve(o1_venv):
             raise PathSafetyError(
-                f"REFUSED: {resolved} is O1's active runtime and cannot "
-                f"be {operation}d"
+                f"REFUSED: {resolved} is O1's active runtime and cannot be {operation}d"
             )
         # O2's deployment root is protected.
         if _is_under(resolved, supervisor.deployment_root):
             raise PathSafetyError(
-                f"REFUSED: {resolved} is under O2's deployment root and "
-                f"cannot be {operation}d"
+                f"REFUSED: {resolved} is under O2's deployment root and cannot be {operation}d"
             )
         # O2's home is protected.
         o2_home = identity.HOME_MAPPING.get(str(supervisor.deployment_root))
         if o2_home is not None and _is_under(resolved, o2_home):
             raise PathSafetyError(
-                f"REFUSED: {resolved} is under O2's home and cannot "
-                f"be {operation}d"
+                f"REFUSED: {resolved} is under O2's home and cannot be {operation}d"
             )
 
     return resolved
@@ -302,8 +291,8 @@ __all__ = [
     "PathSafetyError",
     "assert_on_allowlist",
     "is_o1_active_runtime",
-    "is_o2_release_path",
-    "is_o2_db_path",
-    "is_o1_staging_path",
     "is_o1_release_path",
+    "is_o1_staging_path",
+    "is_o2_db_path",
+    "is_o2_release_path",
 ]

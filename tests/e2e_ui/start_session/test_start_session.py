@@ -583,7 +583,7 @@ async def _drive_permission_mode(base_url: str, session_id: str) -> None:
             await expect(perm).to_be_visible()
             await perm.click()
             perm_labels = (
-                "Manual",
+                "Default",
                 "Auto",
                 "Accept edits",
                 "Plan",
@@ -1992,7 +1992,7 @@ async def _drive_approval_mode(base_url: str, session_id: str) -> None:
 
 
 def test_start_session_bypass_sandbox(seeded_session: tuple[str, str]) -> None:
-    """Codex full-bypass reaches create and seeds the next session.
+    """Codex full-bypass reaches create and requires a fresh opt-in next session.
 
     Bypass is the most-permissive option in the Codex config modal's Approval
     dropdown — Codex's ``--dangerously-bypass-approvals-and-sandbox`` stance.
@@ -2000,7 +2000,7 @@ def test_start_session_bypass_sandbox(seeded_session: tuple[str, str]) -> None:
     no warning banner. When armed, the create ``POST /v1/sessions`` must carry
     the ``omnigent.harnesses.codex_native.main.bypass_sandbox: "1"`` conversation label so the
     runner launches Codex with the bypass flag. After returning to New Session,
-    the same dropdown must still show bypass rather than resetting to Default.
+    the same dropdown must reset to Default: bypass is a per-session opt-in.
     """
     base_url, session_id = seeded_session
     _run_in_fresh_loop(_drive_bypass_sandbox(base_url, session_id))
@@ -2074,7 +2074,7 @@ async def _drive_bypass_sandbox(base_url: str, session_id: str) -> None:
             )
             await _open_entry_config(page, "ag_codex_e2e")
             await expect(page.get_by_test_id("new-chat-landing-config-approval")).to_contain_text(
-                "Bypass approvals & sandbox"
+                "Default"
             )
         finally:
             await browser.close()
@@ -2267,6 +2267,7 @@ async def _drive_pi_native_start(base_url: str, session_id: str) -> None:
             assert body.get("labels") == {
                 "omnigent.ui": "terminal",
                 "omnigent.wrapper": "pi-native-ui",
+                "omnigent.routing_policy": "manual",
                 "omnigent.client_create_token": body["labels"]["omnigent.client_create_token"],
             }, body
             assert re.fullmatch(r"[0-9a-f]{32}", body["labels"]["omnigent.client_create_token"])
@@ -2351,6 +2352,7 @@ async def _drive_antigravity_native_start(base_url: str, session_id: str) -> Non
             assert body.get("labels") == {
                 "omnigent.ui": "terminal",
                 "omnigent.wrapper": "antigravity-native-ui",
+                "omnigent.routing_policy": "manual",
                 "omnigent.client_create_token": body["labels"]["omnigent.client_create_token"],
             }, body
             assert re.fullmatch(r"[0-9a-f]{32}", body["labels"]["omnigent.client_create_token"])
@@ -2445,6 +2447,7 @@ async def _drive_opencode_native_start(base_url: str, session_id: str) -> None:
             assert body.get("labels") == {
                 "omnigent.ui": "terminal",
                 "omnigent.wrapper": "opencode-native-ui",
+                "omnigent.routing_policy": "manual",
                 "omnigent.client_create_token": body["labels"]["omnigent.client_create_token"],
             }, body
             assert re.fullmatch(r"[0-9a-f]{32}", body["labels"]["omnigent.client_create_token"])
@@ -2534,6 +2537,7 @@ async def _drive_kimi_native_start(base_url: str, session_id: str) -> None:
             assert body.get("labels") == {
                 "omnigent.ui": "terminal",
                 "omnigent.wrapper": "kimi-native-ui",
+                "omnigent.routing_policy": "manual",
                 "omnigent.client_create_token": body["labels"]["omnigent.client_create_token"],
             }, body
             assert re.fullmatch(r"[0-9a-f]{32}", body["labels"]["omnigent.client_create_token"])

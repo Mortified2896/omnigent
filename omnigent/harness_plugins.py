@@ -248,7 +248,7 @@ HERMES_NATIVE_CODING_AGENT = NativeCodingAgent(
 
 # Native harnesses whose spawn-env builder takes a ``bridge_id=`` resolved from
 # a session label. Their label key follows the uniform
-# ``omnigent.<key>_native.bridge_id`` pattern (pinned against the real bridge
+# ``omnigent.harnesses.<key>_native.main.bridge_id`` pattern (pinned against the real bridge
 # constants in tests/test_harness_plugins.py). Claude also carries a bridge id
 # but resolves it through a runner helper with a server-side fallback, so it is
 # handled as a spawn-env special case rather than a plain label read.
@@ -276,7 +276,9 @@ def _builtin_native_provider(key: str) -> NativeHarnessProvider:
         spawn_env_builder=f"{pkg}.bridge:build_{key}_native_spawn_env",
         # Session label key — a stable wire identifier, not a module path.
         bridge_id_label_key=(
-            f"omnigent.{key}_native.bridge_id" if key in _BRIDGE_ID_LABEL_HARNESSES else None
+            f"omnigent.harnesses.{key}_native.main.bridge_id"
+            if key in _BRIDGE_ID_LABEL_HARNESSES
+            else None
         ),
         materialize_agent_spec=f"{module}:_materialize_{key}_agent_spec",
     )
@@ -331,6 +333,19 @@ _BASH_PROMPT = "Use the Bash tool to run this exact command: echo omnigent-bench
 # bench today; the rest are declared best-effort by integration mode and will be
 # reconciled against the bench's interrupt/streaming probes as coverage expands.
 _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
+    # One approved, closed Responses turn: no tools, follow-ups, or token stream.
+    "local-tool-free": _C(
+        _IM.SDK_IN_PROCESS,
+        _EL.NONE,
+        _RS.NONE,
+        _EF.NONE,
+        _MF.MULTI,
+        _AU.OMNIGENT_CREDENTIAL,
+        subagents=False,
+        interrupt=False,
+        streaming=False,
+        instruction_delivery=_ID.COMPOSED_PER_TURN,
+    ),
     # Native-CLI harnesses (wrap a resident vendor TUI/server).
     "claude-native": _C(
         _IM.NATIVE_TUI,

@@ -194,6 +194,7 @@ def repl_env(
     config_home.mkdir(parents=True, exist_ok=True)
     (config_home / "config.yaml").write_text(
         "auto_open_conversation: false\ntui:\n  theme: dark\n"
+        f"host:\n  name: approval-e2e-{fake_home.name}\n"
     )
     env: dict[str, str] = {
         **os.environ,
@@ -203,6 +204,7 @@ def repl_env(
         "OPENAI_BASE_URL": f"{mock_llm_server_url}/v1",
         "HOME": str(fake_home),
         "OMNIGENT_CONFIG_HOME": str(config_home),
+        "OMNIGENT_DATA_DIR": str(config_home),
         "DATABRICKS_CONFIG_FILE": str(real_databrickscfg),
         "OMNIGENT_SKIP_ONBOARD": "1",
         # Force ANSI on — pexpect captures everything, stripping

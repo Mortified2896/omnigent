@@ -575,7 +575,10 @@ async def _drive_o3_review(
 
             messages = [body for body in event_bodies if body.get("type") == "message"]
             assert len(messages) == 1
+            stable_id = messages[0]["data"]["stable_id"]
+            assert re.fullmatch(r"[0-9a-f]{32}", stable_id)
             assert messages[0]["data"] == {
+                "stable_id": stable_id,
                 "role": "user",
                 "content": [{"type": "input_text", "text": _PROMPT}],
             }

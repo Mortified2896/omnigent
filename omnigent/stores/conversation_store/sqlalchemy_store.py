@@ -90,7 +90,6 @@ from omnigent.stores.conversation_store import (
     _INSTANCE_SCOPED_LABEL_KEYS,
     ARCHIVED_AT_LABEL_KEY,
     CODEX_ACCESS_LANE_LABEL_KEY,
-    ConversationBusyError,
     FORK_CARRY_HISTORY_LABEL_KEY,
     FORK_SOURCE_EXTERNAL_SESSION_LABEL_KEY,
     FORK_SOURCE_LABEL_KEY,
@@ -98,6 +97,7 @@ from omnigent.stores.conversation_store import (
     PROJECT_LABEL_KEY,
     SWITCH_PREVIOUS_BUILTIN_LABEL_KEY,
     ConversationAlreadyExistsError,
+    ConversationBusyError,
     ConversationNotFoundError,
     ConversationStore,
     CreatedSession,
@@ -3135,7 +3135,11 @@ class SqlAlchemyConversationStore(ConversationStore):
                 metadata_key = (current_workspace_id(), conversation_id)
                 if self._conv_engine is self._engine:
                     live_meta = ap_sess.get(SqlConversationMetadata, metadata_key)
-                    live_status = decode_session_live_status(live_meta.live_status) if live_meta else None
+                    live_status = (
+                        decode_session_live_status(live_meta.live_status)
+                        if live_meta and live_meta.live_status is not None
+                        else None
+                    )
                 else:
                     # Status writers take the same AP conversation lock before
                     # touching the split metadata database, so the read stays
@@ -3145,7 +3149,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                         live_meta = meta_sess.get(SqlConversationMetadata, metadata_key)
                         live_status = (
                             decode_session_live_status(live_meta.live_status)
-                            if live_meta
+                            if live_meta and live_meta.live_status is not None
                             else None
                         )
                 if live_status in {"running", "waiting"}:

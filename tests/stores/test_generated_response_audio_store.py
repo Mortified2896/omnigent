@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from omnigent.db.db_models import SqlGeneratedResponseAudio
 from omnigent.db.utils import now_epoch
 from omnigent.stores.generated_response_audio import (
@@ -9,7 +11,13 @@ from omnigent.stores.generated_response_audio import (
 )
 
 
-def test_audio_state_is_idempotent_and_response_scoped(db_uri: str) -> None:
+@pytest.mark.parametrize("processing_time", [100, 101])
+def test_audio_state_is_idempotent_and_response_scoped(
+    db_uri: str, monkeypatch: pytest.MonkeyPatch, processing_time: int
+) -> None:
+    # Listing orders by last update, not insertion. Exercise both a timestamp
+    # tie and crossing the second boundary without depending on machine speed.
+    monkeypatch.setattr("omnigent.stores.generated_response_audio.now_epoch", lambda: 100)
     store = SqlAlchemyGeneratedResponseAudioStore(db_uri)
     conversation_id = "a" * 32
     first = store.create_pending(conversation_id, "response-a", "daily-brief")
@@ -19,6 +27,9 @@ def test_audio_state_is_idempotent_and_response_scoped(db_uri: str) -> None:
     assert duplicate == first
     assert first.status == "pending"
     assert other.response_id == "response-b"
+    monkeypatch.setattr(
+        "omnigent.stores.generated_response_audio.now_epoch", lambda: processing_time
+    )
     assert store.claim_pending(conversation_id, "response-a") is True
     assert store.claim_pending(conversation_id, "response-a") is False
     assert (
@@ -38,10 +49,12 @@ def test_audio_state_is_idempotent_and_response_scoped(db_uri: str) -> None:
     assert ready.artifact_key == "generated-response-audio/test.wav"
     assert ready.duration_seconds == 3.25
     assert ready.sample_rate == 24_000
-    assert [row.response_id for row in store.list_for_conversation(conversation_id)] == [
-        "response-a",
-        "response-b",
-    ]
+    expected_order = (
+        ["response-a", "response-b"] if processing_time == 100 else ["response-b", "response-a"]
+    )
+    assert [
+        row.response_id for row in store.list_for_conversation(conversation_id)
+    ] == expected_order
 
 
 def test_recovery_leaves_recent_processing_job_alone(db_uri: str) -> None:

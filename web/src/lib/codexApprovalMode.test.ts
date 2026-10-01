@@ -36,6 +36,26 @@ describe("codexApprovalMode", () => {
   });
 
   describe("codexApprovalModeFromSession", () => {
+    it("prefers confirmed canonical labels over legacy labels, including an explicit unknown", () => {
+      const legacy = { "omnigent.codex_native.approval_mode": "full-access" };
+      expect(codexApprovalModeFromSession({ labels: legacy })).toBe("full-access");
+      expect(
+        codexApprovalModeFromSession({
+          labels: {
+            ...legacy,
+            [CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY]: "ask-for-approval",
+          },
+        }),
+      ).toBe("ask-for-approval");
+      expect(
+        codexApprovalModeFromSession({
+          labels: {
+            ...legacy,
+            [CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY]: null,
+          },
+        }),
+      ).toBeNull();
+    });
     it("returns the label the server stamps after a confirmed switch", () => {
       expect(
         codexApprovalModeFromSession({
@@ -53,7 +73,7 @@ describe("codexApprovalMode", () => {
       expect(codexApprovalModeFromSession({ labels: {} })).toBeNull();
       expect(
         codexApprovalModeFromSession({
-          labels: { "omnigent.codex_native.bypass_sandbox": "1" },
+          labels: { "omnigent.harnesses.codex_native.main.bypass_sandbox": "1" },
         }),
       ).toBeNull();
     });

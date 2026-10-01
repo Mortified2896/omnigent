@@ -239,12 +239,17 @@ async def _drive_composer_proposal(
             await page.get_by_test_id("new-chat-landing-agent-select").click()
             await page.get_by_test_id("new-chat-landing-agent-ag_codex_e2e").click()
 
-            advisor_switch = page.get_by_role("switch", name="Compare my choice with the advisor")
+            advisor_switch = page.get_by_role("button", name="Advisor off", exact=True)
             await expect(advisor_switch).to_be_visible()
             await advisor_switch.click()
             await expect(
                 page.get_by_text("Allowed answers — shared by you and the advisor")
+            ).to_have_count(0)
+            await page.get_by_role("button", name="Advisor settings", exact=True).click()
+            await expect(
+                page.get_by_text("Allowed answers — shared by you and the advisor")
             ).to_be_visible()
+            await page.keyboard.press("Escape")
             await expect(page.get_by_test_id("new-chat-landing-inline-model")).to_be_visible()
             await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_be_visible()
             await expect(page.get_by_test_id("model-advisor-advisor-choice")).to_be_visible()
@@ -285,7 +290,12 @@ async def _drive_composer_proposal(
             ).bounding_box()
             assert advisor_effort_box is not None
             assert abs(advisor_box["y"] - advisor_effort_box["y"]) < 2
-            assert advisor_box["width"] == model_box["width"]
+            # The current layout gives the recommender its own row; both
+            # selectors must fit that row without overlapping or clipping.
+            assert advisor_box["width"] >= 100
+            assert model_box["width"] >= 100
+            assert advisor_box["x"] + advisor_box["width"] <= advisor_effort_box["x"] + 2
+            assert advisor_effort_box["x"] + advisor_effort_box["width"] <= 390
             assert (
                 await page.get_by_test_id("model-advisor-composer-choice")
                 .get_by_test_id("model-advisor-advisor-choice")
@@ -309,6 +319,9 @@ async def _drive_composer_proposal(
             await page.set_viewport_size({"width": 390, "height": 844})
             await page.get_by_test_id("new-chat-landing-input").fill("Compare the selected models")
             if submit_method == "enter":
+                # Touch-primary Enter inserts a newline. Exercise keyboard
+                # submission on desktop after validating the mobile layout.
+                await page.set_viewport_size({"width": 1280, "height": 900})
                 await page.get_by_test_id("new-chat-landing-input").press("Enter")
             else:
                 await page.get_by_test_id("new-chat-landing-submit").click()

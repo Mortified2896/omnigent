@@ -56,6 +56,7 @@ def downgrade() -> None:
         table_name="generated_response_audio",
     )
     op.drop_table("generated_response_audio")
-    op.drop_column("scheduled_tasks", "audio_voice_profile")
-    op.drop_column("scheduled_tasks", "audio_enabled")
-    op.drop_column("scheduled_tasks", "codex_web_search_mode")
+    with op.batch_alter_table("scheduled_tasks") as batch_op:
+        batch_op.drop_column("audio_voice_profile")
+        batch_op.drop_column("audio_enabled")
+        batch_op.drop_column("codex_web_search_mode")

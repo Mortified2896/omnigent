@@ -148,10 +148,13 @@ def mock_credentials_env(
     env["OMNIGENT_NO_UPDATE_CHECK"] = "1"
     config_home = tmp_path_factory.mktemp("omnigent-mock-e2e-config")
     (config_home / "config.yaml").write_text(
-        "auth:\n  type: api_key\n",
+        f"auth:\n  type: api_key\nhost:\n  name: mock-e2e-{config_home.name}\n",
         encoding="utf-8",
     )
     env["OMNIGENT_CONFIG_HOME"] = str(config_home)
+    env["OMNIGENT_DATA_DIR"] = str(config_home)
+    env["HOME"] = str(config_home.parent / (config_home.name + "-home"))
+    Path(env["HOME"]).mkdir()
     repo = str(_OMNIGENT_REPO)
     omnigent_path = str(_OMNIGENT_REPO / "omnigent")
     existing_pp = env.get("PYTHONPATH", "")

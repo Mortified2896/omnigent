@@ -87,9 +87,7 @@ def get_state(unit: str) -> str:
         raise ServiceStateError("unit name is required")
     if not is_known(unit):
         stderr = "unit not known to systemd"
-        raise ServiceStateError(
-            f"systemctl is-active {unit!r} target unknown: {stderr}"
-        )
+        raise ServiceStateError(f"systemctl is-active {unit!r} target unknown: {stderr}")
     result = subprocess.run(
         ["systemctl", "is-active", unit],
         capture_output=True,
@@ -174,8 +172,13 @@ def wait_for_state(
     return False
 
 
-def classify(*, active: Iterable[str] = (), inactive: Iterable[str] = (),
-             failed: Iterable[str] = (), unknown: Iterable[str] = ()) -> dict:
+def classify(
+    *,
+    active: Iterable[str] = (),
+    inactive: Iterable[str] = (),
+    failed: Iterable[str] = (),
+    unknown: Iterable[str] = (),
+) -> dict:
     """Return a deterministic state report for a peer-supervised deployment.
 
     Each iterable is a list of unit names. The returned dict has the
@@ -199,17 +202,17 @@ def classify(*, active: Iterable[str] = (), inactive: Iterable[str] = (),
 
 
 __all__ = [
-    "ServiceStateError",
     "ACTIVE_STATES",
-    "OK_STATES",
-    "INACTIVE_STATES",
-    "FAILED_STATES",
     "ERROR_STATES",
-    "is_active",
-    "is_inactive",
-    "is_failed",
-    "is_known",
-    "get_state",
-    "wait_for_state",
+    "FAILED_STATES",
+    "INACTIVE_STATES",
+    "OK_STATES",
+    "ServiceStateError",
     "classify",
+    "get_state",
+    "is_active",
+    "is_failed",
+    "is_inactive",
+    "is_known",
+    "wait_for_state",
 ]

@@ -12,6 +12,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useChatStore } from "@/store/chatStore";
 import type { ServerInfo } from "@/lib/capabilities";
 import type * as IdentityModule from "@/lib/identity";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
@@ -266,7 +267,14 @@ function renderSidebar(activeId?: string, info?: ServerInfo) {
   return Object.assign(view, { rerenderSidebar: () => view.rerender(makeUi()) });
 }
 
+const originalSwitchTo = useChatStore.getState().switchTo;
+const switchTo = vi.fn<typeof originalSwitchTo>().mockResolvedValue(undefined);
+
 beforeEach(() => {
+  // These row-only tests do not mount ChatPage or initialize its stream client.
+  // Assert the navigation boundary without starting a real session bind.
+  switchTo.mockClear();
+  useChatStore.setState({ switchTo });
   mocks.rename.mutate.mockReset();
   mocks.rename.isSuccess = false;
   mocks.rename.isError = false;
@@ -286,7 +294,10 @@ beforeEach(() => {
   mockConversations([CONV]);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useChatStore.setState({ switchTo: originalSwitchTo });
+});
 
 describe("quick pin/unpin hover button", () => {
   it("keeps the row full-width and the trailing controls inset from the right edge", () => {

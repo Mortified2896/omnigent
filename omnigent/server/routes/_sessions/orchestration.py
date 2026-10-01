@@ -25,6 +25,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from omnigent.cli_invocation import cli_invocation
 from omnigent.db.utils import generate_agent_id, generate_task_id
@@ -6790,11 +6791,10 @@ async def _relay_runner_stream_once(
                                             session_id,
                                             [_attribution_item],
                                         )
-                                except Exception:
-                                    _logger.warning(
+                                except (OmnigentError, SQLAlchemyError, OSError, ValueError):
+                                    _logger.exception(
                                         "Could not persist response model attribution for %s",
                                         _response_id,
-                                        exc_info=True,
                                     )
                             # Push the server-computed cost AND token breakdown
                             # to the web client's session indicator, rolled up

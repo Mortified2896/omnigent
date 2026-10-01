@@ -18,6 +18,7 @@ never exercised.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 
 import httpx
@@ -200,7 +201,9 @@ def test_scheduled_task_rows_show_schedule_summary_and_relative_next_run(
     # armed daily task is always <24h out, so its label is "Next run in …".
     # (The forbidden thing was a client recompute of WHICH instant is next; a
     # delta off the server value is fine.)
-    expect(daily.get_by_test_id("task-next-run")).to_contain_text("Next run in", timeout=30_000)
+    expect(daily.get_by_test_id("task-next-run")).to_contain_text(
+        re.compile(r"Next run (?:in .+|soon)$"), timeout=30_000
+    )
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -370,7 +373,9 @@ def test_scheduled_task_row_run_controls(
 
     # Relative next-run renders for an armed active task — a delta off the
     # server's next_run_at ("Next run in …"), not a client-recomputed instant.
-    expect(row.get_by_test_id("task-next-run")).to_contain_text("Next run in", timeout=30_000)
+    expect(row.get_by_test_id("task-next-run")).to_contain_text(
+        re.compile(r"Next run (?:in .+|soon)$"), timeout=30_000
+    )
 
     # No run has fired yet → the run history is empty.
     empty = httpx.get(f"{live_server}/v1/scheduled-tasks/{task_id}/runs", timeout=10.0)
@@ -471,28 +476,21 @@ def test_scheduled_task_model_effort_controls_visible_for_capable_agent(
     expect(permission_trigger).to_have_text("Default")
 
 
-def test_scheduled_task_model_effort_controls_hidden_for_incapable_agent(
+def test_scheduled_task_codex_model_effort_and_search_controls(
     page: Page,
     live_server: str,
 ) -> None:
-    """The Model/Effort row is hidden for a non-capable agent, with the hint.
-
-    The e2e server seeds the built-in ``codex-native-ui`` ("Codex") agent, which
-    carries ``approvalMode`` — NOT the ``permissionMode`` capability the
-    model/effort surface is gated on. Rather than drive the create-dialog agent
-    picker into Codex (it can fold into a hover-only "More" submenu when the host
-    reports it unconfigured, which is fragile to click), we SEED a task against
-    the Codex agent and open its EDIT dialog: the row gates on the selected
-    agent, which edit mode seeds from the loaded task, so the row must be absent
-    and the "uses defaults" helper hint shown instead. (Chosen because the e2e
-    server does register Codex; the seeded-edit path is the deterministic way to
-    exercise the hidden branch.)
-    """
+    """Codex exposes model/effort and search, without Claude permission controls."""
     codex_agent_id = _builtin_agent_id(live_server, "codex-native-ui")
-    _create_task(live_server, codex_agent_id, "Codex daily", "FREQ=DAILY;BYHOUR=9;BYMINUTE=0")
+    _create_task(
+        live_server,
+        codex_agent_id,
+        "Codex model-and-search controls",
+        "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+    )
 
     page.goto(f"{live_server}/tasks")
-    row = _row_by_name(page, "Codex daily")
+    row = _row_by_name(page, "Codex model-and-search controls")
     expect(row).to_be_visible(timeout=30_000)
     row.hover()
     row.get_by_test_id("task-row-menu").click()
@@ -500,8 +498,28 @@ def test_scheduled_task_model_effort_controls_hidden_for_incapable_agent(
 
     dialog = page.get_by_test_id("create-scheduled-task-dialog")
     expect(dialog).to_be_visible(timeout=30_000)
-    # Capability gate off → the row is never rendered (nor the permission
-    # control), and the "uses defaults" helper hint stands in for it.
+    expect(page.get_by_test_id("task-model-effort-row")).to_be_visible()
+    expect(page.get_by_test_id("task-model-trigger")).to_be_visible()
+    expect(page.get_by_test_id("task-effort-trigger")).to_be_visible()
+    expect(page.get_by_test_id("task-permission-control")).to_be_hidden()
+    expect(page.get_by_test_id("task-web-search-control")).to_be_visible()
+
+
+def test_scheduled_task_model_effort_controls_hidden_for_incapable_agent(
+    page: Page,
+    live_server: str,
+) -> None:
+    """Keep the hidden-controls branch covered with a genuinely incapable agent."""
+    agent_id = _builtin_agent_id(live_server, "hello_world")
+    _create_task(live_server, agent_id, "No native controls", "FREQ=DAILY;BYHOUR=9;BYMINUTE=0")
+    page.goto(f"{live_server}/tasks")
+    row = _row_by_name(page, "No native controls")
+    expect(row).to_be_visible(timeout=30_000)
+    row.hover()
+    row.get_by_test_id("task-row-menu").click()
+    page.get_by_test_id("task-edit").click()
+    dialog = page.get_by_test_id("create-scheduled-task-dialog")
+    expect(dialog).to_be_visible(timeout=30_000)
     expect(page.get_by_test_id("task-model-effort-row")).to_be_hidden()
     expect(page.get_by_test_id("task-permission-control")).to_be_hidden()
     expect(dialog.get_by_text("Uses this agent")).to_be_visible()

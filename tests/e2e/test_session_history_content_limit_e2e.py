@@ -168,14 +168,14 @@ def test_session_history_raised_content_limit_recovers_full_child_response_e2e(
                 "tool_calls": [
                     _tool_call(
                         "sys_session_get_history",
-                        {"conversation_id": child_id, "tail_items": 1},
+                        {"conversation_id": child_id, "tail_items": 5},
                         "call_default_history",
                     ),
                     _tool_call(
                         "sys_session_get_history",
                         {
                             "conversation_id": child_id,
-                            "tail_items": 1,
+                            "tail_items": 5,
                             "content_max_chars": 5000,
                         },
                         "call_raised_history",
@@ -203,7 +203,17 @@ def test_session_history_raised_content_limit_recovers_full_child_response_e2e(
         item["call_id"]: json.loads(item["output"])
         for item in get_output_items(body, "function_call_output")
     }
-    default_text = outputs["call_default_history"]["items"][-1]["text"]
-    raised_text = outputs["call_raised_history"]["items"][-1]["text"]
+    # The transcript also includes resource lifecycle events with no text.
+    # Compare the answer rather than assuming it is the final transcript item.
+    default_text = next(
+        item["text"]
+        for item in reversed(outputs["call_default_history"]["items"])
+        if item.get("type") == "message" and item.get("role") == "assistant"
+    )
+    raised_text = next(
+        item["text"]
+        for item in reversed(outputs["call_raised_history"]["items"])
+        if item.get("type") == "message" and item.get("role") == "assistant"
+    )
     assert default_text == long_child_text[:2000] + " [truncated]"
     assert raised_text == long_child_text

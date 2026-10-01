@@ -13,7 +13,8 @@ export interface CodexRuntimeApprovalPreset {
 }
 
 /** Conversation-label key the server writes for the live approval mode. */
-export const CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY = "omnigent.codex_native.approval_mode";
+export const CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY =
+  "omnigent.harnesses.codex_native.main.approval_mode";
 
 /**
  * The three runtime approval stances Codex's `/permissions` popup offers, in
@@ -60,6 +61,10 @@ export function codexApprovalModeLabel(mode: string | null | undefined): string 
 export function codexApprovalModeFromSession(
   session: { labels?: Record<string, string | null> | null } | null | undefined,
 ): string | null {
-  const labelled = session?.labels?.[CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY];
+  const labels = session?.labels;
+  const labelled =
+    labels && Object.hasOwn(labels, CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY)
+      ? labels[CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY]
+      : labels?.["omnigent.codex_native.approval_mode"];
   return typeof labelled === "string" && labelled ? labelled : null;
 }
