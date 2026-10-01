@@ -14,10 +14,10 @@ These tests prove:
 from __future__ import annotations
 
 import importlib.util
-import sys
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,15 +25,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 
+
 def _load(name: str):
-    spec = importlib.util.spec_from_file_location(
-        f"peer_deployer_{name}", PKG_ROOT / f"{name}.py"
-    )
+    spec = importlib.util.spec_from_file_location(f"peer_deployer_{name}", PKG_ROOT / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
 
 transaction = _load("transaction")
 
@@ -333,7 +333,7 @@ def test_fail_record_marks_failure(tx_root: Path) -> None:
 def test_record_persists_to_disk(tx_root: Path) -> None:
     """The record is written to disk atomically and readable as JSON."""
     tx_id = transaction.make_tx_id()
-    record = transaction.create(
+    transaction.create(
         tx_id=tx_id,
         target="O1",
         supervisor="O2",

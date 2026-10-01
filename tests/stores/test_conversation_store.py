@@ -26,8 +26,8 @@ from omnigent.session_import import (
 )
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
-from omnigent.stores.conversation_store import sqlalchemy_store as conversation_store_module
 from omnigent.stores.conversation_store import ConversationBusyError
+from omnigent.stores.conversation_store import sqlalchemy_store as conversation_store_module
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )

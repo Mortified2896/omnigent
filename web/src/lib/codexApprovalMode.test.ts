@@ -53,7 +53,7 @@ describe("codexApprovalMode", () => {
       expect(codexApprovalModeFromSession({ labels: {} })).toBeNull();
       expect(
         codexApprovalModeFromSession({
-          labels: { "omnigent.codex_native.bypass_sandbox": "1" },
+          labels: { "omnigent.harnesses.codex_native.main.bypass_sandbox": "1" },
         }),
       ).toBeNull();
     });

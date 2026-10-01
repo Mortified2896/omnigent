@@ -4,8 +4,8 @@ import hashlib
 import io
 import json
 import wave
-from unittest.mock import AsyncMock
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse

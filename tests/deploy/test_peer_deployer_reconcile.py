@@ -16,12 +16,11 @@ record) and assert the new operation:
   * Refuses when the historical transaction is corrupt
   * Refuses when the historical transaction has target == supervisor
 """
+
 from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -37,7 +36,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -161,6 +161,7 @@ def _write_record(
 
 def _sha256(path: Path) -> str:
     import hashlib
+
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -191,8 +192,11 @@ class TestIncidentRegression:
     """
 
     def test_2026_08_08_incident_full_replay(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Reproduce the 2026-08-08 incident and assert the reconciler
@@ -232,12 +236,11 @@ class TestIncidentRegression:
         (active_venv / "lib").mkdir()
         (active_venv / "bin").mkdir()
         (active_venv / "PROVENANCE.txt").write_text(
-            "sha=e5f4249667a1602916d44ac62d10b921a299f05d\n"
-            "package_version=0.8.1\n"
+            "sha=e5f4249667a1602916d44ac62d10b921a299f05d\npackage_version=0.8.1\n"
         )
 
         # Build the historical transaction.
-        record = _write_record(
+        _write_record(
             tx_id,
             candidate_path=str(candidate),
             mutation_boundary_crossed=False,
@@ -287,8 +290,11 @@ class TestIncidentRegression:
         assert audit_blob["tx_id"] == tx_id
 
     def test_2026_08_08_active_runtime_protected(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """If the candidate IS the O1 active runtime, the reconciler
@@ -333,8 +339,11 @@ class TestIncidentRegression:
         assert "active_runtime" in audit_blob["disposition"]
 
     def test_2026_08_08_o2_release_protected(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """If the candidate is under O2's deployment root, the
@@ -376,8 +385,11 @@ class TestRefusalProofs:
     """Each refusal-proof is exercised in isolation."""
 
     def test_refuses_when_target_is_symlink_target(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the candidate is the O1 venv symlink itself."""
@@ -402,8 +414,11 @@ class TestRefusalProofs:
             )
 
     def test_refuses_when_target_is_o2_db(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the candidate overlaps O2's DB home."""
@@ -433,8 +448,11 @@ class TestRefusalProofs:
         assert o2_db.exists()
 
     def test_refuses_when_quarantine_exists(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the quarantine dir already exists."""
@@ -459,8 +477,11 @@ class TestRefusalProofs:
             )
 
     def test_refuses_for_cross_mutation_boundary_without_db_backup(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the historical tx crossed the mutation boundary
@@ -491,8 +512,10 @@ class TestRefusalProofs:
             )
 
     def test_refuses_when_tx_missing(
-        self, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the transaction does not exist."""
@@ -506,8 +529,10 @@ class TestRefusalProofs:
             )
 
     def test_refuses_when_tx_id_format_invalid(
-        self, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the tx_id is not in the canonical format."""
@@ -521,8 +546,11 @@ class TestRefusalProofs:
             )
 
     def test_refuses_when_target_overlaps_intrinsic_forbidden(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Refuses if the candidate is the O1 venv path itself."""
@@ -559,13 +587,16 @@ class TestForensicPreservation:
     """The historical transaction record must remain byte-identical."""
 
     def test_failed_reconcile_does_not_modify_transaction(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """Even when reconciliation fails, the transaction.json is unchanged."""
         tx_id = "promotion-20260808T201637Z-60ced75f"
-        record = _write_record(
+        _write_record(
             tx_id,
             candidate_path="",
             mutation_boundary_crossed=False,
@@ -589,15 +620,18 @@ class TestForensicPreservation:
         assert original_path.read_bytes() == original_bytes
 
     def test_audit_record_links_to_original_transaction(
-        self, tx_root: Path, quarantine_root: Path,
-        fake_target: identity.Instance, fake_supervisor: identity.Instance,
+        self,
+        tx_root: Path,
+        quarantine_root: Path,
+        fake_target: identity.Instance,
+        fake_supervisor: identity.Instance,
         tmp_path: Path,
     ) -> None:
         """The audit record carries the original transaction SHA-256."""
         tx_id = "promotion-20260808T201637Z-60ced7a0"
         candidate = fake_target.deployment_root / "releases" / ("a" * 40)
         candidate.mkdir(parents=True, exist_ok=True)
-        record = _write_record(
+        _write_record(
             tx_id,
             candidate_path=str(candidate),
             mutation_boundary_crossed=False,
@@ -641,3 +675,56 @@ class TestV3EntrypointReconcile:
         """The reconciler stamps a version + classification."""
         cls = reconcile.RECONCILER_VERSION
         assert cls.startswith("1.")
+
+
+@pytest.mark.parametrize("sha", ["b" * 40, ""])
+def test_refuses_mismatched_present_provenance(
+    tx_root: Path,
+    quarantine_root: Path,
+    fake_target: identity.Instance,
+    fake_supervisor: identity.Instance,
+    sha: str,
+) -> None:
+    tx_id = "promotion-20260808T201637Z-60ced760"
+    candidate = fake_target.deployment_root / "releases" / ("a" * 40)
+    candidate.mkdir(parents=True)
+    (candidate / "PROVENANCE.txt").write_text(f"sha={sha}\n")
+    _write_record(tx_id, candidate_path=str(candidate), tx_root=tx_root)
+    historical = transaction.transaction_path(tx_root, tx_id).read_bytes()
+    with pytest.raises(reconcile.ReconciliationError, match="provenance SHA mismatch"):
+        reconcile.reconcile_stale_transaction(
+            tx_id,
+            quarantine_root=quarantine_root,
+            tx_root=tx_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
+        )
+    assert candidate.is_dir()
+    assert transaction.transaction_path(tx_root, tx_id).read_bytes() == historical
+    audit = json.loads((quarantine_root / tx_id / "reconciliation.json").read_text())
+    assert audit["safe"] is False
+    assert audit["disposition"] == "refused_provenance_mismatch"
+
+
+@pytest.mark.parametrize("field", ["target", "supervisor"])
+def test_refuses_override_identity_mismatch(
+    tx_root: Path,
+    quarantine_root: Path,
+    fake_target: identity.Instance,
+    fake_supervisor: identity.Instance,
+    field: str,
+) -> None:
+    tx_id = "promotion-20260808T201637Z-60ced761"
+    record = _write_record(tx_id, tx_root=tx_root)
+    setattr(record, field, "unexpected-owner")
+    transaction.save(record, root=tx_root)
+    historical = transaction.transaction_path(tx_root, tx_id).read_bytes()
+    with pytest.raises(reconcile.ReconciliationError, match=f"{field} binding mismatch"):
+        reconcile.reconcile_stale_transaction(
+            tx_id,
+            quarantine_root=quarantine_root,
+            tx_root=tx_root,
+            allowed_target=fake_target,
+            allowed_supervisor=fake_supervisor,
+        )
+    assert transaction.transaction_path(tx_root, tx_id).read_bytes() == historical

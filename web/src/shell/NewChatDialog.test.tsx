@@ -2031,7 +2031,7 @@ describe("NewChatLandingScreen", () => {
     const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
     const labels = body.labels as Record<string, string>;
     // The label is what the runner reads to launch with the bypass flag.
-    expect(labels["omnigent.codex_native.bypass_sandbox"]).toBe("1");
+    expect(labels["omnigent.harnesses.codex_native.main.bypass_sandbox"]).toBe("1");
     // The native wrapper labels still ride alongside it.
     expect(labels["omnigent.wrapper"]).toBe("codex-native-ui");
   });
@@ -4610,6 +4610,7 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
     // The placeholder's CLI labels don't ride along, but its routing state is
     // persisted so the UI can report which router/backend owns the run.
     expect(body.labels).toEqual({
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
       "omnigent.routing_backend": "databricks-aigw",
       "omnigent.routing_policy": "native",
     });
@@ -5135,6 +5136,7 @@ describe("NewChatLandingScreen bundle-agent Smart Routing", () => {
       expect(body.model_override).toBeUndefined();
       expect(body.reasoning_effort).toBeUndefined();
       expect(body.labels).toEqual({
+        "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
         "omnigent.routing_backend": "unavailable",
         "omnigent.routing_policy": "native",
       });

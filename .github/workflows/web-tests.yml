@@ -5,6 +5,8 @@ name: web Tests
 # Draft PRs are skipped; `ready_for_review` refires when the draft is converted.
 
 on:
+  # Explicit draft-branch validation without converting the PR to ready.
+  workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:

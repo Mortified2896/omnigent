@@ -49,13 +49,14 @@ anything. It does NOT touch the active runtime. It does NOT touch
 the DB. It does NOT restart services. It only moves a *proven*
 candidate into a quarantine directory and writes an audit record.
 """
+
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import secrets
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -71,10 +72,12 @@ from .transaction import TransactionRecord
 # a valid reconciliation overlay. Older versions are explicitly
 # listed to support re-validation of historical overlays; unknown
 # versions are rejected (fail-closed).
-ACCEPTED_RECONCILER_VERSIONS: frozenset[str] = frozenset({
-    "1.0.0",
-    "1.1.0",  # overlay-aware; introduces validate_completed_reconciliation()
-})
+ACCEPTED_RECONCILER_VERSIONS: frozenset[str] = frozenset(
+    {
+        "1.0.0",
+        "1.1.0",  # overlay-aware; introduces validate_completed_reconciliation()
+    }
+)
 
 
 # Reconciliation-validation classifications. They are three-valued
@@ -83,11 +86,13 @@ CLASS_ACTIVE_UNRESOLVED = "ACTIVE_UNRESOLVED"
 CLASS_VALIDLY_RECONCILED = "VALIDLY_RECONCILED"
 CLASS_INVALID_INCONSISTENT = "INVALID_INCONSISTENT"
 
-VALID_RECONCILIATION_CLASSIFICATIONS = frozenset({
-    CLASS_ACTIVE_UNRESOLVED,
-    CLASS_VALIDLY_RECONCILED,
-    CLASS_INVALID_INCONSISTENT,
-})
+VALID_RECONCILIATION_CLASSIFICATIONS = frozenset(
+    {
+        CLASS_ACTIVE_UNRESOLVED,
+        CLASS_VALIDLY_RECONCILED,
+        CLASS_INVALID_INCONSISTENT,
+    }
+)
 
 
 @dataclass
@@ -196,6 +201,7 @@ class ReconciliationReport:
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        mutation_boundary = self.historical_tx_mutation_boundary_crossed
         return {
             "tx_id": self.tx_id,
             "reconciler_version": self.reconciler_version,
@@ -203,7 +209,7 @@ class ReconciliationReport:
             "historical_tx_sha256": self.historical_tx_sha256,
             "historical_tx_path": self.historical_tx_path,
             "historical_tx_phase": self.historical_tx_phase,
-            "historical_tx_mutation_boundary_crossed": self.historical_tx_mutation_boundary_crossed,
+            "historical_tx_mutation_boundary_crossed": mutation_boundary,
             "candidate_path": self.candidate_path,
             "candidate_provenance_present": self.candidate_provenance_present,
             "candidate_provenance_sha": self.candidate_provenance_sha,
@@ -255,9 +261,7 @@ def _not_forbidden(path: Path, report: ReconciliationReport) -> bool:
         except ValueError:
             continue
         if path == forbidden or path == forbidden.resolve():
-            report.forbidden_proofs.append(
-                f"intrinsic_forbidden: {path} == {forbidden}"
-            )
+            report.forbidden_proofs.append(f"intrinsic_forbidden: {path} == {forbidden}")
             safe = False
             break
     return safe
@@ -340,7 +344,6 @@ def _service_exe_references_path(unit: str, path: Path) -> bool:
 
 def _classify_candidate_provenance(
     candidate: Path,
-    expected_sha: str,
 ) -> tuple[bool, str]:
     """Return (provenance_present, provenance_sha)."""
     provenance = candidate / "PROVENANCE.txt"
@@ -416,8 +419,6 @@ def reconcile_stale_transaction(
                 tx_id,
                 quarantine_root=quarantine_root,
                 tx_root=tx_root,
-                allowed_target=allowed_target,
-                allowed_supervisor=allowed_supervisor,
             )
         if validation.is_invalid:
             raise ReconciliationError(
@@ -441,9 +442,13 @@ def reconcile_stale_transaction(
     try:
         record = TransactionRecord.from_dict(json.loads(historical_blob))
     except (json.JSONDecodeError, transaction.TransactionError) as exc:
-        raise ReconciliationError(
-            f"historical transaction record is corrupt: {exc}"
-        ) from exc
+        raise ReconciliationError(f"historical transaction record is corrupt: {exc}") from exc
+
+    # Overrides select filesystem identities, not a different transaction owner.
+    if allowed_target is not None and record.target != allowed_target.name:
+        raise ReconciliationError("REFUSED: historical target binding mismatch")
+    if allowed_supervisor is not None and record.supervisor != allowed_supervisor.name:
+        raise ReconciliationError("REFUSED: historical supervisor binding mismatch")
 
     target = allowed_target or identity.get(record.target)
     supervisor = allowed_supervisor or identity.get(record.supervisor)
@@ -494,9 +499,7 @@ def reconcile_stale_transaction(
         candidate_resolved = _resolve(candidate)
     except OSError as exc:
         report.disposition = f"refused_candidate_unresolvable: {exc}"
-        raise ReconciliationError(
-            f"REFUSED: cannot resolve candidate {candidate}: {exc}"
-        ) from exc
+        raise ReconciliationError(f"REFUSED: cannot resolve candidate {candidate}: {exc}") from exc
     report.candidate_path = str(candidate_resolved)
 
     # Independent proofs — the order matters. Each proof must pass
@@ -507,7 +510,8 @@ def reconcile_stale_transaction(
     if not _check(
         "not_o1_active_runtime",
         not _is_o1_active_runtime(candidate_resolved, target),
-        f"candidate={candidate_resolved} target_active={_is_o1_active_runtime(candidate_resolved, target)}",
+        f"candidate={candidate_resolved} "
+        f"target_active={_is_o1_active_runtime(candidate_resolved, target)}",
         report,
     ):
         report.disposition = "refused_unsafe_active_runtime"
@@ -520,20 +524,20 @@ def reconcile_stale_transaction(
     if not _check(
         "not_o1_venv_symlink",
         not _is_o1_symlink_target(candidate_resolved, target),
-        f"candidate={candidate_resolved} is_target_symlink={candidate_resolved == (target.deployment_root / 'venv')}",
+        f"candidate={candidate_resolved} "
+        f"is_target_symlink={candidate_resolved == (target.deployment_root / 'venv')}",
         report,
     ):
         report.disposition = "refused_unsafe_symlink"
         _write_audit(report, quarantine_root)
-        raise ReconciliationError(
-            f"REFUSED: candidate {candidate_resolved} is O1's venv symlink"
-        )
+        raise ReconciliationError(f"REFUSED: candidate {candidate_resolved} is O1's venv symlink")
 
     # 3. Candidate is NOT under O2's deployment root.
     if not _check(
         "not_o2_runtime",
         not _is_o2_runtime_or_release(candidate_resolved, supervisor),
-        f"candidate={candidate_resolved} under_o2={_is_o2_runtime_or_release(candidate_resolved, supervisor)}",
+        f"candidate={candidate_resolved} "
+        f"under_o2={_is_o2_runtime_or_release(candidate_resolved, supervisor)}",
         report,
     ):
         report.disposition = "refused_unsafe_o2_runtime"
@@ -546,14 +550,13 @@ def reconcile_stale_transaction(
     if not _check(
         "not_o2_db",
         not _is_o2_db_path(candidate_resolved, supervisor),
-        f"candidate={candidate_resolved} overlaps_o2_db={_is_o2_db_path(candidate_resolved, supervisor)}",
+        f"candidate={candidate_resolved} "
+        f"overlaps_o2_db={_is_o2_db_path(candidate_resolved, supervisor)}",
         report,
     ):
         report.disposition = "refused_unsafe_o2_db"
         _write_audit(report, quarantine_root)
-        raise ReconciliationError(
-            f"REFUSED: candidate {candidate_resolved} overlaps O2's DB home"
-        )
+        raise ReconciliationError(f"REFUSED: candidate {candidate_resolved} overlaps O2's DB home")
 
     # 5. Candidate is NOT in the intrinsic-forbidden list.
     if not _check(
@@ -570,7 +573,12 @@ def reconcile_stale_transaction(
 
     # 6. No running O1/O2 service references the candidate.
     refs: list[str] = []
-    for unit in (target.service_unit, target.host_unit, supervisor.service_unit, supervisor.host_unit):
+    for unit in (
+        target.service_unit,
+        target.host_unit,
+        supervisor.service_unit,
+        supervisor.host_unit,
+    ):
         if _service_exe_references_path(unit, candidate_resolved):
             refs.append(unit)
     if not _check(
@@ -581,25 +589,24 @@ def reconcile_stale_transaction(
     ):
         report.disposition = "refused_service_references"
         _write_audit(report, quarantine_root)
-        raise ReconciliationError(
-            f"REFUSED: live service unit references the candidate: {refs}"
-        )
+        raise ReconciliationError(f"REFUSED: live service unit references the candidate: {refs}")
 
-    # 7. The candidate's PROVENANCE.txt, if present, identifies the
-    #    expected artifact. Mismatch is informational, not a refusal —
-    #    the reconciler logs it but a missing provenance is ALSO
-    #    informational. The transaction record carries the expected
-    #    SHA so we can compare.
+    # Missing provenance is expected for a partially staged candidate. Present
+    # provenance must agree with the transaction before ownership is proven.
     expected_sha = record.target_artifact_sha or record.new_runtime_sha
-    provenance_present, provenance_sha = _classify_candidate_provenance(
-        candidate_resolved, expected_sha
-    )
+    provenance_present, provenance_sha = _classify_candidate_provenance(candidate_resolved)
     report.candidate_provenance_present = provenance_present
     report.candidate_provenance_sha = provenance_sha
     if provenance_present and expected_sha and provenance_sha != expected_sha:
-        report.notes.append(
-            f"provenance_sha_mismatch: expected={expected_sha} actual={provenance_sha}"
+        report.disposition = "refused_provenance_mismatch"
+        _check(
+            "candidate_provenance_binding",
+            False,
+            f"expected={expected_sha} actual={provenance_sha}",
+            report,
         )
+        _write_audit(report, quarantine_root)
+        raise ReconciliationError("REFUSED: candidate provenance SHA mismatch")
 
     # 8. Mutation boundary state. If the historical transaction
     #    crossed the mutation boundary, the reconciler is more
@@ -631,9 +638,7 @@ def reconcile_stale_transaction(
     if qdir.exists():
         report.disposition = "refused_quarantine_exists"
         _write_audit(report, quarantine_root)
-        raise ReconciliationError(
-            f"REFUSED: quarantine dir already exists: {qdir}"
-        )
+        raise ReconciliationError(f"REFUSED: quarantine dir already exists: {qdir}")
 
     try:
         qdir.parent.mkdir(parents=True, exist_ok=True)
@@ -678,9 +683,7 @@ def _write_completion_marker(
     """
     marker_path = quarantine_root / report.tx_id / "RECONCILIATION_COMPLETE"
     marker_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = marker_path.with_name(
-        marker_path.name + f".tmp.{os.getpid()}.{secrets.token_hex(4)}"
-    )
+    tmp = marker_path.with_name(marker_path.name + f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
     payload = (
         "RECONCILIATION_COMPLETE\n"
         f"tx_id: {report.tx_id}\n"
@@ -697,10 +700,8 @@ def _write_completion_marker(
         os.replace(tmp, marker_path)
     finally:
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
 
 
 def _reconcile_already_completed(
@@ -708,8 +709,6 @@ def _reconcile_already_completed(
     *,
     quarantine_root: Path,
     tx_root: Path,
-    allowed_target: Instance | None,
-    allowed_supervisor: Instance | None,
 ) -> ReconciliationReport:
     """Return a no-op success report for an already-reconciled tx.
 
@@ -723,20 +722,22 @@ def _reconcile_already_completed(
     historical_blob = record_path.read_bytes()
     historical_sha = _sha256_bytes(historical_blob)
     record = TransactionRecord.from_dict(json.loads(historical_blob))
-    report = ReconciliationReport(
+    return ReconciliationReport(
         tx_id=tx_id,
         reconciler_version=overlay.get("reconciler_version", RECONCILER_VERSION)
-            if overlay else RECONCILER_VERSION,
+        if overlay
+        else RECONCILER_VERSION,
         reconciled_at_unix=float(overlay.get("reconciled_at_unix", time.time()))
-            if overlay else time.time(),
+        if overlay
+        else time.time(),
         historical_tx_sha256=historical_sha,
         historical_tx_path=str(record_path),
         historical_tx_phase=record.phase,
         historical_tx_mutation_boundary_crossed=record.mutation_boundary_crossed,
         candidate_path=str(overlay.get("candidate_path", "") or record.new_runtime_path),
-        candidate_provenance_present=bool(
-            overlay and overlay.get("candidate_provenance_present")
-        ) if overlay else False,
+        candidate_provenance_present=bool(overlay and overlay.get("candidate_provenance_present"))
+        if overlay
+        else False,
         candidate_provenance_sha=str(
             overlay.get("candidate_provenance_sha", "") if overlay else ""
         ),
@@ -748,7 +749,6 @@ def _reconcile_already_completed(
         forbidden_proofs=[],
         notes=["idempotent re-invocation; overlay present and valid"],
     )
-    return report
 
 
 def _write_audit(report: ReconciliationReport, quarantine_root: Path) -> None:
@@ -774,9 +774,7 @@ def _write_audit(report: ReconciliationReport, quarantine_root: Path) -> None:
     audit_dir.mkdir(parents=True, exist_ok=True)
     audit_path = audit_dir / "reconciliation.json"
     payload = json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n"
-    tmp = audit_path.with_name(
-        audit_path.name + f".tmp.{os.getpid()}.{secrets.token_hex(4)}"
-    )
+    tmp = audit_path.with_name(audit_path.name + f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
     try:
         with tmp.open("w") as fp:
             fp.write(payload)
@@ -790,10 +788,8 @@ def _write_audit(report: ReconciliationReport, quarantine_root: Path) -> None:
     finally:
         # Clean up any partial temp file on failure.
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
     # Also write a human-readable summary next to the audit.
     summary = audit_dir / "SUMMARY.txt"
     summary_lines = [
@@ -995,12 +991,11 @@ def validate_completed_reconciliation(
     try:
         transaction.assert_tx_id(tx_id)
     except transaction.TransactionError as exc:
-        v = ReconciliationValidation(
+        return ReconciliationValidation(
             tx_id=tx_id,
             classification=CLASS_INVALID_INCONSISTENT,
             reasons=[f"invalid tx_id format: {exc}"],
         )
-        return v
 
     v = ReconciliationValidation(tx_id=tx_id, classification=CLASS_ACTIVE_UNRESOLVED)
 
@@ -1026,7 +1021,9 @@ def validate_completed_reconciliation(
         _record_check(v, "historical_parseable", False, f"parse failed: {exc}")
         return v
     _record_check(
-        v, "historical_loaded", True,
+        v,
+        "historical_loaded",
+        True,
         f"sha={historical_sha[:16]}... phase={record.phase} "
         f"mutation_boundary_crossed={record.mutation_boundary_crossed}",
     )
@@ -1039,12 +1036,16 @@ def validate_completed_reconciliation(
     if target.name == supervisor.name:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "target_distinct_from_supervisor", False,
+            v,
+            "target_distinct_from_supervisor",
+            False,
             f"target==supervisor=={target.name!r} in historical record",
         )
         return v
     _record_check(
-        v, "target_distinct_from_supervisor", True,
+        v,
+        "target_distinct_from_supervisor",
+        True,
         f"target={target.name} supervisor={supervisor.name}",
     )
 
@@ -1073,7 +1074,9 @@ def validate_completed_reconciliation(
     if record.mutation_boundary_crossed:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "historical_mutation_boundary", False,
+            v,
+            "historical_mutation_boundary",
+            False,
             "historical transaction crossed the mutation boundary; "
             "overlay-based bypass is not supported for post-mutation "
             "transactions (requires explicit runtime + DB recovery proof)",
@@ -1084,24 +1087,30 @@ def validate_completed_reconciliation(
     # 6. The historical transaction must bind to the same target/
     #    supervisor as the current promotion, otherwise the overlay
     #    is for a DIFFERENT promotion and is irrelevant.
-    expected_target = (allowed_target.name if allowed_target is not None else "O1")
-    expected_supervisor = (allowed_supervisor.name if allowed_supervisor is not None else "O2")
+    expected_target = allowed_target.name if allowed_target is not None else "O1"
+    expected_supervisor = allowed_supervisor.name if allowed_supervisor is not None else "O2"
     if record.target != expected_target:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "historical_target_binding", False,
+            v,
+            "historical_target_binding",
+            False,
             f"historical target={record.target!r} != expected {expected_target!r}",
         )
         return v
     if record.supervisor != expected_supervisor:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "historical_supervisor_binding", False,
+            v,
+            "historical_supervisor_binding",
+            False,
             f"historical supervisor={record.supervisor!r} != expected {expected_supervisor!r}",
         )
         return v
     _record_check(
-        v, "historical_target_supervisor_binding", True,
+        v,
+        "historical_target_supervisor_binding",
+        True,
         f"target={record.target} supervisor={record.supervisor}",
     )
 
@@ -1115,7 +1124,9 @@ def validate_completed_reconciliation(
         else:
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "overlay_parseable", False,
+                v,
+                "overlay_parseable",
+                False,
                 "reconciliation.json exists but is not parseable JSON",
             )
             return v
@@ -1127,16 +1138,23 @@ def validate_completed_reconciliation(
 
     # 8. Reconciler version must be one we accept.
     reconciler_version = overlay.get("reconciler_version")
-    if not isinstance(reconciler_version, str) or reconciler_version not in ACCEPTED_RECONCILER_VERSIONS:
+    if (
+        not isinstance(reconciler_version, str)
+        or reconciler_version not in ACCEPTED_RECONCILER_VERSIONS
+    ):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_reconciler_version", False,
+            v,
+            "overlay_reconciler_version",
+            False,
             f"reconciler_version={reconciler_version!r} not in "
             f"accepted={sorted(ACCEPTED_RECONCILER_VERSIONS)}",
         )
         return v
     _record_check(
-        v, "overlay_reconciler_version", True,
+        v,
+        "overlay_reconciler_version",
+        True,
         f"reconciler_version={reconciler_version}",
     )
 
@@ -1144,7 +1162,9 @@ def validate_completed_reconciliation(
     if overlay.get("tx_id") != tx_id:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_tx_id_binding", False,
+            v,
+            "overlay_tx_id_binding",
+            False,
             f"overlay tx_id={overlay.get('tx_id')!r} != {tx_id!r}",
         )
         return v
@@ -1156,15 +1176,21 @@ def validate_completed_reconciliation(
     if not isinstance(overlay_historical_path, str) or not overlay_historical_path:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_historical_path_present", False,
+            v,
+            "overlay_historical_path_present",
+            False,
             "historical_tx_path missing or not a string",
         )
         return v
     try:
-        if Path(os.path.realpath(overlay_historical_path)) != Path(os.path.realpath(str(record_path))):
+        if Path(os.path.realpath(overlay_historical_path)) != Path(
+            os.path.realpath(str(record_path))
+        ):
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "overlay_historical_path_binding", False,
+                v,
+                "overlay_historical_path_binding",
+                False,
                 f"overlay historical_tx_path={overlay_historical_path!r} "
                 f"resolves to {os.path.realpath(overlay_historical_path)!r} "
                 f"!= canonical {os.path.realpath(str(record_path))!r}",
@@ -1173,12 +1199,16 @@ def validate_completed_reconciliation(
     except OSError as exc:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_historical_path_binding", False,
+            v,
+            "overlay_historical_path_binding",
+            False,
             f"cannot resolve overlay historical_tx_path: {exc}",
         )
         return v
     _record_check(
-        v, "overlay_historical_path_binding", True,
+        v,
+        "overlay_historical_path_binding",
+        True,
         f"historical_tx_path={overlay_historical_path}",
     )
 
@@ -1190,20 +1220,25 @@ def validate_completed_reconciliation(
     if not isinstance(overlay_historical_sha, str) or not overlay_historical_sha:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_historical_sha256_present", False,
+            v,
+            "overlay_historical_sha256_present",
+            False,
             "historical_tx_sha256 missing or not a string",
         )
         return v
     if overlay_historical_sha != historical_sha:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_historical_sha256_match", False,
-            f"overlay historical_tx_sha256={overlay_historical_sha} "
-            f"!= current {historical_sha}",
+            v,
+            "overlay_historical_sha256_match",
+            False,
+            f"overlay historical_tx_sha256={overlay_historical_sha} != current {historical_sha}",
         )
         return v
     _record_check(
-        v, "overlay_historical_sha256_match", True,
+        v,
+        "overlay_historical_sha256_match",
+        True,
         f"sha256={historical_sha[:16]}...",
     )
 
@@ -1212,7 +1247,9 @@ def validate_completed_reconciliation(
     if overlay_phase != record.phase:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_historical_phase_match", False,
+            v,
+            "overlay_historical_phase_match",
+            False,
             f"overlay phase={overlay_phase!r} != current phase={record.phase!r}",
         )
         return v
@@ -1221,13 +1258,17 @@ def validate_completed_reconciliation(
     if overlay_mutation != record.mutation_boundary_crossed:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_mutation_boundary_match", False,
+            v,
+            "overlay_mutation_boundary_match",
+            False,
             f"overlay mutation_boundary_crossed={overlay_mutation!r} "
             f"!= current {record.mutation_boundary_crossed!r}",
         )
         return v
     _record_check(
-        v, "overlay_mutation_boundary_match", True,
+        v,
+        "overlay_mutation_boundary_match",
+        True,
         f"mutation_boundary_crossed={record.mutation_boundary_crossed}",
     )
 
@@ -1237,18 +1278,24 @@ def validate_completed_reconciliation(
     if overlay_classification != "stale_incomplete":
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_classification_stale_incomplete", False,
+            v,
+            "overlay_classification_stale_incomplete",
+            False,
             f"overlay classification={overlay_classification!r} != 'stale_incomplete'",
         )
         return v
     _record_check(
-        v, "overlay_classification_stale_incomplete", True,
+        v,
+        "overlay_classification_stale_incomplete",
+        True,
         f"classification={overlay_classification}",
     )
     if overlay.get("safe") is not True:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_safe_true", False,
+            v,
+            "overlay_safe_true",
+            False,
             f"overlay safe={overlay.get('safe')!r} != True",
         )
         return v
@@ -1257,12 +1304,16 @@ def validate_completed_reconciliation(
     if overlay_disposition != "quarantined":
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_disposition_quarantined", False,
+            v,
+            "overlay_disposition_quarantined",
+            False,
             f"overlay disposition={overlay_disposition!r} != 'quarantined'",
         )
         return v
     _record_check(
-        v, "overlay_disposition_quarantined", True,
+        v,
+        "overlay_disposition_quarantined",
+        True,
         f"disposition={overlay_disposition}",
     )
 
@@ -1271,7 +1322,9 @@ def validate_completed_reconciliation(
     if not isinstance(overlay_quarantine_path, str) or not overlay_quarantine_path:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "overlay_quarantine_path_present", False,
+            v,
+            "overlay_quarantine_path_present",
+            False,
             "quarantine_path missing or not a string",
         )
         return v
@@ -1282,7 +1335,9 @@ def validate_completed_reconciliation(
     except OSError as exc:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_path_resolves", False,
+            v,
+            "quarantine_path_resolves",
+            False,
             f"cannot resolve {overlay_quarantine_path}: {exc}",
         )
         return v
@@ -1292,7 +1347,9 @@ def validate_completed_reconciliation(
     if not quarantine_resolved.exists():
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_path_exists", False,
+            v,
+            "quarantine_path_exists",
+            False,
             f"quarantine path does not exist: {quarantine_resolved}",
         )
         return v
@@ -1304,20 +1361,26 @@ def validate_completed_reconciliation(
     except OSError as exc:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_root_resolves", False,
+            v,
+            "quarantine_root_resolves",
+            False,
             f"cannot resolve quarantine_root {quarantine_root}: {exc}",
         )
         return v
     if not _path_under(quarantine_resolved, quarantine_root_resolved):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_path_under_root", False,
+            v,
+            "quarantine_path_under_root",
+            False,
             f"quarantine path {quarantine_resolved} is not under "
             f"resolved root {quarantine_root_resolved}",
         )
         return v
     _record_check(
-        v, "quarantine_path_under_root", True,
+        v,
+        "quarantine_path_under_root",
+        True,
         f"under {quarantine_root_resolved}",
     )
 
@@ -1333,13 +1396,16 @@ def validate_completed_reconciliation(
     if not _path_under(quarantine_resolved, expected_qdir):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_path_bound_to_tx_id", False,
-            f"quarantine path {quarantine_resolved} is not under "
-            f"per-tx directory {expected_qdir}",
+            v,
+            "quarantine_path_bound_to_tx_id",
+            False,
+            f"quarantine path {quarantine_resolved} is not under per-tx directory {expected_qdir}",
         )
         return v
     _record_check(
-        v, "quarantine_path_bound_to_tx_id", True,
+        v,
+        "quarantine_path_bound_to_tx_id",
+        True,
         f"under {expected_qdir}",
     )
 
@@ -1348,41 +1414,52 @@ def validate_completed_reconciliation(
     if protected is not None:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_not_protected", False,
+            v,
+            "quarantine_not_protected",
+            False,
             f"quarantine path collides with protected path {protected!r}",
         )
         return v
     # Also explicitly forbid overlap with O1 active runtime and venv.
-    target_venv = (target.deployment_root / "venv")
+    target_venv = target.deployment_root / "venv"
     try:
-        o1_venv_resolved = _resolve(target_venv) if target_venv.is_symlink() or target_venv.exists() else None
+        o1_venv_resolved = (
+            _resolve(target_venv) if target_venv.is_symlink() or target_venv.exists() else None
+        )
     except OSError:
         o1_venv_resolved = None
     if o1_venv_resolved is not None and quarantine_resolved == o1_venv_resolved:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_not_o1_venv", False,
+            v,
+            "quarantine_not_o1_venv",
+            False,
             f"quarantine path resolves to O1 venv: {o1_venv_resolved}",
         )
         return v
     if _path_under(quarantine_resolved, supervisor.deployment_root):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_not_o2_root", False,
-            f"quarantine path is under O2 deployment root "
-            f"{supervisor.deployment_root}",
+            v,
+            "quarantine_not_o2_root",
+            False,
+            f"quarantine path is under O2 deployment root {supervisor.deployment_root}",
         )
         return v
     o2_home = identity.HOME_MAPPING.get(str(supervisor.deployment_root))
     if o2_home is not None and _path_under(quarantine_resolved, o2_home):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "quarantine_not_o2_home", False,
+            v,
+            "quarantine_not_o2_home",
+            False,
             f"quarantine path is under O2 home {o2_home}",
         )
         return v
     _record_check(
-        v, "quarantine_not_protected", True,
+        v,
+        "quarantine_not_protected",
+        True,
         f"quarantine {quarantine_resolved} is not a protected path",
     )
 
@@ -1397,14 +1474,18 @@ def validate_completed_reconciliation(
         if original_resolved.exists():
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "original_candidate_absent", False,
+                v,
+                "original_candidate_absent",
+                False,
                 f"original candidate still present at {original_resolved} "
                 "after quarantine; overlay claims disposition=quarantined "
                 "but the move is incomplete or was reverted",
             )
             return v
         _record_check(
-            v, "original_candidate_absent", True,
+            v,
+            "original_candidate_absent",
+            True,
             f"original {original_resolved} no longer present",
         )
 
@@ -1421,20 +1502,26 @@ def validate_completed_reconciliation(
         if not prov_sha:
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "quarantine_provenance_has_sha", False,
+                v,
+                "quarantine_provenance_has_sha",
+                False,
                 "PROVENANCE.txt present but sha= missing",
             )
             return v
         if expected_artifact_sha and prov_sha != expected_artifact_sha:
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "quarantine_provenance_sha_matches", False,
+                v,
+                "quarantine_provenance_sha_matches",
+                False,
                 f"quarantined candidate sha={prov_sha} != expected "
                 f"artifact sha={expected_artifact_sha}",
             )
             return v
         _record_check(
-            v, "quarantine_provenance_sha_matches", True,
+            v,
+            "quarantine_provenance_sha_matches",
+            True,
             f"sha={prov_sha}",
         )
 
@@ -1443,7 +1530,6 @@ def validate_completed_reconciliation(
     #     filesystem + systemd state right now.
     target_root = target.deployment_root
     supervisor_root = supervisor.deployment_root
-    target_home = identity.HOME_MAPPING.get(str(target_root))
     supervisor_home = identity.HOME_MAPPING.get(str(supervisor_root))
 
     # 15a. O1 active runtime does not point into quarantine.
@@ -1459,7 +1545,9 @@ def validate_completed_reconciliation(
         if _path_under(target_venv_resolved, quarantine_resolved):
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "o1_active_runtime_not_in_quarantine", False,
+                v,
+                "o1_active_runtime_not_in_quarantine",
+                False,
                 f"O1 venv resolves to {target_venv_resolved} which is "
                 f"under quarantine {quarantine_resolved}",
             )
@@ -1467,29 +1555,35 @@ def validate_completed_reconciliation(
         if target_venv_resolved == quarantine_resolved:
             v.classification = CLASS_INVALID_INCONSISTENT
             _record_check(
-                v, "o1_active_runtime_not_in_quarantine", False,
+                v,
+                "o1_active_runtime_not_in_quarantine",
+                False,
                 f"O1 venv resolves to quarantine {quarantine_resolved}",
             )
             return v
         _record_check(
-            v, "o1_active_runtime_not_in_quarantine", True,
+            v,
+            "o1_active_runtime_not_in_quarantine",
+            True,
             f"O1 venv resolves to {target_venv_resolved}",
         )
 
     # 15b. O1 /opt/omnigent/venv does not point into quarantine
     #      via a sub-path alias. (Same as 15a but textually distinct
     #      so operators reading the report understand it.)
-    if target_venv_resolved is not None and _path_under(
-        quarantine_resolved, target_venv_resolved
-    ):
+    if target_venv_resolved is not None and _path_under(quarantine_resolved, target_venv_resolved):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "o1_venv_does_not_contain_quarantine", False,
+            v,
+            "o1_venv_does_not_contain_quarantine",
+            False,
             f"O1 venv {target_venv_resolved} contains quarantine path",
         )
         return v
     _record_check(
-        v, "o1_venv_does_not_contain_quarantine", True,
+        v,
+        "o1_venv_does_not_contain_quarantine",
+        True,
         "O1 venv does not contain the quarantine path",
     )
 
@@ -1498,21 +1592,25 @@ def validate_completed_reconciliation(
     if _path_under(quarantine_resolved, supervisor_root):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "o2_does_not_reference_quarantine", False,
+            v,
+            "o2_does_not_reference_quarantine",
+            False,
             f"quarantine is under O2 root {supervisor_root}",
         )
         return v
-    if supervisor_home is not None and _path_under(
-        quarantine_resolved, supervisor_home
-    ):
+    if supervisor_home is not None and _path_under(quarantine_resolved, supervisor_home):
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "o2_home_does_not_reference_quarantine", False,
+            v,
+            "o2_home_does_not_reference_quarantine",
+            False,
             f"quarantine is under O2 home {supervisor_home}",
         )
         return v
     _record_check(
-        v, "o2_does_not_reference_quarantine", True,
+        v,
+        "o2_does_not_reference_quarantine",
+        True,
         "O2 root and home do not contain the quarantine path",
     )
 
@@ -1520,20 +1618,26 @@ def validate_completed_reconciliation(
     #      path. We check all four canonical units.
     refs: list[str] = []
     for unit in (
-        target.service_unit, target.host_unit,
-        supervisor.service_unit, supervisor.host_unit,
+        target.service_unit,
+        target.host_unit,
+        supervisor.service_unit,
+        supervisor.host_unit,
     ):
         if _service_exe_references_unit_path(unit, quarantine_resolved):
             refs.append(unit)
     if refs:
         v.classification = CLASS_INVALID_INCONSISTENT
         _record_check(
-            v, "no_service_references_quarantine", False,
+            v,
+            "no_service_references_quarantine",
+            False,
             f"live service units reference quarantine path: {refs}",
         )
         return v
     _record_check(
-        v, "no_service_references_quarantine", True,
+        v,
+        "no_service_references_quarantine",
+        True,
         "no O1/O2 service unit references the quarantine path",
     )
 
@@ -1558,7 +1662,9 @@ def validate_completed_reconciliation(
         # absent. Older reconcilers (1.0.0) are accepted; the
         # marker is the new authoritative signal.
         _record_check(
-            v, "live_state_no_active_executor", True,
+            v,
+            "live_state_no_active_executor",
+            True,
             "audit present and original candidate absent; no "
             "RECONCILIATION_COMPLETE marker is required because "
             "the overlay is sufficient evidence and the candidate "
@@ -1566,7 +1672,9 @@ def validate_completed_reconciliation(
         )
     else:
         _record_check(
-            v, "live_state_no_active_executor", True,
+            v,
+            "live_state_no_active_executor",
+            True,
             f"RECONCILIATION_COMPLETE marker present at {marker}",
         )
 
@@ -1605,11 +1713,11 @@ __all__ = [
     "CLASS_VALIDLY_RECONCILED",
     "DEFAULT_QUARANTINE_ROOT",
     "INTRINSIC_FORBIDDEN_PATHS",
+    "RECONCILER_VERSION",
     "ReconciliationError",
     "ReconciliationReport",
-    "RECONCILER_VERSION",
     "ReconciliationValidation",
-    "reconcile_stale_transaction",
     "list_quarantined",
+    "reconcile_stale_transaction",
     "validate_completed_reconciliation",
 ]

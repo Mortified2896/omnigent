@@ -121,7 +121,8 @@ export const CODEX_NATIVE_APPROVAL_MODES: NativeHarnessMode[] = [
 // metadata) so it survives reload. Mutually exclusive in spirit with the
 // approval-mode presets above: when bypass is on the runner strips any
 // `--sandbox` / `--ask-for-approval` flags those presets would emit.
-export const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
+export const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY =
+  "omnigent.harnesses.codex_native.main.bypass_sandbox";
 // Bypass is the most-permissive Codex approval stance — presented as a 4th
 // option in the Codex approval dropdown (Codex only; OpenCode shares the
 // presets above but has no bypass). It rides as a conversation label, not

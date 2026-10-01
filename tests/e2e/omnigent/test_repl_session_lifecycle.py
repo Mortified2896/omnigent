@@ -15,6 +15,7 @@ import re
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -94,25 +95,26 @@ def _stop_host_daemon(home: Path) -> None:
 
     :param home: HOME directory used by a REPL subprocess.
     """
-    pid_path = home / ".omnigent" / "host.pid"
-    if not pid_path.exists():
+    state_dir = home / ".omnigent"
+    if not (state_dir / "daemons").is_dir():
         return
-    try:
-        pid = int(pid_path.read_text().splitlines()[0])
-    except (IndexError, ValueError):
-        pid_path.unlink(missing_ok=True)
-        return
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if not _pid_alive(pid):
-            break
-        _pause_between_external_polls(0.1)
-    if _pid_alive(pid):
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
-    pid_path.unlink(missing_ok=True)
+    # The CLI checks the recorded command before signalling a PID, including
+    # recycled-PID protection. Scope its registry to this test's own HOME.
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "OMNIGENT_CONFIG_HOME": str(state_dir),
+        "OMNIGENT_DATA_DIR": str(state_dir),
+        "OMNIGENT_SKIP_ONBOARD": "1",
+        "OMNIGENT_NO_UPDATE_CHECK": "1",
+    }
+    subprocess.run(
+        [sys.executable, "-m", "omnigent", "host", "stop", "--all", "--daemon-only", "--force"],
+        env=env,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
 
 
 @dataclass(frozen=True)
@@ -179,7 +181,17 @@ def _repl_env(
     """
     env = dict(base_env)
     # This process uses its per-test HOME for daemon state and logs.
-    env.pop("OMNIGENT_DATA_DIR", None)
+    state_dir = home / ".omnigent"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    # Two isolated homes on the same machine are distinct test hosts; the
+    # collision gate must remain enabled. Do not inherit the fixture's shared
+    # config root or the operator's state directory.
+    (state_dir / "config.yaml").write_text(
+        f"auth:\n  type: api_key\nhost:\n  name: repl-lifecycle-{home.name}\n",
+        encoding="utf-8",
+    )
+    env["OMNIGENT_CONFIG_HOME"] = str(state_dir)
+    env["OMNIGENT_DATA_DIR"] = str(state_dir)
     env["HOME"] = str(home)
     env["TERM"] = "xterm-256color"
     env["LINES"] = "40"

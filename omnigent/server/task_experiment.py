@@ -132,7 +132,6 @@ def require_completed_answer(
         )
 
 
-
 def save_outcome(
     store: ConversationStore,
     conversation_id: str,

@@ -6,6 +6,7 @@ state what is allowed and what is forbidden. The tests assert
 that the disposition is correctly computed for each phase and
 that the integrity checks reject incomplete metadata.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -23,7 +24,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -75,11 +77,19 @@ def empty_tx(tmp_path: Path) -> transaction.TransactionRecord:
 class TestPreMutationStates:
     """Pre-mutation states must NEVER touch active runtime or DB."""
 
-    @pytest.mark.parametrize("phase", [
-        "init", "preflight", "schema_snapshot", "db_backup",
-    ])
+    @pytest.mark.parametrize(
+        "phase",
+        [
+            "init",
+            "preflight",
+            "schema_snapshot",
+            "db_backup",
+        ],
+    )
     def test_pre_mutation_disposition_no_touch(
-        self, empty_tx: transaction.TransactionRecord, phase: str,
+        self,
+        empty_tx: transaction.TransactionRecord,
+        phase: str,
     ) -> None:
         empty_tx.phase = phase
         # db_backup just requires the backup path be filled in;
@@ -92,11 +102,17 @@ class TestPreMutationStates:
         assert d.can_stop_services is False
         assert d.can_clear_transaction_staging is True
 
-    @pytest.mark.parametrize("phase", [
-        "candidate_staging", "candidate_verified",
-    ])
+    @pytest.mark.parametrize(
+        "phase",
+        [
+            "candidate_staging",
+            "candidate_verified",
+        ],
+    )
     def test_staged_disposition_only_clean_staging(
-        self, empty_tx: transaction.TransactionRecord, phase: str,
+        self,
+        empty_tx: transaction.TransactionRecord,
+        phase: str,
     ) -> None:
         empty_tx.phase = phase
         d = fsm.disposition_for(empty_tx)
@@ -109,7 +125,8 @@ class TestPostMutationStates:
     """Post-mutation states must require DB backup integrity."""
 
     def test_switched_disposition_requires_old_runtime(
-        self, empty_tx: transaction.TransactionRecord,
+        self,
+        empty_tx: transaction.TransactionRecord,
     ) -> None:
         empty_tx.phase = "switch"
         empty_tx.old_runtime_path = "/opt/omnigent/venv.legacy-tx123"
@@ -119,7 +136,8 @@ class TestPostMutationStates:
         assert d.must_verify_old_runtime is True
 
     def test_switched_disposition_refuses_no_old_runtime(
-        self, empty_tx: transaction.TransactionRecord,
+        self,
+        empty_tx: transaction.TransactionRecord,
     ) -> None:
         empty_tx.phase = "switch"
         empty_tx.old_runtime_path = ""
@@ -127,7 +145,8 @@ class TestPostMutationStates:
             fsm.disposition_for(empty_tx)
 
     def test_db_migrated_disposition_requires_db_backup(
-        self, empty_tx: transaction.TransactionRecord,
+        self,
+        empty_tx: transaction.TransactionRecord,
     ) -> None:
         empty_tx.phase = "service_restart"
         empty_tx.old_runtime_path = "/opt/omnigent/venv.legacy-tx"
@@ -139,7 +158,8 @@ class TestPostMutationStates:
         assert d.must_verify_db_backup is True
 
     def test_db_migrated_disposition_refuses_no_db_backup(
-        self, empty_tx: transaction.TransactionRecord,
+        self,
+        empty_tx: transaction.TransactionRecord,
     ) -> None:
         empty_tx.phase = "service_restart"
         empty_tx.old_runtime_path = "/opt/omnigent/venv.legacy-tx"
@@ -148,7 +168,8 @@ class TestPostMutationStates:
             fsm.disposition_for(empty_tx)
 
     def test_db_migrated_disposition_refuses_bad_integrity(
-        self, empty_tx: transaction.TransactionRecord,
+        self,
+        empty_tx: transaction.TransactionRecord,
     ) -> None:
         empty_tx.phase = "service_restart"
         empty_tx.old_runtime_path = "/opt/omnigent/venv.legacy-tx"
@@ -163,7 +184,9 @@ class TestTerminalStates:
 
     @pytest.mark.parametrize("phase", ["tx_committed", "rolled_back", "failure"])
     def test_terminal_disposition_no_touch(
-        self, empty_tx: transaction.TransactionRecord, phase: str,
+        self,
+        empty_tx: transaction.TransactionRecord,
+        phase: str,
     ) -> None:
         empty_tx.phase = phase
         d = fsm.disposition_for(empty_tx)

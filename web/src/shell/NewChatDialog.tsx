@@ -1,3 +1,11 @@
+import {
+  AGY_NATIVE_DEFAULT_SKIP_MODE,
+  AGY_NATIVE_SKIP_VALUE,
+  AGY_NATIVE_SKIP_MODES,
+} from "@/lib/nativeHarnessModes";
+import { showToast } from "@/components/ui/toast";
+import { CLIENT_CREATE_TOKEN_LABEL, newTempConversation } from "@/lib/tempConversationId";
+import { readAlwaysUseWorktree } from "@/lib/worktreeDefaultPreferences";
 import { O3FailedReview } from "@/components/O3SessionReview";
 import { O3ReviewTimingStatus } from "@/components/O3ReviewTimingStatus";
 import { startReviewTiming, finishReviewTiming, type O3ReviewTiming } from "@/lib/o3ReviewTiming";
@@ -95,13 +103,18 @@ import {
 
 // Re-exported for tests that import the readiness helpers from this module.
 export { harnessUnavailableReasonOnHost, harnessUnconfiguredOnHost, harnessWarningBadgeText };
-import { isFeatureEnabled, sandboxOptionLabel } from "@/lib/capabilities";
+import { isFeatureEnabled, sandboxOptionLabel, sandboxProviderOptions } from "@/lib/capabilities";
 import {
   isSlashCommandText,
   rankedSlashCommandNames,
   SlashCommandMenu,
 } from "@/components/SlashCommandMenu";
-import { setPendingInitialPrompt } from "@/store/chatStore";
+import {
+  beginLocalConversation,
+  hydrateLocalConversation,
+  removeLocalConversation,
+  setPendingInitialPrompt,
+} from "@/store/chatStore";
 import { appendPromptHistoryEntry } from "@/hooks/usePromptHistory";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { CliCommandBlock } from "./CliCommandBlock";
@@ -116,6 +129,8 @@ import {
 import { getCliServerUrl, getOmnigentHostConfig } from "@/lib/host";
 import { readLastAgentId, writeLastAgentId } from "@/lib/agentPreferences";
 import {
+  readLastSandboxProvider,
+  writeLastSandboxProvider,
   readLastHostChoice,
   writeLastHostChoice,
   SANDBOX_HOST_CHOICE,
@@ -184,11 +199,7 @@ import {
   moveConversationToProject,
   PROJECT_LABEL_KEY,
 } from "@/hooks/useConversations";
-import {
-  collectConversationIds,
-  type ConversationsInfiniteData,
-  type SessionListWireItem,
-} from "@/lib/sessionListCache";
+import type { SessionListWireItem } from "@/lib/sessionListCache";
 import { nextPushedSession } from "@/lib/sessionUpdatesSocket";
 import { FileMentionMenu } from "@/components/FileMentionMenu";
 import { useMentionBrowser } from "@/hooks/useMentionBrowser";
@@ -368,7 +379,7 @@ const CODEX_NATIVE_APPROVAL_MODES: {
 // metadata) so it survives reload. Mutually exclusive in spirit with the
 // approval-mode presets above: when bypass is on the runner strips any
 // `--sandbox` / `--ask-for-approval` flags those presets would emit.
-const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.codex_native.bypass_sandbox";
+const CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY = "omnigent.harnesses.codex_native.main.bypass_sandbox";
 const CODEX_ACCESS_LANE_LABEL_KEY = "omnigent.access_lane";
 const O3_ROUTING_PROPOSAL_LABEL_KEY = "o3.routing.proposal_id";
 const O3_ROUTING_MODEL_ID = "__omniroute_o3__";
@@ -1426,6 +1437,7 @@ function HarnessConfigModal({
   permissionMode,
   approvalMode,
   cursorExecMode,
+  agySkipMode,
   bypassSandbox,
   pickedModel,
   pickedCodexAccessLane,
@@ -1442,6 +1454,7 @@ function HarnessConfigModal({
   setPermissionMode,
   setApprovalMode,
   setCursorExecMode,
+  setAgySkipMode,
   setBypassSandbox,
   setPickedModel,
   setPickedCodexModel,
@@ -1459,6 +1472,7 @@ function HarnessConfigModal({
   permissionMode: string;
   approvalMode: string;
   cursorExecMode: string;
+  agySkipMode: string;
   bypassSandbox: boolean;
   pickedModel: string;
   pickedCodexAccessLane: CodexAccessLane | null;
@@ -1475,6 +1489,7 @@ function HarnessConfigModal({
   setPermissionMode: (mode: string) => void;
   setApprovalMode: (mode: string) => void;
   setCursorExecMode: (mode: string) => void;
+  setAgySkipMode: (mode: string) => void;
   setBypassSandbox: (enabled: boolean) => void;
   setPickedModel: (model: string) => void;
   setPickedCodexModel: (model: string, accessLane: CodexAccessLane | null) => void;
@@ -1488,6 +1503,7 @@ function HarnessConfigModal({
   const entryHarness = nativeCodingAgentForAvailableAgent(agent)?.harness ?? null;
   const hasPermission = nativeAgentHasCapability(agent, "permissionMode");
   const hasApproval = nativeAgentHasCapability(agent, "approvalMode");
+  const hasAgySkip = nativeAgentHasCapability(agent, "skipPermissions");
   const hasCursor = nativeAgentHasCapability(agent, "cursorMode");
   const hasModelPicker = nativeAgentHasCapability(agent, "modelPicker");
   const isCodex = entryHarness === "codex-native";
@@ -1503,6 +1519,7 @@ function HarnessConfigModal({
   const [draftEffort, setDraftEffort] = useState(pickedEffort);
   const [draftPermission, setDraftPermission] = useState(permissionMode);
   const [draftApproval, setDraftApproval] = useState(approvalMode);
+  const [draftAgySkip, setDraftAgySkip] = useState(agySkipMode);
   const [draftCursor, setDraftCursor] = useState(cursorExecMode);
   const [draftBypass, setDraftBypass] = useState(bypassSandbox);
   const [draftHarness, setDraftHarness] = useState<string | null>(pickedHarness);
@@ -1518,6 +1535,7 @@ function HarnessConfigModal({
     setDraftPermission(permissionMode);
     setDraftApproval(approvalMode);
     setDraftCursor(cursorExecMode);
+    setDraftAgySkip(agySkipMode);
     setDraftBypass(bypassSandbox);
     setDraftHarness(pickedHarness);
     setDraftRouting(costControlMode);
@@ -1632,6 +1650,9 @@ function HarnessConfigModal({
           mode: draftApproval,
           ...(isCodex ? { model: draftModel, accessLane: draftCodexAccessLane ?? "" } : {}),
         });
+    } else if (hasAgySkip) {
+      setAgySkipMode(draftAgySkip);
+      if (entryHarness) writeHarnessOption(entryHarness, { mode: draftAgySkip });
     } else if (hasCursor) {
       setCursorExecMode(draftCursor);
       if (entryHarness) writeHarnessOption(entryHarness, { mode: draftCursor });
@@ -1849,7 +1870,38 @@ function HarnessConfigModal({
           {/* Stays rendered while Smart Routing is the pick: it is the control
           that selected it, so hiding it would strand the choice with no way to
           read it back or switch away without cancelling. */}
-          {!hasPermission && !hasApproval && !hasCursor && brainDefault && (
+          {!autoRouting && hasAgySkip && (
+            <>
+              <ConfigRow label="Permissions" description="What the agent can do without asking">
+                <DescribedSelect
+                  value={draftAgySkip}
+                  onValueChange={setDraftAgySkip}
+                  options={AGY_NATIVE_SKIP_MODES}
+                  testId="new-chat-landing-config-agy-skip"
+                  ariaLabel="Permissions"
+                  componentId="new_chat.config.permission"
+                />
+              </ConfigRow>
+              {/* Persistent danger banner while the bypass is selected. agy has
+                  no firing pre-tool hook, so Omnigent cannot re-gate individual
+                  tools once this is on — the warning is the only guardrail. */}
+              {draftAgySkip === AGY_NATIVE_SKIP_VALUE && (
+                <div
+                  role="alert"
+                  data-testid="new-chat-landing-agy-skip-banner"
+                  className="flex items-start gap-1.5 rounded-md border border-destructive bg-destructive/10 px-2 py-1.5 text-xs font-medium leading-relaxed text-destructive"
+                >
+                  <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    Danger: this session runs Antigravity with all tool permission prompts disabled.
+                    It can edit any file and run any command without asking.
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+
+          {!hasPermission && !hasApproval && !hasCursor && !hasAgySkip && brainDefault && (
             <ConfigRow label="Agent Harness" description="Underlying coding harness">
               <Select value={draftHarness ?? brainDefault} onValueChange={setDraftHarness}>
                 <SelectTrigger
@@ -1940,7 +1992,25 @@ function HarnessConfigModal({
 // message, attachments and picker selections survive the unmount that happens
 // when the user navigates into an existing session and back. Module-scoped,
 // not persisted to storage (a page refresh starts clean); cleared on create.
+export function surfaceProjectCreateWarnings(warnings: unknown): void {
+  if (!Array.isArray(warnings)) return;
+  try {
+    for (const warning of warnings) {
+      const message = (warning as { message?: unknown } | null)?.message;
+      if (typeof message === "string" && message !== "") showToast(message);
+    }
+  } catch {
+    // A toast failure must never fail the create that already succeeded.
+  }
+}
+
 interface LandingDraft {
+  sandboxProvider: string | null;
+  agySkipMode: string;
+  project: string;
+  agentFromConfig: boolean;
+  workspaceFromConfig: boolean;
+  autoSeededBranch: string;
   message: string;
   files: File[];
   pickedAgentId: string | null;
@@ -1963,20 +2033,39 @@ interface LandingDraft {
 }
 
 let landingDraft: LandingDraft | null = null;
+let landingDraftRevision = 0;
+function writeLandingDraft(draft: LandingDraft | null): void {
+  landingDraft = draft;
+  landingDraftRevision += 1;
+}
 
 // Test-only: clears the preserved landing draft so each case starts from a
 // clean module state (the draft is module-scoped and survives unmount by
 // design, which would otherwise leak between tests).
 export function resetLandingDraft(): void {
-  landingDraft = null;
+  writeLandingDraft(null);
 }
 
 export function NewChatLandingScreen() {
+  const isMobileViewport = useIsMobileViewport();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const projectParam = searchParams.get("project") ?? "";
   const queryClient = useQueryClient();
   const serverUrl = getCliServerUrl();
-  const { data: agents } = useAvailableAgents();
+  const { data: projectList, isLoading: projectListLoading } = useProjects();
+  const configProjectId = useMemo(
+    () =>
+      projectParam !== ""
+        ? ((projectList ?? []).find((p) => p.name === projectParam)?.id ?? null)
+        : null,
+    [projectList, projectParam],
+  );
+  const { data: storedProjectConfig, isLoading: projectConfigLoading } =
+    useProjectConfig(configProjectId);
+  const { data: agents } = useAvailableAgents({
+    pinnedAgentIds: storedProjectConfig?.agent_id ? [storedProjectConfig.agent_id] : [],
+  });
   // refetchOnFocus: returning from a terminal `omni setup` must clear the
   // readiness badge even if the live push was missed while the tab was hidden.
   const { data: hosts, isLoading: hostsLoading } = useHosts({ refetchOnFocus: true });
@@ -2021,7 +2110,33 @@ export function NewChatLandingScreen() {
   const [landingSurface, setLandingSurface] = useState<HTMLElement | null>(null);
   useNativeServerSwitcherForMainSurface(landingSurface, true);
 
-  const [message, setMessage] = useState<string>(() => landingDraft?.message ?? "");
+  const restoredDraft: LandingDraft | null =
+    landingDraft === null || landingDraft.project === projectParam
+      ? landingDraft
+      : {
+          ...landingDraft,
+          pickedAgentId: null,
+          pickedHarness: null,
+          selectedHostId: null,
+          sandboxSelected: false,
+          sandboxProvider: null,
+          agentFromConfig: false,
+          workspaceFromConfig: false,
+          // The repo inputs compose the managed create's workspace string, so
+          // they are location state too — keeping them would clone another
+          // project's repository into this project's sandbox.
+          sandboxRepoUrl: "",
+          sandboxRepoBranch: "",
+          workspace: "",
+          branchName: "",
+          // The branch may be the worktree-default's auto-seed, generated for
+          // the other visit's workspace — drop the marker with it so the
+          // seed/retract machinery starts clean for this visit.
+          autoSeededBranch: "",
+          prefilledBranch: "",
+        };
+
+  const [message, setMessage] = useState<string>(() => restoredDraft?.message ?? "");
   // Composer text captured when voice dictation starts, so Esc can revert to it.
   const voiceSnapshotRef = useRef("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -2036,7 +2151,7 @@ export function NewChatLandingScreen() {
   // Attachments for the first message — same affordances as the in-session
   // composer (paperclip + paste); carried to ChatPage via the pending
   // initial prompt and sent with the auto-dispatched first turn.
-  const [files, setFiles] = useState<File[]>(() => landingDraft?.files ?? []);
+  const [files, setFiles] = useState<File[]>(() => restoredDraft?.files ?? []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addFiles = (incoming: File[]) => setFiles((prev) => [...prev, ...incoming]);
   const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index));
@@ -2105,7 +2220,16 @@ export function NewChatLandingScreen() {
   // Provider-named label for the sandbox option (e.g. "Modal Sandbox"),
   // falling back to the generic "New Sandbox" when the server names no
   // provider.
-  const sandboxLabel = sandboxOptionLabel(info !== "loading" ? info.sandbox_provider : null);
+  const sandboxProviderRows = info !== "loading" ? sandboxProviderOptions(info) : [];
+  const [sandboxProvider, setSandboxProvider] = useState<string | null>(
+    () =>
+      (landingDraft?.project === projectParam ? landingDraft?.sandboxProvider : null) ??
+      readLastSandboxProvider(),
+  );
+  const effectiveSandboxProvider = sandboxProviderRows.includes(sandboxProvider)
+    ? sandboxProvider
+    : (sandboxProviderRows[0] ?? null);
+  const sandboxLabel = sandboxOptionLabel(effectiveSandboxProvider);
   // Embed-only docs seam: when the host passes additional docs and managed
   // sandboxes are unavailable, keep the sandbox row visible but disabled and
   // attach a help tooltip with a clickable link.
@@ -2118,17 +2242,16 @@ export function NewChatLandingScreen() {
 
   // Project driving this visit, when the sidebar's per-project "new session"
   // pencil landed here with a `?project=` query param. Empty otherwise.
-  const projectParam = searchParams.get("project") ?? "";
   // Seeded from the persisted last pick so a returning user starts on the
   // agent they used last; validated against the live list in
   // effectiveAgentId below (a stale id falls back to the default). A
   // project-driven visit defers to the project-prefill effect instead
   // (which falls back to the same last pick).
   const [pickedAgentId, setPickedAgentId] = useState<string | null>(
-    () => landingDraft?.pickedAgentId ?? (projectParam !== "" ? null : readLastAgentId()),
+    () => restoredDraft?.pickedAgentId ?? (projectParam !== "" ? null : readLastAgentId()),
   );
   const [selectedHostId, setSelectedHostId] = useState<string | null>(
-    () => landingDraft?.selectedHostId ?? null,
+    () => restoredDraft?.selectedHostId ?? null,
   );
   // Sessions on the selected host — fetched only when a host is selected,
   // to avoid registering hundreds of sessions into the health poll at idle.
@@ -2137,7 +2260,7 @@ export function NewChatLandingScreen() {
   // host — the server provisions a sandbox host at create time
   // (host_type: "managed"), so no host_id or workspace is sent.
   const [sandboxSelected, setSandboxSelected] = useState(
-    () => landingDraft?.sandboxSelected ?? false,
+    () => restoredDraft?.sandboxSelected ?? false,
   );
   const { data: hostClaudeModelOptions, isLoading: hostClaudeModelsLoading } = useHostModelOptions(
     selectedHostId,
@@ -2199,13 +2322,16 @@ export function NewChatLandingScreen() {
   // `workspace` string (`<url>[#<branch>]`); both blank = empty
   // server-created workspace.
   const [sandboxRepoUrl, setSandboxRepoUrl] = useState<string>(
-    () => landingDraft?.sandboxRepoUrl ?? "",
+    () => restoredDraft?.sandboxRepoUrl ?? "",
   );
   const [sandboxRepoBranch, setSandboxRepoBranch] = useState<string>(
-    () => landingDraft?.sandboxRepoBranch ?? "",
+    () => restoredDraft?.sandboxRepoBranch ?? "",
   );
-  const [workspace, setWorkspace] = useState<string>(() => landingDraft?.workspace ?? "");
-  const [branchName, setBranchName] = useState<string>(() => landingDraft?.branchName ?? "");
+  const [workspace, setWorkspace] = useState<string>(() => restoredDraft?.workspace ?? "");
+  const agentFromConfigRef = useRef(restoredDraft?.agentFromConfig ?? false);
+  const workspaceFromConfigRef = useRef(restoredDraft?.workspaceFromConfig ?? false);
+  const [autoSeededBranch, setAutoSeededBranch] = useState(restoredDraft?.autoSeededBranch ?? "");
+  const [branchName, setBranchName] = useState<string>(() => restoredDraft?.branchName ?? "");
   // The base branch auto-fills from the configured default (Settings › Git)
   // when the user names a worktree branch, and is left alone once the user
   // touches it — clearing the branch name re-arms the auto-fill (see the effect
@@ -2222,7 +2348,7 @@ export function NewChatLandingScreen() {
   // that worktree (no git opts). Editing the field away from it means the user
   // wants a *new* worktree off that name.
   const [prefilledBranch, setPrefilledBranch] = useState<string>(
-    () => landingDraft?.prefilledBranch ?? "",
+    () => restoredDraft?.prefilledBranch ?? "",
   );
   // Project to file the new session under. Empty = unfiled. Stamped as the
   // `omni_project` label at create (so the row is filed from its first sidebar
@@ -2240,13 +2366,13 @@ export function NewChatLandingScreen() {
   // meaningful for the claude-native wrapper; ignored otherwise. Lives in
   // the footer tray's Advanced settings menu.
   const [permissionMode, setPermissionMode] = useState<string>(
-    () => landingDraft?.permissionMode ?? CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE,
+    () => restoredDraft?.permissionMode ?? CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE,
   );
   // Approval mode for Codex (codex --approval-mode). Only meaningful for
   // the codex-native wrapper; ignored otherwise. Lives in the footer
   // tray's Advanced settings menu.
   const [approvalMode, setApprovalMode] = useState<string>(
-    () => landingDraft?.approvalMode ?? CODEX_NATIVE_DEFAULT_APPROVAL_MODE,
+    () => restoredDraft?.approvalMode ?? CODEX_NATIVE_DEFAULT_APPROVAL_MODE,
   );
   // DANGEROUS codex full-bypass opt-in (Codex only). OFF by default and only
   // flippable on after the user types the confirmation phrase, so it can
@@ -2254,36 +2380,39 @@ export function NewChatLandingScreen() {
   // label so it survives reload. When on, a persistent red banner warns and
   // the runner ignores the approval-mode preset's flags.
   const [bypassSandbox, setBypassSandbox] = useState<boolean>(
-    () => landingDraft?.bypassSandbox ?? false,
+    () => restoredDraft?.bypassSandbox ?? false,
   );
   // Execution mode for Cursor (cursor-agent --mode / --yolo). Only meaningful
   // for the cursor-native wrapper; ignored otherwise.
+  const [agySkipMode, setAgySkipMode] = useState(
+    () => restoredDraft?.agySkipMode ?? AGY_NATIVE_DEFAULT_SKIP_MODE,
+  );
   const [cursorExecMode, setCursorExecMode] = useState<string>(
-    () => landingDraft?.cursorExecMode ?? CURSOR_NATIVE_DEFAULT_EXEC_MODE,
+    () => restoredDraft?.cursorExecMode ?? CURSOR_NATIVE_DEFAULT_EXEC_MODE,
   );
   // Per-session brain-harness override for bundle agents (polly / debby).
   // null = the agent spec's declared harness (no override sent). On agent
   // switch, seeded from the user's last stored pick for that agent.
   const [pickedHarness, setPickedHarness] = useState<string | null>(
     () =>
-      landingDraft?.pickedHarness ??
-      readLastHarness(landingDraft?.pickedAgentId ?? readLastAgentId()),
+      restoredDraft?.pickedHarness ??
+      readLastHarness(restoredDraft?.pickedAgentId ?? readLastAgentId()),
   );
   // Per-session model + reasoning effort for the claude-native model picker.
   // "" = unselected: nothing is checked and `model_override` / `reasoning_effort`
   // are omitted from the create, so Claude Code uses its own configured model.
   // An explicit pick rides along and is remembered (seeded back on a later visit
   // via the harness-seed effect below).
-  const [pickedModel, _setPickedModel] = useState<string>(() => landingDraft?.pickedModel ?? "");
+  const [pickedModel, _setPickedModel] = useState<string>(() => restoredDraft?.pickedModel ?? "");
   const [pickedCodexAccessLane, setPickedCodexAccessLane] = useState<CodexAccessLane | null>(
-    () => landingDraft?.pickedCodexAccessLane ?? null,
+    () => restoredDraft?.pickedCodexAccessLane ?? null,
   );
-  const [pickedEffort, setPickedEffort] = useState<string>(() => landingDraft?.pickedEffort ?? "");
+  const [pickedEffort, setPickedEffort] = useState<string>(() => restoredDraft?.pickedEffort ?? "");
   // Per-session cost-control switch ("Cost Optimized" pill). Unset
   // (null) defers to the agent spec's default and is omitted from
   // the create body.
   const [costControlMode, _setCostControlMode] = useState<CostControlMode>(
-    () => landingDraft?.costControlMode ?? null,
+    () => restoredDraft?.costControlMode ?? null,
   );
   // Model selection and smart routing are mutually exclusive: enabling
   // routing clears the explicit model pick, and picking a model turns
@@ -2391,17 +2520,24 @@ export function NewChatLandingScreen() {
   // `submittedRef` is flipped once the draft is sent to a create, so the
   // snapshot is dropped instead of resurrected.
   const submittedRef = useRef(false);
+  const submittedDraftRevisionRef = useRef(landingDraftRevision);
   // Whether this composer is still on screen. The create POST can outlive
   // it — the user opens another session while the session bootstraps — and
   // the post-create navigation must not follow them there.
   const onScreenRef = useRef(true);
   const draftRef = useRef<LandingDraft>(null as unknown as LandingDraft);
   draftRef.current = {
+    project: projectParam,
+    agentFromConfig: agentFromConfigRef.current,
+    workspaceFromConfig: workspaceFromConfigRef.current,
+    autoSeededBranch,
     message,
     files,
     pickedAgentId,
     selectedHostId,
     sandboxSelected,
+    sandboxProvider,
+    agySkipMode,
     sandboxRepoUrl,
     sandboxRepoBranch,
     workspace,
@@ -2423,7 +2559,11 @@ export function NewChatLandingScreen() {
     onScreenRef.current = true;
     return () => {
       onScreenRef.current = false;
-      landingDraft = submittedRef.current ? null : draftRef.current;
+      if (!submittedRef.current) writeLandingDraft(draftRef.current);
+      else if (submittedDraftRevisionRef.current === landingDraftRevision) {
+        writeLandingDraft(null);
+        submittedDraftRevisionRef.current = landingDraftRevision;
+      }
     };
   }, []);
 
@@ -2432,7 +2572,7 @@ export function NewChatLandingScreen() {
   const handleAdvisorLaunched = useCallback(
     (sessionId: string) => {
       submittedRef.current = true;
-      landingDraft = null;
+      if (submittedDraftRevisionRef.current === landingDraftRevision) writeLandingDraft(null);
       if (selectedHostId) writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
       if (onScreenRef.current) navigate(`/c/${sessionId}`);
     },
@@ -2533,16 +2673,6 @@ export function NewChatLandingScreen() {
   // `?project=` carries the project NAME, so resolve it to the first-class id
   // the config endpoint needs; a label-only folder (id null) or plain visit
   // has no config to read.
-  const { data: projectList, isLoading: projectListLoading } = useProjects();
-  const configProjectId = useMemo(
-    () =>
-      projectParam !== ""
-        ? ((projectList ?? []).find((p) => p.name === projectParam)?.id ?? null)
-        : null,
-    [projectList, projectParam],
-  );
-  const { data: storedProjectConfig, isLoading: projectConfigLoading } =
-    useProjectConfig(configProjectId);
   // Normalize into the machine's shape. `undefined` = still loading (the machine
   // waits so a generic default can't win the race); `{}` = nothing to wait for
   // (plain visit / label-only folder / genuinely empty config), so it settles
@@ -2560,6 +2690,7 @@ export function NewChatLandingScreen() {
       workspace: c.workspace,
       agentId: c.agent_id,
       useWorktree: c.use_worktree,
+      model: c.model,
     };
   }, [
     projectParam,
@@ -2610,6 +2741,12 @@ export function NewChatLandingScreen() {
       seededConfigSigRef.current !== null &&
       prefillConfigSig !== seededConfigSigRef.current;
     if (!projectChanged && !configChanged) return;
+    agentFromConfigRef.current = false;
+    workspaceFromConfigRef.current = false;
+    setAutoSeededBranch("");
+    setPrefilledBranch("");
+    setSandboxRepoUrl("");
+    setSandboxRepoBranch("");
     setSandboxSelected(false);
     setSelectedHostId(null);
     setPickedAgentId(projectParam !== "" ? null : readLastAgentId());
@@ -2670,6 +2807,7 @@ export function NewChatLandingScreen() {
         return;
       }
       // Stored host is gone or offline — fall through to the default.
+      return;
     }
 
     if (managedSandboxesEnabled) {
@@ -2713,7 +2851,9 @@ export function NewChatLandingScreen() {
   // dir/branch readable (worktree-1a2b3c4d).
   const generateBranchName = useCallback(() => {
     const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
-    setBranchName(`worktree-${suffix}`);
+    const branch = `worktree-${suffix}`;
+    setBranchName(branch);
+    return branch;
   }, []);
   // The project's stored default base branch (Project settings), trimmed. Wins
   // over the user-global default (Settings › Git); an unset project default
@@ -2794,7 +2934,10 @@ export function NewChatLandingScreen() {
     // Seed into an empty field only, so a config-supplied (or explicitly
     // picked) workspace isn't clobbered.
     const seededWorkspace = workspace === "";
-    if (seededWorkspace) setWorkspace(candidate);
+    if (seededWorkspace) {
+      workspaceFromConfigRef.current = false;
+      setWorkspace(candidate);
+    }
     // Fork fresh only when we actually seeded the redirect AND no branch is set
     // — a project that supplies its own workspace keeps a plain launch, and a
     // branch typed/picked while the probe was loading isn't overwritten (the
@@ -2825,11 +2968,19 @@ export function NewChatLandingScreen() {
   // bundled agent. So a pending pick made before switching to a sandbox is
   // dropped there, falling back to a real agent; off the sandbox it's kept.
   const pendingAgentAllowedOnTarget = !sandboxSelected;
+  const configuredAgentUnavailable =
+    projectParam !== "" &&
+    prefillConfig?.agentId != null &&
+    agents !== undefined &&
+    !agentList.some((a) => a.id === prefillConfig.agentId);
   const effectiveAgentId =
     pickedAgentId === PENDING_AGENT_ID && pendingAgentAllowedOnTarget
       ? PENDING_AGENT_ID
-      : ((agentList.some((a) => a.id === pickedAgentId) ? pickedAgentId : agentList[0]?.id) ??
-        null);
+      : agentList.some((a) => a.id === pickedAgentId)
+        ? pickedAgentId
+        : configuredAgentUnavailable
+          ? null
+          : (agentList[0]?.id ?? null);
   const selectedAgent = useMemo(
     () =>
       effectiveAgentId === PENDING_AGENT_ID && pendingAgent
@@ -2854,6 +3005,7 @@ export function NewChatLandingScreen() {
   }, [selectedNativeHarness, effectiveAgentId]);
   const supportsPermissionMode = nativeAgentHasCapability(selectedAgent, "permissionMode");
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
+  const supportsAgySkipPermissions = nativeAgentHasCapability(selectedAgent, "skipPermissions");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
   const supportsModelPicker = nativeAgentHasCapability(selectedAgent, "modelPicker");
   const selectedCodexOption = useMemo(
@@ -2939,6 +3091,7 @@ export function NewChatLandingScreen() {
     supportsPermissionMode ||
     supportsApprovalMode ||
     supportsCursorMode ||
+    supportsAgySkipPermissions ||
     supportsModelPicker ||
     smartRoutingEligible ||
     (selectedAgent?.harness != null && selectedAgent.harness in brainHarnessLabelsAll);
@@ -3064,11 +3217,25 @@ export function NewChatLandingScreen() {
   // Only reset on an ACTUAL agent change — not the initial resolution (null →
   // first id, or a persisted/draft pick resolving on mount), which would wipe a
   // costControlMode/bypass restored from the landing draft.
+  const userPickedModelRef = useRef(false);
+  const projectDefaultModel =
+    prefillConfig?.agentId === effectiveAgentId ? prefillConfig?.model : undefined;
+  const projectModelVocab =
+    selectedNativeHarness === "codex-native"
+      ? codexModelOptions
+      : selectedNativeHarness === "claude-native"
+        ? claudeModelOptions
+        : piModelOptions;
+  const projectDefaultModelValid =
+    projectDefaultModel && projectModelVocab.some((m) => m.id === projectDefaultModel)
+      ? projectDefaultModel
+      : null;
   const prevAgentIdRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     const prev = prevAgentIdRef.current;
     prevAgentIdRef.current = effectiveAgentId;
-    if (prev === undefined || prev === effectiveAgentId) return;
+    if (prev === undefined || prev === null || prev === effectiveAgentId) return;
+    userPickedModelRef.current = false;
     setBypassSandbox(false);
     setCostControlMode(null);
   }, [effectiveAgentId, setCostControlMode]);
@@ -3078,7 +3245,7 @@ export function NewChatLandingScreen() {
   // default. Keyed on the harness so an in-session edit isn't clobbered on
   // re-render — only a harness switch reseeds.
   useEffect(() => {
-    if (!selectedNativeHarness) return;
+    if (!selectedNativeHarness || userPickedModelRef.current) return;
     const stored = readHarnessOptions(selectedNativeHarness);
     // Resolve the mode to the stored value when it's still valid for this
     // harness, else the harness default. The else branch must RESET (not
@@ -3095,8 +3262,9 @@ export function NewChatLandingScreen() {
     // this holds on every run of this effect — including the re-run when the
     // model catalog resolves, which lands after the routing seed below.
     const storedRoutingOn =
-      stored.routingPolicy === "native" ||
-      (stored.routingPolicy === undefined && stored.routing === "on");
+      projectDefaultModelValid === null &&
+      (stored.routingPolicy === "native" ||
+        (stored.routingPolicy === undefined && stored.routing === "on"));
     const storedAccessLane =
       stored.accessLane === "omniroute" ||
       stored.accessLane === "codex-direct" ||
@@ -3105,9 +3273,10 @@ export function NewChatLandingScreen() {
         : null;
     if (selectedNativeHarness === "pi-native") {
       setPickedModel(
-        stored.model != null && piModelOptions.some((model) => model.id === stored.model)
-          ? stored.model
-          : "",
+        projectDefaultModelValid ??
+          (stored.model != null && piModelOptions.some((model) => model.id === stored.model)
+            ? stored.model
+            : ""),
       );
     }
     if (supportsPermissionMode) {
@@ -3119,11 +3288,12 @@ export function NewChatLandingScreen() {
       // nothing stored (or a retired id) it resolves to "" — unselected, so the
       // create omits the override and Claude Code uses its own configured model.
       setPickedModel(
-        !storedRoutingOn &&
+        projectDefaultModelValid ??
+          (!storedRoutingOn &&
           stored.model != null &&
           claudeModelOptions.some((m) => m.id === stored.model)
-          ? stored.model
-          : "",
+            ? stored.model
+            : ""),
       );
       setPickedEffort(
         !storedRoutingOn &&
@@ -3149,7 +3319,10 @@ export function NewChatLandingScreen() {
         !storedRoutingOn && selectedNativeHarness === "codex-native"
           ? standardCodexModelOption(codexModelOptions)
           : undefined;
-      const seededCodexOption = storedCodexOption ?? standardOption;
+      const projectCodexOption = projectDefaultModelValid
+        ? codexModelOptions.find((option) => option.id === projectDefaultModelValid)
+        : undefined;
+      const seededCodexOption = projectCodexOption ?? storedCodexOption ?? standardOption;
       const seededEffortLevels = seededCodexOption
         ? codexEffortLevelsForModel([seededCodexOption], seededCodexOption.id)
         : [];
@@ -3162,13 +3335,21 @@ export function NewChatLandingScreen() {
             ? CODEX_STANDARD_REASONING_EFFORT
             : "",
       );
+    } else if (supportsAgySkipPermissions) {
+      setAgySkipMode(resolve(AGY_NATIVE_SKIP_MODES, AGY_NATIVE_DEFAULT_SKIP_MODE));
     } else if (supportsCursorMode) {
       setCursorExecMode(resolve(CURSOR_NATIVE_EXEC_MODES, CURSOR_NATIVE_DEFAULT_EXEC_MODE));
     }
     // Reseed on harness changes and when the selected host's catalog resolves;
     // capability flags are derived from the same harness and stay omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedNativeHarness, claudeModelOptions, codexModelOptions, piModelOptions]);
+  }, [
+    selectedNativeHarness,
+    claudeModelOptions,
+    codexModelOptions,
+    piModelOptions,
+    projectDefaultModelValid,
+  ]);
   // Smart Routing is remembered per harness alongside the mode/model
   // knobs, in its own effect because eligibility depends on the server flag
   // (which resolves after mount — this must reseed when it lands). A stored
@@ -3181,6 +3362,10 @@ export function NewChatLandingScreen() {
   // switch itself (the router always routes), so it's left alone.
   useEffect(() => {
     if (!selectedNativeHarness || autoRoutingSelected) return;
+    if (projectDefaultModelValid !== null && !userPickedModelRef.current) {
+      setCostControlMode(null);
+      return;
+    }
     const stored = readHarnessOptions(selectedNativeHarness);
     if (stored.routingPolicy === "benchmark" || stored.routingPolicy === "manual") {
       setCostControlMode("off");
@@ -3197,6 +3382,7 @@ export function NewChatLandingScreen() {
     effectiveAgentId,
     autoRoutingSelected,
     setCostControlMode,
+    projectDefaultModelValid,
   ]);
   // Top-level Smart Routing pins permissions to Default (no override sent), so
   // entering it resets the mode rather than restoring one: nothing is remembered
@@ -3458,10 +3644,14 @@ export function NewChatLandingScreen() {
     if (writes.selectSandbox) setSandboxSelected(true);
     if (writes.hostId !== undefined) setSelectedHostId((cur) => cur ?? writes.hostId!);
     if (writes.agentId !== undefined) {
+      if (pickedAgentId === null)
+        agentFromConfigRef.current = prefillConfig?.agentId === writes.agentId;
       setPickedAgentId((cur) => cur ?? writes.agentId!);
       if (pickedAgentId === null) setPickedHarness(readLastHarness(writes.agentId));
     }
     if (writes.workspace !== undefined) {
+      if (workspace === "")
+        workspaceFromConfigRef.current = prefillConfig?.workspace === writes.workspace;
       setWorkspace((cur) => (cur === "" ? writes.workspace! : cur));
     }
     setPrefill(step.state);
@@ -3476,6 +3666,7 @@ export function NewChatLandingScreen() {
     selectedHostId,
     pickedAgentId,
     prefillConfig,
+    workspace,
   ]);
 
   // Opt-in worktree from the project's stored config. The inference machine
@@ -3486,7 +3677,7 @@ export function NewChatLandingScreen() {
   // per settled workspace (ref-guarded) and only into an empty branch, so a
   // typed branch / existing-worktree prefill is never clobbered.
   useEffect(() => {
-    if (prefillConfig?.useWorktree !== true) return;
+    if ((prefillConfig?.useWorktree ?? readAlwaysUseWorktree()) !== true) return;
     if (prefill.project !== projectParam || !prefillDone(prefill)) return;
     if (sandboxSelected || selectedHostId === null || workspaceTrimmed === "") return;
     if (branchName !== "" || prefilledBranch !== "") return;
@@ -3495,7 +3686,10 @@ export function NewChatLandingScreen() {
     // anti-flicker placeholder from a previous path).
     if (hostWorktreesArePlaceholder || hostWorktrees === undefined) return;
     worktreeSeededForRef.current = workspaceTrimmed;
-    if (hostWorktrees.some((w) => w.is_main)) generateBranchName();
+    if (hostWorktrees.some((w) => w.is_main)) {
+      const branch = generateBranchName();
+      setAutoSeededBranch(branch);
+    }
   }, [
     prefillConfig,
     prefill,
@@ -3509,6 +3703,18 @@ export function NewChatLandingScreen() {
     hostWorktreesArePlaceholder,
     generateBranchName,
   ]);
+
+  // Retract our own auto-seeded branch when the effective default is now off
+  // (the seed effect only fills, never clears) — e.g. after flipping the global
+  // default off in Settings. Only clears while the field still holds OUR seed.
+  useEffect(() => {
+    if (autoSeededBranch === "" || branchName !== autoSeededBranch) return;
+    if ((prefillConfig?.useWorktree ?? readAlwaysUseWorktree()) === true) return;
+    setBranchName("");
+    setAutoSeededBranch("");
+    // Re-arm the seed guard so flipping the default back on can seed again.
+    worktreeSeededForRef.current = null;
+  }, [prefillConfig, branchName, autoSeededBranch]);
 
   // Sandbox repo inputs are valid when blank (empty workspace), or when
   // the URL passes the shape check; a branch without a URL is dangling.
@@ -3728,7 +3934,9 @@ export function NewChatLandingScreen() {
     ? SMART_ROUTING_LABEL
     : selectedAgent
       ? selectedAgent.display_name
-      : "Select agent";
+      : configuredAgentUnavailable
+        ? "Agent unavailable"
+        : "Select agent";
 
   // Wrap the harness setter so every explicit pick is persisted to
   // localStorage. The caller can pass an explicit `agentId` for the
@@ -3785,6 +3993,7 @@ export function NewChatLandingScreen() {
     // NOT cleared here: it is a saved knob on the agent, and its modal's
     // always-rendered Agent Harness row is how the user switches away.
     else if (pickedHarness === AUTO_NATIVE_HARNESS_ID) handleSetPickedHarness(null, agent.id);
+    agentFromConfigRef.current = false;
     setPickedAgentId(agent.id);
     writeLastAgentId(agent.id);
   };
@@ -3809,11 +4018,14 @@ export function NewChatLandingScreen() {
     setSelectedHostId(hostId);
     // Workspace is host-specific — clear it and let the seeding effect run for
     // the new host.
+    workspaceFromConfigRef.current = false;
     setWorkspace("");
     seededHostRef.current = null;
   }
 
-  function selectSandbox() {
+  function selectSandbox(provider: string | null = effectiveSandboxProvider) {
+    setSandboxProvider(provider);
+    writeLastSandboxProvider(provider);
     // Persist the explicit sandbox pick (as the reserved sentinel) even when
     // it's already selected, mirroring selectHost — so the sandbox becomes the
     // sticky default for the next visit.
@@ -3823,6 +4035,7 @@ export function NewChatLandingScreen() {
     // server-chosen, so clear any prior host pick and its workspace.
     setSandboxSelected(true);
     setSelectedHostId(null);
+    workspaceFromConfigRef.current = false;
     setWorkspace("");
     seededHostRef.current = null;
   }
@@ -3851,7 +4064,9 @@ export function NewChatLandingScreen() {
   // dropped it on the strength of the submit.
   function returnDraftToUser() {
     submittedRef.current = false;
-    if (!onScreenRef.current) landingDraft = draftRef.current;
+    if (!onScreenRef.current && submittedDraftRevisionRef.current === landingDraftRevision) {
+      writeLandingDraft(draftRef.current);
+    }
   }
 
   function o3WorkspaceSummary(): string {
@@ -3997,6 +4212,13 @@ export function NewChatLandingScreen() {
       setO3ReviewError("The proposal must create an approved derived route before launch.");
       return;
     }
+    const createLocation = window.location.href;
+    let localConv: ReturnType<typeof beginLocalConversation> = null;
+    const tearDownLocalConversation = () => {
+      if (localConv === null) return;
+      const stillOnTempRoute = window.location.pathname.endsWith(`/c/${localConv.tempConvId}`);
+      if (removeLocalConversation(localConv.tempConvId) && stillOnTempRoute) navigate("/");
+    };
     setCreating(true);
     setCreateError(null);
     // The draft is spent from the moment it is submitted: it belongs to the
@@ -4004,6 +4226,7 @@ export function NewChatLandingScreen() {
     // hand it back pre-filled. Flipped here rather than on the response
     // because the create outlives an unmount; a create that fails hands the
     // draft back via returnDraftToUser.
+    submittedDraftRevisionRef.current = landingDraftRevision;
     submittedRef.current = true;
     try {
       if (
@@ -4021,7 +4244,7 @@ export function NewChatLandingScreen() {
         clearO3RoutingDraft();
         setO3Draft(null);
         setO3Proposal(null);
-        landingDraft = null;
+        if (submittedDraftRevisionRef.current === landingDraftRevision) writeLandingDraft(null);
         if (onScreenRef.current) navigate(`/c/${storedDraft.sessionId}`);
         return;
       }
@@ -4044,6 +4267,7 @@ export function NewChatLandingScreen() {
       const agentSupportsPermissionMode = nativeAgentHasCapability(agent, "permissionMode");
       const agentSupportsApprovalMode =
         !toolFree && nativeAgentHasCapability(agent, "approvalMode");
+      const agentSupportsAgySkip = nativeAgentHasCapability(agent, "skipPermissions");
       const agentSupportsCursorMode = nativeAgentHasCapability(agent, "cursorMode");
       const agentSupportsModelPicker = nativeAgentHasCapability(agent, "modelPicker");
       // Smart Routing — server-side. The fully-auto harness always routes
@@ -4102,6 +4326,31 @@ export function NewChatLandingScreen() {
             : Object.keys(codexLaneLabel).length > 0
               ? codexLaneLabel
               : undefined;
+      // First-class project filing: a project-driven visit whose `?project=`
+      // name resolved to a real project id sends `project_id` so the server
+      // files the session atomically at create (born filed, no follow-up
+      // move). A label-only folder (no first-class row yet) keeps the legacy
+      // label + post-create move, which creates the project row on demand.
+      const createProjectId =
+        (projectList ?? []).find((project) => project.name === selectedProject)?.id ?? null;
+      // Server-side default-fill: a slot still holding its untouched project-
+      // config seed (per the source refs) is OMITTED so the server fills it
+      // from the config. Any user interaction — even re-picking the exact
+      // config value — cleared the ref, so an explicit choice is always SENT
+      // (the server treats it as authoritative and only warns on mismatch).
+      // The value-equality guard covers seeds later displaced without a write.
+      const agentFromProjectConfig =
+        createProjectId !== null &&
+        configProjectId === createProjectId &&
+        agentFromConfigRef.current &&
+        prefillConfig?.agentId != null &&
+        effectiveAgentId === prefillConfig.agentId;
+      const workspaceFromProjectConfig =
+        createProjectId !== null &&
+        configProjectId === createProjectId &&
+        workspaceFromConfigRef.current &&
+        prefillConfig?.workspace != null &&
+        workspaceTrimmed === prefillConfig.workspace;
       // When filing into a project, stamp its legacy `omni_project` label at
       // create so the session is BORN FILED. The sidebar dual-reads project
       // membership from this label OR the first-class `project_id` the follow-up
@@ -4130,10 +4379,12 @@ export function NewChatLandingScreen() {
       const createLabels = {
         ...baseLabels,
         ...routingLabels,
-        ...(selectedProject ? { [PROJECT_LABEL_KEY]: selectedProject } : {}),
+        ...(selectedProject && createProjectId === null
+          ? { [PROJECT_LABEL_KEY]: selectedProject }
+          : {}),
       };
 
-      let data: { id: string };
+      let data: { id: string; warnings?: { message?: string }[] };
 
       if (!o3Approved && effectiveAgentId === PENDING_AGENT_ID && pendingAgent) {
         // Custom agent path: build bundle client-side and use multipart POST.
@@ -4143,11 +4394,13 @@ export function NewChatLandingScreen() {
         // same way the fork-resume path does.
         const bundle = await buildAgentBundle(pendingAgent);
         const metadata: Record<string, unknown> = {};
-        if (workspaceTrimmed) metadata.workspace = workspaceTrimmed;
+        if (workspaceTrimmed && !workspaceFromProjectConfig) metadata.workspace = workspaceTrimmed;
+        if (createProjectId !== null) metadata.project_id = createProjectId;
         // Born-filed: stamp the project's `omni_project` label so a bundled
         // session groups under its project from its first sidebar appearance,
         // same as the JSON path (see `createLabels`).
-        if (selectedProject) metadata.labels = { [PROJECT_LABEL_KEY]: selectedProject };
+        if (selectedProject && createProjectId === null)
+          metadata.labels = { [PROJECT_LABEL_KEY]: selectedProject };
         data = await createBundledSession(
           bundle,
           metadata as Parameters<typeof createBundledSession>[1],
@@ -4173,41 +4426,38 @@ export function NewChatLandingScreen() {
         // to the agent and host we're about to ask for. Sub-agent children
         // are never a create's result. Snapshotting the known ids BEFORE
         // the POST is what makes "never seen" mean "created by this call".
-        const knownSessionIds = new Set(
-          collectConversationIds(
-            [
-              ...queryClient.getQueriesData<ConversationsInfiniteData>({
-                queryKey: ["conversations"],
-              }),
-              ...queryClient.getQueriesData<ConversationsInfiniteData>({
-                queryKey: ["project-sessions"],
-              }),
-            ].map(([, cached]) => cached),
-          ),
-        );
-        // A sandbox create has no host to match on until the sandbox
-        // registers one, so it waits for the response like before.
-        const matchOwnCreate =
-          sandboxSelected || !selectedHostId
-            ? null
-            : (item: SessionListWireItem) =>
-                !knownSessionIds.has(item.id) &&
-                item.parent_session_id == null &&
-                item.agent_id === launchAgentId &&
-                item.host_id === selectedHostId;
+        const provisional = newTempConversation();
+        if (!o3Approved) {
+          try {
+            localConv = beginLocalConversation(initialPrompt, files, provisional);
+            if (localConv !== null) navigate(`/c/${localConv.tempConvId}`);
+          } catch {
+            /* A missing client cache falls back to server-first creation. */
+          }
+        }
+        const createToken = localConv?.createToken ?? provisional.token;
+        const matchOwnCreate = (item: SessionListWireItem) =>
+          item.parent_session_id == null &&
+          item.labels?.[CLIENT_CREATE_TOKEN_LABEL] === createToken;
         const createRequest = authenticatedFetch("/v1/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            agent_id: launchAgentId,
+            agent_id: !o3Approved && agentFromProjectConfig ? undefined : launchAgentId,
+            ...(createProjectId !== null ? { project_id: createProjectId } : {}),
             ...(sandboxSelected
               ? {
                   host_type: "managed",
-                  workspace: composeSandboxWorkspace(sandboxRepoUrl, sandboxRepoBranch),
+                  sandbox_provider: effectiveSandboxProvider ?? undefined,
+                  workspace:
+                    composeSandboxWorkspace(sandboxRepoUrl, sandboxRepoBranch) ||
+                    (createProjectId !== null ? null : undefined),
+                  ...(createProjectId !== null ? { git: null } : {}),
                 }
               : {
                   host_id: selectedHostId,
-                  workspace: workspaceTrimmed,
+                  workspace:
+                    !o3Approved && workspaceFromProjectConfig ? undefined : workspaceTrimmed,
                   // Create a new worktree, or bind an existing one
                   // (`existing_worktree` records the branch for the sidebar +
                   // delete flow without creating anything), or neither.
@@ -4223,7 +4473,10 @@ export function NewChatLandingScreen() {
             // placeholder, so the placeholder's wrapper labels, launch args and
             // model would all describe a CLI the router may not pick. The
             // server stamps the routed wrapper's labels once it has rebound.
-            labels: smartRoutingHarnessSelected && !o3Approved ? routingLabels : createLabels,
+            labels: {
+              ...(smartRoutingHarnessSelected && !o3Approved ? routingLabels : createLabels),
+              [CLIENT_CREATE_TOKEN_LABEL]: createToken,
+            },
             // Permission / approval / cursor mode → CLI flag pair, persisted as
             // terminal_launch_args. Omitted for the default and non-native agents.
             terminal_launch_args:
@@ -4238,7 +4491,9 @@ export function NewChatLandingScreen() {
                     : agentSupportsCursorMode && cursorExecMode !== CURSOR_NATIVE_DEFAULT_EXEC_MODE
                       ? (CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === cursorExecMode)?.args ??
                         [])
-                      : undefined,
+                      : agentSupportsAgySkip && agySkipMode === AGY_NATIVE_SKIP_VALUE
+                        ? AGY_NATIVE_SKIP_MODES.find((mode) => mode.value === agySkipMode)?.args
+                        : undefined,
             // Model + reasoning effort, persisted on the session row before
             // the runner launches. Claude, Codex, and Pi read model_override at
             // terminal launch; an unselected ("") knob is omitted so the
@@ -4297,7 +4552,12 @@ export function NewChatLandingScreen() {
         const confirmed = (async (): Promise<{ id: string } | { error: string }> => {
           const response = await createRequest;
           if (!response.ok) return { error: await describeCreateError(response) };
-          return { id: ((await response.json()) as { id: string }).id };
+          const result = (await response.json()) as {
+            id: string;
+            warnings?: { message?: string }[];
+          };
+          surfaceProjectCreateWarnings(result.warnings);
+          return { id: result.id };
         })();
         // Once the create answers, its id is authoritative — stop listening.
         void confirmed.finally(() => abortPush.abort()).catch(() => {});
@@ -4313,6 +4573,8 @@ export function NewChatLandingScreen() {
         // the workspace and agent, so winning on the push can't skip past an
         // error the user needed to see on this screen.
         if ("error" in created) {
+          tearDownLocalConversation();
+          if (localConv !== null) showToast(created.error);
           returnDraftToUser();
           setCreateError(created.error);
           return;
@@ -4337,7 +4599,8 @@ export function NewChatLandingScreen() {
       // `project_id` and clears that label — the single source of truth after
       // the dual-read transition. Non-fatal if it fails: the session stays
       // filed by its label, so it still shows under the project either way.
-      if (selectedProject) {
+      surfaceProjectCreateWarnings(data.warnings);
+      if (selectedProject && createProjectId === null) {
         try {
           // File via first-class project_id; the helper resolves the picked
           // name to a project id, creating an empty project on demand when the
@@ -4373,14 +4636,27 @@ export function NewChatLandingScreen() {
       // as a `slash_command` event (server resolves the skill) instead
       // of plain text the agent would see as a literal "/name". Native
       // terminal agents keep plain text — their CLI owns slash commands.
-      setPendingInitialPrompt(data.id, {
-        text: initialPrompt,
-        skill:
-          o3Approved || isNativeTerminalAgent
-            ? null
-            : matchSkillInvocation(initialPrompt, agent?.skills ?? []),
-        files,
-      });
+      const skill =
+        o3Approved || isNativeTerminalAgent
+          ? null
+          : matchSkillInvocation(initialPrompt, agent?.skills ?? []);
+      if (localConv !== null && launchAgentId) {
+        const tempRouteSuffix = `/c/${localConv.tempConvId}`;
+        hydrateLocalConversation(
+          localConv.tempConvId,
+          data.id,
+          launchAgentId,
+          initialPrompt,
+          files,
+          localConv.pendingMsgTempId,
+          skill,
+          navigate,
+          () => window.location.pathname.endsWith(tempRouteSuffix),
+        );
+      } else {
+        setPendingInitialPrompt(data.id, { text: initialPrompt, skill, files });
+      }
+
       // Scope the recall entry to the new session id so ArrowUp surfaces it in
       // the freshly-opened chat (whose composer reads the same per-conversation
       // key). Sanitized text so recall reproduces exactly what was sent.
@@ -4392,14 +4668,16 @@ export function NewChatLandingScreen() {
       }
       // The session was created — drop any draft a detour back to this
       // screen stashed, so the next visit starts clean.
-      landingDraft = null;
+      if (submittedDraftRevisionRef.current === landingDraftRevision) writeLandingDraft(null);
       // Only follow the create while the user is still on the landing
       // screen. A create that outlived it means they moved on to another
       // session; jumping them into this one now would hijack that. The
       // session is created either way and its first message stays held
       // for whenever they open it.
-      if (onScreenRef.current) navigate(`/c/${data.id}`);
+      if (localConv === null && onScreenRef.current && window.location.href === createLocation)
+        navigate(`/c/${data.id}`);
     } catch (cause) {
+      tearDownLocalConversation();
       returnDraftToUser();
       setCreateError(
         o3Approved && cause instanceof Error
@@ -4608,7 +4886,7 @@ export function NewChatLandingScreen() {
               placeholder={pillSkills.length > 0 ? "" : placeholderText}
               aria-label={placeholderText}
               rows={1}
-              autoFocus
+              autoFocus={!isMobileViewport}
               data-testid="new-chat-landing-input"
               // A 16px phone input avoids Safari focus zoom; desktop stays compact.
               className="min-h-[60px] max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 pb-2 font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground md:text-ui md:leading-5 md:select-text"
@@ -4965,6 +5243,7 @@ export function NewChatLandingScreen() {
                     permissionMode={permissionMode}
                     approvalMode={approvalMode}
                     cursorExecMode={cursorExecMode}
+                    agySkipMode={agySkipMode}
                     bypassSandbox={bypassSandbox}
                     pickedModel={pickedModel}
                     pickedCodexAccessLane={pickedCodexAccessLane}
@@ -4987,9 +5266,16 @@ export function NewChatLandingScreen() {
                     setPermissionMode={setPermissionMode}
                     setApprovalMode={setApprovalMode}
                     setCursorExecMode={setCursorExecMode}
+                    setAgySkipMode={setAgySkipMode}
                     setBypassSandbox={setBypassSandbox}
-                    setPickedModel={setPickedModel}
-                    setPickedCodexModel={setPickedCodexModel}
+                    setPickedModel={(model) => {
+                      userPickedModelRef.current = true;
+                      setPickedModel(model);
+                    }}
+                    setPickedCodexModel={(model, lane) => {
+                      userPickedModelRef.current = true;
+                      setPickedCodexModel(model, lane);
+                    }}
                     setPickedEffort={setPickedEffort}
                     setPickedHarness={handleSetPickedHarness}
                     onRoutingSelectionChange={(mode, benchmark) => {
@@ -5104,17 +5390,28 @@ export function NewChatLandingScreen() {
                   {(managedSandboxesEnabled || showDisabledSandboxWithDocs) && (
                     <>
                       {managedSandboxesEnabled ? (
-                        <DropdownMenuItem
-                          onSelect={selectSandbox}
-                          data-testid="new-chat-landing-sandbox-option"
-                          data-active={sandboxSelected ? "true" : undefined}
-                          className="text-sm data-[active=true]:bg-muted dark:data-[active=true]:bg-muted/50"
-                        >
-                          <span className="flex items-center gap-2">
-                            <MonitorCloudIcon className="size-4 text-muted-foreground" />
-                            <span className="text-sm">{sandboxLabel}</span>
-                          </span>
-                        </DropdownMenuItem>
+                        sandboxProviderRows.map((provider, index) => (
+                          <DropdownMenuItem
+                            key={provider ?? "default"}
+                            onSelect={() => selectSandbox(provider)}
+                            // First row keeps the original testid; later
+                            // rows get a scoped one.
+                            data-testid={
+                              index === 0
+                                ? "new-chat-landing-sandbox-option"
+                                : `new-chat-landing-sandbox-option-${provider}`
+                            }
+                            data-active={
+                              sandboxSelected && sandboxProvider === provider ? "true" : undefined
+                            }
+                            className="text-sm data-[active=true]:bg-muted dark:data-[active=true]:bg-muted/50"
+                          >
+                            <span className="flex items-center gap-2">
+                              <MonitorCloudIcon className="size-4 text-muted-foreground" />
+                              <span className="text-sm">{sandboxOptionLabel(provider)}</span>
+                            </span>
+                          </DropdownMenuItem>
+                        ))
                       ) : (
                         <DropdownMenuItem
                           aria-disabled="true"
@@ -5335,7 +5632,10 @@ export function NewChatLandingScreen() {
                         initialPath={
                           isNavigablePath(workspaceTrimmed) ? workspaceTrimmed : undefined
                         }
-                        onNavigate={setWorkspace}
+                        onNavigate={(path) => {
+                          workspaceFromConfigRef.current = false;
+                          setWorkspace(path);
+                        }}
                         // Warn when browsing into a directory other live agents
                         // occupy. Suppressed only when a NEW isolated worktree
                         // will be created (no shared-dir conflict then). When
@@ -5466,6 +5766,7 @@ export function NewChatLandingScreen() {
                                       // though blur is about to hide the list.
                                       onMouseDown={(e) => {
                                         e.preventDefault();
+                                        workspaceFromConfigRef.current = false;
                                         setWorkspace(w.path);
                                         setBranchInputFocused(false);
                                         setWorktreePopoverOpen(false);

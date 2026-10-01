@@ -43,7 +43,6 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
 
 from . import identity, transaction
 from .identity import Instance
@@ -61,9 +60,7 @@ def _ensure_initialized(record: TransactionRecord) -> None:
             "mutation boundary; rollback is not permitted"
         )
     if record.phase == "rolled_back":
-        raise RollbackError(
-            f"REFUSED: transaction {record.tx_id!r} has already been rolled back"
-        )
+        raise RollbackError(f"REFUSED: transaction {record.tx_id!r} has already been rolled back")
     if record.phase == "tx_committed":
         raise RollbackError(
             f"REFUSED: transaction {record.tx_id!r} is committed; rollback is not permitted"
@@ -88,18 +85,13 @@ def refuse_unknown_path(record: TransactionRecord, path: str) -> None:
 def _verify_db_backup(record: TransactionRecord) -> None:
     """The DB backup must exist and pass integrity check before use."""
     if not record.db_backup_path:
-        raise RollbackError(
-            f"REFUSED: transaction {record.tx_id!r} has no DB backup path"
-        )
+        raise RollbackError(f"REFUSED: transaction {record.tx_id!r} has no DB backup path")
     backup = Path(record.db_backup_path)
     if not backup.is_file():
-        raise RollbackError(
-            f"REFUSED: rollback DB backup missing: {backup}"
-        )
+        raise RollbackError(f"REFUSED: rollback DB backup missing: {backup}")
     if record.db_backup_integrity and record.db_backup_integrity != "ok":
         raise RollbackError(
-            f"REFUSED: rollback DB backup integrity was not 'ok': "
-            f"{record.db_backup_integrity!r}"
+            f"REFUSED: rollback DB backup integrity was not 'ok': {record.db_backup_integrity!r}"
         )
     sqlite = shutil.which("sqlite3")
     if sqlite is None:
@@ -119,8 +111,8 @@ def _verify_db_backup(record: TransactionRecord) -> None:
 
 def _resolve_current_runtime(
     target_root: Path,
-    runtime_resolver: Optional[Callable[[Path], Path]] = None,
-) -> Optional[Path]:
+    runtime_resolver: Callable[[Path], Path] | None = None,
+) -> Path | None:
     """Return the current runtime path for the target, if any.
 
     If ``runtime_resolver`` is provided, it is called with the target
@@ -147,7 +139,7 @@ def _resolve_current_runtime(
 
 def _resolve_current_link(
     target_root: Path,
-    runtime_resolver: Optional[Callable[[Path], Path]] = None,
+    runtime_resolver: Callable[[Path], Path] | None = None,
 ) -> Path:
     """Return the symlink path used to point to the current runtime.
 
@@ -165,7 +157,7 @@ def _resolve_current_link(
 
 def _resolve_home(
     target: Instance,
-    home_mapping: Optional[dict[str, Path]] = None,
+    home_mapping: dict[str, Path] | None = None,
 ) -> Path:
     """Return the data home for the target instance."""
     if home_mapping is not None:
@@ -177,17 +169,15 @@ def _resolve_home(
         return home_mapping[target_root_str]
     target_root_str = str(target.deployment_root)
     if target_root_str not in identity.HOME_MAPPING:
-        raise RollbackError(
-            f"unknown target deployment root, no home mapping: {target_root_str}"
-        )
+        raise RollbackError(f"unknown target deployment root, no home mapping: {target_root_str}")
     return identity.HOME_MAPPING[target_root_str]
 
 
 def paired_rollback(
     record: TransactionRecord,
     *,
-    runtime_resolver: Optional[Callable[[Path], Path]] = None,
-    home_mapping: Optional[dict[str, Path]] = None,
+    runtime_resolver: Callable[[Path], Path] | None = None,
+    home_mapping: dict[str, Path] | None = None,
 ) -> dict:
     """Restore the target to its pre-promotion state.
 
@@ -229,9 +219,7 @@ def paired_rollback(
         # No current symlink — nothing to restore. The transaction's
         # candidate may still exist on disk but we cannot reason
         # about it. We preserve it.
-        report["preserved"].append(
-            f"current_symlink:absent at {target_root}. Nothing to restore."
-        )
+        report["preserved"].append(f"current_symlink:absent at {target_root}. Nothing to restore.")
     elif not transaction.is_owned(record, str(current_runtime)):
         # The current runtime is NOT the transaction-created candidate.
         # In that case we MUST NOT touch it. It is the old runtime.
@@ -275,9 +263,7 @@ def paired_rollback(
             source = Path(record.db_backup_path + suffix)
             if not source.is_file():
                 continue
-            tmp = db_path.with_suffix(
-                db_path.suffix + f".rollback.{os.getpid()}"
-            )
+            tmp = db_path.with_suffix(db_path.suffix + f".rollback.{os.getpid()}")
             shutil.copy2(source, tmp)
             os.replace(tmp, db_path)
             report["actions"].append(f"db_restored:{source}->{db_path}")
@@ -297,9 +283,7 @@ def paired_rollback(
     record.rollback_completed = True
     record.phase = "rolled_back"
     transaction.save(record, root=transaction.DEFAULT_TX_ROOT)
-    report["preserved"].append(
-        "rollback_artifacts: db backup, release dirs, transaction record"
-    )
+    report["preserved"].append("rollback_artifacts: db backup, release dirs, transaction record")
     return report
 
 

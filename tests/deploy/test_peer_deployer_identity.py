@@ -15,15 +15,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 
+
 def _load(name: str):
-    spec = importlib.util.spec_from_file_location(
-        f"peer_deployer_{name}", PKG_ROOT / f"{name}.py"
-    )
+    spec = importlib.util.spec_from_file_location(f"peer_deployer_{name}", PKG_ROOT / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
 
 identity = _load("identity")
 
@@ -151,7 +151,9 @@ def test_require_distinct_accepts_o1_o2() -> None:
 def test_home_mapping_contains_canonical_paths() -> None:
     assert str(identity.O1.deployment_root) in identity.HOME_MAPPING
     assert identity.HOME_MAPPING[str(identity.O1.deployment_root)] == Path("/var/lib/omnigent")
-    assert identity.HOME_MAPPING[str(identity.O2.deployment_root)] == Path("/var/lib/omnigent-production")
+    assert identity.HOME_MAPPING[str(identity.O2.deployment_root)] == Path(
+        "/var/lib/omnigent-production"
+    )
 
 
 def test_snapshots_equal_ignores_health() -> None:
@@ -174,10 +176,7 @@ def test_snapshots_equal_ignores_health() -> None:
 
 
 def test_read_provenance_parses(tmp_path: Path) -> None:
-    (tmp_path / "PROVENANCE.txt").write_text(
-        "sha=" + "a" * 40 + "\n"
-        "package_version=0.9.0.dev0\n"
-    )
+    (tmp_path / "PROVENANCE.txt").write_text("sha=" + "a" * 40 + "\npackage_version=0.9.0.dev0\n")
     parsed = identity.read_provenance(tmp_path)
     assert parsed["sha"] == "a" * 40
     assert parsed["package_version"] == "0.9.0.dev0"
@@ -189,10 +188,7 @@ def test_read_provenance_rejects_missing(tmp_path: Path) -> None:
 
 
 def test_read_provenance_rejects_non_sha(tmp_path: Path) -> None:
-    (tmp_path / "PROVENANCE.txt").write_text(
-        "sha=not-a-sha\n"
-        "package_version=0.9.0.dev0\n"
-    )
+    (tmp_path / "PROVENANCE.txt").write_text("sha=not-a-sha\npackage_version=0.9.0.dev0\n")
     with pytest.raises(identity.IdentityError):
         identity.read_provenance(tmp_path)
 
@@ -201,11 +197,14 @@ def test_http_health_ok_returns_bool_for_active_service() -> None:
     """If the O2 service is healthy on the host, this returns True."""
     import shutil
     import subprocess
+
     if shutil.which("curl") is None:
         pytest.skip("curl not available")
     result = subprocess.run(
         ["curl", "-fsS", "--max-time", "3", "http://127.0.0.1:4197/health"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         pytest.skip("O2 not healthy on this host")

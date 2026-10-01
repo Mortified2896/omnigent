@@ -282,8 +282,7 @@ export function isCostRoutingEligible(
       gatewayBacked: hostBacksHarnessWithGateway(host, native.harness),
     }) !== null &&
     isCostRoutingSession(session) &&
-    session?.labels?.["omnigent.routing_policy"] !== "benchmark" &&
-    !isNativeTerminalSession(session)
+    session?.labels?.["omnigent.routing_policy"] !== "benchmark"
   );
 }
 

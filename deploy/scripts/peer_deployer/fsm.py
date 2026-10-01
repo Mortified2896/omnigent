@@ -54,12 +54,12 @@ transaction phase to a (state_name, rollback_disposition)
 pair. The rollback subsystem uses this map to choose the
 correct recovery path.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from . import transaction
 from .transaction import TransactionRecord
@@ -266,9 +266,7 @@ def verify_old_runtime_path(path: str) -> Path:
         raise transaction.TransactionError("old_runtime_path is empty")
     p = Path(path)
     if not p.is_absolute():
-        raise transaction.TransactionError(
-            f"REFUSED: old_runtime_path is not absolute: {path!r}"
-        )
+        raise transaction.TransactionError(f"REFUSED: old_runtime_path is not absolute: {path!r}")
     if "venv.legacy-" not in p.name:
         raise transaction.TransactionError(
             f"REFUSED: old_runtime_path {path!r} is not a "
@@ -277,17 +275,17 @@ def verify_old_runtime_path(path: str) -> Path:
     return p.resolve()
 
 
-def classify_phase(phase: str) -> Optional[State]:
+def classify_phase(phase: str) -> State | None:
     """Return the State corresponding to ``phase`` or None if unknown."""
     return PHASE_TO_STATE.get(phase)
 
 
 __all__ = [
-    "State",
+    "DISPOSITIONS",
     "PHASE_TO_STATE",
     "Disposition",
-    "DISPOSITIONS",
+    "State",
+    "classify_phase",
     "disposition_for",
     "verify_old_runtime_path",
-    "classify_phase",
 ]

@@ -16,10 +16,10 @@ write a transaction record to a state corresponding to a
 boundary, then verify that the next process can correctly
 classify the state and proceed.
 """
+
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -34,7 +34,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -109,7 +110,8 @@ class TestRecoverabilityAfterInterruption:
     """Each phase can be diagnosed and recovered from a separate process."""
 
     def test_recoverable_after_staging_interruption(
-        self, tx_root: Path,
+        self,
+        tx_root: Path,
     ) -> None:
         """Interruption after staging, before mutation.
 
@@ -119,7 +121,8 @@ class TestRecoverabilityAfterInterruption:
         touch the active runtime.
         """
         record = _make_record(
-            tx_root, phase="candidate_staging",
+            tx_root,
+            phase="candidate_staging",
             mutation_boundary_crossed=False,
         )
         # Load from disk in a "fresh process" by re-importing.
@@ -133,7 +136,8 @@ class TestRecoverabilityAfterInterruption:
         assert d.can_clear_transaction_staging is True
 
     def test_recoverable_after_verification_interruption(
-        self, tx_root: Path,
+        self,
+        tx_root: Path,
     ) -> None:
         """Interruption after verification, before mutation.
 
@@ -142,7 +146,8 @@ class TestRecoverabilityAfterInterruption:
         no-touch disposition.
         """
         record = _make_record(
-            tx_root, phase="candidate_verified",
+            tx_root,
+            phase="candidate_verified",
             mutation_boundary_crossed=False,
         )
         loaded = transaction.load(record.tx_id, root=tx_root)
@@ -153,7 +158,8 @@ class TestRecoverabilityAfterInterruption:
         assert d.can_touch_db is False
 
     def test_recoverable_after_switch_interruption(
-        self, tx_root: Path,
+        self,
+        tx_root: Path,
     ) -> None:
         """Interruption after switch, before mutation completion.
 
@@ -162,7 +168,8 @@ class TestRecoverabilityAfterInterruption:
         old_runtime_path to be set.
         """
         record = _make_record(
-            tx_root, phase="switch",
+            tx_root,
+            phase="switch",
             mutation_boundary_crossed=True,
             old_runtime_path="/opt/omnigent/venv.legacy-tx",
         )
@@ -175,7 +182,8 @@ class TestRecoverabilityAfterInterruption:
         assert d.must_verify_old_runtime is True
 
     def test_recoverable_after_db_migration_interruption(
-        self, tx_root: Path,
+        self,
+        tx_root: Path,
     ) -> None:
         """Interruption after DB migration, before full accept.
 
@@ -184,7 +192,8 @@ class TestRecoverabilityAfterInterruption:
         require both DB backup integrity and old_runtime_path.
         """
         record = _make_record(
-            tx_root, phase="service_restart",
+            tx_root,
+            phase="service_restart",
             mutation_boundary_crossed=True,
             db_backup_path="/backup/chat.db",
             db_backup_integrity="ok",
@@ -198,13 +207,15 @@ class TestRecoverabilityAfterInterruption:
         assert d.must_verify_old_runtime is True
 
     def test_unrecoverable_post_mutation_without_db_backup(
-        self, tx_root: Path,
+        self,
+        tx_root: Path,
     ) -> None:
         """A post-mutation tx without a verified DB backup is
         refused; the operator must verify the DB state.
         """
         record = _make_record(
-            tx_root, phase="service_restart",
+            tx_root,
+            phase="service_restart",
             mutation_boundary_crossed=True,
             db_backup_path="",
             db_backup_integrity="",

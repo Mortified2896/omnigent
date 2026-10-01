@@ -14,9 +14,9 @@ recovery plan:
 from __future__ import annotations
 
 import importlib.util
-import sys
 import os
 import sqlite3
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -24,15 +24,18 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 
+
 def _load_pkg():
     """Load the peer_deployer package as a proper package so relative
     imports inside modules resolve correctly."""
     import sys as _sys
+
     if "peer_deployer" in _sys.modules:
         return _sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -50,6 +53,7 @@ def _load_pkg():
         sub_spec.loader.exec_module(sub)
         setattr(pkg, name, sub)
     return pkg
+
 
 _pkg = _load_pkg()
 transaction = _pkg.transaction
@@ -169,7 +173,9 @@ def test_refuse_missing_db_backup(record_for_rollback, tx_root: Path) -> None:
         rollback.paired_rollback(record_for_rollback)
 
 
-def test_refuse_db_backup_integrity_failure(record_for_rollback, tx_root: Path, tmp_path: Path) -> None:
+def test_refuse_db_backup_integrity_failure(
+    record_for_rollback, tx_root: Path, tmp_path: Path
+) -> None:
     bad = tmp_path / "bad.db"
     bad.write_text("not a sqlite database")
     record_for_rollback.db_backup_path = str(bad)
@@ -178,7 +184,9 @@ def test_refuse_db_backup_integrity_failure(record_for_rollback, tx_root: Path, 
         rollback.paired_rollback(record_for_rollback)
 
 
-def test_refuse_db_backup_already_marked_bad(record_for_rollback, tx_root: Path, tmp_path: Path) -> None:
+def test_refuse_db_backup_already_marked_bad(
+    record_for_rollback, tx_root: Path, tmp_path: Path
+) -> None:
     bad = tmp_path / "bad.db"
     bad.write_text("not a sqlite database")
     record_for_rollback.db_backup_path = str(bad)
@@ -250,7 +258,10 @@ def test_transaction_marks_rolled_back_after_paired_rollback(
     home.mkdir()
     current_link = tmp_path / "current"
     home_mapping = {str(_pkg.identity.O1.deployment_root): home}
-    resolver = lambda root: (candidate, current_link)  # current runtime + symlink location
+
+    def resolver(root):
+        return (candidate, current_link)  # current runtime + symlink location
+
     try:
         report = rollback.paired_rollback(
             record_for_rollback,
@@ -260,7 +271,7 @@ def test_transaction_marks_rolled_back_after_paired_rollback(
     except Exception as exc:
         pytest.fail(f"paired_rollback raised: {exc}")
     assert report["actions"]
-    assert record_for_rollback.phase == "rolled_back" 
+    assert record_for_rollback.phase == "rolled_back"
 
 
 def test_tx_root_path_helper(record_for_rollback, tx_root: Path, tmp_path: Path) -> None:
@@ -270,7 +281,9 @@ def test_tx_root_path_helper(record_for_rollback, tx_root: Path, tmp_path: Path)
 
 
 def tx_root_path(record: transaction.TransactionRecord) -> Path:
-    return Path(transaction.transaction_path(transaction.DEFAULT_TX_ROOT, record.tx_id)).parent.parent
+    return Path(
+        transaction.transaction_path(transaction.DEFAULT_TX_ROOT, record.tx_id)
+    ).parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +316,7 @@ class TestSixRequiredScenarios:
         # No tx directory was created.
         assert not any(tmp_path.iterdir())
 
-    def test_scenario_2_candidate_staging_failure_does_not_mutate(
-        self, tmp_path: Path
-    ) -> None:
+    def test_scenario_2_candidate_staging_failure_does_not_mutate(self, tmp_path: Path) -> None:
         """Scenario 2: candidate staging fails → active runtime untouched.
 
         The rollback subsystem refuses to operate on a transaction
@@ -396,10 +407,8 @@ class TestSixRequiredScenarios:
         try:
             # The current runtime is imagined to be tmp_path/candidate;
             # configure the O1 deployment root to be the tmp_path.
-            try:
+            with suppress(Exception):
                 identity_module.O1.deployment_root = tmp_path  # type: ignore[misc]
-            except Exception:
-                pass
             try:
                 report = rollback.paired_rollback(record)
             except Exception as exc:
@@ -410,9 +419,7 @@ class TestSixRequiredScenarios:
             identity_module.HOME_MAPPING.clear()
             identity_module.HOME_MAPPING.update(old_mapping)
 
-    def test_scenario_5_rollback_unknown_path_refuses(
-        self, tx_root: Path, tmp_path: Path
-    ) -> None:
+    def test_scenario_5_rollback_unknown_path_refuses(self, tx_root: Path, tmp_path: Path) -> None:
         """Scenario 5: rollback receives unknown/unowned path → refuse deletion."""
         record = transaction.create(
             tx_id=transaction.make_tx_id(),
@@ -430,9 +437,7 @@ class TestSixRequiredScenarios:
         with pytest.raises(rollback.RollbackError, match="not owned"):
             rollback.refuse_unknown_path(record, str(unowned))
 
-    def test_scenario_6_self_upgrade_refused_before_mutation(
-        self, tx_root: Path
-    ) -> None:
+    def test_scenario_6_self_upgrade_refused_before_mutation(self, tx_root: Path) -> None:
         """Scenario 6: self-upgrade target == supervisor → refuse before mutation."""
         with pytest.raises(transaction.TransactionError, match="target == supervisor"):
             transaction.create(

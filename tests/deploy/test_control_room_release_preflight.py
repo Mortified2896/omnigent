@@ -9,10 +9,7 @@ from pathlib import Path
 import pytest
 
 _MODULE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "deploy"
-    / "scripts"
-    / "omnigent_release_preflight.py"
+    Path(__file__).resolve().parents[2] / "deploy" / "scripts" / "omnigent_release_preflight.py"
 )
 _SPEC = importlib.util.spec_from_file_location("control_room_release_preflight", _MODULE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -36,7 +33,7 @@ def _write_test_wheel(tmp_path: Path, *, embedded_sha: str = _SHA) -> Path:
         prefix = "omnigent/server/static/web-ui/"
         archive.writestr(
             f"{prefix}index.html",
-            '<html><head><title>Omnigent</title>'
+            "<html><head><title>Omnigent</title>"
             '<link href="/assets/app.css" rel="stylesheet"></head>'
             '<body><script src="/assets/app.js"></script></body></html>',
         )

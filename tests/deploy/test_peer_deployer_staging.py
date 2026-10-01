@@ -24,10 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -37,11 +34,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 
-SUPERVISOR_RELEASE_ROOT = Path("/opt/omnigent-production/releases/541c9a3180b81bfb2fc450b3ef5f8648691b359d")
-SUPERVISOR_PYTHON = SUPERVISOR_RELEASE_ROOT / "venv" / "bin" / "python"
-SUPERVISOR_SITE = (
-    SUPERVISOR_RELEASE_ROOT / "venv" / "lib" / "python3.12" / "site-packages"
+SUPERVISOR_RELEASE_ROOT = Path(
+    "/opt/omnigent-production/releases/541c9a3180b81bfb2fc450b3ef5f8648691b359d"
 )
+SUPERVISOR_PYTHON = SUPERVISOR_RELEASE_ROOT / "venv" / "bin" / "python"
+SUPERVISOR_SITE = SUPERVISOR_RELEASE_ROOT / "venv" / "lib" / "python3.12" / "site-packages"
 
 
 def _load_pkg():
@@ -49,7 +46,8 @@ def _load_pkg():
         return sys.modules["peer_deployer"]
     init = PKG_ROOT / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "peer_deployer", init,
+        "peer_deployer",
+        init,
         submodule_search_locations=[str(PKG_ROOT)],
     )
     assert spec is not None
@@ -127,7 +125,12 @@ def _make_fake_supervisor_layout(
         check=True,
         capture_output=True,
     )
-    site = venv_dir / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    site = (
+        venv_dir
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
     # Synthesize minimal site-packages with .dist-info dirs and matching
     # importable package directories.
     for name, version in package_versions.items():
@@ -144,9 +147,7 @@ def _make_fake_supervisor_layout(
     omnigent_dir = site / "omnigent"
     omnigent_dir.mkdir(parents=True, exist_ok=True)
     (omnigent_dir / "__init__.py").write_text("# omnigent\n")
-    (omnigent_dir / "_build_info.py").write_text(
-        f"COMMIT_SHA: str = '{runtime_sha}'\n"
-    )
+    (omnigent_dir / "_build_info.py").write_text(f"COMMIT_SHA: str = '{runtime_sha}'\n")
     dist_info = site / f"omnigent-{runtime_version}.dist-info"
     dist_info.mkdir()
     (dist_info / "METADATA").write_text(
@@ -193,7 +194,9 @@ def test_runtime_identity_uses_import_not_regex(tmp_path: Path) -> None:
         capture_output=True,
     )
     # Copy our synthesized site-packages into the venv.
-    venv_site = venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    venv_site = (
+        venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    )
     for child in site.iterdir():
         if child.is_dir():
             shutil.copytree(child, venv_site / child.name)
@@ -225,7 +228,9 @@ def test_runtime_identity_handles_unannotated_form(tmp_path: Path) -> None:
         check=True,
         capture_output=True,
     )
-    venv_site = venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    venv_site = (
+        venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    )
     for child in site.iterdir():
         if child.is_dir():
             shutil.copytree(child, venv_site / child.name)
@@ -251,13 +256,15 @@ def test_runtime_identity_rejects_non_40_char_sha(tmp_path: Path) -> None:
         check=True,
         capture_output=True,
     )
-    venv_site = venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    venv_site = (
+        venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    )
     for child in site.iterdir():
         if child.is_dir():
             shutil.copytree(child, venv_site / child.name)
         else:
             shutil.copy2(child, venv_site / child.name)
-    python = venv / "bin" / "python"
+    venv / "bin" / "python"
     with pytest.raises(identity.IdentityError):
         identity.installed_sha(Path("/nonexistent"))
 
@@ -265,7 +272,7 @@ def test_runtime_identity_rejects_non_40_char_sha(tmp_path: Path) -> None:
 @needs_supervisor
 def test_capture_supervisor_closure(tmp_path: Path) -> None:
     """capture_supervisor_closure must walk site-packages and pin every package."""
-    release_root, deploy_root = _make_fake_supervisor_layout(tmp_path)
+    _release_root, deploy_root = _make_fake_supervisor_layout(tmp_path)
     # Build a fake Instance pointing at the deploy root.
     fake = identity.Instance(
         name="O2-fake",
@@ -305,7 +312,7 @@ def test_staging_refuses_non_canonical_tx_id() -> None:
 @needs_supervisor
 def test_safe_cleanup_staging_only_removes_owned(tmp_path: Path) -> None:
     """safe_cleanup_staging refuses to delete a path that isn't owned."""
-    tx_id = "promotion-20260808T201637Z-60ced75e"
+    "promotion-20260808T201637Z-60ced75e"
     fake_root = tmp_path / "deploy"
     fake_root.mkdir()
     other_dir = fake_root / "someone-elses-stuff"
@@ -349,15 +356,16 @@ def test_complete_marker_required_for_mutation_boundary() -> None:
         expected_version="0.9.0.dev0",
     )
     assert ok is False
-    assert any(c.name == "candidate_runtime_staged_and_verified" and not c.ok
-               for c in report.checks)
+    assert any(
+        c.name == "candidate_runtime_staged_and_verified" and not c.ok for c in report.checks
+    )
     assert any(c.name == "mutation_boundary_blocked" for c in report.checks)
 
 
 @needs_supervisor
 def test_dependency_bundle_reproducible_captures_closure(tmp_path: Path) -> None:
     """dependency_bundle_reproducible must produce a closure with the supervisor pkgs."""
-    release_root, deploy_root = _make_fake_supervisor_layout(tmp_path)
+    _release_root, deploy_root = _make_fake_supervisor_layout(tmp_path)
     fake = identity.Instance(
         name="O2-fake",
         deployment_root=deploy_root,
@@ -423,8 +431,12 @@ def test_real_supervisor_closure_dry_run_stages(tmp_path: Path) -> None:
         supervisor=identity.O2,
         wheels={
             "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
-            "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
-            "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+            "sdk_client": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+            "sdk_ui": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
         },
         dry_run=True,
     )
@@ -437,13 +449,17 @@ def test_real_supervisor_closure_dry_run_stages(tmp_path: Path) -> None:
 def test_real_supervisor_can_produce_a_real_candidate(tmp_path: Path) -> None:
     """End-to-end: build a real candidate from the real supervisor into a tmp_path."""
     target_release = tmp_path / "candidate"
-    closure = staging.stage_candidate_runtime(
+    staging.stage_candidate_runtime(
         target_release_root=target_release,
         supervisor=identity.O2,
         wheels={
             "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
-            "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
-            "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+            "sdk_client": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+            "sdk_ui": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
         },
     )
     # The .complete marker must be present.
@@ -488,16 +504,22 @@ def test_target_release_already_exists_is_refused(tmp_path: Path) -> None:
             target_release_root=target_release,
             supervisor=identity.O2,
             wheels={
-                "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
-                "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
-                "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+                "main": SUPERVISOR_RELEASE_ROOT
+                / "artifacts"
+                / "omnigent-0.9.0.dev0-py3-none-any.whl",
+                "sdk_client": SUPERVISOR_RELEASE_ROOT
+                / "artifacts"
+                / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+                "sdk_ui": SUPERVISOR_RELEASE_ROOT
+                / "artifacts"
+                / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
             },
         )
 
 
 @needs_supervisor
 def test_write_staging_manifest_records_closure(tmp_path: Path) -> None:
-    release_root, deploy_root = _make_fake_supervisor_layout(tmp_path)
+    _release_root, deploy_root = _make_fake_supervisor_layout(tmp_path)
     fake = identity.Instance(
         name="O2-fake",
         deployment_root=deploy_root,
@@ -523,22 +545,24 @@ def test_versions_match_supervisor_for_real_candidate(tmp_path: Path) -> None:
         supervisor=identity.O2,
         wheels={
             "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
-            "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
-            "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+            "sdk_client": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+            "sdk_ui": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
         },
     )
     candidate_python = target_release / "venv" / "bin" / "python"
     closure = staging.capture_supervisor_closure(identity.O2)
-    mismatches = staging.verify_candidate_versions(
-        candidate_python, closure.expected_versions()
-    )
+    mismatches = staging.verify_candidate_versions(candidate_python, closure.expected_versions())
     assert mismatches == [], mismatches
 
 
 @needs_supervisor
 def test_candidate_id_mismatch_rejected(tmp_path: Path) -> None:
     """A candidate with the wrong SHA must NOT match candidate_identity_matches."""
-    release_root, deploy_root = _make_fake_supervisor_layout(
+    release_root, _deploy_root = _make_fake_supervisor_layout(
         tmp_path, runtime_sha="b" * 40, runtime_version="0.9.0.dev0"
     )
     assert not staging.candidate_identity_matches(
@@ -562,8 +586,12 @@ def test_full_preflight_with_candidate_gate_passes(tmp_path: Path) -> None:
         supervisor=identity.O2,
         wheels={
             "main": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent-0.9.0.dev0-py3-none-any.whl",
-            "sdk_client": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
-            "sdk_ui": SUPERVISOR_RELEASE_ROOT / "artifacts" / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
+            "sdk_client": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_client-0.9.0.dev0-py3-none-any.whl",
+            "sdk_ui": SUPERVISOR_RELEASE_ROOT
+            / "artifacts"
+            / "omnigent_ui_sdk-0.9.0.dev0-py3-none-any.whl",
         },
     )
     # Redirect the production transaction root to an empty tmp dir
@@ -571,6 +599,7 @@ def test_full_preflight_with_candidate_gate_passes(tmp_path: Path) -> None:
     fake_tx_root = tmp_path / "transactions"
     fake_tx_root.mkdir()
     import peer_deployer.transaction as _tx_module
+
     original = _tx_module.DEFAULT_TX_ROOT
     object.__setattr__(_tx_module, "DEFAULT_TX_ROOT", fake_tx_root)
     try:
