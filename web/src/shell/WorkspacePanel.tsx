@@ -900,12 +900,6 @@ function WorkspacePanelImpl({
       openTerminals.length > 0 ||
       sideChats.tabs.length > 0 ||
       (showBrowserTab && browsers.tabs.length > 0));
-  const showEmptyNewTab =
-    !pending &&
-    openFiles.length === 0 &&
-    openTerminals.length === 0 &&
-    sideChats.tabs.length === 0 &&
-    (!showBrowserTab || browsers.tabs.length === 0);
   const effectiveHandleProps = pending
     ? {
         ...handleProps,
@@ -1211,28 +1205,17 @@ function WorkspacePanelImpl({
                   );
                 })}
               </div>
-              {/* "+" trails the last tab but sits OUTSIDE the scroller, so it
-                stays pinned (never scrolls under / overlaps the tabs) when they
-                overflow, and hugs the last tab when they fit. ml-[2px] keeps the
-                same gap the scroller's gap-0.5 gives between tabs. */}
-              <NewTabMenu
-                conversationId={conversationId}
-                onOpenBrowser={addBrowser}
-                onOpenSideChat={onNewSideChat}
-                onCreateError={onShellCreateFailed}
-                onOpenTerminal={openTerminalTab}
-                onCreateStart={onShellCreateStart}
-                triggerClassName="ml-[2px]"
-                liveness={liveness}
-              />
             </>
           )}
           {/* "+" — open a new Shell tab. With no open tabs it sits here, right
-            after the nav tabs (next to Shells); once tabs exist it moves into
-            the open-tabs region to trail the last tab (see above). Self-gates
+            after the nav tabs (next to Shells); with tabs it trails the scroll region,
+            staying pinned outside it. Keep one mounted menu so arriving tabs
+            cannot dismiss an open dropdown. Self-gates
             to nothing when the agent has no terminal access. */}
-          {showEmptyNewTab && (
+          {!pending && (
             <NewTabMenu
+              key="new-tab-menu"
+              triggerClassName={showOpenTabs ? "ml-[2px]" : undefined}
               conversationId={conversationId}
               onOpenBrowser={addBrowser}
               onOpenSideChat={onNewSideChat}

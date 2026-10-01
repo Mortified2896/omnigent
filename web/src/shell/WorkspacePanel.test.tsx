@@ -1,3 +1,4 @@
+import { cloneElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -105,7 +106,7 @@ function renderWorkspace(
   const openTerminalTab = vi.fn();
   const onCloseTerminal = vi.fn();
   const onToggleMaximized = vi.fn();
-  const view = render(
+  const tree = (
     <TooltipProvider delayDuration={0}>
       <WorkspacePanel
         conversationId="conv_ws"
@@ -149,9 +150,13 @@ function renderWorkspace(
         liveness={overrides.liveness}
         pending={overrides.pending}
       />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+  const view = render(tree);
+  const rerenderWithOpenFiles = (openFiles: string[]) =>
+    view.rerender(cloneElement(tree, {}, cloneElement(tree.props.children, { openFiles })));
   return {
+    rerenderWithOpenFiles,
     openFileViewer,
     onCloseFile,
     onRightRailTabChange,
@@ -511,6 +516,17 @@ describe('WorkspacePanel "+" new-tab menu', () => {
     const tabsRegion = plusWrapper.previousElementSibling as HTMLElement;
     expect(tabsRegion).toContainElement(screen.getByRole("button", { name: "Close App.tsx" }));
     expect(tabsRegion).not.toContainElement(plus);
+  });
+
+  it("keeps an open creation menu when file tabs arrive", async () => {
+    declaresShell();
+    const { rerenderWithOpenFiles } = renderWorkspace();
+    const trigger = screen.getByRole("button", { name: "Open new" });
+    fireEvent.pointerDown(trigger, { button: 0 });
+    expect(await screen.findByRole("menuitem", { name: /shell/i })).toBeVisible();
+    rerenderWithOpenFiles(["src/App.tsx"]);
+    expect(screen.getByRole("button", { name: "Open new", hidden: true })).toBe(trigger);
+    expect(screen.getByRole("menuitem", { name: /shell/i })).toBeVisible();
   });
 
   it("offers Shell (gated on declared terminals), creating one and opening it as a tab", async () => {

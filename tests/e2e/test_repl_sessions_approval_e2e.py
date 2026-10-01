@@ -41,6 +41,12 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+@pytest.fixture
+def mock_llm_server_url(isolated_mock_llm_server_url: str) -> str:
+    """Keep approval queues separate from earlier REPL subprocesses."""
+    return isolated_mock_llm_server_url
+
+
 def _build_repl_env(mock_llm_server_url: str, tmp_home: Path) -> dict[str, str]:
     """Build the pexpect environment dict for REPL spawning.
 
@@ -170,7 +176,7 @@ def _clean_exit(child: Any) -> None:
         child.terminate(force=True)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def repl_env(
     mock_llm_server_url: str,
     tmp_path_factory: pytest.TempPathFactory,
