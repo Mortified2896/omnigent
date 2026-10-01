@@ -26,6 +26,8 @@ _SHA = re.compile(r"[a-f0-9]{40}")
 _SHA256 = re.compile(r"[a-f0-9]{64}")
 _RELEASE_ROOT = Path("/srv/omnigent/releases")
 _MIN_FREE_BYTES = 1024**3
+_O1_SERVICE_CGROUP = "omnigent-o1"
+_O2_SERVICE_CGROUP = "omnigent-o2"
 
 
 class ExternalJournal:
@@ -106,7 +108,7 @@ def external_controller_guard() -> None:
                 "instance-controlled ancestor refused",
             )
             require(
-                "omnigent-o1" not in cgroup and "omnigent-o2" not in cgroup,
+                _O1_SERVICE_CGROUP not in cgroup and _O2_SERVICE_CGROUP not in cgroup,
                 "instance cgroup caller refused",
             )
             status = dict(
