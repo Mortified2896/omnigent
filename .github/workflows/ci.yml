@@ -337,9 +337,12 @@ jobs:
         env:
           OMNIGENT_TEST_DB_URI: cockroachdb+psycopg://root@localhost:${{ matrix.crdb_port }}/defaultdb?sslmode=disable
         run: |
+          # Migration tests deliberately change schema revisions. Concurrent
+          # worker DDL contends on CRDB's shared descriptor/lease tables even
+          # with separate worker databases; exercise the complete set serially.
           uv run pytest tests/stores tests/db \
             -m "not databricks" \
-            -n 4 \
+            -n 1 \
             --dist=loadfile \
             --timeout=300 \
             --junitxml=artifacts/pytest-stores-crdb.xml
