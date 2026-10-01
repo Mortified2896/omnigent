@@ -273,6 +273,8 @@ def _wait_for_children(
     return count
 
 
+# Requires the 0.14.0 contract added in upstream b203ba4cf.
+@pytest.mark.min_server_version("0.14.0")
 def test_spawn_bounds_denies_dispatches_beyond_per_turn_cap(
     http_client: httpx.Client,
     live_runner_id: str,

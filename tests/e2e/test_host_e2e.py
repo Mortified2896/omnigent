@@ -563,6 +563,8 @@ def test_host_launch_runner_and_session_round_trip(
     shutil.which("goose") is not None,
     reason="needs the goose CLI ABSENT so the native terminal start fails",
 )
+# Requires the 0.9.0 contract added in upstream b624d47ef.
+@pytest.mark.min_runner_version("0.9.0")
 def test_native_terminal_start_failure_names_the_readable_runner_log(
     live_server: str,
     http_client: httpx.Client,

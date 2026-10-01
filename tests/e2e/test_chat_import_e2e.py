@@ -241,6 +241,8 @@ def _write_force_import_fixture(home: Path, harness: str, text: str) -> str:
     return session_id
 
 
+# Requires the 0.6.0 contract added in upstream 50d84146e.
+@pytest.mark.min_server_version("0.6.0")
 def test_cli_imports_claude_chat_into_live_server(live_server: str, tmp_path: Path) -> None:
     """The real CLI and server create a readable session from Claude JSONL."""
     source_session_id = "a1b2c3d4-1234-5678-9abc-def012345678"
@@ -321,6 +323,8 @@ def test_cli_imports_claude_chat_into_live_server(live_server: str, tmp_path: Pa
     assert [item["type"] for item in items.json()["data"]] == ["message", "message"]
 
 
+# Requires the 0.6.0 contract added in upstream 9df2abd98.
+@pytest.mark.min_server_version("0.6.0")
 def test_cli_imports_recent_claude_chats_as_batch(live_server: str, tmp_path: Path) -> None:
     """The real CLI imports a bounded recent batch from oldest to newest."""
     source_session_ids = (
@@ -392,6 +396,8 @@ def test_cli_imports_recent_claude_chats_as_batch(live_server: str, tmp_path: Pa
         assert session.json()["external_session_id"] == source_id
 
 
+# Requires the 0.6.0 contract added in upstream 9df2abd98.
+@pytest.mark.min_server_version("0.6.0")
 def test_cli_imports_recent_codex_chats_as_batch(live_server: str, tmp_path: Path) -> None:
     """The real CLI discovers and imports recent Codex rollout files."""
     source_session_ids = (
@@ -481,6 +487,8 @@ def test_cli_imports_recent_codex_chats_as_batch(live_server: str, tmp_path: Pat
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
+# Requires the 0.8.0 contract added in upstream 6935fce64.
+@pytest.mark.min_server_version("0.6.0")
 def test_cli_force_replaces_imported_chat(
     live_server: str,
     tmp_path: Path,
@@ -547,6 +555,8 @@ def test_cli_force_replaces_imported_chat(
 
 
 @pytest.mark.parametrize("harness", ["qwen", "kiro", "pi", "kimi"])
+# Requires the 0.7.0 contract added in upstream 24831901e.
+@pytest.mark.min_server_version("0.6.0")
 def test_cli_imports_jsonl_harness_chat_end_to_end(
     live_server: str,
     tmp_path: Path,
@@ -617,6 +627,8 @@ def test_cli_imports_jsonl_harness_chat_end_to_end(
     assert item_data[1]["model"] == f"{harness}-native-ui"
 
 
+# Requires the 0.7.0 contract added in upstream fda35701f.
+@pytest.mark.min_server_version("0.6.0")
 def test_cli_imports_opencode_export_end_to_end(
     live_server: str,
     tmp_path: Path,

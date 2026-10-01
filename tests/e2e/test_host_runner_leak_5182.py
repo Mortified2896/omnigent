@@ -127,6 +127,8 @@ def _runner_online(client: httpx.Client, runner_id: str) -> bool:
 
 
 @pytest.mark.timeout(600)
+# Requires the 0.12.0 contract added in upstream d2157a72d.
+@pytest.mark.min_runner_version("0.12.0")
 def test_relaunch_reaps_the_superseded_runner(
     live_server: str,
     http_client: httpx.Client,

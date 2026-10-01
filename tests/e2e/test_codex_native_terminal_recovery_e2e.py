@@ -96,6 +96,8 @@ def _wait_for_pane_text(socket: str, text: str) -> None:
         raise AssertionError(f"{exc}\nLast pane contents:\n{pane}") from exc
 
 
+# Requires the 0.16.0 contract added in upstream 109bc7ba4.
+@pytest.mark.min_runner_version("0.16.0")
 def test_codex_terminal_recovery_preserves_inflight_turn(
     http_client: httpx.Client,
     live_runner_id: str,

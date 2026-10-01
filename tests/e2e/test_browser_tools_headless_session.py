@@ -69,6 +69,8 @@ def test_browser_action_request_fails_fast_without_renderer(
     assert elapsed < 2.0, f"browser action took {elapsed:.1f}s without a renderer"
 
 
+# Requires the 0.13.0 contract added in upstream 151afb660.
+@pytest.mark.min_server_version("0.13.0")
 def test_browser_tools_not_advertised_to_request_harness_without_renderer(
     http_client: httpx.Client,
     live_runner_id: str,

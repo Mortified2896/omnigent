@@ -43,6 +43,7 @@ import uuid
 from typing import Any
 
 import httpx
+import pytest
 
 from tests.e2e._harness_probes import skip_if_harness_cli_missing
 from tests.e2e.conftest import (
@@ -90,6 +91,8 @@ def _all_output_text(body: dict[str, Any]) -> str:
     return _json.dumps(body.get("output", [])) + " " + str(body.get("error") or "")
 
 
+# Requires the 0.13.0 contract added in upstream ae47c337a.
+@pytest.mark.min_server_version("0.13.0")
 def test_output_policy_deny_is_enforced_on_claude_sdk(
     http_client: httpx.Client,
     live_runner_id: str,

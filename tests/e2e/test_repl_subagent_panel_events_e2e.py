@@ -296,6 +296,8 @@ def _wait_for_toolbar(repl: Any, pattern: re.Pattern[str], timeout: float) -> st
 
 
 @pytest.mark.posix_only
+# Requires the 0.13.0 contract added in upstream 3664cef3c.
+@pytest.mark.min_server_version("0.13.0")
 def test_repl_toolbar_shows_child_driven_outside_parent_runner(
     live_server: str,
     http_client: httpx.Client,

@@ -414,6 +414,8 @@ def _register_pwd_agent(
     return str(rows[0]["agent_id"]), model
 
 
+# Requires the 0.13.0 contract added in upstream b160026d0.
+@pytest.mark.min_runner_version("0.13.0")
 def test_zygote_harness_children_do_not_root_at_daemon_start_cwd(
     live_server: str,
     http_client: httpx.Client,
@@ -532,6 +534,8 @@ def test_zygote_harness_children_do_not_root_at_daemon_start_cwd(
         _terminate(daemon.proc)
 
 
+# Requires the 0.13.0 contract added in upstream b160026d0.
+@pytest.mark.min_runner_version("0.13.0")
 def test_new_dispatch_succeeds_after_daemon_start_cwd_deleted(
     live_server: str,
     http_client: httpx.Client,

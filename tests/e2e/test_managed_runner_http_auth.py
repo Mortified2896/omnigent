@@ -63,9 +63,6 @@ from omnigent.runner.identity import (
     RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR,
     token_bound_runner_id,
 )
-from omnigent.stores.conversation_store.sqlalchemy_store import (
-    SqlAlchemyConversationStore,
-)
 from tests._helpers.compat import apply_server_env, compat_server_cwd, server_executable
 from tests._helpers.live_server import find_free_port
 from tests.server.helpers import build_agent_bundle
@@ -217,13 +214,33 @@ def _seed_owned_session_with_managed_runner(base_url: str, db_uri: str) -> str:
     session_id = create.json()["session_id"]
 
     runner_id = token_bound_runner_id(_BINDING_TOKEN)
-    from omnigent.stores.host_store import HostStore
-
     host_id = "fc07bf2e7b2943ad9960f771169e83cc"
-    HostStore(db_uri).upsert_on_connect(host_id, "managed-test-host", _OWNER)
-    conversations = SqlAlchemyConversationStore(db_uri)
-    conversations.set_host_id(session_id, host_id, workspace="/tmp/e2e-workspace")
-    conversations.replace_runner_id(session_id, runner_id)
+    # Seed through the server's own stores. Current stores auto-migrate an
+    # old server's DB, removing columns that its already-loaded ORM still uses.
+    subprocess.run(
+        [
+            server_executable(),
+            "-c",
+            "import sys; from omnigent.stores.host_store import HostStore; "
+            "from omnigent.stores.conversation_store.sqlalchemy_store "
+            "import SqlAlchemyConversationStore; "
+            "uri, host, owner, session, runner = sys.argv[1:]; "
+            "HostStore(uri).upsert_on_connect(host, 'managed-test-host', owner); "
+            "store = SqlAlchemyConversationStore(uri); "
+            "store.set_host_id(session, host, workspace='/tmp/e2e-workspace'); "
+            "store.replace_runner_id(session, runner)",
+            db_uri,
+            host_id,
+            _OWNER,
+            session_id,
+            runner_id,
+        ],
+        env=apply_server_env(dict(os.environ), _REPO_ROOT),
+        cwd=compat_server_cwd() or _REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return session_id
 
 

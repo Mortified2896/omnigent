@@ -120,6 +120,8 @@ async def _median_page_latency_ms(db_uri: str) -> float:
 # Two server boots + seeding 17k sessions comfortably exceed the strict
 # per-test caps some e2e workflows pass on the CLI.
 @pytest.mark.timeout(600)
+# Requires the 0.14.0 contract added in upstream 6c33881aa.
+@pytest.mark.min_server_version("0.14.0")
 async def test_list_sessions_page_latency_does_not_scale_with_corpus(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

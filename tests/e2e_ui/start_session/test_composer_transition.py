@@ -123,9 +123,7 @@ async def _drive(
             await expect(loading).to_be_visible()
             await expect(label).not_to_contain_text(selected)
             await expect(label).to_contain_text("High")
-            await page.screenshot(
-                path=output / "temporary-model.png", animations="disabled"
-            )
+            await page.screenshot(path=output / "temporary-model.png", animations="disabled")
             release.set()
             await page.wait_for_url(f"{base_url}/c/{session_id}")
             # The temporary and bound routes mount different composer cards.
@@ -135,9 +133,7 @@ async def _drive(
             assert len(create_bodies) == 1, create_bodies
             assert create_bodies[0]["model_override"] == selected, create_bodies
             assert create_bodies[0]["reasoning_effort"] == "high", create_bodies
-            await page.screenshot(
-                path=output / "bound-pending-model.png", animations="disabled"
-            )
+            await page.screenshot(path=output / "bound-pending-model.png", animations="disabled")
             await expect(loading).to_be_visible()
             await expect(label).not_to_contain_text(selected)
             await expect(label).to_contain_text("High")
@@ -145,9 +141,7 @@ async def _drive(
             compact_selected_label = selected_label.replace(" (1M context)", " 1M")
             await expect(label).to_contain_text(compact_selected_label)
             await expect(loading).to_have_count(0)
-            await page.screenshot(
-                path=output / "bound-model.png", animations="disabled"
-            )
+            await page.screenshot(path=output / "bound-model.png", animations="disabled")
             samples = await page.evaluate("window.composerSamples")
             assert not await page.evaluate("window.sawConversationLoading")
             assert any("/c/temp" in sample["path"] and sample["loading"] for sample in samples), (

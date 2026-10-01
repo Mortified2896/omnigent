@@ -181,6 +181,8 @@ def test_report_only_policy_denies_notebook_edit(
         pytest.param({"file_path": "/etc/x.ipynb", "new_source": "x"}, id="file_path"),
     ],
 )
+# Requires the 0.12.0 contract added in upstream 3f128e2b6.
+@pytest.mark.min_server_version("0.12.0")
 def test_worktree_guard_denies_escaping_notebook_edit(
     live_server: str,
     http_client: httpx.Client,

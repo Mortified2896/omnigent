@@ -78,6 +78,8 @@ def _wait_for_text(client: httpx.Client, session_id: str, text: str, timeout: fl
     raise AssertionError(f"{text!r} did not appear in session {session_id}")
 
 
+# Requires the 0.13.0 contract added in upstream 284fdba76.
+@pytest.mark.min_runner_version("0.13.0")
 def test_subagent_inbox_survives_real_runner_process_restart(
     http_client: httpx.Client,
     live_runner_id: str,

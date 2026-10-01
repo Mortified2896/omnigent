@@ -340,6 +340,8 @@ def _runner_online(client: httpx.Client, runner_id: str) -> bool:
 
 
 @pytest.mark.timeout(300)
+# Requires the 0.13.0 contract added in upstream e50f6b9d2.
+@pytest.mark.min_server_version("0.13.0")
 def test_runner_less_session_remains_running_after_shutdown_and_stop(
     tmp_path: Path,
     mock_llm_server_url: str,

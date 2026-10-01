@@ -130,6 +130,9 @@ def _wait_for_child_file(
 
 
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
+# Requires the 0.5.0 contract added in upstream e7fac09d9.
+@pytest.mark.min_server_version("0.5.0")
+@pytest.mark.min_runner_version("0.5.0")
 def test_file_passes_from_parent_agent_to_subagent(
     http_client: httpx.Client,
     live_runner_id: str,

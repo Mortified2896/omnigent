@@ -119,6 +119,8 @@ def owned_shell_session(
     owner.close()
 
 
+# Requires the 0.15.0 contract added in upstream a405cab63.
+@pytest.mark.min_server_version("0.15.0")
 def test_editor_cannot_run_environment_shell(
     live_server: str, owned_shell_session: _OwnedShellSession
 ) -> None:
