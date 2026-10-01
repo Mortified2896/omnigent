@@ -15,7 +15,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -1664,7 +1664,13 @@ function ConversationList({
   const activateRow = useCallback((id: string, event: MouseEvent<HTMLAnchorElement>) => {
     if (event.defaultPrevented || event.button !== 0) return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    setOptimisticActiveId(id);
+    // BrowserRouter updates history before its transition commits. Bind the
+    // incoming store synchronously so the outgoing composer is hidden before
+    // the URL changes; ChatPage's route effect then becomes a no-op.
+    flushSync(() => {
+      void useChatStore.getState().switchTo(id);
+      setOptimisticActiveId(id);
+    });
   }, []);
   const displayedActiveId = optimisticActiveId ?? resolvedActiveId;
   const [activeOverride, setActiveOverride] = useState<ActiveChatOverride | null>(null);

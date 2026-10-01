@@ -502,6 +502,7 @@ _SNAPSHOT_DELAY = """
 (() => {
   const sessionId = __SESSION_ID__;
   const delayMs = __DELAY_MS__;
+  window.__snapshotDelayCount = 0;
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input.url;
@@ -509,6 +510,7 @@ _SNAPSHOT_DELAY = """
       window.__delaySnapshot &&
       new URL(url, window.location.origin).pathname === `/v1/sessions/${sessionId}`
     ) {
+      window.__snapshotDelayCount += 1;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
     return originalFetch(input, init);
@@ -621,12 +623,11 @@ def test_composer_model_label_never_shows_the_previous_sessions_model(
 
     log = page.evaluate("window.__modelLabelLog")
     claude_labels = [e["text"] for e in log if e["path"] == f"/c/{claude_session}"]
-    # Guard against a no-op run: the held snapshot must have produced at least
-    # one pre-bind paint before the settled Sonnet 5 label.
-    assert len(claude_labels) > 1, (
-        f"the delayed-bind window was never observed (labels: {claude_labels}); "
-        "the snapshot delay did not take effect, so this run proves nothing"
-    )
+    # Prove the delayed request ran directly. The correct hydration placeholder
+    # can suppress every pre-bind composer paint; counting repeated label paints
+    # would incorrectly reject that successful behavior.
+    assert page.evaluate("window.__snapshotDelayCount") > 0, "snapshot delay did not take effect"
+    assert claude_labels, "the settled Claude composer label was never recorded"
     leaked = [
         text for text in claude_labels if _CODEX_MODEL_ID in text or _CODEX_MODEL_LABEL in text
     ]
