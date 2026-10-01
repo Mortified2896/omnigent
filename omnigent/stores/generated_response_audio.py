@@ -29,6 +29,11 @@ class GeneratedResponseAudio:
     updated_at: int
 
 
+def _affected_rows(result: object) -> int:
+    """Return a stable DML row count across SQLAlchemy result implementations."""
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 def _to_entity(row: SqlGeneratedResponseAudio) -> GeneratedResponseAudio:
     return GeneratedResponseAudio(
         workspace_id=row.workspace_id or DEFAULT_WORKSPACE_ID,
@@ -120,7 +125,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.status == "failed")
                 .values(status="pending", error_code=None, updated_at=now_epoch())
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
 
     def claim_pending(self, conversation_id: str, response_id: str) -> bool:
         with self._session("claim_generated_audio") as session:
@@ -132,7 +137,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.status == "pending")
                 .values(status="processing", updated_at=now_epoch())
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
 
     def recover_processing(self) -> int:
         """Recover only jobs stale for 30 minutes after a worker/server crash.
@@ -149,7 +154,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.updated_at < stale_before)
                 .values(status="pending", updated_at=now_epoch())
             )
-            return int(result.rowcount or 0)
+            return _affected_rows(result)
 
     def list_pending_all_workspaces(self) -> list[GeneratedResponseAudio]:
         with self._session("list_pending_generated_audio") as session:
@@ -192,7 +197,7 @@ class SqlAlchemyGeneratedResponseAudioStore:
                     updated_at=now_epoch(),
                 )
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
 
     def mark_failed(self, conversation_id: str, response_id: str, error_code: str) -> bool:
         with self._session("fail_generated_audio") as session:
@@ -204,4 +209,4 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.status.in_(("pending", "processing")))
                 .values(status="failed", error_code=error_code[:64], updated_at=now_epoch())
             )
-            return result.rowcount == 1
+            return _affected_rows(result) == 1
