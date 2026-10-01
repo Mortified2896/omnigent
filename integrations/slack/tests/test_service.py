@@ -2682,6 +2682,9 @@ async def test_tool_approval_approve_resumes_turn(tmp_path: Path) -> None:
         session_id=sid, elicitation_id=eid, verdict=Verdict(accepted=True)
     )
     await _wait_for_resolved(omnigent)
+    # Recording the verdict precedes the resumed stream. Wait for the turn
+    # before shutdown, which deliberately cancels in-flight work.
+    await asyncio.wait_for(asyncio.gather(*service._turn_tasks), timeout=2)
     await service.shutdown()
 
     assert delivered is True
