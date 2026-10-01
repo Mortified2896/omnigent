@@ -376,6 +376,10 @@ def pi_host(
 # process kill, which would take the whole xdist worker with it.
 @pytest.mark.timeout(360, method="signal")
 @pytest.mark.flaky(reruns=1, reruns_delay=5)
+# Multipart host binding requires upstream f89e099f7 (0.13.0);
+# preserving the Pi pane after exit requires upstream 60cc03156 (0.16.0).
+@pytest.mark.min_server_version("0.13.0")
+@pytest.mark.min_runner_version("0.16.0")
 def test_pi_main_terminal_survives_pi_exit_without_tmux_unavailable(
     pi_host: _PiHost,
     http_client: httpx.Client,

@@ -909,6 +909,24 @@ export function VirtualBubbleList({
   }, []);
 
   const totalSize = virtualizer.getTotalSize();
+  // A virtual row can grow before the content ResizeObserver runs. Follow that
+  // committed height before paint while the reader still owns the bottom lock,
+  // so streamed text does not spend several frames below the viewport. History
+  // prepends and restored reading positions keep their separate anchor hold.
+  useLayoutEffect(() => {
+    const c = ctxRef.current;
+    if (
+      !scrollEl ||
+      disableVirtualization ||
+      prependCommitRef.current ||
+      restoringRef.current ||
+      !c.state.isAtBottom ||
+      c.state.escapedFromLock
+    ) {
+      return;
+    }
+    c.state.scrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+  }, [totalSize, scrollEl, disableVirtualization]);
   const range = virtualizer.range;
 
   // The user turn owning the viewport midpoint, from the virtualizer's model —

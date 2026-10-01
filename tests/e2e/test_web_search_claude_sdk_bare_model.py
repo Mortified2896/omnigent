@@ -213,6 +213,8 @@ def test_web_search_advertised_with_bare_model_on_claude_sdk(
     )
 
 
+# Requires the 0.13.0 runner contract added in upstream 8b5aede85.
+@pytest.mark.min_runner_version("0.13.0")
 def test_prefixed_model_not_forwarded_verbatim_to_anthropic(
     http_client: httpx.Client,
     live_runner_id: str,

@@ -122,6 +122,8 @@ def _evaluate_tool_call(
 
 
 @pytest.mark.timeout(120)
+# Requires the 0.13.0 server contract added in upstream 3f128e2b6.
+@pytest.mark.min_server_version("0.13.0")
 def test_report_only_policy_denies_notebook_edit(
     live_server: str,
     http_client: httpx.Client,

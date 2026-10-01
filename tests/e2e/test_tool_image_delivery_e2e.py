@@ -145,6 +145,8 @@ def _flat_text(occurrences: list[list[dict[str, Any]]]) -> str:
 
 
 @pytest.mark.timeout(420)
+# Requires the 0.16.0 runner contract added in upstream f35f239ea.
+@pytest.mark.min_runner_version("0.16.0")
 def test_external_mcp_image_tool_result_reaches_model_as_image_block(
     http_client: httpx.Client,
     live_runner_id: str,
@@ -346,6 +348,8 @@ class _ScreenshotRenderer(threading.Thread):
 @pytest.mark.timeout(420)
 # Requires the 0.16.0 contract added in upstream f35f239ea.
 @pytest.mark.min_runner_version("0.16.0")
+# Requires the 0.13.0 server contract added in upstream 151afb660.
+@pytest.mark.min_server_version("0.13.0")
 def test_browser_screenshot_result_reaches_model_as_image_block(
     http_client: httpx.Client,
     live_runner_id: str,

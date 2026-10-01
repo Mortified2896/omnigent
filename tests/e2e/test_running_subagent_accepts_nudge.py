@@ -98,6 +98,8 @@ def _gate_pending(mock_url: str) -> bool:
     return bool(resp.json().get("pending"))
 
 
+# Requires the 0.16.0 runner contract added in upstream f87c4e58a.
+@pytest.mark.min_runner_version("0.16.0")
 def test_parent_nudge_lands_on_child_with_stuck_running_turn(
     http_client: httpx.Client,
     live_runner_id: str,

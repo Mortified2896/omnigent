@@ -385,6 +385,8 @@ def _wait_for_host_online_by_name(
     raise AssertionError(f"Host named {host_name!r} did not appear online within {timeout}s")
 
 
+# Requires the 0.10.0 runner contract added in upstream a71df6c13.
+@pytest.mark.min_runner_version("0.10.0")
 def test_host_name_only_config_generates_host_id(
     live_server: str,
     http_client: httpx.Client,
@@ -1204,6 +1206,8 @@ def test_host_native_session_round_trips_after_runner_death(
             host_proc.wait()
 
 
+# Requires the 0.10.0 server contract added in upstream dc10a2214.
+@pytest.mark.min_server_version("0.10.0")
 def test_host_retry_session_recovers_killed_runner(
     live_server: str,
     http_client: httpx.Client,

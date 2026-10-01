@@ -35,6 +35,8 @@ def _tool_names_in_request(request: dict[str, Any]) -> set[str]:
 
 
 @pytest.mark.timeout(30)
+# Requires the 0.13.0 server contract added in upstream 151afb660.
+@pytest.mark.min_server_version("0.13.0")
 def test_browser_action_request_fails_fast_without_renderer(
     http_client: httpx.Client,
     live_runner_id: str,
