@@ -643,7 +643,7 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         "OMNIGENT_DATABRICKS_EXTRA_HEADERS",
         # The operator's env-forwarding control var itself. Without it here, the
         # var is stripped before it reaches the daemon in --server mode (the
-        # remote daemon prefixes are DATABRICKS_ + LC_/MLFLOW_/OTEL_/OMNIGENT_OTEL_,
+        # remote daemon prefixes are DATABRICKS_ + LC_/OTEL_/OMNIGENT_OTEL_,
         # not plain OMNIGENT_), so _build_runner_env never sees the names it lists
         # and the whole passthrough is a no-op remotely. It carries only env var
         # NAMES, not secrets, so allowlisting it leaks nothing on its own.
@@ -657,13 +657,13 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
     # USERPROFILE for Path.home(), etc.); a no-op on POSIX. See _platform.
     | set(WINDOWS_ENV_PASSTHROUGH)
 )
-# Allowed by prefix: locale family (``LC_*``), MLflow, and OpenTelemetry config —
+# Allowed by prefix: locale family (``LC_*``) and OpenTelemetry config —
 # both the standard ``OTEL_*`` vars and Omnigent's ``OMNIGENT_OTEL_*`` knobs
 # (capture-content, FastAPI toggle) so they reach the runner/harness too.
 # No ``CLOUDSDK_`` prefix on purpose: it would also pass gcloud's
 # ``CLOUDSDK_AUTH_*`` bearer/refresh tokens; the two config selectors are
 # allowlisted by exact name above instead.
-_RUNNER_ENV_ALLOWLIST_PREFIXES: tuple[str, ...] = ("LC_", "MLFLOW_", "OTEL_", "OMNIGENT_OTEL_")
+_RUNNER_ENV_ALLOWLIST_PREFIXES: tuple[str, ...] = ("LC_", "OTEL_", "OMNIGENT_OTEL_")
 
 # Harness credential / endpoint env vars forwarded host→runner when
 # present. These are the names the harnesses themselves resolve —
@@ -4595,7 +4595,7 @@ def run_host_process(
     # Initialize tracing so the host daemon exports its own spans
     # (e.g. handling launch_runner / stat / list_dir frames) into the
     # same distributed trace as the server that requested them. The
-    # daemon inherits OTEL_*/MLFLOW_* config from the launching CLI.
+    # daemon inherits OTEL_* config from the launching CLI.
     from omnigent.runtime import telemetry
 
     telemetry.init("omni-host")
