@@ -8,11 +8,11 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import httpx
-import tomllib
+
+from omnigent.omniroute_credentials import codex_mcp_omniroute_key as _codex_mcp_omniroute_key
 
 from .models import (
     CandidateEvaluation,
@@ -33,32 +33,6 @@ _CALL_LOG_PAGE_SIZE = 100
 _MAX_CALL_LOG_PAGES = 20
 _MAX_EXECUTION_RECORDS = 100
 _CALL_LOG_CLOCK_SKEW = timedelta(minutes=5)
-
-
-def _codex_mcp_omniroute_key(
-    base_url: str,
-    config_path: Path | None = None,
-) -> str | None:
-    """Read the existing loopback OmniRoute MCP bearer without persisting it."""
-    path = config_path or Path.home() / ".codex" / "config.toml"
-    try:
-        config = tomllib.loads(path.read_text(encoding="utf-8"))
-        entry = config["mcp_servers"]["omniroute"]
-        mcp_url = urlsplit(entry["url"])
-        target = urlsplit(base_url)
-        if (
-            mcp_url.scheme != "http"
-            or mcp_url.hostname not in {"127.0.0.1", "localhost", "::1"}
-            or target.scheme != "http"
-            or target.hostname not in {"127.0.0.1", "localhost", "::1"}
-            or mcp_url.port != target.port
-        ):
-            return None
-        headers = entry.get("http_headers", {})
-        value = headers.get("Authorization") or headers.get("authorization")
-        return value.strip() if isinstance(value, str) and value.strip() else None
-    except (KeyError, OSError, TypeError, ValueError, tomllib.TOMLDecodeError):
-        return None
 
 
 def _target_pair(provider_id: str, model: str) -> tuple[str, str]:

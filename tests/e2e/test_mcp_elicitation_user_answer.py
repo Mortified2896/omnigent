@@ -209,6 +209,8 @@ def _collect_all_tool_outputs(client: httpx.Client, session_id: str) -> list[str
 # ── Test ─────────────────────────────────────────────────────────────────────
 
 
+# Requires the 0.13.0 contract added in upstream 6af394fc2.
+@pytest.mark.min_runner_version("0.13.0")
 def test_mcp_elicitation_delivers_user_selected_answer_not_schema_default(
     http_client: httpx.Client,
     live_runner_id: str,

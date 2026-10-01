@@ -13,8 +13,7 @@ export interface CodexRuntimeApprovalPreset {
 }
 
 /** Conversation-label key the server writes for the live approval mode. */
-export const CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY =
-  "omnigent.harnesses.codex_native.main.approval_mode";
+export const CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY = "omnigent.codex_native.approval_mode";
 
 /**
  * The three runtime approval stances Codex's `/permissions` popup offers, in

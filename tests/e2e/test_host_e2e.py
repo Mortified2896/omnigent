@@ -32,6 +32,7 @@ import httpx
 import pytest
 import yaml
 
+from omnigent.native.native_coding_agents import CLAUDE_NATIVE_AGENT_NAME
 from omnigent.process_logging import PROCESS_LOG_FILE_ENV_VAR
 from tests._helpers.compat import apply_runner_env, compat_runner_cwd, runner_executable
 from tests.e2e.conftest import (
@@ -67,6 +68,7 @@ def _spawn_host_daemon(
     tmp_path: Path,
     live_server: str,
     mock_llm_server_url: str,
+    interactive_shells: list[str] | None = None,
 ) -> _SpawnedHostDaemon:
     """
     Spawn an isolated host daemon for a single host e2e test.
@@ -89,6 +91,7 @@ def _spawn_host_daemon(
         ``"http://localhost:18501"``.
     :param mock_llm_server_url: Base URL of the mock LLM server, e.g.
         ``"http://127.0.0.1:12345"``.
+    :param interactive_shells: Optional deterministic host inventory for tests.
     :returns: The spawned daemon handle and its host_id.
     """
     omni_dir = tmp_path / ".omnigent"
@@ -114,13 +117,32 @@ def _spawn_host_daemon(
         "OPENAI_API_KEY": "mock-key",
         PROCESS_LOG_FILE_ENV_VAR: str(daemon_log),
     }
+    command = [
+        runner_executable(),
+        "-m",
+        "omnigent.host._daemon_entry",
+        "--server",
+        live_server,
+    ]
+    if interactive_shells is not None:
+        command = [
+            runner_executable(),
+            "-c",
+            (
+                "import sys; "
+                "from omnigent.host.connect import run_host_process; "
+                "run_host_process(sys.argv[1], interactive_shells=sys.argv[2:])"
+            ),
+            live_server,
+            *interactive_shells,
+        ]
     with open(daemon_log, "w") as log_fh:
         proc = subprocess.Popen(
             # Compat-aware: pinned OLD host venv in runner compat mode (Config 2),
             # else the test process's python. apply_runner_env drops the inherited
             # worktree PYTHONPATH in that mode; the old host launches old runners
             # (colocated) from its own venv.
-            [runner_executable(), "-m", "omnigent.host._daemon_entry", "--server", live_server],
+            command,
             env=apply_runner_env(env),
             cwd=compat_runner_cwd(),
             stdout=subprocess.DEVNULL,
@@ -266,6 +288,72 @@ def test_host_connect_and_list(
         assert resp.json()["status"] == "offline", "Host should be offline after daemon is killed"
 
 
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="needs zsh on the server-side machine")
+def test_native_shells_follow_bash_only_host_inventory(
+    live_server: str,
+    http_client: httpx.Client,
+    tmp_path: Path,
+    mock_llm_server_url: str,
+) -> None:
+    """The UI-shaped native session offers and launches only host shells."""
+    daemon = _spawn_host_daemon(
+        tmp_path=tmp_path,
+        live_server=live_server,
+        mock_llm_server_url=mock_llm_server_url,
+        interactive_shells=["bash"],
+    )
+    try:
+        _wait_for_host_online(http_client, daemon.host_id, timeout=30.0)
+        host = http_client.get(f"/v1/hosts/{daemon.host_id}")
+        host.raise_for_status()
+        assert host.json()["interactive_shells"] == ["bash"]
+
+        agents = http_client.get("/v1/agents", params={"limit": 100})
+        agents.raise_for_status()
+        agent_id = next(
+            row["id"] for row in agents.json()["data"] if row["name"] == CLAUDE_NATIVE_AGENT_NAME
+        )
+        workspace = tmp_path / "bash-only-workspace"
+        workspace.mkdir()
+        created = http_client.post(
+            "/v1/sessions",
+            json={
+                "agent_id": agent_id,
+                "host_id": daemon.host_id,
+                "workspace": str(workspace),
+            },
+            timeout=60.0,
+        )
+        created.raise_for_status()
+        session_id = created.json()["id"]
+
+        agent = http_client.get(f"/v1/sessions/{session_id}/agent")
+        agent.raise_for_status()
+        assert agent.json()["terminals"] == ["bash"]
+
+        rejected = http_client.post(
+            f"/v1/sessions/{session_id}/resources/terminals",
+            json={"terminal": "zsh", "session_key": "missing"},
+            timeout=30.0,
+        )
+        assert rejected.status_code == 400, rejected.text
+
+        launched = http_client.post(
+            f"/v1/sessions/{session_id}/resources/terminals",
+            json={"terminal": "bash", "session_key": "e2e"},
+            timeout=90.0,
+        )
+        launched.raise_for_status()
+        assert launched.json()["metadata"]["terminal_name"] == "bash"
+    finally:
+        daemon.proc.send_signal(signal.SIGTERM)
+        try:
+            daemon.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            daemon.proc.kill()
+            daemon.proc.wait()
+
+
 def _wait_for_host_online_by_name(
     client: httpx.Client,
     host_name: str,
@@ -297,6 +385,8 @@ def _wait_for_host_online_by_name(
     raise AssertionError(f"Host named {host_name!r} did not appear online within {timeout}s")
 
 
+# Requires the 0.10.0 runner contract added in upstream a71df6c13.
+@pytest.mark.min_runner_version("0.10.0")
 def test_host_name_only_config_generates_host_id(
     live_server: str,
     http_client: httpx.Client,
@@ -475,6 +565,8 @@ def test_host_launch_runner_and_session_round_trip(
     shutil.which("goose") is not None,
     reason="needs the goose CLI ABSENT so the native terminal start fails",
 )
+# Requires the 0.9.0 contract added in upstream b624d47ef.
+@pytest.mark.min_runner_version("0.9.0")
 def test_native_terminal_start_failure_names_the_readable_runner_log(
     live_server: str,
     http_client: httpx.Client,
@@ -1114,6 +1206,8 @@ def test_host_native_session_round_trips_after_runner_death(
             host_proc.wait()
 
 
+# Requires the 0.10.0 server contract added in upstream dc10a2214.
+@pytest.mark.min_server_version("0.10.0")
 def test_host_retry_session_recovers_killed_runner(
     live_server: str,
     http_client: httpx.Client,

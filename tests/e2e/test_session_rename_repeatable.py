@@ -109,6 +109,9 @@ def _rename_tool_result(
 
 
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
+# Requires the 0.13.0 contract added in upstream dcbeb1372.
+@pytest.mark.min_server_version("0.6.0")
+@pytest.mark.min_runner_version("0.13.0")
 def test_sys_session_rename_succeeds_after_first_title_landed(
     http_client: httpx.Client,
     live_runner_id: str,

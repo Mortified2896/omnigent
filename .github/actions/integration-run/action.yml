@@ -61,7 +61,7 @@ runs:
         python-version-file: ".python-version"
 
     - name: Install uv
-      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
+      uses: ./.github/actions/setup-uv
       with:
         enable-cache: true
 
@@ -75,20 +75,29 @@ runs:
       shell: bash
       run: uv sync --locked --extra all --group test
 
-    - name: Install binary dependencies
-      # Mirrors e2e.yml. --ignore-scripts blocks npm postinstall hooks; we run
-      # claude-code's install.cjs explicitly (audited, no network). bubblewrap
-      # backs the linux_bwrap sandbox in tests/inner/*.
-      working-directory: .github/ci-deps
+    - name: Install system dependencies
+      # bubblewrap backs the linux_bwrap sandbox in tests/inner/*.
       shell: bash
       run: |
         set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y tmux ripgrep bubblewrap
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-        npm install --ignore-scripts
-        node node_modules/@anthropic-ai/claude-code/install.cjs
-        echo "${GITHUB_WORKSPACE}/.github/ci-deps/node_modules/.bin" >> "$GITHUB_PATH"
+
+    - name: Install Claude Code CLI
+      uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@aa5736c38f5c1258ee29452c6825d75033b952d7
+      with:
+        harness: claude
+
+    - name: Install Codex CLI
+      uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@aa5736c38f5c1258ee29452c6825d75033b952d7
+      with:
+        harness: codex
+
+    - name: Install Pi CLI
+      uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@aa5736c38f5c1258ee29452c6825d75033b952d7
+      with:
+        harness: pi
 
     - name: Build pinned old server (backwards-compat only)
       # See e2e-run for the full rationale. Requires fetch-depth 0 in the caller.
@@ -105,8 +114,9 @@ runs:
         venv="$RUNNER_TEMP/server-env"
         git worktree add --detach "$src" "$tag"
         uv venv --python 3.12 "$venv"
-        uv pip install --python "$venv/bin/python" \
-          -e "$src" -e "$src/sdks/python-client" -e "$src/sdks/ui"
+        # Preserve the old release lockfile, as in the compatibility smoke jobs.
+        UV_PROJECT_ENVIRONMENT="$venv" uv sync --project "$src" --locked \
+          --extra all --no-dev --python "$venv/bin/python"
         "$venv/bin/omnigent" --version
         echo "OMNIGENT_COMPAT_SERVER_PYTHON=$venv/bin/python" >> "$GITHUB_ENV"
         echo "OMNIGENT_COMPAT_SERVER_VERSION=${tag#v}" >> "$GITHUB_ENV"
@@ -128,8 +138,9 @@ runs:
         venv="$RUNNER_TEMP/runner-env"
         git worktree add --detach "$src" "$tag"
         uv venv --python 3.12 "$venv"
-        uv pip install --python "$venv/bin/python" \
-          -e "$src" -e "$src/sdks/python-client" -e "$src/sdks/ui"
+        # Preserve the old release lockfile, as in the compatibility smoke jobs.
+        UV_PROJECT_ENVIRONMENT="$venv" uv sync --project "$src" --locked \
+          --extra all --no-dev --python "$venv/bin/python"
         "$venv/bin/omnigent" --version
         echo "OMNIGENT_COMPAT_RUNNER_PYTHON=$venv/bin/python" >> "$GITHUB_ENV"
         echo "OMNIGENT_COMPAT_RUNNER_VERSION=${tag#v}" >> "$GITHUB_ENV"
@@ -148,6 +159,10 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p artifacts "$INTEGRATION_TMP_BASE"
+        RETRY_ARGS=()
+        if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          RETRY_ARGS+=(--force-reruns=0)
+        fi
         # --capture=no + --log-cli-level=INFO stream live so progress shows
         # even if the step hits its timeout before buffered output renders.
         # --timeout=180 caps a single hung test (see e2e.yml).
@@ -162,7 +177,7 @@ runs:
             --basetemp="$INTEGRATION_TMP_BASE" \
             --junitxml="artifacts/integration-${HARNESS}.xml" \
             --capture=no --log-cli-level=INFO \
-            -v --tb=long --showlocals --log-level=INFO -r a
+            -v --tb=long --showlocals --log-level=INFO -r a "${RETRY_ARGS[@]}"
 
     - name: Upload server/runner logs on failure
       if: ${{ failure() || cancelled() }}

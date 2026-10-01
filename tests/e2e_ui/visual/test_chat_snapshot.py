@@ -168,6 +168,7 @@ _TOKEN_SPANS = '[data-streamdown="code-block-body"] span[style*="--sdm-c"]'
 
 
 @pytest.mark.visual
+@pytest.mark.workspace_panel_product_default
 def test_chat_conversation_matches_baseline(
     snapshot_page: Page,
     live_server: str,
@@ -216,9 +217,10 @@ def test_chat_conversation_matches_baseline(
     # read-only model/effort label; wait for both so the capture includes them
     # (they hydrate from the same session snapshot the bubbles above wait on).
     expect(page.locator('[data-testid="composer-config-gear"]')).to_be_visible(timeout=30_000)
-    expect(page.locator('[data-testid="composer-model-effort-label"]')).to_be_visible()
-    expect(page.get_by_role("button", name="Do not score")).to_be_visible()
-    expect(page.get_by_test_id("model-attribution")).to_contain_text(
+    expect(page.locator('[data-testid="composer-agent-config-value"]')).to_be_visible()
+
+    expect(page.get_by_role("button", name="Do not score").last).to_be_visible()
+    expect(page.get_by_test_id("model-attribution").last).to_contain_text(
         "The harness did not report the model used for this response."
     )
 

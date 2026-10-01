@@ -26,32 +26,22 @@ PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 
 
 def _load_pkg():
-    """Load the peer_deployer package as a proper package so relative
-    imports inside modules resolve correctly."""
+    """Reuse package identity while importing every submodule this fixture needs."""
     import sys as _sys
 
-    if "peer_deployer" in _sys.modules:
-        return _sys.modules["peer_deployer"]
-    init = PKG_ROOT / "__init__.py"
-    spec = importlib.util.spec_from_file_location(
-        "peer_deployer",
-        init,
-        submodule_search_locations=[str(PKG_ROOT)],
-    )
-    assert spec is not None
-    pkg = importlib.util.module_from_spec(spec)
-    _sys.modules["peer_deployer"] = pkg
-    spec.loader.exec_module(pkg)
-    # Pre-import submodules so relative imports work.
-    for name in ["identity", "transaction", "service_state", "preflight", "rollback"]:
-        sub_spec = importlib.util.spec_from_file_location(
-            f"peer_deployer.{name}", PKG_ROOT / f"{name}.py"
+    pkg = _sys.modules.get("peer_deployer")
+    if pkg is None:
+        spec = importlib.util.spec_from_file_location(
+            "peer_deployer",
+            PKG_ROOT / "__init__.py",
+            submodule_search_locations=[str(PKG_ROOT)],
         )
-        assert sub_spec is not None
-        sub = importlib.util.module_from_spec(sub_spec)
-        _sys.modules[f"peer_deployer.{name}"] = sub
-        sub_spec.loader.exec_module(sub)
-        setattr(pkg, name, sub)
+        assert spec is not None and spec.loader is not None
+        pkg = importlib.util.module_from_spec(spec)
+        _sys.modules["peer_deployer"] = pkg
+        spec.loader.exec_module(pkg)
+    for name in ["identity", "transaction", "service_state", "preflight", "rollback"]:
+        setattr(pkg, name, importlib.import_module(f"peer_deployer.{name}"))
     return pkg
 
 

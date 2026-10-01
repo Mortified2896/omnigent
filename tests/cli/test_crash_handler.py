@@ -141,6 +141,24 @@ def test_save_report_collision_disambiguates(data_dir: Path) -> None:
     assert a.exists() and b.exists()
 
 
+def test_rotation_retains_latest_report_when_timestamps_tie(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ch.install_crash_handler("omnigent", "omnigent-ai/omnigent", keep_reports=2)
+    rotate = ch._rotate
+
+    def tied_rotate(directory: Path, keep: int, *, latest: Path | None = None) -> None:
+        for report in directory.glob("crash-*.md"):
+            os.utime(report, ns=(1_000_000_000, 1_000_000_000))
+        rotate(directory, keep, latest=latest)
+
+    monkeypatch.setattr(ch, "_rotate", tied_rotate)
+    for index in range(5):
+        newest = ch._save_report(f"report {index}\n")
+        assert newest.read_text() == f"report {index}\n"
+        assert len(list(newest.parent.glob("crash-*.md"))) <= 2
+
+
 # --------------------------------------------------------------------------- #
 # Rendering: non-TTY is plain, TTY is header + copyable path (no box)
 # --------------------------------------------------------------------------- #

@@ -16,7 +16,7 @@ describe("claudePermissionMode", () => {
       claudePermissionModeFromSession({
         labels: {
           ...legacy,
-          "omnigent.harnesses.claude_native.main.permission_mode": "plan",
+          "omnigent.claude_native.permission_mode": "plan",
         },
       }),
     ).toBe("plan");
@@ -24,7 +24,7 @@ describe("claudePermissionMode", () => {
       claudePermissionModeFromSession({
         labels: {
           ...legacy,
-          "omnigent.harnesses.claude_native.main.permission_mode": null,
+          "omnigent.claude_native.permission_mode": null,
         },
       }),
     ).not.toBe("bypassPermissions");

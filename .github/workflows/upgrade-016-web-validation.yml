@@ -1,0 +1,86 @@
+name: Upgrade 0.16 frontend validation
+
+# Temporary exact-SHA evidence; no deployment and no snapshot replacement.
+on:
+  push:
+    branches: [codex/upgrade-0.16]
+    paths:
+      - .github/workflows/upgrade-016-web-validation.yml
+      - web/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-016-web-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    uses: ./.github/workflows/security-gate.yml
+
+  web:
+    name: Exact-SHA frontend checks
+    needs: gate
+    if: github.repository == 'Mortified2896/omnigent'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      EVIDENCE: /tmp/upgrade-016-web-${{ github.run_id }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Record source identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p "$EVIDENCE"
+          git rev-parse HEAD > "$EVIDENCE/source-sha.txt"
+          git ls-tree HEAD web/src/shell/NewChatDialog.tsx > "$EVIDENCE/composer-blob.txt"
+          cp web/src/shell/NewChatDialog.tsx "$EVIDENCE/NewChatDialog.tsx"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.15.1
+          standalone: true
+
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile --filter web
+
+      - name: Lint
+        run: |
+          set -euo pipefail
+          pnpm --dir web lint 2>&1 | tee "$EVIDENCE/lint.txt"
+
+      - name: Type check
+        run: |
+          set -euo pipefail
+          pnpm --dir web type-check 2>&1 | tee "$EVIDENCE/type-check.txt"
+
+      - name: Production web build
+        run: |
+          set -euo pipefail
+          pnpm --dir web build 2>&1 | tee "$EVIDENCE/build.txt"
+
+      - name: Preserve check evidence without publishing the build
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: upgrade-016-web-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.EVIDENCE }}/
+          retention-days: 7
+          if-no-files-found: error

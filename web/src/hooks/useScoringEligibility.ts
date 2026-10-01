@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
+import { isTempConvId } from "@/lib/tempConversationId";
 
 export type ExclusionReason = "test_fixture" | "duplicate" | "out_of_scope" | "other";
 export interface ScoringEligibility {
@@ -24,7 +25,7 @@ export function useSessionScoringPolicy(sessionId: string) {
       if (!response.ok) throw new Error("Could not load scoring settings");
       return (await response.json()) as SessionScoringPolicy;
     },
-    enabled: !!sessionId,
+    enabled: !!sessionId && !isTempConvId(sessionId),
   });
 }
 

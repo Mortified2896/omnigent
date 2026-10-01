@@ -20,6 +20,7 @@ round-trip complements it by exercising the batch blocks end-to-end.
 from __future__ import annotations
 
 import ast
+import hashlib
 import tempfile
 import warnings
 from pathlib import Path
@@ -47,6 +48,14 @@ _SQLITE_UNSAFE_OPS = frozenset(
 )
 
 _VERSIONS_DIR = Path(omnigent.db.__file__).parent / "migrations" / "versions"
+
+# Already applied on RTX before the upstream integration: owner instructions
+# require these exact bytes to remain intact. Only its three legacy downgrade
+# calls are exempt; new edits/calls still fail. RTX SQLite 3.45.1 supports them,
+# the full round-trip below executes them, and deployment rollback restores
+# the stopped-state backup rather than downgrading a database with new writes.
+_DEPLOYED_LEGACY_DOWNGRADE = "c91f6a2d7e40_scheduled_task_search_and_audio.py"
+_DEPLOYED_LEGACY_SHA256 = "c15e21d0fc385557c5b1bdd38f65770425a420e10a0294379cc2f30b15b26da1"
 
 
 def _raw_unsafe_op_calls(source: str) -> list[tuple[str, int]]:
@@ -99,6 +108,10 @@ def test_no_migration_uses_sqlite_unsafe_raw_ddl() -> None:
     offenders: dict[str, list[tuple[str, int]]] = {}
     for path in version_files:
         raw = _raw_unsafe_op_calls(path.read_text())
+        if path.name == _DEPLOYED_LEGACY_DOWNGRADE:
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == _DEPLOYED_LEGACY_SHA256
+            assert raw == [("drop_column", 59), ("drop_column", 60), ("drop_column", 61)]
+            continue
         if raw:
             offenders[path.name] = raw
     assert offenders == {}, (

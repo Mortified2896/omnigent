@@ -231,7 +231,10 @@ def test_revoke_returns_404_for_bob(live_server: str, owner_session: _OwnedSessi
         grants = owner_session.owner.get(f"/v1/sessions/{sid}/permissions")
         grants.raise_for_status()
         # The grant row is gone, not just downgraded.
-        assert bob_email not in [g["user_id"] for g in grants.json()["permissions"]]
+        # v0.4 returns the permission rows directly; newer servers use an envelope.
+        payload = grants.json()
+        rows = payload["permissions"] if isinstance(payload, dict) else payload
+        assert bob_email not in [g["user_id"] for g in rows]
 
 
 def test_public_grant_read_only_semantics(live_server: str, owner_session: _OwnedSession) -> None:

@@ -405,13 +405,17 @@ def _register_pwd_agent(
             },
         },
     )
-    resp = http_client.get("/v1/sessions", params={"agent_name": agent_name, "limit": 1})
+    resp = http_client.get(
+        "/v1/sessions", params={"visibility": "all", "agent_name": agent_name, "limit": 1}
+    )
     resp.raise_for_status()
     rows = resp.json()["data"]
     assert rows, f"agent {agent_name!r} not registered"
     return str(rows[0]["agent_id"]), model
 
 
+# Requires the 0.13.0 contract added in upstream b160026d0.
+@pytest.mark.min_runner_version("0.13.0")
 def test_zygote_harness_children_do_not_root_at_daemon_start_cwd(
     live_server: str,
     http_client: httpx.Client,
@@ -530,6 +534,8 @@ def test_zygote_harness_children_do_not_root_at_daemon_start_cwd(
         _terminate(daemon.proc)
 
 
+# Requires the 0.13.0 contract added in upstream b160026d0.
+@pytest.mark.min_runner_version("0.13.0")
 def test_new_dispatch_succeeds_after_daemon_start_cwd_deleted(
     live_server: str,
     http_client: httpx.Client,

@@ -41,6 +41,12 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+@pytest.fixture
+def mock_llm_server_url(isolated_mock_llm_server_url: str) -> str:
+    """Keep approval queues separate from earlier REPL subprocesses."""
+    return isolated_mock_llm_server_url
+
+
 def _build_repl_env(mock_llm_server_url: str, tmp_home: Path) -> dict[str, str]:
     """Build the pexpect environment dict for REPL spawning.
 
@@ -140,8 +146,13 @@ def _spawn_repl_with_args(
 
 
 def _wait_for_prompt_ready(child: Any, timeout: float = 60.0) -> None:
-    """Wait for the REPL prompt (``❯``) to appear."""
-    child.expect("❯", timeout=timeout)
+    """Wait for prompt_toolkit's live input loop to reach idle state.
+
+    The welcome banner can contain a prompt-shaped ``❯`` before the input
+    loop starts reading.  The ready toolbar is emitted by the live loop, so
+    waiting for it prevents the first keystroke from being dropped.
+    """
+    child.expect(r"·\s*ready", timeout=timeout)
 
 
 def _read_pending(child: Any, seconds: float = 0.3) -> str:
@@ -165,7 +176,7 @@ def _clean_exit(child: Any) -> None:
         child.terminate(force=True)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def repl_env(
     mock_llm_server_url: str,
     tmp_path_factory: pytest.TempPathFactory,

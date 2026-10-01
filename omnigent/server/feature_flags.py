@@ -24,6 +24,7 @@ class Feature(StrEnum):
     HARNESS_INSTALL = "harness_install"
     CANVAS = "canvas"
     MODEL_ADVISOR = "model_advisor"
+    CUSTOMIZE = "customize"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,12 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         description="Concrete model advisor with visible review and override",
         owner="web",
         review_by_release="0.16.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.CUSTOMIZE,
+        description="Web Customize settings section (Harnesses & Skills)",
+        owner="web",
+        review_by_release="0.15.0",
     ),
 )
 

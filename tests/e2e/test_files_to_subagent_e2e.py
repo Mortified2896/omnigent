@@ -77,7 +77,7 @@ def _find_child_session_id(
     while time.monotonic() < deadline:
         resp = http_client.get(
             "/v1/sessions",
-            params={"kind": "sub_agent", "limit": 1000},
+            params={"visibility": "all", "kind": "sub_agent", "limit": 1000},
         )
         resp.raise_for_status()
         for item in resp.json().get("data", []):
@@ -91,7 +91,9 @@ def _find_child_session_id(
         time.sleep(POLL_INTERVAL_S)
     # Diagnostic dump: show the sub_agent list and the parent's items so a
     # missing child (failed dispatch vs. mismatched title) is debuggable.
-    sub_list = http_client.get("/v1/sessions", params={"kind": "sub_agent", "limit": 1000})
+    sub_list = http_client.get(
+        "/v1/sessions", params={"visibility": "all", "kind": "sub_agent", "limit": 1000}
+    )
     parent_snap = http_client.get(f"/v1/sessions/{parent_session_id}")
     raise AssertionError(
         f"No sub-agent child session titled {child_title!r} for parent "
@@ -128,6 +130,9 @@ def _wait_for_child_file(
 
 
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
+# Requires the 0.5.0 contract added in upstream e7fac09d9.
+@pytest.mark.min_server_version("0.5.0")
+@pytest.mark.min_runner_version("0.5.0")
 def test_file_passes_from_parent_agent_to_subagent(
     http_client: httpx.Client,
     live_runner_id: str,

@@ -50,11 +50,14 @@ Excluded from default ``pytest`` runs via
 from __future__ import annotations
 
 import json
+import sys
 import time
+import uuid
 from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 
 from tests.e2e.conftest import (
     configure_mock_llm,
@@ -209,11 +212,13 @@ def _configure_spawn_flow(
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def named_sub_agent_test_agent(
     http_client: httpx.Client,
     databricks_workspace_host: str | None,
     databricks_profile_or_none: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> str:
     """
     Upload the named-sub-agent-test fixture (parent + 2 sub-agents).
@@ -230,9 +235,27 @@ def named_sub_agent_test_agent(
         stamped onto the native executors so they authenticate.
     :returns: Agent name ``"named-sub-agent-test"``.
     """
+    # A prior session's delayed auto-wake must never consume this test's queues.
+    # Keep both the uploaded spec and mocked responses on per-test model keys.
+    suffix = uuid.uuid4().hex[:8]
+    spec = yaml.safe_load((_NAMED_FIXTURE / "named-sub-agent-test.yaml").read_text())
+    spec["name"] = f"named-sub-agent-test-{suffix}"
+    keys = {
+        "_PARENT_MODEL": _PARENT_MODEL,
+        "_RESEARCHER_MODEL": _RESEARCHER_MODEL,
+        "_SUMMARIZER_MODEL": _SUMMARIZER_MODEL,
+    }
+    for key, model in keys.items():
+        monkeypatch.setattr(sys.modules[__name__], key, f"{model}-{suffix}")
+    spec["executor"]["model"] = _PARENT_MODEL
+    spec["tools"]["researcher"]["executor"]["model"] = _RESEARCHER_MODEL
+    spec["tools"]["summarizer"]["executor"]["model"] = _SUMMARIZER_MODEL
+    bundle = tmp_path / "named-bundle"
+    bundle.mkdir()
+    (bundle / "named-sub-agent-test.yaml").write_text(yaml.safe_dump(spec))
     return upload_agent(
         http_client,
-        _NAMED_FIXTURE,
+        bundle,
         rewrite_model_for_databricks=databricks_workspace_host is not None,
         databricks_profile=databricks_profile_or_none,
     )

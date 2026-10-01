@@ -238,6 +238,8 @@ def _wait_for_host_online(
 
 
 @pytest.mark.timeout(180)
+# Requires the 0.13.0 contract added in upstream cee6ec9b6.
+@pytest.mark.min_runner_version("0.13.0")
 def test_host_survives_transient_404_during_server_restart(
     live_server: str,
     http_client: httpx.Client,

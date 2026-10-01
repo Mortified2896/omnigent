@@ -307,6 +307,13 @@ def test_uninstall_script_external_config_requires_gate_then_removes_json_key(
 def test_uninstall_script_toml_config_and_launch_agent_reporting(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
+    state = home / ".omnigent"
+    state.mkdir()
+    (state / "installation_id").write_text("test-installation\n")
+    fake_bin, _uv_log = _fake_uv(tmp_path)
+    tmux = fake_bin / "tmux"
+    tmux.write_text("#!/bin/sh\nexit 1\n")
+    tmux.chmod(0o700)
     config = tmp_path / "config.toml"
     config.write_text(
         '[mcp_servers.omnigent]\ncommand = "omnigent"\n\n[mcp_servers.other]\ncommand = "other"\n'
@@ -333,6 +340,7 @@ def test_uninstall_script_toml_config_and_launch_agent_reporting(tmp_path: Path)
         + "\n"
     )
     env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}/usr/bin:/bin"
     env["OMNIGENT_UNINSTALL_LEDGER_MANIFEST"] = str(manifest)
     env["HOME"] = str(home)
     env["OMNIGENT_DATA_DIR"] = str(home / ".omnigent")

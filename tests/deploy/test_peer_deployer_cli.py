@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_ROOT = REPO_ROOT / "deploy" / "scripts" / "peer_deployer"
 SCRIPTS_DIR = REPO_ROOT / "deploy" / "scripts"
@@ -32,15 +34,29 @@ def _load_pkg():
     return pkg
 
 
-def _run_cli(*args: str) -> subprocess.CompletedProcess:
+def _run_cli(*args: str, rtx_host: bool = False) -> subprocess.CompletedProcess:
     """Run the peer_deployer CLI as a subprocess."""
     return subprocess.run(
-        [sys.executable, "-m", "peer_deployer", *args],
+        [
+            sys.executable,
+            "-c",
+            "import socket, runpy; socket.gethostname = lambda: "
+            + repr("rtx-omnigent" if rtx_host else "test-legacy-controller")
+            + "; runpy.run_module('peer_deployer', run_name='__main__')",
+            *args,
+        ],
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
         env={**os.environ, "PYTHONPATH": str(SCRIPTS_DIR)},
     )
+
+
+@pytest.mark.parametrize("command", ["preflight", "stage", "rollback", "complete", "load", "list"])
+def test_legacy_entrypoint_is_refused_on_rtx(command: str) -> None:
+    proc = _run_cli(command, rtx_host=True)
+    assert proc.returncode != 0
+    assert "Legacy deployment is retired on RTX" in proc.stderr
 
 
 def test_cli_preflight_fails_for_target_equal_supervisor() -> None:

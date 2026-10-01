@@ -1,6 +1,5 @@
 const CODEX_NATIVE_WRAPPER = "codex-native-ui";
-const CODEX_NATIVE_COLLABORATION_MODE_LABEL_KEY =
-  "omnigent.harnesses.codex_native.main.collaboration_mode";
+const CODEX_NATIVE_COLLABORATION_MODE_LABEL_KEY = "omnigent.codex_native.collaboration_mode";
 
 export type CodexPlanModeLabelSource =
   { labels?: Record<string, string | null> | null } | null | undefined;

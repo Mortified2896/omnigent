@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 
 from tests.e2e.conftest import POLL_INTERVAL_S, build_agent_bundle
 from tests.e2e.test_host_e2e import (
@@ -48,6 +49,8 @@ def _stop_daemon(proc: subprocess.Popen[bytes]) -> None:
         proc.wait()
 
 
+# Requires the 0.13.0 contract added in upstream f89e099f7.
+@pytest.mark.min_server_version("0.13.0")
 def test_multipart_create_binds_host_and_launches_runner(
     live_server: str,
     http_client: httpx.Client,

@@ -220,7 +220,9 @@ def _find_child_session_id(
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        resp = http_client.get("/v1/sessions", params={"kind": "sub_agent", "limit": 1000})
+        resp = http_client.get(
+            "/v1/sessions", params={"visibility": "all", "kind": "sub_agent", "limit": 1000}
+        )
         resp.raise_for_status()
         for item in resp.json().get("data", []):
             if item.get("title") != child_title:
@@ -309,6 +311,10 @@ def _is_denial(output: str) -> bool:
 
 
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
+# Requires the 0.13.0 contract added in upstream ac99ec208.
+@pytest.mark.min_server_version("0.13.0")
+# Requires the 0.10.0 runner contract added in upstream 0bea9873e.
+@pytest.mark.min_runner_version("0.10.0")
 def test_child_stricter_tool_limit_is_enforced(
     http_client: httpx.Client,
     live_runner_id: str,
@@ -385,6 +391,8 @@ def test_child_stricter_tool_limit_is_enforced(
 
 
 @pytest.mark.flaky(reruns=2, reruns_delay=5)
+# Requires the 0.10.0 runner contract added in upstream 0bea9873e.
+@pytest.mark.min_runner_version("0.10.0")
 def test_inherited_parent_tool_limit_still_fences_child(
     http_client: httpx.Client,
     live_runner_id: str,

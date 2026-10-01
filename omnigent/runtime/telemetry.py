@@ -35,7 +35,6 @@ import os
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -762,7 +761,7 @@ def record_llm_usage(span: Span, usage: dict[str, Any]) -> None:
 
     Uses OTel GenAI semantic convention attributes
     (``gen_ai.usage.*``) so the data is readable by any OTel backend
-    without MLflow-specific translation.
+    without backend-specific translation.
 
     Cache breakdown attributes are recorded only when present.
     Their absence is meaningful (the provider did not report
@@ -803,7 +802,7 @@ def record_error(span: Span, exc: BaseException) -> None:
     the production default) the helper keeps only the metadata needed
     to classify the error: ``error.type`` and the ``ERROR`` status. The
     exception event, status description, ``error.message`` attribute and
-    stack trace are all omitted so a trace receiver (e.g. MLflow) cannot
+    stack trace are all omitted so a trace receiver cannot
     reconstruct the original payload or message text from a metadata-only
     trace. With content capture ON the full diagnostic content is
     preserved.
@@ -828,7 +827,7 @@ def record_cancellation(span: Span) -> None:
     """
     Mark a span as cancelled.
 
-    Neither OTel nor MLflow has a dedicated ``CANCELLED`` status, so
+    OpenTelemetry has no dedicated ``CANCELLED`` status, so
     we use ``ERROR`` with ``error.type = "cancelled"`` as the
     distinguishing attribute. Operators filter cancelled traces via
     the attribute.
@@ -1075,9 +1074,9 @@ def _otlp_trace_protocol() -> str:
     when set (so traces can use HTTP/protobuf while metrics stay on
     gRPC, or vice versa). Falls back to the general
     ``OTEL_EXPORTER_OTLP_PROTOCOL`` knob for backward compatibility
-    with single-protocol deployments. Required for MLflow's HTTP
-    ingest: setting only the signal-specific protocol keeps metrics
-    on gRPC without forcing the whole OTLP pipeline to HTTP.
+    with single-protocol deployments. A signal-specific protocol lets
+    traces use a different OTLP transport without forcing metrics or logs
+    onto the same transport.
 
     :returns: ``"grpc"`` or ``"http/protobuf"``.
     :raises ValueError: If the resolved protocol is unsupported.
@@ -1329,30 +1328,6 @@ def _init_otel_logs() -> None:
         _logs_initialized = True
 
 
-DEFAULT_TELEMETRY_ENV_FILE = "/var/lib/omnigent-production/mlflow-tracing.env"
-
-
-def _load_telemetry_env_file() -> None:
-    """Load deployer-managed telemetry settings without overriding the process."""
-    path = os.environ.get("OMNIGENT_TELEMETRY_ENV_FILE", DEFAULT_TELEMETRY_ENV_FILE)
-    if not path:
-        return
-    try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        if key.strip():
-            os.environ.setdefault(key.strip(), value)
-
-
 def init(service_name: str | None = None) -> None:
     """
     Initialize OpenTelemetry tracing for the omnigent runtime.
@@ -1390,8 +1365,6 @@ def init(service_name: str | None = None) -> None:
     """
     global _capture_content, _initialized
 
-    _load_telemetry_env_file()
-
     if not telemetry_enabled():
         # Master opt-in off (the default): stay fully inert — no provider, no
         # OTEL_SERVICE_NAME mutation, no httpx/metrics/logs instrumentation, no
@@ -1413,9 +1386,8 @@ def init(service_name: str | None = None) -> None:
         service_name or os.environ.get("OTEL_SERVICE_NAME") or "omnigent"
     )
 
-    # Honor the signal-specific trace endpoint first. A receiver that only
-    # serves traces (e.g. MLflow's /v1/traces on a dedicated port) can then
-    # enable traces without implying that metrics or logs are wanted.
+    # Honor the signal-specific trace endpoint first. A trace-only receiver
+    # can then be configured without implying that metrics or logs are wanted.
     trace_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "").strip()
     generic_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
     endpoint = trace_endpoint or generic_endpoint

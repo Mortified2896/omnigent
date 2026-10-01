@@ -1349,11 +1349,11 @@ def test_trace_endpoint_precedence_over_generic(
     """
     ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` wins over the generic
     ``OTEL_EXPORTER_OTLP_ENDPOINT`` for the trace pipeline so a
-    dedicated MLflow trace ingest port can be configured without
+    dedicated trace ingest endpoint can be configured without
     also routing traces/metrics/logs there via the generic knob.
     """
     monkeypatch.setattr(telemetry, "_initialized", False)
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://mlflow:5000/v1/traces")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://collector:4318/v1/traces")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
 
     observed: list[str] = []
@@ -1363,7 +1363,7 @@ def test_trace_endpoint_precedence_over_generic(
 
     monkeypatch.setattr(telemetry, "_init_otel_traces", fake_init)
     telemetry.init(service_name="omnigent-trace-precedence")
-    assert observed == ["http://mlflow:5000/v1/traces"]
+    assert observed == ["http://collector:4318/v1/traces"]
 
 
 def test_trace_endpoint_falls_back_to_generic(
@@ -1397,7 +1397,7 @@ def test_trace_specific_endpoint_activates_fastapi_instrumentation(
     """
     monkeypatch.delenv("OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION", raising=False)
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://mlflow:5000/v1/traces")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://collector:4318/v1/traces")
     assert telemetry._fastapi_instrumentation_enabled() is True
 
 
@@ -1454,7 +1454,7 @@ def test_trace_specific_protocol_overrides_generic(
 ) -> None:
     """
     ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` lets traces ship on
-    HTTP/protobuf (e.g. MLflow) while the rest of the OTLP pipeline
+    HTTP/protobuf while the rest of the OTLP pipeline
     stays on gRPC.
     """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")

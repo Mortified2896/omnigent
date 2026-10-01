@@ -1,12 +1,12 @@
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type * as Identity from "@/lib/identity";
+import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatStore } from "@/store/chatStore";
 import type { Bubble } from "@/lib/renderItems";
 import type { SessionLiveness } from "@/hooks/useSessionLiveness";
-import { BubbleView } from "./ChatPage";
+import { BubbleView, WorkingIndicator } from "./ChatPage";
 import {
   ConnectionIndicator,
   RunnerStartingIndicator,
@@ -35,9 +35,14 @@ function render(ui: ReactNode) {
 afterEach(() => {
   // Several tests poke sandboxStatus into the global zustand store; reset it
   // so a leftover launch band can't bleed into the next test.
-  useChatStore.setState({ sandboxStatus: null });
+  useChatStore.setState({
+    sandboxStatus: null,
+    backgroundTaskCount: 0,
+    blockedOn: null,
+    sessionStatus: "idle",
+    status: "idle",
+  });
   cleanup();
-  mockedAuthenticatedFetch.mockReset();
 });
 
 describe("SandboxFailedIndicator", () => {
@@ -173,6 +178,23 @@ describe("RunnerStartingIndicator", () => {
     useChatStore.setState({ sandboxStatus: { stage: "failed", error: "x" } });
     const { container } = render(<RunnerStartingIndicator variant="row" />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("WorkingIndicator", () => {
+  it("stays hidden when only background tasks remain and returns for foreground work", () => {
+    useChatStore.setState({
+      backgroundTaskCount: 1,
+      blockedOn: null,
+      sessionStatus: "idle",
+      status: "idle",
+    });
+    const { rerender } = render(<WorkingIndicator />);
+    expect(screen.queryByTestId("working-indicator")).toBeNull();
+
+    act(() => useChatStore.setState({ sessionStatus: "running" }));
+    rerender(<WorkingIndicator />);
+    expect(screen.getByTestId("working-indicator")).toBeInTheDocument();
   });
 });
 
@@ -410,6 +432,11 @@ describe("BubbleView dispatch", () => {
     expect(screen.getByTestId("compacting-indicator")).toHaveTextContent(
       "Compacting conversation…",
     );
+  });
+
+  it("renders a completed compaction marker in the transcript", () => {
+    render(<BubbleView bubble={{ kind: "compaction", itemId: "cmp_done" }} />);
+    expect(screen.getByText("Conversation compacted")).toBeInTheDocument();
   });
 
   it("accepts createdAtS timestamp for timer calculation", () => {
