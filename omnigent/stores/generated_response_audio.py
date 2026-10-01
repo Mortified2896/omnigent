@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import asc, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import (
@@ -30,8 +31,13 @@ class GeneratedResponseAudio:
 
 
 def _affected_rows(result: object) -> int:
-    """Return a stable DML row count across SQLAlchemy result implementations."""
-    return int(getattr(result, "rowcount", 0) or 0)
+    """Require a known UPDATE row count before committing an audio state change."""
+    if not isinstance(result, CursorResult):
+        raise TypeError("generated audio update did not return a CursorResult")
+    count = result.rowcount
+    if count < 0:
+        raise RuntimeError("generated audio update returned an unknown row count")
+    return count
 
 
 def _to_entity(row: SqlGeneratedResponseAudio) -> GeneratedResponseAudio:
