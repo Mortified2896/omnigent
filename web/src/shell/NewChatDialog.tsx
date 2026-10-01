@@ -4,6 +4,9 @@ import {
   AGY_NATIVE_SKIP_MODES,
 } from "@/lib/nativeHarnessModes";
 import { showToast } from "@/components/ui/toast";
+import { PoweredByOmnigent } from "@/components/PoweredByOmnigent";
+import { BrandLogo } from "@/components/BrandLogo";
+import { useHeading, usePoweredBy } from "@/lib/branding";
 import { CLIENT_CREATE_TOKEN_LABEL, newTempConversation } from "@/lib/tempConversationId";
 import { readAlwaysUseWorktree } from "@/lib/worktreeDefaultPreferences";
 import { O3FailedReview } from "@/components/O3SessionReview";
@@ -84,7 +87,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { authenticatedFetch } from "@/lib/identity";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
-import { attachmentKey } from "@/lib/attachments";
+import { attachmentKey, validateAttachments } from "@/lib/attachments";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { writeSessionAdvisorEnabled } from "@/model-advisor/sessionAdvisorPreference";
@@ -211,7 +214,6 @@ import {
   parseMentionToken,
   rankMentionEntries,
 } from "@/lib/composerMentions";
-import { OttoEyes } from "@/components/OttoEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import { RoutingProposalCard } from "@/components/RoutingProposalCard";
@@ -1445,6 +1447,7 @@ function HarnessConfigModal({
   claudeModelsLoading,
   codexModelOptions,
   codexModelsLoading,
+  codexModelsError,
   piModelOptions,
   piModelsLoading,
   pickedEffort,
@@ -1480,6 +1483,7 @@ function HarnessConfigModal({
   claudeModelsLoading: boolean;
   codexModelOptions: readonly (ModelPickerOption & Pick<NativeModelOption, "isDefault">)[];
   codexModelsLoading: boolean;
+  codexModelsError: string | null;
   piModelOptions: readonly { id: string; displayName: string }[];
   piModelsLoading: boolean;
   pickedEffort: string;
@@ -1727,6 +1731,7 @@ function HarnessConfigModal({
                   offerSmartRouting={smartRoutingEligible}
                   testId="new-chat-landing-config-model"
                   models={claudeModelSelectOptions}
+                  defaultLabel={defaultModelLabel(claudeModelOptions, displayModelName)}
                   contentClassName="[&_[data-slot=select-item]]:pl-2.5"
                 >
                   {claudeModelsLoading && (
@@ -1809,7 +1814,7 @@ function HarnessConfigModal({
                   )}
                   {!codexModelsLoading && codexModelOptions.length === 0 && (
                     <div className="px-2.5 py-1 text-sm text-muted-foreground">
-                      Models unavailable
+                      {codexModelsError ?? "Models unavailable"}
                     </div>
                   )}
                 </RoutingModelSelect>
@@ -2048,6 +2053,8 @@ export function resetLandingDraft(): void {
 
 export function NewChatLandingScreen() {
   const isMobileViewport = useIsMobileViewport();
+  const brandingHeading = useHeading();
+  const poweredBy = usePoweredBy();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const projectParam = searchParams.get("project") ?? "";
@@ -2153,7 +2160,12 @@ export function NewChatLandingScreen() {
   // initial prompt and sent with the auto-dispatched first turn.
   const [files, setFiles] = useState<File[]>(() => restoredDraft?.files ?? []);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const addFiles = (incoming: File[]) => setFiles((prev) => [...prev, ...incoming]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const addFiles = (incoming: File[]) => {
+    const { accepted, errors } = validateAttachments(incoming);
+    setFiles((prev) => [...prev, ...accepted]);
+    setAttachmentError(errors.length > 0 ? errors.join("\n") : null);
+  };
   const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index));
 
   // Drag-and-drop onto the composer — same behavior as the in-session
@@ -2267,11 +2279,11 @@ export function NewChatLandingScreen() {
     "claude-native",
     !sandboxSelected,
   );
-  const { data: hostCodexModelOptions, isLoading: hostCodexModelsLoading } = useHostModelOptions(
-    selectedHostId,
-    "codex-native",
-    !sandboxSelected,
-  );
+  const {
+    data: hostCodexModelOptions,
+    isLoading: hostCodexModelsLoading,
+    error: hostCodexModelsError,
+  } = useHostModelOptions(selectedHostId, "codex-native", !sandboxSelected);
   const { data: hostPiModelOptions, isLoading: hostPiModelsLoading } = useHostModelOptions(
     selectedHostId,
     "pi-native",
@@ -2287,6 +2299,7 @@ export function NewChatLandingScreen() {
         : (hostClaudeModelOptions ?? []).map((option) => ({
             id: option.id,
             displayName: option.displayName ?? option.id,
+            isDefault: option.isDefault,
           })),
     [hostClaudeModelOptions, sandboxSelected],
   );
@@ -4734,11 +4747,13 @@ export function NewChatLandingScreen() {
               </div>
             </span>
           ) : (
-            <OttoEyes className="h-14 w-auto shrink-0" />
+            <BrandLogo className="h-14 w-auto shrink-0" />
           )}
-          <h1 className="min-w-0 break-words text-center text-[1.5em] md:text-[2.15em] font-normal tracking-[-0.05em] text-foreground line-clamp-2 sm:text-left">
-            {selectedProject || "What should we build?"}
-          </h1>
+          {(selectedProject || brandingHeading) && (
+            <h1 className="min-w-0 break-words text-center text-[1.5em] md:text-[2.15em] font-normal tracking-[-0.05em] text-foreground line-clamp-2 sm:text-left">
+              {selectedProject || brandingHeading}
+            </h1>
+          )}
         </div>
         <div className="relative flex w-full flex-col gap-1">
           <form
@@ -4790,6 +4805,7 @@ export function NewChatLandingScreen() {
               value={message}
               disabled={creating || o3ReviewLoading}
               onChange={(e) => {
+                setAttachmentError(null);
                 changeComposerMessage(e.target.value);
                 // Recompute the active "@"-mention from the caret each keystroke
                 // (native terminal agents with a workspace — ``mentionEnabled``).
@@ -4860,8 +4876,8 @@ export function NewChatLandingScreen() {
                     return;
                   }
                 }
-                // Enter sends; Shift+Enter inserts a newline.
-                if (e.key === "Enter" && !e.shiftKey) {
+                // Desktop Enter sends; touch keyboards and Shift+Enter insert a newline.
+                if (e.key === "Enter" && !e.shiftKey && !isMobileViewport) {
                   e.preventDefault();
                   // The mention menu is briefly closed while its listing loads;
                   // swallow Enter so the in-progress "@dir/" token isn't sent.
@@ -5254,6 +5270,11 @@ export function NewChatLandingScreen() {
                     codexModelOptions={codexModelOptions}
                     codexModelsLoading={
                       !sandboxSelected && selectedHostId !== null && hostCodexModelsLoading
+                    }
+                    codexModelsError={
+                      !sandboxSelected && hostCodexModelsError instanceof Error
+                        ? hostCodexModelsError.message
+                        : null
                     }
                     piModelOptions={piModelOptions}
                     piModelsLoading={
@@ -5970,6 +5991,15 @@ export function NewChatLandingScreen() {
               launch, so submitting surfaces a specific error if it
               really can't run. Normal-flow directly under the composer
               (like the createError line below) so it reads as part of it. */}
+          {attachmentError && (
+            <p
+              className="text-xs text-destructive"
+              role="alert"
+              data-testid="new-chat-landing-attachment-error"
+            >
+              {attachmentError}
+            </p>
+          )}
           {selectedAgentUnconfigured && (
             <HarnessSetupNotice
               agentName={selectedAgent?.display_name}
@@ -6033,6 +6063,12 @@ export function NewChatLandingScreen() {
           )}
         </div>
       </div>
+
+      {poweredBy && (
+        <div className="pb-4 text-center">
+          <PoweredByOmnigent />
+        </div>
+      )}
 
       {/* Connect-host instructions, reachable from the host dropdown even when
           no hosts are online — the zero-host escape hatch. */}

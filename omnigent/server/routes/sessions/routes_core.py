@@ -2596,11 +2596,6 @@ def register_core_routes(
         from omnigent.server.o3_routing_review.session_policy import require_new_review
 
         require_new_review(source.labels or {}, "forking")
-        if source.kind == "sub_agent":
-            raise OmnigentError(
-                "Cannot fork a sub-agent session — only top-level sessions can be forked.",
-                code=ErrorCode.INVALID_INPUT,
-            )
         if source.agent_id is None:
             raise OmnigentError(
                 "Source session has no agent binding — cannot fork.",

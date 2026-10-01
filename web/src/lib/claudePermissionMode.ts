@@ -4,7 +4,8 @@
 
 import { nativeCodingAgentForHarness, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 
-const CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.claude_native.permission_mode";
+const CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY =
+  "omnigent.harnesses.claude_native.main.permission_mode";
 const CLAUDE_NATIVE_WRAPPER = nativeCodingAgentForHarness("claude-native")?.wrapperLabel;
 
 /** Whether a session runs the claude-native wrapper. Fails closed. */
@@ -84,7 +85,11 @@ export function claudePermissionModeFromSession(
     | null
     | undefined,
 ): string | null {
-  const labelled = session?.labels?.[CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY];
+  const labels = session?.labels;
+  const labelled =
+    labels && Object.hasOwn(labels, CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY)
+      ? labels[CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY]
+      : labels?.["omnigent.claude_native.permission_mode"];
   if (typeof labelled === "string" && labelled) return labelled;
   const args = session?.terminalLaunchArgs ?? [];
   const flagIndex = args.indexOf("--permission-mode");

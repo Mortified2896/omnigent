@@ -3770,8 +3770,8 @@ async def test_relay_persists_routing_decision_before_assistant_output() -> None
     # assistant message. If the order flipped (or the routing item were
     # dropped), the chip would render after the answer or not at all.
     types_in_order = [i.type for i in store.appended_items]
-    assert types_in_order == ["routing_decision", "message"], (
-        f"expected [routing_decision, message], got {types_in_order}"
+    assert types_in_order == ["routing_decision", "resource_event", "message"], (
+        f"expected routing decision, response resource, message; got {types_in_order}"
     )
     routing = store.appended_items[0]
     # Every render field round-tripped through RoutingDecisionData on
@@ -5112,8 +5112,8 @@ async def test_relay_flushes_partial_text_on_failed_turn_before_error_item() -> 
         # (or missing the message) means the failed-turn flush regressed and
         # reload shows the error without the text the user watched stream.
         types = [i.type for i in store.appended_items]
-        assert types == ["message", "error"], types
-        message, error = store.appended_items
+        assert types == ["resource_event", "message", "error"], types
+        _response_resource, message, error = store.appended_items
         assert "".join(b["text"] for b in message.data.content) == (
             "Drafting the plan. Now running checks."
         )
@@ -5496,6 +5496,7 @@ async def test_relay_interleaves_text_segments_with_tool_calls() -> None:
         # first text lands BEFORE call_1, not pooled after every tool.
         types = [i.type for i in store.appended_items]
         assert types == [
+            "resource_event",
             "message",
             "function_call",
             "function_call_output",
@@ -5505,6 +5506,7 @@ async def test_relay_interleaves_text_segments_with_tool_calls() -> None:
             "function_call",
             "function_call_output",
             "message",
+            "resource_event",
         ], types
 
         # Three SEPARATE messages, each its own segment — not one run-on.

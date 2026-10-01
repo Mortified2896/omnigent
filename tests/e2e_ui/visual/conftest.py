@@ -31,6 +31,30 @@ def snapshot_page(page: Page) -> Page:
     """
     page.set_viewport_size(_VIEWPORT)
     page.emulate_media(color_scheme="light")
+    # Chat snapshots use synthetic session IDs. Stub the new policy read so
+    # screenshots capture settled test-session controls, not a retry/loading race.
+    page.route(
+        "**/v1/sessions/*/scoring-policy",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {"score_eligible": False, "is_test": True, "retention": None, "responses": {}}
+            ),
+        ),
+    )
+    page.route(
+        "**/v1/sessions/*/response-feedback",
+        lambda route: route.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    page.route(
+        "**/v1/sessions/*/response-attribution/*",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"model_status": "unknown", "actual_model": None}),
+        ),
+    )
     return page
 
 

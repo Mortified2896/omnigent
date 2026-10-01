@@ -17,6 +17,7 @@ from email.parser import BytesParser
 from typing import Any
 
 import httpx
+from omnigent_client._http import is_loopback_url
 
 from omnigent.db.db_models import current_workspace_id, workspace_scope
 from omnigent.server.generated_response_audio_timings import (
@@ -222,7 +223,12 @@ class GeneratedResponseAudioCoordinator:
         self._queue = asyncio.Queue()
         # Full local 1.7B narration can exceed 15 minutes at the supported
         # 12k-character ceiling. Stay below the store's 30-minute stale lease.
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(1500.0, connect=5.0))
+        # Local synthesis must bypass shell proxies, like other loopback clients.
+        # With no backend configured, proxy parsing must not block server startup.
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(1500.0, connect=5.0),
+            trust_env=bool(self.tts_url and not is_loopback_url(self.tts_url)),
+        )
         await asyncio.to_thread(self.audio_store.recover_processing)
         for row in await asyncio.to_thread(self.audio_store.list_pending_all_workspaces):
             self._queue.put_nowait(

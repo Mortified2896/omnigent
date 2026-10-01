@@ -305,6 +305,7 @@ def test_configured_harness_map_covers_all_spellings(
     _no_clis_installed(monkeypatch)
     result = configured_harness_map()
     expected_keys = {
+        "local-tool-free",
         "claude-sdk",
         "claude-native",
         "native-claude",

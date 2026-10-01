@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,7 +14,6 @@ import pytest
 from sqlalchemy import event, select, update
 from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.engine.interfaces import Dialect
-from sqlalchemy.sql.dml import Update
 
 from omnigent.db import current_query_name
 from omnigent.db.db_models import (
@@ -177,33 +178,34 @@ def test_clear_cannot_overwrite_a_competing_settings_update(
     )
     before, metadata_before = _snapshot(store, conversation.id)
     replacement_raw = json.dumps(replacement)
-    replaced = False
+    started = Event()
+    original_lock = store._lock_conversation
+    workspace_id = current_workspace_id()
+    competing = None
 
-    def _competing_write(
-        _connection: object,
-        statement: object,
-        _multiparams: object,
-        _params: object,
-        _execution_options: object,
-    ) -> None:
-        nonlocal replaced
-        if replaced or not isinstance(statement, Update):
-            return
-        if statement.table.name != SqlConversation.__tablename__:
-            return
-        replaced = True
-        _write_overrides(store, conversation.id, replacement_raw, updated_at=150)
+    def _competing_write() -> None:
+        with workspace_scope(workspace_id):
+            started.set()
+            _write_overrides(store, conversation.id, replacement_raw, updated_at=250)
 
-    monkeypatch.setattr(sqlalchemy_store, "now_epoch", lambda: 200)
-    event.listen(store._conv_engine, "before_execute", _competing_write)
-    try:
-        assert store.clear_model_override_if_matches(conversation.id, "unavailable-model") is False
-    finally:
-        event.remove(store._conv_engine, "before_execute", _competing_write)
+    with ThreadPoolExecutor(max_workers=1) as executor:
 
-    assert replaced, "the competing write must happen after the read and before the CAS"
+        def _lock_then_compete(session, conversation_id):
+            nonlocal competing
+            original_lock(session, conversation_id)
+            competing = executor.submit(_competing_write)
+            assert started.wait(timeout=5)
+            # A competing writer cannot commit while this transaction owns the row.
+            assert not competing.done()
+
+        monkeypatch.setattr(store, "_lock_conversation", _lock_then_compete)
+        monkeypatch.setattr(sqlalchemy_store, "now_epoch", lambda: 200)
+        assert store.clear_model_override_if_matches(conversation.id, "unavailable-model") is True
+        assert competing is not None
+        competing.result(timeout=30)
+
     assert _snapshot(store, conversation.id) == (
-        {**before, "session_overrides": replacement_raw, "updated_at": 150},
+        {**before, "session_overrides": replacement_raw, "updated_at": 250},
         metadata_before,
     )
 
@@ -271,41 +273,42 @@ def test_clear_model_override_uses_one_semantic_query_name(
     [sqlite.dialect(), postgresql.dialect(), mysql.dialect()],
     ids=["sqlite", "postgres", "mysql"],
 )
-def test_clear_model_override_compiles_portable_exact_blob_comparison(
+def test_clear_model_override_uses_portable_lock_and_preserves_mutation_version(
     conversation_store: SqlAlchemyConversationStore,
     monkeypatch: pytest.MonkeyPatch,
     dialect: Dialect,
 ) -> None:
     original = '{"model_override":"unavailable-model","future_setting":"é"}'
-    statements: list[Update] = []
+    statements: list[Any] = []
+    row = SimpleNamespace(session_overrides=original, updated_at=200)
 
     class _Session:
-        def scalar(self, _statement: object) -> str:
-            return original
+        def get(self, model, key):
+            assert model is SqlConversation
+            assert key == (current_workspace_id(), "a" * 32)
+            return row
 
-        def execute(self, statement: Update) -> SimpleNamespace:
+        def execute(self, statement, *_args):
             statements.append(statement)
-            return SimpleNamespace(rowcount=1)
 
     @contextmanager
     def _session(query_name: str) -> Iterator[_Session]:
         assert query_name == "clear_model_override_if_matches"
         yield _Session()
 
-    monkeypatch.setattr(conversation_store, "_conv_engine", SimpleNamespace(dialect=dialect))
-    monkeypatch.setattr(conversation_store, "_conv_session", _session)
+    monkeypatch.setattr(conversation_store, "_supports_for_update", dialect.name != "sqlite")
+    monkeypatch.setattr(conversation_store, "_conv_session_immediate", _session)
+    monkeypatch.setattr(sqlalchemy_store, "now_epoch", lambda: 200)
 
     assert conversation_store.clear_model_override_if_matches("a" * 32, "unavailable-model")
-
+    assert row.session_overrides == json.dumps({"future_setting": "é"}, separators=(",", ":"))
+    assert row.updated_at == 201  # same-second mutation must still invalidate cleanup snapshots
     assert len(statements) == 1
-    compiled = statements[0].compile(dialect=dialect)
-    sql = str(compiled)
-    assert "conversations.workspace_id = " in sql
-    assert "conversations.id = " in sql
-    if dialect.name == "mysql":
-        assert "CAST(conversations.session_overrides AS BINARY) = " in sql
-        assert original.encode("utf-8") in compiled.params.values()
+    sql = str(statements[0].compile(dialect=dialect))
+    if dialect.name == "sqlite":
+        assert "UPDATE conversations SET updated_at = updated_at" in sql
+        assert "WHERE id = " in sql
     else:
-        assert "conversations.session_overrides = " in sql
-        assert "CAST(" not in sql
-        assert original in compiled.params.values()
+        assert "conversations.workspace_id = " in sql
+        assert "conversations.id = " in sql
+        assert "FOR UPDATE" in sql

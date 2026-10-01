@@ -73,6 +73,19 @@ def fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(external_rtx, "_run_as_service", lambda _args: None)
     monkeypatch.setattr(external_rtx, "_health", lambda _: {"status": "ok"})
     monkeypatch.setattr(external_rtx, "_check_headroom", lambda _: None)
+    real_run = rtx.run
+
+    def fixture_run(args, **kwargs):
+        # The fixture has no service account. Mock only its ownership operation;
+        # keep the real rollback, database checks, and other commands exercised.
+        if args and args[0] == "chown":
+            assert args[:3] == ["chown", "-R", "hermes:hermes"]
+            assert args[3:]
+            assert all(Path(path).is_relative_to(target.root) for path in args[3:])
+            return ""
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(rtx, "run", fixture_run)
 
     def snapshot(peer, sha):
         if peer.current.resolve().name != sha:

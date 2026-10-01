@@ -68,3 +68,27 @@ def test_exact_narration_never_substitutes_a_newer_response() -> None:
     store = SimpleNamespace(list_items=Mock(return_value=items))
     assert _response_narration_for_id(store, "conversation", "requested") == "Original answer."
     assert _response_narration_for_id(store, "conversation", "missing") == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tts_url", [None, "http://127.0.0.1:9876", "http://localhost:9876"])
+async def test_audio_startup_ignores_malformed_proxy_for_local_backend(
+    monkeypatch: pytest.MonkeyPatch, tts_url: str | None
+) -> None:
+    from omnigent.server.generated_response_audio import GeneratedResponseAudioCoordinator
+
+    monkeypatch.setenv("NO_PROXY", "fe80::/10")
+    coordinator = GeneratedResponseAudioCoordinator(
+        audio_store=SimpleNamespace(
+            recover_processing=Mock(), list_pending_all_workspaces=Mock(return_value=[])
+        ),
+        conversation_store=Mock(),
+        artifact_store=Mock(),
+        tts_url=tts_url,
+    )
+    try:
+        await coordinator.start()
+        assert coordinator._client is not None
+        assert coordinator._worker is not None
+    finally:
+        await coordinator.stop()

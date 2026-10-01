@@ -10,6 +10,26 @@ import {
 } from "@/lib/claudePermissionMode";
 
 describe("claudePermissionMode", () => {
+  it("prefers canonical permissions without reviving a cleared legacy mode", () => {
+    const legacy = { "omnigent.claude_native.permission_mode": "bypassPermissions" };
+    expect(
+      claudePermissionModeFromSession({
+        labels: {
+          ...legacy,
+          "omnigent.harnesses.claude_native.main.permission_mode": "plan",
+        },
+      }),
+    ).toBe("plan");
+    expect(
+      claudePermissionModeFromSession({
+        labels: {
+          ...legacy,
+          "omnigent.harnesses.claude_native.main.permission_mode": null,
+        },
+      }),
+    ).not.toBe("bypassPermissions");
+  });
+
   it("offers only shift+tab-reachable modes for a running session", () => {
     // dontAsk is never in Claude's cycle and bypassPermissions only joins it
     // when the session launched into it — offering either would produce a

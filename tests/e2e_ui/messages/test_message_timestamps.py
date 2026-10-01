@@ -8,18 +8,18 @@ the mock-LLM reply, and assert for both the user and the assistant bubble that
   - the timestamp rides inside the existing 24px action row (no new row),
   - it matches a locale time format (``h:MM AM`` style),
   - the earlier user row is transparent at rest, while the final assistant
-    row rests at 40% opacity; both reach full opacity on hover,
+    row rests at 70% opacity; both reach full opacity on hover,
   - the ordering matches the design target (user: timestamp → Copy at the
     right edge; assistant: Copy/Fork → timestamp at the left edge),
   - the stamp survives a full page reload (server-stamped path, not a
     re-stamped render time),
-  - on a touch-sized viewport the row rests at 40% opacity so the actions
-    stay discoverable without a hover affordance.
+  - on a touch-sized viewport user actions rest at 40% and assistant actions
+    at 70% opacity, so they stay discoverable without a hover affordance.
 
 Selectors:
   - bubbles: ``data-testid="message-bubble"`` + ``data-role="user|assistant"``
   - timestamp: ``data-testid="message-timestamp"`` inside the action row
-  - action row: the timestamp's parent div (``opacity-0``/``opacity-40`` base
+  - action row: the timestamp's parent div (``opacity-0``/``opacity-70`` base
     with ``md:group-hover:opacity-100`` reveal)
 """
 
@@ -144,15 +144,27 @@ def test_hover_reveals_timestamp_on_user_and_assistant_bubbles(
 
     # The assistant response is the final message, so its actions remain
     # partially visible without hover.
-    assert _opacity(assistant_row) == "0.4"
-    assert round(assistant_row.bounding_box()["height"]) == 24
+    _wait_opacity(assistant_row, "0.7")
+    # Feedback controls can wrap beside Copy/Fork. The timestamp
+    # remains in the same action row and keeps its compact line height.
+    assert round(assistant_ts.bounding_box()["height"]) == 16
 
     assistant_bubble.hover()
     _wait_opacity(assistant_row, "1")
 
     # Design order: Copy/Fork → timestamp at the bubble's left edge.
     assistant_copy = assistant_bubble.get_by_role("button", name="Copy")
-    assert assistant_copy.bounding_box()["x"] < assistant_ts.bounding_box()["x"]
+    # The feedback controls can wrap the timestamp to the next line. Its DOM
+    # order still follows Copy/Fork, and same-line rendering remains left-to-right.
+    assert assistant_copy.evaluate(
+        "(copy, stamp) => !!(copy.compareDocumentPosition(stamp) & "
+        "Node.DOCUMENT_POSITION_FOLLOWING)",
+        assistant_ts.element_handle(),
+    )
+    copy_box = assistant_copy.bounding_box()
+    stamp_box = assistant_ts.bounding_box()
+    if abs(copy_box["y"] - stamp_box["y"]) <= 4:
+        assert copy_box["x"] < stamp_box["x"]
 
     # --- persistence: reload must show the same server-stamped values ---
     user_stamp = user_ts.inner_text()
@@ -263,11 +275,11 @@ def test_touch_viewport_keeps_timestamp_row_discoverable(
     browser: Browser,
     seeded_session: tuple[str, str],
 ) -> None:
-    """Below the md breakpoint the action row rests at 40% opacity.
+    """Below the md breakpoint user actions rest at 40%, assistant actions at 70%.
 
     Touch devices have no hover; a permanently invisible row would hide the
     Copy action and the timestamp entirely. A failure means the
-    ``opacity-40`` touch fallback regressed.
+    touch fallback regressed.
     """
     base_url, session_id = seeded_session
     _seed_assistant_text(base_url, session_id, "Touch probe assistant reply.")
@@ -290,11 +302,11 @@ def test_touch_viewport_keeps_timestamp_row_discoverable(
         expect(user_ts).to_have_text(_TIME_RE)
 
         # No hover performed: the row must still be partially visible.
-        assert _opacity(_action_row(user_ts)) == "0.4"
+        _wait_opacity(_action_row(user_ts), "0.4")
 
         assistant_ts = assistant_bubble.locator(_TIMESTAMP)
         expect(assistant_ts).to_have_count(1)
         expect(assistant_ts).to_have_text(_TIME_RE)
-        assert _opacity(_action_row(assistant_ts)) == "0.4"
+        _wait_opacity(_action_row(assistant_ts), "0.7")
     finally:
         ctx.close()

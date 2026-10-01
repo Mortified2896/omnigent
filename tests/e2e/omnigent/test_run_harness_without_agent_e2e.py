@@ -235,6 +235,9 @@ def test_run_harness_live_matrix_covers_registered_coding_harnesses() -> None:
     the ``tests/inner/test_acp_executor.py`` suite.
     """
     expected_live_harnesses = set(OMNIGENT_HARNESSES).intersection(_HARNESS_MODULES) - {
+        # O3's closed one-turn harness requires an approved proposal and is
+        # tested through routing review, not generic coding/REPL launch.
+        "local-tool-free",
         "acp",
         "claude-native",
         "codex-native",

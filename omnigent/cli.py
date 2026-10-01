@@ -3473,9 +3473,6 @@ def _ensure_databricks_server_auth(server: str, *, non_interactive: bool = False
     # Databricks auth probe, and constructing a proxy-aware HTTP client here can
     # fail before the no-proxy rule is applied when an optional SOCKS transport
     # isn't installed.
-    if urlsplit(server).hostname in {"localhost", "127.0.0.1", "::1"}:
-        return
-
     import httpx as _httpx
 
     from omnigent.chat import _remote_headers
@@ -3484,6 +3481,12 @@ def _ensure_databricks_server_auth(server: str, *, non_interactive: bool = False
         load_databricks_workspace_host,
         store_databricks_auth,
     )
+
+    if (
+        urlsplit(server).hostname in {"localhost", "127.0.0.1", "::1"}
+        and load_databricks_workspace_host(server) is None
+    ):
+        return
 
     headers = _remote_headers(server_url=server, host_id=None)
     try:

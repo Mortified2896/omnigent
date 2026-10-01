@@ -58,6 +58,10 @@ def _create_session(client: httpx.Client, *, email: str) -> str:
 
 
 @pytest.mark.compat_smoke
+# /v1/usage was introduced by c3facacd5 in 0.7.0.dev0; v0.4.0 has no
+# usage endpoint. Keep full current-server coverage without asking that older
+# release to implement a future feature.
+@pytest.mark.min_server_version("0.7.0")
 def test_usage_report_happy_path(http_client: httpx.Client) -> None:
     """The report is well-formed, windows are monotonic, and it lists the caller's session."""
     session_id = _create_session(http_client, email=_OWNER_EMAIL)
