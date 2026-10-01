@@ -1,0 +1,214 @@
+name: Upgrade 0.16 sandbox comparison
+
+# Temporary upgrade evidence. No production access, provider credentials, or
+# deployment. Keep draft PRs draft; compare the SAME 34 tests on separate VMs.
+on:
+  push:
+    branches: [codex/upgrade-0.16]
+    paths:
+      - .github/workflows/upgrade-016-sandbox.yml
+      - deploy/docs/upgrade-0.16-backend-handoff.md
+      - omnigent/**
+      - tests/inner/**
+      - tests/runner/test_environment_filesystem.py
+      - pyproject.toml
+      - uv.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-016-sandbox-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    uses: ./.github/workflows/security-gate.yml
+
+  sandbox:
+    name: Sandbox 34 (${{ matrix.source }})
+    needs: gate
+    if: github.repository == 'Mortified2896/omnigent'
+    # A full VM, not ubuntu-slim or a nested default-security Docker container.
+    # No AppArmor, sysctl, seccomp, setuid, or host capability changes are made.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [candidate, upstream]
+    env:
+      OMNIGENT_SKIP_WEB_UI: "true"
+      UV_INDEX_URL: https://pypi.org/simple
+      PIP_INDEX_URL: https://pypi.org/simple
+      PYTHONFAULTHANDLER: "1"
+      TERM: xterm-256color
+      CANDIDATE_SHA: ${{ github.sha }}
+      UPSTREAM_SHA: 82a74473ee4c01163c4269f4296b10a158f0e47e
+      SOURCE: ${{ matrix.source }}
+      EVIDENCE: ${{ runner.temp }}/upgrade-016-sandbox
+    steps:
+      - name: Check out candidate and its failure manifest
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Freeze the exact 34 failing node IDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          text = Path("deploy/docs/upgrade-0.16-backend-handoff.md").read_text()
+          nodeids = re.findall(r"^### `(tests/[^`\n]+::[^`\n]+)`$", text, re.M)
+          if len(nodeids) != 34 or len(set(nodeids)) != 34:
+              raise SystemExit("Expected exactly the 34 unique checkpoint failures")
+          if any(".." in n.split("::", 1)[0].split("/") for n in nodeids):
+              raise SystemExit("Invalid test path")
+          Path(os.environ["EVIDENCE"], "nodeids.txt").write_text("\n".join(nodeids) + "\n")
+          PY
+
+      - name: Check out pinned upstream for the control arm
+        if: matrix.source == 'upstream'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: 82a74473ee4c01163c4269f4296b10a158f0e47e
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: false
+
+      - name: Set up Node.js for deterministic signer tests
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Install sandbox test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap ripgrep tmux sqlite3 dbus-daemon gnome-keyring
+
+      - name: Verify source identity and namespace readiness without policy changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import platform
+          import subprocess
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE"])
+          def read(path):
+              try:
+                  return Path(path).read_text().strip()
+              except OSError:
+                  return "unavailable"
+
+          actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          expected = os.environ["UPSTREAM_SHA" if os.environ["SOURCE"] == "upstream"
+                                else "CANDIDATE_SHA"]
+          if actual != expected:
+              raise SystemExit("Checkout differs from the requested source SHA")
+          fields = ("CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:",
+                    "NoNewPrivs:", "Seccomp:", "Seccomp_filters:")
+          report = {
+              "source": os.environ["SOURCE"], "tested_sha": actual,
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "upstream_sha": os.environ["UPSTREAM_SHA"],
+              "uid": os.geteuid(), "kernel": platform.release(),
+              "python": platform.python_version(), "os_release": read("/etc/os-release"),
+              "apparmor_profile": read("/proc/self/attr/current"),
+              "process_restrictions": [line for line in read("/proc/self/status").splitlines()
+                                       if line.startswith(fields)],
+              "userns_restriction": read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"),
+              "max_user_namespaces": read("/proc/sys/user/max_user_namespaces"),
+              "bwrap_version": subprocess.check_output(["bwrap", "--version"], text=True).strip(),
+              "probes": [], "deployment_accepted": False,
+          }
+          if os.geteuid() == 0:
+              raise SystemExit("Run sandbox tests as the ordinary runner user, not root")
+          base = ["bwrap", "--ro-bind", "/", "/", "--unshare-user", "--uid", "0",
+                  "--gid", "0", "--die-with-parent"]
+          for name, extra in [("user_namespace", []), ("network_namespace", ["--unshare-net"])]:
+              argv = base + extra + ["/usr/bin/true"]
+              try:
+                  result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+                  entry = {"name": name, "argv": argv, "exit_code": result.returncode,
+                           "stdout": result.stdout, "stderr": result.stderr}
+              except subprocess.TimeoutExpired:
+                  entry = {"name": name, "argv": argv, "exit_code": None, "error": "timeout"}
+              report["probes"].append(entry)
+          evidence.joinpath("environment.json").write_text(json.dumps(report, indent=2) + "\n")
+          print(json.dumps(report, indent=2))
+          if any(p["exit_code"] != 0 for p in report["probes"]):
+              raise SystemExit("Runner cannot exercise sandbox contracts; no policy bypass attempted")
+          PY
+
+      - name: Install the source's locked test environment
+        run: uv sync --locked --extra all --group test
+
+      - name: Run all 34 unchanged assertions serially without retries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t nodeids < "$EVIDENCE/nodeids.txt"
+          env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DATABRICKS_TOKEN -u NO_COLOR \
+            uv run --locked --no-sync pytest -o addopts= -n 0 -p no:rerunfailures \
+              --timeout=180 --tb=short -rA --junitxml="$EVIDENCE/results.xml" \
+              "${nodeids[@]}" 2>&1 | tee "$EVIDENCE/pytest.txt"
+
+      - name: Require all 34 identities to pass, not skip or xfail
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE"])
+          expected = set()
+          for nodeid in evidence.joinpath("nodeids.txt").read_text().splitlines():
+              path, name = nodeid.split("::", 1)
+              expected.add((path.removesuffix(".py").replace("/", "."), name))
+          cases = list(ET.parse(evidence / "results.xml").getroot().iter("testcase"))
+          actual = [(c.get("classname"), c.get("name")) for c in cases]
+          bad = [key for key, case in zip(actual, cases)
+                 if any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))]
+          passed = len(cases) == 34 and set(actual) == expected and not bad
+          summary = {"selected": 34, "reported": len(cases), "all_passed": passed,
+                     "bad_cases": bad, "deployment_accepted": False}
+          evidence.joinpath("summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          if not passed:
+              raise SystemExit("Missing, failed, skipped, or xfailed sandbox contract")
+          PY
+
+      - name: Retain source-bound comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: upgrade-016-sandbox-${{ matrix.source }}-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/upgrade-016-sandbox/
+          retention-days: 7
+          if-no-files-found: error
