@@ -114,8 +114,9 @@ runs:
         venv="$RUNNER_TEMP/server-env"
         git worktree add --detach "$src" "$tag"
         uv venv --python 3.12 "$venv"
-        uv pip install --python "$venv/bin/python" \
-          -e "$src" -e "$src/sdks/python-client" -e "$src/sdks/ui"
+        # Preserve the old release lockfile, as in the compatibility smoke jobs.
+        UV_PROJECT_ENVIRONMENT="$venv" uv sync --project "$src" --locked \
+          --extra all --no-dev --python "$venv/bin/python"
         "$venv/bin/omnigent" --version
         echo "OMNIGENT_COMPAT_SERVER_PYTHON=$venv/bin/python" >> "$GITHUB_ENV"
         echo "OMNIGENT_COMPAT_SERVER_VERSION=${tag#v}" >> "$GITHUB_ENV"
@@ -137,8 +138,9 @@ runs:
         venv="$RUNNER_TEMP/runner-env"
         git worktree add --detach "$src" "$tag"
         uv venv --python 3.12 "$venv"
-        uv pip install --python "$venv/bin/python" \
-          -e "$src" -e "$src/sdks/python-client" -e "$src/sdks/ui"
+        # Preserve the old release lockfile, as in the compatibility smoke jobs.
+        UV_PROJECT_ENVIRONMENT="$venv" uv sync --project "$src" --locked \
+          --extra all --no-dev --python "$venv/bin/python"
         "$venv/bin/omnigent" --version
         echo "OMNIGENT_COMPAT_RUNNER_PYTHON=$venv/bin/python" >> "$GITHUB_ENV"
         echo "OMNIGENT_COMPAT_RUNNER_VERSION=${tag#v}" >> "$GITHUB_ENV"

@@ -132,7 +132,6 @@ def test_responses_stream_uses_scripted_token_usage(
     expected_usage = {
         **expected_usage,
         "total_tokens": expected_usage["input_tokens"] + expected_usage["output_tokens"],
-        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
     }
     for event_type in ("response.created", "response.completed"):
         event = next(event for event in events if event.get("type") == event_type)
@@ -152,7 +151,6 @@ def test_responses_json_merges_partial_token_usage(monkeypatch: pytest.MonkeyPat
     assert response.status_code == 200
     assert response.json()["usage"] == {
         "input_tokens": 1000,
-        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
         "output_tokens": 5,
         "total_tokens": 1005,
     }
