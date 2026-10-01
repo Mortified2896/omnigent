@@ -798,7 +798,7 @@ def test_codex_native_spawn_creates_child_session(
         child_id = str(child["id"])
         labels = child.get("labels", {})
         assert isinstance(labels, dict)
-        assert labels.get("omnigent.harnesses.codex_native.main.subagent_thread_id")
+        assert labels.get("omnigent.codex_native.subagent_thread_id")
         _poll_for_assistant_marker(
             http_client,
             session_id=child_id,

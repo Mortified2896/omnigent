@@ -2,11 +2,21 @@
 
 ## Actual stage
 
-This is an upgrade-preparation branch, not a deployable 0.16 build. Upstream
-has NOT yet been integrated into its application source. Main, O1 and O2 were
-not changed by this preparation. Do not merge/deploy this preparation alone
-and call the upgrade complete. This document is specific to this upgrade,
-not a new mandatory workflow for unrelated repository tasks.
+Upstream v0.16.0 application source has now been integrated using a normal
+merge that preserves both ancestries. The sections below retain the original
+preparation handoff; their initial checks are historical, not current acceptance.
+Backend reconciliation has exercised all 33,414 selected test identities.
+Latest results after focused fixes: 33,191 passed, 34 failed, 184 skipped and
+5 existing xfails; 15 Databricks-marked tests were deselected. All 34 unresolved
+failures require real Bubblewrap namespaces that RTX AppArmor currently denies.
+The full-suite attempt was interrupted by worker crashes; these counts combine
+its results, continuations of unexecuted tests and focused repair reruns, and
+must not be reported as an uninterrupted green suite. No new skips or xfails
+were added. A cold-import test now uses subprocesses instead of invalidating
+shared route modules; inherited thread diagnostics stop at inner-test teardown.
+Main, O1 and O2 remain unchanged. The owner has explicitly deferred snapshot acceptance,
+restoration rehearsal, artifact acceptance, main merge and deployment until the
+backend is clean and this branch is pushed. This is not an accepted release.
 
 Verified source references on 2026-10-01:
 

@@ -261,8 +261,12 @@ def test_append_v1_traces_idempotent() -> None:
         telemetry._append_v1_traces("http://collector:4318/v1/traces")
         == "http://collector:4318/v1/traces"
     )
-    assert telemetry._append_v1_traces("http://collector:4318/") == "http://collector:4318/v1/traces"
-    assert telemetry._append_v1_traces("http://collector:4318") == "http://collector:4318/v1/traces"
+    assert (
+        telemetry._append_v1_traces("http://collector:4318/") == "http://collector:4318/v1/traces"
+    )
+    assert (
+        telemetry._append_v1_traces("http://collector:4318") == "http://collector:4318/v1/traces"
+    )
     assert telemetry._append_v1_traces("") == ""
 
 
@@ -634,7 +638,8 @@ def test_short_lived_provider_force_flush(
 def test_otel_env_keys_have_pass_through_prefix() -> None:
     """
     The host (omnigent/host/connect.py) forwards environment variables
-    whose name starts with one of LC_, OTEL_, or OMNIGENT_OTEL_ to spawned runner subprocesses. This is the
+    whose name starts with one of LC_, OTEL_, or OMNIGENT_OTEL_ to spawned runner
+    subprocesses. This is the
     bridge that lets the runner/harness send spans through the same
     OTLP pipeline as the server -- when the prefix list excludes
     OTEL_/OMNIGENT_OTEL_, the runner inherits the master

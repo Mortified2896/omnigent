@@ -4,8 +4,7 @@
 
 import { nativeCodingAgentForHarness, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 
-const CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY =
-  "omnigent.harnesses.claude_native.main.permission_mode";
+const CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.claude_native.permission_mode";
 const CLAUDE_NATIVE_WRAPPER = nativeCodingAgentForHarness("claude-native")?.wrapperLabel;
 
 /** Whether a session runs the claude-native wrapper. Fails closed. */

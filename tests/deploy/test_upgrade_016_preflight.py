@@ -25,8 +25,7 @@ def database(path: Path, snapshot_type: str = "TEXT") -> Path:
         db.execute("CREATE TABLE preferences (value BLOB)")
         db.execute("CREATE TABLE users (preferences BLOB)")
         db.execute(
-            "CREATE TABLE omnigent_conversation_metadata "
-            f"(inference_snapshot {snapshot_type})"
+            f"CREATE TABLE omnigent_conversation_metadata (inference_snapshot {snapshot_type})"
         )
         for table in preflight.COUNT_TABLES:
             db.execute(f'CREATE TABLE "{table}" (payload TEXT)')
@@ -43,7 +42,7 @@ def migration(directory: Path, revision: str, parents: object) -> Path:
     directory.mkdir(exist_ok=True)
     path = directory / f"{revision}_test.py"
     path.write_text(
-        f'revision: str = {revision!r}\ndown_revision = {parents!r}\ndepends_on = None\n',
+        f"revision: str = {revision!r}\ndown_revision = {parents!r}\ndepends_on = None\n",
         encoding="utf-8",
     )
     return path

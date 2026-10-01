@@ -42,6 +42,7 @@ const TASK_WIRE = {
   audio_voice_profile: "daily-brief",
   workspace: null,
   host_id: null,
+  execution_target: "connected_host",
   state: "active",
   last_run_at: null,
   last_run_conversation_id: null,

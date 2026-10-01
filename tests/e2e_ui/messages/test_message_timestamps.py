@@ -1,26 +1,26 @@
 """E2E: hover-revealed timestamps on chat message bubbles.
 
 Chat bubbles show their send/receive time next to the Copy/Fork controls.
-Earlier rows reveal on hover; the final message row stays partially visible.
+Earlier rows reveal on hover; the final message row stays fully visible.
 This drives the full browser → SPA → server stack: send a message, wait for
 the mock-LLM reply, and assert for both the user and the assistant bubble that
 
   - the timestamp rides inside the existing 24px action row (no new row),
   - it matches a locale time format (``h:MM AM`` style),
   - the earlier user row is transparent at rest, while the final assistant
-    row rests at 70% opacity; both reach full opacity on hover,
+    row rests at full opacity,
   - the ordering matches the design target (user: timestamp → Copy at the
     right edge; assistant: Copy/Fork → timestamp at the left edge),
   - the stamp survives a full page reload (server-stamped path, not a
     re-stamped render time),
-  - on a touch-sized viewport user actions rest at 40% and assistant actions
-    at 70% opacity, so they stay discoverable without a hover affordance.
+  - on a touch-sized viewport the row rests at 40% opacity so the actions
+    stay discoverable without a hover affordance.
 
 Selectors:
   - bubbles: ``data-testid="message-bubble"`` + ``data-role="user|assistant"``
   - timestamp: ``data-testid="message-timestamp"`` inside the action row
-  - action row: the timestamp's parent div (``opacity-0``/``opacity-70`` base
-    with ``md:group-hover:opacity-100`` reveal)
+  - action row: the timestamp's parent div (hover-revealed on earlier rows;
+    ``opacity-100`` on the final assistant row)
 """
 
 from __future__ import annotations
@@ -88,20 +88,6 @@ def _opacity(locator: Locator) -> str:
     return locator.evaluate("el => getComputedStyle(el).opacity")
 
 
-def _wait_opacity(locator: Locator, value: str, timeout_s: float = 5.0) -> None:
-    """Poll the computed opacity until it reaches ``value``.
-
-    ``expect.poll`` is not available in the pinned Playwright, and the
-    hover reveal is a CSS transition (no DOM event to await), so poll.
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if _opacity(locator) == value:
-            return
-        time.sleep(0.05)
-    raise AssertionError(f"opacity never became {value!r} within {timeout_s}s")
-
-
 def test_hover_reveals_timestamp_on_user_and_assistant_bubbles(
     page: Page,
     seeded_session: tuple[str, str],
@@ -122,15 +108,15 @@ def test_hover_reveals_timestamp_on_user_and_assistant_bubbles(
 
     # At rest on a desktop viewport the row is fully transparent — the
     # timestamp must not permanently occupy visual space.
-    assert _opacity(user_row) == "0"
+    expect(user_row).to_have_css("opacity", "0")
     # The row exists at the design's 24px height even while hidden.
     assert round(user_row.bounding_box()["height"]) == 24
 
     user_bubble.hover()
-    _wait_opacity(user_row, "1")
+    expect(user_row).to_have_css("opacity", "1")
 
     # Design order: timestamp → Copy at the bubble's right edge.
-    copy_button = user_bubble.get_by_role("button", name="Copy")
+    copy_button = user_bubble.get_by_role("button", name="Copy", exact=True)
     assert user_ts.bounding_box()["x"] < copy_button.bounding_box()["x"]
 
     # --- assistant bubble ---
@@ -142,29 +128,21 @@ def test_hover_reveals_timestamp_on_user_and_assistant_bubbles(
     expect(assistant_ts).to_have_text(_TIME_RE)
     assistant_row = _action_row(assistant_ts)
 
-    # The assistant response is the final message, so its actions remain
-    # partially visible without hover.
-    _wait_opacity(assistant_row, "0.7")
-    # Feedback controls can wrap beside Copy/Fork. The timestamp
-    # remains in the same action row and keeps its compact line height.
+    # The assistant response is the final message, so its actions use their
+    # fully visible hover color at rest.
+    expect(assistant_row).to_have_css("opacity", "1")
     assert round(assistant_ts.bounding_box()["height"]) == 16
 
     assistant_bubble.hover()
-    _wait_opacity(assistant_row, "1")
+    expect(assistant_row).to_have_css("opacity", "1")
 
     # Design order: Copy/Fork → timestamp at the bubble's left edge.
-    assistant_copy = assistant_bubble.get_by_role("button", name="Copy")
-    # The feedback controls can wrap the timestamp to the next line. Its DOM
-    # order still follows Copy/Fork, and same-line rendering remains left-to-right.
+    assistant_copy = assistant_bubble.get_by_role("button", name="Copy", exact=True)
     assert assistant_copy.evaluate(
         "(copy, stamp) => !!(copy.compareDocumentPosition(stamp) & "
         "Node.DOCUMENT_POSITION_FOLLOWING)",
         assistant_ts.element_handle(),
     )
-    copy_box = assistant_copy.bounding_box()
-    stamp_box = assistant_ts.bounding_box()
-    if abs(copy_box["y"] - stamp_box["y"]) <= 4:
-        assert copy_box["x"] < stamp_box["x"]
 
     # --- persistence: reload must show the same server-stamped values ---
     user_stamp = user_ts.inner_text()
@@ -302,11 +280,11 @@ def test_touch_viewport_keeps_timestamp_row_discoverable(
         expect(user_ts).to_have_text(_TIME_RE)
 
         # No hover performed: the row must still be partially visible.
-        _wait_opacity(_action_row(user_ts), "0.4")
+        assert _opacity(_action_row(user_ts)) == "0.4"
 
         assistant_ts = assistant_bubble.locator(_TIMESTAMP)
         expect(assistant_ts).to_have_count(1)
         expect(assistant_ts).to_have_text(_TIME_RE)
-        _wait_opacity(_action_row(assistant_ts), "0.7")
+        expect(_action_row(assistant_ts)).to_have_css("opacity", "0.4")
     finally:
         ctx.close()

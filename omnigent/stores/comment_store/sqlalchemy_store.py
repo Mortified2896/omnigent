@@ -14,6 +14,7 @@ from omnigent.db.utils import (
     get_or_create_engine,
     make_named_managed_session_maker,
     now_epoch_us,
+    run_write_transaction,
 )
 from omnigent.entities import Comment, CommentsFingerprint
 from omnigent.stores.comment_store import CommentStore
@@ -75,6 +76,11 @@ class SqlAlchemyCommentStore(CommentStore):
             self._engine,
             query_name_prefix="omnigent.comment_store",
         )
+        self._session_immediate = make_named_managed_session_maker(
+            self._engine,
+            query_name_prefix="omnigent.comment_store",
+            immediate=True,
+        )
 
     @property
     def supports_conditional_session_delete(self) -> bool:
@@ -126,23 +132,27 @@ class SqlAlchemyCommentStore(CommentStore):
         # display) describe the same instant — the invariant the migration
         # backfill (created_at * 1e6) and docs rely on.
         created_us = now_epoch_us()
-        row = SqlComment(
-            id=uuid.uuid4().hex,
-            conversation_id=conversation_id,
-            path=path,
-            start_index=start_index,
-            end_index=end_index,
-            body=body,
-            status=encode_comment_status("draft"),
-            created_at=created_us // 1_000_000,
-            updated_at=created_us,
-            anchor_content=anchor_content,
-            created_by=created_by,
-        )
-        with self._session("insert_comment") as session:
+        comment_id = uuid.uuid4().hex
+
+        def write(session: Session) -> Comment:
+            row = SqlComment(
+                id=comment_id,
+                conversation_id=conversation_id,
+                path=path,
+                start_index=start_index,
+                end_index=end_index,
+                body=body,
+                status=encode_comment_status("draft"),
+                created_at=created_us // 1_000_000,
+                updated_at=created_us,
+                anchor_content=anchor_content,
+                created_by=created_by,
+            )
             self._lock_conversation(session, conversation_id)
             session.add(row)
             return _to_entity(row)
+
+        return run_write_transaction(self._session_immediate, "insert_comment", write)
 
     def list_for_conversation(
         self,
@@ -172,7 +182,9 @@ class SqlAlchemyCommentStore(CommentStore):
         body: str | None = None,
     ) -> Comment | None:
         """Update a comment's fields, scoped to a conversation. See base class for contract."""
-        with self._session("update_comment") as session:
+        updated_at = now_epoch_us() if status is not None or body is not None else None
+
+        def write(session: Session) -> Comment | None:
             self._lock_conversation(session, conversation_id)
             row = session.get(SqlComment, (current_workspace_id(), conversation_id, comment_id))
             if row is None:
@@ -181,13 +193,16 @@ class SqlAlchemyCommentStore(CommentStore):
                 row.status = encode_comment_status(status)
             if body is not None:
                 row.body = body
-            if status is not None or body is not None:
-                row.updated_at = max(now_epoch_us(), row.updated_at + 1)
+            if updated_at is not None:
+                row.updated_at = max(updated_at, row.updated_at + 1)
             return _to_entity(row)
+
+        return run_write_transaction(self._session_immediate, "update_comment", write)
 
     def delete(self, comment_id: str, conversation_id: str) -> Comment | None:
         """Delete a single comment by id, scoped to a conversation. See base class for contract."""
-        with self._session("delete_comment") as session:
+
+        def write(session: Session) -> Comment | None:
             self._lock_conversation(session, conversation_id)
             row = session.get(SqlComment, (current_workspace_id(), conversation_id, comment_id))
             if row is None:
@@ -195,6 +210,8 @@ class SqlAlchemyCommentStore(CommentStore):
             entity = _to_entity(row)
             session.delete(row)
             return entity
+
+        return run_write_transaction(self._session_immediate, "delete_comment", write)
 
     def get_comments_fingerprints(
         self, conversation_ids: list[str]
@@ -226,5 +243,8 @@ class SqlAlchemyCommentStore(CommentStore):
             SqlComment.workspace_id == current_workspace_id(),
             SqlComment.conversation_id == conversation_id,
         )
-        with self._session("delete_conversation_comments") as session:
+
+        def write(session: Session) -> None:
             session.execute(stmt)
+
+        run_write_transaction(self._session_immediate, "delete_conversation_comments", write)

@@ -9,6 +9,7 @@ falls back to the PTY watcher when the file never appears or vanishes.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -43,6 +44,7 @@ def _write_session_file(
     """
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{pid}.json"
+    previous_mtime = path.stat().st_mtime_ns if path.exists() else None
     path.write_text(
         json.dumps(
             {
@@ -58,6 +60,9 @@ def _write_session_file(
         ),
         encoding="utf-8",
     )
+    if previous_mtime is not None:
+        changed_ns = previous_mtime + 1_000_000_000
+        os.utime(path, ns=(changed_ns, changed_ns))
     return path
 
 

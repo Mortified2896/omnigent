@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 
 from omnigent.inner import codex_harness
+from omnigent.inner.model_signer import SignerLaunchConfig
 from omnigent.runtime.harnesses import _HARNESS_MODULES
 
 
@@ -143,42 +144,106 @@ def test_executor_factory_reads_env_vars(
     assert os_env_value.sandbox.type == "none"
 
 
-def test_executor_factory_resolves_server_selected_access_lane(
+def test_executor_factory_builds_registered_ucode_signer_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Advisor lane metadata selects the matching Codex provider config.
-
-    The lane is deliberately resolved in the harness, after the runner has
-    created the subprocess, so a direct GLM assignment cannot be rerouted by
-    the host's ordinary ChatGPT provider settings.
-    """
-    monkeypatch.setenv("HARNESS_CODEX_ACCESS_LANE", "glm-direct")
-    monkeypatch.setenv("HARNESS_CODEX_MODEL", "glm-5.3")
-    launch = SimpleNamespace(
-        model="glm-5.3",
-        profile=None,
-        config_overrides=['model_provider="omnigent_provider"'],
-        credential_env={"ZAI_API_KEY": "fixture-zai-key"},
+    """The production harness converts trusted workflow inputs into typed authority."""
+    endpoint = "https://example.databricks.com/ai-gateway/codex/v1"
+    monkeypatch.setenv("HARNESS_CODEX_MODEL", "databricks-gpt-5")
+    monkeypatch.setenv("HARNESS_CODEX_SIGNER_PROVIDER", "databricks-ucode-v1")
+    monkeypatch.setenv("HARNESS_CODEX_SIGNER_ENDPOINT", endpoint)
+    monkeypatch.setenv("HARNESS_CODEX_GATEWAY_HOST", "https://example.databricks.com")
+    monkeypatch.setenv("HARNESS_CODEX_DATABRICKS_PROFILE", "test-profile")
+    monkeypatch.setenv(
+        "HARNESS_CODEX_MODEL_EGRESS",
+        '["POST example.databricks.com/ai-gateway/codex/v1/responses"]',
+    )
+    monkeypatch.setenv(
+        "HARNESS_CODEX_OS_ENV",
+        '{"type":"caller_process","sandbox":{"type":"linux_bwrap"}}',
     )
     captured: dict[str, Any] = {}
 
     def _fake_init(self: Any, **kwargs: Any) -> None:
         captured.update(kwargs)
 
-    with (
-        patch(
-            "omnigent.harnesses.codex_native.app_server.resolve_native_codex_launch",
-            return_value=launch,
-        ),
-        patch("omnigent.inner.codex_harness.CodexExecutor.__init__", _fake_init),
-    ):
+    with patch("omnigent.inner.codex_harness.CodexExecutor.__init__", _fake_init):
         codex_harness._build_codex_executor()
 
-    assert captured["model"] == "glm-5.3"
+    signer = captured["signer_launch_config"]
+    assert isinstance(signer, SignerLaunchConfig)
+    assert signer.binding_id == "databricks-ucode-v1"
+    assert signer.endpoint == endpoint
+    assert signer.auth_profile == "test-profile"
+    assert signer.routes[0].path == "/ai-gateway/codex/v1/responses"
     assert captured["gateway"] is False
-    assert captured["model_provider_override"] is None
-    assert captured["extra_config_overrides"] == launch.config_overrides
-    assert captured["credential_env"] == launch.credential_env
+    assert captured["gateway_auth_command"] is None
+    assert captured["base_url_override"] is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "match"),
+    [
+        ("HARNESS_CODEX_MODEL_EGRESS", "", "model egress"),
+        ("HARNESS_CODEX_SIGNER_PROVIDER", "bedrock", "unsupported"),
+        (
+            "HARNESS_CODEX_GATEWAY_AUTH_COMMAND",
+            "sh -c 'steal-token'",
+            "legacy gateway auth command",
+        ),
+    ],
+)
+def test_executor_factory_fails_closed_for_invalid_signer_inputs(
+    name: str,
+    value: str,
+    match: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint = "https://example.databricks.com/ai-gateway/codex/v1"
+    monkeypatch.setenv("HARNESS_CODEX_MODEL", "databricks-gpt-5")
+    monkeypatch.setenv("HARNESS_CODEX_SIGNER_PROVIDER", "databricks-ucode-v1")
+    monkeypatch.setenv("HARNESS_CODEX_SIGNER_ENDPOINT", endpoint)
+    monkeypatch.setenv("HARNESS_CODEX_GATEWAY_HOST", "https://example.databricks.com")
+    monkeypatch.setenv("HARNESS_CODEX_DATABRICKS_PROFILE", "test-profile")
+    monkeypatch.setenv(
+        "HARNESS_CODEX_MODEL_EGRESS",
+        '["POST example.databricks.com/ai-gateway/codex/v1/responses"]',
+    )
+    monkeypatch.setenv(
+        "HARNESS_CODEX_OS_ENV",
+        '{"type":"caller_process","sandbox":{"type":"linux_bwrap"}}',
+    )
+    if value:
+        monkeypatch.setenv(name, value)
+    else:
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises((OSError, ValueError), match=match):
+        codex_harness._build_codex_executor()
+
+
+def test_executor_factory_rejects_arbitrary_ucode_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HARNESS_CODEX_MODEL", "databricks-gpt-5")
+    monkeypatch.setenv("HARNESS_CODEX_SIGNER_PROVIDER", "databricks-ucode-v1")
+    monkeypatch.setenv(
+        "HARNESS_CODEX_SIGNER_ENDPOINT",
+        "https://evil.example/ai-gateway/codex/v1",
+    )
+    monkeypatch.setenv("HARNESS_CODEX_GATEWAY_HOST", "https://example.databricks.com")
+    monkeypatch.setenv("HARNESS_CODEX_DATABRICKS_PROFILE", "test-profile")
+    monkeypatch.setenv(
+        "HARNESS_CODEX_MODEL_EGRESS",
+        '["POST evil.example/ai-gateway/codex/v1/responses"]',
+    )
+    monkeypatch.setenv(
+        "HARNESS_CODEX_OS_ENV",
+        '{"type":"caller_process","sandbox":{"type":"linux_bwrap"}}',
+    )
+
+    with pytest.raises(ValueError, match="registered Databricks ucode endpoint"):
+        codex_harness._build_codex_executor()
 
 
 def test_executor_factory_cwd_falls_back_to_runner_workspace(
@@ -568,3 +633,41 @@ def test_bundle_dir_unset_passes_none(
 
     assert captured["bundle_dir"] is None
     assert captured["agent_name"] is None
+
+
+def test_executor_factory_resolves_server_selected_access_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Advisor lane metadata selects the matching Codex provider config.
+
+    The lane is deliberately resolved in the harness, after the runner has
+    created the subprocess, so a direct GLM assignment cannot be rerouted by
+    the host's ordinary ChatGPT provider settings.
+    """
+    monkeypatch.setenv("HARNESS_CODEX_ACCESS_LANE", "glm-direct")
+    monkeypatch.setenv("HARNESS_CODEX_MODEL", "glm-5.3")
+    launch = SimpleNamespace(
+        model="glm-5.3",
+        profile=None,
+        config_overrides=['model_provider="omnigent_provider"'],
+        credential_env={"ZAI_API_KEY": "fixture-zai-key"},
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_init(self: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch(
+            "omnigent.harnesses.codex_native.app_server.resolve_native_codex_launch",
+            return_value=launch,
+        ),
+        patch("omnigent.inner.codex_harness.CodexExecutor.__init__", _fake_init),
+    ):
+        codex_harness._build_codex_executor()
+
+    assert captured["model"] == "glm-5.3"
+    assert captured["gateway"] is False
+    assert captured["model_provider_override"] is None
+    assert captured["extra_config_overrides"] == launch.config_overrides
+    assert captured["credential_env"] == launch.credential_env

@@ -41,7 +41,7 @@ def idle_sessions(base: str) -> dict[str, Any]:
     rows = []
     after = ""
     for _ in range(100):
-        page = request(base, "/v1/sessions?limit=200&include_archived=true" + after)
+        page = request(base, "/v1/sessions?visibility=all&limit=200&include_archived=true" + after)
         data = page.get("data")
         if not isinstance(data, list) or not isinstance(page.get("has_more"), bool):
             raise MaintenanceError("sessions.incomplete_inventory")

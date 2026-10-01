@@ -8,12 +8,12 @@ describe("Codex collaboration mode provenance", () => {
     expect(
       codexPlanModeFromLabels({
         ...legacy,
-        "omnigent.harnesses.codex_native.main.collaboration_mode": null,
+        "omnigent.codex_native.collaboration_mode": null,
       }),
     ).toBe(false);
     expect(
       codexPlanModeFromLabels({
-        "omnigent.harnesses.codex_native.main.collaboration_mode": "plan",
+        "omnigent.codex_native.collaboration_mode": "plan",
       }),
     ).toBe(true);
   });

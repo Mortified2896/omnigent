@@ -82,8 +82,7 @@ def snapshot_size(value: str | bytes | memoryview) -> int:
 def _columns(db: sqlite3.Connection, table: str) -> dict[str, str]:
     # Identifiers here and in audit_database come only from fixed source constants.
     return {
-        str(row[1]): str(row[2]).upper()
-        for row in db.execute(f'PRAGMA table_info("{table}")')
+        str(row[1]): str(row[2]).upper() for row in db.execute(f'PRAGMA table_info("{table}")')
     }
 
 
@@ -98,7 +97,9 @@ def audit_database(path: Path) -> dict[str, Any]:
         db.execute("BEGIN")
         if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
             raise AuditError("SQLite integrity check failed")
-        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {
+            row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         if "alembic_version" not in tables:
             raise AuditError("database has no Alembic revision evidence")
         revisions = [str(row[0]) for row in db.execute("SELECT version_num FROM alembic_version")]
@@ -124,7 +125,10 @@ def audit_database(path: Path) -> dict[str, Any]:
                 result["size_checks"][key] = {"present": False}
                 continue
             scan: dict[str, Any] = {
-                "present": True, "non_null": 0, "oversized": 0, "unreadable": 0
+                "present": True,
+                "non_null": 0,
+                "oversized": 0,
+                "unreadable": 0,
             }
             # A completed snapshot conversion already stores framed bytes. Do not
             # recompress those: ll1a2b3c4d5e skips an already-binary column.
@@ -196,11 +200,7 @@ def _parents(value: Any) -> tuple[str, ...]:
         return ()
     if isinstance(value, str) and value:
         return (value,)
-    if (
-        isinstance(value, (list, tuple))
-        and value
-        and all(isinstance(v, str) and v for v in value)
-    ):
+    if isinstance(value, (list, tuple)) and value and all(isinstance(v, str) and v for v in value):
         if len(set(value)) == len(value):
             return tuple(value)
     raise AuditError("invalid migration parents")
@@ -250,7 +250,9 @@ def audit_migrations(directory: Path, reference: Path | None = None) -> dict[str
     if len(heads) != 1:
         blockers.append("join the fork and upstream heads with a NEW Alembic merge revision")
     if reference is None:
-        blockers.append("historical script preservation not checked: supply --reference-migrations")
+        blockers.append(
+            "historical script preservation not checked: supply --reference-migrations"
+        )
     else:
         for revision in CUSTOM_REVISIONS:
             originals = [path for path in reference.glob(f"{revision}_*.py") if path.is_file()]
@@ -287,15 +289,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             result["migrations"] = audit_migrations(args.migrations, args.reference_migrations)
     except (AuditError, OSError, sqlite3.Error, SyntaxError, ImportError) as exc:
         # Do not serialize database content or arbitrary exception text into logs.
-        print(json.dumps(
-            {
-                "deployment_accepted": False,
-                "error": type(exc).__name__,
-                "detail": (
-                    str(exc) if isinstance(exc, AuditError) else "audit could not be completed"
-                ),
-            }
-        ))
+        print(
+            json.dumps(
+                {
+                    "deployment_accepted": False,
+                    "error": type(exc).__name__,
+                    "detail": (
+                        str(exc) if isinstance(exc, AuditError) else "audit could not be completed"
+                    ),
+                }
+            )
+        )
         return 2
     checks = list(result["databases"].values())
     if "migrations" in result:

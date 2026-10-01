@@ -1,26 +1,56 @@
+import type * as SandboxModelOptionsModule from "@/hooks/useSandboxModelOptions";
+
+vi.mock("@/hooks/useSandboxModelOptions", async (importOriginal) => ({
+  ...(await importOriginal<typeof SandboxModelOptionsModule>()),
+  useSandboxModelOptions: vi.fn(() => ({
+    data: {
+      configured: false,
+      status: "unconfigured",
+      models: [],
+      configuration_revision: null,
+      provider_label: null,
+      default_model: null,
+    },
+    isLoading: false,
+    error: null,
+  })),
+}));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useConversations as useTestConversations } from "@/hooks/useConversations";
+
+vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTestConversations() }));
+
+vi.mock("@/hooks/useSkills", () => ({
+  useSkills: ({ target, enabled }: { target: { agentId?: string } | null; enabled?: boolean }) => ({
+    skills:
+      useAvailableAgents().data?.find((candidate) => candidate.id === target?.agentId)?.skills ??
+      [],
+    skillsStatus: enabled === false || target === null ? "unavailable" : "ready",
+    refetch: vi.fn(),
+  }),
+}));
 import type * as UseConversationsModule from "@/hooks/useConversations";
+import type * as HostWorktreesModule from "@/hooks/useHostWorktrees";
 import type * as AgentLabelsModule from "@/lib/agentLabels";
 import type { SessionListWireItem } from "@/lib/sessionListCache";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticatedFetch } from "@/lib/identity";
+import { composerContextToLabels } from "@/lib/composerContextAdapters";
+import { clearOptimisticTitles, getOptimisticTitle } from "@/lib/optimisticTitles";
+import { clearSessionDrafts, setSessionDraft } from "@/lib/sessionDrafts";
 import type { Host } from "@/hooks/useHosts";
 import { useHostModelOptions, useHosts } from "@/hooks/useHosts";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
-import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
-import type { ServerInfo } from "@/lib/capabilities";
-import {
-  routingDraftForProposal,
-  writeO3RoutingDraft,
-  type O3RoutingProposal,
-} from "@/lib/o3RoutingReview";
 import { NewChatLandingScreen, resetLandingDraft, sanitizeInitialPrompt } from "./NewChatDialog";
 import { writeDefaultBaseBranch } from "@/lib/baseBranchPreferences";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
+import type { ServerInfo } from "@/lib/capabilities";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 // The landing screen drives the real Web-start flow end to end: the host and
 // first agent auto-select, the working directory seeds from the host's most-
@@ -33,6 +63,12 @@ import { writeDefaultBaseBranch } from "@/lib/baseBranchPreferences";
 // layers are stubbed so the test isolates that wiring.
 const navigateMock = vi.fn();
 const setPendingInitialPromptMock = vi.fn();
+const beginLocalConversationMock = vi.fn();
+const hasPendingLocalMessageMock = vi.fn();
+const hydrateLocalConversationMock = vi.fn();
+const removeLocalConversationMock = vi.fn();
+let searchParams = new URLSearchParams();
+let projects: { id: string | null; name: string }[] = [];
 
 const RECENT_KEY = "omnigent:recent-workspaces";
 // Prompt history is scoped per conversation; the landing composer writes under
@@ -48,14 +84,16 @@ const SEEDED_WORKSPACE = "/Users/corey/universe/src/foo";
 // flow's navigate() lands on our spy regardless of router/provider setup.
 vi.mock("@/lib/routing", () => ({
   useNavigate: () => navigateMock,
-  // The landing screen reads `?project=` to pre-fill the project chip; this
-  // flow suite never sets one, so an empty params object is enough.
-  useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  useSearchParams: () => [searchParams, vi.fn()],
 }));
 
 // The screen hands the first message to ChatPage through the chatStore
 // (keyed by conversation id), not router state — assert on that call.
 vi.mock("@/store/chatStore", () => ({
+  beginLocalConversation: (...args: unknown[]) => beginLocalConversationMock(...args),
+  hasPendingLocalMessage: (...args: unknown[]) => hasPendingLocalMessageMock(...args),
+  hydrateLocalConversation: (...args: unknown[]) => hydrateLocalConversationMock(...args),
+  removeLocalConversation: (...args: unknown[]) => removeLocalConversationMock(...args),
   setPendingInitialPrompt: (...args: unknown[]) => setPendingInitialPromptMock(...args),
 }));
 
@@ -80,7 +118,11 @@ vi.mock("@/lib/sessionUpdatesSocket", () => ({
   },
 }));
 
-vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
+vi.mock("@/lib/identity", () => ({
+  authenticatedFetch: vi.fn(),
+  getCurrentUserId: vi.fn(() => null),
+  resolveIdentity: vi.fn(async () => null),
+}));
 vi.mock("@/hooks/useHosts", () => ({
   useHosts: vi.fn(),
   useHostModelOptions: vi.fn(() => ({
@@ -105,8 +147,38 @@ vi.mock("@/hooks/useHostFilesystem", () => ({
   // an idle mutation keeps it inert for these tests.
   useCreateHostDirectory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
-vi.mock("@/hooks/useHostWorktrees", () => ({
-  useHostWorktrees: () => ({ data: undefined }),
+vi.mock("@/hooks/useHostWorktrees", async (importOriginal) => ({
+  ...(await importOriginal<typeof HostWorktreesModule>()),
+  useHostWorktrees: (_hostId: string | null, path: string | null) => ({
+    data:
+      path === "/Users/corey/universe/src/foo"
+        ? [
+            {
+              path,
+              branch: "main",
+              is_main: true,
+              detached: false,
+            },
+          ]
+        : path === null
+          ? undefined
+          : [],
+    isPlaceholderData: false,
+  }),
+  hostWorktreesQueryOptions: (hostId: string, repoPath: string) => ({
+    queryKey: ["host-worktrees", hostId, repoPath],
+    queryFn: async () =>
+      repoPath === "/Users/corey/universe/src/foo"
+        ? [
+            {
+              path: repoPath,
+              branch: "main",
+              is_main: true,
+              detached: false,
+            },
+          ]
+        : [],
+  }),
 }));
 // No other sessions in scope — keep the conflict hooks inert so they don't
 // issue their own /health fetch or surface a warning. The warning is covered
@@ -117,12 +189,13 @@ vi.mock("@/hooks/useDirectorySessions", () => ({
 vi.mock("@/hooks/RunnerHealthProvider", () => ({
   useRunnerHealthRegistration: () => new Map<string, boolean>(),
 }));
-// The composer's project chip lists projects via useProjects; stub it to an
-// empty list so it doesn't fire its own authenticatedFetch (which would land
-// at mock.calls[0] and skew these create-POST call assertions).
 vi.mock("@/hooks/useConversations", async (importOriginal) => ({
   ...(await importOriginal<typeof UseConversationsModule>()),
-  useProjects: () => ({ data: [] }),
+  useProjects: () => ({ data: projects }),
+  useProjectConfig: () => ({ data: null, isLoading: false }),
+  // Same reason as useProjects above: the landing reads useConversations for
+  // hasNoSessions, so stub it to avoid an authenticatedFetch skewing calls[0].
+  useConversations: () => ({ data: undefined }),
 }));
 // Dynamic harness-label fetching is covered separately. Keep it synchronous
 // here so exact create-POST call-count assertions only observe the POST.
@@ -152,177 +225,23 @@ function host(overrides: Partial<Host> = {}): Host {
 }
 
 function agent(overrides: Partial<AvailableAgent> = {}): AvailableAgent {
+  const name = overrides.name ?? "hello_world";
+  const harnessByName: Record<string, string> = {
+    "antigravity-native-ui": "antigravity-native",
+    "claude-native-ui": "claude-native",
+    "codex-native-ui": "codex-native",
+    "cursor-native-ui": "cursor-native",
+    "opencode-native-ui": "opencode-native",
+  };
   return {
     id: "ag_hello",
-    name: "hello_world",
+    name,
     display_name: "Hello World",
     description: null,
-    harness: null,
+    harness: harnessByName[name] ?? "claude-sdk",
     skills: [],
     ...overrides,
   };
-}
-
-const O3_SERVER_INFO: ServerInfo = {
-  enabled_connections: [],
-  features: {},
-  accounts_enabled: false,
-  single_user: true,
-  login_url: null,
-  needs_setup: false,
-  databricks_features: false,
-  managed_sandboxes_enabled: false,
-  sandbox_provider: null,
-  sharing_mode: "on",
-  public_sharing_enabled: true,
-  server_version: "test",
-  smart_routing_enabled: false,
-  smart_routing_sources: { external: false, oss: false },
-  o3_routing_review_enabled: true,
-  harness_install_enabled: false,
-  installable_harnesses: [],
-  dictation_available: false,
-};
-
-function o3Proposal(decision: O3RoutingProposal["decision"] = null): O3RoutingProposal {
-  const routeCreated = decision === "approve" || decision === "run_anyway";
-  return {
-    schema_version: 2,
-    proposal_id: "01234567-89ab-cdef-0123-456789abcdef",
-    created_at: "2026-09-04T00:00:00Z",
-    updated_at: "2026-09-04T00:00:00Z",
-    expires_at: "2026-09-04T01:00:00Z",
-    prompt_fingerprint: `sha256:${"0".repeat(64)}`,
-    workspace_summary: `Workspace: ${SEEDED_WORKSPACE}`,
-    adviser: {
-      task_summary: "Inspect the repository",
-      task_classification: "systems",
-      difficulty: "normal",
-      risk: "low",
-      requirements: {
-        terminal: true,
-        tools: true,
-        minimum_context_tokens: 0,
-        vision: false,
-      },
-      benchmark_requirements: [
-        {
-          benchmark_id: "terminal-bench",
-          version: "4.0.0",
-          slice_id: "tb4.cr-systems-db-v1",
-          reason: "Terminal competence",
-        },
-      ],
-      proposed_reasoning_effort: "low",
-      evidence_policy: "strict",
-      disposition: "route",
-      confidence: 0.9,
-      rationale: "A qualified terminal route is available.",
-      decomposition: [],
-    },
-    approved_constraints: {
-      benchmark: {
-        benchmark_id: "terminal-bench",
-        version: "4.0.0",
-        slice_id: "tb4.cr-systems-db-v1",
-        minimum_score: 0.5,
-        reason: "Terminal competence",
-        difficulty: "normal",
-        calibration_version: "o3-benchmark-difficulty-calibration-v1",
-      },
-      difficulty: "normal",
-      calibration_version: "o3-benchmark-difficulty-calibration-v1",
-      reasoning_effort: "low",
-      risk: "low",
-      evidence_policy: "strict",
-      cost_quota_preference: "preserve_subscription",
-    },
-    evaluations: [
-      {
-        candidate: {
-          candidate_id: "codex-gpt-5.5-low",
-          provider_id: "codex",
-          model: "gpt-5.5",
-          catalogue_model_id: "codex/gpt-5.5",
-          harness: "codex-native",
-          supported_reasoning_efforts: ["low"],
-          context_tokens: 128_000,
-          terminal: true,
-          tools: true,
-          vision: false,
-          responses_api: true,
-          monetary_cost_usd: null,
-          cost_source: "ChatGPT subscription",
-          quota_source: "Codex quota",
-          last_full_probe_at: "2026-09-03T00:00:00+08:00",
-          probe_reference: "live probe",
-          provider_usable: true,
-          model_present: true,
-          quota_available: true,
-          quota_remaining_percent: 80,
-          quota_reset_at: null,
-          recent_success_rate: 0.99,
-          recent_retry_rate: 0.01,
-          latency_ms: 100,
-        },
-        status: "pass",
-        evidence_class: "exact",
-        admission_score: 0.61,
-        evidence: [],
-        exclusions: [],
-        caveats: [],
-        ranking: {
-          evidence_confidence: 0.9,
-          competence_margin: 0.11,
-          health: 0.99,
-          estimated_monetary_cost_usd: null,
-          quota_remaining_percent: 80,
-          quota_reset_at: null,
-          quota_scarcity_penalty: 0.15,
-          recent_failure_rate: 0.01,
-          recent_retry_rate: 0.01,
-          latency_ms: 100,
-          deterministic_score: 0.9,
-        },
-      },
-    ],
-    frontier: {
-      requested_minimum: 0.5,
-      global_measured_frontier: 0.61,
-      accessible_configured_frontier: 0.61,
-      healthy_available_frontier: 0.61,
-      passing_exact_candidates: ["codex-gpt-5.5-low"],
-      provisional_candidates: [],
-      capability_gap: null,
-    },
-    disposition: "route",
-    decision,
-    decision_reason: null,
-    derived_combo_name: routeCreated ? "custom/o3-route-0123456789ab" : null,
-    derived_combo_definition: routeCreated ? { name: "custom/o3-route-0123456789ab" } : null,
-    session_id: null,
-    actual_provider: null,
-    actual_model: null,
-    actual_reasoning_effort: null,
-    execution_provenance: [],
-    execution_status: null,
-    provenance_synced_at: null,
-    task_outcome: null,
-    terminal_disposition: null,
-  };
-}
-
-function jsonResponse(body: unknown): Response {
-  return { ok: true, status: 200, statusText: "OK", json: async () => body } as Response;
-}
-
-function errorResponse(message: string): Response {
-  return {
-    ok: false,
-    status: 503,
-    statusText: "Unavailable",
-    json: async () => ({ error: { message } }),
-  } as Response;
 }
 
 function setHosts(hosts: Host[]): void {
@@ -335,7 +254,10 @@ function setAgents(agents: AvailableAgent[]): void {
   >);
 }
 
-function renderLanding(cachedSessionIds: string[] = [], info?: ServerInfo): void {
+function renderLanding(
+  cachedSessionIds: string[] = [],
+  infoOverrides: Partial<ServerInfo> = {},
+): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -355,10 +277,32 @@ function renderLanding(cachedSessionIds: string[] = [], info?: ServerInfo): void
       pageParams: [undefined],
     });
   }
+  const info = {
+    accounts_enabled: false,
+    single_user: false,
+    login_url: null,
+    needs_setup: false,
+    databricks_features: false,
+    managed_sandboxes_enabled: false,
+    sandbox_provider: null,
+    enabled_connections: [],
+    sharing_mode: "on",
+    public_sharing_enabled: true,
+    server_version: null,
+    smart_routing_enabled: false,
+    smart_routing_sources: { external: false, oss: false },
+    features: {},
+    harness_install_enabled: false,
+    installable_harnesses: [],
+    dictation_available: false,
+    ...infoOverrides,
+  } as ServerInfo;
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={client}>
-        {info ? <CapabilitiesProvider info={info}>{children}</CapabilitiesProvider> : children}
+        <CapabilitiesProvider info={info}>
+          <TooltipProvider>{children}</TooltipProvider>
+        </CapabilitiesProvider>
       </QueryClientProvider>
     );
   }
@@ -401,14 +345,31 @@ function selectAgent(agentId: string): void {
   fireEvent.click(screen.getByTestId(`new-chat-landing-agent-${agentId}`));
 }
 
-/**
- * Select <agentId> and open its run-config modal via the composer gear icon.
- * The knobs (model / effort / permission / approval / cursor mode / brain
- * harness) live in this modal, not the picker dropdown.
- */
+/** Select <agentId> and open its model and effort submenu. */
+function openAgentModels(agentId: string): void {
+  const picker = screen.getByTestId("new-chat-landing-agent-select");
+  fireEvent.pointerDown(picker, { button: 0 });
+  if (screen.queryByTestId(`new-chat-landing-agent-${agentId}`) == null) {
+    fireEvent.click(screen.getByTestId("new-chat-landing-harness-more"));
+  }
+  if (screen.queryByTestId(`new-chat-landing-agent-config-${agentId}`) == null) {
+    fireEvent.click(screen.getByTestId(`new-chat-landing-agent-${agentId}`));
+    fireEvent.pointerDown(picker, { button: 0 });
+    if (screen.queryByTestId(`new-chat-landing-agent-${agentId}`) == null) {
+      fireEvent.click(screen.getByTestId("new-chat-landing-harness-more"));
+    }
+  }
+  fireEvent.click(screen.getByTestId(`new-chat-landing-agent-config-${agentId}`));
+}
+
+/** Open a configurable agent's advanced brain-harness settings. */
 function openAgentConfig(agentId: string): void {
-  selectAgent(agentId);
-  fireEvent.click(screen.getByTestId("new-chat-landing-config-gear"));
+  openAgentModels(agentId);
+}
+
+function pickPermissionOption(value: string): void {
+  fireEvent.pointerDown(screen.getByTestId("new-chat-landing-permission-chip"), { button: 0 });
+  fireEvent.click(screen.getByTestId(`new-chat-landing-permission-option-${value}`));
 }
 
 /** Open a Radix Select trigger (opens on pointerdown in jsdom). */
@@ -423,21 +384,32 @@ function pickSelectOption(triggerTestId: string, label: string): void {
   fireEvent.click(screen.getByText(label));
 }
 
-/** Close the config modal by clicking Save (commits the draft). */
-function saveConfig(): void {
-  fireEvent.click(screen.getByTestId("new-chat-landing-config-save"));
+/** Close the inline config after its selection applies immediately. */
+function closeAgentConfig(): void {
+  fireEvent.keyDown(document, { key: "Escape" });
 }
 
 beforeEach(() => {
   navigateMock.mockReset();
   setPendingInitialPromptMock.mockReset();
+  beginLocalConversationMock.mockReset();
+  beginLocalConversationMock.mockReturnValue(null);
+  hasPendingLocalMessageMock.mockReset();
+  hasPendingLocalMessageMock.mockReturnValue(true);
+  hydrateLocalConversationMock.mockReset();
+  removeLocalConversationMock.mockReset();
+  removeLocalConversationMock.mockReturnValue(false);
   pushMatchers.length = 0;
   announcePushedSession = null;
   vi.mocked(authenticatedFetch).mockReset();
   // Clear the module-level landing draft so a base branch (or other field)
   // left behind by an unmounting test doesn't seed the next one.
   resetLandingDraft();
+  clearOptimisticTitles();
+  clearSessionDrafts();
   localStorage.clear();
+  searchParams = new URLSearchParams();
+  projects = [];
   vi.mocked(useHostModelOptions).mockReturnValue({
     data: [
       { id: "opus", displayName: "Opus" },
@@ -459,290 +431,48 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
-  it.each(["native", "free"])(
-    "holds an O3 task until approval, then launches the %s route once",
-    async (lane) => {
-      const pending = o3Proposal();
-      const approved = o3Proposal("approve");
-      if (lane === "free") {
-        const selection = {
-          mode: "hard_tool_free" as const,
-          route: "free/model",
-          provider: "free",
-          cost_class: "free",
-          capability_score_lower: 60,
-          reason: "Meets floor with zero tools",
-        };
-        pending.selected_execution = selection;
-        approved.selected_execution = selection;
-        approved.derived_combo_name = null;
-      }
-      vi.mocked(authenticatedFetch)
-        .mockResolvedValueOnce(
-          jsonResponse({
-            source_pool: "custom/o3-codex-pool",
-            slices: [
-              {
-                benchmark_id: "terminal-bench",
-                version: "4.0.0",
-                slice_id: "tb4.cr-systems-db-v1",
-                label: "Systems and databases",
-                interpretation: "Systems tasks",
-                task_ids: [],
-                task_manifest_digest: "sha256:test",
-                official: false,
-              },
-            ],
-          }),
-        )
-        .mockResolvedValueOnce(jsonResponse(pending))
-        .mockResolvedValueOnce(jsonResponse(approved))
-        .mockResolvedValueOnce(jsonResponse({ id: "conv_o3" }))
-        .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3" }));
-      setAgents([
-        agent({
-          id: "ag_codex",
-          name: "codex-native-ui",
-          display_name: "Codex",
-          harness: "codex-native",
-        }),
-        agent({
-          id: "ag_free",
-          name: "local-tool-free",
-          display_name: "Tool-free",
-          harness: "local-tool-free",
-        }),
-      ]);
-
-      renderLanding([], O3_SERVER_INFO);
-      await waitForWorkspaceSeed();
-      pickSelectOption("new-chat-landing-inline-model", "Benchmark Routing (O3)");
-      expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
-        "Benchmark Routing (O3)",
-      );
-      expect(screen.getByText(/Automatic — the estimator chooses/)).toBeTruthy();
-      expect(screen.queryByTestId("o3-estimator-slice")).toBeNull();
-      fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
-      expect(await screen.findByTestId("o3-estimator-slice")).toHaveValue("");
-      typeMessage("inspect the repo without changing it");
-      fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
-
-      await screen.findByTestId("o3-routing-proposal-card");
-      const callsBeforeApproval = vi.mocked(authenticatedFetch).mock.calls;
-      expect(callsBeforeApproval.some(([url]) => url === "/v1/sessions")).toBe(false);
-      expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
-      expect(navigateMock).not.toHaveBeenCalled();
-      const proposalCall = callsBeforeApproval.find(
-        ([url]) => url === "/v1/o3/routing-review/proposals",
-      );
-      expect(JSON.parse(proposalCall?.[1]?.body as string).prompt).toBe(
-        "inspect the repo without changing it",
-      );
-      expect(JSON.parse(proposalCall?.[1]?.body as string).estimator_policy).toBeUndefined();
-
-      fireEvent.click(screen.getByTestId("o3-approve"));
-
-      await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
-      const sessionCall = vi
-        .mocked(authenticatedFetch)
-        .mock.calls.find(([url]) => url === "/v1/sessions");
-      expect(sessionCall).toBeDefined();
-      const sessionBody = JSON.parse(sessionCall?.[1]?.body as string);
-      expect(sessionBody).toMatchObject({
-        agent_id: lane === "free" ? "ag_free" : "ag_codex",
-        harness_override: lane === "free" ? "local-tool-free" : "codex-native",
-        model_override:
-          lane === "free"
-            ? `local-tool-free/${pending.proposal_id}`
-            : "custom/o3-route-0123456789ab",
-        reasoning_effort: "low",
-        cost_control_mode_override: "off",
-        labels: {
-          ...(lane === "native" ? { "omnigent.access_lane": "omniroute" } : {}),
-          "o3.routing.proposal_id": pending.proposal_id,
-        },
-      });
-      if (lane === "free") {
-        expect(sessionBody.labels["omnigent.wrapper"]).toBeUndefined();
-        expect(sessionBody.labels["omnigent.ui"]).toBeUndefined();
-      }
-      expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_o3", {
-        text: "inspect the repo without changing it",
-        skill: null,
-        files: [],
-      });
-      const linkCall = vi
-        .mocked(authenticatedFetch)
-        .mock.calls.find(([url]) => String(url).endsWith("/session"));
-      expect(JSON.parse(linkCall?.[1]?.body as string)).toEqual({ session_id: "conv_o3" });
-      expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
-      expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3");
-    },
-  );
-
-  it("restores the unsent O3 prompt and proposal across a page reload", async () => {
-    const pending = o3Proposal();
-    writeO3RoutingDraft(
-      routingDraftForProposal(
-        pending,
-        "inspect the repo after reload",
-        "inspect the repo after reload",
-        `Workspace: ${SEEDED_WORKSPACE}`,
-      ),
-    );
-    vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce(jsonResponse(pending))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          source_pool: "custom/o3-codex-pool",
-          slices: [
-            {
-              benchmark_id: "terminal-bench",
-              version: "4.0.0",
-              slice_id: "tb4.cr-systems-db-v1",
-              label: "Systems and databases",
-              interpretation: "Systems tasks",
-              task_ids: [],
-              task_manifest_digest: "sha256:test",
-              official: false,
-            },
-          ],
-        }),
-      );
-    setAgents([
-      agent({
-        id: "ag_codex",
-        name: "codex-native-ui",
-        display_name: "Codex",
-        harness: "codex-native",
-      }),
-    ]);
-
-    renderLanding([], O3_SERVER_INFO);
-
-    await screen.findByTestId("o3-routing-proposal-card");
-    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(
-      "inspect the repo after reload",
-    );
-    expect(vi.mocked(authenticatedFetch).mock.calls.some(([url]) => url === "/v1/sessions")).toBe(
-      false,
-    );
-    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
-  });
-
-  it("drops a stale saved proposal after a local server restart while preserving the prompt", async () => {
-    const pending = o3Proposal();
-    writeO3RoutingDraft(
-      routingDraftForProposal(
-        pending,
-        "inspect the repo after server restart",
-        "inspect the repo after server restart",
-        `Workspace: ${SEEDED_WORKSPACE}`,
-      ),
-    );
-    vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        statusText: "Not Found",
-        json: async () => ({
-          error: { code: "not_found", message: "routing proposal not found" },
-        }),
-      } as Response)
-      .mockResolvedValueOnce(
-        jsonResponse({
-          source_pool: "custom/o3-codex-pool",
-          slices: [],
-        }),
-      );
-    setAgents([
-      agent({
-        id: "ag_codex",
-        name: "codex-native-ui",
-        display_name: "Codex",
-        harness: "codex-native",
-      }),
-    ]);
-
-    renderLanding([], O3_SERVER_INFO);
-
-    await waitFor(() => {
-      expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
+  it("keeps project placement on the provisional and rekeyed conversation", async () => {
+    searchParams = new URLSearchParams("project=Alpha");
+    projects = [{ id: "proj_alpha", name: "Alpha" }];
+    beginLocalConversationMock.mockReturnValue({
+      tempConvId: "temp:1234567890abcdef1234567890abcdef",
+      pendingMsgTempId: "pend_1",
+      createToken: "1234567890abcdef1234567890abcdef",
     });
-    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(
-      "inspect the repo after server restart",
-    );
-    expect(screen.queryByTestId("o3-review-error")).not.toBeInTheDocument();
-    expect(screen.getByTestId("new-chat-landing-submit")).toHaveTextContent("Review route");
-  });
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
 
-  it("retains the created session id until proposal linking succeeds", async () => {
-    const pending = o3Proposal();
-    const approved = o3Proposal("approve");
-    vi.mocked(authenticatedFetch)
-      .mockResolvedValueOnce(
-        jsonResponse({
-          source_pool: "custom/o3-codex-pool",
-          slices: [
-            {
-              benchmark_id: "terminal-bench",
-              version: "4.0.0",
-              slice_id: "tb4.cr-systems-db-v1",
-              label: "Systems and databases",
-              interpretation: "Systems tasks",
-              task_ids: [],
-              task_manifest_digest: "sha256:test",
-              official: false,
-            },
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse(pending))
-      .mockResolvedValueOnce(jsonResponse(approved))
-      .mockResolvedValueOnce(jsonResponse({ id: "conv_o3_retry" }))
-      .mockResolvedValueOnce(errorResponse("Proposal link temporarily failed"))
-      // The saved session id takes the link-only recovery path instead of
-      // creating a duplicate session.
-      .mockResolvedValueOnce(jsonResponse({ ...approved, session_id: "conv_o3_retry" }));
-    setAgents([
-      agent({
-        id: "ag_codex",
-        name: "codex-native-ui",
-        display_name: "Codex",
-        harness: "codex-native",
-      }),
-    ]);
-
-    renderLanding([], O3_SERVER_INFO);
+    renderLanding();
     await waitForWorkspaceSeed();
-    pickSelectOption("new-chat-landing-inline-model", "Benchmark Routing (O3)");
-    fireEvent.click(screen.getByTestId("o3-estimator-override-toggle"));
-    fireEvent.change(await screen.findByTestId("o3-estimator-slice"), {
-      target: { value: "terminal-bench|4.0.0|tb4.cr-systems-db-v1" },
-    });
-    fireEvent.change(screen.getByTestId("o3-estimator-threshold"), {
-      target: { value: "40" },
-    });
-    typeMessage("inspect the retry handoff");
+    typeMessage("inspect the repo");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
-    await screen.findByTestId("o3-routing-proposal-card");
-    fireEvent.click(screen.getByTestId("o3-approve"));
 
-    await screen.findByText("Proposal link temporarily failed");
-    const retained = JSON.parse(
-      localStorage.getItem("omnigent:o3-routing-review:draft:v1") ?? "null",
+    const project = { id: "proj_alpha", name: "Alpha" };
+    await waitFor(() =>
+      expect(beginLocalConversationMock).toHaveBeenCalledWith(
+        "inspect the repo",
+        [],
+        expect.any(Object),
+        project,
+        expect.objectContaining({ boundAgentId: "ag_hello", reasoningEffort: null }),
+      ),
     );
-    expect(retained.sessionId).toBe("conv_o3_retry");
-    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("o3-approve"));
-
-    await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalledTimes(1));
-    expect(
-      vi.mocked(authenticatedFetch).mock.calls.filter(([url]) => url === "/v1/sessions"),
-    ).toHaveLength(1);
-    expect(localStorage.getItem("omnigent:o3-routing-review:draft:v1")).toBeNull();
-    expect(navigateMock).toHaveBeenCalledWith("/c/conv_o3_retry");
+    await waitFor(() =>
+      expect(hydrateLocalConversationMock).toHaveBeenCalledWith(
+        "temp:1234567890abcdef1234567890abcdef",
+        "conv_new",
+        "ag_hello",
+        "inspect the repo",
+        [],
+        "pend_1",
+        null,
+        navigateMock,
+        expect.any(Function),
+        project,
+      ),
+    );
   });
 
   it("posts host_id, workspace and agent_id to /v1/sessions and navigates", async () => {
@@ -770,14 +500,381 @@ describe("NewChatLandingScreen create flow", () => {
       host_id: "host_1",
       workspace: SEEDED_WORKSPACE,
     });
-    // A plain YAML agent carries no terminal-wrapper labels.
+    expect(body.id).toBeUndefined();
     expect(body.labels).toEqual({
-      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
       "omnigent.routing_policy": "manual",
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
+      ...composerContextToLabels({
+        workingDirectory: { kind: "selected", path: SEEDED_WORKSPACE },
+        worktree: { kind: "none" },
+      }),
     });
 
     // On success the screen routes to the freshly created session.
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/c/conv_new"));
+  });
+
+  it("resolves a navigate-first create from the exact-token top-level pushed row", async () => {
+    let resolveCreate!: (response: Response) => void;
+    vi.mocked(authenticatedFetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveCreate = resolve;
+      }) as ReturnType<typeof authenticatedFetch>,
+    );
+    beginLocalConversationMock.mockReturnValue({
+      tempConvId: "temp:1234567890abcdef1234567890abcdef",
+      pendingMsgTempId: "pend_1",
+      createToken: "1234567890abcdef1234567890abcdef",
+    });
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("inspect the repo");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith("/c/temp:1234567890abcdef1234567890abcdef"),
+    );
+    await waitFor(() => expect(pushMatchers).toHaveLength(1));
+    const isOurs = pushMatchers[0]!;
+    expect(
+      isOurs({
+        id: "conv_pushed",
+        parent_session_id: null,
+        labels: { "omnigent.client_create_token": "1234567890abcdef1234567890abcdef" },
+      }),
+    ).toBe(true);
+    expect(
+      isOurs({
+        id: "conv_wrong",
+        parent_session_id: null,
+        labels: { "omnigent.client_create_token": "ffffffffffffffffffffffffffffffff" },
+      }),
+    ).toBe(false);
+    expect(isOurs({ id: "conv_missing", parent_session_id: null })).toBe(false);
+    expect(
+      isOurs({
+        id: "conv_child",
+        parent_session_id: "conv_parent",
+        labels: { "omnigent.client_create_token": "1234567890abcdef1234567890abcdef" },
+      }),
+    ).toBe(false);
+
+    act(() =>
+      announcePushedSession?.({
+        id: "conv_pushed",
+        parent_session_id: null,
+        labels: { "omnigent.client_create_token": "1234567890abcdef1234567890abcdef" },
+      }),
+    );
+    await waitFor(() =>
+      expect(hydrateLocalConversationMock).toHaveBeenCalledWith(
+        "temp:1234567890abcdef1234567890abcdef",
+        "conv_pushed",
+        "ag_hello",
+        "inspect the repo",
+        [],
+        "pend_1",
+        null,
+        navigateMock,
+        expect.any(Function),
+        undefined,
+      ),
+    );
+    expect(resolveCreate).toBeTypeOf("function");
+  });
+
+  it("keeps a managed create on its temp route until the HTTP response succeeds", async () => {
+    let resolveCreate!: (response: Response) => void;
+    vi.mocked(authenticatedFetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveCreate = resolve;
+      }) as ReturnType<typeof authenticatedFetch>,
+    );
+    beginLocalConversationMock.mockReturnValue({
+      tempConvId: "temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      pendingMsgTempId: "pend_managed",
+      createToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+
+    renderLanding([], { managed_sandboxes_enabled: true });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
+    typeMessage("start a sandbox");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith("/c/temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    );
+    expect(pushMatchers).toHaveLength(0);
+    expect(hydrateLocalConversationMock).not.toHaveBeenCalled();
+
+    resolveCreate({
+      ok: true,
+      json: async () => ({ id: "conv_managed" }),
+    } as unknown as Response);
+    await waitFor(() =>
+      expect(hydrateLocalConversationMock).toHaveBeenCalledWith(
+        "temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "conv_managed",
+        "ag_hello",
+        "start a sandbox",
+        [],
+        "pend_managed",
+        null,
+        navigateMock,
+        expect.any(Function),
+        undefined,
+      ),
+    );
+  });
+
+  it("removes a managed temp conversation when the HTTP response rejects it", async () => {
+    let resolveCreate!: (response: Response) => void;
+    vi.mocked(authenticatedFetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveCreate = resolve;
+      }) as ReturnType<typeof authenticatedFetch>,
+    );
+    beginLocalConversationMock.mockReturnValue({
+      tempConvId: "temp:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      pendingMsgTempId: "pend_managed_fail",
+      createToken: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+
+    renderLanding([], { managed_sandboxes_enabled: true });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
+    typeMessage("start a sandbox");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    expect(pushMatchers).toHaveLength(0);
+
+    resolveCreate({
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: "managed launch rejected" }),
+    } as unknown as Response);
+    await waitFor(() =>
+      expect(removeLocalConversationMock).toHaveBeenCalledWith(
+        "temp:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ),
+    );
+    expect(hydrateLocalConversationMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["original task", "corrected task", ""])(
+    "returns only the canceled draft after creation fails: %j",
+    async (corrected) => {
+      const tempConvId = "temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      let resolveCreate!: (response: Response) => void;
+      vi.mocked(authenticatedFetch).mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveCreate = resolve;
+        }) as ReturnType<typeof authenticatedFetch>,
+      );
+      beginLocalConversationMock.mockReturnValue({
+        tempConvId,
+        pendingMsgTempId: "pend_cancel",
+        createToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      });
+      renderLanding();
+      await waitForWorkspaceSeed();
+      typeMessage("original task");
+      fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+      await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+      cleanup();
+
+      hasPendingLocalMessageMock.mockReturnValue(false);
+      setSessionDraft(tempConvId, { text: corrected, files: [] });
+      await act(async () => {
+        resolveCreate({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: "host unavailable" }),
+        } as unknown as Response);
+      });
+      await waitFor(() => expect(removeLocalConversationMock).toHaveBeenCalledWith(tempConvId));
+
+      renderLanding();
+      expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(corrected);
+      expect(hydrateLocalConversationMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("restores the recovered temp-draft files onto the still-mounted landing after a failed create", async () => {
+    // The create is rejected while the landing is still on screen, and the
+    // optimistic temp conversation accumulated its own draft meanwhile. The
+    // recovered draft (submitted draft + temp draft) must be restored onto
+    // the live composer — a missing restore would leave only the submitted
+    // chip and go red here, unlike the unmount path where the remount
+    // re-seeds from the stashed draft either way.
+    const tempConvId = "temp:cccccccccccccccccccccccccccccccc";
+    let resolveCreate!: (response: Response) => void;
+    vi.mocked(authenticatedFetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveCreate = resolve;
+      }) as ReturnType<typeof authenticatedFetch>,
+    );
+    beginLocalConversationMock.mockReturnValue({
+      tempConvId,
+      pendingMsgTempId: "pend_restore",
+      createToken: "cccccccccccccccccccccccccccccccc",
+    });
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("original task");
+    const submitted = new File(["hello"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByTestId("new-chat-landing-file-input"), {
+      target: { files: [submitted] },
+    });
+    expect(screen.getByText("notes.txt")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+
+    // A file the landing composer never had lands in the temp draft.
+    const carried = new File(["world"], "extra.txt", { type: "text/plain" });
+    act(() => {
+      setSessionDraft(tempConvId, { text: "more context", files: [carried] });
+    });
+    await act(async () => {
+      resolveCreate({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: "host unavailable" }),
+      } as unknown as Response);
+    });
+
+    await waitFor(() => expect(screen.getByText("extra.txt")).toBeTruthy());
+    expect(screen.getByText("notes.txt")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(
+      "original task\n\nmore context",
+    );
+  });
+
+  it("keeps a failed create's restored draft when a newer create succeeds", async () => {
+    let resolveFirst!: (response: Response) => void;
+    let resolveSecond!: (response: Response) => void;
+    vi.mocked(authenticatedFetch)
+      .mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        }) as ReturnType<typeof authenticatedFetch>,
+      )
+      .mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveSecond = resolve;
+        }) as ReturnType<typeof authenticatedFetch>,
+      );
+    beginLocalConversationMock
+      .mockReturnValueOnce({
+        tempConvId: "temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        pendingMsgTempId: "pend_a",
+        createToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      })
+      .mockReturnValueOnce({
+        tempConvId: "temp:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        pendingMsgTempId: "pend_b",
+        createToken: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      });
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("restore this draft");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    cleanup();
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("newer successful create");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    expect(pushMatchers).toHaveLength(2);
+    const firstRow = {
+      id: "conv_first",
+      parent_session_id: null,
+      labels: { "omnigent.client_create_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    };
+    const secondRow = {
+      id: "conv_second",
+      parent_session_id: null,
+      labels: { "omnigent.client_create_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    };
+    expect(pushMatchers[0]?.(firstRow)).toBe(true);
+    expect(pushMatchers[0]?.(secondRow)).toBe(false);
+    expect(pushMatchers[1]?.(firstRow)).toBe(false);
+    expect(pushMatchers[1]?.(secondRow)).toBe(true);
+    cleanup();
+
+    resolveFirst({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: "first create failed" }),
+    } as unknown as Response);
+    await waitFor(() =>
+      expect(removeLocalConversationMock).toHaveBeenCalledWith(
+        "temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      ),
+    );
+
+    resolveSecond({
+      ok: true,
+      json: async () => ({ id: "conv_second" }),
+    } as unknown as Response);
+    await waitFor(() =>
+      expect(hydrateLocalConversationMock).toHaveBeenCalledWith(
+        "temp:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "conv_second",
+        "ag_hello",
+        "newer successful create",
+        [],
+        "pend_b",
+        null,
+        navigateMock,
+        expect.any(Function),
+        undefined,
+      ),
+    );
+
+    renderLanding();
+    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue("restore this draft");
+  });
+
+  it("records the launched workspace under its host without corrupting other recents", async () => {
+    // Write-back hygiene for omnigent:recent-workspaces: the launched path
+    // moves to the front of ITS host's list (deduplicated, not appended
+    // twice), and other hosts' lists survive untouched. A corrupted or
+    // cross-host write here is what later feeds recent[0] into the composer's
+    // generic workspace seeding.
+    localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify({
+        host_1: ["/Users/corey/projects/other", SEEDED_WORKSPACE],
+        host_2: ["/srv/elsewhere"],
+      }),
+    );
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
+
+    renderLanding();
+    // The auto-seed takes the most-recent path for host_1.
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("other"),
+    );
+    typeMessage("inspect the repo");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/c/conv_new"));
+
+    const stored = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "{}") as Record<string, string[]>;
+    // Launched path stays a single front entry — re-launching the same
+    // workspace must not insert a duplicate or reorder the rest.
+    expect(stored.host_1).toEqual(["/Users/corey/projects/other", SEEDED_WORKSPACE]);
+    // Another host's recents are untouched by the write-back.
+    expect(stored.host_2).toEqual(["/srv/elsewhere"]);
   });
 
   it("opens the session on the stream's announcement instead of waiting for the create", async () => {
@@ -796,7 +893,15 @@ describe("NewChatLandingScreen create flow", () => {
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
     await waitFor(() => expect(announcePushedSession).not.toBeNull());
-    act(() => announcePushedSession?.({ id: "conv_pushed" }));
+    const [, createInit] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const token = JSON.parse(createInit.body as string).labels["omnigent.client_create_token"];
+    act(() =>
+      announcePushedSession?.({
+        id: "conv_pushed",
+        parent_session_id: null,
+        labels: { "omnigent.client_create_token": token },
+      }),
+    );
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/c/conv_pushed"));
     // The first message is handed off under the same id. That coupling is why
@@ -807,37 +912,6 @@ describe("NewChatLandingScreen create flow", () => {
       expect.objectContaining({ text: "inspect the repo" }),
     );
   });
-
-  it.each([true, false])(
-    "keeps a newer parked draft when an older create settles (success=%s)",
-    async (success) => {
-      let settle!: (response: Response) => void;
-      vi.mocked(authenticatedFetch).mockReturnValueOnce(
-        new Promise<Response>((resolve) => {
-          settle = resolve;
-        }),
-      );
-      renderLanding();
-      await waitForWorkspaceSeed();
-      typeMessage("older submitted task");
-      fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
-      await waitFor(() => expect(authenticatedFetch).toHaveBeenCalled());
-      cleanup();
-      renderLanding();
-      typeMessage("newer parked task");
-      cleanup();
-      await act(async () => {
-        settle({
-          ok: success,
-          status: success ? 200 : 500,
-          json: async () => ({ id: "conv_old" }),
-          text: async () => "old create failed",
-        } as Response);
-      });
-      renderLanding();
-      expect(screen.getByTestId("new-chat-landing-input")).toHaveValue("newer parked task");
-    },
-  );
 
   it("recognizes only the session it just asked for among the stream's pushes", async () => {
     vi.mocked(authenticatedFetch).mockReturnValueOnce(
@@ -851,24 +925,23 @@ describe("NewChatLandingScreen create flow", () => {
 
     await waitFor(() => expect(pushMatchers).toHaveLength(1));
     const isOurs = pushMatchers[0]!;
-    const [, request] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
-    const token = JSON.parse(request.body as string).labels["omnigent.client_create_token"];
+    const [, createInit] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const token = JSON.parse(createInit.body as string).labels["omnigent.client_create_token"];
     const ours: SessionListWireItem = {
-      labels: { "omnigent.client_create_token": token },
       id: "conv_mine",
-      agent_id: "ag_hello",
-      host_id: "host_1",
+      parent_session_id: null,
+      labels: { "omnigent.client_create_token": token },
     };
     expect(isOurs(ours)).toBe(true);
 
-    // A concurrent create on the same agent and host must not steal navigation.
-    expect(isOurs({ ...ours, labels: {} })).toBe(false);
-    expect(isOurs({ ...ours, labels: { "omnigent.client_create_token": "another-create" } })).toBe(
-      false,
-    );
+    expect(
+      isOurs({
+        ...ours,
+        labels: { "omnigent.client_create_token": "ffffffffffffffffffffffffffffffff" },
+      }),
+    ).toBe(false);
+    expect(isOurs({ ...ours, labels: undefined })).toBe(false);
     expect(isOurs({ ...ours, parent_session_id: "conv_parent" })).toBe(false);
-    // The server may default-fill a changed project agent/host; the token remains authoritative.
-    expect(isOurs({ ...ours, agent_id: "ag_other", host_id: "host_2" })).toBe(true);
   });
 
   it("shows a busy spinner on the submit button while the create is in flight", async () => {
@@ -1034,6 +1107,26 @@ describe("NewChatLandingScreen create flow", () => {
     expect(navigateMock).toHaveBeenCalledWith("/c/conv_new");
   });
 
+  it("stashes the first prompt as the session's optimistic label", async () => {
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("  read the README\nand refactor  ");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    // The sidebar reads this while the server's seed title is still in
+    // flight — same whitespace-collapsed text the seed will carry, so the
+    // swap is invisible.
+    await waitFor(() =>
+      expect(getOptimisticTitle("conv_new")).toBe("read the README and refactor"),
+    );
+    expect(navigateMock).toHaveBeenCalledWith("/c/conv_new");
+  });
+
   it("carries attached files into the chatStore handoff", async () => {
     vi.mocked(authenticatedFetch).mockResolvedValueOnce({
       ok: true,
@@ -1055,6 +1148,35 @@ describe("NewChatLandingScreen create flow", () => {
     await waitFor(() =>
       expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
         text: "what is in this image?",
+        skill: null,
+        files: [file],
+      }),
+    );
+  });
+
+  it("enables Send for a file-only draft and creates the session without text", async () => {
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+
+    // An attached image alone is a sendable draft: the send path omits the
+    // input_text block for blank text, so nothing downstream needs typing.
+    const file = new File(["x"], "screenshot.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("new-chat-landing-file-input"), {
+      target: { files: [file] },
+    });
+
+    const submit = screen.getByTestId("new-chat-landing-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(setPendingInitialPromptMock).toHaveBeenCalledWith("conv_new", {
+        text: "",
         skill: null,
         files: [file],
       }),
@@ -1103,9 +1225,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Not a bundled skill — e.g. a typo or a host-discovered skill the
-    // server can't know pre-session. Falls through to plain text, same as
-    // the in-session composer's unknown-command path.
+    // Unknown names fall through to plain text, as in the session composer.
     typeMessage("/typo do something");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1196,10 +1316,14 @@ describe("NewChatLandingScreen create flow", () => {
     // the UI keys off to render the terminal wrapper. Dropping them would make
     // a native Claude Code session render as a plain chat.
     expect(body.labels).toEqual({
-      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
       "omnigent.routing_policy": "manual",
       "omnigent.ui": "terminal",
       "omnigent.wrapper": "claude-code-native-ui",
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
+      ...composerContextToLabels({
+        workingDirectory: { kind: "selected", path: SEEDED_WORKSPACE },
+        worktree: { kind: "none" },
+      }),
     });
   });
 
@@ -1225,10 +1349,14 @@ describe("NewChatLandingScreen create flow", () => {
     // agent name (unlike claude, whose wrapper is "claude-code-native-ui").
     // The runner/server key off exactly this value to boot the agy terminal.
     expect(body.labels).toEqual({
-      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
       "omnigent.routing_policy": "manual",
       "omnigent.ui": "terminal",
       "omnigent.wrapper": "antigravity-native-ui",
+      "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
+      ...composerContextToLabels({
+        workingDirectory: { kind: "selected", path: SEEDED_WORKSPACE },
+        worktree: { kind: "none" },
+      }),
     });
   });
 
@@ -1241,13 +1369,9 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Open Claude Code's config modal and pick a non-default permission mode,
-    // then Save. The create call proves the choice travels as a
-    // `--permission-mode <mode>` pair in terminal_launch_args.
-    openAgentConfig("ag_native");
-    pickSelectOption("new-chat-landing-config-permission", "Bypass permissions");
-    saveConfig();
-    // The trigger label stays the bare agent name (the pick lives in the modal).
+    // The hand dropdown's selection must travel as Claude's two-token CLI flag.
+    pickPermissionOption("bypassPermissions");
+    // Permissions stay separate from the agent/model trigger.
     expect(screen.getByTestId("new-chat-landing-agent-select").textContent).not.toContain("(");
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
@@ -1259,6 +1383,10 @@ describe("NewChatLandingScreen create flow", () => {
     // bare single token) means the runner would launch claude with the wrong
     // permission mode.
     expect(body.terminal_launch_args).toEqual(["--permission-mode", "bypassPermissions"]);
+    expect(
+      JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")["claude-native"]
+        ?.mode,
+    ).toBe("bypassPermissions");
   });
 
   it("seeds the permission mode from the last pick for claude-native on a new session", async () => {
@@ -1288,6 +1416,55 @@ describe("NewChatLandingScreen create flow", () => {
     expect(body.terminal_launch_args).toEqual(["--permission-mode", "plan"]);
   });
 
+  it.each([
+    {
+      harness: "codex-native",
+      agentName: "codex-native-ui",
+      displayName: "Codex",
+      mode: "full-access",
+      expectedArgs: ["--sandbox", "danger-full-access", "--ask-for-approval", "never"],
+    },
+    {
+      harness: "cursor-native",
+      agentName: "cursor-native-ui",
+      displayName: "Cursor",
+      mode: "plan",
+      expectedArgs: ["--mode", "plan"],
+    },
+    {
+      harness: "antigravity-native",
+      agentName: "antigravity-native-ui",
+      displayName: "Antigravity",
+      mode: "skip",
+      expectedArgs: ["--dangerously-skip-permissions"],
+    },
+  ])("seeds the last launched mode for $harness", async (testCase) => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ [testCase.harness]: { mode: testCase.mode } }),
+    );
+    setAgents([
+      agent({
+        id: `ag_${testCase.harness}`,
+        name: testCase.agentName,
+        display_name: testCase.displayName,
+      }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: `conv_${testCase.harness}` }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).terminal_launch_args).toEqual(testCase.expectedArgs);
+  });
+
   it("persists the picked permission mode for claude-native so the next session seeds it", async () => {
     setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
     vi.mocked(authenticatedFetch).mockResolvedValueOnce({
@@ -1297,18 +1474,45 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    openAgentConfig("ag_native");
-    pickSelectOption("new-chat-landing-config-permission", "Accept edits");
-    saveConfig();
+    pickPermissionOption("acceptEdits");
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
-    // The pick is snapshotted under the harness key on Save, so the next
-    // visit can seed from it. (Saving also records the empty model/effort,
-    // which stay unset for this default-model session.)
+    // The successfully-created session leaves its launched mode as the next
+    // session's default.
     await waitFor(() =>
       expect(
         JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")["claude-native"]
           ?.mode,
       ).toBe("acceptEdits"),
+    );
+  });
+
+  it("requires fresh Codex bypass consent for the next session", async () => {
+    setAgents([agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_codex" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    pickPermissionOption("bypass");
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")["codex-native"]
+          ?.mode,
+      ).toBe("default"),
+    );
+
+    cleanup();
+    renderLanding();
+    await waitForWorkspaceSeed();
+    expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveAccessibleName(
+      "Permission mode: Default",
     );
   });
 
@@ -1323,16 +1527,16 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Open Claude Code's config modal: it shows the permission select (not an
-    // approval select), and Codex's stored "full-access" preset doesn't bleed
-    // in — the permission select sits at its Default.
-    openAgentConfig("ag_native");
-    expect(screen.queryByTestId("new-chat-landing-config-approval")).toBeNull();
-    // The permission select's trigger displays its current value — "Default",
-    // not Codex's stored "full-access" (which isn't even a valid value here).
-    expect(screen.getByTestId("new-chat-landing-config-permission").textContent).toContain(
-      "Default",
+    // Claude's hand menu stays on Manual and never offers Codex approval presets.
+    expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveAccessibleName(
+      "Permission mode: Manual",
     );
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-permission-chip"), { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-permission-option-default")).toHaveTextContent(
+      "Manual",
+    );
+    expect(screen.queryByTestId("new-chat-landing-permission-option-full-access")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-permission-option-bypass")).toBeNull();
   });
 
   it("posts no launch args for opencode-native, even after a codex full-access pick", async () => {
@@ -1352,10 +1556,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Pick "Full access" for Codex in its config modal and Save.
-    openAgentConfig("ag_codex");
-    pickSelectOption("new-chat-landing-config-approval", "Full access");
-    saveConfig();
+    pickPermissionOption("full-access");
 
     // Switch to OpenCode by clicking its row. It has no mode knobs, so no gear
     // shows for it — its launch posts no terminal_launch_args.
@@ -1444,6 +1645,98 @@ describe("NewChatLandingScreen create flow", () => {
     expect(body.terminal_launch_args).toBeUndefined();
   });
 
+  it("posts --dangerously-skip-permissions when the bypass is picked for antigravity-native", async () => {
+    setAgents([
+      agent({ id: "ag_agy", name: "antigravity-native-ui", display_name: "Antigravity" }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_agy" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    pickPermissionOption("skip");
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    // agy's ONLY pre-emptive control, as a bare single token. Claude's
+    // `["--permission-mode", ...]` pair would be rejected by agy, which has no
+    // such flag — so assert the exact spelling, not merely "some args".
+    expect(body.terminal_launch_args).toEqual(["--dangerously-skip-permissions"]);
+    expect(
+      JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")[
+        "antigravity-native"
+      ]?.mode,
+    ).toBe("skip");
+  });
+
+  it("remembers the launched execution mode for cursor-native", async () => {
+    setAgents([agent({ id: "ag_cursor", name: "cursor-native-ui", display_name: "Cursor" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_cursor" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    pickPermissionOption("plan");
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).terminal_launch_args).toEqual(["--mode", "plan"]);
+    const stored = JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")[
+      "cursor-native"
+    ];
+    expect(stored?.mode).toBe("plan");
+  });
+
+  it("omits terminal_launch_args when antigravity-native permissions are left at default", async () => {
+    setAgents([
+      agent({ id: "ag_agy", name: "antigravity-native-ui", display_name: "Antigravity" }),
+    ]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_agy" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    // Anchor so the absence check is not vacuous against a malformed body.
+    expect(body.labels?.["omnigent.wrapper"]).toBe("antigravity-native-ui");
+    // Untouched → agy keeps its own request-review prompt.
+    expect(body.terminal_launch_args).toBeUndefined();
+  });
+
+  it("shows a danger banner while the antigravity-native bypass is selected", async () => {
+    setAgents([
+      agent({ id: "ag_agy", name: "antigravity-native-ui", display_name: "Antigravity" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // agy exposes no firing pre-tool hook, so Omnigent cannot re-gate tools
+    // once this is armed — the banner is the only guardrail the user gets.
+    expect(screen.queryByTestId("new-chat-landing-agy-skip-banner")).toBeNull();
+    pickPermissionOption("skip");
+    expect(screen.getByTestId("new-chat-landing-agy-skip-banner")).toHaveAttribute("role", "alert");
+    expect(screen.getByTestId("new-chat-landing-agy-skip-banner")).toHaveTextContent(
+      "all tool permission prompts disabled",
+    );
+    pickPermissionOption("default");
+    expect(screen.queryByTestId("new-chat-landing-agy-skip-banner")).toBeNull();
+  });
+
   it("omits model + effort on create when the picker is untouched for claude-native", async () => {
     setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
     vi.mocked(authenticatedFetch).mockResolvedValueOnce({
@@ -1475,12 +1768,11 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Model, effort and permission mode share Claude Code's one config modal;
-    // both can be set in one visit and commit together on Save.
-    openAgentConfig("ag_native");
-    pickSelectOption("new-chat-landing-config-model", "Opus");
-    pickSelectOption("new-chat-landing-config-effort", "High");
-    saveConfig();
+    // Model and effort selections apply directly from the Edit submenu.
+    openAgentModels("ag_native");
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Opus" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "High" }));
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1522,20 +1814,19 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    openAgentConfig("ag_pi");
-    fireEvent.click(screen.getByTestId("new-chat-landing-config-model"));
+    openAgentModels("ag_pi");
     const fullNameRow = document.querySelector(
-      '[data-model-id="omnigent-openai/system.ai.gpt-5-6-sol"]',
+      '[data-testid="new-chat-landing-agent-model-omnigent-openai/system.ai.gpt-5-6-sol"]',
     );
     expect(fullNameRow).not.toBeNull();
     expect(fullNameRow).toHaveAttribute("title", "GPT 5.6 Sol");
-    fireEvent.change(screen.getByTestId("new-chat-landing-config-model-search"), {
+    fireEvent.change(screen.getByTestId("new-chat-landing-agent-model-search"), {
       target: { value: "gpt sol" },
     });
     expect(screen.getByText("GPT 5.6 Sol")).toBeInTheDocument();
     expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
     fireEvent.click(screen.getByText("GPT 5.6 Sol"));
-    saveConfig();
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1545,6 +1836,9 @@ describe("NewChatLandingScreen create flow", () => {
     expect(body.model_override).toBe("omnigent-openai/system.ai.gpt-5-6-sol");
     expect(body.reasoning_effort).toBeUndefined();
     expect(body.labels?.["omnigent.wrapper"]).toBe("pi-native-ui");
+    expect(
+      JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")["pi-native"]?.model,
+    ).toBe("omnigent-openai/system.ai.gpt-5-6-sol");
   });
 
   it("seeds the model + effort from the last pick for claude-native on a new session", async () => {
@@ -1573,6 +1867,48 @@ describe("NewChatLandingScreen create flow", () => {
     expect(body.reasoning_effort).toBe("high");
   });
 
+  it("clears remembered model + effort when both create-composer picks return to Default", async () => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({ "claude-native": { model: "opus", effort: "high" } }),
+    );
+    setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_native" }),
+    } as unknown as Response);
+
+    renderLanding();
+    await waitForWorkspaceSeed();
+    openAgentModels("ag_native");
+    expect(screen.getByTestId("new-chat-landing-agent-model-opus")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByTestId("new-chat-landing-agent-effort-high")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-default"));
+    fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-default"));
+    const stored = JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")[
+      "claude-native"
+    ];
+    expect(stored?.model).toBe("");
+    expect(stored?.effort).toBe("");
+
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
+    const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.model_override).toBeUndefined();
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+
   it("persists a picked model for claude-native, preserving the stored effort", async () => {
     // Effort is already on record. Picking only the model must merge — not
     // clobber — so the next session seeds BOTH from storage.
@@ -1581,14 +1917,21 @@ describe("NewChatLandingScreen create flow", () => {
       JSON.stringify({ "claude-native": { effort: "high" } }),
     );
     setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: "conv_native" }),
+    } as unknown as Response);
 
     renderLanding();
     await waitForWorkspaceSeed();
-    openAgentConfig("ag_native");
-    pickSelectOption("new-chat-landing-config-model", "Opus");
-    saveConfig();
+    openAgentModels("ag_native");
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Opus" }));
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    typeMessage("go");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
 
-    // Save merges the model pick with the stored effort — both seed next time.
+    // The launched snapshot contains both the new model and seeded effort.
     await waitFor(() => {
       const stored = JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")[
         "claude-native"
@@ -1655,10 +1998,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Open Codex's config modal, pick "Full access", and Save.
-    openAgentConfig("ag_codex");
-    pickSelectOption("new-chat-landing-config-approval", "Full access");
-    saveConfig();
+    pickPermissionOption("full-access");
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1671,6 +2011,10 @@ describe("NewChatLandingScreen create flow", () => {
       "--ask-for-approval",
       "never",
     ]);
+    expect(
+      JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")["codex-native"]
+        ?.mode,
+    ).toBe("full-access");
   });
 
   it("omits terminal_launch_args when approval mode is left at default for codex-native", async () => {
@@ -1706,10 +2050,10 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Open Polly's config modal and pick the Pi harness, then Save.
+    // Open Polly's inline config and pick the Pi harness.
     openAgentConfig("ag_polly");
     pickSelectOption("new-chat-landing-config-harness", "Pi");
-    saveConfig();
+    closeAgentConfig();
     expect(screen.getByTestId("new-chat-landing-agent-select").textContent).not.toContain("(");
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
@@ -1734,12 +2078,9 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // With no explicit pick the pill shows just the agent name — the spec
-    // default is not suffixed (it lives in the Advanced menu's radios).
+    // With no explicit pick the pill shows the agent and its declared SDK.
     expect(screen.getByTestId("new-chat-landing-agent-select").textContent).toContain("Polly");
-    expect(screen.getByTestId("new-chat-landing-agent-select").textContent).not.toContain(
-      "Claude SDK",
-    );
+    expect(screen.getByTestId("new-chat-landing-agent-select").textContent).toContain("Claude SDK");
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1762,14 +2103,13 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Pick Pi, Save, then change mind back to the spec default (Claude SDK)
-    // and Save again.
+    // Pick Pi, then change mind back to the spec default (Claude SDK).
     openAgentConfig("ag_polly");
     pickSelectOption("new-chat-landing-config-harness", "Pi");
-    saveConfig();
+    closeAgentConfig();
     openAgentConfig("ag_polly");
     pickSelectOption("new-chat-landing-config-harness", "Claude SDK");
-    saveConfig();
+    closeAgentConfig();
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1781,30 +2121,26 @@ describe("NewChatLandingScreen create flow", () => {
     expect(body.harness_override).toBeUndefined();
   });
 
-  // Skipped while the toggle is hidden behind the false-gate in NewChatDialog; un-skip when re-enabling.
   it("no longer renders a standalone smart-routing composer toggle", async () => {
-    // The sparkle toggle was folded into the gear modal's Model dropdown — it
-    // must not render as a separate composer control anymore.
+    // Smart Routing belongs in the model menu, not a separate composer toggle.
     setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
     renderLanding();
     await waitForWorkspaceSeed();
     expect(screen.queryByTestId("cost-toggle-trigger")).toBeNull();
   });
 
-  it("renders the config modal footer without its own background or top border", async () => {
-    // The Cancel/Save footer should blend into the modal body — no gray tray
-    // band and no divider line above the buttons.
-    setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
+  it("renders the inline config surface without a gray tray or top border", async () => {
+    setAgents([
+      agent({ id: "ag_polly", name: "polly", display_name: "Polly", harness: "claude-sdk" }),
+    ]);
     renderLanding();
     await waitForWorkspaceSeed();
-    openAgentConfig("ag_native");
+    openAgentConfig("ag_polly");
 
-    const footer = screen
-      .getByTestId("new-chat-landing-config-save")
-      .closest("[data-slot=dialog-footer]");
-    expect(footer).not.toBeNull();
-    expect(footer).toHaveClass("bg-transparent", "border-t-0");
-    expect(footer?.className).not.toMatch(/bg-muted/);
+    const configMenu = screen.getAllByRole("menu").at(-1);
+    expect(configMenu).toHaveClass("composer-agent-config-menu");
+    expect(configMenu?.className).not.toMatch(/bg-muted|border-t/);
+    expect(screen.queryByTestId("new-chat-landing-config-save")).toBeNull();
   });
 
   it("omits cost_control_mode_override when Smart Routing is left unpicked", async () => {
@@ -2035,7 +2371,7 @@ describe("NewChatLandingScreen create flow", () => {
     renderLanding();
     await waitForWorkspaceSeed();
     // Pick the non-default agent (Radix opens on pointerdown). "second_agent"
-    // is a custom agent, so it lives in the "Custom agents" submenu.
+    // is a custom agent, so it lives in the "Other..." submenu.
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
     fireEvent.click(screen.getByTestId("new-chat-landing-custom-agents"));
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-ag_two"));
@@ -2098,87 +2434,53 @@ describe("sanitizeInitialPrompt", () => {
   });
 });
 
-it("keeps manual and native dispatch isolated from an enabled O3 estimator", async () => {
-  vi.mocked(authenticatedFetch).mockImplementation(async (url) =>
-    jsonResponse(url === "/v1/sessions" ? { id: "conv_native_policy" } : { slices: [] }),
-  );
-  setAgents([
-    agent({
-      id: "ag_codex",
-      name: "codex-native-ui",
-      display_name: "Codex",
-      harness: "codex-native",
-    }),
-  ]);
-  renderLanding([], {
-    ...O3_SERVER_INFO,
-    smart_routing_enabled: true,
-    smart_routing_sources: { external: false, oss: true },
-  });
-  await waitForWorkspaceSeed();
-  expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("Default");
-  expect(screen.queryByTestId("o3-estimator-settings")).toBeNull();
-  pickSelectOption("new-chat-landing-inline-model", "Omnigent Smart Routing");
-  typeMessage("inspect the native routing fixture");
-  fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
-  await waitFor(() => expect(navigateMock).toHaveBeenCalled());
-  const calls = vi.mocked(authenticatedFetch).mock.calls;
-  expect(calls.some(([url]) => String(url).includes("/proposals"))).toBe(false);
-  const request = calls.find(([url]) => url === "/v1/sessions");
-  const body = JSON.parse(String(request?.[1]?.body));
-  expect(body.cost_control_mode_override).toBe("on");
-  expect(body.model_override).toBeUndefined();
-  expect(body.reasoning_effort).toBeUndefined();
-  expect(body.labels["omnigent.routing_policy"]).toBe("native");
-  expect(body.labels["omnigent.routing_backend"]).toBe("oss-llm");
-});
+describe("create-session input on touch-primary devices", () => {
+  it("Enter inserts a newline instead of submitting when the pointer is coarse", async () => {
+    // Phones have no practical Shift+Enter, so an Enter-submit in the
+    // create-session composer was an unrecoverable accidental send. On
+    // coarse-pointer devices the composer must let Enter fall through to the
+    // textarea's native newline; sending stays an explicit tap.
+    const matchMediaSpy = vi.spyOn(window, "matchMedia").mockImplementation((query: string) =>
+      query.includes("pointer: coarse")
+        ? ({
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener: () => {},
+            removeListener: () => {},
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+          } as MediaQueryList)
+        : ({
+            matches: false,
+            media: query,
+            onchange: null,
+            addListener: () => {},
+            removeListener: () => {},
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+          } as MediaQueryList),
+    );
 
-it("preserves benchmark routing on an unrelated gear save and clears it for an explicit model selection", async () => {
-  setAgents([
-    agent({
-      id: "ag_codex",
-      name: "codex-native-ui",
-      display_name: "Codex",
-      harness: "codex-native",
-    }),
-  ]);
-  renderLanding([], O3_SERVER_INFO);
-  await waitForWorkspaceSeed();
-  pickSelectOption("new-chat-landing-inline-model", "Benchmark Routing (O3)");
-  fireEvent.click(screen.getByTestId("new-chat-landing-config-gear"));
-  expect(screen.getByTestId("new-chat-landing-config-model")).toHaveTextContent(
-    "Benchmark Routing (O3)",
-  );
-  saveConfig();
-  expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent(
-    "Benchmark Routing (O3)",
-  );
-  expect(screen.getByTestId("o3-estimator-settings")).toBeInTheDocument();
-  fireEvent.click(screen.getByTestId("new-chat-landing-config-gear"));
-  openSelect("new-chat-landing-config-model");
-  fireEvent.click(screen.getByRole("option", { name: /^Default/ }));
-  saveConfig();
-  expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("Default");
-  expect(screen.queryByTestId("o3-estimator-settings")).toBeNull();
-});
+    try {
+      renderLanding();
+      await waitForWorkspaceSeed();
+      const input = screen.getByTestId("new-chat-landing-input");
+      fireEvent.change(input, { target: { value: "first line of a long prompt" } });
 
-it("hides disabled O3 while retaining Smart Routing and Default", async () => {
-  setAgents([
-    agent({
-      id: "ag_codex",
-      name: "codex-native-ui",
-      display_name: "Codex",
-      harness: "codex-native",
-    }),
-  ]);
-  renderLanding([], {
-    ...O3_SERVER_INFO,
-    o3_routing_review_enabled: false,
-    smart_routing_enabled: true,
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      // No session was created and no navigation happened: Enter was not
+      // intercepted, so the composer still holds the user's draft.
+      expect(authenticatedFetch).not.toHaveBeenCalled();
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      fireEvent.focus(screen.getByTestId("new-chat-landing-submit"));
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    } finally {
+      matchMediaSpy.mockRestore();
+    }
   });
-  await waitForWorkspaceSeed();
-  openSelect("new-chat-landing-inline-model");
-  expect(screen.queryByRole("option", { name: /Benchmark Routing/ })).toBeNull();
-  expect(screen.getByRole("option", { name: /Omnigent Smart Routing/ })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: /^Default/ })).toBeInTheDocument();
 });
