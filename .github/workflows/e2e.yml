@@ -59,9 +59,14 @@ jobs:
   # don't need the full suite — just exit fast.
   gate:
     if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-      github.event.label.name == 'skip-security-scan'
+      (github.event_name != 'schedule' ||
+       github.repository == 'omnigent-ai/omnigent' ||
+       vars.ENABLE_SCHEDULED_E2E == 'true') &&
+      (
+        github.event_name != 'pull_request' ||
+        (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+        github.event.label.name == 'skip-security-scan'
+      )
     uses: ./.github/workflows/security-gate.yml
 
   # Shard matrix (e2e-shard-matrix.sh, shared with e2e-ui.yml). Fork PRs run by
