@@ -4104,8 +4104,13 @@ def _paste_and_submit(
     # "old promptnew prompt" with no separator).
     # Ctrl-A (Home) + Ctrl-K (kill-to-end) is the safest pair —
     # Ctrl-U only clears backwards from cursor.
-    _run_tmux(socket_path, "send-keys", "-t", tmux_target, "C-a")
-    _run_tmux(socket_path, "send-keys", "-t", tmux_target, "C-k")
+    # A just-mounted empty composer can ingest these editing shortcuts as
+    # literal control bytes. There is nothing to clear in that case; avoid
+    # corrupting the prompt and its pending-input receipt after a resume.
+    row = _composer_row(_capture_pane(socket_path, tmux_target))
+    if row is None or row.strip()[1:].strip():
+        _run_tmux(socket_path, "send-keys", "-t", tmux_target, "C-a")
+        _run_tmux(socket_path, "send-keys", "-t", tmux_target, "C-k")
     # Trailing newline absorbs a trailing "\" so it can't escape the submit Enter.
     # Delivered through a tmux buffer, NOT ``send-keys`` argv: tmux caps one
     # client→server command at ~16KB, so per-byte hex argv blew up with

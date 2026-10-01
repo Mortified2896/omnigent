@@ -10,6 +10,7 @@ REPL's TUI requires a TTY to render.
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -90,7 +91,21 @@ def test_repl_default_sessions_renders_assistant_text(
         f"  and nothing else.\n",
     )
 
-    child = _spawn_repl(yaml_path=yaml_path, env=mock_credentials_env)
+    # A previous REPL may leave a daemon/lock in the session-scoped state.
+    env = dict(mock_credentials_env)
+    config = tmp_path / "config"
+    config.mkdir()
+    shutil.copy2(Path(env["OMNIGENT_CONFIG_HOME"]) / "config.yaml", config / "config.yaml")
+    home = tmp_path / "home"
+    home.mkdir()
+    env.update(
+        {
+            "HOME": str(home),
+            "OMNIGENT_CONFIG_HOME": str(config),
+            "OMNIGENT_DATA_DIR": str(tmp_path / "data"),
+        }
+    )
+    child = _spawn_repl(yaml_path=yaml_path, env=env)
     try:
         child.expect("\u276f", timeout=60)
         submit_prompt(child, "Say the marker.")

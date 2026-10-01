@@ -3826,6 +3826,40 @@ def test_write_tmux_target_persists_socket_and_target(tmp_path: Path) -> None:
     assert before <= payload["updated_at"] <= after
 
 
+def test_inject_empty_composer_does_not_prefix_editing_control_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A just-mounted input can record clearing shortcuts as literal text."""
+    monkeypatch.setattr(claude_native_bridge, "_TRUSTED_PARENT", tmp_path)
+    bridge_dir = tmp_path / "bridge"
+    write_tmux_target(bridge_dir, socket_path=Path("/tmp/example/tmux.sock"), tmux_target="main")
+    tui = {"pane": _composer_pane(), "text": ""}
+    submitted: list[str] = []
+    payload: list[str] = []
+
+    def run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+        if "capture-pane" in cmd:
+            return SimpleNamespace(returncode=0, stdout=tui["pane"], stderr="")
+        if cmd[-1] == "C-a":
+            tui["text"] += "\x01"
+        if cmd[-1] == "C-k":
+            tui["text"] += "\x0b"
+        if "load-buffer" in cmd:
+            payload.append(Path(cmd[-1]).read_text().strip())
+        if "paste-buffer" in cmd:
+            tui["text"] += payload[-1]
+            tui["pane"] = _composer_pane(tui["text"])
+        if cmd[-1] == "Enter":
+            submitted.append(tui["text"])
+            tui["pane"] = _composer_pane()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", run)
+    inject_user_message(bridge_dir, content="resumed prompt")
+    assert submitted == ["resumed prompt"]
+
+
 @pytest.mark.parametrize(
     "content,expected_payload",
     [
@@ -3881,7 +3915,7 @@ def test_inject_user_message_pastes_content_then_submits(
     # again once Enter submits. The paste-committed and submit-verified
     # gates both poll capture-pane, so a static pane would either stall
     # the paste gate (draft never appears) or fail verification.
-    tui = {"pane": _composer_pane()}
+    tui = {"pane": _composer_pane("previous draft")}
 
     def _fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         """
@@ -4049,10 +4083,10 @@ def test_inject_user_message_escapes_unsupported_slash_command_payload(
     monkeypatch.setattr("subprocess.run", _fake_run)
 
     inject_user_message(bridge_dir, content="/help")
-    assert loaded_payloads[0].startswith("\ufeff/help".encode("utf-8"))
+    assert loaded_payloads[0].startswith("\ufeff/help".encode())
 
     inject_user_message(bridge_dir, content="/clear")
-    assert not loaded_payloads[1].startswith("\ufeff".encode("utf-8"))
+    assert not loaded_payloads[1].startswith("\ufeff".encode())
 
 
 def _rejection_pane(name: str, draft: str = "") -> str:
@@ -4164,7 +4198,7 @@ def test_unknown_command_rejection_redelivers_escaped(
         f"got {len(payloads)} paste(s)."
     )
     assert payloads[0].startswith(b"/not-a-real-skill")
-    assert payloads[1].startswith("\ufeff/not-a-real-skill hello world".encode("utf-8"))
+    assert payloads[1].startswith("\ufeff/not-a-real-skill hello world".encode())
 
 
 def test_unknown_name_accepted_as_skill_is_not_redelivered(
@@ -4407,22 +4441,12 @@ def test_inject_user_message_waits_for_claude_prompt_before_typing(
     monkeypatch.setattr("subprocess.run", _fake_run)
     inject_user_message(bridge_dir, content="hello")
 
-    # Gate polled until the third capture (prompt present), then the
-    # five delivery calls (C-a, C-k, load-buffer, paste-buffer, Enter)
-    # fired.
+    # The empty composer needs only the paste and submit after readiness.
     assert capture_calls["n"] >= 3, (
         f"Expected >=3 capture-pane polls before the prompt rendered, got {capture_calls['n']}."
     )
-    assert len(send_keys) == 5, (
-        f"Expected 5 tmux calls (C-a, C-k, load-buffer, paste-buffer, Enter), "
-        f"got {len(send_keys)}."
-    )
-    clear_home, clear_kill, load, paste, submit = send_keys
-    assert clear_home[-1] == "C-a"
-    assert clear_kill[-1] == "C-k"
-    # The paste fires after the gate via the buffer path. The exact
-    # payload/flag assertions live in the dedicated paste test; here the
-    # gate ordering is the claim.
+    assert len(send_keys) == 3
+    load, paste, submit = send_keys
     assert load[3] == "load-buffer"
     assert paste[3] == "paste-buffer"
     assert submit[-1] == "Enter"
@@ -10369,8 +10393,8 @@ def test_inject_user_message_restores_an_occupied_input_box_first(
     them and replays an old prompt on Enter, the rewind dialog commits a
     checkpoint restore, a settings panel changes a setting, and shell mode
     hands the message to bash. The injection must Escape the surface first
-    (its own documented dismissal), restoring the empty input box, then
-    deliver the message normally.
+    (its own documented dismissal), restore and clear the previous draft,
+    then deliver the message normally.
     """
     monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._TRUSTED_PARENT", tmp_path)
     monkeypatch.setattr(
@@ -10402,7 +10426,7 @@ def test_inject_user_message_restores_an_occupied_input_box_first(
         if "capture-pane" in cmd:
             return SimpleNamespace(returncode=0, stdout=tui["pane"], stderr="")
         if cmd[-1] == "Escape":
-            tui["pane"] = _composer_pane()
+            tui["pane"] = _composer_pane("previous draft")
         if "paste-buffer" in cmd:
             tui["pane"] = _composer_pane("restore my composer")
         if cmd[-1] == "Enter":
