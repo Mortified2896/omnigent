@@ -413,6 +413,26 @@ def install_chat_session_routes(handle: ChatSessionContract) -> None:
         },
     )
     contract.json("/v1/me", {"user_id": "local", "is_admin": True})
+    contract.json(
+        f"/v1/model-advisor/catalog?host_id={handle.host_id}",
+        {
+            "object": "model_advisor.catalog",
+            "catalog_revision": "browser-fixture",
+            "options": [],
+            "logical_options": [],
+        },
+    )
+    contract.json(
+        f"/v1/model-advisor/preferences?host_id={handle.host_id}&profile=default",
+        {
+            "object": "model_advisor.preferences",
+            "version": 0,
+            "etag": None,
+            "state": "missing",
+            "preferences": None,
+            "logical_preferences": None,
+        },
+    )
     contract.json("/v1/agents", lambda _request: list_payload([handle._agent()]))
     contract.json(
         "/v1/hosts",
@@ -441,6 +461,7 @@ def install_chat_session_routes(handle: ChatSessionContract) -> None:
     )
     contract.json("/v1/sessions/projects", [])
     contract.json("/v1/sessions", lambda _request: list_payload([handle._session()]))
+    contract.session_review(handle.session_id)
     session_api = f"/v1/sessions/{handle.session_id}"
     contract.json(session_api, lambda _request: handle._session())
 

@@ -1645,11 +1645,21 @@ class SysSessionGetHistoryTool(Tool):
         )
         if isinstance(content_offset_chars, str):
             return content_offset_chars
-        page = resolution.conv_store.list_items(
-            resolution.child.id,
-            limit=tail_items,
-            order="desc",
-        )
+        # Audio/resource notifications do not consume transcript tail slots.
+        # Page past them so a completed report remains reachable with tail=1.
+        transcript_items: list[ConversationItem] = []
+        after = None
+        while len(transcript_items) < tail_items:
+            page = resolution.conv_store.list_items(
+                resolution.child.id,
+                limit=tail_items,
+                order="desc",
+                after=after,
+            )
+            transcript_items.extend(item for item in page.data if item.type != "resource_event")
+            if not page.has_more or not page.data or page.data[-1].id == after:
+                break
+            after = page.data[-1].id
         # ``list_items(order="desc")`` returns newest-first; reverse
         # to chronological order so the LLM reads top-to-bottom.
         items: list[dict[str, Any]] = [
@@ -1658,7 +1668,7 @@ class SysSessionGetHistoryTool(Tool):
                 max_chars=content_max_chars,
                 offset_chars=content_offset_chars,
             )
-            for item in reversed(page.data)
+            for item in reversed(transcript_items[:tail_items])
         ]
         # A parked elicitation never lands in the conversation store
         # (it lives only in the pending-elicitations index), so without

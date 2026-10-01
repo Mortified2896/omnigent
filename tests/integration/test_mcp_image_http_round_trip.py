@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import sys
 import uuid
 from collections.abc import Iterator
@@ -19,6 +20,7 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.e2e import conftest as e2e_fixtures
 from tests.e2e.conftest import create_runner_bound_session, register_inline_agent
 from tests.integration._stdio_image_tool import (
     BETWEEN_TEXT,
@@ -40,7 +42,27 @@ def isolated_http_client(
 ) -> Iterator[httpx.Client]:
     """Start the existing live stack with disposable config and no keyring."""
     config_home = tmp_path_factory.mktemp("mcp-image-config")
+    # The pinned old server intentionally cannot import the current worktree.
+    # Supply only this standalone test policy, never the current application.
+    fixture_root = tmp_path_factory.mktemp("mcp-image-policy")
+    fixture_package = fixture_root / "tests" / "integration"
+    fixture_package.mkdir(parents=True)
+    (fixture_root / "tests" / "__init__.py").touch()
+    (fixture_package / "__init__.py").touch()
+    shutil.copyfile(
+        Path(__file__).with_name("_stdio_image_tool.py"), fixture_package / "_stdio_image_tool.py"
+    )
+    original_apply_server_env = e2e_fixtures.apply_server_env
+
+    def apply_fixture_server_env(env: dict[str, str], *args: Any, **kwargs: Any) -> dict[str, str]:
+        original_apply_server_env(env, *args, **kwargs)
+        env["PYTHONPATH"] = os.pathsep.join(
+            filter(None, (str(fixture_root), env.get("PYTHONPATH")))
+        )
+        return env
+
     with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(e2e_fixtures, "apply_server_env", apply_fixture_server_env)
         patch.setenv("OMNIGENT_CONFIG_HOME", str(config_home))
         patch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
         # The live runner is a sibling Python process; pytest's pythonpath
@@ -139,6 +161,9 @@ def _call_snapshot(
 
 
 @pytest.mark.asyncio
+# Native image-bearing MCP results were introduced in upstream #7444 (0.16).
+# The pinned 0.4 runner returns its legacy text serialization instead.
+@pytest.mark.min_runner_version("0.16.0")
 @pytest.mark.parametrize("adapter", ["codex", "native", "claude-sdk"])
 @pytest.mark.parametrize("upstream_error", [False, True])
 async def test_images_and_late_text_survive_production_http_and_adapters(

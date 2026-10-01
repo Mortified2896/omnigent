@@ -207,6 +207,10 @@ runs:
         mkdir -p "$E2E_TMP_BASE"
 
         EXTRA_ARGS=()
+        # Manually dispatched validation records the first attempt only.
+        if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          EXTRA_ARGS+=(--force-reruns=0)
+        fi
         if [[ "$NIGHTLY_FULL" != "true" ]]; then
           EXTRA_ARGS+=(-m "not nightly")
         fi

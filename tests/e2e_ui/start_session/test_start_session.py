@@ -633,7 +633,7 @@ async def _drive_permission_mode(base_url: str, session_id: str) -> None:
             await expect(perm).to_be_visible()
             await perm.click()
             perm_labels = (
-                "Default",
+                "Manual",
                 "Auto",
                 "Accept edits",
                 "Plan",
@@ -2326,7 +2326,7 @@ async def _drive_approval_mode(base_url: str, session_id: str) -> None:
 
 
 def test_start_session_bypass_sandbox(seeded_session: tuple[str, str]) -> None:
-    """Codex full-bypass reaches create and seeds the next session.
+    """Codex full-bypass reaches create and resets for the next session.
 
     Bypass is the most-permissive option in the composer's permissions
     dropdown — Codex's ``--dangerously-bypass-approvals-and-sandbox`` stance.
@@ -2334,7 +2334,7 @@ def test_start_session_bypass_sandbox(seeded_session: tuple[str, str]) -> None:
     no warning banner. When armed, the create ``POST /v1/sessions`` must carry
     the ``omnigent.codex_native.bypass_sandbox: "1"`` conversation label so the
     runner launches Codex with the bypass flag. After returning to New Session,
-    the same dropdown must still show bypass rather than resetting to Default.
+    this launch-only opt-in must reset to Default.
     """
     base_url, session_id = seeded_session
     _run_in_fresh_loop(_drive_bypass_sandbox(base_url, session_id))
@@ -2408,9 +2408,10 @@ async def _drive_bypass_sandbox(base_url: str, session_id: str) -> None:
             await page.get_by_test_id("new-chat-landing-input").wait_for(
                 state="visible", timeout=30_000
             )
-            await expect(approval).to_contain_text("Bypass approvals & sandbox")
+            await expect(approval).to_contain_text("Default")
             await approval.click()
             await expect(bypass).to_be_visible()
+            await expect(bypass).not_to_be_checked()
         finally:
             await browser.close()
 

@@ -91,8 +91,8 @@ async def _drive_composer_proposal(
         context = await browser.new_context(
             viewport={"width": 390, "height": 844},
             device_scale_factor=2,
-            is_mobile=True,
-            has_touch=True,
+            is_mobile=submit_method == "button",
+            has_touch=submit_method == "button",
         )
         page = await context.new_page()
         try:
@@ -249,34 +249,36 @@ async def _drive_composer_proposal(
             await expect(
                 page.get_by_text("Allowed answers — shared by you and the advisor")
             ).to_be_visible()
-            await page.keyboard.press("Escape")
-            await expect(page.get_by_test_id("new-chat-landing-inline-model")).to_be_visible()
-            await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_be_visible()
+            await page.get_by_role("button", name="Advisor settings", exact=True).click()
+            await expect(
+                page.get_by_role("combobox", name="Your model", exact=True)
+            ).to_be_visible()
+            await expect(
+                page.get_by_role("combobox", name="Your reasoning effort", exact=True)
+            ).to_be_visible()
             await expect(page.get_by_test_id("model-advisor-advisor-choice")).to_be_visible()
             await expect(page.get_by_text("Your model and reasoning", exact=False)).to_have_count(
                 0
             )
 
-            model_picker = page.get_by_test_id("new-chat-landing-inline-model")
+            model_picker = page.get_by_role("combobox", name="Your model", exact=True)
             agent_picker = page.get_by_test_id("new-chat-landing-agent-select")
-            gear_picker = page.get_by_test_id("new-chat-landing-config-gear")
+            permission_picker = page.get_by_test_id("new-chat-landing-permission-chip")
             await model_picker.click()
-            await page.locator(
-                '[role="option"][data-model-id="gpt-5.5"][data-access-lane="codex-direct"]'
-            ).click()
-            effort_picker = page.get_by_test_id("new-chat-landing-inline-effort")
+            await page.locator('[role="option"][data-model-id="gpt-5.5"]').click()
+            effort_picker = page.get_by_role("combobox", name="Your reasoning effort", exact=True)
             agent_box = await agent_picker.bounding_box()
-            gear_box = await gear_picker.bounding_box()
+            permission_box = await permission_picker.bounding_box()
             model_box = await model_picker.bounding_box()
             effort_box = await effort_picker.bounding_box()
             assert (
                 agent_box is not None
-                and gear_box is not None
+                and permission_box is not None
                 and model_box is not None
                 and effort_box is not None
             )
-            assert abs(agent_box["y"] - model_box["y"]) < 3
-            assert abs(gear_box["y"] - model_box["y"]) < 3
+            assert abs(agent_box["y"] - permission_box["y"]) < 3
+            assert model_box["y"] + model_box["height"] <= agent_box["y"]
             assert abs(model_box["y"] - effort_box["y"]) < 2
             assert model_box["x"] >= 0
             assert effort_box["x"] + effort_box["width"] <= 390
@@ -313,14 +315,18 @@ async def _drive_composer_proposal(
             await page.get_by_test_id("model-advisor-advisor-choice").scroll_into_view_if_needed()
             await page.screenshot(path=str(tmp_path / "model-advisor-advisor-picker-mobile.png"))
             await page.set_viewport_size({"width": 1280, "height": 900})
-            await expect(page.get_by_test_id("new-chat-landing-inline-model")).to_be_visible()
-            await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_be_visible()
+            await expect(
+                page.get_by_role("combobox", name="Your model", exact=True)
+            ).to_be_visible()
+            await expect(
+                page.get_by_role("combobox", name="Your reasoning effort", exact=True)
+            ).to_be_visible()
             await page.screenshot(path=str(tmp_path / "model-advisor-composer-desktop.png"))
             await page.set_viewport_size({"width": 390, "height": 844})
             await page.get_by_test_id("new-chat-landing-input").fill("Compare the selected models")
             if submit_method == "enter":
-                # Touch-primary Enter inserts a newline. Exercise keyboard
-                # submission on desktop after validating the mobile layout.
+                # Use the keyboard context on desktop; resizing a touch context
+                # does not change its primary-pointer/Enter semantics.
                 await page.set_viewport_size({"width": 1280, "height": 900})
                 await page.get_by_test_id("new-chat-landing-input").press("Enter")
             else:

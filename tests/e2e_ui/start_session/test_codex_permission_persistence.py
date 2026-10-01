@@ -1,4 +1,4 @@
-"""Codex launch permissions survive reloads and visits to other harnesses."""
+"""Codex presets persist; the launch-only bypass opt-in resets."""
 
 from __future__ import annotations
 
@@ -77,15 +77,16 @@ async def _drive(
             await page.get_by_test_id(f"new-chat-landing-permission-option-{mode}").click()
             await expect(chip).to_have_accessible_name(f"Permission mode: {label}")
 
+            restored_label = "Default" if mode == "bypass" else label
             await page.reload()
-            await expect(chip).to_have_accessible_name(f"Permission mode: {label}")
+            await expect(chip).to_have_accessible_name(f"Permission mode: {restored_label}")
             await select_landing_agent(page, "ag_claude_e2e")
             await chip.click()
             await page.get_by_test_id("new-chat-landing-permission-option-plan").click()
             await select_landing_agent(page, "ag_codex_e2e")
-            await expect(chip).to_have_accessible_name(f"Permission mode: {label}")
+            await expect(chip).to_have_accessible_name(f"Permission mode: {restored_label}")
             await page.reload()
-            await expect(chip).to_have_accessible_name(f"Permission mode: {label}")
+            await expect(chip).to_have_accessible_name(f"Permission mode: {restored_label}")
 
             await page.get_by_test_id("new-chat-landing-input").fill("Check saved permissions")
             async with page.expect_request(
@@ -94,9 +95,7 @@ async def _drive(
                 await page.get_by_test_id("new-chat-landing-submit").click()
             body = (await created.value).post_data_json
             assert body.get("terminal_launch_args") == args
-            assert body["labels"].get("omnigent.codex_native.bypass_sandbox") == (
-                "1" if mode == "bypass" else None
-            )
+            assert body["labels"].get("omnigent.codex_native.bypass_sandbox") is None
         finally:
             await page.context.close()
             await browser.close()

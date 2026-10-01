@@ -100,6 +100,7 @@ def sessions_url(appearance_url: str, browser_contract: BrowserContract) -> tupl
     )
     for session in sessions:
         session_id = session["id"]
+        browser_contract.session_review(session_id)
         browser_contract.json(f"/v1/sessions/{session_id}", session)
         browser_contract.json(f"/v1/sessions/{session_id}/items", empty_list)
         browser_contract.json(

@@ -106,6 +106,7 @@ def seeded_session(browser_contract: BrowserContract) -> BrowserSession:
     browser_contract.json(
         "/v1/sessions", {**empty, "data": [row], "first_id": sid, "last_id": sid}
     )
+    browser_contract.session_review(sid)
     browser_contract.json(api, row)
     browser_contract.json(
         f"{api}/items",

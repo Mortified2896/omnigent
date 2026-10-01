@@ -72,7 +72,7 @@ async def test_codex_source_catalog_and_default(
     config_path.write_text(config)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr(app_server, "_codex_home_config_source_from_env", lambda: source)
-    monkeypatch.setattr(app_server, "_clean_codex_env", lambda: dict(env))
+    monkeypatch.setattr(app_server, "_clean_codex_env", lambda env_passthrough=None: dict(env))
     # Resolve the override through Codex's config/read, without an Omnigent pin.
     launch = app_server.NativeCodexLaunch(
         ['model="catalog-first"'] if override else [], None, None

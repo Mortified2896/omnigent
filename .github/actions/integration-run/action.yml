@@ -159,6 +159,10 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p artifacts "$INTEGRATION_TMP_BASE"
+        RETRY_ARGS=()
+        if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          RETRY_ARGS+=(--force-reruns=0)
+        fi
         # --capture=no + --log-cli-level=INFO stream live so progress shows
         # even if the step hits its timeout before buffered output renders.
         # --timeout=180 caps a single hung test (see e2e.yml).
@@ -173,7 +177,7 @@ runs:
             --basetemp="$INTEGRATION_TMP_BASE" \
             --junitxml="artifacts/integration-${HARNESS}.xml" \
             --capture=no --log-cli-level=INFO \
-            -v --tb=long --showlocals --log-level=INFO -r a
+            -v --tb=long --showlocals --log-level=INFO -r a "${RETRY_ARGS[@]}"
 
     - name: Upload server/runner logs on failure
       if: ${{ failure() || cancelled() }}

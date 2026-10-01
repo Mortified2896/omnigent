@@ -6631,6 +6631,58 @@ async def test_session_peek_returns_chronological_projected_items() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_session_peek_pages_past_resource_notifications() -> None:
+    from omnigent.runner.tool_dispatch import _execute_session_query_tool
+
+    cursors: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/sessions/conv_target/items":
+            after = request.url.params.get("after")
+            cursors.append(after)
+            if after is None:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [{"id": "audio-event", "type": "resource_event"}],
+                        "has_more": True,
+                    },
+                )
+            assert after == "audio-event"
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "report",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "complete report tail"}],
+                        }
+                    ],
+                    "has_more": False,
+                },
+            )
+        if request.url.path == "/v1/sessions/conv_target":
+            return httpx.Response(200, json={"id": "conv_target", "title": "writer:report"})
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    async with _session_query_client(handler) as client:
+        out = json.loads(
+            await _execute_session_query_tool(
+                "sys_session_get_history",
+                json.dumps({"conversation_id": "conv_target", "tail_items": 1}),
+                conversation_id="conv_caller",
+                server_client=client,
+            )
+        )
+    assert cursors == [None, "audio-event"]
+    assert out["items"] == [
+        {"type": "message", "role": "assistant", "text": "complete report tail"}
+    ]
+
+
 _REST_HISTORY_CONTENT_SCENARIOS = [
     pytest.param(3000, 4000, "R" * 3000, id="raised-limit"),
     pytest.param(3000, None, "R" * 2000 + " [truncated]", id="default-limit"),

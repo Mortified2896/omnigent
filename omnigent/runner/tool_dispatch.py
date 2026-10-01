@@ -6138,26 +6138,36 @@ async def _session_get_history_via_rest(
     content_offset_chars = _clamp_history_offset_chars(args.get("content_offset_chars", 0))
     if isinstance(content_offset_chars, str):
         return content_offset_chars
-    try:
-        resp = await server_client.get(
-            f"/v1/sessions/{target_id}/items",
-            params={"limit": tail_items, "order": "desc"},
-            timeout=30.0,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": f"sys_session_get_history failed: {exc}"})
-    if resp.status_code == 404:
-        return json.dumps({"error": "session_not_found", "conversation_id": target_id})
-    if resp.status_code in (401, 403):
-        return json.dumps({"error": "session_out_of_tree", "conversation_id": target_id})
-    if resp.status_code != 200:
-        return json.dumps({"error": f"sys_session_get_history returned {resp.status_code}"})
-    data: list[_JsonObject] = resp.json().get("data", [])
+    data: list[_JsonObject] = []
+    after: str | None = None
+    while len(data) < tail_items:
+        params: dict[str, str | int] = {"limit": tail_items, "order": "desc"}
+        if after is not None:
+            params["after"] = after
+        try:
+            resp = await server_client.get(
+                f"/v1/sessions/{target_id}/items", params=params, timeout=30.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"error": f"sys_session_get_history failed: {exc}"})
+        if resp.status_code == 404:
+            return json.dumps({"error": "session_not_found", "conversation_id": target_id})
+        if resp.status_code in (401, 403):
+            return json.dumps({"error": "session_out_of_tree", "conversation_id": target_id})
+        if resp.status_code != 200:
+            return json.dumps({"error": f"sys_session_get_history returned {resp.status_code}"})
+        page = resp.json()
+        rows: list[_JsonObject] = page.get("data", [])
+        data.extend(item for item in rows if item.get("type") != "resource_event")
+        next_after = _optional_string(rows[-1].get("id")) if rows else None
+        if not page.get("has_more") or next_after is None or next_after == after:
+            break
+        after = next_after
     # ``order="desc"`` returns newest-first; reverse to chronological so
     # the LLM reads top-to-bottom (matches the in-process peek).
     items: list[_JsonObject] = [
         _project_api_item(it, max_chars=content_max_chars, offset_chars=content_offset_chars)
-        for it in reversed(data)
+        for it in reversed(data[:tail_items])
     ]
     meta = await _fetch_peek_meta(target_id, server_client)
     # A parked elicitation never lands in the conversation store (it

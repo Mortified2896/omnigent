@@ -1039,7 +1039,9 @@ def test_fully_visible_transcript_paints_no_scrollbar(
 ) -> None:
     chat = chat_session_contract
     _single_reply(chat, 140)
-    open_live(page, chat, {"width": 1400, "height": 800})
+    # Include the customized human review/provenance controls in the short
+    # transcript's viewport; the scrollbar assertions below remain unchanged.
+    open_live(page, chat, {"width": 1400, "height": 1000})
     page.get_by_role("button", name="Expand right panel").click()
     expect(page.get_by_role("complementary", name="Workspace")).to_be_visible()
     expect(page.get_by_text("word0000", exact=False)).to_be_visible()

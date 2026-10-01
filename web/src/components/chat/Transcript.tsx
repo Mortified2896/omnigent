@@ -1,7 +1,7 @@
 import { O3SessionReview } from "@/components/O3SessionReview";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
   Conversation,
@@ -531,6 +531,16 @@ export function resolveTranscriptViewOffset(
 }
 
 const MAX_CACHED_VIEWS = 24;
+// Review/audio metadata can resize an already measured row while the reader
+// scrolls upward. Keep entirely off-screen rows anchored in either direction;
+// growth inside the visible row must still stay below the reader's position.
+const holdMeasuredRows: NonNullable<
+  Virtualizer<HTMLElement, Element>["shouldAdjustScrollPositionOnItemSizeChange"]
+> = (item, _delta, instance) => {
+  const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments;
+  return instance.itemSizeCache.has(item.key) ? item.end <= offset : item.start < offset;
+};
+
 const transcriptViewCache = new Map<string, TranscriptViewSnapshot>();
 function rememberTranscriptView(convId: string, snap: TranscriptViewSnapshot): void {
   transcriptViewCache.delete(convId); // re-insert to refresh LRU order
@@ -721,6 +731,7 @@ export function VirtualBubbleList({
     overscan: 6,
     scrollMargin,
   });
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = holdMeasuredRows;
 
   // An assistant bubble is keyed by its first item, so a history page that
   // continues the top turn renames it. Keep rendering it under the key its row
@@ -951,7 +962,7 @@ export function VirtualBubbleList({
       }
     }
     prependCommitRef.current = false;
-    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = holdMeasuredRows;
     const firstKey = bubbles.length > 0 ? bubbleKey(bubbles[0]!) : undefined;
     const prevFirstKey = prevFirstKeyRef.current;
     const prevSnapshot = rowSnapshotRef.current;

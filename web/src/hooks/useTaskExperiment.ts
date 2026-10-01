@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
+import { isTempConvId } from "@/lib/tempConversationId";
 
 export type TaskOutcome = "success" | "partial" | "failed" | "not_sure";
 export interface TaskOutcomeInput {
@@ -41,7 +42,7 @@ export function useTaskExperiment(sessionId: string) {
       if (!response.ok) throw new Error("Could not load task outcomes");
       return (await response.json()) as ExperimentEvent[];
     },
-    enabled: !!sessionId,
+    enabled: !!sessionId && !isTempConvId(sessionId),
   });
 }
 export function useSaveTaskOutcome(sessionId: string, responseId: string) {

@@ -274,6 +274,8 @@ def clipboard_browser(
         session_id = request.url.split("/v1/sessions/", 1)[1].split("?", 1)[0]
         return next(row for row in sessions if row["id"] == session_id)
 
+    for session_id in session_ids:
+        browser_contract.session_review(session_id)
     browser_contract.json(session_detail, _session)
     browser_contract.json(
         re.compile(rf"/v1/sessions/({'|'.join(map(re.escape, session_ids))})/items(?:\?.*)?$"),

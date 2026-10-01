@@ -3,7 +3,7 @@
 Pick Codex and "Bypass approvals & sandbox", switch to Claude Code and pick
 "Plan", then return to Codex. The composer remembers each harness's last mode
 pick (localStorage via ``rememberPickerOptions``), so returning to Codex must
-restore bypass — and a second switch back to Claude must restore Plan.
+reset bypass — and a second switch back to Claude must restore Plan.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def _codex_and_claude_agents_body() -> str:
     )
 
 
-def test_codex_bypass_survives_agent_switch(seeded_session: tuple[str, str]) -> None:
+def test_codex_bypass_resets_on_agent_switch(seeded_session: tuple[str, str]) -> None:
     _run_in_fresh_loop(_drive(*seeded_session))
 
 
@@ -96,7 +96,7 @@ async def _drive(base_url: str, session_id: str) -> None:
             await expect(chip).to_contain_text("Plan")
 
             await select_landing_agent(page, "ag_codex_e2e")
-            await expect(chip).to_contain_text("Bypass approvals & sandbox")
+            await expect(chip).to_contain_text("Default")
 
             await select_landing_agent(page, "ag_claude_e2e")
             await expect(chip).to_contain_text("Plan")

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from omnigent.entities.conversation import MessageData, NewConversationItem
+from omnigent.entities.conversation import MessageData, NewConversationItem, ResourceEventData
 from omnigent.runtime import pending_elicitations
 from omnigent.runtime.prompt import SUBAGENT_WAKE_NOTICE_SHAPE
 from omnigent.spec.types import AgentSpec, ExecutorSpec
@@ -423,6 +423,33 @@ def test_peek_returns_items_chronological(session_fixture: _Fixture) -> None:
     assert items[0]["content"] == "find the auth bug"
     assert items[1]["role"] == "assistant"
     assert items[1]["content"] == "looking at handlers.py"
+
+
+def test_peek_tail_pages_past_resource_notifications(session_fixture: _Fixture) -> None:
+    session_fixture.conv_store.append(
+        session_fixture.child_conv_id,
+        [
+            NewConversationItem(
+                type="resource_event",
+                response_id="resource-notification",
+                data=ResourceEventData(
+                    event_type="session.resource.created",
+                    resource_id=f"audio-{index}",
+                    resource_type="audio",
+                ),
+            )
+            for index in range(3)
+        ],
+    )
+    payload = json.loads(
+        SysSessionGetHistoryTool().invoke(
+            json.dumps({"conversation_id": session_fixture.child_conv_id, "tail_items": 1}),
+            session_fixture.ctx,
+        )
+    )
+    assert payload["items"] == [
+        {"role": "assistant", "type": "text", "content": "looking at handlers.py"}
+    ]
 
 
 _HISTORY_CONTENT_SCENARIOS = [

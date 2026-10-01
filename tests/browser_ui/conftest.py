@@ -127,6 +127,22 @@ class BrowserContract:
         """Register an HTTP mock; later registrations win over the deny route."""
         self.context.route(url, handler)
 
+    def session_review(self, session_id: str) -> None:
+        """Explicit idle human-review contract for a fixture-owned session."""
+        api = f"/v1/sessions/{session_id}"
+        self.json(f"{api}/task-experiment", [])
+        self.json(f"{api}/generated-audio", {"data": []})
+        self.json(
+            re.compile(
+                rf"^{re.escape(self.base_url + api)}/response-attribution/[^/?]+(?:\?.*)?$"
+            ),
+            None,
+        )
+        self.json(
+            f"{api}/scoring-policy",
+            {"score_eligible": False, "is_test": True, "retention": None, "responses": {}},
+        )
+
     def json(
         self,
         path: str | re.Pattern[str],

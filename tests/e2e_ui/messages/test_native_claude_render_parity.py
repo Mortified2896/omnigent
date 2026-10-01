@@ -710,9 +710,11 @@ def _send_turn_and_settle(
     set_fallback_mock_llm(mock_llm_server_url, "default", assistant_token)
     set_fallback_mock_llm(mock_llm_server_url, _CLAUDE_MOCK_MODEL, assistant_token)
     _send(page, _turn_prompt(index, user_marker, assistant_token))
-    expect(page.locator(_ASSISTANT)).to_have_count(
-        expected_assistant_bubbles, timeout=turn_timeout_ms
-    )
+    # The undelivered-message error is also an assistant-role row. Count
+    # actual response text here; the journey separately asserts its error row.
+    expect(
+        page.locator(_ASSISTANT).filter(has=page.get_by_test_id("assistant-text-section"))
+    ).to_have_count(expected_assistant_bubbles, timeout=turn_timeout_ms)
     expect(page.locator(_WORKING)).to_have_count(0, timeout=turn_timeout_ms)
     _wait_for_transcript_message(page, base_url, session_id, user_marker, role="user")
 
