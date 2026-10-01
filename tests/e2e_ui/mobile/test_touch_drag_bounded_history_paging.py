@@ -138,11 +138,16 @@ def _track_items_requests(page, session_id: str) -> None:
         (() => {{
           const endpoint = {json.dumps(endpoint)};
           window.__itemsUrls = [];
+          window.__itemsPending = 0;
           const originalFetch = window.fetch.bind(window);
           window.fetch = (input, init) => {{
             const url = typeof input === "string" ? input : input.url;
-            if (url.includes(endpoint)) window.__itemsUrls.push(url);
-            return originalFetch(input, init);
+            if (!url.includes(endpoint)) return originalFetch(input, init);
+            window.__itemsUrls.push(url);
+            window.__itemsPending += 1;
+            return originalFetch(input, init).finally(() => {{
+              window.__itemsPending -= 1;
+            }});
           }};
         }})();
         """
@@ -218,15 +223,18 @@ def test_one_touch_drag_loads_bounded_history(
         # One small downward finger drag — the reader peeking at what's above.
         page.evaluate(_TOUCH_DRAG)
 
-        # Let paging settle: wait until no new /items request lands for a
-        # while, so a chaining regression is fully counted rather than raced.
+        # Let paging settle after responses and their rendering finish. A quiet
+        # request count alone also describes a slow page still in flight; that
+        # must not end the observation before the page can resume the seek.
         deadline = time.monotonic() + _SETTLE_DEADLINE_SECONDS
         last_count = page.evaluate("window.__itemsUrls.length")
         settled_for = 0.0
         while time.monotonic() < deadline and settled_for < _SETTLE_SECONDS:
             page.wait_for_timeout(500)
             current = page.evaluate("window.__itemsUrls.length")
-            if current == last_count:
+            pending = page.evaluate("window.__itemsPending")
+            loading = page.get_by_text("Loading earlier messages", exact=False).count()
+            if current == last_count and pending == 0 and loading == 0:
                 settled_for += 0.5
             else:
                 settled_for = 0.0

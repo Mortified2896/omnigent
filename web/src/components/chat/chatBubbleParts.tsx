@@ -1493,11 +1493,11 @@ export function HistoryAutoLoader({
     const itemsChanged = !generationChanged && oldestItemIdRef.current !== oldestItemId;
     const scrollPositionChanged =
       !generationChanged && handledScrollRevisionRef.current !== scrollRevision;
-    oldestItemIdRef.current = oldestItemId;
     handledScrollRevisionRef.current = scrollRevision;
 
     if (generationChanged) {
       generationRef.current = historyGeneration;
+      oldestItemIdRef.current = oldestItemId;
       // A new window is a new open: require a fresh gesture, with a fresh budget.
       scrolledUpRef.current = false;
       seekBaseRowsRef.current = null;
@@ -1515,7 +1515,10 @@ export function HistoryAutoLoader({
     ) {
       return;
     }
-    if (el.scrollTop >= historyLoadThreshold(el)) return;
+    if (el.scrollTop >= historyLoadThreshold(el)) {
+      oldestItemIdRef.current = oldestItemId;
+      return;
+    }
     // A finger-armed request waits while the pane is still moving, so the page
     // cannot land mid-fling. A pane that has been still for the settle window
     // fetches at once — a slow drag that stopped at the top has no momentum to
@@ -1535,6 +1538,10 @@ export function HistoryAutoLoader({
         return;
       }
     }
+    // A folded page can land while row measurement still moves the pane.
+    // Retain its cursor through the touch-settle timer so that timer can resume
+    // the seek; consuming it earlier makes the timer look like movement alone.
+    oldestItemIdRef.current = oldestItemId;
     if (scrolledUpRef.current) {
       scrolledUpRef.current = false;
       // A gesture's first page is free; the budget bounds the pages after it,

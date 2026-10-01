@@ -1047,6 +1047,35 @@ describe("HistoryAutoLoader", () => {
     nowSpy.mockRestore();
   });
 
+  it("retains a folded page cursor while touch movement settles", () => {
+    let now = 1000;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const loadMoreHistory = vi.fn(async () => {
+      useChatStore.setState({ loadingMoreHistory: true });
+    });
+    useChatStore.setState({ hasMoreHistory: true, oldestItemId: "item_50", loadMoreHistory });
+    const scrollRoot = document.createElement("div");
+    setScrollMetrics(scrollRoot, { scrollTop: 0, scrollHeight: 400, clientHeight: 800 });
+    stickContext.scrollRef.current = scrollRoot;
+
+    render(<HistoryAutoLoader rowCount={1} />);
+    fingerDragUpAndSettle(scrollRoot);
+    expect(loadMoreHistory).toHaveBeenCalledTimes(1);
+
+    // Row measurement moves the pane just before the folded page lands.
+    fireEvent.scroll(scrollRoot);
+    act(() => {
+      useChatStore.setState({ loadingMoreHistory: false, oldestItemId: "item_49" });
+    });
+    expect(loadMoreHistory).toHaveBeenCalledTimes(1);
+    now += 200;
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(loadMoreHistory).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
+  });
+
   it("fetches at once for a finger drag that has already stopped", () => {
     // A slow drag to the top, finger held still: nothing is moving, so there
     // is no momentum to protect and the loading row must not lag.
