@@ -930,8 +930,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     </div>
   ) : null;
   const composerControls = (
-    <div className="col-span-2 flex w-full min-w-0 flex-col gap-2 md:basis-full">
-      {controls}
+    <div className="col-span-2 flex w-full min-w-0 flex-col gap-1 md:basis-full">
       {humanControls}
       {editor.draft?.enabled ? (
         <div
@@ -1004,7 +1003,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           ) : null}
         </div>
       ) : null}
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        {controls}
         <Button
           type="button"
           size="sm"
