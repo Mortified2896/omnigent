@@ -142,6 +142,11 @@ def _response_usage(output_tokens: int, overrides: dict | None = None) -> dict:
     """Merge scripted token counts and derive the total when it is omitted."""
     usage = {"input_tokens": 10, "output_tokens": output_tokens, **(overrides or {})}
     usage.setdefault("total_tokens", usage["input_tokens"] + usage["output_tokens"])
+    usage["input_tokens_details"] = {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        **(usage.get("input_tokens_details") or {}),
+    }
     return usage
 
 

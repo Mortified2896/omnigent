@@ -169,4 +169,11 @@ def test_database_rejects_invalid_rating(conversation_store):
     with pytest.raises((IntegrityError, OperationalError)) as caught:
         with store._conv_session("test_rating_constraint") as session:
             session.execute(update(SqlResponseFeedback).values(rating=0))
-    assert "ck_response_feedback_rating" in str(caught.value)
+    constraints = inspect(store._conv_engine).get_check_constraints("response_feedback")
+    assert any(check["name"] == "ck_response_feedback_rating" for check in constraints)
+    if store._conv_engine.dialect.name == "cockroachdb":
+        # CRDB 23.2 reports the CHECK expression rather than its declared name.
+        assert "rating IN" in str(caught.value)
+    else:
+        assert "ck_response_feedback_rating" in str(caught.value)
+    assert store.list_response_feedback(conv.id, "local")[0].rating == 1

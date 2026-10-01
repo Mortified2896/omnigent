@@ -30,6 +30,19 @@ def _crdb_engine(db_uri: str) -> Engine:
     return engine
 
 
+def _joined_branch_revision(upstream_revision: str) -> tuple[str, str]:
+    # Downgrading the upstream arm leaves the already-applied custom arm intact.
+    return tuple(sorted(("c91f6a2d7e40", upstream_revision)))
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_schema(db_uri: str):
+    engine = get_or_create_engine(db_uri)
+    yield
+    if is_cockroachdb(engine.dialect.name):
+        _initialize_or_verify_schema(engine, db_uri)
+
+
 def test_cockroachdb_bootstrap_is_at_head(db_uri: str) -> None:
     engine = _crdb_engine(db_uri)
     assert _get_current_db_revision(engine) == _get_head_db_revision(db_uri)
@@ -69,7 +82,7 @@ def test_cockroachdb_upgrades_from_supported_baseline(db_uri: str) -> None:
         command.downgrade(config, CRDB_BASELINE_REVISION)
         connection.commit()
 
-    assert _get_current_db_revision(engine) == CRDB_BASELINE_REVISION
+    assert _get_current_db_revision(engine) == _joined_branch_revision(CRDB_BASELINE_REVISION)
 
     _initialize_or_verify_schema(engine, db_uri)
 
@@ -149,7 +162,7 @@ def test_account_generation_backfill_resumes_after_schema_commit(db_uri) -> None
             _initialize_or_verify_schema(engine, db_uri)
     finally:
         event.remove(engine, "before_cursor_execute", interrupt_backfill)
-    assert _get_current_db_revision(engine) == "hh1b2c3d4e5f"
+    assert _get_current_db_revision(engine) == _joined_branch_revision("hh1b2c3d4e5f")
     assert "account_generation" in {c["name"] for c in inspect(engine).get_columns("users")}
 
     _initialize_or_verify_schema(engine, db_uri)

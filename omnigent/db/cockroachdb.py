@@ -119,10 +119,21 @@ def _crdb_revision_is_supported(db_uri: str, current: str | tuple[str, ...], hea
     from omnigent.db.utils import _build_alembic_config
 
     script = ScriptDirectory.from_config(_build_alembic_config(db_uri))
-    revisions = script.iterate_revisions(head, CRDB_BASELINE_REVISION)
-    supported = {revision.revision for revision in revisions} | {CRDB_BASELINE_REVISION}
     current_revisions = (current,) if isinstance(current, str) else current
-    return bool(current_revisions) and all(revision in supported for revision in current_revisions)
+    if not current_revisions:
+        return False
+    ancestors = {revision.revision for revision in script.iterate_revisions(head, "base")}
+    if not all(revision in ancestors for revision in current_revisions):
+        return False
+    # A joined graph can retain an applied sibling arm while the upstream arm
+    # is at its CRDB baseline. Require the baseline in the applied ancestry,
+    # rather than requiring every sibling to descend from that baseline.
+    applied = {
+        revision.revision
+        for current_revision in current_revisions
+        for revision in script.iterate_revisions(current_revision, "base")
+    }
+    return CRDB_BASELINE_REVISION in applied
 
 
 def _start_or_resume_crdb_bootstrap(
@@ -202,10 +213,11 @@ def _start_or_resume_crdb_bootstrap(
 def _crdb_model_indexes() -> tuple[Index, ...]:
     """Return every index declared by the current application models."""
     from omnigent.db.db_models import ConversationBase, OmnigentBase
+    from omnigent.model_advisor_repository import metadata as model_advisor_metadata
 
     entries = (
         (table.name, index)
-        for metadata in (OmnigentBase.metadata, ConversationBase.metadata)
+        for metadata in (OmnigentBase.metadata, ConversationBase.metadata, model_advisor_metadata)
         for table in metadata.tables.values()
         for index in table.indexes
     )
@@ -288,7 +300,13 @@ def _initialize_or_verify_crdb_schema(engine: Engine, db_uri: str) -> None:
     head = _get_head_db_revision(db_uri)
     current = _get_current_db_revision(engine)
     tables = set(inspect(engine).get_table_names())
-    expected = set(OmnigentBase.metadata.tables) | set(ConversationBase.metadata.tables)
+    from omnigent.model_advisor_repository import metadata as model_advisor_metadata
+
+    expected = (
+        set(OmnigentBase.metadata.tables)
+        | set(ConversationBase.metadata.tables)
+        | set(model_advisor_metadata.tables)
+    )
 
     if current is None:
         _start_or_resume_crdb_bootstrap(engine, version, tables, expected, head)
@@ -299,6 +317,9 @@ def _initialize_or_verify_crdb_schema(engine: Engine, db_uri: str) -> None:
                 connection.commit()
                 _prepare_crdb_schema_transaction(connection, version)
                 ConversationBase.metadata.create_all(bind=connection)
+                connection.commit()
+                _prepare_crdb_schema_transaction(connection, version)
+                model_advisor_metadata.create_all(bind=connection)
                 connection.commit()
             missing = expected - set(inspect(engine).get_table_names())
             if missing:

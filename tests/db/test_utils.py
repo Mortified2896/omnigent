@@ -57,6 +57,25 @@ def _clean_engine_cache() -> None:
     clear_engine_cache()
 
 
+@pytest.mark.parametrize(
+    ("current", "supported"),
+    [
+        ("d016c91f6a2d", True),
+        ("gf1b2c3d4e5f", True),
+        (("c91f6a2d7e40", "gf1b2c3d4e5f"), True),
+        (("c91f6a2d7e40", "hh1b2c3d4e5f"), True),
+        (("c91f6a2d7e40", "ge1b2c3d4e5f"), False),
+        ("c91f6a2d7e40", False),
+        ("ge1b2c3d4e5f", False),
+        ((), False),
+    ],
+)
+def test_crdb_supported_revision_requires_applied_baseline(current, supported):
+    from omnigent.db.cockroachdb import _crdb_revision_is_supported
+
+    assert _crdb_revision_is_supported("sqlite://", current, "d016c91f6a2d") is supported
+
+
 def test_non_sqlite_engine_has_pool_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
