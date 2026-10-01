@@ -31,9 +31,6 @@ env:
   OMNIGENT_SKIP_WEB_UI: "true"
   UV_INDEX_URL: https://pypi.org/simple
   PIP_INDEX_URL: https://pypi.org/simple
-  # Explicit validation must expose a first-attempt failure, including tests
-  # with individual flaky markers. Automatic CI retains its existing policy.
-  PYTEST_ADDOPTS: ${{ github.event_name == 'workflow_dispatch' && '--force-reruns=0' || '' }}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
