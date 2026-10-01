@@ -64,7 +64,8 @@ jobs:
   # runs on schedule/dispatch and covers the broader version history.
   resolve-latest:
     name: Resolve latest stable tag
-    # PRs: always. Schedule/dispatch: always.
+    # Forks opt into the inherited full-history scheduled sweep.
+    if: github.event_name != 'schedule' || github.repository == 'omnigent-ai/omnigent' || vars.ENABLE_SCHEDULED_BACKCOMPAT == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -163,7 +164,7 @@ jobs:
     name: setup
     # The full pairwise matrix is expensive — skip it on PR triggers (the
     # fast smoke jobs above cover the PR case).
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.event_name != 'schedule' || github.repository == 'omnigent-ai/omnigent' || vars.ENABLE_SCHEDULED_BACKCOMPAT == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -256,7 +257,7 @@ jobs:
   # tests/e2e_ui for every old server tag × shard (server axis only).
   setup-ui:
     name: setup-ui
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.event_name != 'schedule' || github.repository == 'omnigent-ai/omnigent' || vars.ENABLE_SCHEDULED_BACKCOMPAT == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

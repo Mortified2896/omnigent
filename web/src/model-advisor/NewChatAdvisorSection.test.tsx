@@ -672,6 +672,11 @@ it("keeps settings hidden until requested and exposes a compact Advisor toggle",
     />,
   );
   const toggle = await screen.findByRole("button", { name: "Advisor on" });
+  const recommender = screen.getByRole("combobox", { name: "Recommender model" });
+  const settings = screen.getByRole("button", { name: "Advisor settings" });
+  expect(
+    recommender.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Model advisor settings" })).toBeNull();
   expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toBeDefined();
   fireEvent.click(toggle);

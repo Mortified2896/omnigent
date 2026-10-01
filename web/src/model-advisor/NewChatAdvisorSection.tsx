@@ -782,18 +782,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           Advisor {editor.draft?.enabled ? "on" : "off"}
         </Button>
       ) : null}
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        disabled={round.busy || disabled}
-        onClick={() => setSettingsOpen((open) => !open)}
-        aria-expanded={settingsOpen}
-        aria-label="Advisor settings"
-      >
-        <SettingsIcon />
-        Advisor settings
-      </Button>
     </div>
   );
   const settingsPanel = settingsOpen ? (
@@ -1016,6 +1004,20 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           ) : null}
         </div>
       ) : null}
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={round.busy || disabled}
+          onClick={() => setSettingsOpen((open) => !open)}
+          aria-expanded={settingsOpen}
+          aria-label="Advisor settings"
+        >
+          <SettingsIcon />
+          Advisor settings
+        </Button>
+      </div>
     </div>
   );
   return (

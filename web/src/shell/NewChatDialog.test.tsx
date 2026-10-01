@@ -959,7 +959,7 @@ describe("NewChatLandingScreen", () => {
     );
 
     const primaryActions = screen.getByTestId("new-chat-landing-primary-actions");
-    expect(primaryActions).toHaveClass("min-w-0", "flex-wrap", "col-span-3", "md:justify-end");
+    expect(primaryActions).toHaveClass("min-w-0", "md:flex-wrap", "col-span-3", "md:justify-end");
     expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveClass(
       "min-w-0",
       "max-w-full",
@@ -970,7 +970,7 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
 
     const model = screen.getByTestId("new-chat-landing-inline-model");
-    expect(model).toHaveClass("w-28", "max-w-full", "sm:w-60");
+    expect(model).toHaveClass("w-full", "min-w-0", "max-w-full", "md:w-60");
     expect(primaryActions).toContainElement(model);
     expect(screen.getByTestId("new-chat-landing-model-effort")).toContainElement(model);
     expect(screen.getByTestId("new-chat-landing-model-effort")).toContainElement(
@@ -1504,12 +1504,12 @@ describe("NewChatLandingScreen", () => {
 
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "None",
       "Low",
       "Medium",
       "High",
       "XHigh",
       "Max",
+      "None",
     ]);
   });
 
@@ -1634,11 +1634,11 @@ describe("NewChatLandingScreen", () => {
 
     openSelect("new-chat-landing-inline-effort");
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "None",
       "Low",
       "Medium",
       "High",
       "XHigh",
+      "None",
     ]);
     expect(screen.queryByText("Max")).toBeNull();
     expect(screen.queryByText("Minimal")).toBeNull();
