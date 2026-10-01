@@ -19,6 +19,7 @@ interface Props {
   review: ProviderReviewView;
   options: readonly LogicalOption[];
   busy?: boolean;
+  approvalRequired?: boolean;
   error?: string | null;
   onConfirm: (overrideId: string | null, reason: string | null) => void;
   onCancel: () => void;
@@ -28,6 +29,7 @@ export function ProviderAdvisorReview({
   review,
   options,
   busy = false,
+  approvalRequired,
   error,
   onConfirm,
   onCancel,
@@ -35,12 +37,20 @@ export function ProviderAdvisorReview({
   return (
     <ReviewForRound
       key={review.round_fingerprint}
-      {...{ review, options, busy, error, onConfirm, onCancel }}
+      {...{ review, options, busy, approvalRequired, error, onConfirm, onCancel }}
     />
   );
 }
 
-function ReviewForRound({ review, options, busy, error, onConfirm, onCancel }: Props) {
+function ReviewForRound({
+  review,
+  options,
+  busy,
+  approvalRequired,
+  error,
+  onConfirm,
+  onCancel,
+}: Props) {
   const id = useId();
   const [override, setOverride] = useState(false);
   const [choice, setChoice] = useState(review.assigned_choice_id);
@@ -56,7 +66,14 @@ function ReviewForRound({ review, options, busy, error, onConfirm, onCancel }: P
   const available = byId.get(executionId)?.available === true;
   return (
     <section aria-label="Review model assignment" className="space-y-3 rounded-lg border p-4">
-      <h3 className="font-medium">Review before running</h3>
+      <h3 className="font-medium">
+        {approvalRequired ? "Approval required before running" : "Review before running"}
+      </h3>
+      {approvalRequired ? (
+        <p role="alert">
+          You marked this model as requiring approval. Approve it, choose another model, or cancel.
+        </p>
+      ) : null}
       <p className="text-sm">Your original choice: {label(review.human_choice_id)}</p>
       <p className="text-sm">Advisor recommendation: {label(review.advisor_choice_id)}</p>
       <p className="text-sm text-muted-foreground">{review.rationale}</p>

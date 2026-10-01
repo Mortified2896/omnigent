@@ -364,3 +364,32 @@ def test_migration_requires_explicit_policy_confirmation():
         effective_pool(migrated, CATALOG)
     confirmed = migrated.choose_transport("openai", "direct_only")
     assert effective_pool(confirmed, CATALOG) == (OPENAI_LOW,)
+
+
+def test_approval_models_roundtrip_without_changing_answer_pool_or_advisor_input():
+    guarded = replace(
+        PREFS, openai=replace(PREFS.openai, approval_model_ids=(OPENAI_LOW.model_id,))
+    )
+    assert ProviderPreferences.from_payload(guarded.to_payload()) == guarded
+    assert effective_pool(guarded, CATALOG) == effective_pool(PREFS, CATALOG)
+    assert advisor_input("Task", effective_pool(guarded, CATALOG)) == advisor_input(
+        "Task", effective_pool(PREFS, CATALOG)
+    )
+
+
+def test_existing_v3_preferences_default_to_no_approval_models():
+    payload = PREFS.to_payload()
+    for group in payload["providers"].values():
+        group.pop("approval_model_ids", None)
+    restored = ProviderPreferences.from_payload(payload)
+    assert restored.openai.approval_model_ids == ()
+    assert restored.glm.approval_model_ids == ()
+    assert restored.to_payload() == payload
+
+
+@pytest.mark.parametrize("value", ["model", None, [1], ["duplicate", "duplicate"]])
+def test_approval_models_validate_saved_input(value):
+    payload = PREFS.to_payload()
+    payload["providers"]["openai"]["approval_model_ids"] = value
+    with pytest.raises(ProviderPolicyError):
+        ProviderPreferences.from_payload(payload)

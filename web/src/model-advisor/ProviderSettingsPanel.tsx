@@ -129,7 +129,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
           </button>
           <p>
             {props.dirty
-              ? "Unsaved changes apply only to this round until saved."
+              ? "Changes apply to this chat. Save defaults to use them for new chats."
               : "Defaults are saved for new chats."}
           </p>
         </footer>
@@ -268,6 +268,22 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
                 <span>{selected.disabled_model_ids.includes(model.model_id) ? "Off" : "On"}</span>
               </label>
             </legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                aria-label={`Ask before running ${model.display_name}`}
+                checked={(selected.approval_model_ids ?? []).includes(model.model_id)}
+                onChange={(event) => {
+                  const approvalModels = new Set(selected.approval_model_ids ?? []);
+                  if (event.currentTarget.checked) approvalModels.add(model.model_id);
+                  else approvalModels.delete(model.model_id);
+                  onChange(
+                    updateProvider(value, provider, { approval_model_ids: [...approvalModels] }),
+                  );
+                }}
+              />
+              Ask for approval when the advisor chooses this model
+            </label>
             <div className="advisor-efforts">
               {model.options.map((option) => {
                 const checked = selected.selected_choice_ids.includes(option.choice_id);

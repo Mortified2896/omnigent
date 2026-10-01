@@ -1586,10 +1586,9 @@ describe("NewChatLandingScreen", () => {
     renderLanding({ features: { model_advisor: true } });
     selectAgent("a2");
 
-    const advisorSwitch = (await screen.findByRole("switch", {
-      name: /Compare my choice with the advisor/,
-    })) as HTMLInputElement;
-    expect(advisorSwitch.checked).toBe(false);
+    const advisorToggle = await screen.findByRole("button", { name: "Advisor off" });
+    await waitFor(() => expect(advisorToggle).not.toBeDisabled());
+    expect(advisorToggle).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("new-chat-landing-inline-model")).toBeTruthy();
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeTruthy();
     expect(screen.queryByTestId("model-advisor-advisor-choice")).toBeNull();
@@ -1600,10 +1599,10 @@ describe("NewChatLandingScreen", () => {
     openSelect("new-chat-landing-inline-effort");
     fireEvent.click(screen.getByRole("option", { name: "Medium" }));
 
-    fireEvent.click(advisorSwitch);
-    await waitFor(() =>
-      expect(screen.getByText("Allowed answers — shared by you and the advisor")).toBeTruthy(),
-    );
+    fireEvent.click(advisorToggle);
+    expect(screen.queryByText("Allowed answers — shared by you and the advisor")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Advisor settings" }));
+    expect(await screen.findByText("Allowed answers — shared by you and the advisor")).toBeTruthy();
     expect(screen.getByTestId("new-chat-landing-inline-model")).toHaveTextContent("GPT-5.5");
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Medium");
     expect(screen.queryByTestId("model-advisor-human-choice")).toBeNull();

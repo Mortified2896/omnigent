@@ -20,7 +20,11 @@ beforeEach(() => {
 });
 
 const api = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
+vi.mock("@/lib/identity", () => ({
+  authenticatedFetch: api,
+  getCurrentUserId: () => "local",
+  getCurrentAuthorId: () => "local",
+}));
 
 const OPTION_A = {
   candidate_id: "legacy-aaa",
@@ -108,6 +112,7 @@ function roundPayload(id: string, overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   api.mockReset();
+  localStorage.clear();
   advisorModelTarget = document.createElement("div");
   document.body.appendChild(advisorModelTarget);
   catalog = {
@@ -228,7 +233,7 @@ afterEach(() => {
 const GLM_PICK = { model: "glm-5.3", accessLane: "glm-direct", effort: "high" };
 
 function mountSection(overrides: Partial<Parameters<typeof NewChatAdvisorSection>[0]> = {}) {
-  return render(
+  const view = render(
     <NewChatAdvisorSection
       hostId="host_1"
       task="Write a test suite"
@@ -240,6 +245,9 @@ function mountSection(overrides: Partial<Parameters<typeof NewChatAdvisorSection
       {...overrides}
     />,
   );
+  const settings = screen.queryByRole("button", { name: "Advisor settings" });
+  if (settings) fireEvent.click(settings);
+  return view;
 }
 
 it("renders nothing without a host", () => {
@@ -649,4 +657,98 @@ it("resolves an explicit model and effort independently of a stale composer conn
     ([url, init]) => url === "/v1/model-advisor/rounds" && init?.method === "POST",
   );
   expect(JSON.parse(posted![1].body).human_choice_id).toBe(LOGICAL_A.choice_id);
+});
+
+it("keeps settings hidden until requested and exposes a compact Advisor toggle", async () => {
+  render(
+    <NewChatAdvisorSection
+      hostId="host_1"
+      task="Task"
+      humanPick={GLM_PICK}
+      launchAgentId="ag_1"
+      launchWorkspace="/repo"
+      onLaunched={() => {}}
+    />,
+  );
+  const toggle = await screen.findByRole("button", { name: "Advisor on" });
+  expect(screen.queryByRole("region", { name: "Model advisor settings" })).toBeNull();
+  expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toBeDefined();
+  fireEvent.click(toggle);
+  expect(screen.getByRole("button", { name: "Advisor off" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Advisor settings" }));
+  expect(screen.getByRole("region", { name: "Model advisor settings" })).toBeDefined();
+});
+
+it("saves approval flags and pauses an advisor-selected guarded model for approval or override", async () => {
+  mountSection({ humanPick: { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" } });
+  const approval = await screen.findByRole("checkbox", { name: "Ask before running GLM-5.3" });
+  fireEvent.click(approval);
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await waitFor(() => expect(api.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
+  const saved = api.mock.calls.find(([, init]) => init?.method === "PUT")!;
+  expect(JSON.parse(saved[1].body).preferences.providers.glm.approval_model_ids).toEqual([
+    "glm-5.3",
+  ]);
+  send();
+  await screen.findByRole("heading", { name: "Approval required before running" });
+  expect(api.mock.calls.some(([url]) => url.endsWith("/confirm"))).toBe(false);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Override this assignment" }));
+  fireEvent.change(screen.getByLabelText("Run instead"), {
+    target: { value: LOGICAL_A.choice_id },
+  });
+  fireEvent.change(screen.getByLabelText("Override reason"), {
+    target: { value: "Use the cheaper model" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Run selected model" }));
+  await waitFor(() => expect(api.mock.calls.some(([url]) => url.endsWith("/confirm"))).toBe(true));
+  const confirm = api.mock.calls.find(([url]) => url.endsWith("/confirm"))!;
+  expect(JSON.parse(confirm[1].body).override_candidate_id).toBe(LOGICAL_A.choice_id);
+});
+
+it("retains the original human and recommender choices when continuing a newly launched chat", async () => {
+  catalog.logical_options = [
+    LOGICAL_A,
+    LOGICAL_B,
+    { ...LOGICAL_B, choice_id: "choice-glm-medium", reasoning_effort: "medium" },
+  ];
+  const original = { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" };
+  const launched = vi.fn();
+  const view = mountSection({ humanPick: original, onLaunched: launched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("combobox", { name: "Recommender reasoning effort" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Medium" }));
+  send();
+  await screen.findByRole("button", { name: "Run selected model" });
+  fireEvent.click(screen.getByRole("button", { name: "Run selected model" }));
+  await waitFor(() => expect(launched).toHaveBeenCalledWith("conv_new"));
+  view.unmount();
+  render(
+    <NewChatAdvisorSection
+      hostId="host_1"
+      task=""
+      humanPick={GLM_PICK}
+      launchAgentId="ag_1"
+      launchWorkspace="/repo"
+      continueSessionId="conv_new"
+      autoSubmit={false}
+      enabledOverride
+      onHumanPickChange={async () => {}}
+      onLaunched={() => {}}
+    />,
+  );
+  expect(await screen.findByRole("combobox", { name: "Your model" })).toHaveTextContent("GPT-5.5");
+  expect(screen.getByRole("combobox", { name: "Your reasoning effort" })).toHaveTextContent(
+    "Medium",
+  );
+  expect(screen.getByRole("combobox", { name: "Recommender model" })).toHaveTextContent("GLM-5.3");
+  expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toHaveTextContent(
+    "Medium",
+  );
+  expect(
+    api.mock.calls.filter(([url, init]) => url.endsWith("/rounds") && init?.method === "POST"),
+  ).toHaveLength(1);
 });

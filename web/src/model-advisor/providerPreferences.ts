@@ -17,6 +17,7 @@ export interface ProviderSelection {
   collapsed: boolean;
   selected_choice_ids: string[];
   disabled_model_ids: string[];
+  approval_model_ids?: string[];
   transport_preference: TransportPreference;
 }
 

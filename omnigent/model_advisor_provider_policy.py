@@ -81,12 +81,14 @@ class ProviderSelection:
     selected_choice_ids: tuple[str, ...] = ()
     transport_preference: Preference = "omniroute_preferred"
     disabled_model_ids: tuple[str, ...] = ()
+    approval_model_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool or type(self.collapsed) is not bool:
             raise ProviderPolicyError("Provider switches must be boolean")
         _ids(self.selected_choice_ids)
         _ids(self.disabled_model_ids)
+        _ids(self.approval_model_ids)
         if self.transport_preference not in ("omniroute_preferred", "direct_only"):
             raise ProviderPolicyError("Unsupported transport preference")
 
@@ -141,6 +143,12 @@ class ProviderPreferences:
                 "collapsed": value.collapsed,
                 "selected_choice_ids": list(value.selected_choice_ids),
                 "disabled_model_ids": list(value.disabled_model_ids),
+                # Keep existing frozen-round fingerprints stable when no guard is set.
+                **(
+                    {"approval_model_ids": list(value.approval_model_ids)}
+                    if value.approval_model_ids
+                    else {}
+                ),
                 "transport_preference": value.transport_preference,
             }
 
@@ -186,7 +194,11 @@ class ProviderPreferences:
                 expected_group_keys.add("disabled_model_ids")
             if (
                 not isinstance(value, dict)
-                or set(value) != expected_group_keys
+                or set(value) - {"approval_model_ids"} != expected_group_keys
+                or (
+                    "approval_model_ids" in value
+                    and not isinstance(value["approval_model_ids"], list)
+                )
                 or not isinstance(value["selected_choice_ids"], list)
                 or (version == 3 and not isinstance(value["disabled_model_ids"], list))
             ):
@@ -197,6 +209,7 @@ class ProviderPreferences:
                 selected_choice_ids=tuple(value["selected_choice_ids"]),
                 transport_preference=value["transport_preference"],
                 disabled_model_ids=tuple(value.get("disabled_model_ids", ())),
+                approval_model_ids=tuple(value.get("approval_model_ids", ())),
             )
         if not all(
             isinstance(payload[key], list)

@@ -9,6 +9,8 @@ import {
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
+import { SettingsIcon, SparklesIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 import {
   AdvisorConflictError,
@@ -45,6 +47,8 @@ import {
 } from "@/components/ui/select";
 import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
+import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./sessionAdvisorPreference";
+
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
 
@@ -75,6 +79,11 @@ export interface NewChatAdvisorSectionProps {
   continueSessionId?: string | null;
   onFlowStateChange?: (busy: boolean, reviewVisible: boolean) => void;
   advisorModelTarget?: HTMLElement | null;
+  feedbackTarget?: HTMLElement | null;
+  enabledOverride?: boolean;
+  autoSubmit?: boolean;
+  onHumanPickChange?: (pick: HumanModelPick) => Promise<void>;
+  disabled?: boolean;
   onLaunched: (sessionId: string) => void;
 }
 
@@ -126,15 +135,24 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     submissionBlockReason,
     hostId,
     task,
-    humanPick,
+    humanPick: suppliedHumanPick,
     launchAgentId,
     launchWorkspace,
     continueSessionId = null,
     onFlowStateChange,
     advisorModelTarget,
+    feedbackTarget,
+    enabledOverride,
+    autoSubmit = true,
+    onHumanPickChange,
+    disabled = false,
     onLaunched,
   } = props;
+  const [sessionHumanPick, setSessionHumanPick] = useState<HumanModelPick | null>(null);
+  const humanPick = sessionHumanPick ?? suppliedHumanPick;
   const scope = hostId ?? "";
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [humanPickBusy, setHumanPickBusy] = useState(false);
   const [editor, setEditor] = useState<EditorState>({
     saved: null,
     draft: null,
@@ -223,6 +241,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     submissionKey.current = null;
     setEditor({ saved: null, draft: null, dirty: false, error: null });
     setRound(IDLE_ROUND);
+    setSessionHumanPick(null);
     setOptions([]);
     setCatalogError(null);
     if (hostId === null) return;
@@ -236,11 +255,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         if (cancelled || !isCurrentScope(hostId, generation)) return;
         setOptions(toLogicalOptions(catalog));
         const saved = toSavedProviderPreferences(prefs);
+        const sessionChoices = continueSessionId
+          ? readSessionAdvisorChoices(hostId, continueSessionId)
+          : null;
+        setSessionHumanPick(sessionChoices?.humanPick ?? null);
         if (saved) {
           setEditor({
             saved,
-            draft: continueSessionId ? { ...saved.preferences, enabled: true } : saved.preferences,
-            dirty: false,
+            draft: continueSessionId
+              ? {
+                  ...(sessionChoices?.preferences ?? saved.preferences),
+                  enabled: true,
+                }
+              : saved.preferences,
+            dirty: Boolean(
+              sessionChoices && !samePreferences(saved.preferences, sessionChoices.preferences),
+            ),
             error: null,
           });
         } else {
@@ -264,6 +294,24 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       cancelled = true;
     };
   }, [hostId, continueSessionId, isCurrentScope, stopPolling]);
+
+  useEffect(() => {
+    if (enabledOverride === undefined) return;
+    setEditor((current) =>
+      current.draft && current.draft.enabled !== enabledOverride
+        ? { ...current, draft: { ...current.draft, enabled: enabledOverride } }
+        : current,
+    );
+  }, [enabledOverride, editor.draft?.enabled]);
+
+  useEffect(() => {
+    if (hostId && continueSessionId && editor.draft) {
+      writeSessionAdvisorChoices(hostId, continueSessionId, {
+        preferences: editor.draft,
+        humanPick,
+      });
+    }
+  }, [hostId, continueSessionId, editor.draft, humanPick]);
 
   const resolveHumanChoice = useCallback((): string | null => {
     if (!humanPick || humanPick.model === "") return null;
@@ -432,7 +480,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   }, [continueSessionId, editor.draft, editor.saved?.version, hostId, isCurrentScope]);
 
   const handlePropose = useCallback(() => {
-    if (hostId === null || round.busy || !editor.draft || validation !== null) {
+    if (hostId === null || round.busy || humanPickBusy || !editor.draft || validation !== null) {
       if (validation !== null) setRound({ round: null, busy: false, error: validation });
       return;
     }
@@ -485,6 +533,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     })();
   }, [
     editor.draft,
+    humanPickBusy,
     hostId,
     isCurrentScope,
     pollRound,
@@ -527,7 +576,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           );
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({ round: dto, busy: false, error: dto.launch_error ?? null });
-          if (dto.execution.session_id !== null) onLaunched(dto.execution.session_id);
+          if (dto.execution.session_id !== null) {
+            if (editor.draft)
+              writeSessionAdvisorChoices(host, dto.execution.session_id, {
+                preferences: editor.draft,
+                humanPick,
+              });
+            onLaunched(dto.execution.session_id);
+          }
         } catch (cause) {
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({
@@ -540,6 +596,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     },
     [
       continueSessionId,
+      editor.draft,
+      humanPick,
       hostId,
       isCurrentScope,
       launchAgentId,
@@ -608,12 +666,62 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   }, [continueSessionId, round.busy, reviewVisible, round.error]);
   const autoSubmittedIdentity = useRef<string | null>(null);
   useEffect(() => {
-    if (!continueSessionId || !editor.draft || validation !== null || catalogError !== null) return;
+    if (
+      !autoSubmit ||
+      humanPickBusy ||
+      !continueSessionId ||
+      !editor.draft ||
+      !editor.draft.enabled ||
+      validation !== null ||
+      catalogError !== null
+    )
+      return;
     const identity = submissionIdentity.current;
     if (!identity || autoSubmittedIdentity.current === identity) return;
     autoSubmittedIdentity.current = identity;
     handlePropose();
-  }, [continueSessionId, editor.draft, validation, catalogError, handlePropose]);
+  }, [
+    autoSubmit,
+    humanPickBusy,
+    continueSessionId,
+    editor.draft,
+    validation,
+    catalogError,
+    handlePropose,
+  ]);
+  const assigned = options.find((option) => option.choice_id === review?.assigned_choice_id);
+  const approvalPreferences = round.round?.decision_context?.preferences_snapshot ?? editor.draft;
+  const approvalRequired = Boolean(
+    review?.assigned_arm === "advisor" &&
+    assigned &&
+    approvalPreferences?.providers[assigned.provider].approval_model_ids?.includes(
+      assigned.model_id,
+    ),
+  );
+  const humanOption = options.find((option) => option.choice_id === resolveHumanChoice());
+  const humanEfforts = options.filter(
+    (option) => humanOption && advisorModelKey(option) === advisorModelKey(humanOption),
+  );
+  const changeHuman = async (option: LogicalOption | undefined) => {
+    if (!option || !onHumanPickChange) return;
+    setHumanPickBusy(true);
+    try {
+      const pick = {
+        model: option.model_ids[0],
+        accessLane: humanPick?.accessLane ?? null,
+        effort: option.reasoning_effort === "not_applicable" ? "" : option.reasoning_effort,
+      };
+      await onHumanPickChange(pick);
+      setSessionHumanPick(pick);
+    } catch (cause) {
+      setEditor((current) => ({
+        ...current,
+        error: cause instanceof Error ? cause.message : "Couldn't change your model.",
+      }));
+    } finally {
+      setHumanPickBusy(false);
+    }
+  };
   if (hostId === null) return null;
   if (catalogError !== null)
     return (
@@ -625,158 +733,259 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         Model advisor unavailable: {catalogError}
       </p>
     );
+  const controls = (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {enabledOverride === undefined ? (
+        <Button
+          type="button"
+          size="sm"
+          variant={editor.draft?.enabled ? "secondary" : "ghost"}
+          disabled={!editor.draft || round.busy || disabled}
+          aria-pressed={editor.draft?.enabled ?? false}
+          onClick={() =>
+            editor.draft && handleChange({ ...editor.draft, enabled: !editor.draft.enabled })
+          }
+        >
+          <SparklesIcon />
+          Advisor {editor.draft?.enabled ? "on" : "off"}
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={round.busy || disabled}
+        onClick={() => setSettingsOpen((open) => !open)}
+        aria-expanded={settingsOpen}
+        aria-label="Advisor settings"
+      >
+        <SettingsIcon />
+        Advisor settings
+      </Button>
+    </div>
+  );
+  const settingsPanel = settingsOpen ? (
+    <ProviderSettingsPanel
+      idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}
+      value={editor.draft}
+      options={options}
+      dirty={editor.dirty}
+      busy={disabled || round.busy}
+      enabledLocked={Boolean(continueSessionId)}
+      error={editor.error}
+      onChange={handleChange}
+      onSave={handleSave}
+    />
+  ) : null;
+  const feedback = (
+    <div className="space-y-3" data-testid="model-advisor-section">
+      {editor.error && !settingsOpen ? <p role="alert">{editor.error}</p> : null}
+      {feedbackTarget ? (
+        <>
+          {validation && autoSubmit ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
+              Advisor settings
+            </Button>
+          ) : null}
+          {settingsPanel}
+        </>
+      ) : null}
+      {editor.draft?.enabled && (!continueSessionId || autoSubmit) ? (
+        <div className="space-y-2" ref={submissionFeedbackRef}>
+          {round.busy ? <p role="status">Preparing recommendation…</p> : null}
+          {validation ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {validation}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {reviewVisible && review ? (
+        <ProviderAdvisorReview
+          review={review}
+          approvalRequired={approvalRequired}
+          options={options}
+          busy={round.busy}
+          error={round.round?.launch_error ?? round.error}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
+      ) : null}
+      {!reviewVisible && round.error !== null ? (
+        <p className="text-sm text-destructive" role="alert">
+          {round.error}
+        </p>
+      ) : null}
+      {round.round?.state === "blocked" ? (
+        <p className="text-sm text-amber-600 dark:text-amber-500" role="alert">
+          The round was blocked
+          {round.round.failure_reason ? `: ${round.round.failure_reason}` : "."} Nothing ran. Start
+          a new round to try again.
+        </p>
+      ) : null}
+      {round.round?.execution.uncertain ? (
+        <p className="text-sm text-amber-600 dark:text-amber-500" role="alert">
+          The round was confirmed but its launch could not be verified. It is kept for inspection
+          and will not retry automatically.
+        </p>
+      ) : null}
+      {round.round?.requested_execution ? (
+        <p className="text-xs text-muted-foreground">
+          Requested: {round.round.requested_execution.model ?? "unknown model"}
+          {round.round.requested_execution.reasoning_effort
+            ? ` at ${round.round.requested_execution.reasoning_effort} reasoning`
+            : ""}
+          {round.round.requested_execution.access_lane
+            ? ` via ${round.round.requested_execution.access_lane}`
+            : ""}
+          .
+        </p>
+      ) : null}
+      {round.round?.actual_execution ? (
+        <p className="text-xs text-muted-foreground">
+          Actual:{" "}
+          {round.round.actual_execution.status === "observed"
+            ? `${round.round.actual_execution.model ?? "unknown model"}${round.round.actual_execution.reasoning_effort ? ` at ${round.round.actual_execution.reasoning_effort} reasoning` : ""}`
+            : "unknown/unverified"}
+          {round.round.actual_execution.reason ? ` — ${round.round.actual_execution.reason}` : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+  const humanControls = onHumanPickChange ? (
+    <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:flex-wrap">
+      <span className="col-span-2 min-w-0 text-xs text-muted-foreground md:flex-1">Your model</span>
+      <SearchableModelPicker
+        value={humanOption ? advisorModelKey(humanOption) : (humanPick?.model ?? "")}
+        options={advisorOptions}
+        compact
+        includeDefault={false}
+        ariaLabel="Your model"
+        loading={false}
+        disabled={disabled || round.busy || humanPickBusy}
+        onValueChange={(key) =>
+          void changeHuman(
+            options.find(
+              (option) =>
+                advisorModelKey(option) === key &&
+                option.available &&
+                option.reasoning_effort === humanOption?.reasoning_effort,
+            ) ?? options.find((option) => advisorModelKey(option) === key && option.available),
+          )
+        }
+      />
+      <Select
+        value={humanOption?.choice_id ?? ""}
+        disabled={disabled || round.busy || humanPickBusy || !humanOption}
+        onValueChange={(id) => void changeHuman(options.find((option) => option.choice_id === id))}
+      >
+        <SelectTrigger
+          aria-label="Your reasoning effort"
+          className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+        >
+          <SelectValue placeholder="Reasoning" />
+        </SelectTrigger>
+        <SelectContent>
+          {humanEfforts.map((option) => (
+            <SelectItem
+              key={option.choice_id}
+              value={option.choice_id}
+              disabled={!option.available}
+            >
+              {effortLabel(option.reasoning_effort)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  ) : null;
+  const composerControls = (
+    <div className="col-span-2 flex w-full min-w-0 flex-col gap-2 md:basis-full">
+      {controls}
+      {humanControls}
+      {editor.draft?.enabled ? (
+        <div
+          className="col-span-2 grid w-full min-w-0 grid-cols-subgrid items-center gap-1 md:flex md:basis-full md:flex-wrap"
+          data-testid="model-advisor-composer-choice"
+        >
+          <label
+            htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+            className="min-w-0 text-xs text-muted-foreground md:flex-1"
+          >
+            Recommender
+          </label>
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:shrink-0">
+            <SearchableModelPicker
+              id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+              value={advisorModelValue}
+              options={advisorOptions}
+              loading={false}
+              compact
+              includeDefault={false}
+              placeholder="Choose model…"
+              ariaLabel="Recommender model"
+              testId="model-advisor-advisor-choice"
+              searchTestId="model-advisor-advisor-choice-search"
+              disabled={disabled || round.busy}
+              onValueChange={(modelKey) => {
+                const choices = options.filter(
+                  (option) => advisorModelKey(option) === modelKey && option.available,
+                );
+                const choice =
+                  choices.find(
+                    (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
+                  ) ?? choices[0];
+                if (editor.draft && choice)
+                  handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+              }}
+            />
+            <Select
+              value={savedAdvisor?.choice_id ?? ""}
+              disabled={disabled || round.busy || !savedAdvisor}
+              onValueChange={(choiceId) =>
+                editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
+              }
+            >
+              <SelectTrigger
+                className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+                aria-label="Recommender reasoning effort"
+                data-testid="model-advisor-advisor-effort"
+              >
+                <SelectValue placeholder="Reasoning" />
+              </SelectTrigger>
+              <SelectContent align="start">
+                {advisorEfforts.map((option) => (
+                  <SelectItem
+                    key={option.choice_id}
+                    value={option.choice_id}
+                    disabled={!option.available}
+                  >
+                    {effortLabel(option.reasoning_effort)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {savedAdvisorUnavailable ? (
+            <p role="alert" className="col-span-2 text-xs text-destructive">
+              The saved advisor model is unavailable from this host. Choose a valid model and
+              reasoning level to continue.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
   return (
     <>
-      {editor.draft?.enabled && advisorModelTarget
-        ? createPortal(
-            <div
-              className="col-span-2 grid w-full min-w-0 grid-cols-subgrid items-center gap-1 md:flex md:basis-full md:flex-wrap"
-              data-testid="model-advisor-composer-choice"
-            >
-              <label
-                htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-                className="min-w-0 text-xs text-muted-foreground md:flex-1"
-              >
-                Recommender
-              </label>
-              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:shrink-0">
-                <SearchableModelPicker
-                  id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-                  value={advisorModelValue}
-                  options={advisorOptions}
-                  loading={false}
-                  compact
-                  includeDefault={false}
-                  placeholder="Choose model…"
-                  ariaLabel="Recommender model"
-                  testId="model-advisor-advisor-choice"
-                  searchTestId="model-advisor-advisor-choice-search"
-                  disabled={round.busy}
-                  onValueChange={(modelKey) => {
-                    const choices = options.filter(
-                      (option) => advisorModelKey(option) === modelKey && option.available,
-                    );
-                    const choice =
-                      choices.find(
-                        (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
-                      ) ?? choices[0];
-                    if (editor.draft && choice)
-                      handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-                  }}
-                />
-                <Select
-                  value={savedAdvisor?.choice_id ?? ""}
-                  disabled={round.busy || !savedAdvisor}
-                  onValueChange={(choiceId) =>
-                    editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
-                  }
-                >
-                  <SelectTrigger
-                    className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
-                    aria-label="Recommender reasoning effort"
-                    data-testid="model-advisor-advisor-effort"
-                  >
-                    <SelectValue placeholder="Reasoning" />
-                  </SelectTrigger>
-                  <SelectContent align="start">
-                    {advisorEfforts.map((option) => (
-                      <SelectItem
-                        key={option.choice_id}
-                        value={option.choice_id}
-                        disabled={!option.available}
-                      >
-                        {effortLabel(option.reasoning_effort)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {savedAdvisorUnavailable ? (
-                <p role="alert" className="col-span-2 text-xs text-destructive">
-                  The saved advisor model is unavailable from this host. Choose a valid model and
-                  reasoning level to continue.
-                </p>
-              ) : null}
-            </div>,
-            advisorModelTarget,
-          )
-        : null}
-      <div className="space-y-3" data-testid="model-advisor-section">
-        <ProviderSettingsPanel
-          idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}
-          value={editor.draft}
-          options={options}
-          dirty={editor.dirty}
-          busy={round.busy}
-          enabledLocked={Boolean(continueSessionId)}
-          error={editor.error}
-          onChange={handleChange}
-          onSave={handleSave}
-        />
-        {editor.draft?.enabled ? (
-          <div className="space-y-2" ref={submissionFeedbackRef}>
-            {round.busy ? <p role="status">Preparing recommendation…</p> : null}
-            {validation ? (
-              <p role="status" className="text-sm text-muted-foreground">
-                {validation}
-              </p>
-            ) : null}
-            <p className="text-xs text-muted-foreground">
-              The advisor sees only the logical model and reasoning choices. Connection preference
-              is applied after the logical decision.
-            </p>
-          </div>
-        ) : null}
-        {reviewVisible && review ? (
-          <ProviderAdvisorReview
-            review={review}
-            options={options}
-            busy={round.busy}
-            error={round.round?.launch_error ?? round.error}
-            onConfirm={handleConfirm}
-            onCancel={handleCancel}
-          />
-        ) : null}
-        {!reviewVisible && round.error !== null ? (
-          <p className="text-sm text-destructive" role="alert">
-            {round.error}
-          </p>
-        ) : null}
-        {round.round?.state === "blocked" ? (
-          <p className="text-sm text-amber-600 dark:text-amber-500" role="alert">
-            The round was blocked
-            {round.round.failure_reason ? `: ${round.round.failure_reason}` : "."} Nothing ran.
-            Start a new round to try again.
-          </p>
-        ) : null}
-        {round.round?.execution.uncertain ? (
-          <p className="text-sm text-amber-600 dark:text-amber-500" role="alert">
-            The round was confirmed but its launch could not be verified. It is kept for inspection
-            and will not retry automatically.
-          </p>
-        ) : null}
-        {round.round?.requested_execution ? (
-          <p className="text-xs text-muted-foreground">
-            Requested: {round.round.requested_execution.model ?? "unknown model"}
-            {round.round.requested_execution.reasoning_effort
-              ? ` at ${round.round.requested_execution.reasoning_effort} reasoning`
-              : ""}
-            {round.round.requested_execution.access_lane
-              ? ` via ${round.round.requested_execution.access_lane}`
-              : ""}
-            .
-          </p>
-        ) : null}
-        {round.round?.actual_execution ? (
-          <p className="text-xs text-muted-foreground">
-            Actual:{" "}
-            {round.round.actual_execution.status === "observed"
-              ? `${round.round.actual_execution.model ?? "unknown model"}${round.round.actual_execution.reasoning_effort ? ` at ${round.round.actual_execution.reasoning_effort} reasoning` : ""}`
-              : "unknown/unverified"}
-            {round.round.actual_execution.reason ? ` — ${round.round.actual_execution.reason}` : ""}
-          </p>
-        ) : null}
-      </div>
+      {advisorModelTarget ? createPortal(composerControls, advisorModelTarget) : composerControls}
+      {feedbackTarget ? null : settingsPanel}
+      {feedbackTarget ? createPortal(feedback, feedbackTarget) : feedback}
     </>
   );
 }

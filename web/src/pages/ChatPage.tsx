@@ -2640,6 +2640,8 @@ function ComposerImpl({
   const [planModeBusy, setPlanModeBusy] = useState(false);
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
+  const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
+  const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
   // A closing review can report one final busy state during its exit.
   // Only an open dialog may lock the composer toggle.
@@ -4136,7 +4138,37 @@ function ComposerImpl({
             </TooltipProvider>
           </div>
         </div>
+        {canUseModelAdvisor ? (
+          <div ref={setAdvisorModelTarget} className="flex min-w-0 flex-col gap-2 px-3 pb-2" />
+        ) : null}
       </div>
+      {canUseModelAdvisor ? (
+        <NewChatAdvisorSection
+          key={`${advisorHostId}:${conversationId}`}
+          hostId={advisorHostId}
+          task={pendingAdvisorSend?.task ?? ""}
+          humanPick={advisorHumanPick}
+          launchAgentId={advisorAgentId}
+          launchWorkspace={advisorWorkspace}
+          continueSessionId={conversationId}
+          autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
+          enabledOverride={advisorEnabled}
+          advisorModelTarget={advisorModelTarget}
+          feedbackTarget={advisorFeedbackTarget}
+          disabled={isReadOnly || unreachable || advisorFlowLocked}
+          onHumanPickChange={async (pick) => {
+            const store = useChatStore.getState();
+            const model = findNativeModelOption(codexModelOptions, pick.model)?.id ?? pick.model;
+            await store.setModel(model, {
+              expectConfirmation: modelPickerKind === "codex" || modelPickerKind === "claude",
+            });
+            if (costRoutingEligible) await store.setCostControlMode("off");
+            await store.setEffort(pick.effort || null);
+          }}
+          onFlowStateChange={(busy, reviewVisible) => setAdvisorFlowLocked(busy || reviewVisible)}
+          onLaunched={handleAdvisorLaunched}
+        />
+      ) : null}
       <ComposerStatusLine
         goal={goal}
         isSubAgentSession={subAgentLabel != null}
@@ -4171,20 +4203,7 @@ function ComposerImpl({
               composer and go to the selected answer model after you confirm.
             </DialogDescription>
           </DialogHeader>
-          {pendingAdvisorSend && canUseModelAdvisor ? (
-            <NewChatAdvisorSection
-              hostId={advisorHostId}
-              task={pendingAdvisorSend.task}
-              humanPick={advisorHumanPick}
-              launchAgentId={advisorAgentId}
-              launchWorkspace={advisorWorkspace}
-              continueSessionId={pendingAdvisorSend.sessionId}
-              onFlowStateChange={(busy, reviewVisible) =>
-                setAdvisorFlowLocked(busy || reviewVisible)
-              }
-              onLaunched={handleAdvisorLaunched}
-            />
-          ) : null}
+          <div ref={setAdvisorFeedbackTarget} />
         </DialogContent>
       </Dialog>
     </form>

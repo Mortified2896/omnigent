@@ -20,6 +20,13 @@ is not required. This file defines the fork's default repository workflow.
   normally needs a diff and relevant link/instruction checks, not an app build.
   Broaden checks for auth, security, schemas, or cross-cutting behavior; small
   diffs are not automatically low risk. Do not bypass existing hooks/checks.
+- For requested application changes meant to be inspected in the running
+  Omnigent UI, completion includes validation, merge to the fork's main, and
+  deployment to the current RTX O1/O2 instances, followed by live verification
+  and inspectable URLs. Treat the implementation request as authorization for
+  this development rollout unless the user asks for source-only work or says
+  not to merge/deploy. Do not stop at local edits or a draft PR. A request for
+  deployment in a later turn supersedes an earlier no-deploy boundary.
 - Follow the requested delivery and applicable session instructions. This repo
   does not additionally require an issue, PR, independent reviewer, diagram,
   demo, or full-repository test/lint run for every task. When a PR is needed,
@@ -39,7 +46,10 @@ Before source mutation, verify the repository, branch/base, worktree status, and
 
 Do not edit installed release trees as source. Do not reactivate retired old O1/O2 without explicit owner authorization.
 
-Preserve unrelated changes. Do not merge, deploy, release, replace databases, or perform destructive cleanup unless the task explicitly authorizes it.
+Preserve unrelated changes. Merge and deployment follow the requested delivery
+and the application-change default above. Releases, database replacement,
+retired-instance reactivation, and destructive cleanup still require explicit
+owner authorization. Do not infer authorization for other environments.
 
 Before continuing another agent's branch, fetch the current GitHub refs and fast-forward the correct task branch where possible. Compare its head and base to GitHub; do not work from chat SHAs alone, reset dirty work, or blindly merge another feature branch.
 
