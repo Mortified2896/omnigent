@@ -855,77 +855,78 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
     </div>
   );
-  const recommenderControls = editor.draft?.enabled ? (
-    <div
-      className="col-span-2 grid w-full min-w-0 grid-cols-subgrid items-center gap-1 md:flex md:basis-full md:flex-wrap"
-      data-testid="model-advisor-composer-choice"
-    >
-      <label
-        htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-        className="min-w-0 text-xs text-muted-foreground md:flex-1"
+  const recommenderControls =
+    editor.draft && (editor.draft.enabled || settingsOpen) ? (
+      <div
+        className="flex w-full min-w-0 flex-col gap-1 md:flex-row md:flex-wrap md:items-center"
+        data-testid="model-advisor-composer-choice"
       >
-        Recommender
-      </label>
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:shrink-0">
-        <SearchableModelPicker
-          id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-          value={advisorModelValue}
-          options={advisorOptions}
-          loading={false}
-          compact
-          includeDefault={false}
-          placeholder="Choose model…"
-          ariaLabel="Recommender model"
-          testId="model-advisor-advisor-choice"
-          searchTestId="model-advisor-advisor-choice-search"
-          disabled={disabled || round.busy}
-          onValueChange={(modelKey) => {
-            const choices = options.filter(
-              (option) => advisorModelKey(option) === modelKey && option.available,
-            );
-            const choice =
-              choices.find(
-                (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
-              ) ?? choices[0];
-            if (editor.draft && choice)
-              handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-          }}
-        />
-        <Select
-          value={savedAdvisor?.choice_id ?? ""}
-          disabled={disabled || round.busy || !savedAdvisor}
-          onValueChange={(choiceId) =>
-            editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
-          }
+        <label
+          htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+          className="min-w-0 text-xs text-muted-foreground md:flex-1"
         >
-          <SelectTrigger
-            className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
-            aria-label="Recommender reasoning effort"
-            data-testid="model-advisor-advisor-effort"
+          Recommender
+        </label>
+        <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:w-auto md:shrink-0">
+          <SearchableModelPicker
+            id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+            value={advisorModelValue}
+            options={advisorOptions}
+            loading={false}
+            compact
+            includeDefault={false}
+            placeholder="Choose model…"
+            ariaLabel="Recommender model"
+            testId="model-advisor-advisor-choice"
+            searchTestId="model-advisor-advisor-choice-search"
+            disabled={disabled || round.busy}
+            onValueChange={(modelKey) => {
+              const choices = options.filter(
+                (option) => advisorModelKey(option) === modelKey && option.available,
+              );
+              const choice =
+                choices.find(
+                  (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
+                ) ?? choices[0];
+              if (editor.draft && choice)
+                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+            }}
+          />
+          <Select
+            value={savedAdvisor?.choice_id ?? ""}
+            disabled={disabled || round.busy || !savedAdvisor}
+            onValueChange={(choiceId) =>
+              editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
+            }
           >
-            <SelectValue placeholder="Reasoning" />
-          </SelectTrigger>
-          <SelectContent align="start">
-            {advisorEfforts.map((option) => (
-              <SelectItem
-                key={option.choice_id}
-                value={option.choice_id}
-                disabled={!option.available}
-              >
-                {effortLabel(option.reasoning_effort)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+            <SelectTrigger
+              className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+              aria-label="Recommender reasoning effort"
+              data-testid="model-advisor-advisor-effort"
+            >
+              <SelectValue placeholder="Reasoning" />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {advisorEfforts.map((option) => (
+                <SelectItem
+                  key={option.choice_id}
+                  value={option.choice_id}
+                  disabled={!option.available}
+                >
+                  {effortLabel(option.reasoning_effort)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {savedAdvisorUnavailable ? (
+          <p role="alert" className="col-span-2 text-xs text-destructive">
+            The saved advisor model is unavailable from this host. Choose a valid model and
+            reasoning level to continue.
+          </p>
+        ) : null}
       </div>
-      {savedAdvisorUnavailable ? (
-        <p role="alert" className="col-span-2 text-xs text-destructive">
-          The saved advisor model is unavailable from this host. Choose a valid model and reasoning
-          level to continue.
-        </p>
-      ) : null}
-    </div>
-  ) : null;
+    ) : null;
   const composerControls = (
     <div className="col-span-2 flex w-full min-w-0 flex-col gap-1 md:basis-full">
       {recommenderControls}

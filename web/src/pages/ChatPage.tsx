@@ -2712,9 +2712,9 @@ function ComposerImpl(
     if (selectedComposerEffort && !values.includes(selectedComposerEffort)) {
       values.push(selectedComposerEffort);
     }
-    return values.map((value) => ({
-      value,
-      label: formatStatusEffortLabel(value) ?? value,
+    return values.map((effort) => ({
+      value: effort,
+      label: formatStatusEffortLabel(effort) ?? effort,
     }));
   }, [effortLevels, selectedComposerEffort]);
   const changeComposerEffort = async (effort: string | null) => {
