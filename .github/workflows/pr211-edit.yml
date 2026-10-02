@@ -1,67 +1,31 @@
 name: PR211 bounded source correction
-
-# Temporary branch-only editing bridge. Remove before merging PR211.
-# Implements the owner's authorized branch push; no repository settings changed.
+# Temporary task-branch diagnostic bridge; remove before merge.
 on:
   push:
     branches: [codex/fix-advisor-native-composer]
     paths: [.github/workflows/pr211-edit.yml]
 permissions:
   contents: read
-concurrency:
-  group: pr211-bounded-source-correction
-  cancel-in-progress: false
 jobs:
-  correct:
-    if: github.repository == 'Mortified2896/omnigent' && github.ref == 'refs/heads/codex/fix-advisor-native-composer'
+  source:
+    if: github.repository == 'Mortified2896/omnigent'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Apply exactly the reviewed single-line source correction
+      - name: Archive only committed source, never runtime state
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import subprocess
-          path = Path('web/src/pages/ChatPage.tsx')
-          expected = '9fef6f9ab8a18dafa847d4f538696b40132b3f89'
-          actual = subprocess.check_output(['git', 'hash-object', str(path)], text=True).strip()
-          if actual != expected:
-              raise SystemExit('Source changed; refusing to overwrite concurrent work')
-          source = path.read_bytes()
-          before = b'  }, [effortLevels, modelPickerKind, selectedComposerEffort]);'
-          after = b'  }, [effortLevels, selectedComposerEffort]);'
-          if source.count(before) != 1:
-              raise SystemExit('Expected exactly one reviewed dependency array')
-          path.write_bytes(source.replace(before, after))
-          changed = subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()
-          if changed != [str(path)]:
-              raise SystemExit('Unexpected changed paths')
-          subprocess.run(['git', 'diff', '--check'], check=True)
-          diff = subprocess.check_output(['git', 'diff', '--', str(path)], text=True)
-          if sum(line.startswith('+') and not line.startswith('+++') for line in diff.splitlines()) != 1:
-              raise SystemExit('Unexpected additions')
-          if sum(line.startswith('-') and not line.startswith('---') for line in diff.splitlines()) != 1:
-              raise SystemExit('Unexpected deletions')
-          print(diff)
-          PY
-      - name: Push only to the unchanged task branch
-        env:
-          PUSH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ github.sha }}
-        run: |
-          set -eu
-          remote="https://x-access-token:${PUSH_TOKEN}@github.com/Mortified2896/omnigent.git"
-          branch='refs/heads/codex/fix-advisor-native-composer'
-          current=$(git ls-remote "$remote" "$branch" | cut -f1)
-          test "$current" = "$EXPECTED_SHA" || { echo 'Task branch moved; refusing push'; exit 1; }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- web/src/pages/ChatPage.tsx
-          git commit -m 'fix(web): remove stale effort-picker memo dependency'
-          git push "$remote" "HEAD:$branch"
+          git rev-parse HEAD > "$RUNNER_TEMP/pr211-source-sha.txt"
+          git archive --format=tar.gz -o "$RUNNER_TEMP/pr211-source.tgz" HEAD
+          git ls-tree -r --name-only HEAD | grep -E 'tests/e2e_ui/.*(modal|reconnect|model_advisor|codex_model_metadata)'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr211-source
+          path: |
+            ${{ runner.temp }}/pr211-source.tgz
+            ${{ runner.temp }}/pr211-source-sha.txt
+          if-no-files-found: error
+          retention-days: 1
