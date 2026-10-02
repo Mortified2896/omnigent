@@ -2730,7 +2730,9 @@ function ComposerImpl(
       await useChatStore.getState().setEffort(effort);
     } catch (error) {
       if (useChatStore.getState().conversationId === sourceSessionId)
-        setCommandError(error instanceof Error ? error.message : "Unable to change reasoning effort");
+        setCommandError(
+          error instanceof Error ? error.message : "Unable to change reasoning effort",
+        );
     } finally {
       configBusyRef.current = false;
       setConfigBusy(false);
@@ -4223,10 +4225,7 @@ function ComposerImpl(
                   value={selectedComposerEffort}
                   options={inlineComposerEfforts}
                   disabled={
-                    isReadOnly ||
-                    unreachable ||
-                    configBusy ||
-                    pendingComposerModelChange !== null
+                    isReadOnly || unreachable || configBusy || pendingComposerModelChange !== null
                   }
                   label={modelPickerKind === "pi" ? "Thinking level" : "Reasoning effort"}
                   onSelect={(effort) => void changeComposerEffort(effort)}

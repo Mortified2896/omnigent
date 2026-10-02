@@ -726,14 +726,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     if (!identity || autoSubmittedIdentity.current === identity) return;
     autoSubmittedIdentity.current = identity;
     handlePropose();
-  }, [
-    autoSubmit,
-    continueSessionId,
-    editor.draft,
-    validation,
-    catalogError,
-    handlePropose,
-  ]);
+  }, [autoSubmit, continueSessionId, editor.draft, validation, catalogError, handlePropose]);
   if (hostId === null) return null;
   if (catalogError !== null)
     return (

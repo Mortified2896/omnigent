@@ -6813,7 +6813,8 @@ export function NewChatLandingScreen() {
                             : undefined
                         }
                         triggerDetails={harnessTriggerDetails.filter(
-                          (detail) => detail.label !== "Effort" && detail.label !== "Thinking level",
+                          (detail) =>
+                            detail.label !== "Effort" && detail.label !== "Thinking level",
                         )}
                         triggerIcon={
                           selectedAgent ? (
@@ -6852,9 +6853,7 @@ export function NewChatLandingScreen() {
                               ? "Thinking level"
                               : "Reasoning effort"
                           }
-                          onSelect={(effort) =>
-                            selectPickerEffort(effort ?? EFFORT_SELECT_NONE)
-                          }
+                          onSelect={(effort) => selectPickerEffort(effort ?? EFFORT_SELECT_NONE)}
                           testIdPrefix="new-chat-landing"
                         />
                       )}
