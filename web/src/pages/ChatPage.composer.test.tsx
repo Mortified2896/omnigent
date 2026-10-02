@@ -2107,9 +2107,10 @@ describe("Composer model/effort label", () => {
       />,
     );
     expect(label()).not.toHaveTextContent("gpt-5.5");
-    // The real effort still renders — proving the label is present and only
-    // the leaked model was suppressed.
-    expect(label()).toHaveTextContent("High");
+    // The real effort still renders in the independent selector; the model
+    // trigger itself must remain free of effort text.
+    expect(label()).not.toHaveTextContent("High");
+    expect(screen.getByTestId("composer-inline-effort")).toHaveTextContent("High");
   });
 
   it("waits for a native session model before its catalog lands", () => {
@@ -2133,8 +2134,10 @@ describe("Composer model/effort label", () => {
       />,
     );
     expect(label()).not.toHaveTextContent("gpt-5.5");
-    // The real effort still renders — only the leaked model was suppressed.
-    expect(label()).toHaveTextContent("High");
+    // The real effort still renders in the independent selector; only the
+    // model trigger waits for a session-backed model.
+    expect(label()).not.toHaveTextContent("High");
+    expect(screen.getByTestId("composer-inline-effort")).toHaveTextContent("High");
   });
 
   it("opens model configuration from Edit in the shared picker", async () => {

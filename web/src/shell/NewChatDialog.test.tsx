@@ -1621,14 +1621,14 @@ describe("NewChatLandingScreen initial picker loading", () => {
     mockModelQueries((harness) => (harness === "claude-native" ? preferredModels : pendingModels));
     editDraft("Keep this draft when configuration finishes loading");
     await waitFor(() => expect(expectReadyPicker()).toHaveTextContent("Fable 5.1"));
-    expect(expectReadyPicker()).toHaveTextContent("Max");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
     expect(screen.getByTestId("new-chat-landing-input")).toHaveValue(
       "Keep this draft when configuration finishes loading",
     );
     expect(readyCommits.length).toBeGreaterThan(0);
     for (const text of readyCommits) {
       expect(text).toContain("Fable 5.1");
-      expect(text).toContain("Max");
+      expect(text).not.toContain("Max");
     }
   });
 
@@ -1641,7 +1641,7 @@ describe("NewChatLandingScreen initial picker loading", () => {
     renderLanding();
     const picker = expectReadyPicker();
     expect(picker).toHaveTextContent("Fable 5.1");
-    expect(picker).toHaveTextContent("Max");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
 
     const refreshing = { isFetching: true, fetchStatus: "fetching" } as const;
     mockAgents(DEFAULT_LANDING_AGENTS, refreshing);
@@ -1652,7 +1652,7 @@ describe("NewChatLandingScreen initial picker loading", () => {
 
     expect(expectReadyPicker()).toBe(picker);
     expect(picker).toHaveTextContent("Fable 5.1");
-    expect(picker).toHaveTextContent("Max");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
     expect(screen.queryByText("No agents")).toBeNull();
     expect(screen.queryByText("Models unavailable")).toBeNull();
   });
@@ -1855,7 +1855,7 @@ describe("NewChatLandingScreen initial picker loading", () => {
     mockModelQueries(() => preferredModels);
     editDraft("The project defaults are ready");
     expect(expectReadyPicker()).toHaveTextContent("Fable 5.1");
-    expect(expectReadyPicker()).toHaveTextContent("Max");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
     expect(screen.getByTestId("new-chat-landing-host-chip")).toHaveAccessibleName(/machine-2/);
   });
 });
@@ -2100,7 +2100,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
     expect(livePicker).toBeEnabled();
     expect(livePicker).not.toHaveAttribute("aria-busy", "true");
     expect(livePicker).toHaveTextContent("Sonnet 4.7");
-    expect(livePicker).toHaveTextContent("High");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
     expect(livePicker).not.toHaveTextContent("Sonnet 4.6");
     expect(screen.queryByTestId("new-chat-landing-picker-loading")).toBeNull();
     expect(input).toHaveValue("Keep this draft after live settings resolve");
@@ -2131,7 +2131,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
       const picker = screen.getByTestId("new-chat-landing-agent-select");
       const permission = screen.getByTestId("new-chat-landing-permission-chip");
       expect(picker).toHaveTextContent("Opus 4.8");
-      expect(picker).toHaveTextContent("Max");
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
       expect(permission).toHaveTextContent("Plan");
       expect(permission).toBeEnabled();
       const input = screen.getByTestId("new-chat-landing-input");
@@ -2153,7 +2153,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
       ]);
       fireEvent.change(input, { target: { value: "The catalogs are now ready" } });
       expect(picker).toHaveTextContent("Opus from the live catalog");
-      expect(picker).toHaveTextContent("Max");
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
       expect(permission).toHaveTextContent("Plan");
       expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled();
       if (!storageUnavailable) {
@@ -2243,7 +2243,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
       pickPermissionOption("bypass");
       const picker = screen.getByTestId("new-chat-landing-agent-select");
       expect(picker).toHaveTextContent("GPT-5.6");
-      expect(picker).toHaveTextContent("xHigh");
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("xHigh");
 
       mockAgents(DEFAULT_LANDING_AGENTS);
       mockHosts([host("online")]);
@@ -2254,7 +2254,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
         target: { value: "Keep the Codex settings" },
       });
       expect(picker).toHaveTextContent("GPT-5.6");
-      expect(picker).toHaveTextContent("xHigh");
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("xHigh");
       expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveTextContent(
         "Bypass approvals & sandbox",
       );
@@ -2352,7 +2352,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
     renderLanding();
     const picker = screen.getByTestId("new-chat-landing-agent-select");
     expect(picker).toBeEnabled();
-    expect(picker).toHaveTextContent("Low");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Low");
     expect(screen.getByTestId("new-chat-landing-permission-chip")).toBeEnabled();
     expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveTextContent("Plan");
   });
@@ -3944,7 +3944,7 @@ describe("NewChatLandingScreen", () => {
       "aria-checked",
       "true",
     );
-    expect(screen.getByTestId("new-chat-landing-agent-effort-value")).toHaveTextContent("High");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
     const summary = screen.getByTestId("new-chat-landing-agent-summary-a2");
     expect(summary).toHaveTextContent("High");
     expect(summary).toHaveClass("flex-1", "truncate");
@@ -3973,18 +3973,18 @@ describe("NewChatLandingScreen", () => {
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-config-a2"));
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-databricks-gpt-5-6"));
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-xhigh"));
-    expect(screen.getByTestId("new-chat-landing-agent-effort-value")).toHaveTextContent("xHigh");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("xHigh");
     expect(screen.getByTestId("new-chat-landing-agent-summary-a2")).toHaveTextContent("xHigh");
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-databricks-gpt-5-5"));
     expect(screen.getByTestId("new-chat-landing-agent-effort-default")).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    expect(screen.queryByTestId("new-chat-landing-agent-effort-value")).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Default");
     closeMenu();
     selectAgent("a1");
     selectAgent("a2");
-    expect(screen.queryByTestId("new-chat-landing-agent-effort-value")).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Default");
     const { body } = await submitAndReadBody();
     expect(body.reasoning_effort).toBeUndefined();
   });
