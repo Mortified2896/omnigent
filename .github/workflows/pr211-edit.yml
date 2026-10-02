@@ -1,7 +1,7 @@
 name: PR211 bounded source correction
 
-# Temporary editing bridge for this branch only; remove before merging PR211.
-# Runs no repository scripts and does not change repository permissions.
+# Temporary branch-only editing bridge. Remove before merging PR211.
+# Implements the owner's authorized branch push; no repository settings changed.
 on:
   push:
     branches: [codex/fix-advisor-native-composer]
@@ -16,6 +16,8 @@ jobs:
     if: github.repository == 'Mortified2896/omnigent' && github.ref == 'refs/heads/codex/fix-advisor-native-composer'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -48,30 +50,18 @@ jobs:
               raise SystemExit('Unexpected deletions')
           print(diff)
           PY
-      # Existing repository-maintenance App, downscoped to this repository.
-      # No PR-controlled program is executed while this token exists.
-      - name: Mint existing repository App token
-        id: app-token
-        if: vars.OMNIGENT_BOT_APP_ID != ''
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          app-id: ${{ vars.OMNIGENT_BOT_APP_ID }}
-          private-key: ${{ secrets.OMNIGENT_BOT_APP_KEY }}
-          owner: Mortified2896
-          repositories: omnigent
-          permission-contents: write
       - name: Push only to the unchanged task branch
         env:
-          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ github.sha }}
         run: |
-          test -n "$PUSH_TOKEN" || { echo 'Existing repository App not configured'; exit 1; }
+          set -eu
           remote="https://x-access-token:${PUSH_TOKEN}@github.com/Mortified2896/omnigent.git"
           branch='refs/heads/codex/fix-advisor-native-composer'
           current=$(git ls-remote "$remote" "$branch" | cut -f1)
           test "$current" = "$EXPECTED_SHA" || { echo 'Task branch moved; refusing push'; exit 1; }
-          git config user.name 'omnigent-ci[bot]'
-          git config user.email '294685417+omnigent-ci[bot]@users.noreply.github.com'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- web/src/pages/ChatPage.tsx
           git commit -m 'fix(web): remove stale effort-picker memo dependency'
           git push "$remote" "HEAD:$branch"
