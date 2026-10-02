@@ -10763,7 +10763,9 @@ describe("managed sandbox inference models", () => {
       fireEvent.click(screen.getByTestId("new-chat-landing-inline-effort"));
       fireEvent.click(screen.getByRole("option", { name: "Max" }));
       expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
+      console.log("QUALIFIED_BEFORE_REMOUNT", lane, readHarnessOptions("codex-native"));
       remountLanding();
+      console.log("QUALIFIED_AFTER_REMOUNT", lane, readHarnessOptions("codex-native"));
       await waitFor(() =>
         expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max"),
       );
