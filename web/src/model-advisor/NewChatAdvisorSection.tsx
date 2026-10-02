@@ -963,9 +963,11 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         ? settingsPanel
           ? createPortal(settingsPanel, settingsPanelTarget)
           : null
-        : feedbackTarget
+        : settingsOpenOverride !== undefined
           ? null
-          : settingsPanel}
+          : feedbackTarget
+            ? null
+            : settingsPanel}
       {feedbackTarget ? createPortal(feedback, feedbackTarget) : feedback}
     </>
   );

@@ -1760,9 +1760,9 @@ describe("Composer model/effort label", () => {
     expect(screen.getByTestId("composer-agent-effort-high")).toBeVisible();
   });
 
-  it("shows the model in the foreground and effort muted", () => {
+  it("keeps the model pill focused on the model and exposes effort separately", () => {
     // The chip renders the harness's reported model (`llmModel`), never the
-    // sticky preference or the request.
+    // sticky preference or the request. Effort has its own compact control.
     useChatStore.setState({ llmModel: "opus", sessionReasoningEffort: "high" });
     renderWithTooltips(
       <Composer
@@ -1776,12 +1776,11 @@ describe("Composer model/effort label", () => {
       />,
     );
     expect(label()).toHaveTextContent("Opus");
-    expect(label()).toHaveTextContent("High");
-    // The harness identity ("Claude") is NOT in the label — it lives in the gear tooltip.
+    expect(label()).not.toHaveTextContent("High");
     expect(label()).not.toHaveTextContent("Claude");
-    // Model black, effort grey.
     expect(within(label()).getByText("Opus")).toHaveClass("text-foreground");
-    expect(within(label()).getByText("High")).toHaveClass("text-muted-foreground");
+    expect(screen.queryByTestId("composer-agent-effort-value")).toBeNull();
+    expect(screen.getByTestId("composer-inline-effort")).toHaveTextContent("High");
   });
 
   it("shows no effort when the session uses its default", () => {
@@ -5813,6 +5812,72 @@ describe("Model Advisor in an existing chat", () => {
     expect(toggle).toBeEnabled();
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("opens Recommender settings from the compact chat action without adding controls below the composer", async () => {
+    const choice = {
+      choice_id: "choice-openai",
+      provider: "openai",
+      model_id: "gpt-5.5",
+      display_name: "GPT-5.5",
+      reasoning_effort: "medium",
+      model_ids: ["gpt-5.5"],
+      access_lanes: ["codex-direct"],
+      available: true,
+    };
+    const provider = {
+      enabled: true,
+      collapsed: true,
+      selected_choice_ids: [choice.choice_id],
+      disabled_model_ids: [],
+      transport_preference: "direct_only",
+    };
+    advisorFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/model-advisor/catalog"))
+        return Response.json({
+          object: "model_advisor.catalog",
+          catalog_revision: "rev-1",
+          options: [],
+          logical_options: [choice],
+        });
+      if (url.includes("/model-advisor/preferences"))
+        return Response.json({
+          version: 1,
+          etag: "prefs-1",
+          logical_preferences: {
+            schema_version: 3,
+            enabled: true,
+            providers: {
+              openai: provider,
+              glm: { ...provider, enabled: false, selected_choice_ids: [] },
+            },
+            advisor_choice_id: choice.choice_id,
+            human_probability_percent: 50,
+            unresolved_legacy_ids: [],
+            route_review_required: [],
+          },
+        });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    renderWithTooltips(
+      <Composer
+        {...composerProps({
+          modelPickerKind: "codex",
+          advisorHostId: "host_1",
+          advisorAgentId: "ag_1",
+          advisorWorkspace: "/repo",
+          advisorHumanPick: { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Recommender", { selector: "label" })).toBeNull();
+    fireEvent.click(screen.getByTestId("chat-model-advisor-settings"));
+    expect(await screen.findByRole("heading", { name: "Recommender settings" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Model advisor settings" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Recommender model" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
   });
 
   beforeEach(() => {
