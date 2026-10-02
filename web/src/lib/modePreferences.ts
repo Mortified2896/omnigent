@@ -86,6 +86,9 @@ export function writeHarnessOption(
   try {
     const map = readMap();
     map[harness] = { ...map[harness], ...patch };
+    if (harness === "codex-native") {
+      console.log("HARNESS_WRITE", JSON.stringify(patch), new Error().stack);
+    }
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
     // localStorage quota or access errors shouldn't break the composer.
