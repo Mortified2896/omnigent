@@ -230,7 +230,16 @@ export function ComposerEffortPicker({
     <Select
       value={value || EFFORT_SELECT_NONE}
       disabled={disabled}
-      onValueChange={(next) => onSelect(next === EFFORT_SELECT_NONE ? null : next)}
+      onValueChange={(next) => {
+        const nextValue = next === EFFORT_SELECT_NONE ? null : next;
+        // Radix mirrors Select through a hidden native <select>. During a
+        // controlled remount/options handoff that element can emit a change for
+        // the value we already own (not a user selection). Treat it as the
+        // controlled no-op it is; otherwise a transient Default frame clears a
+        // persisted reasoning choice.
+        if (nextValue === value) return;
+        onSelect(nextValue);
+      }}
     >
       <SelectTrigger
         aria-label={label}
