@@ -3973,6 +3973,62 @@ function ComposerImpl(
             ) : undefined,
           beforeInput: (
             <>
+              {canUseModelAdvisor ? (
+                <div
+                  className="flex min-w-0 items-center justify-between gap-2 px-3 pt-2"
+                  data-testid="chat-advisor-toolbar"
+                >
+                  {canUseModelAdvisor && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isReadOnly || unreachable || advisorFlowLocked}
+                      aria-pressed={advisorEnabled}
+                      aria-label={
+                        advisorEnabled
+                          ? "Turn Model Advisor off for follow-ups"
+                          : "Turn Model Advisor on for follow-ups"
+                      }
+                      data-testid="chat-model-advisor-toggle"
+                      onClick={() => {
+                        if (advisorHostId && conversationId)
+                          writeSessionAdvisorEnabled(
+                            advisorHostId,
+                            conversationId,
+                            !advisorEnabled,
+                          );
+                        setAdvisorEnabled(!advisorEnabled);
+                        if (advisorEnabled) {
+                          setPendingAdvisorSend(null);
+                          setAdvisorDialogOpen(false);
+                          setCommandError(null);
+                        }
+                      }}
+                    >
+                      Advisor {advisorEnabled ? "on" : "off"}
+                    </Button>
+                  )}
+                  {canUseModelAdvisor && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 md:size-7"
+                      disabled={isReadOnly || unreachable || advisorFlowLocked}
+                      aria-label="Recommender settings"
+                      title="Recommender settings"
+                      data-testid="chat-model-advisor-settings"
+                      onClick={() => {
+                        setAdvisorDialogOpen(false);
+                        setAdvisorSettingsOpen(true);
+                      }}
+                    >
+                      <SettingsIcon className="size-4" aria-hidden="true" />
+                    </Button>
+                  )}
+                </div>
+              ) : null}
               {/* Slash-command suggestions — floats above the composer box */}
               {slashCompletion.open && (
                 <SlashCommandMenu
@@ -4082,51 +4138,6 @@ function ComposerImpl(
         actions={{
           leading: (
             <>
-              {canUseModelAdvisor && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={isReadOnly || unreachable || advisorFlowLocked}
-                  aria-pressed={advisorEnabled}
-                  aria-label={
-                    advisorEnabled
-                      ? "Turn Model Advisor off for follow-ups"
-                      : "Turn Model Advisor on for follow-ups"
-                  }
-                  data-testid="chat-model-advisor-toggle"
-                  onClick={() => {
-                    if (advisorHostId && conversationId)
-                      writeSessionAdvisorEnabled(advisorHostId, conversationId, !advisorEnabled);
-                    setAdvisorEnabled(!advisorEnabled);
-                    if (advisorEnabled) {
-                      setPendingAdvisorSend(null);
-                      setAdvisorDialogOpen(false);
-                      setCommandError(null);
-                    }
-                  }}
-                >
-                  Advisor {advisorEnabled ? "on" : "off"}
-                </Button>
-              )}
-              {canUseModelAdvisor && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 md:size-7"
-                  disabled={isReadOnly || unreachable || advisorFlowLocked}
-                  aria-label="Recommender settings"
-                  title="Recommender settings"
-                  data-testid="chat-model-advisor-settings"
-                  onClick={() => {
-                    setAdvisorDialogOpen(false);
-                    setAdvisorSettingsOpen(true);
-                  }}
-                >
-                  <SettingsIcon className="size-4" aria-hidden="true" />
-                </Button>
-              )}
               <ComposerAddMenu
                 disabled={false}
                 attachDisabled={
