@@ -1,0 +1,25 @@
+name: PR211 focused web validation
+
+on:
+  push:
+    branches:
+      - codex/pr211-focused-validation
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up pnpm
+        uses: ./.github/actions/setup-pnpm
+      - name: Install web dependencies
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --filter web
+      - name: Run focused composer tests
+        run: pnpm --filter web exec vitest run src/shell/NewChatDialog.test.tsx src/pages/ChatPage.composer.test.tsx
