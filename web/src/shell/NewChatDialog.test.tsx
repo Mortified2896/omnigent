@@ -3946,7 +3946,8 @@ describe("NewChatLandingScreen", () => {
     );
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
     const summary = screen.getByTestId("new-chat-landing-agent-summary-a2");
-    expect(summary).toHaveTextContent("High");
+    expect(summary).toHaveTextContent("GPT-5.5");
+    expect(summary).not.toHaveTextContent("High");
     expect(summary).toHaveClass("flex-1", "truncate");
     expect(summary).not.toHaveClass("w-[5.25rem]", "shrink-0");
 
@@ -3974,7 +3975,8 @@ describe("NewChatLandingScreen", () => {
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-databricks-gpt-5-6"));
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-xhigh"));
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("xHigh");
-    expect(screen.getByTestId("new-chat-landing-agent-summary-a2")).toHaveTextContent("xHigh");
+    expect(screen.getByTestId("new-chat-landing-agent-summary-a2")).toHaveTextContent("GPT-5.6");
+    expect(screen.getByTestId("new-chat-landing-agent-summary-a2")).not.toHaveTextContent("xHigh");
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-databricks-gpt-5-5"));
     expect(screen.getByTestId("new-chat-landing-agent-effort-default")).toHaveAttribute(
       "aria-checked",
@@ -10758,7 +10760,7 @@ describe("managed sandbox inference models", () => {
       ).toHaveAttribute("aria-checked", "false");
       expect(screen.queryByTestId("new-chat-landing-agent-effort-low")).toBeNull();
       closePrimaryPicker();
-      fireEvent.pointerDown(screen.getByTestId("new-chat-landing-inline-effort"), { button: 0 });
+      fireEvent.click(screen.getByTestId("new-chat-landing-inline-effort"));
       fireEvent.click(screen.getByRole("option", { name: "Max" }));
       expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
       remountLanding();
