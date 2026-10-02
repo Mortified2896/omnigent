@@ -1892,7 +1892,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
       key: getNewChatPickerCacheKey(""),
       label: picker.getAttribute("aria-label"),
       model: within(picker).getByTestId("new-chat-landing-agent-model-value").textContent,
-      effort: within(picker).getByTestId("new-chat-landing-agent-effort-value").textContent,
+      effort: "",
       icon: within(picker).getByTestId("new-chat-landing-agent-icon").innerHTML,
     };
     expect(snapshot.key).not.toBeNull();
@@ -1917,9 +1917,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
     expect(within(picker).getByTestId("new-chat-landing-agent-model-value").textContent).toBe(
       snapshot.model,
     );
-    expect(within(picker).getByTestId("new-chat-landing-agent-effort-value").textContent).toBe(
-      snapshot.effort,
-    );
+    expect(within(picker).queryByTestId("new-chat-landing-agent-effort-value")).toBeNull();
     expect(within(picker).getByTestId("new-chat-landing-agent-icon").innerHTML).toBe(snapshot.icon);
     expect(screen.getByTestId("new-chat-landing-input")).toBeEnabled();
     return picker;
@@ -3806,18 +3804,11 @@ describe("NewChatLandingScreen", () => {
 
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-high"));
     expect(screen.getByTestId("new-chat-landing-agent-config-value")).toHaveTextContent(
-      "Opus 4.8High",
+      "Opus 4.8",
     );
-    expect(screen.getByTestId("new-chat-landing-agent-effort-value")).toHaveTextContent("High");
-    expect(screen.getByTestId("new-chat-landing-agent-effort-value")).toHaveClass(
-      "shrink-0",
-      "text-[13px]",
-      "leading-5",
-      "font-normal",
-      "text-muted-foreground",
-    );
-    expect(screen.getByTestId("new-chat-landing-agent-effort-value")).not.toHaveClass("hidden");
-    expect(picker).toHaveAccessibleName("Claude Code, Model Opus 4.8, Effort High");
+    expect(screen.queryByTestId("new-chat-landing-agent-effort-value")).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
+    expect(picker).toHaveAccessibleName("Claude Code, Model Opus 4.8");
   });
 
   it.each([
@@ -4860,7 +4851,7 @@ describe("NewChatLandingScreen", () => {
     closePrimaryPicker();
 
     expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveAccessibleName(
-      "Claude Code, Model Smart Routing, Effort —",
+      "Claude Code, Model Smart Routing",
     );
   });
 
@@ -10766,15 +10757,14 @@ describe("managed sandbox inference models", () => {
         screen.getByTestId("new-chat-landing-agent-model-same-model-omniroute"),
       ).toHaveAttribute("aria-checked", "false");
       expect(screen.queryByTestId("new-chat-landing-agent-effort-low")).toBeNull();
-      fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-max"));
       closePrimaryPicker();
+      fireEvent.pointerDown(screen.getByTestId("new-chat-landing-inline-effort"), { button: 0 });
+      fireEvent.click(screen.getByRole("option", { name: "Max" }));
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
       remountLanding();
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
       openAgentModels("a2");
       expect(screen.getByTestId("new-chat-landing-agent-model-same-model-" + lane)).toHaveAttribute(
-        "aria-checked",
-        "true",
-      );
-      expect(screen.getByTestId("new-chat-landing-agent-effort-max")).toHaveAttribute(
         "aria-checked",
         "true",
       );
