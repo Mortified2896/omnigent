@@ -2713,7 +2713,7 @@ function ComposerImpl(
       value,
       label: formatStatusEffortLabel(value) ?? value,
     }));
-  }, [effortLevels, modelPickerKind, selectedComposerEffort]);
+  }, [effortLevels, selectedComposerEffort]);
   const changeComposerEffort = async (effort: string | null) => {
     if (
       isReadOnly ||
