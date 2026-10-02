@@ -147,12 +147,12 @@ def test_codex_native_picker_uses_raw_model_metadata(
 
     page.goto(f"{base_url}/c/{session_id}")
 
-    # The read-only composer label shows the resolved model + effort; the
-    # harness identity moved into the config gear's hover tooltip.
+    # The native model trigger and separate effort dropdown expose the same
+    # authoritative session metadata; the harness icon remains in the trigger.
     expect(page.get_by_test_id("composer-agent-model-value")).to_have_text(
         expected_label, timeout=15_000
     )
-    expect(page.get_by_test_id("composer-agent-effort-value")).to_have_text("xHigh")
+    expect(page.get_by_test_id("composer-inline-effort")).to_have_text("xHigh")
 
     page.get_by_test_id("composer-config-gear").hover()
     expect(page.get_by_test_id("composer-config-gear-tooltip")).to_contain_text("Codex")
@@ -186,7 +186,7 @@ def test_codex_native_unknown_model_keeps_raw_label(
 
     label = page.get_by_test_id("composer-agent-model-value")
     expect(label).to_have_text("gpt-unlisted", timeout=15_000)
-    expect(page.get_by_test_id("composer-agent-effort-value")).to_have_count(0)
+    expect(page.get_by_test_id("composer-inline-effort")).to_have_count(0)
     page.reload()
     expect(label).to_have_text("gpt-unlisted", timeout=15_000)
 
@@ -224,7 +224,7 @@ def test_custom_codex_native_agent_keeps_model_and_effort_controls(
     expect(page.get_by_test_id("composer-agent-model-value")).to_have_text(
         "Codex Pretty 5.5", timeout=15_000
     )
-    expect(page.get_by_test_id("composer-agent-effort-value")).to_have_text("xHigh")
+    expect(page.get_by_test_id("composer-inline-effort")).to_have_text("xHigh")
 
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible()

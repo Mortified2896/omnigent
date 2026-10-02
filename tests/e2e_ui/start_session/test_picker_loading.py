@@ -49,7 +49,7 @@ async def _expect_pending(
         await expect(picker).to_have_count(0)
     else:
         await expect(picker).to_contain_text(cached_label, timeout=30_000)
-        await expect(picker).to_contain_text(effort)
+        await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_contain_text(effort)
         await expect(picker).to_be_enabled()
         await expect(picker).to_have_attribute("aria-busy", "true")
         await expect(loading).to_have_count(0)
@@ -184,7 +184,11 @@ async def _drive(
                         '[data-testid="new-chat-landing-picker-loading"]');
                     const picker = document.querySelector(
                         '[data-testid="new-chat-landing-agent-select"]');
-                    const value = loading ? 'loading' : picker?.textContent;
+                    const effort = document.querySelector(
+                        '[data-testid="new-chat-landing-inline-effort"]');
+                    const value = loading ? 'loading' : picker
+                        ? [picker.textContent, effort?.textContent].filter(Boolean).join(' ')
+                        : null;
                     if (value && window.pickerLoadingSamples.at(-1) !== value) {
                         window.pickerLoadingSamples.push(value);
                     }
@@ -306,7 +310,9 @@ async def _drive(
 
                 gates["models"].set()
                 await expect(picker).to_contain_text(expected_model)
-                await expect(picker).to_contain_text(expected_effort)
+                await expect(
+                    page.get_by_test_id("new-chat-landing-inline-effort")
+                ).to_contain_text(expected_effort)
                 await expect(picker).not_to_have_attribute("aria-busy", "true")
                 if cached_label is not None:
                     choice = page.get_by_test_id(f"new-chat-landing-agent-model-{chosen_model}")
@@ -332,19 +338,32 @@ async def _drive(
                 samples = await page.evaluate("window.pickerLoadingSamples")
                 if cached_label is None:
                     assert samples[0] == "loading", samples
-                    assert len(samples) > 1, samples
-                    assert all(live_label in label and "Max" in label for label in samples[1:]), (
-                        samples
-                    )
+                    live_samples = samples[1:]
+                    assert live_samples, samples
+                    # Model and reasoning are intentionally independent controls.
+                    # React may commit them on adjacent frames (Default -> saved
+                    # effort), so forbid blank/foreign values rather than
+                    # requiring an impossible atomic combined-label transition.
+                    assert all(live_label in label for label in live_samples), samples
+                    assert all(
+                        any(effort in label for effort in ("Default", "Max"))
+                        for label in live_samples
+                    ), samples
+                    assert live_label in live_samples[-1] and "Max" in live_samples[-1], samples
                 else:
                     # The boot identity probe must confirm whose cache to read.
                     cached_samples = samples[1:] if samples[0] == "loading" else samples
                     assert cached_label in cached_samples[0], samples
                     assert all(
                         any(model in label for model in (cached_label, expected_model))
-                        and any(effort in label for effort in (cached_effort, expected_effort))
+                        and any(
+                            effort in label
+                            for effort in ("Default", cached_effort, expected_effort)
+                        )
                         for label in cached_samples
                     ), samples
+                    assert expected_model in cached_samples[-1], samples
+                    assert expected_effort in cached_samples[-1], samples
                 for samples_name, allowed_labels in (
                     ("directoryLoadingSamples", {"repo"}),
                     ("permissionLoadingSamples", {cached_permission, expected_permission}),

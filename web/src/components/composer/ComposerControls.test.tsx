@@ -6,6 +6,7 @@ import {
   ComposerWorkspaceTrigger,
   ComposerHarnessTrigger,
   ComposerPermissionPicker,
+  ComposerEffortPicker,
 } from "./ComposerControls";
 import {
   COMPOSER_COLLAPSED_LABEL_CLASS,
@@ -110,6 +111,24 @@ describe("shared composer controls", () => {
     expect(screen.queryByLabelText("Model change pending")).toBeNull();
     fireEvent.click(trigger);
     expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("renders a compact independent effort selector with a default reset", () => {
+    const onSelect = vi.fn();
+    render(
+      <ComposerEffortPicker
+        value="high"
+        options={[
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ]}
+        onSelect={onSelect}
+      />,
+    );
+    expect(screen.getByTestId("composer-inline-effort")).toHaveTextContent("High");
+    fireEvent.click(screen.getByTestId("composer-inline-effort"));
+    fireEvent.click(screen.getByRole("option", { name: "Default" }));
+    expect(onSelect).toHaveBeenCalledWith(null);
   });
 
   it("dispatches permission selections through the caller's handler", () => {

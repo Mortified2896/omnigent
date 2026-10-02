@@ -84,7 +84,11 @@ export interface NewChatAdvisorSectionProps {
   feedbackTarget?: HTMLElement | null;
   enabledOverride?: boolean;
   autoSubmit?: boolean;
-  onHumanPickChange?: (pick: HumanModelPick) => Promise<void>;
+  /** Render persistent recommender/settings controls. Chat follow-ups disable this. */
+  showComposerControls?: boolean;
+  /** Optional externally controlled settings state and portal for compact chat integration. */
+  settingsOpenOverride?: boolean;
+  settingsPanelTarget?: HTMLElement | null;
   disabled?: boolean;
   onLaunched: (sessionId: string) => void;
 }
@@ -147,15 +151,18 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     feedbackTarget,
     enabledOverride,
     autoSubmit = true,
-    onHumanPickChange,
+    showComposerControls = true,
+    settingsOpenOverride,
+    settingsPanelTarget,
     disabled = false,
     onLaunched,
   } = props;
   const [sessionHumanPick, setSessionHumanPick] = useState<HumanModelPick | null>(null);
-  const humanPick = sessionHumanPick ?? suppliedHumanPick;
+  // The native composer is the execution-choice authority. Saved Advisor state is fallback only.
+  const humanPick = suppliedHumanPick ?? sessionHumanPick;
   const scope = hostId ?? "";
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [humanPickBusy, setHumanPickBusy] = useState(false);
+  const [localSettingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpen = settingsOpenOverride ?? localSettingsOpen;
   const [editor, setEditor] = useState<EditorState>({
     saved: null,
     draft: null,
@@ -483,7 +490,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   }, [continueSessionId, editor.draft, editor.saved?.version, hostId, isCurrentScope]);
 
   const handlePropose = useCallback(() => {
-    if (hostId === null || round.busy || humanPickBusy || !editor.draft || validation !== null) {
+    if (hostId === null || round.busy || !editor.draft || validation !== null) {
       if (validation !== null) setRound({ round: null, busy: false, error: validation });
       return;
     }
@@ -536,7 +543,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     })();
   }, [
     editor.draft,
-    humanPickBusy,
     hostId,
     isCurrentScope,
     pollRound,
@@ -709,7 +715,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   useEffect(() => {
     if (
       !autoSubmit ||
-      humanPickBusy ||
       !continueSessionId ||
       !editor.draft ||
       !editor.draft.enabled ||
@@ -721,39 +726,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     if (!identity || autoSubmittedIdentity.current === identity) return;
     autoSubmittedIdentity.current = identity;
     handlePropose();
-  }, [
-    autoSubmit,
-    humanPickBusy,
-    continueSessionId,
-    editor.draft,
-    validation,
-    catalogError,
-    handlePropose,
-  ]);
-  const humanOption = options.find((option) => option.choice_id === resolveHumanChoice());
-  const humanEfforts = options.filter(
-    (option) => humanOption && advisorModelKey(option) === advisorModelKey(humanOption),
-  );
-  const changeHuman = async (option: LogicalOption | undefined) => {
-    if (!option || !onHumanPickChange) return;
-    setHumanPickBusy(true);
-    try {
-      const pick = {
-        model: option.model_ids[0],
-        accessLane: humanPick?.accessLane ?? null,
-        effort: option.reasoning_effort === "not_applicable" ? "" : option.reasoning_effort,
-      };
-      await onHumanPickChange(pick);
-      setSessionHumanPick(pick);
-    } catch (cause) {
-      setEditor((current) => ({
-        ...current,
-        error: cause instanceof Error ? cause.message : "Couldn't change your model.",
-      }));
-    } finally {
-      setHumanPickBusy(false);
-    }
-  };
+  }, [autoSubmit, continueSessionId, editor.draft, validation, catalogError, handlePropose]);
   if (hostId === null) return null;
   if (catalogError !== null)
     return (
@@ -800,7 +773,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const feedback = (
     <div className="space-y-3" data-testid="model-advisor-section">
       {editor.error && !settingsOpen ? <p role="alert">{editor.error}</p> : null}
-      {feedbackTarget ? (
+      {feedbackTarget && !settingsPanelTarget ? (
         <>
           {validation && autoSubmit ? (
             <Button
@@ -809,7 +782,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               size="sm"
               onClick={() => setSettingsOpen((open) => !open)}
             >
-              Advisor settings
+              Recommender settings
             </Button>
           ) : null}
           {settingsPanel}
@@ -882,127 +855,81 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
     </div>
   );
-  const humanControls = onHumanPickChange ? (
-    <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:flex-wrap">
-      <span className="col-span-2 min-w-0 text-xs text-muted-foreground md:flex-1">Your model</span>
-      <SearchableModelPicker
-        value={humanOption ? advisorModelKey(humanOption) : (humanPick?.model ?? "")}
-        options={advisorOptions}
-        compact
-        includeDefault={false}
-        ariaLabel="Your model"
-        loading={false}
-        disabled={disabled || round.busy || humanPickBusy}
-        onValueChange={(key) =>
-          void changeHuman(
-            options.find(
-              (option) =>
-                advisorModelKey(option) === key &&
-                option.available &&
-                option.reasoning_effort === humanOption?.reasoning_effort,
-            ) ?? options.find((option) => advisorModelKey(option) === key && option.available),
-          )
-        }
-      />
-      <Select
-        value={humanOption?.choice_id ?? ""}
-        disabled={disabled || round.busy || humanPickBusy || !humanOption}
-        onValueChange={(id) => void changeHuman(options.find((option) => option.choice_id === id))}
+  const recommenderControls =
+    editor.draft && (editor.draft.enabled || settingsOpen) ? (
+      <div
+        className="flex w-full min-w-0 flex-col gap-1 md:flex-row md:flex-wrap md:items-center"
+        data-testid="model-advisor-composer-choice"
       >
-        <SelectTrigger
-          aria-label="Your reasoning effort"
-          className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+        <label
+          htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+          className="min-w-0 text-xs text-muted-foreground md:flex-1"
         >
-          <SelectValue placeholder="Reasoning" />
-        </SelectTrigger>
-        <SelectContent>
-          {humanEfforts.map((option) => (
-            <SelectItem
-              key={option.choice_id}
-              value={option.choice_id}
-              disabled={!option.available}
+          Recommender
+        </label>
+        <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:w-auto md:shrink-0">
+          <SearchableModelPicker
+            id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+            value={advisorModelValue}
+            options={advisorOptions}
+            loading={false}
+            compact
+            includeDefault={false}
+            placeholder="Choose model…"
+            ariaLabel="Recommender model"
+            testId="model-advisor-advisor-choice"
+            searchTestId="model-advisor-advisor-choice-search"
+            disabled={disabled || round.busy}
+            onValueChange={(modelKey) => {
+              const choices = options.filter(
+                (option) => advisorModelKey(option) === modelKey && option.available,
+              );
+              const choice =
+                choices.find(
+                  (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
+                ) ?? choices[0];
+              if (editor.draft && choice)
+                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+            }}
+          />
+          <Select
+            value={savedAdvisor?.choice_id ?? ""}
+            disabled={disabled || round.busy || !savedAdvisor}
+            onValueChange={(choiceId) =>
+              editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
+            }
+          >
+            <SelectTrigger
+              className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
+              aria-label="Recommender reasoning effort"
+              data-testid="model-advisor-advisor-effort"
             >
-              {effortLabel(option.reasoning_effort)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  ) : null;
+              <SelectValue placeholder="Reasoning" />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {advisorEfforts.map((option) => (
+                <SelectItem
+                  key={option.choice_id}
+                  value={option.choice_id}
+                  disabled={!option.available}
+                >
+                  {effortLabel(option.reasoning_effort)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {savedAdvisorUnavailable ? (
+          <p role="alert" className="col-span-2 text-xs text-destructive">
+            The saved advisor model is unavailable from this host. Choose a valid model and
+            reasoning level to continue.
+          </p>
+        ) : null}
+      </div>
+    ) : null;
   const composerControls = (
     <div className="col-span-2 flex w-full min-w-0 flex-col gap-1 md:basis-full">
-      {humanControls}
-      {editor.draft?.enabled ? (
-        <div
-          className="col-span-2 grid w-full min-w-0 grid-cols-subgrid items-center gap-1 md:flex md:basis-full md:flex-wrap"
-          data-testid="model-advisor-composer-choice"
-        >
-          <label
-            htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-            className="min-w-0 text-xs text-muted-foreground md:flex-1"
-          >
-            Recommender
-          </label>
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:shrink-0">
-            <SearchableModelPicker
-              id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-              value={advisorModelValue}
-              options={advisorOptions}
-              loading={false}
-              compact
-              includeDefault={false}
-              placeholder="Choose model…"
-              ariaLabel="Recommender model"
-              testId="model-advisor-advisor-choice"
-              searchTestId="model-advisor-advisor-choice-search"
-              disabled={disabled || round.busy}
-              onValueChange={(modelKey) => {
-                const choices = options.filter(
-                  (option) => advisorModelKey(option) === modelKey && option.available,
-                );
-                const choice =
-                  choices.find(
-                    (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
-                  ) ?? choices[0];
-                if (editor.draft && choice)
-                  handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-              }}
-            />
-            <Select
-              value={savedAdvisor?.choice_id ?? ""}
-              disabled={disabled || round.busy || !savedAdvisor}
-              onValueChange={(choiceId) =>
-                editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
-              }
-            >
-              <SelectTrigger
-                className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
-                aria-label="Recommender reasoning effort"
-                data-testid="model-advisor-advisor-effort"
-              >
-                <SelectValue placeholder="Reasoning" />
-              </SelectTrigger>
-              <SelectContent align="start">
-                {advisorEfforts.map((option) => (
-                  <SelectItem
-                    key={option.choice_id}
-                    value={option.choice_id}
-                    disabled={!option.available}
-                  >
-                    {effortLabel(option.reasoning_effort)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {savedAdvisorUnavailable ? (
-            <p role="alert" className="col-span-2 text-xs text-destructive">
-              The saved advisor model is unavailable from this host. Choose a valid model and
-              reasoning level to continue.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+      {recommenderControls}
       <div className="flex items-center justify-between gap-2">
         {controls}
         <Button
@@ -1012,18 +939,36 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           disabled={round.busy || disabled}
           onClick={() => setSettingsOpen((open) => !open)}
           aria-expanded={settingsOpen}
-          aria-label="Advisor settings"
+          aria-label="Recommender settings"
         >
           <SettingsIcon />
-          Advisor settings
+          Recommender settings
         </Button>
       </div>
     </div>
   );
   return (
     <>
-      {advisorModelTarget ? createPortal(composerControls, advisorModelTarget) : composerControls}
-      {feedbackTarget ? null : settingsPanel}
+      {showComposerControls
+        ? advisorModelTarget
+          ? createPortal(composerControls, advisorModelTarget)
+          : composerControls
+        : null}
+      {settingsPanelTarget
+        ? settingsPanel
+          ? createPortal(
+              <div className="space-y-3">
+                {!showComposerControls ? recommenderControls : null}
+                {settingsPanel}
+              </div>,
+              settingsPanelTarget,
+            )
+          : null
+        : settingsOpenOverride !== undefined
+          ? null
+          : feedbackTarget
+            ? null
+            : settingsPanel}
       {feedbackTarget ? createPortal(feedback, feedbackTarget) : feedback}
     </>
   );

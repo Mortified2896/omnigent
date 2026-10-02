@@ -9,6 +9,14 @@ import {
   MonitorCloudIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EFFORT_SELECT_NONE } from "@/components/HarnessConfigControls";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -200,6 +208,46 @@ export function ComposerPermissionPicker({
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+export function ComposerEffortPicker({
+  value,
+  options,
+  disabled = false,
+  label = "Reasoning effort",
+  onSelect,
+  testIdPrefix = "composer",
+}: {
+  value: string | null;
+  options: readonly { value: string; label: string }[];
+  disabled?: boolean;
+  label?: string;
+  onSelect: (value: string | null) => void;
+  testIdPrefix?: string;
+}) {
+  return (
+    <Select
+      value={value || EFFORT_SELECT_NONE}
+      disabled={disabled}
+      onValueChange={(next) => onSelect(next === EFFORT_SELECT_NONE ? null : next)}
+    >
+      <SelectTrigger
+        aria-label={label}
+        data-testid={`${testIdPrefix}-inline-effort`}
+        className="data-[size=default]:h-8 w-[5.5rem] min-w-[5.5rem] gap-1 px-2 text-[13px] md:data-[size=default]:h-7"
+      >
+        <SelectValue placeholder="—" />
+      </SelectTrigger>
+      <SelectContent align="start">
+        <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

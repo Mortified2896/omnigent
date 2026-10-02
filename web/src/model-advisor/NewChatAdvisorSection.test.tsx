@@ -246,7 +246,7 @@ function mountSection(overrides: Partial<Parameters<typeof NewChatAdvisorSection
       {...overrides}
     />,
   );
-  const settings = screen.queryByRole("button", { name: "Advisor settings" });
+  const settings = screen.queryByRole("button", { name: "Recommender settings" });
   if (settings) fireEvent.click(settings);
   return view;
 }
@@ -673,7 +673,7 @@ it("keeps settings hidden until requested and exposes a compact Advisor toggle",
   );
   const toggle = await screen.findByRole("button", { name: "Advisor on" });
   const recommender = screen.getByRole("combobox", { name: "Recommender model" });
-  const settings = screen.getByRole("button", { name: "Advisor settings" });
+  const settings = screen.getByRole("button", { name: "Recommender settings" });
   expect(
     recommender.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -685,7 +685,7 @@ it("keeps settings hidden until requested and exposes a compact Advisor toggle",
     "false",
   );
   expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Advisor settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Recommender settings" }));
   expect(screen.getByRole("region", { name: "Model advisor settings" })).toBeDefined();
 });
 
@@ -745,15 +745,14 @@ it("retains the original human and recommender choices when continuing a newly l
       continueSessionId="conv_new"
       autoSubmit={false}
       enabledOverride
-      onHumanPickChange={async () => {}}
       onLaunched={() => {}}
     />,
   );
-  expect(await screen.findByRole("combobox", { name: "Your model" })).toHaveTextContent("GPT-5.5");
-  expect(screen.getByRole("combobox", { name: "Your reasoning effort" })).toHaveTextContent(
-    "Medium",
+  expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Your reasoning effort" })).toBeNull();
+  expect(await screen.findByRole("combobox", { name: "Recommender model" })).toHaveTextContent(
+    "GLM-5.3",
   );
-  expect(screen.getByRole("combobox", { name: "Recommender model" })).toHaveTextContent("GLM-5.3");
   expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toHaveTextContent(
     "Medium",
   );

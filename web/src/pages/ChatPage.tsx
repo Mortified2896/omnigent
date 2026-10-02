@@ -24,6 +24,7 @@ import {
 import {
   BotIcon,
   WandSparklesIcon,
+  SettingsIcon,
   CornerUpLeftIcon,
   FileTextIcon,
   Loader2Icon,
@@ -54,6 +55,7 @@ import {
   ComposerWorkspaceBar,
   ComposerPermissionPicker,
   ComposerConfigTooltipRows,
+  ComposerEffortPicker,
 } from "@/components/composer/ComposerControls";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useAppName } from "@/lib/branding";
@@ -2502,7 +2504,8 @@ function ComposerImpl(
   const [planModeBusy, setPlanModeBusy] = useState(false);
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
-  const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
+  const [advisorSettingsOpen, setAdvisorSettingsOpen] = useState(false);
+  const [advisorSettingsTarget, setAdvisorSettingsTarget] = useState<HTMLDivElement | null>(null);
   const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
   // A closing review can report one final busy state during its exit.
@@ -2655,12 +2658,14 @@ function ComposerImpl(
   useEffect(() => {
     setAdvisorEnabled(readSessionAdvisorEnabled(advisorHostId, conversationId));
     setAdvisorDialogOpen(false);
+    setAdvisorSettingsOpen(false);
     setAdvisorFlowLocked(false);
     setPendingAdvisorSend(null);
   }, [advisorHostId, conversationId]);
 
   useEffect(() => {
     if (pendingAdvisorSend && pendingAdvisorSend.sessionId === conversationId && !isWorking) {
+      setAdvisorSettingsOpen(false);
       setAdvisorDialogOpen(true);
     }
   }, [conversationId, isWorking, pendingAdvisorSend]);
@@ -2695,6 +2700,48 @@ function ComposerImpl(
   const codexApprovalMode = useChatStore((s) => s.codexApprovalMode);
   const [configBusy, setConfigBusy] = useState(false);
   const configBusyRef = useRef(false);
+  const selectedComposerEffort = useSessionEffort();
+  const composerCostControlMode = useChatStore((s) => s.costControlModeOverride);
+  const pendingComposerModelChange = useChatStore((s) => s.pendingModelChange);
+  const composerRoutingOn = costRoutingEligible && composerCostControlMode === "on";
+  const composerApprovalLocked =
+    composerSession?.labels?.["omnigent.routing_policy"] === "benchmark" ||
+    !!composerSession?.labels?.["o3.routing.proposal_id"];
+  const inlineComposerEfforts = useMemo(() => {
+    const values = [...effortLevels];
+    if (selectedComposerEffort && !values.includes(selectedComposerEffort)) {
+      values.push(selectedComposerEffort);
+    }
+    return values.map((effort) => ({
+      value: effort,
+      label: formatStatusEffortLabel(effort) ?? effort,
+    }));
+  }, [effortLevels, selectedComposerEffort]);
+  const changeComposerEffort = async (effort: string | null) => {
+    if (
+      isReadOnly ||
+      unreachable ||
+      composerRoutingOn ||
+      composerApprovalLocked ||
+      configBusyRef.current ||
+      pendingComposerModelChange !== null
+    )
+      return;
+    configBusyRef.current = true;
+    setConfigBusy(true);
+    const sourceSessionId = useChatStore.getState().conversationId;
+    try {
+      await useChatStore.getState().setEffort(effort);
+    } catch (error) {
+      if (useChatStore.getState().conversationId === sourceSessionId)
+        setCommandError(
+          error instanceof Error ? error.message : "Unable to change reasoning effort",
+        );
+    } finally {
+      configBusyRef.current = false;
+      setConfigBusy(false);
+    }
+  };
 
   // Ctrl+Shift+M opens the model picker, the keyboard equivalent of bare
   // "/model" (same nonce bump). Gated like the gear's model-open path: a picker
@@ -3926,6 +3973,62 @@ function ComposerImpl(
             ) : undefined,
           beforeInput: (
             <>
+              {canUseModelAdvisor ? (
+                <div
+                  className="flex min-w-0 items-center justify-between gap-2 px-3 pt-2"
+                  data-testid="chat-advisor-toolbar"
+                >
+                  {canUseModelAdvisor && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isReadOnly || unreachable || advisorFlowLocked}
+                      aria-pressed={advisorEnabled}
+                      aria-label={
+                        advisorEnabled
+                          ? "Turn Model Advisor off for follow-ups"
+                          : "Turn Model Advisor on for follow-ups"
+                      }
+                      data-testid="chat-model-advisor-toggle"
+                      onClick={() => {
+                        if (advisorHostId && conversationId)
+                          writeSessionAdvisorEnabled(
+                            advisorHostId,
+                            conversationId,
+                            !advisorEnabled,
+                          );
+                        setAdvisorEnabled(!advisorEnabled);
+                        if (advisorEnabled) {
+                          setPendingAdvisorSend(null);
+                          setAdvisorDialogOpen(false);
+                          setCommandError(null);
+                        }
+                      }}
+                    >
+                      Advisor {advisorEnabled ? "on" : "off"}
+                    </Button>
+                  )}
+                  {canUseModelAdvisor && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 md:size-7"
+                      disabled={isReadOnly || unreachable || advisorFlowLocked}
+                      aria-label="Recommender settings"
+                      title="Recommender settings"
+                      data-testid="chat-model-advisor-settings"
+                      onClick={() => {
+                        setAdvisorDialogOpen(false);
+                        setAdvisorSettingsOpen(true);
+                      }}
+                    >
+                      <SettingsIcon className="size-4" aria-hidden="true" />
+                    </Button>
+                  )}
+                </div>
+              ) : null}
               {/* Slash-command suggestions — floats above the composer box */}
               {slashCompletion.open && (
                 <SlashCommandMenu
@@ -4035,33 +4138,6 @@ function ComposerImpl(
         actions={{
           leading: (
             <>
-              {canUseModelAdvisor && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={isReadOnly || unreachable || advisorFlowLocked}
-                  aria-pressed={advisorEnabled}
-                  aria-label={
-                    advisorEnabled
-                      ? "Turn Model Advisor off for follow-ups"
-                      : "Turn Model Advisor on for follow-ups"
-                  }
-                  data-testid="chat-model-advisor-toggle"
-                  onClick={() => {
-                    if (advisorHostId && conversationId)
-                      writeSessionAdvisorEnabled(advisorHostId, conversationId, !advisorEnabled);
-                    setAdvisorEnabled(!advisorEnabled);
-                    if (advisorEnabled) {
-                      setPendingAdvisorSend(null);
-                      setAdvisorDialogOpen(false);
-                      setCommandError(null);
-                    }
-                  }}
-                >
-                  Advisor {advisorEnabled ? "on" : "off"}
-                </Button>
-              )}
               <ComposerAddMenu
                 disabled={false}
                 attachDisabled={
@@ -4159,6 +4235,22 @@ function ComposerImpl(
                   openNonce={pickerOpenNonce}
                 />
               </div>
+              {showEffort && inlineComposerEfforts.length > 0 && !composerRoutingOn && (
+                <ComposerEffortPicker
+                  value={selectedComposerEffort}
+                  options={inlineComposerEfforts}
+                  disabled={
+                    isReadOnly ||
+                    unreachable ||
+                    configBusy ||
+                    composerApprovalLocked ||
+                    pendingComposerModelChange !== null
+                  }
+                  label={modelPickerKind === "pi" ? "Thinking level" : "Reasoning effort"}
+                  onSelect={(effort) => void changeComposerEffort(effort)}
+                  testIdPrefix="composer"
+                />
+              )}
               <ComposerMicButton
                 className="size-8 md:size-7"
                 enableHotkey
@@ -4236,9 +4328,6 @@ function ComposerImpl(
         )
       )}
       {canUseModelAdvisor ? (
-        <div ref={setAdvisorModelTarget} className="flex min-w-0 flex-col gap-2 px-3 pb-2" />
-      ) : null}
-      {canUseModelAdvisor ? (
         <NewChatAdvisorSection
           key={`${advisorHostId}:${conversationId}`}
           hostId={advisorHostId}
@@ -4249,22 +4338,27 @@ function ComposerImpl(
           continueSessionId={conversationId}
           autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
           enabledOverride={advisorEnabled}
-          advisorModelTarget={advisorModelTarget}
+          showComposerControls={false}
+          settingsOpenOverride={advisorSettingsOpen}
+          settingsPanelTarget={advisorSettingsTarget}
           feedbackTarget={advisorFeedbackTarget}
           disabled={isReadOnly || unreachable || advisorFlowLocked}
-          onHumanPickChange={async (pick) => {
-            const store = useChatStore.getState();
-            const model = findNativeModelOption(codexModelOptions, pick.model)?.id ?? pick.model;
-            await store.setModel(model, {
-              expectConfirmation: modelPickerKind === "codex" || modelPickerKind === "claude",
-            });
-            if (costRoutingEligible) await store.setCostControlMode("off");
-            await store.setEffort(pick.effort || null);
-          }}
           onFlowStateChange={(busy, reviewVisible) => setAdvisorFlowLocked(busy || reviewVisible)}
           onLaunched={handleAdvisorLaunched}
         />
       ) : null}
+      <Dialog open={advisorSettingsOpen} onOpenChange={setAdvisorSettingsOpen}>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Recommender settings</DialogTitle>
+            <DialogDescription>
+              Choose the Advisor model, candidate pool, connection preferences, and approval rules.
+              Your execution model and reasoning level stay in the composer controls.
+            </DialogDescription>
+          </DialogHeader>
+          <div ref={setAdvisorSettingsTarget} />
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={advisorDialogOpen}
         onOpenChange={(open) => {
@@ -4920,7 +5014,6 @@ function SessionHarnessPicker({
     showModels,
     showEffort,
   });
-  const effortLabel = showEffort && !routingOn ? formatStatusEffortLabel(selectedEffort) : null;
   const label = routingOn
     ? SMART_ROUTING_LABEL
     : modelLabelLoading
@@ -5119,7 +5212,7 @@ function SessionHarnessPicker({
         trigger={{
           label: "Configure session",
           model: label,
-          effort: effortLabel ?? undefined,
+          effort: undefined,
           icon: <ComposerAgentIcon agent={iconAgent} />,
           disabled: busy || !configurable,
           "aria-disabled": disabled || busy || !configurable,

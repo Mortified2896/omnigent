@@ -15,6 +15,7 @@ import {
   ComposerHostTrigger,
   ComposerPermissionPicker,
   ComposerConfigTooltipRows,
+  ComposerEffortPicker,
 } from "@/components/composer/ComposerControls";
 import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
 import {
@@ -6349,49 +6350,6 @@ export function NewChatLandingScreen() {
                 )}
             </ComposerWorkspaceBar>
           )}
-          {modelAdvisorEnabled && (
-            <NewChatAdvisorSection
-              submitRef={advisorSubmitRef}
-              submissionBlockReason={
-                files.length > 0
-                  ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
-                  : null
-              }
-              hostId={selectedHostId}
-              task={
-                buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
-                sanitizeInitialPrompt(message)
-              }
-              humanPick={
-                pickedModel
-                  ? { model: pickedModel, accessLane: pickedCodexAccessLane, effort: pickedEffort }
-                  : null
-              }
-              launchAgentId={effectiveAgentId}
-              launchWorkspace={workspace || null}
-              onHumanPickChange={async (pick) => {
-                userPickedModelRef.current = true;
-                setPickedModel(pick.model);
-                setPickedCodexAccessLane(pick.accessLane);
-                setPickedEffort(pick.effort);
-                setCostControlMode(null);
-                if (selectedNativeHarness)
-                  rememberPickerOptions(selectedNativeHarness, {
-                    model: pick.model,
-                    accessLane: pick.accessLane ?? "",
-                    effort: pick.effort,
-                    routing: "off",
-                  });
-              }}
-              onLaunched={(sessionId) => {
-                submittedRef.current = true;
-                if (submittedDraftRevisionRef.current === landingDraftRevision)
-                  writeLandingDraft(null);
-                if (selectedHostId) writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
-                if (onScreenRef.current) navigate(`/c/${sessionId}`);
-              }}
-            />
-          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -6465,6 +6423,42 @@ export function NewChatLandingScreen() {
               slots={{
                 beforeInput: (
                   <>
+                    <div className="px-3 pt-2 empty:hidden" data-testid="new-chat-advisor-controls">
+                      {modelAdvisorEnabled && (
+                        <NewChatAdvisorSection
+                          submitRef={advisorSubmitRef}
+                          submissionBlockReason={
+                            files.length > 0
+                              ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
+                              : null
+                          }
+                          hostId={selectedHostId}
+                          task={
+                            buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
+                            sanitizeInitialPrompt(message)
+                          }
+                          humanPick={
+                            pickedModel
+                              ? {
+                                  model: pickedModel,
+                                  accessLane: pickedCodexAccessLane,
+                                  effort: pickedEffort,
+                                }
+                              : null
+                          }
+                          launchAgentId={effectiveAgentId}
+                          launchWorkspace={workspace || null}
+                          onLaunched={(sessionId) => {
+                            submittedRef.current = true;
+                            if (submittedDraftRevisionRef.current === landingDraftRevision)
+                              writeLandingDraft(null);
+                            if (selectedHostId)
+                              writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
+                            if (onScreenRef.current) navigate(`/c/${sessionId}`);
+                          }}
+                        />
+                      )}
+                    </div>
                     {/* Skill suggestions — floats above the composer box. */}
                     {slashCompletion.open && (
                       <SlashCommandMenu
@@ -6825,7 +6819,10 @@ export function NewChatLandingScreen() {
                             ? harnessTriggerTooltipRows
                             : undefined
                         }
-                        triggerDetails={harnessTriggerDetails}
+                        triggerDetails={harnessTriggerDetails.filter(
+                          (detail) =>
+                            detail.label !== "Effort" && detail.label !== "Thinking level",
+                        )}
                         triggerIcon={
                           selectedAgent ? (
                             <span
@@ -6850,6 +6847,23 @@ export function NewChatLandingScreen() {
                         triggerClassName="text-[13px] leading-5"
                       />
                     </div>
+                    {pickerEffortOptions.length > 0 &&
+                      !routingOn &&
+                      !smartRoutingHarnessSelected &&
+                      !fusionSelected && (
+                        <ComposerEffortPicker
+                          value={pickedEffort || null}
+                          options={pickerEffortOptions}
+                          disabled={creating}
+                          label={
+                            selectedNativeHarness === "pi-native"
+                              ? "Thinking level"
+                              : "Reasoning effort"
+                          }
+                          onSelect={(effort) => selectPickerEffort(effort ?? EFFORT_SELECT_NONE)}
+                          testIdPrefix="new-chat-landing"
+                        />
+                      )}
                     <ComposerMicButton
                       className="size-8 md:size-7"
                       enableHotkey

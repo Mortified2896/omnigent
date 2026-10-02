@@ -118,25 +118,27 @@ async def _drive(
             await page.get_by_test_id("new-chat-landing-submit").click()
             await page.wait_for_url(re.compile(r"/c/temp"))
             label = page.get_by_test_id("composer-agent-config-value")
-            await expect(label).to_be_visible()
+            effort = page.get_by_test_id("composer-inline-effort")
+            await expect(page.get_by_test_id("composer-config-gear")).to_be_visible()
+            await expect(effort).to_be_visible()
             loading = page.get_by_test_id("composer-model-loading")
             await expect(loading).to_be_visible()
             await expect(label).not_to_contain_text(selected)
-            await expect(label).to_contain_text("High")
+            await expect(effort).to_contain_text("High")
             await page.screenshot(path=output / "temporary-model.png", animations="disabled")
             release.set()
             await page.wait_for_url(f"{base_url}/c/{session_id}")
             # The temporary and bound routes mount different composer cards.
             # Wait for the bound loading contract before capturing its element.
             await expect(loading).to_be_visible()
-            await expect(label).to_contain_text("High")
+            await expect(effort).to_contain_text("High")
             assert len(create_bodies) == 1, create_bodies
             assert create_bodies[0]["model_override"] == selected, create_bodies
             assert create_bodies[0]["reasoning_effort"] == "high", create_bodies
             await page.screenshot(path=output / "bound-pending-model.png", animations="disabled")
             await expect(loading).to_be_visible()
             await expect(label).not_to_contain_text(selected)
-            await expect(label).to_contain_text("High")
+            await expect(effort).to_contain_text("High")
             snapshot_ready.set()
             compact_selected_label = selected_label.replace(" (1M context)", " 1M")
             await expect(label).to_contain_text(compact_selected_label)
