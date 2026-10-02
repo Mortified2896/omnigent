@@ -3803,9 +3803,7 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByTestId("new-chat-landing-agent-efforts")).toHaveTextContent("High");
 
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-high"));
-    expect(screen.getByTestId("new-chat-landing-agent-config-value")).toHaveTextContent(
-      "Opus 4.8",
-    );
+    expect(screen.getByTestId("new-chat-landing-agent-config-value")).toHaveTextContent("Opus 4.8");
     expect(screen.queryByTestId("new-chat-landing-agent-effort-value")).toBeNull();
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
     expect(picker).toHaveAccessibleName("Claude Code, Model Opus 4.8");
