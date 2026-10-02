@@ -131,6 +131,25 @@ describe("shared composer controls", () => {
     expect(onSelect).toHaveBeenCalledWith(null);
   });
 
+  it("does not dispatch a controlled no-op effort change", () => {
+    const onSelect = vi.fn();
+    const view = render(
+      <ComposerEffortPicker
+        value={null}
+        options={[{ value: "low", label: "Low" }]}
+        onSelect={onSelect}
+      />,
+    );
+    view.rerender(
+      <ComposerEffortPicker
+        value="high"
+        options={[{ value: "high", label: "High" }]}
+        onSelect={onSelect}
+      />,
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("dispatches permission selections through the caller's handler", () => {
     const onSelect = vi.fn();
     render(
