@@ -230,7 +230,11 @@ export function ComposerEffortPicker({
     <Select
       value={value || EFFORT_SELECT_NONE}
       disabled={disabled}
-      onValueChange={(next) => onSelect(next === EFFORT_SELECT_NONE ? null : next)}
+      onValueChange={(next) => {
+        // Radix's native select can emit an empty value while saved choices
+        // and their options mount. Only the explicit Default item clears effort.
+        if (next) onSelect(next === EFFORT_SELECT_NONE ? null : next);
+      }}
     >
       <SelectTrigger
         aria-label={label}
