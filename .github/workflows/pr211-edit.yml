@@ -1,5 +1,5 @@
 name: PR211 bounded source correction
-# Temporary task-branch diagnostic bridge; remove before merge.
+# Temporary editing bridge. Delete before merging the task branch.
 on:
   push:
     branches: [codex/fix-advisor-native-composer]
@@ -7,25 +7,179 @@ on:
 permissions:
   contents: read
 jobs:
-  source:
+  correct:
     if: github.repository == 'Mortified2896/omnigent'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Archive only committed source, never runtime state
+      - name: Apply source-bound reviewed corrections
         run: |
-          git rev-parse HEAD > "$RUNNER_TEMP/pr211-source-sha.txt"
-          git archive --format=tar.gz -o "$RUNNER_TEMP/pr211-source.tgz" HEAD
-          git ls-tree -r --name-only HEAD | grep -E 'tests/e2e_ui/.*(modal|reconnect|model_advisor|codex_model_metadata)'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: pr211-source
-          path: |
-            ${{ runner.temp }}/pr211-source.tgz
-            ${{ runner.temp }}/pr211-source-sha.txt
-          if-no-files-found: error
-          retention-days: 1
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          expected = {
+              'tests/e2e_ui/chat/test_codex_model_metadata.py': '4bd4e0af60afb51f795ffcc714aab379685980f7',
+              'tests/e2e_ui/start_session/test_composer_transition.py': 'de8455aba8a9d2d72eae7f9470f8b75262deb894',
+              'tests/e2e_ui/start_session/test_model_advisor_composer.py': 'a8b67ba11999b96e3301675b6a99428f1f35b4ca',
+              'tests/e2e_ui/start_session/test_picker_loading.py': '6b90f3d9a877e9ebf7239be00a3d8e1b18b72fab',
+              'web/src/model-advisor/NewChatAdvisorSection.tsx': 'c3112cc8dd2ec24c8f38f5ca4bc3a15e127b132f',
+              'web/src/pages/ChatPage.composer.test.tsx': '7844a1f96ef71743929cdd75b95490b686ae4bb7',
+              'web/src/pages/ChatPage.tsx': '20cd1cb659f4dfb07088e566fa022f2b5bbbcfbf',
+              'web/src/shell/NewChatDialog.tsx': 'd50c1f0ef71dafa58efe094c02438bec990e7e3c',
+          }
+          for path, sha in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              if actual != sha:
+                  raise SystemExit('Source changed; refusing overwrite: ' + path)
+          def change(path, edits):
+              p = Path(path)
+              s = p.read_text()
+              for old, new, count in edits:
+                  if s.count(old) != count:
+                      raise SystemExit('Unexpected edit count: ' + path)
+                  s = s.replace(old, new)
+              p.write_text(s)
+          change('tests/e2e_ui/chat/test_codex_model_metadata.py', [
+              ('"composer-agent-effort-value"', '"composer-inline-effort"', 3),
+              ("# The read-only composer label shows the resolved model + effort; the\n    # harness identity moved into the config gear's hover tooltip.", '# The native model trigger and separate effort dropdown expose the same\n    # authoritative session metadata; the harness icon remains in the trigger.', 1),
+          ])
+          change('tests/e2e_ui/start_session/test_picker_loading.py', [
+              ('await expect(picker).to_contain_text(effort)', 'await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_contain_text(\n            effort\n        )', 1),
+              ("const value = loading ? 'loading' : picker?.textContent;", "const effort = document.querySelector(\n                        '[data-testid=\"new-chat-landing-inline-effort\"]');\n                    const value = loading ? 'loading' : picker\n                        ? [picker.textContent, effort?.textContent].filter(Boolean).join(' ')\n                        : null;", 1),
+              ('await expect(picker).to_contain_text(expected_effort)', 'await expect(\n                    page.get_by_test_id("new-chat-landing-inline-effort")\n                ).to_contain_text(expected_effort)', 1),
+          ])
+          change('tests/e2e_ui/start_session/test_composer_transition.py', [
+              ('await expect(label).to_be_visible()', 'effort = page.get_by_test_id("composer-inline-effort")\n            await expect(page.get_by_test_id("composer-config-gear")).to_be_visible()\n            await expect(effort).to_be_visible()', 1),
+              ('await expect(label).to_contain_text("High")', 'await expect(effort).to_contain_text("High")', 3),
+          ])
+          p = Path('tests/e2e_ui/start_session/test_model_advisor_composer.py')
+          s = p.read_text().replace('name="Advisor settings", exact=True', 'name="Recommender settings", exact=True')
+          start = s.index('            await expect(\n                page.get_by_role("combobox", name="Your model", exact=True)\n            ).to_be_visible()')
+          end = s.index('            await page.screenshot(\n                path=str(tmp_path / "model-advisor-composer-mobile.png")', start)
+          s = s[:start] + '''            # Only the native icon/model trigger owns execution selection.
+                      await expect(
+                          page.get_by_role("combobox", name="Your model", exact=True)
+                      ).to_have_count(0)
+                      await expect(
+                          page.get_by_role("combobox", name="Your reasoning effort", exact=True)
+                      ).to_have_count(0)
+                      model_picker = page.get_by_test_id("new-chat-landing-agent-select")
+                      effort_picker = page.get_by_test_id("new-chat-landing-inline-effort")
+                      permission_picker = page.get_by_test_id("new-chat-landing-permission-chip")
+                      await expect(model_picker).to_be_visible()
+                      await expect(effort_picker).to_be_visible()
+                      await model_picker.click()
+                      await page.get_by_test_id("new-chat-landing-agent-config-ag_codex_e2e").click()
+                      await page.get_by_test_id(
+                          "new-chat-landing-agent-model-gpt-5.5-codex-direct"
+                      ).click()
+                      await page.keyboard.press("Escape")
+                      await page.keyboard.press("Escape")
+                      await effort_picker.click()
+                      await page.get_by_role("option", name="Medium", exact=True).click()
+                      await expect(effort_picker).to_contain_text("Medium")
+                      await expect(page.get_by_test_id("new-chat-landing-agent-icon")).to_be_visible()
+                      model_box = await model_picker.bounding_box()
+                      effort_box = await effort_picker.bounding_box()
+                      permission_box = await permission_picker.bounding_box()
+                      assert model_box is not None and effort_box is not None
+                      assert permission_box is not None
+                      assert abs(model_box["y"] - permission_box["y"]) < 4
+                      assert abs(model_box["y"] - effort_box["y"]) < 4
+                      assert model_box["x"] + model_box["width"] <= effort_box["x"] + 1
+                      assert effort_box["x"] + effort_box["width"] <= 390
+                      advisor_picker = page.get_by_test_id("model-advisor-advisor-choice")
+                      advisor_effort = page.get_by_test_id("model-advisor-advisor-effort")
+                      await expect(advisor_picker).to_have_count(1)
+                      await expect(advisor_picker).to_be_visible()
+                      await expect(advisor_effort).to_be_visible()
+                      await expect(page.get_by_text("Recommender", exact=True)).to_be_visible()
+                      advisor_box = await advisor_picker.bounding_box()
+                      advisor_effort_box = await advisor_effort.bounding_box()
+                      assert advisor_box is not None and advisor_effort_box is not None
+                      assert abs(advisor_box["y"] - advisor_effort_box["y"]) < 2
+                      assert advisor_box["width"] >= 100
+                      assert advisor_box["x"] + advisor_box["width"] <= advisor_effort_box["x"] + 2
+                      assert advisor_effort_box["x"] + advisor_effort_box["width"] <= 390
+                      await expect(advisor_picker).to_contain_text("GLM-5.3")
+                      await expect(advisor_effort).to_contain_text("High")
+                      await expect(
+                          page.get_by_role("button", name="Recommender settings", exact=True)
+                      ).to_be_visible()
+
+          '''.replace('\n                      ', '\n            ') + s[end:]
+          s = s.replace('''            await expect(
+                          page.get_by_role("combobox", name="Your model", exact=True)
+                      ).to_be_visible()
+                      await expect(
+                          page.get_by_role("combobox", name="Your reasoning effort", exact=True)
+                      ).to_be_visible()'''.replace('\n                      ', '\n            '), '''            await expect(model_picker).to_be_visible()
+                      await expect(model_picker).to_contain_text("GPT-5.5")
+                      await expect(effort_picker).to_be_visible()
+                      await expect(advisor_picker).to_be_visible()'''.replace('\n                      ', '\n            '))
+          p.write_text(s)
+          p = Path('web/src/model-advisor/NewChatAdvisorSection.tsx')
+          s = p.read_text()
+          a = s.index('  const composerControls = (')
+          b = s.index('      <div className="flex items-center justify-between gap-2">', a)
+          expression = s[a:b].split('      {editor.draft?.enabled ? (', 1)[1].rsplit('      ) : null}', 1)[0]
+          s = s[:a] + '  const recommenderControls = editor.draft?.enabled ? (\n' + expression + '  ) : null;\n  const composerControls = (\n    <div className="col-span-2 flex w-full min-w-0 flex-col gap-1 md:basis-full">\n      {recommenderControls}\n' + s[b:]
+          s = s.replace('? createPortal(settingsPanel, settingsPanelTarget)', '? createPortal(\n              <div className="space-y-3">\n                {!showComposerControls ? recommenderControls : null}\n                {settingsPanel}\n              </div>,\n              settingsPanelTarget,\n            )')
+          p.write_text(s)
+          p = Path('web/src/shell/NewChatDialog.tsx')
+          s = p.read_text()
+          a = s.index('          {modelAdvisorEnabled && (\n            <NewChatAdvisorSection')
+          b = s.index('          <form\n', a)
+          block = s[a:b]
+          s = s[:a] + s[b:]
+          needle = '                beforeInput: (\n                  <>\n                    {/* Skill suggestions'
+          if s.count(needle) != 1:
+              raise SystemExit('Composer slot changed')
+          s = s.replace(needle, '                beforeInput: (\n                  <>\n                    <div className="px-3 pt-2 empty:hidden" data-testid="new-chat-advisor-controls">\n' + block + '                    </div>\n                    {/* Skill suggestions')
+          p.write_text(s)
+          change('web/src/pages/ChatPage.tsx', [
+              ('  const composerRoutingOn = costRoutingEligible && composerCostControlMode === "on";', '  const composerRoutingOn = costRoutingEligible && composerCostControlMode === "on";\n  const composerApprovalLocked =\n    composerSession?.labels?.["omnigent.routing_policy"] === "benchmark" ||\n    !!composerSession?.labels?.["o3.routing.proposal_id"];', 1),
+              ('      composerRoutingOn ||\n      configBusyRef.current ||', '      composerRoutingOn ||\n      composerApprovalLocked ||\n      configBusyRef.current ||', 1),
+              ('isReadOnly || unreachable || configBusy || pendingComposerModelChange !== null', 'isReadOnly || unreachable || configBusy || composerApprovalLocked || pendingComposerModelChange !== null', 1),
+          ])
+          change('web/src/pages/ChatPage.composer.test.tsx', [
+              ('    expect(screen.getByRole("combobox", { name: "Recommender model" })).toBeInTheDocument();\n    expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();', '    const dialog = screen.getByRole("dialog");\n    expect(within(dialog).getByRole("combobox", { name: "Recommender model" })).toBeInTheDocument();\n    expect(\n      within(dialog).getByRole("combobox", { name: "Recommender reasoning effort" }),\n    ).toBeInTheDocument();\n    expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();', 1),
+          ])
+          changed = subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()
+          if set(changed) != set(expected):
+              raise SystemExit('Unexpected changed paths')
+          Path('/tmp/pr211-paths.txt').write_text('\n'.join(changed) + '\n')
+          subprocess.run(['python3', '-m', 'compileall', '-q', *[p for p in changed if p.endswith('.py')]], check=True)
+          PY
+      - name: Format exactly the reviewed changed files with repository-pinned tools
+        run: |
+          python3 -m pip install --disable-pip-version-check ruff==0.15.16
+          mapfile -t pyfiles < <(grep '\.py$' /tmp/pr211-paths.txt)
+          ruff format "${pyfiles[@]}"
+          ruff check "${pyfiles[@]}"
+          mapfile -t tsfiles < <(grep '\.tsx$' /tmp/pr211-paths.txt)
+          npx --yes --package prettier@3.9.5 prettier --write "${tsfiles[@]}"
+          git diff --check
+          git diff --stat
+      - name: Push only reviewed paths to unchanged task branch
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${PUSH_TOKEN}@github.com/Mortified2896/omnigent.git"
+          branch='refs/heads/codex/fix-advisor-native-composer'
+          test "$(git ls-remote "$remote" "$branch" | cut -f1)" = "$EXPECTED_SHA" || { echo 'Task branch moved'; exit 1; }
+          diff <(git diff --name-only | sort) <(sort /tmp/pr211-paths.txt)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          mapfile -t paths < /tmp/pr211-paths.txt
+          git add -- "${paths[@]}"
+          git commit -m 'fix(web): retain recommender controls and reconcile separate-effort regressions'
+          git push "$remote" "HEAD:$branch"
