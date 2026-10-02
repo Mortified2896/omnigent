@@ -1,0 +1,77 @@
+name: PR211 final focused validation
+
+on:
+  push:
+    branches:
+      - codex/pr211-final-focused
+
+permissions:
+  contents: read
+
+env:
+  OMNIGENT_SKIP_WEB_UI: "true"
+  ANTHROPIC_API_KEY: ""
+  DATABRICKS_TOKEN: ""
+  CODEX: ""
+  CLAUDE_CODE: ""
+  UV_INDEX_URL: https://pypi.org/simple
+  TERM: xterm-256color
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: ./.github/actions/setup-pnpm
+      - name: Install web dependencies
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --filter web
+      - name: Focused React tests
+        run: pnpm --filter web exec vitest run src/shell/NewChatDialog.test.tsx src/pages/ChatPage.composer.test.tsx
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version-file: ".python-version"
+      - uses: ./.github/actions/setup-pnpm
+      - uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: true
+      - name: Cache virtualenv
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock') }}
+      - name: Install project + test dependencies
+        run: uv sync --locked --extra all --group test
+      - name: Install bubblewrap + tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap tmux
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Cache Playwright
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: Build web SPA
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: |
+          pnpm install --frozen-lockfile --filter web
+          pnpm --filter web run build
+      - name: Focused browser tests
+        env:
+          OMNIGENT_E2E_ANTIGRAVITY: mock
+        run: |
+          uv run pytest             tests/e2e_ui/start_session/test_picker_loading.py             tests/e2e_ui/start_session/test_model_advisor_composer.py             -v --tb=short -r a             --ui-skip-build             --tracing=retain-on-failure             --screenshot=only-on-failure             -m "not visual and not nightly"
