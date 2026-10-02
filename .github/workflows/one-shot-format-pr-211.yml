@@ -1,0 +1,50 @@
+name: One-shot format PR 211
+
+on:
+  push:
+    branches:
+      - codex/fix-advisor-native-composer
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-format-pr-211
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: codex/fix-advisor-native-composer
+
+      - name: Set up pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Install web dependencies
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --filter web
+
+      - name: Format changed frontend files and remove this workflow
+        run: |
+          pnpm --filter web exec prettier --write \
+            src/model-advisor/NewChatAdvisorSection.tsx \
+            src/pages/ChatPage.composer.test.tsx \
+            src/pages/ChatPage.tsx \
+            src/shell/NewChatDialog.tsx
+          rm .github/workflows/one-shot-format-pr-211.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/src/model-advisor/NewChatAdvisorSection.tsx \
+            web/src/pages/ChatPage.composer.test.tsx \
+            web/src/pages/ChatPage.tsx \
+            web/src/shell/NewChatDialog.tsx \
+            .github/workflows/one-shot-format-pr-211.yml
+          git commit -m "chore: format Advisor composer integration"
+          git push origin HEAD:codex/fix-advisor-native-composer
