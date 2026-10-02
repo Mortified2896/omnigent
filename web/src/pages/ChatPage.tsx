@@ -2665,6 +2665,7 @@ function ComposerImpl(
 
   useEffect(() => {
     if (pendingAdvisorSend && pendingAdvisorSend.sessionId === conversationId && !isWorking) {
+      setAdvisorSettingsOpen(false);
       setAdvisorDialogOpen(true);
     }
   }, [conversationId, isWorking, pendingAdvisorSend]);
@@ -4995,7 +4996,6 @@ function SessionHarnessPicker({
     showModels,
     showEffort,
   });
-  const effortLabel = showEffort && !routingOn ? formatStatusEffortLabel(selectedEffort) : null;
   const label = routingOn
     ? SMART_ROUTING_LABEL
     : modelLabelLoading
