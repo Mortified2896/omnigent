@@ -86,6 +86,9 @@ export interface NewChatAdvisorSectionProps {
   autoSubmit?: boolean;
   /** Render persistent recommender/settings controls. Chat follow-ups disable this. */
   showComposerControls?: boolean;
+  /** Optional externally controlled settings state and portal for compact chat integration. */
+  settingsOpenOverride?: boolean;
+  settingsPanelTarget?: HTMLElement | null;
   disabled?: boolean;
   onLaunched: (sessionId: string) => void;
 }
@@ -149,13 +152,17 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     enabledOverride,
     autoSubmit = true,
     showComposerControls = true,
+    settingsOpenOverride,
+    settingsPanelTarget,
     disabled = false,
     onLaunched,
   } = props;
   const [sessionHumanPick, setSessionHumanPick] = useState<HumanModelPick | null>(null);
-  const humanPick = sessionHumanPick ?? suppliedHumanPick;
+  // The native composer is the execution-choice authority. Saved Advisor state is fallback only.
+  const humanPick = suppliedHumanPick ?? sessionHumanPick;
   const scope = hostId ?? "";
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [localSettingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpen = settingsOpenOverride ?? localSettingsOpen;
   const [editor, setEditor] = useState<EditorState>({
     saved: null,
     draft: null,
@@ -773,7 +780,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const feedback = (
     <div className="space-y-3" data-testid="model-advisor-section">
       {editor.error && !settingsOpen ? <p role="alert">{editor.error}</p> : null}
-      {feedbackTarget ? (
+      {feedbackTarget && !settingsPanelTarget ? (
         <>
           {validation && autoSubmit ? (
             <Button
@@ -782,7 +789,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               size="sm"
               onClick={() => setSettingsOpen((open) => !open)}
             >
-              Advisor settings
+              Recommender settings
             </Button>
           ) : null}
           {settingsPanel}
@@ -937,10 +944,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           disabled={round.busy || disabled}
           onClick={() => setSettingsOpen((open) => !open)}
           aria-expanded={settingsOpen}
-          aria-label="Advisor settings"
+          aria-label="Recommender settings"
         >
           <SettingsIcon />
-          Advisor settings
+          Recommender settings
         </Button>
       </div>
     </div>
@@ -952,7 +959,13 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           ? createPortal(composerControls, advisorModelTarget)
           : composerControls
         : null}
-      {feedbackTarget ? null : settingsPanel}
+      {settingsPanelTarget
+        ? settingsPanel
+          ? createPortal(settingsPanel, settingsPanelTarget)
+          : null
+        : feedbackTarget
+          ? null
+          : settingsPanel}
       {feedbackTarget ? createPortal(feedback, feedbackTarget) : feedback}
     </>
   );

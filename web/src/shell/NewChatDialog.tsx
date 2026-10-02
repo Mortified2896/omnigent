@@ -6812,7 +6812,9 @@ export function NewChatLandingScreen() {
                             ? harnessTriggerTooltipRows
                             : undefined
                         }
-                        triggerDetails={harnessTriggerDetails}
+                        triggerDetails={harnessTriggerDetails.filter(
+                          (detail) => detail.label !== "Effort" && detail.label !== "Thinking level",
+                        )}
                         triggerIcon={
                           selectedAgent ? (
                             <span

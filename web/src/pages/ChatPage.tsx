@@ -24,6 +24,7 @@ import {
 import {
   BotIcon,
   WandSparklesIcon,
+  SettingsIcon,
   CornerUpLeftIcon,
   FileTextIcon,
   Loader2Icon,
@@ -2503,6 +2504,8 @@ function ComposerImpl(
   const [planModeBusy, setPlanModeBusy] = useState(false);
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
+  const [advisorSettingsOpen, setAdvisorSettingsOpen] = useState(false);
+  const [advisorSettingsTarget, setAdvisorSettingsTarget] = useState<HTMLDivElement | null>(null);
   const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
   // A closing review can report one final busy state during its exit.
@@ -2655,6 +2658,7 @@ function ComposerImpl(
   useEffect(() => {
     setAdvisorEnabled(readSessionAdvisorEnabled(advisorHostId, conversationId));
     setAdvisorDialogOpen(false);
+    setAdvisorSettingsOpen(false);
     setAdvisorFlowLocked(false);
     setPendingAdvisorSend(null);
   }, [advisorHostId, conversationId]);
@@ -2706,7 +2710,7 @@ function ComposerImpl(
     }
     return values.map((value) => ({
       value,
-      label: formatStatusEffortLabel(value, modelPickerKind === "codex") ?? value,
+      label: formatStatusEffortLabel(value) ?? value,
     }));
   }, [effortLevels, modelPickerKind, selectedComposerEffort]);
   const changeComposerEffort = async (effort: string | null) => {
@@ -4098,6 +4102,24 @@ function ComposerImpl(
                   Advisor {advisorEnabled ? "on" : "off"}
                 </Button>
               )}
+              {canUseModelAdvisor && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 md:size-7"
+                  disabled={isReadOnly || unreachable || advisorFlowLocked}
+                  aria-label="Recommender settings"
+                  title="Recommender settings"
+                  data-testid="chat-model-advisor-settings"
+                  onClick={() => {
+                    setAdvisorDialogOpen(false);
+                    setAdvisorSettingsOpen(true);
+                  }}
+                >
+                  <SettingsIcon className="size-4" aria-hidden="true" />
+                </Button>
+              )}
               <ComposerAddMenu
                 disabled={false}
                 attachDisabled={
@@ -4298,12 +4320,26 @@ function ComposerImpl(
           autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
           enabledOverride={advisorEnabled}
           showComposerControls={false}
+          settingsOpenOverride={advisorSettingsOpen}
+          settingsPanelTarget={advisorSettingsTarget}
           feedbackTarget={advisorFeedbackTarget}
           disabled={isReadOnly || unreachable || advisorFlowLocked}
           onFlowStateChange={(busy, reviewVisible) => setAdvisorFlowLocked(busy || reviewVisible)}
           onLaunched={handleAdvisorLaunched}
         />
       ) : null}
+      <Dialog open={advisorSettingsOpen} onOpenChange={setAdvisorSettingsOpen}>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Recommender settings</DialogTitle>
+            <DialogDescription>
+              Choose the Advisor model, candidate pool, connection preferences, and approval rules.
+              Your execution model and reasoning level stay in the composer controls.
+            </DialogDescription>
+          </DialogHeader>
+          <div ref={setAdvisorSettingsTarget} />
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={advisorDialogOpen}
         onOpenChange={(open) => {
@@ -5158,7 +5194,7 @@ function SessionHarnessPicker({
         trigger={{
           label: "Configure session",
           model: label,
-          effort: effortLabel ?? undefined,
+          effort: undefined,
           icon: <ComposerAgentIcon agent={iconAgent} />,
           disabled: busy || !configurable,
           "aria-disabled": disabled || busy || !configurable,
