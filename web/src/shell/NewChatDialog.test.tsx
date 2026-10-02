@@ -10723,7 +10723,8 @@ describe("managed sandbox inference models", () => {
     openAgentModels("a2");
     expect(screen.getByTestId("new-chat-landing-agent-models")).toBeVisible();
     expect(screen.getByTestId("new-chat-landing-agent-efforts")).toBeVisible();
-    expect(screen.queryByTestId("model-advisor-human-choice")).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
   });
 
   it.each(["codex-direct", "glm-direct"] as const)(

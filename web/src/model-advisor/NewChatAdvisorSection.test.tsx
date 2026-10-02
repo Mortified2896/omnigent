@@ -745,15 +745,14 @@ it("retains the original human and recommender choices when continuing a newly l
       continueSessionId="conv_new"
       autoSubmit={false}
       enabledOverride
-      onHumanPickChange={async () => {}}
       onLaunched={() => {}}
     />,
   );
-  expect(await screen.findByRole("combobox", { name: "Your model" })).toHaveTextContent("GPT-5.5");
-  expect(screen.getByRole("combobox", { name: "Your reasoning effort" })).toHaveTextContent(
-    "Medium",
+  expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Your reasoning effort" })).toBeNull();
+  expect(await screen.findByRole("combobox", { name: "Recommender model" })).toHaveTextContent(
+    "GLM-5.3",
   );
-  expect(screen.getByRole("combobox", { name: "Recommender model" })).toHaveTextContent("GLM-5.3");
   expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toHaveTextContent(
     "Medium",
   );

@@ -84,7 +84,8 @@ export interface NewChatAdvisorSectionProps {
   feedbackTarget?: HTMLElement | null;
   enabledOverride?: boolean;
   autoSubmit?: boolean;
-  onHumanPickChange?: (pick: HumanModelPick) => Promise<void>;
+  /** Render persistent recommender/settings controls. Chat follow-ups disable this. */
+  showComposerControls?: boolean;
   disabled?: boolean;
   onLaunched: (sessionId: string) => void;
 }
@@ -147,7 +148,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     feedbackTarget,
     enabledOverride,
     autoSubmit = true,
-    onHumanPickChange,
+    showComposerControls = true,
     disabled = false,
     onLaunched,
   } = props;
@@ -155,7 +156,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const humanPick = sessionHumanPick ?? suppliedHumanPick;
   const scope = hostId ?? "";
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [humanPickBusy, setHumanPickBusy] = useState(false);
   const [editor, setEditor] = useState<EditorState>({
     saved: null,
     draft: null,
@@ -483,7 +483,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   }, [continueSessionId, editor.draft, editor.saved?.version, hostId, isCurrentScope]);
 
   const handlePropose = useCallback(() => {
-    if (hostId === null || round.busy || humanPickBusy || !editor.draft || validation !== null) {
+    if (hostId === null || round.busy || !editor.draft || validation !== null) {
       if (validation !== null) setRound({ round: null, busy: false, error: validation });
       return;
     }
@@ -536,7 +536,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     })();
   }, [
     editor.draft,
-    humanPickBusy,
     hostId,
     isCurrentScope,
     pollRound,
@@ -709,7 +708,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   useEffect(() => {
     if (
       !autoSubmit ||
-      humanPickBusy ||
       !continueSessionId ||
       !editor.draft ||
       !editor.draft.enabled ||
@@ -723,37 +721,12 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     handlePropose();
   }, [
     autoSubmit,
-    humanPickBusy,
     continueSessionId,
     editor.draft,
     validation,
     catalogError,
     handlePropose,
   ]);
-  const humanOption = options.find((option) => option.choice_id === resolveHumanChoice());
-  const humanEfforts = options.filter(
-    (option) => humanOption && advisorModelKey(option) === advisorModelKey(humanOption),
-  );
-  const changeHuman = async (option: LogicalOption | undefined) => {
-    if (!option || !onHumanPickChange) return;
-    setHumanPickBusy(true);
-    try {
-      const pick = {
-        model: option.model_ids[0],
-        accessLane: humanPick?.accessLane ?? null,
-        effort: option.reasoning_effort === "not_applicable" ? "" : option.reasoning_effort,
-      };
-      await onHumanPickChange(pick);
-      setSessionHumanPick(pick);
-    } catch (cause) {
-      setEditor((current) => ({
-        ...current,
-        error: cause instanceof Error ? cause.message : "Couldn't change your model.",
-      }));
-    } finally {
-      setHumanPickBusy(false);
-    }
-  };
   if (hostId === null) return null;
   if (catalogError !== null)
     return (
@@ -882,56 +855,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
     </div>
   );
-  const humanControls = onHumanPickChange ? (
-    <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:flex-wrap">
-      <span className="col-span-2 min-w-0 text-xs text-muted-foreground md:flex-1">Your model</span>
-      <SearchableModelPicker
-        value={humanOption ? advisorModelKey(humanOption) : (humanPick?.model ?? "")}
-        options={advisorOptions}
-        compact
-        includeDefault={false}
-        ariaLabel="Your model"
-        loading={false}
-        disabled={disabled || round.busy || humanPickBusy}
-        onValueChange={(key) =>
-          void changeHuman(
-            options.find(
-              (option) =>
-                advisorModelKey(option) === key &&
-                option.available &&
-                option.reasoning_effort === humanOption?.reasoning_effort,
-            ) ?? options.find((option) => advisorModelKey(option) === key && option.available),
-          )
-        }
-      />
-      <Select
-        value={humanOption?.choice_id ?? ""}
-        disabled={disabled || round.busy || humanPickBusy || !humanOption}
-        onValueChange={(id) => void changeHuman(options.find((option) => option.choice_id === id))}
-      >
-        <SelectTrigger
-          aria-label="Your reasoning effort"
-          className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
-        >
-          <SelectValue placeholder="Reasoning" />
-        </SelectTrigger>
-        <SelectContent>
-          {humanEfforts.map((option) => (
-            <SelectItem
-              key={option.choice_id}
-              value={option.choice_id}
-              disabled={!option.available}
-            >
-              {effortLabel(option.reasoning_effort)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  ) : null;
   const composerControls = (
     <div className="col-span-2 flex w-full min-w-0 flex-col gap-1 md:basis-full">
-      {humanControls}
       {editor.draft?.enabled ? (
         <div
           className="col-span-2 grid w-full min-w-0 grid-cols-subgrid items-center gap-1 md:flex md:basis-full md:flex-wrap"
@@ -1022,7 +947,11 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   );
   return (
     <>
-      {advisorModelTarget ? createPortal(composerControls, advisorModelTarget) : composerControls}
+      {showComposerControls
+        ? advisorModelTarget
+          ? createPortal(composerControls, advisorModelTarget)
+          : composerControls
+        : null}
       {feedbackTarget ? null : settingsPanel}
       {feedbackTarget ? createPortal(feedback, feedbackTarget) : feedback}
     </>

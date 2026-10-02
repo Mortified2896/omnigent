@@ -15,6 +15,7 @@ import {
   ComposerHostTrigger,
   ComposerPermissionPicker,
   ComposerConfigTooltipRows,
+  ComposerEffortPicker,
 } from "@/components/composer/ComposerControls";
 import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
 import {
@@ -6369,20 +6370,6 @@ export function NewChatLandingScreen() {
               }
               launchAgentId={effectiveAgentId}
               launchWorkspace={workspace || null}
-              onHumanPickChange={async (pick) => {
-                userPickedModelRef.current = true;
-                setPickedModel(pick.model);
-                setPickedCodexAccessLane(pick.accessLane);
-                setPickedEffort(pick.effort);
-                setCostControlMode(null);
-                if (selectedNativeHarness)
-                  rememberPickerOptions(selectedNativeHarness, {
-                    model: pick.model,
-                    accessLane: pick.accessLane ?? "",
-                    effort: pick.effort,
-                    routing: "off",
-                  });
-              }}
               onLaunched={(sessionId) => {
                 submittedRef.current = true;
                 if (submittedDraftRevisionRef.current === landingDraftRevision)
@@ -6850,6 +6837,25 @@ export function NewChatLandingScreen() {
                         triggerClassName="text-[13px] leading-5"
                       />
                     </div>
+                    {pickerEffortOptions.length > 0 &&
+                      !routingOn &&
+                      !smartRoutingHarnessSelected &&
+                      !fusionSelected && (
+                        <ComposerEffortPicker
+                          value={pickedEffort || null}
+                          options={pickerEffortOptions}
+                          disabled={creating}
+                          label={
+                            selectedNativeHarness === "pi-native"
+                              ? "Thinking level"
+                              : "Reasoning effort"
+                          }
+                          onSelect={(effort) =>
+                            selectPickerEffort(effort ?? EFFORT_SELECT_NONE)
+                          }
+                          testIdPrefix="new-chat-landing"
+                        />
+                      )}
                     <ComposerMicButton
                       className="size-8 md:size-7"
                       enableHotkey

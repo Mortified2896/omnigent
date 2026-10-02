@@ -54,6 +54,7 @@ import {
   ComposerWorkspaceBar,
   ComposerPermissionPicker,
   ComposerConfigTooltipRows,
+  ComposerEffortPicker,
 } from "@/components/composer/ComposerControls";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useAppName } from "@/lib/branding";
@@ -2502,7 +2503,6 @@ function ComposerImpl(
   const [planModeBusy, setPlanModeBusy] = useState(false);
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
-  const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
   const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
   // A closing review can report one final busy state during its exit.
@@ -2695,6 +2695,42 @@ function ComposerImpl(
   const codexApprovalMode = useChatStore((s) => s.codexApprovalMode);
   const [configBusy, setConfigBusy] = useState(false);
   const configBusyRef = useRef(false);
+  const selectedComposerEffort = useSessionEffort();
+  const composerCostControlMode = useChatStore((s) => s.costControlModeOverride);
+  const pendingComposerModelChange = useChatStore((s) => s.pendingModelChange);
+  const composerRoutingOn = costRoutingEligible && composerCostControlMode === "on";
+  const inlineComposerEfforts = useMemo(() => {
+    const values = [...effortLevels];
+    if (selectedComposerEffort && !values.includes(selectedComposerEffort)) {
+      values.push(selectedComposerEffort);
+    }
+    return values.map((value) => ({
+      value,
+      label: formatStatusEffortLabel(value, modelPickerKind === "codex") ?? value,
+    }));
+  }, [effortLevels, modelPickerKind, selectedComposerEffort]);
+  const changeComposerEffort = async (effort: string | null) => {
+    if (
+      isReadOnly ||
+      unreachable ||
+      composerRoutingOn ||
+      configBusyRef.current ||
+      pendingComposerModelChange !== null
+    )
+      return;
+    configBusyRef.current = true;
+    setConfigBusy(true);
+    const sourceSessionId = useChatStore.getState().conversationId;
+    try {
+      await useChatStore.getState().setEffort(effort);
+    } catch (error) {
+      if (useChatStore.getState().conversationId === sourceSessionId)
+        setCommandError(error instanceof Error ? error.message : "Unable to change reasoning effort");
+    } finally {
+      configBusyRef.current = false;
+      setConfigBusy(false);
+    }
+  };
 
   // Ctrl+Shift+M opens the model picker, the keyboard equivalent of bare
   // "/model" (same nonce bump). Gated like the gear's model-open path: a picker
@@ -4159,6 +4195,21 @@ function ComposerImpl(
                   openNonce={pickerOpenNonce}
                 />
               </div>
+              {showEffort && inlineComposerEfforts.length > 0 && !composerRoutingOn && (
+                <ComposerEffortPicker
+                  value={selectedComposerEffort}
+                  options={inlineComposerEfforts}
+                  disabled={
+                    isReadOnly ||
+                    unreachable ||
+                    configBusy ||
+                    pendingComposerModelChange !== null
+                  }
+                  label={modelPickerKind === "pi" ? "Thinking level" : "Reasoning effort"}
+                  onSelect={(effort) => void changeComposerEffort(effort)}
+                  testIdPrefix="composer"
+                />
+              )}
               <ComposerMicButton
                 className="size-8 md:size-7"
                 enableHotkey
@@ -4236,9 +4287,6 @@ function ComposerImpl(
         )
       )}
       {canUseModelAdvisor ? (
-        <div ref={setAdvisorModelTarget} className="flex min-w-0 flex-col gap-2 px-3 pb-2" />
-      ) : null}
-      {canUseModelAdvisor ? (
         <NewChatAdvisorSection
           key={`${advisorHostId}:${conversationId}`}
           hostId={advisorHostId}
@@ -4249,18 +4297,9 @@ function ComposerImpl(
           continueSessionId={conversationId}
           autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
           enabledOverride={advisorEnabled}
-          advisorModelTarget={advisorModelTarget}
+          showComposerControls={false}
           feedbackTarget={advisorFeedbackTarget}
           disabled={isReadOnly || unreachable || advisorFlowLocked}
-          onHumanPickChange={async (pick) => {
-            const store = useChatStore.getState();
-            const model = findNativeModelOption(codexModelOptions, pick.model)?.id ?? pick.model;
-            await store.setModel(model, {
-              expectConfirmation: modelPickerKind === "codex" || modelPickerKind === "claude",
-            });
-            if (costRoutingEligible) await store.setCostControlMode("off");
-            await store.setEffort(pick.effort || null);
-          }}
           onFlowStateChange={(busy, reviewVisible) => setAdvisorFlowLocked(busy || reviewVisible)}
           onLaunched={handleAdvisorLaunched}
         />
