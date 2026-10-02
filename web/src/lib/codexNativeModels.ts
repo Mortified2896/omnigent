@@ -1,7 +1,7 @@
 import type { NativeModelOption } from "./types";
 
-/** Catalog prefixes a gateway model id carries, mirroring the server's fold. */
-const CATALOG_PREFIXES = ["databricks-", "system.ai."] as const;
+/** Catalog/provider prefixes a native model id may carry for comparison only. */
+const CATALOG_PREFIXES = ["databricks-", "system.ai.", "codex/"] as const;
 const CODEX_EFFORT_LEVEL_ORDER = [
   "minimal",
   "low",
