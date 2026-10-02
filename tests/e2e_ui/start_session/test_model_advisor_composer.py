@@ -245,69 +245,59 @@ async def _drive_composer_proposal(
             await expect(
                 page.get_by_text("Allowed answers — shared by you and the advisor")
             ).to_have_count(0)
-            await page.get_by_role("button", name="Advisor settings", exact=True).click()
+            await page.get_by_role("button", name="Recommender settings", exact=True).click()
             await expect(
                 page.get_by_text("Allowed answers — shared by you and the advisor")
             ).to_be_visible()
-            await page.get_by_role("button", name="Advisor settings", exact=True).click()
+            await page.get_by_role("button", name="Recommender settings", exact=True).click()
+            # Only the native icon/model trigger owns execution selection.
             await expect(
                 page.get_by_role("combobox", name="Your model", exact=True)
-            ).to_be_visible()
+            ).to_have_count(0)
             await expect(
                 page.get_by_role("combobox", name="Your reasoning effort", exact=True)
-            ).to_be_visible()
-            await expect(page.get_by_test_id("model-advisor-advisor-choice")).to_be_visible()
-            await expect(page.get_by_text("Your model and reasoning", exact=False)).to_have_count(
-                0
-            )
-
-            model_picker = page.get_by_role("combobox", name="Your model", exact=True)
-            agent_picker = page.get_by_test_id("new-chat-landing-agent-select")
+            ).to_have_count(0)
+            model_picker = page.get_by_test_id("new-chat-landing-agent-select")
+            effort_picker = page.get_by_test_id("new-chat-landing-inline-effort")
             permission_picker = page.get_by_test_id("new-chat-landing-permission-chip")
+            await expect(model_picker).to_be_visible()
+            await expect(effort_picker).to_be_visible()
             await model_picker.click()
-            await page.locator('[role="option"][data-model-id="gpt-5.5"]').click()
-            effort_picker = page.get_by_role("combobox", name="Your reasoning effort", exact=True)
-            agent_box = await agent_picker.bounding_box()
-            permission_box = await permission_picker.bounding_box()
-            model_box = await model_picker.bounding_box()
-            effort_box = await effort_picker.bounding_box()
-            assert (
-                agent_box is not None
-                and permission_box is not None
-                and model_box is not None
-                and effort_box is not None
-            )
-            assert abs(agent_box["y"] - permission_box["y"]) < 3
-            assert model_box["y"] + model_box["height"] <= agent_box["y"]
-            assert abs(model_box["y"] - effort_box["y"]) < 2
-            assert model_box["x"] >= 0
-            assert effort_box["x"] + effort_box["width"] <= 390
-            assert model_box["x"] + model_box["width"] <= effort_box["x"] + 1
-            advisor_picker = page.get_by_test_id("model-advisor-advisor-choice")
-            advisor_box = await advisor_picker.bounding_box()
-            assert advisor_box is not None and model_box["y"] < advisor_box["y"]
-            await expect(page.get_by_text("Recommender", exact=True)).to_be_visible()
-            advisor_effort_box = await page.get_by_test_id(
-                "model-advisor-advisor-effort"
-            ).bounding_box()
-            assert advisor_effort_box is not None
-            assert abs(advisor_box["y"] - advisor_effort_box["y"]) < 2
-            # The current layout gives the recommender its own row; both
-            # selectors must fit that row without overlapping or clipping.
-            assert advisor_box["width"] >= 100
-            assert model_box["width"] >= 100
-            assert advisor_box["x"] + advisor_box["width"] <= advisor_effort_box["x"] + 2
-            assert advisor_effort_box["x"] + advisor_effort_box["width"] <= 390
-            assert (
-                await page.get_by_test_id("model-advisor-composer-choice")
-                .get_by_test_id("model-advisor-advisor-choice")
-                .count()
-                == 1
-            )
+            await page.get_by_test_id("new-chat-landing-agent-config-ag_codex_e2e").click()
+            await page.get_by_test_id("new-chat-landing-agent-model-gpt-5.5-codex-direct").click()
+            await page.keyboard.press("Escape")
+            await page.keyboard.press("Escape")
             await effort_picker.click()
             await page.get_by_role("option", name="Medium", exact=True).click()
-            await expect(model_picker).to_contain_text("GPT-5.5")
             await expect(effort_picker).to_contain_text("Medium")
+            await expect(page.get_by_test_id("new-chat-landing-agent-icon")).to_be_visible()
+            model_box = await model_picker.bounding_box()
+            effort_box = await effort_picker.bounding_box()
+            permission_box = await permission_picker.bounding_box()
+            assert model_box is not None and effort_box is not None
+            assert permission_box is not None
+            assert abs(model_box["y"] - permission_box["y"]) < 4
+            assert abs(model_box["y"] - effort_box["y"]) < 4
+            assert model_box["x"] + model_box["width"] <= effort_box["x"] + 1
+            assert effort_box["x"] + effort_box["width"] <= 390
+            advisor_picker = page.get_by_test_id("model-advisor-advisor-choice")
+            advisor_effort = page.get_by_test_id("model-advisor-advisor-effort")
+            await expect(advisor_picker).to_have_count(1)
+            await expect(advisor_picker).to_be_visible()
+            await expect(advisor_effort).to_be_visible()
+            await expect(page.get_by_text("Recommender", exact=True)).to_be_visible()
+            advisor_box = await advisor_picker.bounding_box()
+            advisor_effort_box = await advisor_effort.bounding_box()
+            assert advisor_box is not None and advisor_effort_box is not None
+            assert abs(advisor_box["y"] - advisor_effort_box["y"]) < 2
+            assert advisor_box["width"] >= 100
+            assert advisor_box["x"] + advisor_box["width"] <= advisor_effort_box["x"] + 2
+            assert advisor_effort_box["x"] + advisor_effort_box["width"] <= 390
+            await expect(advisor_picker).to_contain_text("GLM-5.3")
+            await expect(advisor_effort).to_contain_text("High")
+            await expect(
+                page.get_by_role("button", name="Recommender settings", exact=True)
+            ).to_be_visible()
 
             await page.screenshot(
                 path=str(tmp_path / "model-advisor-composer-mobile.png"), full_page=True
@@ -315,12 +305,10 @@ async def _drive_composer_proposal(
             await page.get_by_test_id("model-advisor-advisor-choice").scroll_into_view_if_needed()
             await page.screenshot(path=str(tmp_path / "model-advisor-advisor-picker-mobile.png"))
             await page.set_viewport_size({"width": 1280, "height": 900})
-            await expect(
-                page.get_by_role("combobox", name="Your model", exact=True)
-            ).to_be_visible()
-            await expect(
-                page.get_by_role("combobox", name="Your reasoning effort", exact=True)
-            ).to_be_visible()
+            await expect(model_picker).to_be_visible()
+            await expect(model_picker).to_contain_text("GPT-5.5")
+            await expect(effort_picker).to_be_visible()
+            await expect(advisor_picker).to_be_visible()
             await page.screenshot(path=str(tmp_path / "model-advisor-composer-desktop.png"))
             await page.set_viewport_size({"width": 390, "height": 844})
             await page.get_by_test_id("new-chat-landing-input").fill("Compare the selected models")

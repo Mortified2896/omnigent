@@ -6350,35 +6350,6 @@ export function NewChatLandingScreen() {
                 )}
             </ComposerWorkspaceBar>
           )}
-          {modelAdvisorEnabled && (
-            <NewChatAdvisorSection
-              submitRef={advisorSubmitRef}
-              submissionBlockReason={
-                files.length > 0
-                  ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
-                  : null
-              }
-              hostId={selectedHostId}
-              task={
-                buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
-                sanitizeInitialPrompt(message)
-              }
-              humanPick={
-                pickedModel
-                  ? { model: pickedModel, accessLane: pickedCodexAccessLane, effort: pickedEffort }
-                  : null
-              }
-              launchAgentId={effectiveAgentId}
-              launchWorkspace={workspace || null}
-              onLaunched={(sessionId) => {
-                submittedRef.current = true;
-                if (submittedDraftRevisionRef.current === landingDraftRevision)
-                  writeLandingDraft(null);
-                if (selectedHostId) writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
-                if (onScreenRef.current) navigate(`/c/${sessionId}`);
-              }}
-            />
-          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -6452,6 +6423,42 @@ export function NewChatLandingScreen() {
               slots={{
                 beforeInput: (
                   <>
+                    <div className="px-3 pt-2 empty:hidden" data-testid="new-chat-advisor-controls">
+                      {modelAdvisorEnabled && (
+                        <NewChatAdvisorSection
+                          submitRef={advisorSubmitRef}
+                          submissionBlockReason={
+                            files.length > 0
+                              ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
+                              : null
+                          }
+                          hostId={selectedHostId}
+                          task={
+                            buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
+                            sanitizeInitialPrompt(message)
+                          }
+                          humanPick={
+                            pickedModel
+                              ? {
+                                  model: pickedModel,
+                                  accessLane: pickedCodexAccessLane,
+                                  effort: pickedEffort,
+                                }
+                              : null
+                          }
+                          launchAgentId={effectiveAgentId}
+                          launchWorkspace={workspace || null}
+                          onLaunched={(sessionId) => {
+                            submittedRef.current = true;
+                            if (submittedDraftRevisionRef.current === landingDraftRevision)
+                              writeLandingDraft(null);
+                            if (selectedHostId)
+                              writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
+                            if (onScreenRef.current) navigate(`/c/${sessionId}`);
+                          }}
+                        />
+                      )}
+                    </div>
                     {/* Skill suggestions — floats above the composer box. */}
                     {slashCompletion.open && (
                       <SlashCommandMenu

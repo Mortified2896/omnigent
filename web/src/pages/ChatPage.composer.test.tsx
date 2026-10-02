@@ -5880,7 +5880,11 @@ describe("Model Advisor in an existing chat", () => {
     expect(
       await screen.findByRole("region", { name: "Model advisor settings" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Recommender model" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("combobox", { name: "Recommender model" })).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("combobox", { name: "Recommender reasoning effort" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
   });
 

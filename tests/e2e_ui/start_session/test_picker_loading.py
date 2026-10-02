@@ -49,7 +49,7 @@ async def _expect_pending(
         await expect(picker).to_have_count(0)
     else:
         await expect(picker).to_contain_text(cached_label, timeout=30_000)
-        await expect(picker).to_contain_text(effort)
+        await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_contain_text(effort)
         await expect(picker).to_be_enabled()
         await expect(picker).to_have_attribute("aria-busy", "true")
         await expect(loading).to_have_count(0)
@@ -184,7 +184,11 @@ async def _drive(
                         '[data-testid="new-chat-landing-picker-loading"]');
                     const picker = document.querySelector(
                         '[data-testid="new-chat-landing-agent-select"]');
-                    const value = loading ? 'loading' : picker?.textContent;
+                    const effort = document.querySelector(
+                        '[data-testid="new-chat-landing-inline-effort"]');
+                    const value = loading ? 'loading' : picker
+                        ? [picker.textContent, effort?.textContent].filter(Boolean).join(' ')
+                        : null;
                     if (value && window.pickerLoadingSamples.at(-1) !== value) {
                         window.pickerLoadingSamples.push(value);
                     }
@@ -306,7 +310,9 @@ async def _drive(
 
                 gates["models"].set()
                 await expect(picker).to_contain_text(expected_model)
-                await expect(picker).to_contain_text(expected_effort)
+                await expect(
+                    page.get_by_test_id("new-chat-landing-inline-effort")
+                ).to_contain_text(expected_effort)
                 await expect(picker).not_to_have_attribute("aria-busy", "true")
                 if cached_label is not None:
                     choice = page.get_by_test_id(f"new-chat-landing-agent-model-{chosen_model}")

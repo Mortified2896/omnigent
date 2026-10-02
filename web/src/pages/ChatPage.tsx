@@ -2704,6 +2704,9 @@ function ComposerImpl(
   const composerCostControlMode = useChatStore((s) => s.costControlModeOverride);
   const pendingComposerModelChange = useChatStore((s) => s.pendingModelChange);
   const composerRoutingOn = costRoutingEligible && composerCostControlMode === "on";
+  const composerApprovalLocked =
+    composerSession?.labels?.["omnigent.routing_policy"] === "benchmark" ||
+    !!composerSession?.labels?.["o3.routing.proposal_id"];
   const inlineComposerEfforts = useMemo(() => {
     const values = [...effortLevels];
     if (selectedComposerEffort && !values.includes(selectedComposerEffort)) {
@@ -2719,6 +2722,7 @@ function ComposerImpl(
       isReadOnly ||
       unreachable ||
       composerRoutingOn ||
+      composerApprovalLocked ||
       configBusyRef.current ||
       pendingComposerModelChange !== null
     )
@@ -4225,7 +4229,11 @@ function ComposerImpl(
                   value={selectedComposerEffort}
                   options={inlineComposerEfforts}
                   disabled={
-                    isReadOnly || unreachable || configBusy || pendingComposerModelChange !== null
+                    isReadOnly ||
+                    unreachable ||
+                    configBusy ||
+                    composerApprovalLocked ||
+                    pendingComposerModelChange !== null
                   }
                   label={modelPickerKind === "pi" ? "Thinking level" : "Reasoning effort"}
                   onSelect={(effort) => void changeComposerEffort(effort)}
