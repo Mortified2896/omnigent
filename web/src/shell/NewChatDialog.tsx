@@ -3665,22 +3665,7 @@ export function NewChatLandingScreen() {
     if (!selectedNativeHarness) return;
     const picked = effort === EFFORT_SELECT_NONE ? "" : effort;
     setPickedEffort(picked);
-    // Codex can expose the same model id through several transport lanes with
-    // different effort ladders. Persist the complete qualified execution pick
-    // when effort changes instead of relying on a previous partial write; on a
-    // fresh mount the effort must be validated against the same lane the user
-    // selected, not whichever duplicate row happens to appear first.
-    rememberPickerOptions(
-      selectedNativeHarness,
-      selectedNativeHarness === "codex-native"
-        ? {
-            model: pickedModel,
-            accessLane: pickedCodexAccessLane ?? "",
-            effort: picked,
-            routing: "off",
-          }
-        : { effort: picked },
-    );
+    rememberPickerOptions(selectedNativeHarness, { effort: picked });
   };
   const handleSetPickedHarness = useCallback(
     (harness: string | null, agentId?: string) => {

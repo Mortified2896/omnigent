@@ -10764,7 +10764,9 @@ describe("managed sandbox inference models", () => {
       fireEvent.click(screen.getByRole("option", { name: "Max" }));
       expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
       remountLanding();
-      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max");
+      await waitFor(() =>
+        expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max"),
+      );
       openAgentModels("a2");
       expect(screen.getByTestId("new-chat-landing-agent-model-same-model-" + lane)).toHaveAttribute(
         "aria-checked",
