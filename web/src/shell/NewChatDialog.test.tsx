@@ -1463,12 +1463,6 @@ function openAgentConfig(agentId: string): void {
   fireEvent.click(screen.getByTestId(`new-chat-landing-agent-config-${agentId}`));
 }
 
-function clickAgentConfig(agentId: string): void {
-  const edit = screen.getByTestId(`new-chat-landing-agent-config-${agentId}`);
-  fireEvent.pointerDown(edit, { button: 0 });
-  fireEvent.click(edit);
-}
-
 function pickPrimaryOption(section: "model" | "effort", label: string): void {
   if (section === "effort") {
     // Effort left the model menu: it lives in the inline Radix Select beside
@@ -1496,9 +1490,6 @@ function selectedPickerModel(): HTMLElement {
     .find((item) => item.dataset.testid?.startsWith("new-chat-landing-agent-model-"))!;
 }
 /** The inline effort Select's trigger reflects the checked rung (or "Default"). */
-function selectedPickerEffort(): HTMLElement {
-  return screen.getByTestId("new-chat-landing-inline-effort");
-}
 /**
  * Pick an inline Radix Select value (the effort Select). jsdom has no portal
  * geometry, so drive the hidden native <select> Radix keeps in sync instead
@@ -2172,7 +2163,7 @@ describe("NewChatLandingScreen cached picker preview", () => {
     // The refreshed catalog (with the new display name) is what a later pending
     // window replays, so the options cache must carry it.
     expect(
-      readNewChatPickerOptionsCache(snapshot.key)?.models.claude.some(
+      readNewChatPickerOptionsCache(snapshot.key)?.models.claude?.some(
         (option) => option.displayName === "Sonnet 4.7 (1M context)",
       ),
     ).toBe(true);
@@ -5201,7 +5192,6 @@ describe("NewChatLandingScreen", () => {
     fireEvent.pointerDown(picker, { button: 0 });
     fireEvent.click(screen.getByTestId("new-chat-landing-harness-more"));
     const pi = screen.getByTestId("new-chat-landing-agent-a_pi");
-    const otherMenu = pi.closest('[role="menu"]');
     // Selecting Pi (no Edit affordance anymore) promotes it inline.
     fireEvent.click(pi);
     expect(pi).toHaveAttribute("data-active", "true");

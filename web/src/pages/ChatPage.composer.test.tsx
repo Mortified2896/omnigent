@@ -5315,8 +5315,8 @@ describe("Composer config gear", () => {
     fireEvent.click(
       document.querySelector('[data-testid="composer-agent-model-sonnet"]') as Element,
     );
-    const gear = screen.getByTestId("composer-config-gear");
-    expect(gear).toHaveAttribute("aria-disabled", "true");
+    const gearTrigger = screen.getByTestId("composer-config-gear");
+    expect(gearTrigger).toHaveAttribute("aria-disabled", "true");
     for (const choice of screen.queryAllByRole("menuitemcheckbox")) {
       if (choice.getAttribute("data-effort-level")) expect(choice).toHaveAttribute("data-disabled");
     }

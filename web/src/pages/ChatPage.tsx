@@ -5393,13 +5393,9 @@ function useResolvedComposerModel(
     modelPickerKind === "devin" ||
     modelPickerKind === "acp" ||
     modelPickerKind === "configured";
-  const modelOptions: readonly {
-    id: string;
-    model?: string;
-    label?: string;
-    displayName?: string;
-    isDefault?: boolean;
-  }[] = usesServerModelOptions ? codexModelOptions : [];
+  const modelOptions: readonly NativeModelOption[] = usesServerModelOptions
+    ? codexModelOptions
+    : [];
   const isNativeModelPicker = modelPickerKind !== null;
 
   // The harness's own report is the display authority for claude-/codex-
