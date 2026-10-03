@@ -107,10 +107,15 @@ async def _drive_empty_pi_picker(base_url: str, session_id: str) -> None:
             await expect(
                 page.get_by_test_id("new-chat-landing-agent-model-search")
             ).to_be_visible()
-            await expect(page.get_by_test_id("new-chat-landing-agent-efforts")).to_contain_text(
-                "Thinking level"
-            )
-            await expect(page.get_by_test_id("new-chat-landing-agent-effort-high")).to_be_visible()
+            # Effort keeps its own adjacent select (aria-label "Thinking
+            # level"), outside the model menu; its rungs include High.
+            effort = page.get_by_test_id("new-chat-landing-inline-effort")
+            await expect(effort).to_have_attribute("aria-label", "Thinking level")
+            await effort.click()
+            await expect(
+                page.get_by_role("option", name="High", exact=True)
+            ).to_be_visible()
+            await page.keyboard.press("Escape")
             await expect(page.get_by_test_id("new-chat-landing-config-modal")).to_have_count(0)
         finally:
             # Close the context first so the recorded video is flushed to disk,

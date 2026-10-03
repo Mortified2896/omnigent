@@ -480,17 +480,17 @@ def _model_rows(page: Page, rig: PickerRig, agent_label: str) -> list[dict[str, 
 
     The host's boot probe may still be warming; the SPA retries the fetch
     with backoff, so keep re-reading until catalog rows appear — the same
-    wait a person makes. Each pass re-opens whatever collapsed: the agent
-    menu when a click closed it, and the selected agent row's config flyout
-    when it is not showing.
+    wait a person makes. The model list opens from the dedicated model chip;
+    each pass re-opens it when a click collapsed the menu.
     """
     deadline = time.monotonic() + _PICKER_WARMUP_TIMEOUT_S
     while time.monotonic() < deadline:
-        _open_agent_menu(page)
         if page.get_by_test_id(_MODELS_SECTION_TESTID).count() == 0:
-            # Menus re-render while queries settle; a miss here just retries.
             with contextlib.suppress(AssertionError, PlaywrightError):
-                _expand_agent_config(page, agent_label)
+                page.get_by_test_id("new-chat-landing-model-select").click(timeout=5_000)
+                expect(page.get_by_test_id(_MODELS_SECTION_TESTID)).to_be_visible(
+                    timeout=5_000
+                )
         page.wait_for_timeout(500)
         rows: list[dict[str, str]] = []
         for option in page.locator(

@@ -317,7 +317,9 @@ def test_long_model_and_permission_remain_single_row(
     send_bounds = page.get_by_role("button", name="Send", exact=True).bounding_box()
     assert permission_bounds is not None and send_bounds is not None
     page.get_by_test_id("composer-config-gear").click()
-    summary = page.get_by_test_id("composer-agent-model-summary")
+    # The gear's model row carries the FULL catalog display name (the toolbar
+    # trigger shows the compacted form).
+    summary = page.get_by_role("menuitemcheckbox", name=display_name, exact=True)
     expect(summary).to_contain_text(display_name)
     page.get_by_test_id("composer-agent-menu").screenshot(
         path=tmp_path / f"harness-row-{width}.png", animations="disabled"
@@ -337,7 +339,6 @@ def test_long_model_and_permission_remain_single_row(
         "title", "Opus 4.8 1M"
     )
     expect(summary).to_have_attribute("title", display_name)
-    page.get_by_test_id("composer-agent-edit").click()
     expect(page.get_by_role("menuitemcheckbox", name=display_name, exact=True)).to_be_visible()
     page.unroute_all(behavior="wait")
     assert all(results.values()), results

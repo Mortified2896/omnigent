@@ -79,7 +79,7 @@ async def _drive(base_url: str, session_id: str, viewport_width: int) -> None:
             await page.goto(base_url)
             await _open_entry_models(page, "ag_codex_e2e")
             await page.get_by_role("menuitemcheckbox", name=_DISPLAY_NAME, exact=True).click()
-            await expect(page.get_by_test_id("new-chat-landing-agent-model-value")).to_have_text(
+            await expect(page.get_by_test_id("new-chat-landing-model-select")).to_have_text(
                 _DISPLAY_NAME
             )
             await _capture_demo(page, f"catalog-landing-{viewport_width}")
@@ -96,7 +96,6 @@ async def _drive(base_url: str, session_id: str, viewport_width: int) -> None:
             await page.reload()
             await expect(label).to_have_text(_DISPLAY_NAME)
             await page.get_by_test_id("composer-config-gear").click()
-            await page.get_by_test_id("composer-agent-edit").click()
             row = page.locator(f'[role="menuitemcheckbox"][data-model-id="{_MODEL_ID}"]')
             await expect(row).to_have_text(_DISPLAY_NAME)
             await expect(row).to_have_attribute("aria-checked", "true")

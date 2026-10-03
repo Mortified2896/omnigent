@@ -250,11 +250,11 @@ async def _drive(base_url: str, session_id: str, *, initially_ready: bool) -> No
                 )
                 assert not devin_requests
                 return
-            await (
-                page.get_by_test_id(f"new-chat-landing-agent-config-{_DEVIN_AGENT_ID}")
-                .get_by_text("Edit", exact=True)
-                .click()
-            )
+            # Select Devin (the old Edit click did this implicitly), then open
+            # its catalog from the model chip.
+            await page.get_by_test_id(f"new-chat-landing-agent-{_DEVIN_AGENT_ID}").click()
+            await page.keyboard.press("Escape")
+            await page.get_by_test_id("new-chat-landing-model-select").click()
 
             # Devin's own families render, from the devin-native catalog probe.
             models = page.get_by_test_id("new-chat-landing-agent-models")
@@ -268,36 +268,44 @@ async def _drive(base_url: str, session_id: str, *, initially_ready: bool) -> No
             await page.clock.fast_forward(30_000)
             await _wait_until(lambda: len(devin_requests) > requests_before)
 
-            # The Effort ladder renders, carrying only the DEFAULT model's rungs.
+            # The effort select renders, carrying only the DEFAULT model's rungs.
             # Devin has no --effort flag, so this is the only way to express effort
             # when starting a chat; the runner composes it onto the model id at
             # launch — and offering a rung the model lacks would compose an id
             # Devin resolves back to the bare family, so the pick would look inert.
-            await expect(page.get_by_test_id("new-chat-landing-agent-efforts")).to_be_visible()
-            for rung in ("medium", "high", "max"):
+            effort_select = page.get_by_test_id("new-chat-landing-inline-effort")
+            await expect(effort_select).to_be_visible()
+            await effort_select.click()
+            for rung in ("Medium", "High", "Max"):
                 await expect(
-                    page.get_by_test_id(f"new-chat-landing-agent-effort-{rung}")
+                    page.get_by_role("option", name=rung, exact=True)
                 ).to_be_visible()
-            for rung in ("low", "xhigh"):
+            for rung in ("Low", "xHigh"):
                 await expect(
-                    page.get_by_test_id(f"new-chat-landing-agent-effort-{rung}")
+                    page.get_by_role("option", name=rung, exact=True)
                 ).to_have_count(0)
+            await page.keyboard.press("Escape")
 
             # A model + effort pick sticks, which is what the create call sends as
             # model_override + reasoning_effort. Switching to a model with the full
             # ladder widens the rungs, which is the per-model derivation working.
-            await page.get_by_test_id("new-chat-landing-agent-model-claude-opus-5").click()
-            for rung in ("low", "xhigh"):
-                await expect(
-                    page.get_by_test_id(f"new-chat-landing-agent-effort-{rung}")
-                ).to_be_visible()
+            # force=True: the frozen clock leaves the menu's open animation
+            # unsettled, so Playwright's stability probe never passes.
+            opus_row = page.get_by_test_id("new-chat-landing-agent-model-claude-opus-5")
+            await expect(opus_row).to_be_visible()
+            await opus_row.click(force=True)
             await expect(
                 page.get_by_test_id("new-chat-landing-agent-model-claude-opus-5")
             ).to_have_attribute("data-state", "checked")
-            await page.get_by_test_id("new-chat-landing-agent-effort-xhigh").click()
-            await expect(
-                page.get_by_test_id("new-chat-landing-agent-effort-xhigh")
-            ).to_have_attribute("data-state", "checked")
+            await page.keyboard.press("Escape")
+            effort_select = page.get_by_test_id("new-chat-landing-inline-effort")
+            await effort_select.click()
+            for rung in ("Low", "xHigh"):
+                await expect(
+                    page.get_by_role("option", name=rung, exact=True)
+                ).to_be_visible()
+            await page.get_by_role("option", name="xHigh", exact=True).click()
+            await expect(effort_select).to_contain_text("xHigh")
 
             await _close_entry_models(page)
             await expect(page.get_by_test_id("new-chat-landing-agent-select")).to_have_attribute(

@@ -49,8 +49,8 @@ def _choose_workspace_and_haiku(page: Page, workspace: Path) -> None:
     picker.click()
     claude = page.get_by_role("menuitem", name="Claude Code", exact=True)
     expect(claude).to_be_visible()
-    claude.hover()
-    claude.get_by_text("Edit", exact=True).click()
+    # The model list opens from the dedicated model chip now.
+    page.get_by_test_id("new-chat-landing-model-select").click()
     page.get_by_test_id("new-chat-landing-agent-model-haiku").click()
     page.keyboard.press("Escape")
     if picker.get_attribute("aria-expanded") == "true":

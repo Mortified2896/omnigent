@@ -142,11 +142,11 @@ async def _drive_codex_effort_prelaunch(base_url: str, session_id: str) -> None:
             await expect(page.get_by_test_id("new-chat-landing-agent-models")).to_contain_text(
                 "GPT Live Default"
             )
-            effort = page.get_by_test_id("new-chat-landing-agent-effort-high")
+            effort = page.get_by_test_id("new-chat-landing-inline-effort")
             await expect(effort).to_be_visible()
-            await expect(effort).not_to_have_attribute("data-disabled", "")
             await effort.click()
-            await expect(effort).to_have_attribute("aria-checked", "true")
+            await page.get_by_role("option", name="High", exact=True).click()
+            await expect(effort).to_contain_text("High")
             await _close_entry_models(page)
 
             # The pick must take effect: it rides the create call as

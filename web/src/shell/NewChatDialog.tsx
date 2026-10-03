@@ -3798,19 +3798,22 @@ export function NewChatLandingScreen() {
   // While the first load is still in flight the chip must not claim "Models
   // unavailable" — nothing has answered yet.
   const modelControlLabel =
-    pickerLoading && !interactiveWhileLoading
+    modelHarnessUnavailable
       ? ""
-      : modelHarnessUnavailable
-        ? ""
-        : routingOn
-          ? SMART_ROUTING_LABEL
-          : modelTriggerRow
-            ? // "Default" means no model row resolved for this harness — say so
-              // the way the old combined chip did.
-              (compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value)) || "Default") ===
-              "Default"
-              ? "Models unavailable"
-              : compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value))
+      : routingOn
+        ? SMART_ROUTING_LABEL
+        : modelTriggerRow
+          ? (compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value)) || "Default") ===
+            "Default"
+            ? // An unresolved model row reads as unavailable once the load has
+              // settled; while still loading the chip stays blank rather than
+              // claiming anything about the catalog.
+              pickerLoading
+                ? ""
+                : "Models unavailable"
+            : compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value))
+          : pickerLoading
+            ? ""
             : "Default";
   const modelControlIcon = selectedAgent ? (
     <span

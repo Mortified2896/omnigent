@@ -223,9 +223,6 @@ def _pick_effort_in_session(page: Page, level: str) -> None:
     expect(gear).to_be_visible(timeout=60_000)
     expect(gear).to_be_enabled(timeout=60_000)
     gear.click()
-    config_row = page.get_by_test_id("composer-agent-edit")
-    expect(config_row).to_be_visible(timeout=30_000)
-    config_row.click()
     option = page.get_by_test_id(f"composer-agent-effort-{level}")
     expect(option).to_be_visible(timeout=30_000)
     option.click()
@@ -266,17 +263,21 @@ def test_created_session_keeps_default_effort_after_in_session_pick(
     # The host's Claude Code harness row (session-scoped agents don't list).
     claude_row = page.get_by_role("menuitem", name=re.compile(r"^Claude Code"))
     expect(claude_row.first).to_be_visible(timeout=30_000)
-    claude_row.first.get_by_text("Edit", exact=True).click()
+    # Close the harness menu so the chip click opens the model list cleanly.
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("menu")).to_have_count(0)
+    page.get_by_test_id("new-chat-landing-model-select").click()
     expect(agent_picker).to_have_attribute("aria-label", re.compile("Claude Code"), timeout=30_000)
-    selected_model = page.get_by_test_id("new-chat-landing-agent-models").locator(
-        '[role="menuitemcheckbox"][aria-checked="true"]'
+    models_section = page.get_by_test_id("new-chat-landing-agent-models")
+    expect(models_section.locator('[role="menuitemcheckbox"]').first).to_be_visible(
+        timeout=60_000
     )
-    effort_default = page.get_by_test_id("new-chat-landing-agent-effort-default")
+    selected_model = models_section.locator('[role="menuitemcheckbox"][aria-checked="true"]')
+    effort_default = page.get_by_test_id("new-chat-landing-inline-effort")
     expect(selected_model).to_have_count(1, timeout=30_000)
     expect(selected_model).to_be_visible()
     expect(effort_default).to_be_visible(timeout=30_000)
-    expect(effort_default).to_have_attribute("aria-checked", "true")
-    page.keyboard.press("Escape")
+    expect(effort_default).to_contain_text("Default")
     page.keyboard.press("Escape")
     _log.info("landing composer: Claude Code selected, model + effort left at Default")
 
