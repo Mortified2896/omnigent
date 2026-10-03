@@ -44,8 +44,8 @@ def _choose_workspace_and_routing(page: Page, workspace: Path) -> None:
     picker.click()
     claude = page.get_by_role("menuitem", name="Claude Code", exact=True)
     expect(claude).to_be_visible()
-    claude.hover()
-    claude.get_by_text("Edit", exact=True).click()
+    # Smart Routing is a Routing choice in the model chip's menu now.
+    page.get_by_test_id("new-chat-landing-model-select").click()
     page.get_by_role("menuitemcheckbox", name="Smart Routing", exact=True).click()
     page.keyboard.press("Escape")
     if picker.get_attribute("aria-expanded") == "true":

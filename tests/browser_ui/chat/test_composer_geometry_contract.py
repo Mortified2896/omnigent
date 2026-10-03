@@ -479,22 +479,16 @@ def test_picker_rows_follow_the_row_grid(
             summaries[1]["x"] + summaries[1]["width"], abs=TOLERANCE
         )
     else:
-        # The session picker has one config row; its submenu holds the model and
-        # effort rows, which share one grid across the section break.
+        # The gear opens straight onto its sections — no config row submenu.
+        # Model and effort rows share one grid across the section break.
         page.get_by_test_id("composer-config-gear").click()
-        page.get_by_test_id("composer-agent-edit").click()
-        submenu = page.get_by_test_id("composer-agent-config-menu")
-        expect(submenu).to_be_visible()
-        # The phone layout swaps the submenu in as a page of the menu itself, so
-        # settle the menu root as well as the desktop sub-content portal.
-        _settle_menu(page.locator(".composer-agent-menu").first)
-        _settle_menu(submenu)
-        model_rows = submenu.get_by_test_id("composer-agent-models").get_by_role(
-            "menuitemcheckbox"
-        )
-        effort_rows = submenu.get_by_test_id("composer-agent-efforts").get_by_role(
-            "menuitemcheckbox"
-        )
+        menu_body = page.locator(".composer-agent-menu").first
+        models = page.get_by_test_id("composer-agent-models")
+        efforts = page.get_by_test_id("composer-agent-efforts")
+        expect(models).to_be_visible()
+        _settle_menu(menu_body)
+        model_rows = models.get_by_role("menuitemcheckbox")
+        effort_rows = efforts.get_by_role("menuitemcheckbox")
         model_boxes = [box(model_rows.nth(index)) for index in range(model_rows.count())]
         effort_boxes = [box(effort_rows.nth(index)) for index in range(effort_rows.count())]
         assert len(model_boxes) >= 2 and len(effort_boxes) >= 2

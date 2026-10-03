@@ -35,7 +35,7 @@ import type * as AgentLabelsModule from "@/lib/agentLabels";
 import type { SessionListWireItem } from "@/lib/sessionListCache";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 import { authenticatedFetch } from "@/lib/identity";
@@ -345,26 +345,23 @@ function selectAgent(agentId: string): void {
   fireEvent.click(screen.getByTestId(`new-chat-landing-agent-${agentId}`));
 }
 
-/** Select <agentId> and open its model and effort submenu. */
-function openAgentModels(agentId: string): void {
+/**
+ * Open the dedicated model control. Since the model picker left the harness
+ * rows' Edit flyout, the model list is one click on the model chip — no
+ * agent selection required first.
+ */
+function openAgentModels(_agentId: string): void {
+  fireEvent.pointerDown(screen.getByTestId("new-chat-landing-model-select"), { button: 0 });
+}
+
+/** Open a configurable agent's advanced brain-harness settings. */
+function openAgentConfig(agentId: string): void {
   const picker = screen.getByTestId("new-chat-landing-agent-select");
   fireEvent.pointerDown(picker, { button: 0 });
   if (screen.queryByTestId(`new-chat-landing-agent-${agentId}`) == null) {
     fireEvent.click(screen.getByTestId("new-chat-landing-harness-more"));
   }
-  if (screen.queryByTestId(`new-chat-landing-agent-config-${agentId}`) == null) {
-    fireEvent.click(screen.getByTestId(`new-chat-landing-agent-${agentId}`));
-    fireEvent.pointerDown(picker, { button: 0 });
-    if (screen.queryByTestId(`new-chat-landing-agent-${agentId}`) == null) {
-      fireEvent.click(screen.getByTestId("new-chat-landing-harness-more"));
-    }
-  }
   fireEvent.click(screen.getByTestId(`new-chat-landing-agent-config-${agentId}`));
-}
-
-/** Open a configurable agent's advanced brain-harness settings. */
-function openAgentConfig(agentId: string): void {
-  openAgentModels(agentId);
 }
 
 function pickPermissionOption(value: string): void {
@@ -376,6 +373,21 @@ function pickPermissionOption(value: string): void {
 function openSelect(testId: string): void {
   fireEvent.pointerDown(screen.getByTestId(testId), { button: 0 });
   fireEvent.click(screen.getByTestId(testId));
+}
+
+/**
+ * Pick an inline Radix Select value (the effort Select). jsdom has no portal
+ * geometry, so drive the hidden native <select> Radix keeps in sync instead
+ * of clicking a portal option.
+ */
+function pickInlineSelectValue(testId: string, value: string): void {
+  const trigger = screen.getByTestId(testId);
+  const native =
+    trigger.querySelector("select") ??
+    trigger.parentElement?.querySelector("select") ??
+    trigger.closest("span")?.parentElement?.querySelector("select");
+  if (native == null) throw new Error(`no native select under ${testId}`);
+  fireEvent.change(native, { target: { value } });
 }
 
 /** Open the config-modal Select at <triggerTestId> and click the option labeled <label>. */
@@ -1768,11 +1780,12 @@ describe("NewChatLandingScreen create flow", () => {
 
     renderLanding();
     await waitForWorkspaceSeed();
-    // Model and effort selections apply directly from the Edit submenu.
+    // Model applies from the model control; effort keeps its own separate
+    // inline selector beside it.
     openAgentModels("ag_native");
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Opus" }));
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "High" }));
     fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    pickInlineSelectValue("new-chat-landing-inline-effort", "high");
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -1885,20 +1898,19 @@ describe("NewChatLandingScreen create flow", () => {
       "aria-checked",
       "true",
     );
-    expect(screen.getByTestId("new-chat-landing-agent-effort-high")).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
 
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-model-select"), { button: 0 });
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-default"));
-    fireEvent.click(screen.getByTestId("new-chat-landing-agent-effort-default"));
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    pickInlineSelectValue("new-chat-landing-inline-effort", "__none__");
     const stored = JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")[
       "claude-native"
     ];
     expect(stored?.model).toBe("");
     expect(stored?.effort).toBe("");
 
-    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
 
@@ -2127,6 +2139,139 @@ describe("NewChatLandingScreen create flow", () => {
     renderLanding();
     await waitForWorkspaceSeed();
     expect(screen.queryByTestId("cost-toggle-trigger")).toBeNull();
+  });
+
+  it("opens the model list in one click from the model chip, grouped by lane", async () => {
+    // Host catalog rows as the per-lane probe stamps them: lane metadata on
+    // the row, provider family in groupLabel, no display-name suffix needed.
+    vi.mocked(useHostModelOptions).mockReturnValue({
+      data: [
+        {
+          id: "codex/gpt-6-astra",
+          model: "codex/gpt-6-astra",
+          displayName: "GPT-6-Astra",
+          accessLane: "omniroute",
+          groupLabel: "OmniRoute",
+        },
+        {
+          id: "codex/gpt-5.5",
+          model: "codex/gpt-5.5",
+          displayName: "GPT-5.5",
+          accessLane: "omniroute",
+          groupLabel: "OmniRoute",
+          isDefault: true,
+        },
+        {
+          id: "gpt-6.1-sol",
+          model: "gpt-6.1-sol",
+          displayName: "GPT-6.1-Sol",
+          accessLane: "codex-direct",
+          groupLabel: "Codex Subscription — Direct",
+        },
+        {
+          id: "glm-5.3",
+          model: "glm-5.3",
+          displayName: "GLM 5.3 · OmniRoute",
+          accessLane: "omniroute",
+          groupLabel: "GLM",
+        },
+      ],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useHostModelOptions>);
+    setAgents([agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" })]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+
+    // The dedicated model chip carries the current model…
+    const chip = screen.getByTestId("new-chat-landing-model-select");
+    expect(chip).toHaveTextContent("GPT-5.5");
+    // …and ONE interaction opens the list: no Harnesses menu, no Edit row.
+    fireEvent.pointerDown(chip, { button: 0 });
+    const models = await screen.findByTestId("new-chat-landing-agent-models");
+    expect(models).toBeVisible();
+
+    // Non-selectable provider/transport group headings render, in order.
+    const headings = Array.from(
+      models.querySelectorAll<HTMLElement>("[data-model-group-label]"),
+    ).map((node) => node.textContent);
+    expect(headings).toEqual(["OmniRoute", "Codex Subscription — Direct", "GLM · OmniRoute"]);
+
+    // Rows show the bare model name — never the lane string again.
+    expect(
+      within(models).getByTestId("new-chat-landing-agent-model-gpt-6.1-sol-codex-direct"),
+    ).toHaveTextContent("GPT-6.1-Sol");
+    expect(
+      within(models).queryByText((_, node) => node?.textContent === "GLM 5.3 · OmniRoute"),
+    ).toBeNull();
+    expect(
+      within(models).getByTestId("new-chat-landing-agent-model-glm-5.3-omniroute"),
+    ).toHaveTextContent("GLM 5.3");
+
+    // Picking a model updates the chip immediately.
+    fireEvent.click(
+      within(models).getByTestId("new-chat-landing-agent-model-gpt-6.1-sol-codex-direct"),
+    );
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-model-select")).toHaveTextContent("GPT-6.1-Sol"),
+    );
+  });
+
+  it("keeps the harness chip separate and Edit-free for plain harnesses", async () => {
+    setAgents([
+      agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" }),
+      agent({ id: "ag_polly", name: "polly", display_name: "Polly", harness: "claude-sdk" }),
+    ]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    // The harness chip names the harness, not the model.
+    const harnessChip = screen.getByTestId("new-chat-landing-agent-select");
+    expect(harnessChip).toHaveTextContent("Codex");
+    expect(harnessChip).not.toHaveTextContent("GPT");
+
+    // Opening the harness menu lists rows without an Edit affordance; model
+    // choice is not behind it anymore.
+    fireEvent.pointerDown(harnessChip, { button: 0 });
+    await screen.findByTestId("new-chat-landing-agent-ag_codex");
+    expect(screen.queryByTestId("new-chat-landing-agent-config-ag_codex")).toBeNull();
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-select"), { key: "Escape" });
+
+    // The model chip sits beside it as the single model selector.
+    expect(screen.getByTestId("new-chat-landing-model-select")).toBeVisible();
+  });
+
+  it("offers Smart Routing as a Routing choice inside the model menu", async () => {
+    vi.mocked(useHostModelOptions).mockReturnValue({
+      data: [
+        { id: "opus", displayName: "Opus" },
+        { id: "sonnet", displayName: "Sonnet" },
+      ],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useHostModelOptions>);
+    setAgents([agent({ id: "ag_native", name: "claude-native-ui", display_name: "Claude Code" })]);
+    renderLanding([], {
+      smart_routing_enabled: true,
+      smart_routing_sources: { external: true, oss: false },
+    });
+    await waitForWorkspaceSeed();
+
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-model-select"), { button: 0 });
+    await screen.findByTestId("new-chat-landing-agent-models");
+    const routing = screen.getByTestId("new-chat-landing-agent-routing");
+    expect(within(routing).getByText("Smart Routing")).toBeVisible();
+    // The Models section header is the panel's subject — not "Smart Routing".
+    expect(
+      within(screen.getByTestId("new-chat-landing-agent-models")).getByText("Models"),
+    ).toBeVisible();
+
+    // Picking it routes instead of pinning a model.
+    fireEvent.click(within(routing).getByTestId("new-chat-landing-agent-model-smart-routing"));
+    fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-model-select")).toHaveTextContent(
+        "Smart Routing",
+      ),
+    );
   });
 
   it("renders the inline config surface without a gray tray or top border", async () => {

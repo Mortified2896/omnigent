@@ -48,8 +48,6 @@ from tests.e2e_ui.messages.test_native_codex_render_parity import (
 
 _log = logging.getLogger(__name__)
 
-_CONFIG_ROW = '[data-testid="composer-agent-edit"]'
-_CONFIG_SUBMENU = '[data-testid="composer-agent-config-menu"]'
 _EFFORT_SECTION = '[data-testid="composer-agent-efforts"]'
 _CHECKED_EFFORT = '[role="menuitemcheckbox"][data-effort-level][aria-checked="true"]'
 _CONFIG_GEAR = '[data-testid="composer-config-gear"]'
@@ -166,8 +164,6 @@ def test_codex_terminal_effort_change_reaches_composer(
     expect(gear).to_be_visible(timeout=_TERMINAL_READY_TIMEOUT_MS)
     gear.click()
     expect(page.locator(_CONFIG_MENU)).to_be_visible(timeout=15_000)
-    page.locator(_CONFIG_ROW).click()
-    expect(page.locator(_CONFIG_SUBMENU)).to_be_visible(timeout=15_000)
     # The effort section is catalog-gated: a launch model the codex catalog
     # does not list (this fixture pins a mock-provider model) renders no effort
     # section until the in-TUI ``/model`` lands the session on a catalog model.
@@ -291,7 +287,6 @@ def _open_config_menu(page: Page) -> None:
     expect(gear).to_be_visible(timeout=30_000)
     gear.click()
     expect(page.locator(_CONFIG_MENU)).to_be_visible(timeout=15_000)
-    page.locator(_CONFIG_ROW).click()
     expect(page.locator(_EFFORT_SECTION)).to_be_visible(timeout=15_000)
 
 

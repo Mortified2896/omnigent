@@ -209,13 +209,11 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) 
 
 async function openSessionModels() {
   if (!screen.queryByTestId("composer-agent-menu")) openSessionConfig();
-  fireEvent.click(screen.getByTestId("composer-agent-edit"));
-  await screen.findByTestId("composer-agent-config-menu");
+  await screen.findByTestId("composer-agent-models");
 }
 
 async function openSessionEfforts() {
   if (!screen.queryByTestId("composer-agent-menu")) openSessionConfig();
-  fireEvent.click(screen.getByTestId("composer-agent-edit"));
   await screen.findByTestId("composer-agent-efforts");
 }
 
@@ -1229,7 +1227,7 @@ describe("Composer slash-command submit routing", () => {
     expect(onSend).not.toHaveBeenCalled();
     expect(ta.value).toBe("");
     // The config modal is open with the Model control to choose from.
-    expect(await screen.findByTestId("composer-agent-config-menu")).toBeTruthy();
+    expect(await screen.findByTestId("composer-agent-models")).toBeTruthy();
     expect(screen.getByTestId("composer-agent-models")).toBeTruthy();
   });
 
@@ -1467,7 +1465,7 @@ describe("Composer slash-command submit routing", () => {
     // Bare /model opens the modal without sending text or changing the model.
     expect(onSend).not.toHaveBeenCalled();
     expect(setModel).not.toHaveBeenCalled();
-    expect(await screen.findByTestId("composer-agent-config-menu")).toBeTruthy();
+    expect(await screen.findByTestId("composer-agent-models")).toBeTruthy();
     expect(screen.getByTestId("composer-agent-models")).toBeTruthy();
   });
 
@@ -1616,8 +1614,6 @@ describe("Composer cached model labels", () => {
     expect(tooltip).toHaveTextContent("Team model");
     expect(tooltip).not.toHaveTextContent(model);
     openSessionConfig();
-    expect(screen.getByTestId("composer-agent-model-summary")).toHaveTextContent("Team model");
-    fireEvent.click(screen.getByTestId("composer-agent-edit"));
     expect(await screen.findByTestId("composer-agent-model-alias-a")).toBeEnabled();
 
     view.rerender(
@@ -1673,7 +1669,7 @@ describe("Composer cached model labels", () => {
     expect(
       screen.getByRole("menuitemcheckbox", { name: "Loading model… (current)" }),
     ).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("composer-agent-config-menu")).not.toHaveTextContent(model);
+    expect(screen.getByTestId("composer-agent-models")).not.toHaveTextContent(model);
   });
 
   it("does not reuse the creation host's cache after the snapshot host changes", () => {
@@ -1728,7 +1724,7 @@ describe("Composer model/effort label", () => {
 
   const label = () => screen.getByTestId("composer-agent-config-value");
 
-  it("opens directly to one config row whose submenu holds Models and Effort", () => {
+  it("opens the gear straight onto Models and Effort sections", () => {
     useChatStore.setState({
       llmModel: "system.ai.claude-opus-4-6",
       sessionHarness: "claude-native",
@@ -1750,11 +1746,7 @@ describe("Composer model/effort label", () => {
     const menu = within(screen.getByTestId("composer-agent-menu"));
     expect(menu.queryByText("Harnesses")).toBeNull();
     expect(menu.queryByText("Edit")).toBeNull();
-    expect(menu.getAllByRole("menuitem")).toHaveLength(1);
-    const row = menu.getByRole("menuitem", { name: "Claude Code: Opus" });
-    expect(within(row).getByText("Opus")).toHaveClass("text-right");
-    expect(screen.queryByRole("menuitemcheckbox")).toBeNull();
-    fireEvent.keyDown(row, { key: "ArrowRight" });
+    // The model list is present on the first click — no config row in between.
     expect(screen.getByTestId("composer-agent-model-opus")).toHaveTextContent("Opus");
     expect(screen.getByTestId("composer-agent-efforts")).toBeVisible();
     expect(screen.getByTestId("composer-agent-effort-high")).toBeVisible();
@@ -2157,8 +2149,8 @@ describe("Composer model/effort label", () => {
     );
 
     openSessionConfig();
-    fireEvent.click(screen.getByTestId("composer-agent-edit"));
-    expect(await screen.findByTestId("composer-agent-config-menu")).toBeTruthy();
+    fireEvent.keyDown(screen.getByTestId("composer-config-gear"), { key: "ArrowDown" });
+    expect(await screen.findByTestId("composer-agent-models")).toBeTruthy();
     expect(screen.getByTestId("composer-agent-model-opus")).toBeInTheDocument();
   });
 
@@ -4799,14 +4791,10 @@ describe("Composer config gear", () => {
         />,
       );
       openSessionConfig();
-      const rootMenu = within(screen.getByTestId("composer-agent-menu"));
-      expect(rootMenu.queryByRole("separator")).toBeNull();
-      await openSessionModels();
+      if (showModels) await openSessionModels();
+      expect(screen.queryByTestId("composer-agent-routing")).toBeNull();
       expect(screen.queryByRole("menuitem", { name: "Smart Routing" })).toBeNull();
-      const configMenu = within(screen.getByTestId("composer-agent-config-menu"));
-      // Only the Models | Effort divider remains.
-      expect(configMenu.queryAllByRole("separator")).toHaveLength(showModels ? 1 : 0);
-      expect(configMenu.getByTestId("composer-agent-efforts")).toBeVisible();
+      if (showModels) expect(screen.getByTestId("composer-agent-efforts")).toBeVisible();
     },
   );
 
@@ -4825,18 +4813,16 @@ describe("Composer config gear", () => {
       );
       openSessionConfig();
       const rootMenu = within(screen.getByTestId("composer-agent-menu"));
+      // Smart Routing is a Routing-section choice, not a bare menu item.
       expect(rootMenu.queryByRole("menuitem", { name: "Smart Routing" })).toBeNull();
-      expect(rootMenu.queryByRole("separator")).toBeNull();
       await openSessionModels();
-      const menu = within(screen.getByTestId("composer-agent-config-menu"));
-      expect(menu.getByRole("menuitem", { name: "Smart Routing" })).not.toHaveAttribute(
+      const routing = within(screen.getByTestId("composer-agent-routing"));
+      expect(routing.getByRole("menuitemcheckbox", { name: "Smart Routing" })).not.toHaveAttribute(
         "data-disabled",
       );
-      // Smart Routing | Models, then Models | Effort.
-      expect(menu.getAllByRole("separator")).toHaveLength(2);
       expect(useChatStore.getState().costControlModeOverride).toBe(costControlModeOverride);
       if (costControlModeOverride === "on") {
-        for (const choice of menu.getAllByRole("menuitemcheckbox")) {
+        for (const choice of screen.getAllByRole("menuitemcheckbox")) {
           if (choice.getAttribute("data-effort-level")) {
             expect(choice).toHaveAttribute("data-disabled");
           }
@@ -4854,9 +4840,7 @@ describe("Composer config gear", () => {
     openSessionConfig();
     expect(screen.queryByTestId("composer-advanced-settings")).toBeNull();
     expect(screen.queryByText("Advanced settings…")).toBeNull();
-    const menu = screen.getByTestId("composer-agent-menu");
-    expect(menu.lastElementChild).toBe(screen.getByTestId("composer-agent-edit"));
-    expect(within(menu).queryByRole("separator")).toBeNull();
+    expect(screen.queryByTestId("composer-agent-edit")).toBeNull();
   });
 
   it("opens the combined Model and Effort flyout on hover and returns to typing on outside click", async () => {
@@ -4865,7 +4849,6 @@ describe("Composer config gear", () => {
       <Composer {...composerProps({ showModels: true, modelPickerKind: "claude" })} />,
     );
     await user.click(screen.getByTestId("composer-config-gear"));
-    await user.hover(screen.getByTestId("composer-agent-edit"));
     expect(await screen.findByTestId("composer-agent-models")).toBeVisible();
     expect(screen.getByTestId("composer-agent-efforts")).toBeVisible();
     await user.click(textarea());
@@ -4891,15 +4874,11 @@ describe("Composer config gear", () => {
         />,
       );
       fireEvent.keyDown(screen.getByTestId("composer-config-gear"), { key: "ArrowDown" });
-      fireEvent.click(screen.getByTestId("composer-agent-edit"));
+      fireEvent.keyDown(screen.getByTestId("composer-config-gear"), { key: "ArrowDown" });
       const menu = await screen.findByTestId("composer-agent-menu");
       expect(within(menu).getByTestId("composer-agent-models")).toBeVisible();
       expect(within(menu).getByTestId("composer-agent-efforts")).toBeVisible();
       expect(screen.getAllByRole("menu")).toHaveLength(1);
-      fireEvent.click(screen.getByTestId("composer-agent-config-back"));
-      expect(screen.queryByTestId("composer-agent-models")).toBeNull();
-      expect(screen.queryByTestId("composer-agent-efforts")).toBeNull();
-      expect(screen.getByTestId("composer-agent-edit")).toBeVisible();
     } finally {
       window.matchMedia = originalMatchMedia;
     }
@@ -4923,7 +4902,6 @@ describe("Composer config gear", () => {
       />,
     );
     fireEvent.keyDown(screen.getByTestId("composer-config-gear"), { key: "ArrowDown" });
-    fireEvent.keyDown(screen.getByTestId("composer-agent-edit"), { key: "ArrowRight" });
     expect(await screen.findByTestId("composer-agent-models")).toBeVisible();
     expect(await screen.findByTestId("composer-agent-effort-xhigh")).toHaveAttribute(
       "aria-checked",
@@ -4950,7 +4928,11 @@ describe("Composer config gear", () => {
       expect(within(models).getByRole("status")).toHaveTextContent(
         "No usable models are available for this session.",
       );
-      expect(screen.getByRole("menuitem", { name: "Smart Routing" })).toBeVisible();
+      expect(
+        within(screen.getByTestId("composer-agent-routing")).getByRole("menuitemcheckbox", {
+          name: "Smart Routing",
+        }),
+      ).toBeVisible();
       if (currentModel) {
         expect(within(models).getByRole("menuitemcheckbox")).toHaveAttribute(
           "aria-disabled",
@@ -4985,7 +4967,7 @@ describe("Composer config gear", () => {
     );
 
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     expect(screen.queryByRole("menuitemcheckbox", { name: "Default" })).toBeNull();
     expect(screen.getByRole("menuitemcheckbox", { name: "Automatic" })).toBeVisible();
     expect(screen.getByRole("menuitemcheckbox", { name: "Latest" })).toBeVisible();
@@ -5160,7 +5142,7 @@ describe("Composer config gear", () => {
     );
 
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     // A bare "Default" was the bug: this gear and the new-session gear named
     // the same unpinned session's model differently, so neither told the user
     // which model Codex would actually run.
@@ -5192,7 +5174,7 @@ describe("Composer config gear", () => {
     );
 
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     expect(screen.getByRole("menuitemcheckbox", { name: "Opus 4.8 (1M context)" })).toBeTruthy();
   });
 
@@ -5219,6 +5201,60 @@ describe("Composer config gear", () => {
     expect(screen.queryByTestId("composer-config-modal")).toBeNull();
   });
 
+  it("groups session model rows under provider/transport headings", async () => {
+    const setModel = vi.fn().mockResolvedValue(undefined);
+    useChatStore.setState({ setModel });
+    renderWithTooltips(
+      <Composer
+        {...composerProps({
+          showModels: true,
+          modelPickerKind: "codex",
+          codexModelOptions: [
+            {
+              id: "codex/gpt-6-astra",
+              model: "codex/gpt-6-astra",
+              displayName: "GPT-6-Astra",
+              accessLane: "omniroute",
+              groupLabel: "OmniRoute",
+            },
+            {
+              id: "gpt-6.1-sol",
+              model: "gpt-6.1-sol",
+              displayName: "GPT-6.1-Sol",
+              accessLane: "codex-direct",
+              groupLabel: "Codex Subscription — Direct",
+            },
+            {
+              id: "glm-5.3",
+              model: "glm-5.3",
+              displayName: "GLM 5.3 · OmniRoute",
+              accessLane: "omniroute",
+              groupLabel: "GLM",
+            },
+          ],
+        })}
+      />,
+    );
+    await openSessionModels();
+    const models = screen.getByTestId("composer-agent-models");
+    const headings = Array.from(
+      models.querySelectorAll<HTMLElement>("[data-model-group-label]"),
+    ).map((node) => node.textContent);
+    expect(headings).toEqual(["OmniRoute", "Codex Subscription — Direct", "GLM · OmniRoute"]);
+    // Bare model names on the rows — the heading carries the transport.
+    expect(
+      within(models).getByTestId("composer-agent-model-gpt-6.1-sol-codex-direct"),
+    ).toHaveTextContent("GPT-6.1-Sol");
+    expect(within(models).getByTestId("composer-agent-model-glm-5.3-omniroute")).toHaveTextContent(
+      "GLM 5.3",
+    );
+    // Selecting a grouped row still commits the model change.
+    fireEvent.click(within(models).getByTestId("composer-agent-model-gpt-6.1-sol-codex-direct"));
+    await waitFor(() =>
+      expect(setModel).toHaveBeenCalledWith("gpt-6.1-sol", { expectConfirmation: true }),
+    );
+  });
+
   it("keeps Codex models in the primary picker alongside Smart Routing", async () => {
     // Regression: Codex has a Model dropdown, so Smart Routing must be an option
     // inside it (like Claude) — NOT a separate switch alongside the dropdown.
@@ -5232,7 +5268,7 @@ describe("Composer config gear", () => {
       />,
     );
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     expect(screen.getByTestId("composer-agent-models")).toBeTruthy();
     expect(screen.queryByTestId("composer-config-smart-routing")).toBeNull();
   });
@@ -5274,13 +5310,13 @@ describe("Composer config gear", () => {
       />,
     );
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     // Draft a new model and a new effort.
     fireEvent.click(
       document.querySelector('[data-testid="composer-agent-model-sonnet"]') as Element,
     );
-    const configRow = screen.getByTestId("composer-agent-edit");
-    expect(configRow).toHaveAttribute("data-disabled");
+    const gearTrigger = screen.getByTestId("composer-config-gear");
+    expect(gearTrigger).toHaveAttribute("aria-disabled", "true");
     for (const choice of screen.queryAllByRole("menuitemcheckbox")) {
       if (choice.getAttribute("data-effort-level")) expect(choice).toHaveAttribute("data-disabled");
     }
@@ -5293,9 +5329,7 @@ describe("Composer config gear", () => {
     );
     expect(setEffort).not.toHaveBeenCalled();
     resolveModel();
-    await waitFor(() =>
-      expect(screen.getByTestId("composer-agent-edit")).not.toHaveAttribute("data-disabled"),
-    );
+    await waitFor(() => expect(screen.getByTestId("composer-agent-model-sonnet")).toBeEnabled());
     await openSessionEfforts();
     fireEvent.click(screen.getByTestId("composer-agent-effort-low"));
     await waitFor(() => expect(setEffort).toHaveBeenCalledWith("low"));
@@ -5383,7 +5417,7 @@ describe("Composer config gear", () => {
       />,
     );
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
 
     await openSessionEfforts();
     // Sol starts on ultra.
@@ -5439,7 +5473,7 @@ describe("Composer config gear", () => {
       />,
     );
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     // Turn routing off by picking the same model the modal already shows.
     fireEvent.click(document.querySelector('[data-testid="composer-agent-model-opus"]') as Element);
     // The pin must be re-applied AND routing cleared.
@@ -5460,7 +5494,7 @@ describe("Composer config gear", () => {
       />,
     );
     await openSessionModels();
-    await screen.findByTestId("composer-agent-config-menu");
+    await screen.findByTestId("composer-agent-models");
     // Claude gets the Model select instead of a standalone routing switch.
     expect(screen.getByTestId("composer-agent-models")).toBeTruthy();
     expect(screen.queryByTestId("composer-config-smart-routing")).toBeNull();
@@ -5497,7 +5531,7 @@ describe("Composer config gear", () => {
         />,
       );
       await openSessionModels();
-      await screen.findByTestId("composer-agent-config-menu");
+      await screen.findByTestId("composer-agent-models");
       return setModel;
     }
 
@@ -5508,7 +5542,7 @@ describe("Composer config gear", () => {
 
     it("pins nothing when opening and closing the model picker", async () => {
       const setModel = await openModalOnRoutedSession();
-      fireEvent.keyDown(screen.getByTestId("composer-agent-config-menu"), { key: "Escape" });
+      fireEvent.keyDown(screen.getByTestId("composer-agent-models"), { key: "Escape" });
       expect(setModel).not.toHaveBeenCalled();
     });
 

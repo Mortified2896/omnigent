@@ -168,7 +168,6 @@ def test_claude_native_picker_lists_only_live_databricks_models(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible(timeout=15_000)
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
 
     # The model options carry the same data-model-id rows as before (plus the
     # "Default" sentinel row the modal always offers).
@@ -266,9 +265,7 @@ def test_claude_native_picker_updates_after_delayed_catalog(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_enabled()
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
-    expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible()
-    expect(page.get_by_test_id("composer-agent-config-menu")).not_to_contain_text("system.ai.")
+    expect(page.get_by_test_id("composer-agent-models")).not_to_contain_text("system.ai.")
 
     catalog_state["ready"] = True
     _announce_catalog(page, session_id)
@@ -299,10 +296,8 @@ def test_claude_native_picker_updates_after_delayed_catalog(
     log = page.evaluate("window.__modelLabelLog")
     assert not any(entry["loading"] or "system.ai." in entry["text"] for entry in log), log
     gear.click()
-    expect(page.get_by_test_id("composer-agent-model-summary")).to_have_text("Sonnet 5")
+    expect(page.get_by_test_id("composer-agent-model-value")).to_have_text("Sonnet 5")
     page.screenshot(path=str(tmp_path / "session-model-cached-menu.png"))
-    page.get_by_test_id("composer-agent-edit").click()
-    expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible()
 
     new_tab = page.context.new_page()
     try:
@@ -395,7 +390,6 @@ def test_claude_native_alias_selection_persists(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible(timeout=15_000)
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
 
     # Selecting only drafts the pick; the PATCH fires on Save.
     with page.expect_response(
@@ -502,8 +496,6 @@ def test_claude_native_picker_saves_model_while_host_asleep(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_have_attribute("aria-disabled", "false")
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
-    expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible()
     # The catalog still populates the dropdown while the session sleeps.
     expect(page.locator('[role="menuitemcheckbox"][data-model-id]')).to_have_count(
         len(_EXPECTED_ROWS)
@@ -564,8 +556,6 @@ def test_claude_native_unpinned_gateway_catalog_offers_only_the_routable_default
     _screenshot(page, "unpinned-gateway-composer")
 
     page.get_by_test_id("composer-config-gear").click()
-
-    page.get_by_test_id("composer-agent-edit").click()
 
     # Exactly one row — the provider's routable default, pre-selected — so no
     # alias row exists to canonicalize into an id the gateway rejects. Picking
@@ -886,7 +876,6 @@ def test_union_catalog_pick_patches_the_row_id_verbatim(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible(timeout=15_000)
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
     bracket_row = page.locator('[role="menuitemcheckbox"][data-model-id="sonnet[1m]"]')
     expect(bracket_row).to_contain_text("Sonnet 5 (1M context)")
     with page.expect_response(
@@ -924,7 +913,6 @@ def test_claude_native_picker_highlights_the_reported_model(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible(timeout=15_000)
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
 
     expect(page.locator('[role="menuitemcheckbox"][data-model-id="sonnet"]')).to_have_attribute(
         "aria-checked", "true"

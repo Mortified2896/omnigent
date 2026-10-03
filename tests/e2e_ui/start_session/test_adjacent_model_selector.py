@@ -52,7 +52,7 @@ async def _drive_adjacent_selector(base_url: str, session_id: str, width: int, t
             await trigger.click()
             harness = page.get_by_test_id("new-chat-landing-agent-ag_claude_e2e")
             harness_row = harness.locator("xpath=ancestor::*[@data-harness-menu-row]")
-            edit = page.get_by_test_id("new-chat-landing-agent-config-ag_claude_e2e")
+            edit = page.get_by_test_id("new-chat-landing-model-select")
             await expect(harness).to_have_css("cursor", "pointer")
             await harness.hover()
             hovered_background = await harness_row.evaluate(
@@ -96,45 +96,36 @@ async def _drive_adjacent_selector(base_url: str, session_id: str, width: int, t
             await page.mouse.move(20, 20)
             await expect(harness_row).to_have_css("background-color", "rgba(0, 0, 0, 0)")
             await expect(harness).to_have_attribute("data-active", "true")
+            # The model chip is a separate control: close the harness menu, then
+            # open the model list from the chip itself.
+            await page.keyboard.press("Escape")
+            await expect(page.get_by_role("menu")).to_have_count(0)
             await edit.click()
-            await expect(page.get_by_role("menu")).to_have_count(2)
+            await expect(page.get_by_role("menu")).to_have_count(1)
             models = page.get_by_test_id("new-chat-landing-agent-models")
             await expect(models).to_be_visible()
-            parent = page.get_by_role("menu").first
             child = models.locator('xpath=ancestor::*[@role="menu"]')
-            for menu in (parent, child):
-                await menu.evaluate(
-                    "element => Promise.all("
-                    "element.getAnimations().map(animation => animation.finished))"
-                )
-            parent_box = await parent.bounding_box()
-            child_box = await child.bounding_box()
-            trigger_box = await harness.bounding_box()
-            assert parent_box is not None and child_box is not None and trigger_box is not None
-            # Radix may overlap the row's outer focus padding by at most 4px;
-            # the model menu must not cover readable or clickable row content.
-            overlap = min(
-                trigger_box["x"] + trigger_box["width"],
-                child_box["x"] + child_box["width"],
-            ) - max(trigger_box["x"], child_box["x"])
-            assert overlap <= 4, (trigger_box, child_box)
-            await expect(child).to_have_attribute("data-side", "left" if width == 929 else "right")
-
-            await edit.hover()
-            await page.mouse.move(parent_box["x"] + parent_box["width"] / 2, parent_box["y"] + 2)
-            await page.wait_for_timeout(500)
-            await expect(models).to_be_visible()
-            await other.hover()
-            await page.wait_for_timeout(500)
-            await expect(models).to_be_visible()
-            await edit.hover()
-            gap_x = (
-                (trigger_box["x"] + trigger_box["width"] + child_box["x"]) / 2
-                if width == 1600
-                else (child_box["x"] + child_box["width"] + trigger_box["x"]) / 2
+            await child.evaluate(
+                "element => Promise.all("
+                "element.getAnimations().map(animation => animation.finished))"
             )
-            await page.mouse.move(gap_x, child_box["y"] + 20, steps=20)
-            await page.wait_for_timeout(500)
+            child_box = await child.bounding_box()
+            trigger_box = await edit.bounding_box()
+            assert child_box is not None and trigger_box is not None
+            # The menu attaches BELOW the chip; Radix may overlap the trigger's
+            # outer focus padding by at most 4px, so the menu must not cover
+            # readable or clickable chip content.
+            overlap = min(
+                trigger_box["y"] + trigger_box["height"],
+                child_box["y"] + child_box["height"],
+            ) - max(trigger_box["y"], child_box["y"])
+            assert overlap <= 4, (trigger_box, child_box)
+            await expect(child).to_have_attribute("data-side", "bottom")
+
+            # The menu stays open while the pointer travels inside it.
+            await edit.hover()
+            await models.hover()
+            await page.wait_for_timeout(300)
             await expect(models).to_be_visible()
             target = models.get_by_role("menuitemcheckbox", name="Sonnet 5", exact=True)
             target_box = await target.bounding_box()
@@ -150,26 +141,24 @@ async def _drive_adjacent_selector(base_url: str, session_id: str, width: int, t
                 target_box["x"] + target_box["width"] / 2,
                 target_box["y"] + target_box["height"] / 2,
             )
-            await expect(page.get_by_test_id("new-chat-landing-agent-model-value")).to_have_text(
+            await expect(page.get_by_test_id("new-chat-landing-model-select")).to_have_text(
                 "Sonnet 5"
             )
-            await expect(page.get_by_role("menu")).to_have_count(2)
+            await expect(page.get_by_role("menu")).to_have_count(1)
             await page.keyboard.press("Escape")
             await expect(page.get_by_role("menu")).to_have_count(0)
+            await expect(edit).to_be_focused()
+            # Shift+Tab steps back to the harness chip, the neighboring control.
+            await edit.press("Shift+Tab")
             await expect(trigger).to_be_focused()
-            await expect(trigger).to_have_css("box-shadow", re.compile("3px"))
-            await trigger.press("ArrowDown")
-            await expect(harness).to_be_focused()
             await draft.click(position={"x": 10, "y": 10})
             await expect(page.get_by_role("menu")).to_have_count(0)
             await expect(draft).to_be_focused()
             await page.keyboard.type("continue typing")
             await expect(draft).to_have_value("continue typing")
+            # The custom-agents entry stays reachable from the harness menu.
             await trigger.click()
-            await edit.click()
-            await expect(models).to_be_visible()
             await other.click()
-            await expect(models).not_to_be_visible()
             await expect(page.get_by_role("menuitem", name="Create custom agent")).to_be_visible()
             await page.mouse.click(20, 20)
             await expect(page.get_by_role("menu")).to_have_count(0)

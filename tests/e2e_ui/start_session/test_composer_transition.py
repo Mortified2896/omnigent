@@ -95,8 +95,12 @@ async def _drive(
             await page.get_by_test_id("new-chat-button").click()
             await _open_entry_models(page, "ag_claude_e2e")
             await page.get_by_role("menuitemcheckbox", name=selected_label, exact=True).click()
-            await page.get_by_role("menuitemcheckbox", name="High", exact=True).click()
             await _close_entry_models(page)
+            # Effort keeps its own adjacent select.
+            effort = page.get_by_test_id("new-chat-landing-inline-effort")
+            await effort.click()
+            await page.get_by_role("option", name="High", exact=True).click()
+            await expect(effort).to_contain_text("High")
             await page.evaluate("""() => {
               window.composerSamples = [];
               window.sawConversationLoading = false;

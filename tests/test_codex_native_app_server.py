@@ -4875,3 +4875,105 @@ async def test_codex_config_read_preserves_unrelated_errors() -> None:
     with pytest.raises(CodexAppServerResponseError):
         await app_server._read_codex_probe_default(client)
     client.request.assert_awaited_once()
+
+
+def test_direct_lane_launch_ignores_the_pinned_source_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex Subscription — Direct answers from the CLI's live model/list.
+
+    A shared config.toml may pin a gateway-qualified ``model_catalog_json``
+    (the OmniRoute lane's static routes). The subscription lane's catalog and
+    launch shapes must drop that pin, or a stale static file silently hides
+    newer subscription models the account actually advertises.
+    """
+    from omnigent.harnesses.codex_native.app_server import (
+        _resolve_native_codex_access_lane,
+        resolve_native_codex_catalog_launch,
+    )
+
+    monkeypatch.setattr(
+        "omnigent.onboarding.ambient.codex_auth_has_credential", lambda _path: True
+    )
+
+    direct_catalog = resolve_native_codex_catalog_launch(access_lane="codex-direct")
+    assert direct_catalog.ignore_source_model_catalog is True
+    direct_session = _resolve_native_codex_access_lane(access_lane="codex-direct", model="gpt-5.5")
+    assert direct_session.ignore_source_model_catalog is True
+
+
+def test_omniroute_lane_keeps_the_pinned_source_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway lane still probes through the provider-qualified catalog."""
+    from omnigent.harnesses.codex_native.app_server import (
+        resolve_native_codex_catalog_launch,
+    )
+
+    monkeypatch.setenv("OMNIROUTE_O3_KEY", "omniroute-test-placeholder")
+    monkeypatch.setenv("OMNIGENT_O3_OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
+
+    launch = resolve_native_codex_catalog_launch(access_lane="omniroute")
+    assert launch.ignore_source_model_catalog is False
+
+
+def test_probe_home_drops_the_catalog_pin_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``include_model_catalog=False`` strips the pin the minimal bridge copied."""
+    from omnigent.harnesses.codex_native import app_server
+
+    source = tmp_path / "source"
+    source.mkdir()
+    catalog = source / "merged.json"
+    catalog.write_text('{"models": []}')
+    (source / "config.toml").write_text(
+        f'model = "codex/gpt-5.5"\nmodel_catalog_json = {json.dumps(str(catalog))}\n'
+        'model_provider = "gateway"\n'
+        '[model_providers.gateway]\nname = "Gateway"\n'
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(app_server, "_codex_home_config_source_from_env", lambda: source)
+
+    pinned_home = app_server._probe_codex_home(['model_provider="openai"'])
+    assert "model_catalog_json" in tomllib.loads((pinned_home / "config.toml").read_text())
+
+    live_home = app_server._probe_codex_home(
+        ['model_provider="openai"'], include_model_catalog=False
+    )
+    live_config = tomllib.loads((live_home / "config.toml").read_text())
+    assert "model_catalog_json" not in live_config
+    # The rest of the picker config survives the strip.
+    assert live_config["model"] == "codex/gpt-5.5"
+    # Distinct homes: the live lane never replays a pinned home's cached list.
+    assert live_home != pinned_home
+
+
+def test_direct_lane_fingerprint_ignores_the_catalog_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editing the pinned catalog must not invalidate the direct lane's catalog.
+
+    The probe drops the file on that lane, so the stored answer does not
+    depend on it; keying the fingerprint on it would pointlessly re-probe (and
+    let gateway catalog churn churn the subscription lane too).
+    """
+    from omnigent.harnesses.codex_native import app_server as native
+
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text('{"models": []}')
+    (tmp_path / "config.toml").write_text(f'model_catalog_json = "{catalog}"\n')
+    monkeypatch.setattr(native, "_codex_home_config_source_from_env", lambda: tmp_path)
+    direct = native.NativeCodexLaunch(
+        config_overrides=['model_provider="openai"'],
+        model=None,
+        profile=None,
+        ignore_source_model_catalog=True,
+    )
+    before = native.codex_catalog_fingerprint(direct, codex_path="/missing/codex")
+    gateway = native.NativeCodexLaunch(config_overrides=[], model=None, profile=None)
+    gateway_before = native.codex_catalog_fingerprint(gateway, codex_path="/missing/codex")
+    catalog.write_text('{"models": [{"slug": "codex/gpt-6.1-sol"}]}')
+    # The direct lane's fingerprint is stable; the gateway lane's tracks the file.
+    assert native.codex_catalog_fingerprint(direct, codex_path="/missing/codex") == before
+    assert native.codex_catalog_fingerprint(gateway, codex_path="/missing/codex") != gateway_before

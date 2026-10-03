@@ -44,11 +44,13 @@ async def _expect_pending(
 ) -> None:
     loading = page.get_by_role("status", name="Loading session configuration")
     picker = page.get_by_test_id("new-chat-landing-agent-select")
+    model_chip = page.get_by_test_id("new-chat-landing-model-select")
     if cached_label is None:
         await expect(loading).to_be_visible(timeout=30_000)
         await expect(picker).to_have_count(0)
     else:
-        await expect(picker).to_contain_text(cached_label, timeout=30_000)
+        # The cached model text lives on the model chip now.
+        await expect(model_chip).to_contain_text(cached_label, timeout=30_000)
         await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_contain_text(effort)
         await expect(picker).to_be_enabled()
         await expect(picker).to_have_attribute("aria-busy", "true")
@@ -184,10 +186,12 @@ async def _drive(
                         '[data-testid="new-chat-landing-picker-loading"]');
                     const picker = document.querySelector(
                         '[data-testid="new-chat-landing-agent-select"]');
+                    const model = document.querySelector(
+                        '[data-testid="new-chat-landing-model-select"]');
                     const effort = document.querySelector(
                         '[data-testid="new-chat-landing-inline-effort"]');
-                    const value = loading ? 'loading' : picker
-                        ? [picker.textContent, effort?.textContent].filter(Boolean).join(' ')
+                    const value = loading ? 'loading' : model
+                        ? [model.textContent, effort?.textContent].filter(Boolean).join(' ')
                         : null;
                     if (value && window.pickerLoadingSamples.at(-1) !== value) {
                         window.pickerLoadingSamples.push(value);
@@ -245,10 +249,8 @@ async def _drive(
                     expected_effort = "High" if visit == "reload" else "Max"
                     expected_permission = "Manual" if visit == "reload" else "Plan"
                     permission_mode = "default" if visit == "reload" else "plan"
-                    await picker.click()
-                    await page.get_by_test_id(
-                        "new-chat-landing-agent-config-ag_claude_e2e"
-                    ).click()
+                    model_chip = page.get_by_test_id("new-chat-landing-model-select")
+                    await model_chip.click()
                     await expect(
                         page.get_by_test_id("new-chat-landing-agent-models")
                     ).to_be_visible()
@@ -258,11 +260,11 @@ async def _drive(
                     await page.get_by_test_id(
                         f"new-chat-landing-agent-model-{chosen_model}"
                     ).click()
-                    await page.get_by_test_id(
-                        f"new-chat-landing-agent-effort-{expected_effort.lower()}"
-                    ).click()
                     await page.keyboard.press("Escape")
-                    await page.keyboard.press("Escape")
+                    effort_picker = page.get_by_test_id("new-chat-landing-inline-effort")
+                    await effort_picker.click()
+                    await page.get_by_role("option", name=expected_effort, exact=True).click()
+                    await expect(effort_picker).to_contain_text(expected_effort)
                     await page.get_by_test_id("new-chat-landing-permission-chip").click()
                     await page.screenshot(
                         path=output / f"{visit}-cached-permission-menu.png", animations="disabled"
@@ -274,10 +276,10 @@ async def _drive(
                     await page.get_by_test_id("new-chat-landing-composer").dispatch_event("submit")
                     assert not creates
                     # Keep the model menu open through the handoff to live data.
-                    await picker.click()
-                    await page.get_by_test_id(
-                        "new-chat-landing-agent-config-ag_claude_e2e"
-                    ).click()
+                    await model_chip.click()
+                    await expect(
+                        page.get_by_test_id("new-chat-landing-agent-models")
+                    ).to_be_visible()
 
                 gates[first_response].set()
                 await asyncio.wait_for(served[first_response].wait(), timeout=10)
@@ -309,7 +311,9 @@ async def _drive(
                 )
 
                 gates["models"].set()
-                await expect(picker).to_contain_text(expected_model)
+                await expect(page.get_by_test_id("new-chat-landing-model-select")).to_contain_text(
+                    expected_model
+                )
                 await expect(
                     page.get_by_test_id("new-chat-landing-inline-effort")
                 ).to_contain_text(expected_effort)
@@ -353,7 +357,10 @@ async def _drive(
                 else:
                     # The boot identity probe must confirm whose cache to read.
                     cached_samples = samples[1:] if samples[0] == "loading" else samples
-                    assert cached_label in cached_samples[0], samples
+                    # The chip can pass through its "Default" placeholder for a
+                    # frame before the cached label applies; the cache must win
+                    # before live data resolves.
+                    assert any(cached_label in sample for sample in cached_samples[:2]), samples
                     assert all(
                         any(model in label for model in (cached_label, expected_model))
                         and any(

@@ -159,8 +159,6 @@ def test_codex_native_picker_uses_raw_model_metadata(
 
     # The Model submenu renders Codex's displayName raw.
     page.get_by_test_id("composer-config-gear").click()
-    page.get_by_test_id("composer-agent-edit").click()
-    expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible()
 
     model_row = page.locator('[role="menuitemcheckbox"][data-model-id="gpt-5.5"]')
     expect(model_row).to_be_visible()
@@ -191,7 +189,6 @@ def test_codex_native_unknown_model_keeps_raw_label(
     expect(label).to_have_text("gpt-unlisted", timeout=15_000)
 
     page.get_by_test_id("composer-config-gear").click()
-    page.get_by_test_id("composer-agent-edit").click()
     unknown_row = page.locator('[role="menuitemcheckbox"][data-model-id="gpt-unlisted"]')
     expect(unknown_row).to_have_text("gpt-unlisted (current)")
     expect(unknown_row).to_have_attribute("aria-checked", "true")
@@ -229,7 +226,6 @@ def test_custom_codex_native_agent_keeps_model_and_effort_controls(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible()
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
     expect(page.get_by_test_id("composer-agent-models")).to_be_visible()
     expect(page.get_by_test_id("composer-agent-efforts")).to_contain_text("xHigh")
 
@@ -405,8 +401,7 @@ def test_offline_codex_model_label_matches_gateway_id_to_host_catalog(
     expect(gear).to_contain_text("GPT-5.6-Luna", timeout=15_000)
     expect(page.get_by_role("status", name="Loading model")).to_have_count(0)
     gear.click()
-    expect(page.get_by_test_id("composer-agent-model-summary")).to_have_text("GPT-5.6-Luna")
-    page.get_by_test_id("composer-agent-edit").click()
+    expect(page.get_by_test_id("composer-agent-model-value")).to_have_text("GPT-5.6-Luna")
     row = page.locator('[role="menuitemcheckbox"][data-model-id="gpt-5.6-luna"]')
     expect(row).to_have_attribute("aria-checked", "true")
     expect(row).to_contain_text("GPT-5.6-Luna")
@@ -440,8 +435,6 @@ def test_codex_gear_offers_host_probe_rows_before_the_session_catalog(
     gear = page.get_by_test_id("composer-config-gear")
     expect(gear).to_be_visible(timeout=15_000)
     gear.click()
-    page.get_by_test_id("composer-agent-edit").click()
-    expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible()
 
     # The Effort section is present although the session catalog is still empty.
     expect(page.get_by_test_id("composer-agent-efforts")).to_be_visible(timeout=10_000)

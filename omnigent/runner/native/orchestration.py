@@ -5652,6 +5652,7 @@ async def _auto_create_codex_terminal(
         terminal_launch_args=launch_config.terminal_launch_args or (),
         reasoning_effort=launch_config.reasoning_effort,
         model_catalog_rows=_fresh_codex_catalog,
+        ignore_source_model_catalog=_codex_launch.ignore_source_model_catalog,
         # Codex can show project-trust and legacy-model migration prompts before
         # creating a thread. This TUI runs detached for the web UI, so persist
         # the runner-owned acknowledgements in the private session config.

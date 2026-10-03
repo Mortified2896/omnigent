@@ -235,8 +235,6 @@ def test_harness_session_renders_without_crashing(
     # Opening the gear renders the model control, folding every row (the exact
     # path the null-``model`` cursor crash took).
     page.get_by_test_id("composer-config-gear").click()
-    page.get_by_test_id("composer-agent-edit").click()
-    expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible(timeout=10_000)
     expect(page.get_by_test_id("composer-agent-models")).to_be_visible()
 
     # The option list renders without throwing (rows folded into the picker).

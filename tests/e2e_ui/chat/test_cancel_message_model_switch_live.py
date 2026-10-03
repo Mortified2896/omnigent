@@ -74,7 +74,6 @@ def test_cancel_message_during_real_model_switch(
 
         gear = page.get_by_test_id("composer-config-gear")
         gear.click()
-        page.get_by_test_id("composer-agent-edit").click()
         with page.expect_request(
             lambda network_request: (
                 network_request.method == "PATCH"

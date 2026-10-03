@@ -267,10 +267,9 @@ async def _drive_smart_routing_model_option(base_url: str, session_id: str) -> N
             await expect(
                 page.get_by_test_id("new-chat-landing-agent-model-smart-routing")
             ).to_have_attribute("aria-checked", "true")
-            # The router picks the effort with the model, so the row is frozen.
-            await expect(
-                page.get_by_test_id("new-chat-landing-agent-effort-high")
-            ).to_have_attribute("data-disabled", "")
+            # The router picks the effort with the model, so the separate
+            # select stands down.
+            await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_have_count(0)
             await _close_entry_models(page)
 
             await page.get_by_test_id("new-chat-landing-input").fill("fix the flaky test")
@@ -329,14 +328,9 @@ async def _drive_smart_routing_disabled(base_url: str, session_id: str) -> None:
                 page.get_by_test_id("new-chat-landing-harness-smart-routing")
             ).to_have_count(0)
 
-            await (
-                page.get_by_test_id("new-chat-landing-agent-config-ag_claude_e2e")
-                .get_by_text("Edit", exact=True)
-                .click()
-            )
+            await page.get_by_test_id("new-chat-landing-model-select").click()
+            await expect(page.get_by_test_id("new-chat-landing-agent-models")).to_be_visible()
 
-            await expect(
-                page.get_by_role("menuitemcheckbox", name="Smart Routing", exact=True)
-            ).to_have_count(0)
+            await expect(page.get_by_test_id("new-chat-landing-agent-routing")).to_have_count(0)
         finally:
             await browser.close()

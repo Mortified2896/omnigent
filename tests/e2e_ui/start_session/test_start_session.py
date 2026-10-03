@@ -529,11 +529,8 @@ async def _open_entry_models(page, agent_id: str) -> None:
     row = page.get_by_test_id(f"new-chat-landing-agent-{agent_id}")
     if await row.count() == 0:
         await page.get_by_test_id("new-chat-landing-harness-more").click()
-    await (
-        page.get_by_test_id(f"new-chat-landing-agent-config-{agent_id}")
-        .get_by_text("Edit", exact=True)
-        .click()
-    )
+    # The model list opens from the dedicated model chip in one click.
+    await page.get_by_test_id("new-chat-landing-model-select").click()
 
 
 async def _close_entry_models(page) -> None:
@@ -557,7 +554,7 @@ async def _expect_model_menu_without_advanced_settings(page) -> None:
 
 
 async def _open_entry_config(page, agent_id: str) -> None:
-    """Select a configurable agent and open Edit > Advanced settings."""
+    """Select a configurable agent and open its Edit flyout (SDK settings)."""
     picker = page.get_by_test_id("new-chat-landing-agent-select")
     await picker.click()
     await expect(picker).to_have_attribute("aria-expanded", "true")
@@ -565,11 +562,7 @@ async def _open_entry_config(page, agent_id: str) -> None:
     row = page.get_by_test_id(f"new-chat-landing-agent-{agent_id}")
     if await row.count() == 0:
         await page.get_by_test_id("new-chat-landing-harness-more").click()
-    await (
-        page.get_by_test_id(f"new-chat-landing-agent-config-{agent_id}")
-        .get_by_text("Edit", exact=True)
-        .click()
-    )
+    await page.get_by_test_id(f"new-chat-landing-agent-config-{agent_id}").click()
     await expect(page.get_by_test_id("new-chat-landing-config-harness")).to_be_visible()
 
 
@@ -2027,21 +2020,18 @@ async def _drive_model_effort(base_url: str, session_id: str) -> None:
             model = page.locator(
                 '[data-testid^="new-chat-landing-agent-model-"][aria-checked="true"]'
             )
-            effort = page.locator(
-                '[data-testid^="new-chat-landing-agent-effort-"][aria-checked="true"]'
-            )
+            effort = page.get_by_test_id("new-chat-landing-inline-effort")
             await expect(model).to_contain_text("Harness default")
             await expect(effort).to_contain_text("Default")
-            await expect(
-                page.get_by_role("menuitemcheckbox", name="Default", exact=True)
-            ).to_have_count(1)
 
-            # Model and effort picks commit immediately using the live host catalog.
+            # Model and effort picks commit immediately using the live host catalog;
+            # effort keeps its own adjacent select.
             await page.get_by_role("menuitemcheckbox", name="Opus 4.8", exact=True).click()
             await expect(model).to_contain_text("Opus 4.8")
-            await page.get_by_role("menuitemcheckbox", name="High", exact=True).click()
-            await expect(effort).to_contain_text("High")
             await _close_entry_models(page)
+            await effort.click()
+            await page.get_by_role("option", name="High", exact=True).click()
+            await expect(effort).to_contain_text("High")
 
             await page.get_by_test_id("new-chat-landing-input").fill("set up the project")
             await page.get_by_test_id("new-chat-landing-submit").click()
@@ -2060,11 +2050,10 @@ async def _drive_model_effort(base_url: str, session_id: str) -> None:
             await expect(
                 page.locator('[data-testid^="new-chat-landing-agent-model-"][aria-checked="true"]')
             ).to_contain_text("Opus 4.8")
-            await expect(
-                page.locator(
-                    '[data-testid^="new-chat-landing-agent-effort-"][aria-checked="true"]'
-                )
-            ).to_contain_text("High")
+            await _close_entry_models(page)
+            await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_contain_text(
+                "High"
+            )
         finally:
             await browser.close()
 

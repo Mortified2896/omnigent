@@ -18,6 +18,16 @@ export interface ComposerConfigChoice {
   data?: Record<string, string | undefined>;
 }
 
+/**
+ * One provider/transport subgroup of a Models section: a non-selectable
+ * heading (or none, for lane-less rows) followed by that group's choices.
+ */
+export interface ComposerConfigChoiceGroup {
+  key: string;
+  label: string | null;
+  choices: ComposerConfigChoice[];
+}
+
 /** A single labeled section (Models or Effort) of the harness config menu. */
 export interface ComposerConfigSection {
   testId: string;
@@ -26,6 +36,10 @@ export interface ComposerConfigSection {
   // loading/empty note. Page-local because it varies per surface.
   leading?: ReactNode;
   choices: ComposerConfigChoice[];
+  // Provider/transport groups (host-stamped access lanes). When present the
+  // rows render under non-selectable group headings instead of one flat list;
+  // `choices` remains the full ordered set for callers that count or index.
+  groups?: readonly ComposerConfigChoiceGroup[];
 }
 
 function ConfigChoices({ choices }: { choices: readonly ComposerConfigChoice[] }) {
@@ -50,6 +64,24 @@ function ConfigChoices({ choices }: { choices: readonly ComposerConfigChoice[] }
   );
 }
 
+function ConfigGroupedChoices({ groups }: { groups: readonly ComposerConfigChoiceGroup[] }) {
+  return (
+    <>
+      {groups.map((group, index) => (
+        <div key={group.key} data-model-group={group.key}>
+          {group.label !== null && (
+            <PickerSectionHeader data-model-group-label={group.key}>
+              {group.label}
+            </PickerSectionHeader>
+          )}
+          <ConfigChoices choices={group.choices} />
+          {index < groups.length - 1 && <div className="h-1" aria-hidden="true" />}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /**
  * The shared Models + Effort menu sections rendered inside both harness pickers
  * — the in-session composer (ChatPage) and the landing dialog (NewChatDialog).
@@ -61,11 +93,16 @@ function ConfigChoices({ choices }: { choices: readonly ComposerConfigChoice[] }
  */
 export function ComposerConfigSections({
   sdk,
+  routing,
   models,
   efforts,
   extra,
 }: {
   sdk?: ComposerConfigSection;
+  // Optional Smart Routing section rendered above Models. It is a routing
+  // choice, not a model: giving it its own labeled section keeps the panel
+  // titled by its content instead of reading as "the Smart Routing list".
+  routing?: ComposerConfigSection;
   models?: ComposerConfigSection;
   efforts?: ComposerConfigSection;
   // Additional sections rendered after Models/Effort — e.g. Devin Fusion's
@@ -74,6 +111,7 @@ export function ComposerConfigSections({
 }) {
   const sections = [
     ...(sdk ? [sdk] : []),
+    ...(routing ? [routing] : []),
     ...(models ? [models] : []),
     ...(efforts ? [efforts] : []),
     ...(extra ?? []),
@@ -85,7 +123,11 @@ export function ComposerConfigSections({
           {index > 0 && <DropdownMenuSeparator />}
           <PickerSectionHeader>{section.header}</PickerSectionHeader>
           {section.leading}
-          <ConfigChoices choices={section.choices} />
+          {section.groups ? (
+            <ConfigGroupedChoices groups={section.groups} />
+          ) : (
+            <ConfigChoices choices={section.choices} />
+          )}
         </div>
       ))}
     </>

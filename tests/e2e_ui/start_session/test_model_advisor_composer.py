@@ -262,8 +262,9 @@ async def _drive_composer_proposal(
             permission_picker = page.get_by_test_id("new-chat-landing-permission-chip")
             await expect(model_picker).to_be_visible()
             await expect(effort_picker).to_be_visible()
-            await model_picker.click()
-            await page.get_by_test_id("new-chat-landing-agent-config-ag_codex_e2e").click()
+            # The model list opens from the dedicated model chip (the Codex
+            # harness is already selected above).
+            await page.get_by_test_id("new-chat-landing-model-select").click()
             await page.get_by_test_id("new-chat-landing-agent-model-gpt-5.5-codex-direct").click()
             await page.keyboard.press("Escape")
             await page.keyboard.press("Escape")
@@ -306,7 +307,9 @@ async def _drive_composer_proposal(
             await page.screenshot(path=str(tmp_path / "model-advisor-advisor-picker-mobile.png"))
             await page.set_viewport_size({"width": 1280, "height": 900})
             await expect(model_picker).to_be_visible()
-            await expect(model_picker).to_contain_text("GPT-5.5")
+            await expect(page.get_by_test_id("new-chat-landing-model-select")).to_contain_text(
+                "GPT-5.5"
+            )
             await expect(effort_picker).to_be_visible()
             await expect(advisor_picker).to_be_visible()
             await page.screenshot(path=str(tmp_path / "model-advisor-composer-desktop.png"))
