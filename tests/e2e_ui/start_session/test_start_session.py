@@ -2051,9 +2051,9 @@ async def _drive_model_effort(base_url: str, session_id: str) -> None:
                 page.locator('[data-testid^="new-chat-landing-agent-model-"][aria-checked="true"]')
             ).to_contain_text("Opus 4.8")
             await _close_entry_models(page)
-            await expect(
-                page.get_by_test_id("new-chat-landing-inline-effort")
-            ).to_contain_text("High")
+            await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_contain_text(
+                "High"
+            )
         finally:
             await browser.close()
 

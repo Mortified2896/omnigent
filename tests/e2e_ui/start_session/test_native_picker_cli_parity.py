@@ -488,9 +488,7 @@ def _model_rows(page: Page, rig: PickerRig, agent_label: str) -> list[dict[str, 
         if page.get_by_test_id(_MODELS_SECTION_TESTID).count() == 0:
             with contextlib.suppress(AssertionError, PlaywrightError):
                 page.get_by_test_id("new-chat-landing-model-select").click(timeout=5_000)
-                expect(page.get_by_test_id(_MODELS_SECTION_TESTID)).to_be_visible(
-                    timeout=5_000
-                )
+                expect(page.get_by_test_id(_MODELS_SECTION_TESTID)).to_be_visible(timeout=5_000)
         page.wait_for_timeout(500)
         rows: list[dict[str, str]] = []
         for option in page.locator(

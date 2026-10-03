@@ -269,9 +269,7 @@ async def _drive_smart_routing_model_option(base_url: str, session_id: str) -> N
             ).to_have_attribute("aria-checked", "true")
             # The router picks the effort with the model, so the separate
             # select stands down.
-            await expect(
-                page.get_by_test_id("new-chat-landing-inline-effort")
-            ).to_have_count(0)
+            await expect(page.get_by_test_id("new-chat-landing-inline-effort")).to_have_count(0)
             await _close_entry_models(page)
 
             await page.get_by_test_id("new-chat-landing-input").fill("fix the flaky test")
@@ -331,12 +329,8 @@ async def _drive_smart_routing_disabled(base_url: str, session_id: str) -> None:
             ).to_have_count(0)
 
             await page.get_by_test_id("new-chat-landing-model-select").click()
-            await expect(
-                page.get_by_test_id("new-chat-landing-agent-models")
-            ).to_be_visible()
+            await expect(page.get_by_test_id("new-chat-landing-agent-models")).to_be_visible()
 
-            await expect(
-                page.get_by_test_id("new-chat-landing-agent-routing")
-            ).to_have_count(0)
+            await expect(page.get_by_test_id("new-chat-landing-agent-routing")).to_have_count(0)
         finally:
             await browser.close()

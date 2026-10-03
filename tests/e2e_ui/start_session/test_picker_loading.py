@@ -263,9 +263,7 @@ async def _drive(
                     await page.keyboard.press("Escape")
                     effort_picker = page.get_by_test_id("new-chat-landing-inline-effort")
                     await effort_picker.click()
-                    await page.get_by_role(
-                        "option", name=expected_effort, exact=True
-                    ).click()
+                    await page.get_by_role("option", name=expected_effort, exact=True).click()
                     await expect(effort_picker).to_contain_text(expected_effort)
                     await page.get_by_test_id("new-chat-landing-permission-chip").click()
                     await page.screenshot(
@@ -313,9 +311,9 @@ async def _drive(
                 )
 
                 gates["models"].set()
-                await expect(
-                    page.get_by_test_id("new-chat-landing-model-select")
-                ).to_contain_text(expected_model)
+                await expect(page.get_by_test_id("new-chat-landing-model-select")).to_contain_text(
+                    expected_model
+                )
                 await expect(
                     page.get_by_test_id("new-chat-landing-inline-effort")
                 ).to_contain_text(expected_effort)

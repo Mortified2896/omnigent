@@ -277,13 +277,9 @@ async def _drive(base_url: str, session_id: str, *, initially_ready: bool) -> No
             await expect(effort_select).to_be_visible()
             await effort_select.click()
             for rung in ("Medium", "High", "Max"):
-                await expect(
-                    page.get_by_role("option", name=rung, exact=True)
-                ).to_be_visible()
+                await expect(page.get_by_role("option", name=rung, exact=True)).to_be_visible()
             for rung in ("Low", "xHigh"):
-                await expect(
-                    page.get_by_role("option", name=rung, exact=True)
-                ).to_have_count(0)
+                await expect(page.get_by_role("option", name=rung, exact=True)).to_have_count(0)
             await page.keyboard.press("Escape")
 
             # A model + effort pick sticks, which is what the create call sends as
@@ -301,9 +297,7 @@ async def _drive(base_url: str, session_id: str, *, initially_ready: bool) -> No
             effort_select = page.get_by_test_id("new-chat-landing-inline-effort")
             await effort_select.click()
             for rung in ("Low", "xHigh"):
-                await expect(
-                    page.get_by_role("option", name=rung, exact=True)
-                ).to_be_visible()
+                await expect(page.get_by_role("option", name=rung, exact=True)).to_be_visible()
             await page.get_by_role("option", name="xHigh", exact=True).click()
             await expect(effort_select).to_contain_text("xHigh")
 

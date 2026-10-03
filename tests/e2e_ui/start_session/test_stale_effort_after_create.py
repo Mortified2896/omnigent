@@ -269,9 +269,7 @@ def test_created_session_keeps_default_effort_after_in_session_pick(
     page.get_by_test_id("new-chat-landing-model-select").click()
     expect(agent_picker).to_have_attribute("aria-label", re.compile("Claude Code"), timeout=30_000)
     models_section = page.get_by_test_id("new-chat-landing-agent-models")
-    expect(models_section.locator('[role="menuitemcheckbox"]').first).to_be_visible(
-        timeout=60_000
-    )
+    expect(models_section.locator('[role="menuitemcheckbox"]').first).to_be_visible(timeout=60_000)
     selected_model = models_section.locator('[role="menuitemcheckbox"][aria-checked="true"]')
     effort_default = page.get_by_test_id("new-chat-landing-inline-effort")
     expect(selected_model).to_have_count(1, timeout=30_000)

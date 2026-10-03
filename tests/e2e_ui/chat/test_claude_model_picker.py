@@ -557,7 +557,6 @@ def test_claude_native_unpinned_gateway_catalog_offers_only_the_routable_default
 
     page.get_by_test_id("composer-config-gear").click()
 
-
     # Exactly one row — the provider's routable default, pre-selected — so no
     # alias row exists to canonicalize into an id the gateway rejects. Picking
     # it can only ever PATCH the concrete gateway id, which the launch

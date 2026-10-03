@@ -112,9 +112,7 @@ async def _drive_empty_pi_picker(base_url: str, session_id: str) -> None:
             effort = page.get_by_test_id("new-chat-landing-inline-effort")
             await expect(effort).to_have_attribute("aria-label", "Thinking level")
             await effort.click()
-            await expect(
-                page.get_by_role("option", name="High", exact=True)
-            ).to_be_visible()
+            await expect(page.get_by_role("option", name="High", exact=True)).to_be_visible()
             await page.keyboard.press("Escape")
             await expect(page.get_by_test_id("new-chat-landing-config-modal")).to_have_count(0)
         finally:
