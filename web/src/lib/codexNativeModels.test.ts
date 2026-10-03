@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { codexEffortLevelsForModel, findNativeModelOption } from "./codexNativeModels";
+import {
+  codexEffortLevelsForModel,
+  findNativeModelOption,
+  isCodexNativeModel,
+} from "./codexNativeModels";
 import type { NativeModelOption } from "./types";
 
 const qualifiedCodexRow: NativeModelOption = {
@@ -27,5 +31,76 @@ describe("Codex native model matching", () => {
       "high",
       "max",
     ]);
+  });
+});
+
+describe("Codex native catalog inclusion and lane stamping", () => {
+  // Rows as the host's per-lane probe stamps them: verbatim native ids, the
+  // lane metadata added around them, per-model reasoning efforts preserved.
+  const directLaneRows: NativeModelOption[] = [
+    {
+      id: "gpt-6.1-sol",
+      model: "gpt-6.1-sol",
+      displayName: "GPT-6.1-Sol",
+      accessLane: "codex-direct",
+      groupLabel: "Codex Subscription — Direct",
+      isDefault: true,
+      defaultReasoningEffort: "low",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low" },
+        { reasoningEffort: "medium" },
+        { reasoningEffort: "high" },
+        { reasoningEffort: "xhigh" },
+        { reasoningEffort: "max" },
+        { reasoningEffort: "ultra" },
+      ],
+    },
+    {
+      id: "gpt-5.5",
+      model: "gpt-5.5",
+      displayName: "GPT-5.5",
+      accessLane: "codex-direct",
+      groupLabel: "Codex Subscription — Direct",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low" },
+        { reasoningEffort: "medium" },
+        { reasoningEffort: "high" },
+        { reasoningEffort: "xhigh" },
+      ],
+    },
+  ];
+
+  it("offers a model the live account advertises, identified natively", () => {
+    // A model only the CURRENT runtime advertises must be pickable by its
+    // native id — the account truth, not a hardcoded catalog entry.
+    expect(findNativeModelOption(directLaneRows, "gpt-6.1-sol")).toBe(directLaneRows[0]);
+    expect(isCodexNativeModel(directLaneRows, "gpt-6.1-sol")).toBe(true);
+  });
+
+  it("resolves a legacy catalog-qualified id onto the native row", () => {
+    // A sticky session id spelled the gateway way must still resolve to the
+    // native row of the same model (the codex/ prefix folds away).
+    expect(findNativeModelOption(directLaneRows, "codex/gpt-5.5")).toBe(directLaneRows[1]);
+  });
+
+  it("preserves the selected model's own effort ladder across lanes", () => {
+    // GPT-6.1-Sol advertises low→ultra while GPT-5.5 stops at xhigh: the
+    // per-model ladders must survive lane stamping and stay distinct.
+    expect(codexEffortLevelsForModel(directLaneRows, "gpt-6.1-sol")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(codexEffortLevelsForModel(directLaneRows, "gpt-5.5")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    // An unknown model exposes no ladder rather than another model's.
+    expect(codexEffortLevelsForModel(directLaneRows, "gpt-6.9-ghost")).toEqual([]);
   });
 });

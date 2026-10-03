@@ -104,7 +104,7 @@ function HarnessPickerContent({
         const content = event.currentTarget;
         const selected = Array.from(
           content.querySelectorAll<HTMLElement>(
-            '[role="menuitem"][data-active="true"]:not([data-disabled]):not([aria-disabled="true"])',
+            '[role="menuitem"][data-active="true"]:not([data-disabled]):not([aria-disabled="true"]), [role="menuitemcheckbox"][aria-checked="true"]:not([data-disabled]):not([aria-disabled="true"])',
           ),
         ).find((item) => item.closest('[role="menu"]') === content);
         if (!selected) return;

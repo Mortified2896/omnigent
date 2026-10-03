@@ -1436,7 +1436,28 @@ def _codex_picker_config(source_home: Path) -> dict[str, str]:
     return picker
 
 
-def _probe_codex_home(config_overrides: Sequence[str]) -> Path:
+def _strip_model_catalog_pin(codex_home: Path) -> None:
+    """Remove a pinned ``model_catalog_json`` from a bridged config copy.
+
+    Best-effort: a missing or unparseable config leaves the home untouched and
+    the launch falls back to whatever the copy carries.
+    """
+    config_path = codex_home / "config.toml"
+    try:
+        document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+        if "model_catalog_json" not in document:
+            return
+        del document["model_catalog_json"]
+        config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
+    except (OSError, ValueError):  # A broken copy is not fatal
+        _logger.warning("Could not strip model_catalog_json from %s", config_path, exc_info=True)
+
+
+def _probe_codex_home(
+    config_overrides: Sequence[str],
+    *,
+    include_model_catalog: bool = True,
+) -> Path:
     """
     Persistent probe ``CODEX_HOME`` for one provider configuration.
 
@@ -1444,6 +1465,12 @@ def _probe_codex_home(config_overrides: Sequence[str]) -> Path:
     ``models_cache.json`` ETag handling makes repeat probes cheap; keyed by
     the override set so a provider change never replays another provider's
     cache.
+
+    :param include_model_catalog: Copy the configured ``model_catalog_json``
+        into the probe home. The gateway lane needs the provider-qualified
+        file; a lane that answers from the CLI's own live ``model/list``
+        (Codex Subscription — Direct) must not have a static file cap its
+        answer, so it probes with ``False``.
 
     Materialized by the same bridge a session launch uses, in its minimal
     shape. Both halves matter: the credential decides which models the
@@ -1461,7 +1488,15 @@ def _probe_codex_home(config_overrides: Sequence[str]) -> Path:
     # symlink or account-specific cached state under identical overrides.
     source_home = _codex_home_config_source_from_env()
     key = hashlib.sha256(
-        "\n".join((str(source_home.resolve()), *config_overrides)).encode("utf-8")
+        "\n".join(
+            (
+                str(source_home.resolve()),
+                *config_overrides,
+                # A lane that drops the pinned catalog must not replay another
+                # lane's cached models_cache.json from a shared home.
+                f"model_catalog={'source' if include_model_catalog else 'live'}",
+            )
+        ).encode("utf-8")
     ).hexdigest()[:12]
     home = Path.home() / ".omnigent" / "cache" / "codex-model-probe" / key
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1479,6 +1514,8 @@ def _probe_codex_home(config_overrides: Sequence[str]) -> Path:
     )
     # A custom catalog replaces Codex's built-in choices, including visibility.
     picker_config = _codex_picker_config(source_home)
+    if not include_model_catalog:
+        picker_config.pop("model_catalog_json", None)
     if picker_config:
         config_path = home / "config.toml"
         document = (
@@ -1486,6 +1523,10 @@ def _probe_codex_home(config_overrides: Sequence[str]) -> Path:
         )
         document.update(picker_config)
         config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
+    if not include_model_catalog:
+        # The minimal bridge's own copy may already carry the pin; drop it so
+        # the probe answers from the CLI's live model/list.
+        _strip_model_catalog_pin(home)
     return home
 
 
@@ -1587,7 +1628,11 @@ async def probe_codex_model_options(
         config_overrides.extend(databricks.config_overrides)
         env["DATABRICKS_HOST"] = databricks.host
         pinned_model = databricks.model
-    codex_home = await asyncio.to_thread(_probe_codex_home, config_overrides)
+    codex_home = await asyncio.to_thread(
+        _probe_codex_home,
+        config_overrides,
+        include_model_catalog=not launch.ignore_source_model_catalog,
+    )
     env["CODEX_HOME"] = str(codex_home)
     port = _allocate_loopback_port()
     listen_url = f"ws://127.0.0.1:{port}"
@@ -1661,10 +1706,18 @@ def codex_catalog_fingerprint(launch: NativeCodexLaunch, *, codex_path: str | No
     from omnigent.models.model_catalog_store import binary_identity, fingerprint_of
 
     profile_host = _read_databrickscfg_host(launch.profile) if launch.profile is not None else None
+    config_identity = _codex_config_identity(_codex_home_config_source_from_env())
+    if launch.ignore_source_model_catalog:
+        # The probe drops the pinned model_catalog_json, so the answer no
+        # longer depends on that file: stop keying the catalog on it (the
+        # identity tuple's third slot), or editing the file would pointlessly
+        # invalidate a lane that never reads it.
+        source_home, config_file_identity, _catalog_identity, auth_identity = config_identity
+        config_identity = (source_home, config_file_identity, auth_identity)
     return fingerprint_of(
         "codex-native",
         "isolated-picker-v4",
-        _codex_config_identity(_codex_home_config_source_from_env()),
+        config_identity,
         (launch.profile, (profile_host or "").rstrip("/")) if launch.profile is not None else None,
         launch.model,
         tuple(launch.config_overrides),
@@ -2160,6 +2213,10 @@ class CodexNativeAppServer:
     reconcile_process_registry: bool = True
     config_profile: str | None = None
     session_id: str | None = None
+    # Drop a pinned ``model_catalog_json`` from the bridged private config at
+    # startup (Codex Subscription — Direct: its catalog is the CLI's live
+    # ``model/list``, never the gateway-qualified static file).
+    ignore_source_model_catalog: bool = False
     stderr_capture_error_type: str | None = field(default=None, init=False)
     _stderr_diagnostics: CodexStderrDiagnostics | None = field(default=None, init=False)
 
@@ -2234,6 +2291,8 @@ class CodexNativeAppServer:
             extend_model_catalog=codex_extended_catalog_requested(self.env),
             supported_efforts=CODEX_NATIVE_EFFORTS,
         )
+        if self.ignore_source_model_catalog:
+            _strip_model_catalog_pin(self.codex_home)
         compose_profile_instructions = _materialize_codex_profile_for_start(
             self.codex_home,
             config_source,
@@ -3411,6 +3470,7 @@ def build_codex_native_server(
     model_catalog_rows: list[_JsonObject] | None = None,
     reconcile_process_registry: bool = True,
     terminal_launch_args: Sequence[str] = (),
+    ignore_source_model_catalog: bool = False,
 ) -> CodexNativeAppServer:
     """
     Build a configured native Codex app-server process wrapper.
@@ -3543,6 +3603,7 @@ def build_codex_native_server(
         trust_project=trust_project,
         trust_all_hooks=trust_all_hooks,
         reconcile_process_registry=reconcile_process_registry,
+        ignore_source_model_catalog=ignore_source_model_catalog,
     )
 
 
@@ -3591,6 +3652,14 @@ class NativeCodexLaunch:
     env_passthrough: tuple[str, ...] = ()
     credential_env: Mapping[str, str] = field(default_factory=dict, repr=False)
     login_required: bool = False
+    # A provider's own subscription catalog must be the CLI's live
+    # ``model/list`` answer, never the gateway-qualified static
+    # ``model_catalog_json`` a shared config.toml may pin (that file names the
+    # OmniRoute lane's routes and silently hides newer subscription models).
+    # Set on the Codex Subscription — Direct catalog/launch shapes; probes and
+    # session homes then drop the pinned file and the catalog fingerprint
+    # stops keying on it.
+    ignore_source_model_catalog: bool = False
 
 
 _MODEL_PROVIDER_OVERRIDE_PREFIX = "model_provider="
@@ -4035,6 +4104,7 @@ def _resolve_native_codex_access_lane(
                 provider="openai-codex-subscription",
                 provider_fallback=False,
             ),
+            ignore_source_model_catalog=True,
         )
 
     if access_lane == CODEX_ACCESS_LANE_GLM_DIRECT:
@@ -4195,6 +4265,9 @@ def resolve_native_codex_catalog_launch(
                 provider="openai-codex-subscription",
                 provider_fallback=False,
             ),
+            # The subscription catalogue is the account's live model/list, not
+            # the gateway's static model_catalog_json.
+            ignore_source_model_catalog=True,
         )
 
     if access_lane == CODEX_ACCESS_LANE_GLM_DIRECT:

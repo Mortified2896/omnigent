@@ -79,7 +79,7 @@ async def test_codex_source_catalog_and_default(
     )
 
     with monkeypatch.context() as direct:
-        direct.setattr(app_server, "_probe_codex_home", lambda overrides: source)
+        direct.setattr(app_server, "_probe_codex_home", lambda overrides, **_: source)
         direct_rows = await asyncio.wait_for(
             app_server.probe_codex_model_options(codex_path=codex, launch=launch), timeout=20
         )

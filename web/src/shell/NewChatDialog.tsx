@@ -23,7 +23,11 @@ import {
   HarnessMenuNavigationLabel,
   PickerSectionHeader,
 } from "@/components/composer/HarnessMenuRow";
-import { ComposerConfigSections } from "@/components/composer/ComposerConfigSections";
+import {
+  type ComposerConfigChoice,
+  ComposerConfigSections,
+} from "@/components/composer/ComposerConfigSections";
+import { groupedModelLabel, groupModelOptions } from "@/lib/modelPickerGroups";
 import { buildFusionSections } from "@/components/composer/fusionSections";
 import { compactModelTriggerLabel, normalizeEffortLabel } from "@/lib/composerModelLabel";
 import {
@@ -79,7 +83,6 @@ import { ProjectLandingIcon } from "@/components/ProjectIconPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
@@ -1318,15 +1321,6 @@ function visibleModelLabel(label: string): string {
 
 const EMPTY_HARNESS_TRIGGER_DETAILS: readonly { label: string; value: string }[] = [];
 
-function agentHasModelSettings(agent: AvailableAgent | undefined): boolean {
-  return (
-    nativeAgentHasCapability(agent, "modelPicker") ||
-    // devinMode owns Devin's own Model + Effort rows (see nativeCodingAgents).
-    nativeAgentHasCapability(agent, "devinMode") ||
-    nativeCodingAgentForAvailableAgent(agent)?.harness === "codex-native"
-  );
-}
-
 function agentHasAdvancedSettings(
   agent: AvailableAgent | undefined,
   brainHarnessLabels: Readonly<Record<string, string>>,
@@ -1401,6 +1395,7 @@ export function AgentHarnessPicker({
   triggerTooltipRows,
   triggerDetails = EMPTY_HARNESS_TRIGGER_DETAILS,
   triggerIcon,
+  triggerHidesModelText = false,
   selectedConfigContent,
   isEntryConfigurable,
   entrySummaries,
@@ -1462,6 +1457,11 @@ export function AgentHarnessPicker({
   triggerDetails?: readonly { label: string; value: string }[];
   /** Harness glyph rendered before the joined model / effort label. */
   triggerIcon?: ReactNode;
+  /** Hide the joined model / effort text on this trigger. The interactive
+   *  landing sets this: model and effort moved to dedicated controls beside
+   *  the harness chip, while the details still feed the tooltip, the
+   *  accessible name, and the loading-preview cache. */
+  triggerHidesModelText?: boolean;
   /** Integrated configuration menu for the currently selected entry. */
   selectedConfigContent?: ReactNode;
   /** Whether an entry has model settings or a configurable agent harness. */
@@ -1517,7 +1517,14 @@ export function AgentHarnessPicker({
       : triggerModelText;
   const visibleEffortText =
     triggerEffortText === "Default" || triggerEffortText === "—" ? "" : triggerEffortText;
+  // The accessible name mirrors what the chip presents. With the model text
+  // hidden, effort belongs to the model control — including its "—" routing
+  // placeholder, which would read as noise here.
   const triggerAccessibleDetails = triggerDetails
+    .filter(
+      (detail) =>
+        !triggerHidesModelText || (detail.label !== "Effort" && detail.label !== "Thinking level"),
+    )
     .map((detail) => `${detail.label} ${compactModelTriggerLabel(detail.value)}`)
     .join(", ");
   const triggerAccessibleName = [
@@ -1526,13 +1533,21 @@ export function AgentHarnessPicker({
   ]
     .filter(Boolean)
     .join(", ");
+  // The SDK is a harness-level setting: even with the model text hidden it
+  // stays on this chip. Only model / effort move to the model control.
   const triggerText = triggerSdk
     ? agentLabel
-    : visibleModelText ||
-      (triggerModel === undefined ? (hasAgents ? agentLabel : "No agents") : "");
+    : triggerHidesModelText
+      ? hasAgents
+        ? agentLabel
+        : "No agents"
+      : visibleModelText ||
+        (triggerModel === undefined ? (hasAgents ? agentLabel : "No agents") : "");
   const triggerSecondaryText = triggerSdk
     ? compactModelTriggerLabel(triggerSdk.value)
-    : visibleEffortText;
+    : triggerHidesModelText
+      ? ""
+      : visibleEffortText;
   const previewOnly = loading && !interactiveWhileLoading;
   const cachedPreview = previewOnly ? readNewChatPickerCache(cacheKey) : null;
   const visibleCachedPreview = selectedUnavailable ? null : cachedPreview;
@@ -3263,9 +3278,11 @@ export function NewChatLandingScreen() {
     const { [AUTO_HARNESS_ID]: _dropped, ...rest } = brainHarnessLabelsAll;
     return rest;
   }, [brainHarnessLabelsAll, brainRoutable]);
+  // Harness-level configurability only: the Agent SDK section. Model / effort
+  // choices moved to the dedicated model control, so a harness row is Editable
+  // only when it carries harness settings beyond the model.
   const isEntryConfigurable = (agent: AvailableAgent) =>
     (sandboxInferenceConfigured && agent.id === effectiveAgentId) ||
-    agentHasModelSettings(agent) ||
     agentHasAdvancedSettings(agent, brainHarnessLabelsAll);
   // Only an eligible harness can display active per-turn Smart Routing.
   const routingOn = smartRoutingEligible && costControlMode === "on";
@@ -3706,204 +3723,257 @@ export function NewChatLandingScreen() {
     setCostControlMode(null);
     rememberPickerOptions(selectedNativeHarness, { model: modelUid, effort: "", routing: "off" });
   };
+  // The harness picker's Edit flyout now owns only harness-level settings
+  // (the Agent SDK). Model choice lives in the dedicated model control, so
+  // changing a model never routes through a harness row's Edit affordance.
   const selectedConfigContent =
-    selectedAgent && isEntryConfigurable(selectedAgent) ? (
-      <>
-        {smartRoutingEligible && (
-          <>
-            <DropdownMenuCheckboxItem
-              checked={routingOn}
-              onCheckedChange={() => selectPickerModel(MODEL_SELECT_SMART)}
-              onSelect={(event) => event.preventDefault()}
-              data-testid="new-chat-landing-agent-model-smart-routing"
-            >
-              <WandSparklesIcon className="size-4" aria-hidden="true" />
-              {SMART_ROUTING_LABEL}
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        <ComposerConfigSections
-          sdk={
-            selectedAgentHasAdvancedSettings && selectedAgent
-              ? {
-                  testId: "new-chat-landing-config-harness",
-                  header: "Agent SDK",
-                  choices: sdkEntries.map(([id, label]) => ({
-                    key: id,
-                    label: (
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span className="truncate">{label}</span>
-                        {id === AUTO_HARNESS_ID && (
-                          <span className="truncate text-[11px] text-muted-foreground/70">
-                            {AUTO_HARNESS_DESCRIPTION}
-                          </span>
-                        )}
-                        {harnessUnconfiguredOnHost(id, harnessWarningHost) && (
-                          <Badge
-                            variant="outline"
-                            className="border-amber-300 bg-amber-50 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
-                            data-testid={`new-chat-landing-harness-warning-${id}`}
-                          >
-                            {harnessWarningBadgeText(
-                              harnessUnavailableReasonOnHost(id, harnessWarningHost),
-                              harnessInstallEnabled,
-                            )}
-                          </Badge>
-                        )}
-                      </span>
-                    ),
-                    checked: id === activeSdk,
-                    onSelect: () =>
-                      handleSetPickedHarness(
-                        id === selectedAgent.harness ? null : id,
-                        selectedAgent.id,
-                      ),
-                    testId: `new-chat-landing-harness-${id}`,
-                    className: "whitespace-normal [&>span:last-child]:min-w-0",
-                  })),
-                }
-              : undefined
-          }
-          models={
-            sandboxInferenceConfigured ||
-            supportsModelPicker ||
-            supportsPermissionMode ||
-            supportsDevinMode ||
-            selectedNativeHarness === "codex-native"
-              ? {
-                  testId: "new-chat-landing-agent-models",
-                  header: "Models",
-                  leading: (
-                    <>
-                      {sandboxInferenceConfigured && sandboxModels.data?.provider_label && (
-                        <div
-                          className="px-2 py-1 text-xs text-muted-foreground"
-                          data-testid="sandbox-model-provider"
+    selectedAgent && selectedAgentHasAdvancedSettings ? (
+      <ComposerConfigSections
+        sdk={
+          selectedAgentHasAdvancedSettings && selectedAgent
+            ? {
+                testId: "new-chat-landing-config-harness",
+                header: "Agent SDK",
+                choices: sdkEntries.map(([id, label]) => ({
+                  key: id,
+                  label: (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{label}</span>
+                      {id === AUTO_HARNESS_ID && (
+                        <span className="truncate text-[11px] text-muted-foreground/70">
+                          {AUTO_HARNESS_DESCRIPTION}
+                        </span>
+                      )}
+                      {harnessUnconfiguredOnHost(id, harnessWarningHost) && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-300 bg-amber-50 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
+                          data-testid={`new-chat-landing-harness-warning-${id}`}
                         >
-                          {sandboxModels.data.provider_label}
-                        </div>
+                          {harnessWarningBadgeText(
+                            harnessUnavailableReasonOnHost(id, harnessWarningHost),
+                            harnessInstallEnabled,
+                          )}
+                        </Badge>
                       )}
-                      {selectedNativeHarness === "pi-native" && (
-                        <Input
-                          aria-label="Search models"
-                          placeholder="Search models…"
-                          value={pickerModelSearch}
-                          onChange={(event) => setPickerModelSearch(event.target.value)}
-                          onKeyDown={(event) => event.stopPropagation()}
-                          data-testid="new-chat-landing-agent-model-search"
-                        />
-                      )}
-                      {pickerModelsLoading && pickerModelOptions.length === 0 && (
-                        <div className="px-2 py-1 text-xs text-muted-foreground">
-                          Loading models…
-                        </div>
-                      )}
-                      {!pickerModelsLoading && pickerModelOptions.length === 0 && (
-                        <div className="px-2 py-1 text-xs text-muted-foreground">
-                          {pickerModelsError?.message ?? "Models unavailable"}
-                        </div>
-                      )}
-                    </>
+                    </span>
                   ),
-                  choices: [
-                    ...(!sandboxInferenceConfigured &&
-                    pickerModelOptions.length > 0 &&
-                    !pickerModelOptions.some((option) => option.isDefault)
-                      ? [
-                          {
-                            key: "__default__",
-                            label: "Harness default",
-                            checked: !routingOn && pickedModel === "",
-                            onSelect: () => selectPickerModel(MODEL_SELECT_DEFAULT),
-                            testId: "new-chat-landing-agent-model-default",
-                          },
-                        ]
-                      : []),
-                    ...pickerModelOptions
-                      .filter((option) =>
-                        pickerModelSearch
-                          .toLowerCase()
-                          .trim()
-                          .split(/\s+/)
-                          .every((term) =>
-                            `${option.id} ${nativeModelLabel(option)}`.toLowerCase().includes(term),
-                          ),
-                      )
-                      .map((option) => ({
-                        key: `${option.accessLane ?? ""}:${option.id}`,
-                        label: option.accessLane
-                          ? `${visibleModelLabel(nativeModelLabel(option))} · ${option.groupLabel ?? option.accessLane}`
-                          : visibleModelLabel(nativeModelLabel(option)),
-                        checked:
-                          !routingOn &&
-                          (!pickedCodexAccessLane || option.accessLane === pickedCodexAccessLane) &&
-                          (option.fusion !== undefined
-                            ? isFusionModelUid(pickedModel) ||
-                              (pickedModel === "" && option.isDefault === true)
-                            : pickedModel === option.id ||
-                              (pickedModel === "" && option.isDefault === true)),
-                        // The Fusion row always opens its Lead/Sidekick selectors,
-                        // even when Fusion is the catalog default (routing it
-                        // through MODEL_SELECT_DEFAULT would hide them).
-                        onSelect: option.fusion
-                          ? () => selectFusionModel(option.fusion!.default)
-                          : () =>
-                              selectPickerModel(
-                                option.accessLane
-                                  ? option.id
-                                  : option.isDefault
-                                    ? MODEL_SELECT_DEFAULT
-                                    : option.id,
-                                option.accessLane ?? null,
-                              ),
-                        testId: `new-chat-landing-agent-model-${option.id}${option.accessLane ? `-${option.accessLane}` : ""}`,
-                        title: nativeModelLabel(option),
-                        className: "whitespace-normal break-words [&>span:last-child]:min-w-0",
-                      })),
-                  ],
-                }
-              : undefined
-          }
-          efforts={
-            pickerEffortOptions.length > 0
-              ? {
-                  testId: "new-chat-landing-agent-efforts",
-                  header: selectedNativeHarness === "pi-native" ? "Thinking level" : "Effort",
-                  choices: [
-                    {
-                      key: "__default__",
-                      label: "Default",
-                      checked: !routingOn && pickedEffort === "",
-                      disabled: routingOn,
-                      onSelect: () => selectPickerEffort(EFFORT_SELECT_NONE),
-                      testId: "new-chat-landing-agent-effort-default",
-                    },
-                    ...pickerEffortOptions.map((option) => ({
-                      key: option.value,
-                      label: option.label,
-                      checked: !routingOn && pickedEffort === option.value,
-                      disabled: routingOn,
-                      onSelect: () => selectPickerEffort(option.value),
-                      testId: `new-chat-landing-agent-effort-${option.value}`,
-                    })),
-                  ],
-                }
-              : undefined
-          }
-          extra={
-            pickerFusion !== undefined && fusionSelected && !routingOn
-              ? buildFusionSections({
-                  descriptor: pickerFusion,
-                  modelUid: fusionModelUid,
-                  testIdPrefix: "new-chat-landing-agent",
-                  onChange: selectFusionModel,
-                })
-              : undefined
-          }
-        />
-      </>
+                  checked: id === activeSdk,
+                  onSelect: () =>
+                    handleSetPickedHarness(
+                      id === selectedAgent.harness ? null : id,
+                      selectedAgent.id,
+                    ),
+                  testId: `new-chat-landing-harness-${id}`,
+                  className: "whitespace-normal [&>span:last-child]:min-w-0",
+                })),
+              }
+            : undefined
+        }
+      />
     ) : null;
+  // ── The primary model control ─────────────────────────────────────────────
+  // Clicking the model chip opens the model list directly: Smart Routing as a
+  // distinct Routing option, then provider/transport-grouped model rows. The
+  // harness picker stays a separate control, so this remains the ONE model
+  // selector on the composer.
+  const showModelControl =
+    !smartRoutingHarnessSelected &&
+    (sandboxInferenceConfigured ||
+      supportsModelPicker ||
+      supportsPermissionMode ||
+      supportsDevinMode ||
+      selectedNativeHarness === "codex-native");
+  const modelTriggerRow = harnessTriggerDetails.find((row) => row.label === "Model");
+  // An unavailable selected harness must not advertise a model it cannot
+  // launch; blank the chip the same way the harness trigger does.
+  const modelHarnessReadiness =
+    selectedAgent != null
+      ? harnessReadinessOnHost(selectedAgent.harness, harnessWarningHost)
+      : null;
+  const modelHarnessUnavailable =
+    modelHarnessReadiness != null &&
+    !modelHarnessReadiness.selectable &&
+    modelHarnessReadiness.fallbackRelevant;
+  // While the first load is still in flight the chip must not claim "Models
+  // unavailable" — nothing has answered yet.
+  const modelControlLabel =
+    pickerLoading && !interactiveWhileLoading
+      ? ""
+      : modelHarnessUnavailable
+        ? ""
+        : routingOn
+          ? SMART_ROUTING_LABEL
+          : modelTriggerRow
+            ? // "Default" means no model row resolved for this harness — say so
+              // the way the old combined chip did.
+              (compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value)) || "Default") ===
+              "Default"
+              ? "Models unavailable"
+              : compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value))
+            : "Default";
+  const modelControlIcon = selectedAgent ? (
+    <span
+      className="flex size-4 shrink-0 items-center justify-center"
+      data-testid="new-chat-landing-model-icon"
+    >
+      <ComposerAgentIcon agent={selectedAgent} />
+    </span>
+  ) : null;
+  const modelSearchMatches = (option: NativeModelOption) =>
+    pickerModelSearch
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .every((term) => `${option.id} ${nativeModelLabel(option)}`.toLowerCase().includes(term));
+  const modelChoiceFor = (option: NativeModelOption): ComposerConfigChoice => ({
+    key: `${option.accessLane ?? ""}:${option.id}`,
+    label: groupedModelLabel(option, (row) => visibleModelLabel(nativeModelLabel(row))),
+    checked:
+      !routingOn &&
+      (!pickedCodexAccessLane || option.accessLane === pickedCodexAccessLane) &&
+      (option.fusion !== undefined
+        ? isFusionModelUid(pickedModel) || (pickedModel === "" && option.isDefault === true)
+        : pickedModel === option.id || (pickedModel === "" && option.isDefault === true)),
+    // The Fusion row always opens its Lead/Sidekick selectors, even when
+    // Fusion is the catalog default (routing it through MODEL_SELECT_DEFAULT
+    // would hide them).
+    onSelect: option.fusion
+      ? () => selectFusionModel(option.fusion!.default)
+      : () =>
+          selectPickerModel(
+            option.accessLane ? option.id : option.isDefault ? MODEL_SELECT_DEFAULT : option.id,
+            option.accessLane ?? null,
+          ),
+    testId: `new-chat-landing-agent-model-${option.id}${option.accessLane ? `-${option.accessLane}` : ""}`,
+    title: nativeModelLabel(option),
+    className: "whitespace-normal break-words [&>span:last-child]:min-w-0",
+  });
+  // A harness that can't launch on this host must not advertise a retained
+  // catalog — the old Edit flyout simply never opened for it.
+  const visiblePickerModelOptions = modelHarnessUnavailable
+    ? []
+    : pickerModelOptions.filter(modelSearchMatches);
+  const modelPickerChoices: ComposerConfigChoice[] = [
+    ...(!sandboxInferenceConfigured &&
+    visiblePickerModelOptions.length > 0 &&
+    !visiblePickerModelOptions.some((option) => option.isDefault)
+      ? [
+          {
+            key: "__default__",
+            label: "Harness default",
+            checked: !routingOn && pickedModel === "",
+            onSelect: () => selectPickerModel(MODEL_SELECT_DEFAULT),
+            testId: "new-chat-landing-agent-model-default",
+          },
+        ]
+      : []),
+    ...visiblePickerModelOptions.map(modelChoiceFor),
+  ];
+  // Grouped rendering under provider/transport headings — only when the
+  // catalog rows actually carry access lanes; a lane-less catalog (plain
+  // Claude list) keeps its flat menu.
+  const modelPickerGroups = visiblePickerModelOptions.some((option) => option.accessLane)
+    ? groupModelOptions(visiblePickerModelOptions).map((group, index) => ({
+        key: group.key,
+        label: group.label,
+        choices: [
+          ...(index === 0 ? modelPickerChoices.filter((c) => c.key === "__default__") : []),
+          ...group.options.map(modelChoiceFor),
+        ],
+      }))
+    : undefined;
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!modelMenuOpen) setPickerModelSearch("");
+  }, [modelMenuOpen]);
+  const modelMenuOpenRef = useRef(false);
+  modelMenuOpenRef.current = modelMenuOpen;
+  const modelMenuOpenNonceRef = useRef(0);
+  useEffect(() => {
+    if (!modelPickerOpenNonce || modelPickerOpenNonce === modelMenuOpenNonceRef.current) return;
+    // Consume the nonce only when the control exists; before the agents/host
+    // resolve the chip is absent and the hotkey must land once it appears.
+    if (!showModelControl) return;
+    modelMenuOpenNonceRef.current = modelPickerOpenNonce;
+    if (modelMenuOpenRef.current) {
+      // A repeated press refocuses the checked row instead of toggling.
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="new-chat-landing-model-menu"] [role="menuitemcheckbox"][aria-checked="true"]',
+        )
+        ?.focus();
+      return;
+    }
+    setModelMenuOpen(true);
+  }, [modelPickerOpenNonce, showModelControl]);
+  const modelMenuBody = (
+    <ComposerConfigSections
+      routing={
+        smartRoutingEligible
+          ? {
+              testId: "new-chat-landing-agent-routing",
+              header: "Routing",
+              choices: [
+                {
+                  key: "smart-routing",
+                  label: SMART_ROUTING_LABEL,
+                  checked: routingOn,
+                  onSelect: () => selectPickerModel(MODEL_SELECT_SMART),
+                  testId: "new-chat-landing-agent-model-smart-routing",
+                },
+              ],
+            }
+          : undefined
+      }
+      models={{
+        testId: "new-chat-landing-agent-models",
+        header: "Models",
+        leading: (
+          <>
+            {sandboxInferenceConfigured && sandboxModels.data?.provider_label && (
+              <div
+                className="px-2 py-1 text-xs text-muted-foreground"
+                data-testid="sandbox-model-provider"
+              >
+                {sandboxModels.data.provider_label}
+              </div>
+            )}
+            {selectedNativeHarness === "pi-native" && (
+              <Input
+                aria-label="Search models"
+                placeholder="Search models…"
+                value={pickerModelSearch}
+                onChange={(event) => setPickerModelSearch(event.target.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+                data-testid="new-chat-landing-agent-model-search"
+              />
+            )}
+            {pickerModelsLoading && pickerModelOptions.length === 0 && (
+              <div className="px-2 py-1 text-xs text-muted-foreground">Loading models…</div>
+            )}
+            {!pickerModelsLoading && pickerModelOptions.length === 0 && (
+              <div className="px-2 py-1 text-xs text-muted-foreground">
+                {pickerModelsError?.message ?? "Models unavailable"}
+              </div>
+            )}
+          </>
+        ),
+        choices: modelPickerChoices,
+        groups: modelPickerGroups,
+      }}
+      extra={
+        pickerFusion !== undefined && fusionSelected && !routingOn
+          ? buildFusionSections({
+              descriptor: pickerFusion,
+              modelUid: fusionModelUid,
+              testIdPrefix: "new-chat-landing-agent",
+              onChange: selectFusionModel,
+            })
+          : undefined
+      }
+    />
+  );
   const hostModelCatalogs: Record<string, NativeModelOption[] | undefined> = {
     "claude-native": availableClaudeModels,
     "codex-native": availableCodexModels,
@@ -6791,10 +6861,9 @@ export function NewChatLandingScreen() {
                 trailing: (
                   <>
                     <div className="flex min-w-0 items-center rounded-lg">
-                      {/* One trigger combines the harness glyph with model / effort;
-                    the selected entry's submenu owns run configuration. */}
+                      {/* Harness / agent identity chip. Model choice lives in the
+                    dedicated model control beside it — two controls, two concepts. */}
                       <AgentHarnessPicker
-                        openNonce={modelPickerOpenNonce}
                         agentEntries={agentEntries}
                         harnessEntries={harnessEntries}
                         effectiveAgentId={effectiveAgentId}
@@ -6816,13 +6885,16 @@ export function NewChatLandingScreen() {
                         }
                         triggerTooltipRows={
                           !smartRoutingHarnessSelected && harnessTriggerDetails.length > 0
-                            ? harnessTriggerTooltipRows
+                            ? harnessTriggerTooltipRows.filter(
+                                (row) =>
+                                  row.label !== "Model" &&
+                                  row.label !== "Effort" &&
+                                  row.label !== "Thinking level",
+                              )
                             : undefined
                         }
-                        triggerDetails={harnessTriggerDetails.filter(
-                          (detail) =>
-                            detail.label !== "Effort" && detail.label !== "Thinking level",
-                        )}
+                        triggerDetails={harnessTriggerDetails}
+                        triggerHidesModelText
                         triggerIcon={
                           selectedAgent ? (
                             <span
@@ -6847,6 +6919,36 @@ export function NewChatLandingScreen() {
                         triggerClassName="text-[13px] leading-5"
                       />
                     </div>
+                    {showModelControl && (
+                      <HarnessPicker
+                        open={modelMenuOpen}
+                        onOpenChange={setModelMenuOpen}
+                        testId="new-chat-landing-model-menu"
+                        contentSide="bottom"
+                        contentSideOffset={6}
+                        onInitialSelectionFocus={() => {}}
+                        tooltip={
+                          <ComposerConfigTooltipRows
+                            rows={[
+                              { label: "Model", value: modelControlLabel },
+                              ...configSummary.filter(
+                                (row) => row.label === "Effort" || row.label === "Thinking level",
+                              ),
+                            ]}
+                          />
+                        }
+                        tooltipTestId="new-chat-landing-model-tooltip"
+                        trigger={{
+                          label: "Model",
+                          model: modelControlLabel,
+                          icon: modelControlIcon,
+                          testIdPrefix: "new-chat-landing-model",
+                          "data-testid": "new-chat-landing-model-select",
+                        }}
+                      >
+                        {modelMenuBody}
+                      </HarnessPicker>
+                    )}
                     {pickerEffortOptions.length > 0 &&
                       !routingOn &&
                       !smartRoutingHarnessSelected &&

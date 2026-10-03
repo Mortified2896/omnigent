@@ -6275,14 +6275,29 @@ def create_runner_app(
             from omnigent.harnesses.codex_native.app_server import (
                 codex_catalog_fingerprint,
                 mark_launch_default,
-                resolve_native_codex_launch,
+                resolve_native_codex_catalog_launch,
             )
             from omnigent.models import model_catalog_store
+            from omnigent.stores.conversation_store import CODEX_ACCESS_LANE_LABEL_KEY
 
             spec = await _resolve_session_agent_spec(session_id)
             if spec is None:
                 return
-            launch = await asyncio.to_thread(resolve_native_codex_launch, model=None, spec=spec)
+            # Write back under the SESSION'S OWN lane shape. A direct-lane
+            # session's live rows name bare subscription ids; filing them under
+            # the default (gateway) shape would present subscription-only
+            # models as OmniRoute pickable.
+            lane = None
+            if server_client is not None:
+                labels = await _session_labels_for_runner_spawn(
+                    server_client=server_client, session_id=session_id
+                )
+                candidate = labels.get(CODEX_ACCESS_LANE_LABEL_KEY)
+                if isinstance(candidate, str) and candidate:
+                    lane = candidate
+            launch = await asyncio.to_thread(
+                resolve_native_codex_catalog_launch, spec=spec, access_lane=lane
+            )
             fingerprint = codex_catalog_fingerprint(launch)
             stored = model_catalog_store.read_catalog("codex-native", fingerprint)
             stored_default = next(
