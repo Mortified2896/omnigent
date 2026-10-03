@@ -3797,24 +3797,23 @@ export function NewChatLandingScreen() {
     modelHarnessReadiness.fallbackRelevant;
   // While the first load is still in flight the chip must not claim "Models
   // unavailable" — nothing has answered yet.
-  const modelControlLabel =
-    modelHarnessUnavailable
-      ? ""
-      : routingOn
-        ? SMART_ROUTING_LABEL
-        : modelTriggerRow
-          ? (compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value)) || "Default") ===
-            "Default"
-            ? // An unresolved model row reads as unavailable once the load has
-              // settled; while still loading the chip stays blank rather than
-              // claiming anything about the catalog.
-              pickerLoading
-                ? ""
-                : "Models unavailable"
-            : compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value))
-          : pickerLoading
+  const modelControlLabel = modelHarnessUnavailable
+    ? ""
+    : routingOn
+      ? SMART_ROUTING_LABEL
+      : modelTriggerRow
+        ? (compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value)) || "Default") ===
+          "Default"
+          ? // An unresolved model row reads as unavailable once the load has
+            // settled; while still loading the chip stays blank rather than
+            // claiming anything about the catalog.
+            pickerLoading
             ? ""
-            : "Default";
+            : "Models unavailable"
+          : compactModelTriggerLabel(visibleModelLabel(modelTriggerRow.value))
+        : pickerLoading
+          ? ""
+          : "Default";
   const modelControlIcon = selectedAgent ? (
     <span
       className="flex size-4 shrink-0 items-center justify-center"

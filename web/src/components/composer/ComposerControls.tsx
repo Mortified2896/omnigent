@@ -365,10 +365,7 @@ export const ComposerHarnessTrigger = forwardRef<
       {/* With an icon the collapsed row keeps just the glyph: the chevron is
         the first thing dropped so two icon chips fit a phone row. */}
       <ChevronDownIcon
-        className={cn(
-          "size-4 shrink-0 opacity-60",
-          icon != null && COMPOSER_COLLAPSED_LABEL_CLASS,
-        )}
+        className={cn("size-4 shrink-0 opacity-60", icon != null && COMPOSER_COLLAPSED_LABEL_CLASS)}
       />
     </Button>
   );
