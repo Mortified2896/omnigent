@@ -3511,29 +3511,12 @@ class HostProcess:
         try:
             from omnigent.server.o3_routing_review import o3_routing_review_enabled
 
-            if o3_routing_review_enabled():
-                rows = []
-                for lane, label in (
-                    ("omniroute", "OmniRoute"),
-                    ("codex-direct", "Codex Subscription — Direct"),
-                ):
-                    try:
-                        launch = await asyncio.to_thread(
-                            resolve_native_codex_catalog_launch, access_lane=lane
-                        )
-                        lane_rows = await codex_launch_catalog(launch=launch)
-                    except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
-                        _logger.warning("Codex %s catalog unavailable", lane, exc_info=True)
-                        continue
-                    rows.extend(
-                        _codex_options_for_access_lane(
-                            lane_rows or (),
-                            access_lane=lane,
-                            group_label=label,
-                            preserve_default=not rows,
-                        )
-                    )
-            elif _model_advisor_release_enabled():
+            # Model Advisor is the current release surface. A deployment can
+            # still carry the legacy O3 flag while migrating feature config;
+            # that compatibility flag must never override the current catalog
+            # contract or reclassify config-injected GLM rows as Codex
+            # Subscription models.
+            if _model_advisor_release_enabled():
                 # Provider-grouped Model Advisor choices need both explicit
                 # OpenAI subscription lanes. The ordinary/default provider
                 # catalog is not evidence for either lane, so resolve and
@@ -3564,6 +3547,28 @@ class HostProcess:
                     rows.extend(
                         _codex_options_for_access_lane(
                             lane_rows,
+                            access_lane=lane,
+                            group_label=label,
+                            preserve_default=not rows,
+                        )
+                    )
+            elif o3_routing_review_enabled():
+                rows = []
+                for lane, label in (
+                    ("omniroute", "OmniRoute"),
+                    ("codex-direct", "Codex Subscription — Direct"),
+                ):
+                    try:
+                        launch = await asyncio.to_thread(
+                            resolve_native_codex_catalog_launch, access_lane=lane
+                        )
+                        lane_rows = await codex_launch_catalog(launch=launch)
+                    except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
+                        _logger.warning("Codex %s catalog unavailable", lane, exc_info=True)
+                        continue
+                    rows.extend(
+                        _codex_options_for_access_lane(
+                            lane_rows or (),
                             access_lane=lane,
                             group_label=label,
                             preserve_default=not rows,
