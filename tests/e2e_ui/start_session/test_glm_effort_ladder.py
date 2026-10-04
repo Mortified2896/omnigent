@@ -124,10 +124,12 @@ async def _drive(base_url: str, session_id: str, tmp_path: Path) -> None:
             model_chip = page.get_by_test_id("new-chat-landing-model-select")
             await expect(model_chip).to_contain_text("GLM 5 Turbo")
 
-            # The reasoning selector stays visible with the baseline rungs.
+            # The reasoning selector stays visible with the baseline rungs and
+            # a concrete default pick (the ladder's deterministic middle) — the
+            # composer never parks on an ambiguous "Default".
             effort = page.get_by_test_id("new-chat-landing-inline-effort")
             await expect(effort).to_be_visible()
-            await expect(effort).to_contain_text("Default")
+            await expect(effort).to_contain_text("Medium")
             await effort.click()
             for rung in ("Low", "Medium", "High"):
                 await expect(page.get_by_role("option", name=rung, exact=True)).to_be_visible()
