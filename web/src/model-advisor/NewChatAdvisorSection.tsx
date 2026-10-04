@@ -902,9 +902,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const recommenderControls =
     editor.draft && (editor.draft.enabled || settingsOpen) ? (
       <div
-        className="flex min-w-0 flex-1 items-center justify-end gap-1 md:pr-16"
+        className="flex min-w-0 items-center gap-1"
         data-testid="model-advisor-composer-choice"
       >
+        {/* Occupy the same conceptual column as the primary Harness chip so
+            Advisor Model and Reasoning line up beneath their primary peers. */}
+        <span className="hidden w-[5.5rem] shrink-0 text-right text-xs text-muted-foreground md:block">
+          Recommender
+        </span>
         <HarnessPicker
           open={advisorModelOpen}
           onOpenChange={setAdvisorModelOpen}
@@ -960,29 +965,32 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         ) : null}
       </div>
     ) : null;
-  // The secondary row mirrors the primary composer's control columns:
-  // reserve the primary mic + send width on desktop so Advisor model and
-  // reasoning land directly below Model and Reasoning instead of starting a
-  // second form at the left edge.
+  // Secondary controls use the same right-edge column contract as the
+  // primary row: Recommender | Model | Reasoning | trailing actions.
+  // Keeping the toggle on the left prevents the Advisor from becoming a
+  // second form while the selectors align vertically with the primary pair.
   const composerControls = (
     <div className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      <div className="flex shrink-0 items-center gap-1">
-        {controls}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="shrink-0"
-          disabled={round.busy || disabled}
-          onClick={() => setSettingsOpen((open) => !open)}
-          aria-expanded={settingsOpen}
-          aria-label="Recommender settings"
-        >
-          <SettingsIcon />
-          <span className="sr-only md:not-sr-only">Recommender settings</span>
-        </Button>
+      {controls}
+      <div className="ml-auto flex min-w-0 items-center gap-1">
+        {recommenderControls}
+        {/* Match the approximate footprint of the primary mic + send controls
+            so their preceding Model/Reasoning columns share the same edge. */}
+        <div className="flex w-16 shrink-0 justify-end">
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="shrink-0"
+            disabled={round.busy || disabled}
+            onClick={() => setSettingsOpen((open) => !open)}
+            aria-expanded={settingsOpen}
+            aria-label="Recommender settings"
+          >
+            <SettingsIcon />
+          </Button>
+        </div>
       </div>
-      {recommenderControls}
     </div>
   );
   return (
