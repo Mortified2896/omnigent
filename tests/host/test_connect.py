@@ -8165,6 +8165,7 @@ async def test_model_advisor_catalog_wins_over_stale_o3_flag(monkeypatch) -> Non
     """A stale O3 flag cannot reclassify GLM rows as Codex Subscription."""
 
     from omnigent.harnesses.codex_native import app_server
+    from omnigent.host.connect import _is_glm_model_id
 
     # This is the migration state that reproduced on Preview: candidates
     # inherited both the current Model Advisor feature and the legacy O3 flag.
