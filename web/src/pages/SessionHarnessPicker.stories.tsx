@@ -68,10 +68,12 @@ export const Open: Story = {
 export const SmartRouting: Story = {
   args: { costRoutingEligible: true },
   play: async ({ canvasElement }) => {
-    const page = within(canvasElement.ownerDocument.body);
+    // The direct-picker redesign removed the harness→Edit two-stage flow:
+    // the gear opens its sections directly, with Smart Routing as the
+    // Routing section's row.
     await userEvent.click(within(canvasElement).getByTestId("composer-config-gear"));
-    await userEvent.click(await page.findByTestId("composer-agent-edit"));
-    await page.findByRole("menuitem", { name: "Smart Routing" });
+    const page = within(canvasElement.ownerDocument.body);
+    await page.findByTestId("composer-agent-model-smart-routing");
   },
 };
 

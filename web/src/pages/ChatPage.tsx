@@ -83,7 +83,11 @@ import {
 import { getCurrentAuthorId } from "@/lib/identity";
 import { toast } from "sonner";
 import { createSideChat, retrySession } from "@/lib/sessionsApi";
-import { codexEffortLevelsForModel, findNativeModelOption } from "@/lib/codexNativeModels";
+import {
+  codexEffortLadderForModel,
+  codexEffortLevelsForModel,
+  findNativeModelOption,
+} from "@/lib/codexNativeModels";
 import { modelConfigurationSourceRows } from "@/lib/modelConfigurationSource";
 import {
   composerAttachmentKey,
@@ -4736,7 +4740,10 @@ export function effortLevelsForConv(
       // its `supportedReasoningEfforts` — rather than a fixed ladder.
       return codexEffortLevelsForModel(codexModelOptions, currentModel);
     case "codex-native-ui":
-      return codexEffortLevelsForModel(codexModelOptions, currentModel);
+      // A resolved row without advertised tiers (OmniRoute GLM routes the
+      // gateway serves without effort_tiers) falls back to the baseline rungs
+      // instead of hiding the picker; see codexEffortLadderForModel.
+      return codexEffortLadderForModel(codexModelOptions, currentModel);
     case "pi-native-ui":
       return PI_NATIVE_EFFORT_LEVELS;
     default:
@@ -5019,7 +5026,7 @@ function SessionHarnessPicker({
         );
   const availableEfforts =
     modelPickerKind === "codex"
-      ? codexEffortLevelsForModel(codexModelOptions, pickerSelectedModel)
+      ? codexEffortLadderForModel(codexModelOptions, pickerSelectedModel)
       : effortLevels;
   useEffect(() => {
     if (!openNonce || openNonce === appliedOpenNonce.current) return;
@@ -5059,7 +5066,7 @@ function SessionHarnessPicker({
       if (
         modelPickerKind === "codex" &&
         selectedEffort !== null &&
-        !codexEffortLevelsForModel(codexModelOptions, modelId).includes(selectedEffort)
+        !codexEffortLadderForModel(codexModelOptions, modelId).includes(selectedEffort)
       )
         await store.setEffort(null);
       if (

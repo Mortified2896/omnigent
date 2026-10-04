@@ -283,7 +283,7 @@ import { useNativeServerSwitcherForMainSurface } from "@/hooks/useNativeServerSw
 import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
 import type { Conversation } from "@/hooks/useConversations";
 import type { NativeModelOption } from "@/lib/types";
-import { codexEffortLevelsForModel } from "@/lib/codexNativeModels";
+import { codexEffortLadderForModel, codexEffortLevelsForModel } from "@/lib/codexNativeModels";
 import {
   currentFusionCombo,
   fusionModelLabel,
@@ -2323,6 +2323,10 @@ export function NewChatLandingScreen() {
   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
   const modelAdvisorEnabled = isFeatureEnabled(info, "model_advisor");
   const advisorSubmitRef = useRef<AdvisorSubmitHandle>(null);
+  // Portal target for the Advisor's compact secondary row below the composer
+  // action controls (Harness | Model | Reasoning); the section itself mounts
+  // after the form and portals its controls in via advisorModelTarget.
+  const [advisorSlotEl, setAdvisorSlotEl] = useState<HTMLDivElement | null>(null);
   // Which router can answer a pick. The external AI-Gateway router only covers
   // a family the host runs through the gateway; the built-in judge covers any
   // family. Read once here and reused by every routing gate below. "loading"
@@ -3608,7 +3612,7 @@ export function NewChatLandingScreen() {
       : selectedNativeHarness === "pi-native"
         ? PI_NATIVE_EFFORTS
         : selectedNativeHarness === "codex-native"
-          ? codexEffortLevelsForModel(
+          ? codexEffortLadderForModel(
               pickedCodexAccessLane
                 ? codexModelOptions.filter((row) => row.accessLane === pickedCodexAccessLane)
                 : codexModelOptions,
@@ -3660,7 +3664,7 @@ export function NewChatLandingScreen() {
     const picked = model === MODEL_SELECT_DEFAULT ? "" : model;
     const effort =
       selectedNativeHarness === "codex-native" &&
-      !codexEffortLevelsForModel(
+      !codexEffortLadderForModel(
         accessLane
           ? codexModelOptions.filter((row) => row.accessLane === accessLane)
           : codexModelOptions,
@@ -3814,14 +3818,12 @@ export function NewChatLandingScreen() {
         : pickerLoading
           ? ""
           : "Default";
-  const modelControlIcon = selectedAgent ? (
-    <span
-      className="flex size-4 shrink-0 items-center justify-center"
-      data-testid="new-chat-landing-model-icon"
-    >
-      <ComposerAgentIcon agent={selectedAgent} />
-    </span>
-  ) : null;
+  // No icon on the model trigger. The harness chip keeps the harness/agent
+  // icon; a model row carries no reliable provider-icon metadata (rows on the
+  // codex-native lane span OpenAI and GLM providers behind one transport), so
+  // inheriting the harness icon would stamp e.g. the Codex logo on GLM models.
+  // Provider/transport identity is carried by the picker's group headings.
+  const modelControlIcon = null;
   const modelSearchMatches = (option: NativeModelOption) =>
     pickerModelSearch
       .toLowerCase()
@@ -4224,7 +4226,7 @@ export function NewChatLandingScreen() {
         !storedRoutingOn &&
           selectedNativeHarness === "codex-native" &&
           stored.effort != null &&
-          codexEffortLevelsForModel(
+          codexEffortLadderForModel(
             stored.accessLane
               ? codexModelOptions.filter((row) => row.accessLane === stored.accessLane)
               : codexModelOptions,
@@ -6495,42 +6497,6 @@ export function NewChatLandingScreen() {
               slots={{
                 beforeInput: (
                   <>
-                    <div className="px-3 pt-2 empty:hidden" data-testid="new-chat-advisor-controls">
-                      {modelAdvisorEnabled && (
-                        <NewChatAdvisorSection
-                          submitRef={advisorSubmitRef}
-                          submissionBlockReason={
-                            files.length > 0
-                              ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
-                              : null
-                          }
-                          hostId={selectedHostId}
-                          task={
-                            buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
-                            sanitizeInitialPrompt(message)
-                          }
-                          humanPick={
-                            pickedModel
-                              ? {
-                                  model: pickedModel,
-                                  accessLane: pickedCodexAccessLane,
-                                  effort: pickedEffort,
-                                }
-                              : null
-                          }
-                          launchAgentId={effectiveAgentId}
-                          launchWorkspace={workspace || null}
-                          onLaunched={(sessionId) => {
-                            submittedRef.current = true;
-                            if (submittedDraftRevisionRef.current === landingDraftRevision)
-                              writeLandingDraft(null);
-                            if (selectedHostId)
-                              writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
-                            if (onScreenRef.current) navigate(`/c/${sessionId}`);
-                          }}
-                        />
-                      )}
-                    </div>
                     {/* Skill suggestions — floats above the composer box. */}
                     {slashCompletion.open && (
                       <SlashCommandMenu
@@ -6609,6 +6575,17 @@ export function NewChatLandingScreen() {
                 here would also catch the .dark .bg-card glass rule (border +
                 shadow) and visually split the pill in half. */}
                   </>
+                ),
+                // Compact secondary row for the Advisor (Recommender) portal —
+                // below the primary Harness | Model | Reasoning controls, set
+                // apart by a hairline. Hidden entirely while the Advisor
+                // renders nothing into it.
+                afterActions: (
+                  <div
+                    ref={setAdvisorSlotEl}
+                    className="mx-3 mb-1.5 border-t border-border/60 pt-1.5 empty:hidden"
+                    data-testid="new-chat-landing-advisor-slot"
+                  />
                 ),
               }}
               actions={{
@@ -7014,6 +6991,44 @@ export function NewChatLandingScreen() {
               }}
             />
           </form>
+          {/* Advisor (Recommender) — mounts outside the composer card; its
+          controls portal into the compact secondary row under the composer
+          action controls, separated from the primary Harness | Model |
+          Reasoning controls by the slot's hairline divider. */}
+          {modelAdvisorEnabled && (
+            <NewChatAdvisorSection
+              submitRef={advisorSubmitRef}
+              submissionBlockReason={
+                files.length > 0
+                  ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
+                  : null
+              }
+              advisorModelTarget={advisorSlotEl}
+              hostId={selectedHostId}
+              task={
+                buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
+                sanitizeInitialPrompt(message)
+              }
+              humanPick={
+                pickedModel
+                  ? {
+                      model: pickedModel,
+                      accessLane: pickedCodexAccessLane,
+                      effort: pickedEffort,
+                    }
+                  : null
+              }
+              launchAgentId={effectiveAgentId}
+              launchWorkspace={workspace || null}
+              onLaunched={(sessionId) => {
+                submittedRef.current = true;
+                if (submittedDraftRevisionRef.current === landingDraftRevision)
+                  writeLandingDraft(null);
+                if (selectedHostId) writeSessionAdvisorEnabled(selectedHostId, sessionId, true);
+                if (onScreenRef.current) navigate(`/c/${sessionId}`);
+              }}
+            />
+          )}
           <WorkspacePickerDialog
             open={workspacePickerOpen}
             onOpenChange={setWorkspacePickerOpen}

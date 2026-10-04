@@ -80,6 +80,8 @@ interface ChatComposerProps extends Omit<ComponentPropsWithoutRef<"div">, "child
     inputBackdrop?: ReactNode;
     inputHint?: ReactNode;
     attachments?: ReactNode;
+    /** Full-width secondary row below the action controls (e.g. advisor). */
+    afterActions?: ReactNode;
   };
   actions: {
     leading: ReactNode;
@@ -130,6 +132,7 @@ export const ChatComposer = forwardRef<HTMLDivElement, ChatComposerProps>(functi
           {actions.trailing}
         </ComposerActionGroup>
       </ComposerActionRow>
+      {slots?.afterActions}
     </div>
   );
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  codexEffortLadderForModel,
   codexEffortLevelsForModel,
   findNativeModelOption,
   isCodexNativeModel,
@@ -102,5 +103,55 @@ describe("Codex native catalog inclusion and lane stamping", () => {
     ]);
     // An unknown model exposes no ladder rather than another model's.
     expect(codexEffortLevelsForModel(directLaneRows, "gpt-6.9-ghost")).toEqual([]);
+  });
+});
+
+describe("Codex effort ladder baseline for unadvertised rows", () => {
+  const glmOmniRouteRows: NativeModelOption[] = [
+    {
+      // The gateway serves this GLM route without effort_tiers — the exact
+      // live shape that hid the reasoning picker before the baseline existed.
+      id: "glm/glm-5-turbo",
+      model: "glm/glm-5-turbo",
+      displayName: "GLM 5 Turbo · OmniRoute",
+      accessLane: "omniroute",
+      groupLabel: "GLM",
+    },
+    {
+      id: "glm/glm-5.3",
+      model: "glm/glm-5.3",
+      displayName: "GLM 5.3 · OmniRoute",
+      accessLane: "omniroute",
+      groupLabel: "GLM",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low" },
+        { reasoningEffort: "high" },
+        { reasoningEffort: "max" },
+      ],
+    },
+  ];
+
+  it("falls back to the baseline rungs for a resolved row without tiers", () => {
+    expect(codexEffortLadderForModel(glmOmniRouteRows, "glm/glm-5-turbo")).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("keeps a row's advertised ladder untouched", () => {
+    expect(codexEffortLadderForModel(glmOmniRouteRows, "glm/glm-5.3")).toEqual([
+      "low",
+      "high",
+      "max",
+    ]);
+  });
+
+  it("still hides the ladder for an unresolved model", () => {
+    expect(codexEffortLadderForModel(glmOmniRouteRows, "glm/glm-9-ghost")).toEqual([]);
+  });
+
+  it("keeps the strict variant empty for unadvertised rows (Devin semantics)", () => {
+    expect(codexEffortLevelsForModel(glmOmniRouteRows, "glm/glm-5-turbo")).toEqual([]);
   });
 });
