@@ -885,88 +885,86 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const recommenderControls =
     editor.draft && (editor.draft.enabled || settingsOpen) ? (
       <div
-        className="flex w-full min-w-0 flex-wrap items-center gap-1.5"
+        className="flex min-w-0 flex-1 items-center justify-end gap-1 md:pr-16"
         data-testid="model-advisor-composer-choice"
       >
-        <label
-          htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-          className="min-w-0 shrink-0 text-xs text-muted-foreground"
-        >
-          Recommender
-        </label>
-        <div className="flex w-full min-w-0 items-center gap-1 md:w-auto md:shrink-0">
-          <SearchableModelPicker
-            id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-            value={advisorModelValue}
-            options={advisorOptions}
-            loading={false}
-            compact
-            includeDefault={false}
-            placeholder="Choose model…"
-            ariaLabel="Recommender model"
-            testId="model-advisor-advisor-choice"
-            searchTestId="model-advisor-advisor-choice-search"
-            disabled={disabled || round.busy}
-            onValueChange={(modelKey) => {
-              const row = advisorRows.find((candidate) => candidate.key === modelKey);
-              // Switching models reconciles the effort: keep the current one
-              // when the new model offers it, else its declared default, else
-              // the deterministic supported fallback.
-              const choice = row
-                ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
-                : null;
-              if (editor.draft && choice)
-                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-            }}
-          />
-          <ComposerEffortPicker
-            value={savedAdvisor?.reasoning_effort ?? null}
-            options={savedAdvisorEffortOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-            }))}
-            disabled={disabled || round.busy || !savedAdvisor}
-            label="Recommender reasoning effort"
-            testIdPrefix="model-advisor-advisor"
-            testId="model-advisor-advisor-effort"
-            onSelect={(effort) => {
-              if (!editor.draft || !savedAdvisorRow) return;
-              const choice = savedAdvisorRow.choices.find(
-                (option) => option.available && option.reasoning_effort === effort,
-              );
-              if (choice)
-                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-            }}
-          />
-        </div>
+        <span className="sr-only">Recommender</span>
+        <SearchableModelPicker
+          id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+          value={advisorModelValue}
+          options={advisorOptions}
+          loading={false}
+          compact
+          includeDefault={false}
+          placeholder="Choose model…"
+          ariaLabel="Recommender model"
+          testId="model-advisor-advisor-choice"
+          searchTestId="model-advisor-advisor-choice-search"
+          triggerVariant="ghost"
+          triggerClassName="h-8 w-auto max-w-[14rem] gap-1 rounded-lg border-0 px-2 text-[13px] leading-5 hover:bg-muted/70 md:h-7 md:w-auto"
+          disabled={disabled || round.busy}
+          onValueChange={(modelKey) => {
+            const row = advisorRows.find((candidate) => candidate.key === modelKey);
+            // Switching models reconciles the effort: keep the current one
+            // when the new model offers it, else its declared default, else
+            // the deterministic supported fallback.
+            const choice = row
+              ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
+              : null;
+            if (editor.draft && choice)
+              handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+          }}
+        />
+        <ComposerEffortPicker
+          value={savedAdvisor?.reasoning_effort ?? null}
+          options={savedAdvisorEffortOptions.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+          disabled={disabled || round.busy || !savedAdvisor}
+          label="Recommender reasoning effort"
+          testIdPrefix="model-advisor-advisor"
+          testId="model-advisor-advisor-effort"
+          onSelect={(effort) => {
+            if (!editor.draft || !savedAdvisorRow) return;
+            const choice = savedAdvisorRow.choices.find(
+              (option) => option.available && option.reasoning_effort === effort,
+            );
+            if (choice)
+              handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+          }}
+        />
         {savedAdvisorUnavailable ? (
-          <p role="alert" className="col-span-2 text-xs text-destructive">
+          <p role="alert" className="text-xs text-destructive">
             The saved advisor model is unavailable from this host. Choose a valid model and
             reasoning level to continue.
           </p>
         ) : null}
       </div>
     ) : null;
-  // Compact secondary row: Advisor on/off, Recommender model + reasoning, and
-  // settings inline. Portals under the composer's primary action controls —
-  // visually and semantically separate from Harness | Model | Reasoning.
+  // The secondary row mirrors the primary composer's control columns:
+  // reserve the primary mic + send width on desktop so Advisor model and
+  // reasoning land directly below Model and Reasoning instead of starting a
+  // second form at the left edge.
   const composerControls = (
-    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-      {controls}
+    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <div className="flex shrink-0 items-center gap-1">
+        {controls}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="shrink-0"
+          disabled={round.busy || disabled}
+          onClick={() => setSettingsOpen((open) => !open)}
+          aria-expanded={settingsOpen}
+          aria-label="Recommender settings"
+        >
+          <SettingsIcon />
+          <span className="sr-only md:not-sr-only">Recommender settings</span>
+        </Button>
+      </div>
       {recommenderControls}
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="ml-auto shrink-0"
-        disabled={round.busy || disabled}
-        onClick={() => setSettingsOpen((open) => !open)}
-        aria-expanded={settingsOpen}
-        aria-label="Recommender settings"
-      >
-        <SettingsIcon />
-        Recommender settings
-      </Button>
     </div>
   );
   return (
