@@ -1880,7 +1880,7 @@ describe("NewChatLandingScreen create flow", () => {
     expect(body.reasoning_effort).toBe("high");
   });
 
-  it("clears remembered model + effort when both create-composer picks return to Default", async () => {
+  it("clears the remembered model and keeps the concrete effort when the model pick returns to Default", async () => {
     localStorage.setItem(
       "omnigent:last-mode-by-harness",
       JSON.stringify({ "claude-native": { model: "opus", effort: "high" } }),
@@ -1904,12 +1904,14 @@ describe("NewChatLandingScreen create flow", () => {
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-model-select"), { button: 0 });
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-default"));
     fireEvent.keyDown(screen.getByTestId("new-chat-landing-agent-models"), { key: "Escape" });
-    pickInlineSelectValue("new-chat-landing-inline-effort", "__none__");
+    // The effort selector no longer offers a Default entry: the remembered
+    // concrete rung stays put while the model pin clears.
     const stored = JSON.parse(localStorage.getItem("omnigent:last-mode-by-harness") ?? "{}")[
       "claude-native"
     ];
     expect(stored?.model).toBe("");
-    expect(stored?.effort).toBe("");
+    expect(stored?.effort).toBe("high");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
 
     typeMessage("go");
     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
@@ -1918,7 +1920,7 @@ describe("NewChatLandingScreen create flow", () => {
     const [, init] = vi.mocked(authenticatedFetch).mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string);
     expect(body.model_override).toBeUndefined();
-    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.reasoning_effort).toBe("high");
   });
 
   it("persists a picked model for claude-native, preserving the stored effort", async () => {

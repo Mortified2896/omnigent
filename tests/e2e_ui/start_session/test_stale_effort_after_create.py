@@ -275,9 +275,11 @@ def test_created_session_keeps_default_effort_after_in_session_pick(
     expect(selected_model).to_have_count(1, timeout=30_000)
     expect(selected_model).to_be_visible()
     expect(effort_default).to_be_visible(timeout=30_000)
-    expect(effort_default).to_contain_text("Default")
+    # The effort chip shows no explicit rung (the Default entry is gone; the
+    # unset state renders the em-dash placeholder) — no effort rides the create.
+    expect(effort_default).not_to_contain_text(re.compile(r"Low|Medium|High|xHigh|Max"))
     page.keyboard.press("Escape")
-    _log.info("landing composer: Claude Code selected, model + effort left at Default")
+    _log.info("landing composer: Claude Code selected, model + effort left unset")
 
     landing_input.fill(f"Context marker {marker}. Summarize this repository's README.")
     submit = page.get_by_test_id("new-chat-landing-submit")

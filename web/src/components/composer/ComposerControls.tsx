@@ -9,7 +9,6 @@ import {
   MonitorCloudIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EFFORT_SELECT_NONE } from "@/components/HarnessConfigControls";
 import {
   Select,
   SelectContent,
@@ -220,6 +219,7 @@ export function ComposerEffortPicker({
   label = "Reasoning effort",
   onSelect,
   testIdPrefix = "composer",
+  testId,
 }: {
   value: string | null;
   options: readonly { value: string; label: string }[];
@@ -227,26 +227,26 @@ export function ComposerEffortPicker({
   label?: string;
   onSelect: (value: string | null) => void;
   testIdPrefix?: string;
+  testId?: string;
 }) {
   return (
     <Select
-      value={value || EFFORT_SELECT_NONE}
+      value={value || undefined}
       disabled={disabled}
       onValueChange={(next) => {
-        // Radix's native select can emit an empty value while saved choices
-        // and their options mount. Only the explicit Default item clears effort.
-        if (next) onSelect(next === EFFORT_SELECT_NONE ? null : next);
+        // A visible effort picker represents an explicit supported ladder.
+        // Never synthesize an ambiguous "Default" choice here.
+        if (next) onSelect(next);
       }}
     >
       <SelectTrigger
         aria-label={label}
-        data-testid={`${testIdPrefix}-inline-effort`}
+        data-testid={testId ?? `${testIdPrefix}-inline-effort`}
         className="data-[size=default]:h-8 w-[5.5rem] min-w-[5.5rem] gap-1 px-2 text-[13px] md:data-[size=default]:h-7"
       >
         <SelectValue placeholder="—" />
       </SelectTrigger>
       <SelectContent align="start">
-        <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}
@@ -347,7 +347,6 @@ export const ComposerHarnessTrigger = forwardRef<
         {model && (
           <span
             className="min-w-0 truncate text-left text-[13px] leading-5 font-medium text-foreground"
-            title={model}
             data-testid={`${testIdPrefix}-agent-model-value`}
           >
             {model}

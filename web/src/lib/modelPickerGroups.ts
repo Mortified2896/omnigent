@@ -16,6 +16,20 @@ const LANE_LABELS: Readonly<Record<string, string>> = {
   "glm-direct": "Z.AI Direct",
 };
 
+/** The one shared transport vocabulary: every picker labels a lane this way. */
+export function laneLabel(lane: string): string {
+  return LANE_LABELS[lane] ?? lane;
+}
+
+/**
+ * The route line for a set of access lanes, in the order given (the host
+ * already orders lanes by preference). Shared by every picker so a model's
+ * selectable transports render identically everywhere.
+ */
+export function routeSummaryForLanes(lanes: readonly string[]): string {
+  return lanes.map(laneLabel).join(" · ");
+}
+
 /** One rendered provider/transport section of a model picker. */
 export interface ModelPickerGroup {
   /** Grouping key: the row's `accessLane`, or "" for lane-less rows. */
@@ -34,9 +48,9 @@ export interface ModelPickerGroup {
 export function modelGroupLabel(option: NativeModelOption): string | null {
   const lane = option.accessLane;
   if (!lane) return null;
-  const laneLabel = LANE_LABELS[lane] ?? lane;
+  const laneLabelResolved = laneLabel(lane);
   const family = option.groupLabel;
-  return family && family !== laneLabel ? `${family} · ${laneLabel}` : laneLabel;
+  return family && family !== laneLabelResolved ? `${family} · ${laneLabelResolved}` : laneLabelResolved;
 }
 
 /**
@@ -48,9 +62,9 @@ export function modelGroupLabel(option: NativeModelOption): string | null {
  */
 export function stripModelLaneSuffix(label: string, option: NativeModelOption): string {
   if (!option.accessLane) return label;
-  const laneLabel = LANE_LABELS[option.accessLane] ?? option.accessLane;
+  const laneLabelResolved = laneLabel(option.accessLane);
   const suffixes = new Set(
-    [laneLabel, option.groupLabel, option.accessLane].filter(
+    [laneLabelResolved, option.groupLabel, option.accessLane].filter(
       (value): value is string => typeof value === "string" && value.length > 0,
     ),
   );

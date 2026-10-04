@@ -72,10 +72,7 @@ describe("shared composer controls", () => {
     expect(trigger).not.toHaveClass("max-w-[7.25rem]", "md:max-w-40");
     expect(trigger).toHaveTextContent("High");
     expect(screen.getByTestId("composer-agent-model-value")).toHaveClass("truncate");
-    expect(screen.getByTestId("composer-agent-model-value")).toHaveAttribute(
-      "title",
-      "GPT-5.6-Sol",
-    );
+    expect(screen.getByTestId("composer-agent-model-value")).not.toHaveAttribute("title");
     expect(screen.getByTestId("composer-agent-effort-value")).not.toHaveClass("hidden");
     expect(screen.getByTestId("product-icon")).toBeInTheDocument();
     expect(screen.getByTestId("composer-agent-config-value")).toHaveClass(
@@ -113,7 +110,7 @@ describe("shared composer controls", () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it("renders a compact independent effort selector with a default reset", () => {
+  it("renders only concrete supported reasoning efforts", () => {
     const onSelect = vi.fn();
     render(
       <ComposerEffortPicker
@@ -127,8 +124,9 @@ describe("shared composer controls", () => {
     );
     expect(screen.getByTestId("composer-inline-effort")).toHaveTextContent("High");
     fireEvent.click(screen.getByTestId("composer-inline-effort"));
-    fireEvent.click(screen.getByRole("option", { name: "Default" }));
-    expect(onSelect).toHaveBeenCalledWith(null);
+    expect(screen.queryByRole("option", { name: "Default" })).toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: "Low" }));
+    expect(onSelect).toHaveBeenCalledWith("low");
   });
 
   it("dispatches permission selections through the caller's handler", () => {

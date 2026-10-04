@@ -12,6 +12,11 @@ const REASONING_EFFORT_RANK: ReadonlyMap<string, number> = new Map(
   REASONING_EFFORT_ORDER.map((effort, index) => [effort, index]),
 );
 
+/** Deterministic sort key for reasoning efforts; unknown spellings sort last. */
+export function reasoningEffortRank(effort: string): number {
+  return REASONING_EFFORT_RANK.get(effort) ?? REASONING_EFFORT_ORDER.length;
+}
+
 export interface ProviderSelection {
   enabled: boolean;
   collapsed: boolean;

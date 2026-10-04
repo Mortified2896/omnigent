@@ -350,7 +350,7 @@ async def _drive(
                     # requiring an impossible atomic combined-label transition.
                     assert all(live_label in label for label in live_samples), samples
                     assert all(
-                        any(effort in label for effort in ("Default", "Max"))
+                        any(effort in label for effort in ("Default", "—", "Max"))
                         for label in live_samples
                     ), samples
                     assert live_label in live_samples[-1] and "Max" in live_samples[-1], samples
@@ -365,7 +365,7 @@ async def _drive(
                         any(model in label for model in (cached_label, expected_model))
                         and any(
                             effort in label
-                            for effort in ("Default", cached_effort, expected_effort)
+                            for effort in ("Default", "—", cached_effort, expected_effort)
                         )
                         for label in cached_samples
                     ), samples

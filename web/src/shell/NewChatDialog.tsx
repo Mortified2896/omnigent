@@ -283,7 +283,11 @@ import { useNativeServerSwitcherForMainSurface } from "@/hooks/useNativeServerSw
 import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
 import type { Conversation } from "@/hooks/useConversations";
 import type { NativeModelOption } from "@/lib/types";
-import { codexEffortLadderForModel, codexEffortLevelsForModel } from "@/lib/codexNativeModels";
+import {
+  codexEffortLadderForModel,
+  codexEffortLevelsForModel,
+  reconcileCodexEffortForModel,
+} from "@/lib/codexNativeModels";
 import {
   currentFusionCombo,
   fusionModelLabel,
@@ -3662,15 +3666,19 @@ export function NewChatLandingScreen() {
       return;
     }
     const picked = model === MODEL_SELECT_DEFAULT ? "" : model;
+    // A model switch always lands on a concrete supported effort: the current
+    // pick when the new ladder still offers it, else the model's declared
+    // default, else the deterministic supported rung. "" survives only where
+    // no ladder resolves (the picker is hidden then).
     const effort =
-      selectedNativeHarness === "codex-native" &&
-      !codexEffortLadderForModel(
-        accessLane
-          ? codexModelOptions.filter((row) => row.accessLane === accessLane)
-          : codexModelOptions,
-        picked || codexModelOptions.find((option) => option.isDefault)?.id,
-      ).includes(pickedEffort)
-        ? ""
+      selectedNativeHarness === "codex-native"
+        ? reconcileCodexEffortForModel(
+            accessLane
+              ? codexModelOptions.filter((row) => row.accessLane === accessLane)
+              : codexModelOptions,
+            picked || codexModelOptions.find((option) => option.isDefault)?.id,
+            pickedEffort,
+          )
         : pickedEffort;
     setPickedModel(picked);
     setPickedEffort(effort);
@@ -4218,21 +4226,21 @@ export function NewChatLandingScreen() {
           ? stored.accessLane
           : null,
       );
-      // Restore the remembered Codex effort only while the seeded model's
-      // ladder (the catalog default's when no model is pinned) still offers
-      // it — anything else resolves to "" so a level another harness left in
-      // the shared state never rides a Codex create.
+      // Reconcile the remembered Codex effort against the seeded model's
+      // ladder (the catalog default's when no model is pinned): a remembered
+      // level the ladder still offers is kept, anything else resolves to the
+      // model's concrete declared default (or deterministic rung) so a level
+      // another harness left in the shared state never rides a Codex create
+      // and the picker never parks on an ambiguous non-effort.
       setPickedEffort(
-        !storedRoutingOn &&
-          selectedNativeHarness === "codex-native" &&
-          stored.effort != null &&
-          codexEffortLadderForModel(
-            stored.accessLane
-              ? codexModelOptions.filter((row) => row.accessLane === stored.accessLane)
-              : codexModelOptions,
-            seededCodexModel || (codexModelOptions.find((m) => m.isDefault)?.id ?? null),
-          ).includes(stored.effort)
-          ? stored.effort
+        !storedRoutingOn && selectedNativeHarness === "codex-native"
+          ? reconcileCodexEffortForModel(
+              stored.accessLane
+                ? codexModelOptions.filter((row) => row.accessLane === stored.accessLane)
+                : codexModelOptions,
+              seededCodexModel || (codexModelOptions.find((m) => m.isDefault)?.id ?? null),
+              stored.effort,
+            )
           : "",
       );
     } else if (supportsCursorMode) {
