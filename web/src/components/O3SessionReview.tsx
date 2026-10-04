@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { isFeatureEnabled } from "@/lib/capabilities";
 import { getO3SessionReviews, getO3FailedReview } from "@/lib/o3RoutingReview";
 import { O3DecisionSummary, RawAudit } from "./O3DecisionInspect";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./ui/dialog";
@@ -8,13 +9,23 @@ import { Button } from "./ui/button";
 
 export function O3SessionReview({ sessionId }: { sessionId: string | undefined }) {
   const info = useServerInfo();
+  // O3 routing review is a retired surface. During migration a deployment can
+  // still advertise its legacy capability flag alongside the current Model
+  // Advisor feature; the stale flag must not resurrect review fetches or the
+  // "Retry loading O3 review" affordance in otherwise normal sessions.
+  const retiredByModelAdvisor = isFeatureEnabled(info, "model_advisor");
   const query = useQuery({
     queryKey: ["o3-session-reviews", sessionId],
     queryFn: () => getO3SessionReviews(sessionId!),
-    enabled: !!sessionId && info !== "loading" && info.o3_routing_review_enabled,
+    enabled:
+      !!sessionId &&
+      info !== "loading" &&
+      !retiredByModelAdvisor &&
+      info.o3_routing_review_enabled === true,
     refetchOnWindowFocus: true,
     refetchInterval: 15000,
   });
+  if (retiredByModelAdvisor) return null;
   if (query.isError)
     return (
       <Button variant="ghost" onClick={() => void query.refetch()}>
