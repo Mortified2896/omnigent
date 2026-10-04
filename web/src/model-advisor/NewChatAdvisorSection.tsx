@@ -10,7 +10,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { SettingsIcon, SparklesIcon } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 
 import {
@@ -876,11 +875,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         data-testid="model-advisor-composer-choice"
       >
         {enabledOverride === undefined ? (
-          <Switch
+          <Button
+            type="button"
+            size="sm"
+            variant={editor.draft.enabled ? "secondary" : "ghost"}
+            role="switch"
             aria-label="Enable Advisor"
-            checked={editor.draft.enabled}
+            aria-checked={editor.draft.enabled}
             disabled={round.busy || disabled}
-            onCheckedChange={() => {
+            onClick={() => {
               if (!editor.draft) return;
               if (!editor.draft.enabled) {
                 // Seed synchronously so the very first enabled render is valid.
@@ -896,7 +899,9 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               }
               handleChange({ ...editor.draft, enabled: !editor.draft.enabled });
             }}
-          />
+          >
+            {editor.draft.enabled ? "On" : "Off"}
+          </Button>
         ) : null}
         <label
           htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}

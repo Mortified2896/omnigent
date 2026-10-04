@@ -689,6 +689,7 @@ it("opens shared composer selectors below Advisor without changing its enabled s
     "true",
   );
   expect(screen.getByRole("switch", { name: "Enable Advisor" })).not.toBeChecked();
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).toHaveTextContent("Off");
   fireEvent.click(screen.getByRole("button", { name: "Advisor off" }));
   expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Recommender settings" }));
