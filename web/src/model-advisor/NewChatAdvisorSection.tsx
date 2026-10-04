@@ -31,7 +31,6 @@ import {
   type LogicalOption,
   type ProviderPreferences,
 } from "@/model-advisor/providerPreferences";
-import { SearchableModelPicker, type ModelPickerOption } from "@/components/SearchableModelPicker";
 import {
   advisorEffortOptions,
   advisorGroupHeading,
@@ -45,6 +44,8 @@ import {
   type ProviderReviewView,
 } from "@/model-advisor/ProviderAdvisorReview";
 import { ComposerEffortPicker } from "@/components/composer/ComposerControls";
+import { HarnessPicker } from "@/components/composer/HarnessPicker";
+import { ComposerConfigSections } from "@/components/composer/ComposerConfigSections";
 import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
 import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./sessionAdvisorPreference";
@@ -162,6 +163,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const humanPick = suppliedHumanPick ?? sessionHumanPick;
   const scope = hostId ?? "";
   const [localSettingsOpen, setSettingsOpen] = useState(false);
+  const [advisorModelOpen, setAdvisorModelOpen] = useState(false);
   const settingsOpen = settingsOpenOverride ?? localSettingsOpen;
   const [editor, setEditor] = useState<EditorState>({
     saved: null,
@@ -192,29 +194,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   // picker renders, adapted to the advisor's logical (one row per checkpoint,
   // routes shown per row) persistence model.
   const advisorRows = useMemo(() => advisorModelRows(options), [options]);
-  const advisorOptions = useMemo<ModelPickerOption[]>(() => {
-    const result: ModelPickerOption[] = advisorRows.map((row) => ({
-      id: row.modelId,
-      selectionId: row.key,
-      displayName: row.displayName,
-      groupLabel: advisorGroupHeading(row.provider),
-      disabledReason: row.available ? undefined : row.disabledReason,
-      // The row stays a logical choice; the route line carries the transport
-      // information instead of minting one row per lane.
-      description: row.available ? row.routeSummary : undefined,
-      keywords: row.keywords,
-    }));
-    if (!savedAdvisor && editor.draft?.advisor_choice_id) {
-      result.unshift({
-        id: editor.draft.advisor_choice_id,
-        selectionId: editor.draft.advisor_choice_id,
-        displayName: "Saved advisor model unavailable",
-        groupLabel: "Unavailable",
-        disabledReason: "Choose an available recommender model explicitly",
-      });
-    }
-    return result;
-  }, [advisorRows, editor.draft?.advisor_choice_id, savedAdvisor]);
   const savedAdvisorRow = savedAdvisor
     ? (advisorRows.find((row) => row.key === advisorModelKey(savedAdvisor)) ?? null)
     : null;
@@ -882,39 +861,78 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
     </div>
   );
+  const selectAdvisorModel = (modelKey: string) => {
+    const row = advisorRows.find((candidate) => candidate.key === modelKey);
+    // Switching models reconciles the effort: keep the current one when the
+    // new model offers it, else its declared default, else deterministic fallback.
+    const choice = row
+      ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
+      : null;
+    if (editor.draft && choice)
+      handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+  };
+  const advisorModelGroups = (["openai", "glm"] as const)
+    .map((provider) => {
+      const rows = advisorRows.filter((row) => row.provider === provider);
+      return {
+        key: provider,
+        label: advisorGroupHeading(provider),
+        choices: rows.map((row) => ({
+          key: row.key,
+          label: (
+            <span className="min-w-0 flex-1">
+              <span className="block">{row.displayName}</span>
+              {(row.available ? row.routeSummary : row.disabledReason) && (
+                <span className="block whitespace-normal text-xs text-muted-foreground">
+                  {row.available ? row.routeSummary : row.disabledReason}
+                </span>
+              )}
+            </span>
+          ),
+          checked: row.key === advisorModelValue,
+          disabled: !row.available,
+          onSelect: row.available ? () => selectAdvisorModel(row.key) : undefined,
+          testId: `model-advisor-advisor-model-${row.modelId}`,
+          title: row.disabledReason,
+        })),
+      };
+    })
+    .filter((group) => group.choices.length > 0);
+  const advisorModelChoices = advisorModelGroups.flatMap((group) => group.choices);
   const recommenderControls =
     editor.draft && (editor.draft.enabled || settingsOpen) ? (
       <div
         className="flex min-w-0 flex-1 items-center justify-end gap-1 md:pr-16"
         data-testid="model-advisor-composer-choice"
       >
-        <span className="sr-only">Recommender</span>
-        <SearchableModelPicker
-          id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-          value={advisorModelValue}
-          options={advisorOptions}
-          loading={false}
-          compact
-          includeDefault={false}
-          placeholder="Choose model…"
-          ariaLabel="Recommender model"
-          testId="model-advisor-advisor-choice"
-          searchTestId="model-advisor-advisor-choice-search"
-          triggerVariant="ghost"
-          triggerClassName="h-8 w-auto max-w-[14rem] gap-1 rounded-lg border-0 px-2 text-[13px] leading-5 hover:bg-muted/70 md:h-7 md:w-auto"
-          disabled={disabled || round.busy}
-          onValueChange={(modelKey) => {
-            const row = advisorRows.find((candidate) => candidate.key === modelKey);
-            // Switching models reconciles the effort: keep the current one
-            // when the new model offers it, else its declared default, else
-            // the deterministic supported fallback.
-            const choice = row
-              ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
-              : null;
-            if (editor.draft && choice)
-              handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+        <HarnessPicker
+          open={advisorModelOpen}
+          onOpenChange={setAdvisorModelOpen}
+          testId="model-advisor-advisor-choice-menu"
+          contentSide="bottom"
+          contentSideOffset={6}
+          onInitialSelectionFocus={() => {}}
+          trigger={{
+            label: "Recommender model",
+            model:
+              savedAdvisorRow?.displayName ??
+              (savedAdvisorUnavailable ? "Saved advisor model unavailable" : "Choose model…"),
+            testIdPrefix: "model-advisor-advisor",
+            "data-testid": "model-advisor-advisor-choice",
+            disabled: disabled || round.busy,
+            className:
+              "h-8 w-auto max-w-[14rem] gap-1 rounded-lg border-0 px-2 text-[13px] leading-5 hover:bg-muted/70 md:h-7",
           }}
-        />
+        >
+          <ComposerConfigSections
+            models={{
+              testId: "model-advisor-advisor-models",
+              header: "Models",
+              choices: advisorModelChoices,
+              groups: advisorModelGroups,
+            }}
+          />
+        </HarnessPicker>
         <ComposerEffortPicker
           value={savedAdvisor?.reasoning_effort ?? null}
           options={savedAdvisorEffortOptions.map((option) => ({
