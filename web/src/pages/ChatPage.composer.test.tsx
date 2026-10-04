@@ -5432,14 +5432,19 @@ describe("Composer config gear", () => {
       document.querySelector('[data-testid="composer-agent-model-gpt-5.6-luna"]') as Element,
     );
 
-    // The picked ultra is dropped (back to Default) and no longer offered,
-    // while Luna's own max stays.
-    await waitFor(() => expect(useChatStore.getState().setEffort).toHaveBeenCalledWith(null));
-    act(() => useChatStore.setState({ llmModel: "gpt-5.6-luna", sessionReasoningEffort: null }));
+    // The picked ultra is replaced by a concrete supported rung — Luna offers
+    // no declared default, so the ladder's deterministic middle ("high") — and
+    // ultra is no longer offered while Luna's own max stays.
+    await waitFor(() => expect(useChatStore.getState().setEffort).toHaveBeenCalledWith("high"));
+    act(() => useChatStore.setState({ llmModel: "gpt-5.6-luna", sessionReasoningEffort: "high" }));
     await openSessionEfforts();
     expect(screen.queryByTestId("composer-agent-effort-default")).toBeNull();
     expect(document.querySelector('[data-testid="composer-agent-effort-ultra"]')).toBeNull();
     expect(document.querySelector('[data-testid="composer-agent-effort-max"]')).not.toBeNull();
+    expect(screen.getByTestId("composer-agent-effort-high")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   it("re-pins the model when turning Smart Routing off, even if the shown model is unchanged", async () => {

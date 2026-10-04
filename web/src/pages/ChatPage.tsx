@@ -87,6 +87,7 @@ import {
   codexEffortLadderForModel,
   codexEffortLevelsForModel,
   findNativeModelOption,
+  reconcileCodexEffortForModel,
 } from "@/lib/codexNativeModels";
 import { modelConfigurationSourceRows } from "@/lib/modelConfigurationSource";
 import {
@@ -5063,12 +5064,18 @@ function SessionHarnessPicker({
         expectConfirmation: modelPickerKind === "claude" || modelPickerKind === "codex",
       });
       if (useChatStore.getState().conversationId !== sourceSessionId) return;
-      if (
-        modelPickerKind === "codex" &&
-        selectedEffort !== null &&
-        !codexEffortLadderForModel(codexModelOptions, modelId).includes(selectedEffort)
-      )
-        await store.setEffort(null);
+      // Same concrete-effort contract as the landing selector: a model switch
+      // keeps the persisted effort when the new ladder still offers it, else
+      // lands on the model's declared default (or deterministic rung); a
+      // stale effort on a model without a ladder is cleared.
+      if (modelPickerKind === "codex") {
+        const reconciled = reconcileCodexEffortForModel(codexModelOptions, modelId, selectedEffort);
+        if (
+          useChatStore.getState().conversationId === sourceSessionId &&
+          reconciled !== (selectedEffort ?? "")
+        )
+          await store.setEffort(reconciled || null);
+      }
       if (
         costRoutingEligible &&
         routingOn &&

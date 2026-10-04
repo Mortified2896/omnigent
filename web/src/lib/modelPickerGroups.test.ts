@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   groupModelOptions,
   groupedModelLabel,
+  laneLabel,
   modelGroupLabel,
+  routeSummaryForLanes,
   stripModelLaneSuffix,
 } from "./modelPickerGroups";
 import type { NativeModelOption } from "./types";
@@ -101,5 +103,22 @@ describe("groupedModelLabel", () => {
         (option) => option.displayName ?? option.id,
       ),
     ).toBe("GPT-5.5");
+  });
+});
+
+describe("shared lane vocabulary", () => {
+  it("labels every known lane with the host's transport wording", () => {
+    expect(laneLabel("omniroute")).toBe("OmniRoute");
+    expect(laneLabel("codex-direct")).toBe("Codex Subscription — Direct");
+    expect(laneLabel("glm-direct")).toBe("Z.AI Direct");
+    expect(laneLabel("future-lane")).toBe("future-lane");
+  });
+
+  it("summarizes a model's routes in the given lane order", () => {
+    expect(routeSummaryForLanes(["codex-direct", "omniroute"])).toBe(
+      "Codex Subscription — Direct · OmniRoute",
+    );
+    expect(routeSummaryForLanes(["glm-direct", "omniroute"])).toBe("Z.AI Direct · OmniRoute");
+    expect(routeSummaryForLanes([])).toBe("");
   });
 });

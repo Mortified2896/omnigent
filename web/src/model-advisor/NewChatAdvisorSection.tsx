@@ -27,13 +27,19 @@ import {
 } from "@/lib/modelAdvisorApi";
 import {
   emptyProviderPreferences,
-  effortLabel,
   effectiveOptions,
-  PROVIDER_LABELS,
   type LogicalOption,
   type ProviderPreferences,
 } from "@/model-advisor/providerPreferences";
 import { SearchableModelPicker, type ModelPickerOption } from "@/components/SearchableModelPicker";
+import {
+  advisorEffortOptions,
+  advisorGroupHeading,
+  advisorModelKey,
+  advisorModelRows,
+  reconcileAdvisorChoice,
+  seedFreshAdvisorDraft,
+} from "@/model-advisor/advisorModelPresentation";
 import {
   ProviderAdvisorReview,
   type ProviderReviewView,
@@ -179,29 +185,24 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const savedAdvisorUnavailable = Boolean(
     editor.draft?.advisor_choice_id && (!savedAdvisor || !savedAdvisor.available),
   );
-  const advisorModelKey = (option: LogicalOption) =>
-    JSON.stringify([option.provider, option.model_id]);
   const advisorModelValue = savedAdvisor
     ? advisorModelKey(savedAdvisor)
     : (editor.draft?.advisor_choice_id ?? "");
-  const advisorEfforts = options.filter(
-    (option) => savedAdvisor && advisorModelKey(option) === advisorModelKey(savedAdvisor),
-  );
+  // Shared model presentation: the same row/group/route vocabulary the primary
+  // picker renders, adapted to the advisor's logical (one row per checkpoint,
+  // routes shown per row) persistence model.
+  const advisorRows = useMemo(() => advisorModelRows(options), [options]);
   const advisorOptions = useMemo<ModelPickerOption[]>(() => {
-    const models = new Map<string, LogicalOption[]>();
-    for (const option of options) {
-      const key = JSON.stringify([option.provider, option.model_id]);
-      models.set(key, [...(models.get(key) ?? []), option]);
-    }
-    const result: ModelPickerOption[] = Array.from(models, ([key, choices]) => ({
-      id: choices[0].model_id,
-      selectionId: key,
-      displayName: choices[0].display_name,
-      groupLabel: PROVIDER_LABELS[choices[0].provider],
-      disabledReason: choices.some((option) => option.available)
-        ? undefined
-        : "Unavailable from the current host catalog",
-      keywords: choices.flatMap((option) => option.model_ids),
+    const result: ModelPickerOption[] = advisorRows.map((row) => ({
+      id: row.modelId,
+      selectionId: row.key,
+      displayName: row.displayName,
+      groupLabel: advisorGroupHeading(row.provider),
+      disabledReason: row.available ? undefined : row.disabledReason,
+      // The row stays a logical choice; the route line carries the transport
+      // information instead of minting one row per lane.
+      description: row.available ? row.routeSummary : undefined,
+      keywords: row.keywords,
     }));
     if (!savedAdvisor && editor.draft?.advisor_choice_id) {
       result.unshift({
@@ -213,7 +214,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       });
     }
     return result;
-  }, [editor.draft?.advisor_choice_id, options, savedAdvisor]);
+  }, [advisorRows, editor.draft?.advisor_choice_id, savedAdvisor]);
+  const savedAdvisorRow = savedAdvisor
+    ? (advisorRows.find((row) => row.key === advisorModelKey(savedAdvisor)) ?? null)
+    : null;
+  const savedAdvisorEffortOptions = useMemo(
+    () => (savedAdvisorRow ? advisorEffortOptions(savedAdvisorRow.choices) : []),
+    [savedAdvisorRow],
+  );
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) clearInterval(pollTimer.current);
@@ -431,6 +439,18 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       error: null,
     }));
   }, []);
+
+  // Enabling with a never-configured draft must land in a coherent state:
+  // the catalog's declared defaults seed the pool/recommender instead of a
+  // validation error being the normal post-toggle state. Configured drafts
+  // pass through unchanged.
+  useEffect(() => {
+    const draft = editor.draft;
+    if (!draft?.enabled || catalogError !== null || options.length === 0) return;
+    const seeded = seedFreshAdvisorDraft(draft, options, resolveHumanChoice());
+    if (seeded === null || seeded === draft || samePreferences(seeded, draft)) return;
+    handleChange(seeded);
+  }, [editor.draft, options, catalogError, resolveHumanChoice, handleChange]);
 
   const handleSave = useCallback(() => {
     if (hostId === null || !editor.draft) return;
@@ -741,9 +761,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           variant={editor.draft?.enabled ? "secondary" : "ghost"}
           disabled={!editor.draft || round.busy || disabled}
           aria-pressed={editor.draft?.enabled ?? false}
-          onClick={() =>
-            editor.draft && handleChange({ ...editor.draft, enabled: !editor.draft.enabled })
-          }
+          onClick={() => {
+            if (!editor.draft) return;
+            if (!editor.draft.enabled) {
+              // Seed synchronously so the very first enabled render is valid.
+              const seeded = seedFreshAdvisorDraft(
+                { ...editor.draft, enabled: true },
+                options,
+                resolveHumanChoice(),
+              );
+              if (seeded) {
+                handleChange(seeded);
+                return;
+              }
+            }
+            handleChange({ ...editor.draft, enabled: !editor.draft.enabled });
+          }}
         >
           <SparklesIcon />
           Advisor {editor.draft?.enabled ? "on" : "off"}
@@ -875,34 +908,33 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             searchTestId="model-advisor-advisor-choice-search"
             disabled={disabled || round.busy}
             onValueChange={(modelKey) => {
-              const choices = options.filter(
-                (option) => advisorModelKey(option) === modelKey && option.available,
-              );
-              const choice =
-                choices.find(
-                  (option) => option.reasoning_effort === savedAdvisor?.reasoning_effort,
-                ) ?? choices[0];
+              const row = advisorRows.find((candidate) => candidate.key === modelKey);
+              // Switching models reconciles the effort: keep the current one
+              // when the new model offers it, else its declared default, else
+              // the deterministic supported fallback.
+              const choice = row
+                ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
+                : null;
               if (editor.draft && choice)
                 handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
             }}
           />
           <ComposerEffortPicker
             value={savedAdvisor?.reasoning_effort ?? null}
-            options={advisorEfforts
-              .filter((option) => option.available)
-              .map((option) => ({
-                value: option.reasoning_effort,
-                label: effortLabel(option.reasoning_effort),
-              }))}
+            options={savedAdvisorEffortOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+            }))}
             disabled={disabled || round.busy || !savedAdvisor}
             label="Recommender reasoning effort"
             testIdPrefix="model-advisor-advisor"
             testId="model-advisor-advisor-effort"
             onSelect={(effort) => {
-              const choice = advisorEfforts.find(
+              if (!editor.draft || !savedAdvisorRow) return;
+              const choice = savedAdvisorRow.choices.find(
                 (option) => option.available && option.reasoning_effort === effort,
               );
-              if (editor.draft && choice)
+              if (choice)
                 handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
             }}
           />

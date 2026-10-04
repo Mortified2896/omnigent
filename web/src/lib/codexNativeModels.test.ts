@@ -5,6 +5,7 @@ import {
   codexEffortLevelsForModel,
   findNativeModelOption,
   isCodexNativeModel,
+  reconcileCodexEffortForModel,
 } from "./codexNativeModels";
 import type { NativeModelOption } from "./types";
 
@@ -153,5 +154,60 @@ describe("Codex effort ladder baseline for unadvertised rows", () => {
 
   it("keeps the strict variant empty for unadvertised rows (Devin semantics)", () => {
     expect(codexEffortLevelsForModel(glmOmniRouteRows, "glm/glm-5-turbo")).toEqual([]);
+  });
+});
+
+describe("reconcileCodexEffortForModel", () => {
+  const rows: NativeModelOption[] = [
+    {
+      id: "gpt-5.6-sol",
+      model: "gpt-5.6-sol",
+      displayName: "GPT-5.6-Sol",
+      defaultReasoningEffort: "low",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low" },
+        { reasoningEffort: "medium" },
+        { reasoningEffort: "high" },
+      ],
+    },
+    {
+      id: "gpt-5.6-terra",
+      model: "gpt-5.6-terra",
+      displayName: "GPT-5.6-Terra",
+      defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low" },
+        { reasoningEffort: "medium" },
+        { reasoningEffort: "high" },
+      ],
+    },
+    {
+      id: "glm/glm-5-turbo",
+      model: "glm/glm-5-turbo",
+      displayName: "GLM 5 Turbo · OmniRoute",
+      accessLane: "omniroute",
+      groupLabel: "GLM",
+    },
+  ];
+
+  it("keeps the persisted effort when the new model still supports it", () => {
+    expect(reconcileCodexEffortForModel(rows, "gpt-5.6-terra", "high")).toBe("high");
+  });
+
+  it("lands on the new model's catalog-declared default otherwise", () => {
+    expect(reconcileCodexEffortForModel(rows, "gpt-5.6-terra", "max")).toBe("medium");
+  });
+
+  it("lands on the declared default when the previous effort was empty", () => {
+    expect(reconcileCodexEffortForModel(rows, "gpt-5.6-sol", "")).toBe("low");
+  });
+
+  it("falls back to the deterministic middle rung when nothing is declared", () => {
+    expect(reconcileCodexEffortForModel(rows, "glm/glm-5-turbo", "xhigh")).toBe("medium");
+  });
+
+  it("returns no effort when the model resolves to no ladder", () => {
+    expect(reconcileCodexEffortForModel(rows, "unknown-model", "high")).toBe("");
+    expect(reconcileCodexEffortForModel(rows, null, "high")).toBe("");
   });
 });

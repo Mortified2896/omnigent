@@ -807,3 +807,59 @@ it("does not automatically repeat a failed launch and allows an explicit retry",
   await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
   expect(attempts).toBe(2);
 });
+
+it("seeds declared defaults so enabling a never-configured advisor is valid immediately", async () => {
+  prefsDto = {
+    object: "model_advisor.preferences",
+    version: 0,
+    etag: null,
+    state: "unsaved",
+    preferences: null,
+  };
+  mountSection();
+  fireEvent.click(await screen.findByRole("button", { name: "Advisor off" }));
+  // No validation error becomes the normal post-toggle state.
+  await waitFor(() => {
+    expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  });
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
+  expect(screen.queryByText(/Select at least one active model and reasoning level/)).toBeNull();
+  expect(screen.queryByText(/Choose an available advisor model/)).toBeNull();
+  // The seeded pool keeps both providers' defaults plus the composer pick.
+  expect(screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }).checked).toBe(true);
+  expect(screen.getByRole("checkbox", { name: "GLM-5.3: High" }).checked).toBe(true);
+});
+
+it("reconciles the advisor effort to the declared default when the new model lacks it", async () => {
+  mountSection();
+  await screen.findByRole("combobox", { name: "Recommender model" });
+  // Saved choice: GLM-5.3 at high. GPT-5.5 offers medium (its declared
+  // default) but not high, so the switch must land on Medium — never a
+  // "Default" placeholder and never the old arbitrary first row.
+  fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
+});
+
+it("keeps the advisor effort across a model switch when it is still supported", async () => {
+  catalog.logical_options = [
+    LOGICAL_A,
+    { ...LOGICAL_A, choice_id: "choice-openai-high", reasoning_effort: "high" },
+    LOGICAL_B,
+  ];
+  mountSection();
+  await screen.findByRole("combobox", { name: "Recommender model" });
+  fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("High");
+});
+
+it("renders each advisor model's routes with the shared lane vocabulary", async () => {
+  mountSection();
+  await screen.findByRole("combobox", { name: "Recommender model" });
+  fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
+  const option = await screen.findByRole("option", { name: /GPT-5\.5/ });
+  expect(option).toHaveTextContent("Codex Subscription — Direct · OmniRoute");
+});

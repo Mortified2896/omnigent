@@ -4074,14 +4074,16 @@ describe("NewChatLandingScreen", () => {
     openAgentModels("a2");
     fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-databricks-gpt-5-5"));
     closeMenu();
-    // GPT-5.5's ladder has no xhigh: the stale rung resets so the create can't
-    // commit a level the model rejects — the selector reads Default.
-    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Default");
+    // GPT-5.5's ladder has no xhigh: the stale rung reconciles to a concrete
+    // supported rung (the ladder's deterministic middle, "medium") so the
+    // create can't commit a level the model rejects — and the selector never
+    // reads an ambiguous Default.
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Medium");
     selectAgent("a1");
     selectAgent("a2");
-    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Default");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Medium");
     const { body } = await submitAndReadBody();
-    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.reasoning_effort).toBe("medium");
   });
 
   const catalogAgents: AvailableAgent[] = [
@@ -4440,8 +4442,9 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByTestId("new-chat-landing-agent-models")).toBeTruthy();
     // A resolved row without advertised tiers is a metadata gap (gateway GLM
     // routes), not an unknown model: the inline effort select stays visible
-    // with the conservative baseline rungs instead of hiding.
-    expect(inlineEffortValues()).toEqual(["__none__", "low", "medium", "high"]);
+    // with the conservative baseline rungs instead of hiding, and there is no
+    // synthetic Default entry — only concrete supported rungs.
+    expect(inlineEffortValues()).toEqual(["low", "medium", "high"]);
   });
 
   it("sizes model names to content and compacts them only when space runs out", () => {
@@ -4475,7 +4478,7 @@ describe("NewChatLandingScreen", () => {
     expect(picker).toHaveClass("w-auto", "max-w-full", "px-2", "py-0");
     expect(modelChip).toHaveClass("w-auto", "max-w-full", "px-2", "py-0");
     expect(model).toHaveClass("min-w-0", "truncate");
-    expect(model).toHaveAttribute("title", "Extraordinarily Long Claude Model Name");
+    expect(model).not.toHaveAttribute("title");
     expect(model).toHaveTextContent("Extraordinarily Long Claude Model Name");
     expect(voice).toHaveClass("shrink-0", "size-8", "md:size-7");
     expect(submit.parentElement).toHaveClass("shrink-0");
@@ -5586,9 +5589,7 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
     // With no model pinned, the adjacent select lists the catalog default's
     // (GPT-5.5) ladder — raw Codex ids, never another model's rungs.
-    expect(inlineEffortValues()).toEqual(
-      expect.arrayContaining(["__none__", "low", "medium", "high"]),
-    );
+    expect(inlineEffortValues()).toEqual(expect.arrayContaining(["low", "medium", "high"]));
     expect(inlineEffortValues()).not.toContain("xhigh");
     pickInlineSelectValue("new-chat-landing-inline-effort", "high");
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
@@ -5621,12 +5622,13 @@ describe("NewChatLandingScreen", () => {
     expect(inlineEffortValues()).not.toContain("low");
     pickInlineSelectValue("new-chat-landing-inline-effort", "xhigh");
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("xHigh");
-    // Back to GPT-5.5, whose ladder has no xhigh: the stale rung resets so the
-    // create can't commit a level the model rejects.
+    // Back to GPT-5.5, whose ladder has no xhigh: the stale rung reconciles to
+    // the deterministic supported rung ("medium") so the create can't commit a
+    // level the model rejects.
     openAgentModels("a2");
     pickPrimaryOption("model", "GPT-5.5");
     closePrimaryPicker();
-    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Default");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Medium");
 
     fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
       target: { value: "run the build" },
@@ -5635,7 +5637,7 @@ describe("NewChatLandingScreen", () => {
     await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
     const [, init] = authenticatedFetchMock.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
-    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.reasoning_effort).toBe("medium");
   });
 
   it("remembers the Codex effort per harness without leaking it onto Claude", () => {
@@ -5645,9 +5647,9 @@ describe("NewChatLandingScreen", () => {
     expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High");
 
     // Claude's select reopens on its own remembered effort (nothing stored →
-    // Default) — the Codex pick must not ride the shared state across.
+    // the em-dash placeholder) — the Codex pick must not ride the shared state.
     selectAgent("a1");
-    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Default");
+    expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("—");
 
     // Codex reopens on the remembered pick, still valid for its ladder.
     selectAgent("a2");
@@ -5688,7 +5690,10 @@ describe("NewChatLandingScreen", () => {
     const [, init] = authenticatedFetchMock.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
     expect(body.model_override).toBe("databricks-gpt-5-6");
-    expect(body.reasoning_effort).toBeUndefined();
+    // The parent state supplies a concrete rung: the default row's ladder
+    // reseeded "medium", and GPT-5.6's own ladder still offers it, so the
+    // preserved effort rides the create.
+    expect(body.reasoning_effort).toBe("medium");
     expect(useHostModelOptionsMock).toHaveBeenCalledWith(
       "host_1",
       "codex-native",

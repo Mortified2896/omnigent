@@ -158,3 +158,31 @@ export function codexEffortLadderForModel(
     ? []
     : CODEX_UNADVERTISED_MODEL_EFFORTS;
 }
+
+/**
+ * The concrete effort the parent state should hold for a model after a switch.
+ *
+ * A visible effort picker represents an explicit supported ladder, so the
+ * parent must never park an ambiguous "Default" there: the precedence is the
+ * already-persisted effort when the new model still supports it, then the
+ * model's catalog-declared default, then a deterministic supported rung (the
+ * ladder's middle, so metadata-gap ladders like low/high/max land on high).
+ * An empty string means "no explicit effort" and is only returned when the
+ * model resolves to no ladder at all — the picker is hidden in that case.
+ *
+ * @param options - Native model options from the host catalog.
+ * @param currentModel - The model being switched to (null resolves no ladder).
+ * @param currentEffort - The effort persisted for the previous model.
+ */
+export function reconcileCodexEffortForModel(
+  options: readonly NativeModelOption[],
+  currentModel: string | null | undefined,
+  currentEffort: string | null | undefined,
+): string {
+  const ladder = codexEffortLadderForModel(options, currentModel);
+  if (ladder.length === 0) return "";
+  if (currentEffort && ladder.includes(currentEffort)) return currentEffort;
+  const declared = findNativeModelOption(options, currentModel)?.defaultReasoningEffort;
+  if (declared && ladder.includes(declared)) return declared;
+  return ladder[Math.floor((ladder.length - 1) / 2)] ?? "";
+}
