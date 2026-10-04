@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { ChevronDownIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -54,6 +54,9 @@ export interface SearchableModelPickerProps {
   ariaLabel?: string;
   testId?: string;
   searchTestId?: string;
+  /** Trigger styling hook for composer-integrated pickers. */
+  triggerVariant?: ComponentProps<typeof Button>["variant"];
+  triggerClassName?: string;
 }
 
 export function SearchableModelPicker({
@@ -71,6 +74,8 @@ export function SearchableModelPicker({
   ariaLabel = "Model",
   testId = "new-chat-landing-config-model",
   searchTestId = "new-chat-landing-config-model-search",
+  triggerVariant = "outline",
+  triggerClassName,
 }: SearchableModelPickerProps) {
   const [open, setOpen] = useState(false);
   const isMobile = useIsMobileViewport();
@@ -110,7 +115,7 @@ export function SearchableModelPicker({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant="outline"
+          variant={triggerVariant}
           role="combobox"
           id={id}
           aria-expanded={open}
@@ -119,6 +124,7 @@ export function SearchableModelPicker({
           className={cn(
             "h-8 justify-between gap-2 px-2.5 font-normal",
             compact ? "h-9 w-full min-w-0 max-w-full px-2 md:h-8 md:w-60" : "w-full",
+            triggerClassName,
           )}
           data-testid={testId}
         >
