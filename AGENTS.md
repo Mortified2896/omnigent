@@ -22,8 +22,13 @@ is not required. This file defines the fork's default repository workflow.
   diffs are not automatically low risk. Do not bypass existing hooks/checks.
 - For requested application changes meant to be inspected in the running
   Omnigent UI, completion includes validation, merge to the fork's main, and
-  deployment to the current RTX O1/O2 instances, followed by live verification
-  and inspectable URLs. Treat the implementation request as authorization for
+  rollout per the HomeLab release architecture (see
+  `docs/omnigent-release-architecture.md` in HomeLab): build an immutable
+  accepted SHA, expose it as a disposable Komodo candidate for owner
+  inspection at Preview `:2222`, then promote the exact approved SHA to
+  production O1 and verify `:1111`, followed by live verification and
+  inspectable URLs. Legacy O2 is transitional only and is not a normal
+  rollout target. Treat the implementation request as authorization for
   this development rollout unless the user asks for source-only work or says
   not to merge/deploy. Do not stop at local edits or a draft PR. A request for
   deployment in a later turn supersedes an earlier no-deploy boundary.
@@ -63,9 +68,18 @@ For task scoring and live acceptance chats, follow `docs/task-scoring-and-test-s
 
 Apply this section only to live deployment tasks, not source-only work.
 
-Read `deploy/docs/deployment-controller-scope.md` before applying an O1/O2 deployment rule. The peer-supervision rule applies only to updates controlled from inside an Omnigent instance. Independent Codex (Mac app or CLI), ZCode, and operator/SSH sessions are external controllers: they may perform owner-authorized deployments of O1 and O2 directly, without an O1/O2 supervisor task, peer approval, or a TARGET/SUPERVISOR pair. Running on the same physical server does not by itself make a controller part of O1/O2.
+The target topology is production O1 (`:1111`) plus disposable candidates
+inspected at Preview `:2222`; legacy O2 is transitional during migration only
+and disappears from the active architecture once retired. The default
+promotion target is O1 only, and no new application/UI release reaches O1
+before the exact artifact has been tested as a candidate and manually
+inspected through Preview, unless the owner explicitly overrides this
+workflow. HomeLab `docs/omnigent-release-architecture.md` is the architecture
+source of truth.
 
-A Codex process launched as part of an O1/O2 task is still instance-controlled; its name is not an exemption. Do not route an independent Codex deployment through O1/O2 merely to satisfy the self-update rule. Keep identity checks, exact artifact validation, backups, rollback, and post-deployment verification for either controller type. A peer-only tool requirement is a tooling limitation, not a blanket policy for external controllers.
+Read `deploy/docs/deployment-controller-scope.md` before applying an O1/O2 deployment rule. The peer-supervision rule applies only to updates controlled from inside an Omnigent instance. Independent Codex (Mac app or CLI), ZCode, and operator/SSH sessions are external controllers: they may perform owner-authorized O1 deployments directly (and legacy O2 deployments while it still exists), without an O1/O2 supervisor task, peer approval, or a TARGET/SUPERVISOR pair. Running on the same physical server does not by itself make a controller part of O1/O2.
+
+A Codex process launched as part of an O1/O2 task is still instance-controlled; its name is not an exemption. Where an O1 task must not restart O1 itself, use an independent external controller or another suitable healthy control context; permanent O2 is not a required architectural supervisor. Do not route an independent Codex deployment through O1/O2 merely to satisfy the self-update rule. Keep identity checks, exact artifact validation, backups, rollback, and post-deployment verification for either controller type. A peer-only tool requirement is a tooling limitation, not a blanket policy for external controllers.
 
 Before any SSH attempt, run `hostname; id; pwd`. If the independent controller is already on `rtx-omnigent`, stay local: inspect systemd, `/srv/omnigent`, `/etc/omnigent-peers`, loopback health, and Tailscale Serve directly. Never treat an SSH/Tailscale denial to the same machine as a deployment blocker. The current `peer_deployer.rtx` command is root-only and peer-mode; if external deployment needs another path, implement/test that local path rather than SSHing away and back.
 

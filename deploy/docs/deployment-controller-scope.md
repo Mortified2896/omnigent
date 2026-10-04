@@ -5,6 +5,13 @@ self-update restrictions. It supersedes contradictory blanket wording in
 older runbooks, historical deployment records, and agent handoffs. It does not
 grant deployments that the owner has not authorized or change installed tools.
 
+Architecture direction (2026-10-04): the target topology is one permanent
+production instance, O1 at `:1111`, plus disposable candidates inspected at
+Preview `:2222`. Legacy O2 is transitional during migration only and is not a
+required architectural supervisor or a normal rollout target. The default
+promotion target is O1 only. HomeLab
+`docs/omnigent-release-architecture.md` is the architecture source of truth.
+
 ## Local host comes before remote access
 
 Before choosing any SSH/Tailscale path, run `hostname; id; pwd`. If an
@@ -24,13 +31,17 @@ Do not replace it with a network blocker.
 
 **Instance-controlled update:** the controlling task/process runs inside O1 or
 O2 and depends on that Omnigent instance. O1 must not replace/restart itself
-from its own task; O2 must not do so either. Use the other healthy instance for
-an instance-driven update, with distinct TARGET and SUPERVISOR identities.
-The peer-specific preflight and continuity rules apply to that mode.
+from its own task; O2 must not do so either. Use an independent external
+controller, or another suitable healthy control context, for an
+instance-driven update; permanent O2 is not a required architectural
+supervisor. While both instances still exist, the legacy peer may serve as
+that context, with distinct TARGET and SUPERVISOR identities. The
+peer-specific preflight and continuity rules apply to that mode.
 
 **Externally controlled deployment:** an independent Codex Mac app/CLI, ZCode,
 operator shell, or SSH session controls the deployment outside the O1/O2 task
-runtime. It may directly update O1, O2, or both sequentially when authorized.
+runtime. It may directly update O1 when authorized (and legacy O2 while it
+still exists).
 It does **not** require an O1/O2 supervisor task, peer approval, or a
 TARGET/SUPERVISOR pair. It need not create a task inside the other instance.
 The external controller owns validation, service operations, and recovery.
@@ -46,9 +57,9 @@ or application name.
 | Actual controller | Required treatment |
 | --- | --- |
 | Independent Mac Codex deploys O1 over SSH | External deployment; no O2 supervisor task required. |
-| Independent server Codex CLI/operator shell deploys both peers | External deployment; update one target at a time, retaining external recovery control. |
-| O1 task invokes Codex to replace O1 | Still an O1 self-update; use an independent controller or the other instance. |
-| O1 task deploys O2 | Instance-controlled peer update; O1 remains the healthy supervisor. |
+| Independent server Codex CLI/operator shell deploys production | External deployment; default target is O1 only (O2 only while it still exists and separately authorized); update one target at a time, retaining external recovery control. |
+| O1 task invokes Codex to replace O1 | Still an O1 self-update; use an independent external controller or another suitable healthy control context (the legacy peer only while it still exists). |
+| O1 task deploys O2 | Instance-controlled peer update (transitional, while O2 exists); O1 remains the healthy supervisor. |
 
 ## Safeguards common to both modes
 

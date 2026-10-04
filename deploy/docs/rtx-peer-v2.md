@@ -1,5 +1,17 @@
 # RTX O1/O2 v2 deployment contract
 
+## Architecture direction (2026-10-04)
+
+The target topology is one permanent production instance, O1 at `:1111`, with
+disposable Komodo candidates inspected at Preview `:2222`; see HomeLab
+`docs/omnigent-release-architecture.md` for the authoritative workflow. The
+default promotion target is **O1 only**: an accepted candidate SHA, approved
+by the owner through Preview, is promoted to O1. O2 is a **legacy transitional
+instance** that still exists during migration; deploying it is not part of the
+normal success path and requires its own authorization. "Deploy both O1 and
+O2" is no longer the default release outcome. The tool contract below remains
+valid for the modes it describes while both instances exist.
+
 ## Controller scope: instance-driven versus external
 
 Read [deployment controller scope](deployment-controller-scope.md) first.
@@ -47,11 +59,14 @@ sudo -n env PYTHONPATH="/srv/omnigent/releases/<sha>/source/deploy/scripts" \
 ```
 
 Use the same command for O2 only after O1 is verified healthy at the accepted
-SHA. For an interrupted transaction, invoke `recover` with the recorded target
+SHA, only while O2 still exists, and only when that transitional target is
+explicitly authorized — the default promotion target is O1 alone. For an
+interrupted transaction, invoke `recover` with the recorded target
 and transaction ID. This external procedure does not change the
 instance-controlled peer contract below.
 
-O1 is primary; O2 is the warm maintenance peer. Neither replaces/restarts itself
+O1 is primary; O2 is the legacy warm maintenance peer, transitional during
+migration only. Neither replaces/restarts itself
 from inside its own task runtime; this does not prohibit an external deployment.
 Each has separate `/srv/omnigent/o{1,2}/{config,home,state,releases}` roots,
 a distinct host UUID and database binding, and a root-owned current pointer to
