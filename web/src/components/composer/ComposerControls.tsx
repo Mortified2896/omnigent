@@ -219,6 +219,7 @@ export function ComposerEffortPicker({
   label = "Reasoning effort",
   onSelect,
   testIdPrefix = "composer",
+  testId,
 }: {
   value: string | null;
   options: readonly { value: string; label: string }[];
@@ -226,6 +227,7 @@ export function ComposerEffortPicker({
   label?: string;
   onSelect: (value: string | null) => void;
   testIdPrefix?: string;
+  testId?: string;
 }) {
   return (
     <Select
@@ -239,7 +241,7 @@ export function ComposerEffortPicker({
     >
       <SelectTrigger
         aria-label={label}
-        data-testid={`${testIdPrefix}-inline-effort`}
+        data-testid={testId ?? `${testIdPrefix}-inline-effort`}
         className="data-[size=default]:h-8 w-[5.5rem] min-w-[5.5rem] gap-1 px-2 text-[13px] md:data-[size=default]:h-7"
       >
         <SelectValue placeholder="—" />
