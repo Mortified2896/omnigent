@@ -38,13 +38,7 @@ import {
   ProviderAdvisorReview,
   type ProviderReviewView,
 } from "@/model-advisor/ProviderAdvisorReview";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ComposerEffortPicker } from "@/components/composer/ComposerControls";
 import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
 import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./sessionAdvisorPreference";
@@ -892,32 +886,25 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                 handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
             }}
           />
-          <Select
-            value={savedAdvisor?.choice_id ?? ""}
+          <ComposerEffortPicker
+            value={savedAdvisor?.reasoning_effort ?? null}
+            options={advisorEfforts
+              .filter((option) => option.available)
+              .map((option) => ({
+                value: option.reasoning_effort,
+                label: effortLabel(option.reasoning_effort),
+              }))}
             disabled={disabled || round.busy || !savedAdvisor}
-            onValueChange={(choiceId) =>
-              editor.draft && handleChange({ ...editor.draft, advisor_choice_id: choiceId })
-            }
-          >
-            <SelectTrigger
-              className="data-[size=default]:h-9 w-full min-w-0 gap-1 px-2 text-sm md:data-[size=default]:h-8 md:w-auto md:min-w-24 md:px-2.5"
-              aria-label="Recommender reasoning effort"
-              data-testid="model-advisor-advisor-effort"
-            >
-              <SelectValue placeholder="Reasoning" />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {advisorEfforts.map((option) => (
-                <SelectItem
-                  key={option.choice_id}
-                  value={option.choice_id}
-                  disabled={!option.available}
-                >
-                  {effortLabel(option.reasoning_effort)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            label="Recommender reasoning effort"
+            testIdPrefix="model-advisor-advisor"
+            onSelect={(effort) => {
+              const choice = advisorEfforts.find(
+                (option) => option.available && option.reasoning_effort === effort,
+              );
+              if (editor.draft && choice)
+                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+            }}
+          />
         </div>
         {savedAdvisorUnavailable ? (
           <p role="alert" className="col-span-2 text-xs text-destructive">
