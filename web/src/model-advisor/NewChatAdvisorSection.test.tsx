@@ -660,7 +660,7 @@ it("resolves an explicit model and effort independently of a stale composer conn
   expect(JSON.parse(posted![1].body).human_choice_id).toBe(LOGICAL_A.choice_id);
 });
 
-it("keeps settings hidden until requested and exposes a compact Advisor toggle", async () => {
+it("opens shared composer selectors below Advisor without changing its enabled state", async () => {
   render(
     <NewChatAdvisorSection
       hostId="host_1"
@@ -672,18 +672,24 @@ it("keeps settings hidden until requested and exposes a compact Advisor toggle",
     />,
   );
   const toggle = await screen.findByRole("button", { name: "Advisor on" });
-  const recommender = screen.getByRole("combobox", { name: "Recommender model" });
-  const settings = screen.getByRole("button", { name: "Recommender settings" });
-  expect(
-    recommender.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  expect(screen.queryByRole("region", { name: "Model advisor settings" })).toBeNull();
-  expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toBeDefined();
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
   fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const recommender = screen.getByRole("combobox", { name: "Recommender model" });
+  expect(recommender).toHaveAttribute("data-variant", "ghost");
+  expect(
+    toggle.compareDocumentPosition(recommender) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toBeDefined();
+  expect(screen.queryByRole("region", { name: "Model advisor settings" })).toBeNull();
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
   expect(screen.getByRole("button", { name: "Advisor off" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
+    "aria-expanded",
+    "true",
   );
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).not.toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "Advisor off" }));
   expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Recommender settings" }));
   expect(screen.getByRole("region", { name: "Model advisor settings" })).toBeDefined();
@@ -817,7 +823,8 @@ it("seeds declared defaults so enabling a never-configured advisor is valid imme
     preferences: null,
   };
   mountSection();
-  fireEvent.click(await screen.findByRole("button", { name: "Advisor off" }));
+  await screen.findByRole("button", { name: "Advisor off" });
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
   // No validation error becomes the normal post-toggle state.
   await waitFor(() => {
     expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
@@ -826,8 +833,8 @@ it("seeds declared defaults so enabling a never-configured advisor is valid imme
   expect(screen.queryByText(/Select at least one active model and reasoning level/)).toBeNull();
   expect(screen.queryByText(/Choose an available advisor model/)).toBeNull();
   // The seeded pool keeps both providers' defaults plus the composer pick.
-  expect(screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }).checked).toBe(true);
-  expect(screen.getByRole("checkbox", { name: "GLM-5.3: High" }).checked).toBe(true);
+  expect(screen.getByRole("checkbox", { name: "GPT-5.5: Medium" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "GLM-5.3: High" })).toBeChecked();
 });
 
 it("reconciles the advisor effort to the declared default when the new model lacks it", async () => {

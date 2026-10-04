@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 
+import { ComposerHarnessTrigger } from "@/components/composer/ComposerControls";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -45,6 +46,7 @@ export interface SearchableModelPickerProps {
   loading: boolean;
   onValueChange: (value: string) => void;
   compact?: boolean;
+  composer?: boolean;
   disabled?: boolean;
   includeDefault?: boolean;
   defaultValue?: string;
@@ -62,6 +64,7 @@ export function SearchableModelPicker({
   loading,
   onValueChange,
   compact = false,
+  composer = false,
   disabled = false,
   includeDefault = true,
   defaultValue = MODEL_SELECT_DEFAULT,
@@ -108,23 +111,35 @@ export function SearchableModelPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          role="combobox"
-          id={id}
-          aria-expanded={open}
-          aria-label={ariaLabel}
-          disabled={disabled}
-          className={cn(
-            "h-8 justify-between gap-2 px-2.5 font-normal",
-            compact ? "h-9 w-full min-w-0 max-w-full px-2 md:h-8 md:w-60" : "w-full",
-          )}
-          data-testid={testId}
-        >
-          <span className="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
-          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-        </Button>
+        {composer ? (
+          <ComposerHarnessTrigger
+            label={ariaLabel}
+            model={selectedLabel}
+            role="combobox"
+            id={id}
+            aria-expanded={open}
+            disabled={disabled}
+            data-testid={testId}
+          />
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            id={id}
+            aria-expanded={open}
+            aria-label={ariaLabel}
+            disabled={disabled}
+            className={cn(
+              "h-8 justify-between gap-2 px-2.5 font-normal",
+              compact ? "h-9 w-full min-w-0 max-w-full px-2 md:h-8 md:w-60" : "w-full",
+            )}
+            data-testid={testId}
+          >
+            <span className="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
+            <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="start"

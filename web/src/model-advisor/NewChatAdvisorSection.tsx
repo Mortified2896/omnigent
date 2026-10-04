@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { SettingsIcon, SparklesIcon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 
 import {
@@ -161,6 +162,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   // The native composer is the execution-choice authority. Saved Advisor state is fallback only.
   const humanPick = suppliedHumanPick ?? sessionHumanPick;
   const scope = hostId ?? "";
+  const [advisorControlsOpen, setAdvisorControlsOpen] = useState(false);
   const [localSettingsOpen, setSettingsOpen] = useState(false);
   const settingsOpen = settingsOpenOverride ?? localSettingsOpen;
   const [editor, setEditor] = useState<EditorState>({
@@ -760,23 +762,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           size="sm"
           variant={editor.draft?.enabled ? "secondary" : "ghost"}
           disabled={!editor.draft || round.busy || disabled}
-          aria-pressed={editor.draft?.enabled ?? false}
-          onClick={() => {
-            if (!editor.draft) return;
-            if (!editor.draft.enabled) {
-              // Seed synchronously so the very first enabled render is valid.
-              const seeded = seedFreshAdvisorDraft(
-                { ...editor.draft, enabled: true },
-                options,
-                resolveHumanChoice(),
-              );
-              if (seeded) {
-                handleChange(seeded);
-                return;
-              }
-            }
-            handleChange({ ...editor.draft, enabled: !editor.draft.enabled });
-          }}
+          aria-expanded={advisorControlsOpen}
+          onClick={() => setAdvisorControlsOpen((open) => !open)}
         >
           <SparklesIcon />
           Advisor {editor.draft?.enabled ? "on" : "off"}
@@ -883,11 +870,34 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     </div>
   );
   const recommenderControls =
-    editor.draft && (editor.draft.enabled || settingsOpen) ? (
+    editor.draft && (advisorControlsOpen || settingsOpen || enabledOverride === true) ? (
       <div
         className="flex w-full min-w-0 flex-wrap items-center gap-1.5"
         data-testid="model-advisor-composer-choice"
       >
+        {enabledOverride === undefined ? (
+          <Switch
+            aria-label="Enable Advisor"
+            checked={editor.draft.enabled}
+            disabled={round.busy || disabled}
+            onCheckedChange={() => {
+              if (!editor.draft) return;
+              if (!editor.draft.enabled) {
+                // Seed synchronously so the very first enabled render is valid.
+                const seeded = seedFreshAdvisorDraft(
+                  { ...editor.draft, enabled: true },
+                  options,
+                  resolveHumanChoice(),
+                );
+                if (seeded) {
+                  handleChange(seeded);
+                  return;
+                }
+              }
+              handleChange({ ...editor.draft, enabled: !editor.draft.enabled });
+            }}
+          />
+        ) : null}
         <label
           htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
           className="min-w-0 shrink-0 text-xs text-muted-foreground"
@@ -900,7 +910,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             value={advisorModelValue}
             options={advisorOptions}
             loading={false}
-            compact
+            composer
             includeDefault={false}
             placeholder="Choose model…"
             ariaLabel="Recommender model"
@@ -934,8 +944,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               const choice = savedAdvisorRow.choices.find(
                 (option) => option.available && option.reasoning_effort === effort,
               );
-              if (choice)
-                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+              if (choice) handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
             }}
           />
         </div>
@@ -947,26 +956,26 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         ) : null}
       </div>
     ) : null;
-  // Compact secondary row: Advisor on/off, Recommender model + reasoning, and
-  // settings inline. Portals under the composer's primary action controls —
-  // visually and semantically separate from Harness | Model | Reasoning.
+  // Expand the shared composer selectors directly beneath the Advisor button.
   const composerControls = (
-    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-      {controls}
+    <div className="flex w-full min-w-0 flex-col items-start gap-1">
+      <div className="flex w-full items-center justify-between gap-2">
+        {controls}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="ml-auto shrink-0"
+          disabled={round.busy || disabled}
+          onClick={() => setSettingsOpen((open) => !open)}
+          aria-expanded={settingsOpen}
+          aria-label="Recommender settings"
+        >
+          <SettingsIcon />
+          Recommender settings
+        </Button>
+      </div>
       {recommenderControls}
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="ml-auto shrink-0"
-        disabled={round.busy || disabled}
-        onClick={() => setSettingsOpen((open) => !open)}
-        aria-expanded={settingsOpen}
-        aria-label="Recommender settings"
-      >
-        <SettingsIcon />
-        Recommender settings
-      </Button>
     </div>
   );
   return (
