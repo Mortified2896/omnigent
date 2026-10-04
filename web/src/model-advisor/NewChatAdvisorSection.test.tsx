@@ -286,7 +286,7 @@ it("selects recommender reasoning independently and persists the logical choice"
     },
   ];
   mountSection();
-  await screen.findByRole("combobox", { name: "Recommender model" });
+  await screen.findByRole("button", { name: "Recommender model" });
   expect(screen.getByText("Recommender", { exact: true })).toBeDefined();
   fireEvent.click(screen.getByRole("combobox", { name: "Recommender reasoning effort" }));
   fireEvent.click(await screen.findByRole("option", { name: "Medium" }));
@@ -339,7 +339,7 @@ it("allows an answer-disabled model as the independent advisor choice", async ()
   fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }));
   const advisor = screen.getByTestId("model-advisor-advisor-choice");
   fireEvent.click(advisor);
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /GPT-5\.5/ }));
   expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
 });
@@ -672,11 +672,12 @@ it("keeps settings hidden until requested and exposes a compact Advisor toggle",
     />,
   );
   const toggle = await screen.findByRole("button", { name: "Advisor on" });
-  const recommender = screen.getByRole("combobox", { name: "Recommender model" });
+  const recommender = screen.getByRole("button", { name: "Recommender model" });
   const settings = screen.getByRole("button", { name: "Recommender settings" });
-  expect(
-    recommender.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
+  const choiceRow = screen.getByTestId("model-advisor-composer-choice");
+  expect(choiceRow).toHaveClass("justify-end", "md:pr-16");
+  expect(recommender).toHaveClass("border-0", "md:w-auto");
+  expect(settings).toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Model advisor settings" })).toBeNull();
   expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toBeDefined();
   fireEvent.click(toggle);
@@ -684,7 +685,7 @@ it("keeps settings hidden until requested and exposes a compact Advisor toggle",
     "aria-pressed",
     "false",
   );
-  expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Recommender model" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Recommender settings" }));
   expect(screen.getByRole("region", { name: "Model advisor settings" })).toBeDefined();
 });
@@ -750,7 +751,7 @@ it("retains the original human and recommender choices when continuing a newly l
   );
   expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
   expect(screen.queryByRole("combobox", { name: "Your reasoning effort" })).toBeNull();
-  expect(await screen.findByRole("combobox", { name: "Recommender model" })).toHaveTextContent(
+  expect(await screen.findByRole("button", { name: "Recommender model" })).toHaveTextContent(
     "GLM-5.3",
   );
   expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toHaveTextContent(
@@ -832,12 +833,12 @@ it("seeds declared defaults so enabling a never-configured advisor is valid imme
 
 it("reconciles the advisor effort to the declared default when the new model lacks it", async () => {
   mountSection();
-  await screen.findByRole("combobox", { name: "Recommender model" });
+  await screen.findByRole("button", { name: "Recommender model" });
   // Saved choice: GLM-5.3 at high. GPT-5.5 offers medium (its declared
   // default) but not high, so the switch must land on Medium — never a
   // "Default" placeholder and never the old arbitrary first row.
-  fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Recommender model" }));
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /GPT-5\.5/ }));
   expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
 });
@@ -849,17 +850,17 @@ it("keeps the advisor effort across a model switch when it is still supported", 
     LOGICAL_B,
   ];
   mountSection();
-  await screen.findByRole("combobox", { name: "Recommender model" });
-  fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
+  await screen.findByRole("button", { name: "Recommender model" });
+  fireEvent.click(screen.getByRole("button", { name: "Recommender model" }));
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /GPT-5\.5/ }));
   expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("High");
 });
 
 it("renders each advisor model's routes with the shared lane vocabulary", async () => {
   mountSection();
-  await screen.findByRole("combobox", { name: "Recommender model" });
-  fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
-  const option = await screen.findByRole("option", { name: /GPT-5\.5/ });
+  await screen.findByRole("button", { name: "Recommender model" });
+  fireEvent.click(screen.getByRole("button", { name: "Recommender model" }));
+  const option = await screen.findByRole("menuitemcheckbox", { name: /GPT-5\.5/ });
   expect(option).toHaveTextContent("Codex Subscription — Direct · OmniRoute");
 });
