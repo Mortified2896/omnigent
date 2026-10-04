@@ -897,6 +897,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             disabled={disabled || round.busy || !savedAdvisor}
             label="Recommender reasoning effort"
             testIdPrefix="model-advisor-advisor"
+            testId="model-advisor-advisor-effort"
             onSelect={(effort) => {
               const choice = advisorEfforts.find(
                 (option) => option.available && option.reasoning_effort === effort,
