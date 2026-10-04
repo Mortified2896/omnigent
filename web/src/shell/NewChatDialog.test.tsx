@@ -4421,7 +4421,7 @@ describe("NewChatLandingScreen", () => {
     expect(body.reasoning_effort).toBeUndefined();
   });
 
-  it("hides adjacent Codex effort options when the model has no effort metadata", () => {
+  it("offers the baseline effort ladder when the resolved Codex model has no effort metadata", () => {
     useHostModelOptionsMock.mockImplementation(
       (_hostId, harness) =>
         (harness === "codex-native"
@@ -4438,9 +4438,10 @@ describe("NewChatLandingScreen", () => {
     selectAgent("a2");
     openAgentModels("a2");
     expect(screen.getByTestId("new-chat-landing-agent-models")).toBeTruthy();
-    expect(screen.queryByTestId("new-chat-landing-agent-efforts")).toBeNull();
-    // With no effort metadata the separate inline effort select is hidden.
-    expect(screen.queryByTestId("new-chat-landing-inline-effort")).toBeNull();
+    // A resolved row without advertised tiers is a metadata gap (gateway GLM
+    // routes), not an unknown model: the inline effort select stays visible
+    // with the conservative baseline rungs instead of hiding.
+    expect(inlineEffortValues()).toEqual(["__none__", "low", "medium", "high"]);
   });
 
   it("sizes model names to content and compacts them only when space runs out", () => {

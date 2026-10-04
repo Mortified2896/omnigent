@@ -858,16 +858,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const recommenderControls =
     editor.draft && (editor.draft.enabled || settingsOpen) ? (
       <div
-        className="flex w-full min-w-0 flex-col gap-1 md:flex-row md:flex-wrap md:items-center"
+        className="flex w-full min-w-0 flex-wrap items-center gap-1.5"
         data-testid="model-advisor-composer-choice"
       >
         <label
           htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-          className="min-w-0 text-xs text-muted-foreground md:flex-1"
+          className="min-w-0 shrink-0 text-xs text-muted-foreground"
         >
           Recommender
         </label>
-        <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-1 md:flex md:w-auto md:shrink-0">
+        <div className="flex w-full min-w-0 items-center gap-1 md:w-auto md:shrink-0">
           <SearchableModelPicker
             id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
             value={advisorModelValue}
@@ -927,24 +927,26 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         ) : null}
       </div>
     ) : null;
+  // Compact secondary row: Advisor on/off, Recommender model + reasoning, and
+  // settings inline. Portals under the composer's primary action controls —
+  // visually and semantically separate from Harness | Model | Reasoning.
   const composerControls = (
-    <div className="col-span-2 flex w-full min-w-0 flex-col gap-1 md:basis-full">
+    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      {controls}
       {recommenderControls}
-      <div className="flex items-center justify-between gap-2">
-        {controls}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={round.busy || disabled}
-          onClick={() => setSettingsOpen((open) => !open)}
-          aria-expanded={settingsOpen}
-          aria-label="Recommender settings"
-        >
-          <SettingsIcon />
-          Recommender settings
-        </Button>
-      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="ml-auto shrink-0"
+        disabled={round.busy || disabled}
+        onClick={() => setSettingsOpen((open) => !open)}
+        aria-expanded={settingsOpen}
+        aria-label="Recommender settings"
+      >
+        <SettingsIcon />
+        Recommender settings
+      </Button>
     </div>
   );
   return (

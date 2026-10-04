@@ -124,3 +124,37 @@ export function codexEffortLevelsForModel(
     return leftRank - rightRank;
   });
 }
+
+/**
+ * Baseline effort rungs offered for a *resolved* codex-native row that carries
+ * no per-model tiers.
+ *
+ * A row with empty ``supportedReasoningEfforts`` is a catalog metadata gap —
+ * e.g. OmniRoute GLM routes the gateway serves without ``effort_tiers`` — not
+ * an unknown model, so hiding the picker misreads it. The rungs mirror the
+ * server's probed serving facts for GLM on the codex/Responses wire (tops out
+ * at ``high``; see ``omnigent/util/reasoning_effort.py``), and the codex
+ * process remains the runtime validator for the pairing. Rows that advertise
+ * tiers keep exactly those; an unresolved model still yields no rungs.
+ */
+export const CODEX_UNADVERTISED_MODEL_EFFORTS: readonly string[] = ["low", "medium", "high"];
+
+/**
+ * Effort ladder for the selected Codex model, with a baseline for metadata gaps.
+ *
+ * Unlike :func:`codexEffortLevelsForModel`, a row that resolves but advertises
+ * no reasoning tiers falls back to :data:`CODEX_UNADVERTISED_MODEL_EFFORTS`
+ * instead of an empty ladder (which would hide the picker). Use this for the
+ * codex-native picker surfaces; keep the strict variant where an unadvertised
+ * ladder must stay empty (e.g. Devin, where effort is a model-variant suffix).
+ */
+export function codexEffortLadderForModel(
+  options: readonly NativeModelOption[],
+  currentModel: string | null | undefined,
+): readonly string[] {
+  const advertised = codexEffortLevelsForModel(options, currentModel);
+  if (advertised.length > 0) return advertised;
+  return findNativeModelOption(options, currentModel) === null
+    ? []
+    : CODEX_UNADVERTISED_MODEL_EFFORTS;
+}
