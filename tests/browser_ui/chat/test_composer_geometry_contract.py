@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 from itertools import pairwise
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
@@ -245,7 +247,66 @@ def test_label_collapse_preserves_submit_geometry(
         if surface == "landing"
         else page.get_by_test_id("composer-attach")
     )
-    assert_same_vertical_center(box(leading), box(_submit(page, surface)))
+    assert_no_overlap(box(leading), box(_submit(page, surface)))
+    assert_within_viewport(box(_submit(page, surface)), 280)
+
+
+@pytest.mark.parametrize("surface", ["landing", "live"])
+@pytest.mark.parametrize("width", [320, 375, 393, 430, 1280])
+def test_codex_model_and_effort_keep_send_inside_composer(
+    page: Page,
+    chat_session_contract: ChatSessionContract,
+    surface: str,
+    width: int,
+) -> None:
+    """Text-only model chips must never push Send outside the phone viewport."""
+    chat = chat_session_contract
+    model = model_option("gpt-5.6-sol", display_name="GPT-5.6-Sol", is_default=True)
+    model["defaultReasoningEffort"] = "low"
+    model["supportedReasoningEfforts"] = [
+        {"reasoningEffort": "low"},
+        {"reasoningEffort": "xhigh"},
+    ]
+    chat.set_catalog(harness="codex-native", models=[model], selected_model="gpt-5.6-sol")
+    chat.update_session(reasoning_effort="low", labels={"omnigent.wrapper": "codex-native-ui"})
+    chat.contract.json("/v1/skills", {"data": []})
+    chat.contract.json(f"/v1/sessions/{chat.session_id}/codex_goal", {"goal": None})
+    page.add_init_script(
+        'localStorage.setItem("omnigent:recent-workspaces", '
+        f'JSON.stringify({{"{chat.host_id}": ["/work/repo"]}}))'
+    )
+    _surface(page, chat, surface, {"width": width, "height": 852})
+    prefix = "new-chat-landing" if surface == "landing" else "composer"
+    effort = page.get_by_test_id(f"{prefix}-inline-effort")
+    expect(effort).to_be_visible()
+    _input(page, surface).fill("Mobile send geometry regression")
+    submit = _submit(page, surface)
+    expect(submit).to_be_enabled()
+    card = page.locator("[data-composer-card]")
+    for control in [
+        submit,
+        effort,
+        page.get_by_test_id(
+            "new-chat-landing-model-select" if surface == "landing" else "composer-config-gear"
+        ),
+    ]:
+        assert_within_viewport(box(control), width)
+        assert right_inset(box(card), box(control)) >= 12 - TOLERANCE
+        if control != submit:
+            assert_no_overlap(box(control), box(submit))
+    # Click without Playwright's automatic scrolling masking an off-screen button.
+    rect = box(submit)
+    hit = page.evaluate(
+        "([x,y]) => document.elementFromPoint(x,y)?.closest('button')?.getAttribute('aria-label')",
+        [rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2],
+    )
+    assert hit == submit.get_attribute("aria-label")
+    if screenshot_dir := os.environ.get("E2E_SCREENSHOT_DIR"):
+        page.screenshot(path=str(Path(screenshot_dir) / f"{surface}-{width}.png"))
+    if surface == "live":
+        page.mouse.click(rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2)
+        expect(_input(page, surface)).to_have_value("")
+        assert len(chat.event_posts) == 1
 
 
 @pytest.mark.parametrize("surface", ["landing", "live"])

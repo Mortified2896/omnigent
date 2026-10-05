@@ -147,7 +147,10 @@ export const ChatComposer = forwardRef<HTMLDivElement, ChatComposerProps>(functi
  * Every measurement probes the expanded layout: the attribute is removed, the
  * groups' natural widths are read, and the verdict is written back within the
  * same task, so the probe never paints and the verdict never depends on the
- * previous one. Re-measured when the row's width changes and when the controls
+ * previous one. Controls whose labels must remain visible (text-only model
+ * chips and effort pickers) may still exceed the available width; both the
+ * action row and trailing group wrap so Send stays inside the card.
+ * Re-measured when the row's width changes and when the controls
  * inside it change.
  */
 function useCollapsedComposerLabels(
@@ -350,7 +353,7 @@ export const ComposerActionRow = forwardRef<HTMLDivElement, ComponentPropsWithou
       <div
         ref={ref}
         className={cn(
-          "group/composer-actions @container/composer-actions relative flex min-w-0 flex-nowrap items-center justify-between gap-2 pt-1 pb-2",
+          "group/composer-actions @container/composer-actions relative flex min-w-0 flex-wrap items-center justify-between gap-2 pt-1 pb-2",
           COMPOSER_CONTENT_INSET_CLASS,
           className,
         )}
@@ -369,7 +372,9 @@ export const ComposerActionGroup = forwardRef<
       ref={ref}
       className={cn(
         "flex min-w-0 items-center gap-1",
-        side === "left" ? "flex-none overflow-visible" : "ml-auto max-w-full shrink-0",
+        side === "left"
+          ? "flex-none overflow-visible"
+          : "ml-auto max-w-full shrink-0 flex-wrap justify-end",
         className,
       )}
       {...props}
