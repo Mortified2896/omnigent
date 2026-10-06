@@ -20,7 +20,11 @@ _SHA = "a" * 40
 
 
 def _write_test_wheel(
-    tmp_path: Path, *, embedded_sha: str = _SHA, legacy_metadata: bool = True
+    tmp_path: Path,
+    *,
+    embedded_sha: str = _SHA,
+    legacy_metadata: bool = True,
+    relative_assets: bool = False,
 ) -> Path:
     wheel = tmp_path / "omnigent-0.9.0.dev0-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -33,11 +37,12 @@ def _write_test_wheel(
             "Metadata-Version: 2.1\nName: omnigent\nVersion: 0.9.0.dev0\n",
         )
         prefix = "omnigent/server/static/web-ui/"
+        asset_prefix = "./" if relative_assets else "/"
         archive.writestr(
             f"{prefix}index.html",
             "<html><head><title>Omnigent</title>"
-            '<link href="/assets/app.css" rel="stylesheet"></head>'
-            '<body><script src="/assets/app.js"></script></body></html>',
+            f'<link href="{asset_prefix}assets/app.css" rel="stylesheet"></head>'
+            f'<body><script src="{asset_prefix}assets/app.js"></script></body></html>',
         )
         if legacy_metadata:
             archive.writestr(f"{prefix}version.json", "{}")
@@ -73,7 +78,7 @@ def test_inspect_wheel_rejects_wrong_embedded_commit(tmp_path: Path) -> None:
 
 
 def test_inspect_wheel_accepts_upstream_017_spa_without_legacy_metadata(tmp_path: Path) -> None:
-    wheel = _write_test_wheel(tmp_path, legacy_metadata=False)
+    wheel = _write_test_wheel(tmp_path, legacy_metadata=False, relative_assets=True)
     assert preflight.inspect_wheel(wheel, _SHA)["sha"] == _SHA
 
 

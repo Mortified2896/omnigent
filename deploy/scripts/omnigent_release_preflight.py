@@ -95,7 +95,7 @@ def _validate_spa(
     for ref in refs:
         if ref.startswith(("http://", "https://", "data:", "#")):
             continue
-        path = ref.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+        path = PurePosixPath(ref.split("?", 1)[0].split("#", 1)[0].lstrip("/")).as_posix()
         if path:
             local_refs.append(path)
     missing_refs = sorted(path for path in local_refs if f"{prefix}{path}" not in names)
