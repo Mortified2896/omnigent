@@ -95,9 +95,9 @@ def _validate_spa(
     for ref in refs:
         if ref.startswith(("http://", "https://", "data:", "#")):
             continue
-        path = PurePosixPath(ref.split("?", 1)[0].split("#", 1)[0].lstrip("/")).as_posix()
+        path = ref.split("?", 1)[0].split("#", 1)[0].lstrip("/")
         if path:
-            local_refs.append(path)
+            local_refs.append(PurePosixPath(path).as_posix())
     missing_refs = sorted(path for path in local_refs if f"{prefix}{path}" not in names)
     if missing_refs:
         raise PreflightError(f"SPA index references missing files: {', '.join(missing_refs)}")

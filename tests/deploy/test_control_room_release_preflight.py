@@ -41,6 +41,7 @@ def _write_test_wheel(
         archive.writestr(
             f"{prefix}index.html",
             "<html><head><title>Omnigent</title>"
+            '<base href="/">'
             f'<link href="{asset_prefix}assets/app.css" rel="stylesheet"></head>'
             f'<body><script src="{asset_prefix}assets/app.js"></script></body></html>',
         )
