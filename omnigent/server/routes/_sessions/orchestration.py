@@ -2925,6 +2925,10 @@ async def _persist_external_conversation_item_unlocked(
         if drained is not None:
             cleared_pending_id = drained.pending_id
             item = _merge_pending_file_blocks(item, drained.content)
+            if drained.task_tags:
+                item = item.model_copy(
+                    update={"data": item.data.model_copy(update={"task_tags": drained.task_tags})}
+                )
             # Apply the original sender's identity recorded at POST time.
             # The transcript forwarder is the single writer here and has no
             # auth context, so the persisted item would otherwise have
@@ -3173,7 +3177,9 @@ async def _settle_undelivered_native_input(
     item = NewConversationItem(
         type="message",
         response_id=response_id or generate_task_id(),
-        data=MessageData(role="user", content=drained.content, user_authored=True),
+        data=MessageData(
+            role="user", content=drained.content, user_authored=True, task_tags=drained.task_tags
+        ),
         created_by=drained.created_by,
         stable_id=drained.stable_id,
     )
@@ -3274,7 +3280,12 @@ def _build_skipped_native_items(
             NewConversationItem(
                 type="message",
                 response_id=turn_id,
-                data=MessageData(role="user", content=skipped.content, user_authored=True),
+                data=MessageData(
+                    role="user",
+                    content=skipped.content,
+                    user_authored=True,
+                    task_tags=skipped.task_tags,
+                ),
                 created_by=skipped.created_by,
                 stable_id=uuid.uuid5(
                     uuid.NAMESPACE_URL,
@@ -7203,6 +7214,9 @@ async def _dispatch_session_event_to_runner_impl(
             pending_inputs.record(
                 session_id,
                 content,
+                task_tags=MessageData(
+                    role="user", content=content, task_tags=body.data.get("task_tags", [])
+                ).task_tags,
                 created_by=created_by,
                 stable_id=web_stable_id,
                 background_titles_enabled=background_titles_enabled,

@@ -3583,6 +3583,14 @@
             "description": "Native task id of an explicitly completed child.",
             "title": "Subagent Return Id"
           },
+          "task_tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Task Tags",
+            "type": "array"
+          },
           "user_authored": {
             "default": false,
             "description": "Confirmed or conservatively preserved user input; prevents legacy content cleanup from hiding literal agent markup.",
@@ -5986,6 +5994,19 @@
             "description": "Opt-in for the DANGEROUS codex-native full-bypass (`--dangerously-bypass-approvals-and-sandbox`) on the fork. The source's bypass label is ALWAYS dropped on a fork (a bypass-armed source can never silently re-arm its clone), so this is the only way a fork enables it \u2014 an explicit, banner-gated opt-in from the dialog, mirroring the new-session approval selector. `True` stamps `omnigent.harnesses.codex_native.main.bypass_sandbox` on the fork; `False` / omitted leaves the fork in Codex's normal approval/sandbox stance. Only meaningful for a codex-native target; ignored otherwise.",
             "title": "Codex Bypass Sandbox",
             "type": "boolean"
+          },
+          "feedback_response_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Response Id"
           },
           "host_type": {
             "default": "external",
@@ -10082,6 +10103,50 @@
         ]
       }
     },
+    "/v1/hosts/{host_id}/codex-rate-limits": {
+      "get": {
+        "operationId": "get_codex_rate_limits_v1_hosts__host_id__codex_rate_limits_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "title": "Host Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Codex Rate Limits V1 Hosts  Host Id  Codex Rate Limits Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Codex Rate Limits",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
     "/v1/hosts/{host_id}/credentials/detected": {
       "get": {
         "description": "List adoptable credentials already present on a connected host.\n\nBacks the setup dialog's \"adopt an existing credential\" affordance: the\nhost reports which UI-auth-family credentials it already has as\nNON-secret descriptors (family + source label + env var name), so the UI\ncan offer a one-click \"Use it\". Owner-scoped and flag-gated like the\ncredential-write route (404 when disabled). Never returns a secret value.\n\n**Returns:** `{\"object\": \"detected_credentials\", \"credentials\": [...]}`.\n\n**Raises**\n\n- `HTTPException` \u2014 404 when disabled or host unknown, 403 when not the owner, 409 when offline, 502/504 on host failure/timeout.",
@@ -13455,6 +13520,53 @@
         "summary": "Update Comment",
         "tags": [
           "comments"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/feedback-discussions": {
+      "get": {
+        "operationId": "get_feedback_discussions_v1_sessions__session_id__feedback_discussions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Feedback Discussions V1 Sessions  Session Id  Feedback Discussions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Feedback Discussions",
+        "tags": [
+          "sessions"
         ]
       }
     },

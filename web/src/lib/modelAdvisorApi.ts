@@ -299,6 +299,8 @@ export async function createProviderRound(
   humanChoiceId: string,
   preferences: ProviderPreferences,
   submissionKey: string,
+  continuation?: { sessionId: string; keepChosenModel: boolean },
+  taskTags?: string[],
 ): Promise<RoundDto> {
   return advisorFetch<RoundDto>("/v1/model-advisor/rounds", {
     method: "POST",
@@ -310,6 +312,13 @@ export async function createProviderRound(
       human_choice_id: humanChoiceId,
       submission_key: submissionKey,
       preferences,
+      ...(taskTags?.length ? { task_tags: taskTags } : {}),
+      ...(continuation
+        ? {
+            continue_session_id: continuation.sessionId,
+            keep_chosen_model: continuation.keepChosenModel,
+          }
+        : {}),
     }),
   });
 }

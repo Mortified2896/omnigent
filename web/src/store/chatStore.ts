@@ -155,6 +155,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
 import { toast } from "sonner";
 
 export interface SendOptions {
+  taskTags?: string[];
   /** Compact is a control event, not a user-message turn. */
   command?: "compact";
   /** Client-only quote provenance, retained if the composer needs to retry. */
@@ -324,6 +325,7 @@ export function beginLocalConversation(
   provisional = newTempConversation(),
   project?: LocalConversationProject,
   model?: OptimisticSessionModel,
+  taskTags?: string[],
 ): { tempConvId: string; pendingMsgTempId: string; createToken: string } | null {
   if (queryClient === null) return null;
   const { id: tempConvId, token: createToken } = provisional;
@@ -350,6 +352,7 @@ export function beginLocalConversation(
     tempId: pendingMsgTempId,
     content,
     initialDraft: { text, files: files ?? [] },
+    taskTags,
     createdAtS: Math.floor(Date.now() / 1000),
     ...(selfAuthor !== null ? { author: selfAuthor } : {}),
   };
@@ -425,6 +428,7 @@ export function hydrateLocalConversation(
   navigate: (to: string, opts?: { replace?: boolean }) => void,
   isStillViewing: () => boolean = () => true,
   project?: LocalConversationProject,
+  taskTags?: string[],
 ): void {
   const shouldSend = hasPendingLocalMessage(tempConvId);
   const restoredDraft = conversationRegistry.peek(tempConvId)?.getState().failedSendDraft;
@@ -477,6 +481,7 @@ export function hydrateLocalConversation(
   void store.send(text, agentId, files, {
     pinnedConversationId: realId,
     reusePendingTempId: pendingMsgTempId,
+    taskTags,
   });
 }
 
@@ -513,6 +518,7 @@ export function removeLocalConversation(tempConvId: string): boolean {
  * real id comes from the consumed event when we promote into `blocks`.
  */
 export interface PendingUserMessage {
+  taskTags?: string[];
   tempId: string;
   content: MessageContentBlock[];
   /** Unsent draft awaiting session/model readiness, including unuploaded files. */
@@ -549,6 +555,7 @@ export interface PendingUserMessage {
  * directly (no serialization concern).
  */
 export interface QueuedMessage {
+  taskTags?: string[];
   /** Captured at enqueue time so background dispatch preserves the control. */
   command?: "compact";
   /** Client-only id, e.g. `q_1`. */
@@ -804,6 +811,7 @@ export interface ConversationState {
    * is covered.
    */
   failedSendDraft: {
+    taskTags?: string[];
     conversationId: string;
     text: string;
     files: File[];
@@ -1106,7 +1114,12 @@ export interface ChatActions {
    * while the agent is busy. The head is flushed automatically (FIFO, one per
    * turn) when the session next goes idle — see the `session_status` handler.
    */
-  enqueueMessage: (text: string, files?: File[], replyDraft?: StoredReplyDraft) => void;
+  enqueueMessage: (
+    text: string,
+    files?: File[],
+    replyDraft?: StoredReplyDraft,
+    taskTags?: string[],
+  ) => void;
   /** Remove a queued message by id (the strip's per-row delete). */
   dequeueMessage: (queueId: string) => void;
   /**
@@ -1756,6 +1769,7 @@ function scheduleWorkspaceFilesystemInvalidation(sessionId: string): void {
  * the vendor CLI interprets slash commands itself.
  */
 export interface PendingInitialPrompt {
+  taskTags?: string[];
   /** Sanitized full text the user typed, e.g. `"/review-pr 123"`. */
   text: string;
   /** Matched bundled-skill invocation, or `null` for a plain message. */
@@ -1879,7 +1893,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
   abortController: null,
   historyGeneration: 0,
 
-  enqueueMessage: (text, files, replyDraft) => {
+  enqueueMessage: (text, files, replyDraft, taskTags) => {
     const { conversationId, boundAgentId, sessionHarness } = get();
     if (conversationId === null) return;
     queueSeq += 1;
@@ -1903,6 +1917,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
           ...(boundAgentId !== null ? { agentId: boundAgentId } : {}),
           ...(files && files.length > 0 ? { files } : {}),
           ...(replyDraft ? { replyDraft } : {}),
+          taskTags,
         },
       ],
     }));
@@ -2316,6 +2331,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
               {
                 tempId,
                 content,
+                taskTags: opts?.taskTags,
                 ...(initialDraft ? { initialDraft } : {}),
                 createdAtS: Math.floor(Date.now() / 1000),
                 ...(selfAuthor !== null ? { author: selfAuthor } : {}),
@@ -2420,6 +2436,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
           role: "user",
           content: serverContent,
           stable_id: stableId,
+          ...(opts?.taskTags?.length ? { task_tags: opts.taskTags } : {}),
         },
       });
       // Policy denied the input — the server returned immediately
@@ -2532,6 +2549,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
             conversationId: draftSessionId,
             text,
             files: files ?? [],
+            taskTags: opts?.taskTags,
             stableId,
             serverRefused,
             ...(unsettled ? { unsettled: true } : {}),
@@ -3349,6 +3367,7 @@ function queuedSendOptions(
   return {
     command: message.command,
     replyDraft: message.replyDraft,
+    taskTags: message.taskTags,
     stableId,
     pinnedConversationId: message.conversationId,
     onError: (error) => {
@@ -4274,6 +4293,7 @@ async function bindStream(
       const toPending = (p: PendingInput): PendingUserMessage => ({
         tempId: p.pendingId,
         content: p.content,
+        ...(p.taskTags?.length ? { taskTags: p.taskTags } : {}),
         ...(p.createdBy !== undefined ? { author: p.createdBy } : {}),
       });
       let candidatePending: PendingUserMessage[];
@@ -6587,6 +6607,7 @@ function committedUserBlock(
   stableKey?: string,
   createdBy?: string,
   createdAtS?: number,
+  taskTags?: string[],
 ): UserMessageBlock {
   return {
     type: "user_message",
@@ -6607,6 +6628,7 @@ function committedUserBlock(
     },
     content,
     stableKey,
+    taskTags,
   };
 }
 
@@ -7421,6 +7443,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
                   matched.tempId,
                   event.createdBy ?? matched.author,
                   matched.createdAtS,
+                  matched.taskTags,
                 ),
               ],
             };
@@ -7456,6 +7479,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
                 head.tempId,
                 event.createdBy ?? head.author,
                 head.createdAtS,
+                head.taskTags,
               ),
             ],
           };
@@ -7467,7 +7491,16 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
         return {
           blocks: [
             ...s.blocks,
-            committedUserBlock(event.itemId, eventContent, undefined, event.createdBy),
+            committedUserBlock(
+              event.itemId,
+              eventContent,
+              undefined,
+              event.createdBy,
+              undefined,
+              Array.isArray(event.data.task_tags)
+                ? event.data.task_tags.filter((tag): tag is string => typeof tag === "string")
+                : undefined,
+            ),
           ],
         };
       });

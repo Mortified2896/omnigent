@@ -16,6 +16,11 @@ vi.mock("@/hooks/useSandboxModelOptions", async (importOriginal) => ({
   })),
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Keep subscription polling out of the session-create transport assertions.
+vi.mock("@/components/composer/CodexSubscriptionUsage", () => ({
+  CodexSubscriptionUsage: () => null,
+}));
 import { useConversations as useTestConversations } from "@/hooks/useConversations";
 
 vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTestConversations() }));
@@ -469,6 +474,7 @@ describe("NewChatLandingScreen create flow", () => {
         expect.any(Object),
         project,
         expect.objectContaining({ boundAgentId: "ag_hello", reasoningEffort: null }),
+        [],
       ),
     );
     await waitFor(() =>
@@ -483,6 +489,7 @@ describe("NewChatLandingScreen create flow", () => {
         navigateMock,
         expect.any(Function),
         project,
+        [],
       ),
     );
   });
@@ -591,6 +598,7 @@ describe("NewChatLandingScreen create flow", () => {
         navigateMock,
         expect.any(Function),
         undefined,
+        [],
       ),
     );
     expect(resolveCreate).toBeTypeOf("function");
@@ -637,6 +645,7 @@ describe("NewChatLandingScreen create flow", () => {
         navigateMock,
         expect.any(Function),
         undefined,
+        [],
       ),
     );
   });
@@ -847,6 +856,7 @@ describe("NewChatLandingScreen create flow", () => {
         navigateMock,
         expect.any(Function),
         undefined,
+        [],
       ),
     );
 
@@ -2156,9 +2166,9 @@ describe("NewChatLandingScreen create flow", () => {
           groupLabel: "OmniRoute",
         },
         {
-          id: "codex/gpt-5.5",
-          model: "codex/gpt-5.5",
-          displayName: "GPT-5.5",
+          id: "codex/gpt-6-sol",
+          model: "codex/gpt-6-sol",
+          displayName: "GPT-6-Sol",
           accessLane: "omniroute",
           groupLabel: "OmniRoute",
           isDefault: true,
@@ -2186,7 +2196,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     // The dedicated model chip carries the current model…
     const chip = screen.getByTestId("new-chat-landing-model-select");
-    expect(chip).toHaveTextContent("GPT-5.5");
+    expect(chip).toHaveTextContent("GPT-6-Astra");
     // …and ONE interaction opens the list: no Harnesses menu, no Edit row.
     fireEvent.pointerDown(chip, { button: 0 });
     const models = await screen.findByTestId("new-chat-landing-agent-models");

@@ -196,6 +196,13 @@
   border-color: #2469d9;
   background: rgba(36, 105, 217, 0.09);
 }
+.advisor-effort.advisor-approval-effort.is-selected {
+  border-color: #dc2626;
+  background: rgba(220, 38, 38, 0.09);
+}
+.advisor-providers .advisor-approval-effort input {
+  accent-color: #dc2626;
+}
 .advisor-effort input {
   margin: 0;
 }

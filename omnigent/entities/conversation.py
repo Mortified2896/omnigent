@@ -321,6 +321,16 @@ class MessageData(BaseModel):
     subagent_return_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     interrupted: bool = Field(default=False, exclude_if=lambda value: value is False)
     stream_message_id: str | None = None
+    task_tags: list[str] = Field(
+        default_factory=list, max_length=8, exclude_if=lambda value: not value
+    )
+
+    @field_validator("task_tags")
+    @classmethod
+    def validate_task_tags(cls, tags: list[str]) -> list[str]:
+        if any(not tag.strip() or len(tag) > 40 for tag in tags):
+            raise ValueError("task tags must contain 1 to 40 characters")
+        return list(dict.fromkeys(tag.strip() for tag in tags))
 
     @field_validator("content")
     @classmethod

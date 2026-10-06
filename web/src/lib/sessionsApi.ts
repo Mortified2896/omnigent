@@ -216,6 +216,7 @@ interface SessionResponseWire {
    * optimistic bubble. Empty for non-native sessions.
    */
   pending_inputs?: {
+    task_tags?: string[];
     pending_id: string;
     content: MessageContentBlock[];
     created_by?: string;
@@ -356,6 +357,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
     pendingInputs: (wire.pending_inputs ?? []).map((p) => ({
       pendingId: p.pending_id,
       content: p.content,
+      ...(p.task_tags?.length ? { taskTags: p.task_tags } : {}),
       ...(p.created_by !== undefined ? { createdBy: p.created_by } : {}),
     })),
     permissionLevel: wire.permission_level ?? null,
@@ -823,9 +825,10 @@ export async function forkSession(
     sandbox?: { provider?: string | null; workspace?: string | null };
     /** Mark the fork as a side chat (hidden from the left sidebar). */
     sideChat?: boolean;
+    feedbackResponseId?: string;
   } = {},
 ): Promise<Session> {
-  const { title, agentId, upToResponseId, config, sandbox, sideChat } = options;
+  const { title, agentId, upToResponseId, config, sandbox, sideChat, feedbackResponseId } = options;
   const body: {
     title?: string;
     agent_id?: string;
@@ -838,10 +841,12 @@ export async function forkSession(
     sandbox_provider?: string;
     workspace?: string | null;
     side_chat?: boolean;
+    feedback_response_id?: string;
   } = {};
   if (sideChat) {
     body.side_chat = true;
   }
+  if (feedbackResponseId) body.feedback_response_id = feedbackResponseId;
   if (title !== undefined) {
     body.title = title;
   }

@@ -331,6 +331,7 @@ function isCompactionSummaryMessage(item: MessageItem): boolean {
 
 function userMessageToBlock(item: MessageItem): UserMessageBlock {
   return {
+    taskTags: item.task_tags,
     type: "user_message",
     ctx: ctxFor(item),
     // Forward the full content array verbatim so the renderer can

@@ -8,7 +8,13 @@ import {
 
 let composerSubmitRef = createRef<AdvisorSubmitHandle>();
 function NewChatAdvisorSection(props: Parameters<typeof AdvisorSection>[0]) {
-  return <AdvisorSection submitRef={composerSubmitRef} {...props} />;
+  return (
+    <AdvisorSection
+      submitRef={composerSubmitRef}
+      settingsPanelTarget={settingsPanelTarget}
+      {...props}
+    />
+  );
 }
 function send() {
   act(() => {
@@ -28,8 +34,8 @@ vi.mock("@/lib/identity", () => ({
 
 const OPTION_A = {
   candidate_id: "legacy-aaa",
-  model_id: "gpt-5.5",
-  display_name: "GPT-5.5",
+  model_id: "gpt-6.1-sol",
+  display_name: "GPT-6.1 Sol",
   lane_id: "codex-direct" as const,
   reasoning_effort: "medium",
   access_class: "chatgpt_plan",
@@ -48,10 +54,10 @@ const OPTION_B = {
 const LOGICAL_A = {
   choice_id: "choice-openai-medium",
   provider: "openai" as const,
-  model_id: "gpt-5.5",
-  display_name: "GPT-5.5",
+  model_id: "gpt-6.1-sol",
+  display_name: "GPT-6.1 Sol",
   reasoning_effort: "medium",
-  model_ids: ["gpt-5.5", "codex/gpt-5.5"],
+  model_ids: ["gpt-6.1-sol", "codex/gpt-6.1-sol"],
   access_lanes: ["codex-direct", "omniroute"],
   default_access_lanes: ["codex-direct"],
   available: true,
@@ -96,6 +102,7 @@ let roundState: string;
 let rounds: Record<string, Record<string, unknown>>;
 let failNext: number | null;
 let advisorModelTarget: HTMLDivElement;
+let settingsPanelTarget: HTMLDivElement;
 
 function roundPayload(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -115,6 +122,8 @@ beforeEach(() => {
   localStorage.clear();
   advisorModelTarget = document.createElement("div");
   document.body.appendChild(advisorModelTarget);
+  settingsPanelTarget = document.createElement("div");
+  document.body.appendChild(settingsPanelTarget);
   catalog = {
     object: "model_advisor.catalog",
     catalog_revision: "rev1",
@@ -228,6 +237,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   advisorModelTarget.remove();
+  settingsPanelTarget.remove();
 });
 
 const GLM_PICK = { model: "glm-5.3", accessLane: "glm-direct", effort: "high" };
@@ -303,44 +313,48 @@ it("keeps provider and model switches from erasing remembered reasoning", async 
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });
 
-  const terra = screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }) as HTMLInputElement;
-  const effort = screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement;
+  const terra = screen.getByRole("switch", {
+    name: "Enable GPT-6.1 Sol answers",
+  }) as HTMLInputElement;
+  const effort = screen.getByRole("checkbox", { name: "GPT-6.1 Sol: Medium" }) as HTMLInputElement;
   expect(terra.checked).toBe(true);
   expect(effort.checked).toBe(true);
 
   fireEvent.click(terra);
   expect(
-    (screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }) as HTMLInputElement).checked,
+    (screen.getByRole("switch", { name: "Enable GPT-6.1 Sol answers" }) as HTMLInputElement)
+      .checked,
   ).toBe(false);
   expect(
-    (screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement).checked,
+    (screen.getByRole("checkbox", { name: "GPT-6.1 Sol: Medium" }) as HTMLInputElement).checked,
   ).toBe(true);
   expect(screen.getByRole("status")).toHaveTextContent("1 active combinations");
 
   const openai = screen.getByRole("switch", { name: "Enable OpenAI answers" }) as HTMLInputElement;
   fireEvent.click(openai);
   expect(
-    (screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement).checked,
+    (screen.getByRole("checkbox", { name: "GPT-6.1 Sol: Medium" }) as HTMLInputElement).checked,
   ).toBe(true);
   fireEvent.click(screen.getByRole("switch", { name: "Enable OpenAI answers" }));
   expect(
-    (screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }) as HTMLInputElement).checked,
+    (screen.getByRole("switch", { name: "Enable GPT-6.1 Sol answers" }) as HTMLInputElement)
+      .checked,
   ).toBe(false);
 
-  fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-6.1 Sol answers" }));
   expect(
-    (screen.getByRole("checkbox", { name: "GPT-5.5: Medium" }) as HTMLInputElement).checked,
+    (screen.getByRole("checkbox", { name: "GPT-6.1 Sol: Medium" }) as HTMLInputElement).checked,
   ).toBe(true);
 });
 
 it("allows an answer-disabled model as the independent advisor choice", async () => {
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });
-  fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-5.5 answers" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Enable GPT-6.1 Sol answers" }));
   const advisor = screen.getByTestId("model-advisor-advisor-choice");
   fireEvent.click(advisor);
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
-  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-6\.1 Sol/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6.1 Sol");
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
 });
 
@@ -399,7 +413,7 @@ it("ignores hydration responses from a host that is no longer selected", async (
     Response.json({ ...catalog, catalog_revision: "stale-host1", logical_options: [LOGICAL_A] }),
   );
   resolveOldPreferences(Response.json(prefsDto));
-  await waitFor(() => expect(screen.queryByText(/GPT-5\.5/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/GPT-6\.1 Sol/)).toBeNull());
 });
 
 it("surfaces a catalog failure as a visible reason", async () => {
@@ -435,7 +449,7 @@ it("does not reserve a round without the composer prompt", async () => {
   mountSection({ task: "   " });
   await screen.findByRole("region", { name: "Model advisor settings" });
   send();
-  await waitFor(() => expect(screen.getByRole("status")).toBeDefined());
+  await waitFor(() => expect(screen.getByText(/Write the task before asking/)).toBeDefined());
   expect(screen.getByText(/Write the task before asking/)).toBeDefined();
   const posted = api.mock.calls.find(([url]) => url === "/v1/model-advisor/rounds");
   expect(posted).toBeUndefined();
@@ -462,7 +476,7 @@ it("requires the exact lane, model, and reasoning effort", async () => {
 
 it("maps the composer Default effort to the host catalog's lane-specific default choice", async () => {
   mountSection({
-    humanPick: { model: "codex/gpt-5.5", accessLane: "codex-direct", effort: "" },
+    humanPick: { model: "codex/gpt-6.1-sol", accessLane: "codex-direct", effort: "" },
   });
   await screen.findByRole("region", { name: "Model advisor settings" });
   send();
@@ -496,7 +510,7 @@ it("uses the current composer model and reasoning choice when creating each roun
     <NewChatAdvisorSection
       hostId="host_1"
       task="Write a test suite"
-      humanPick={{ model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" }}
+      humanPick={{ model: "gpt-6.1-sol", accessLane: "codex-direct", effort: "medium" }}
       launchAgentId="ag_1"
       launchWorkspace="/repo"
       advisorModelTarget={advisorModelTarget}
@@ -644,7 +658,7 @@ it("an enabled follow-up uses its composer choice even when saved defaults are o
 it("resolves an explicit model and effort independently of a stale composer connection", async () => {
   mountSection({
     humanPick: {
-      model: "gpt-5.5",
+      model: "gpt-6.1-sol",
       effort: "medium",
       accessLane: "unavailable-previous-connection",
     },
@@ -660,7 +674,7 @@ it("resolves an explicit model and effort independently of a stale composer conn
   expect(JSON.parse(posted![1].body).human_choice_id).toBe(LOGICAL_A.choice_id);
 });
 
-it("opens shared composer selectors below Advisor without changing its enabled state", async () => {
+it("keeps the Advisor row and selectors present when toggled off", async () => {
   render(
     <NewChatAdvisorSection
       hostId="host_1"
@@ -671,43 +685,33 @@ it("opens shared composer selectors below Advisor without changing its enabled s
       onLaunched={() => {}}
     />,
   );
-  const toggle = await screen.findByRole("button", { name: "Advisor on" });
-  expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
+  const model = await screen.findByRole("combobox", { name: "Recommender model" });
+  const effort = screen.getByRole("combobox", { name: "Recommender reasoning effort" });
+  const toggle = screen.getByRole("switch", { name: "Enable Advisor" });
+  expect(toggle).toBeChecked();
   fireEvent.click(toggle);
-  expect(toggle).toHaveAttribute("aria-expanded", "true");
-  const recommender = screen.getByRole("combobox", { name: "Recommender model" });
-  expect(recommender).toHaveAttribute("data-variant", "ghost");
-  expect(
-    toggle.compareDocumentPosition(recommender) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  expect(screen.getByRole("combobox", { name: "Recommender reasoning effort" })).toBeDefined();
-  expect(screen.queryByRole("region", { name: "Model advisor settings" })).toBeNull();
-  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
-  expect(screen.getByRole("button", { name: "Advisor off" })).toHaveAttribute(
-    "aria-expanded",
-    "true",
-  );
-  expect(screen.getByRole("switch", { name: "Enable Advisor" })).not.toBeChecked();
-  expect(screen.getByRole("switch", { name: "Enable Advisor" })).toHaveTextContent("Off");
-  fireEvent.click(screen.getByRole("button", { name: "Advisor off" }));
-  expect(screen.queryByRole("combobox", { name: "Recommender model" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Recommender settings" }));
-  expect(screen.getByRole("region", { name: "Model advisor settings" })).toBeDefined();
+  expect(toggle).not.toBeChecked();
+  expect(model).toBeInTheDocument();
+  expect(effort).toBeInTheDocument();
+  fireEvent.click(toggle);
+  expect(toggle).toBeChecked();
+  expect(model).toBeInTheDocument();
 });
 
 it("saves approval flags and pauses an advisor-selected guarded model for approval or override", async () => {
   mountSection({
     requireConfirmation: false,
-    humanPick: { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" },
+    humanPick: { model: "gpt-6.1-sol", accessLane: "codex-direct", effort: "medium" },
   });
-  const approval = await screen.findByRole("checkbox", { name: "Ask before running GLM-5.3" });
+  const approval = await screen.findByRole("checkbox", {
+    name: "Ask before running GLM-5.3 at High",
+  });
   fireEvent.click(approval);
   fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
   await waitFor(() => expect(api.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
   const saved = api.mock.calls.find(([, init]) => init?.method === "PUT")!;
-  expect(JSON.parse(saved[1].body).preferences.providers.glm.approval_model_ids).toEqual([
-    "glm-5.3",
+  expect(JSON.parse(saved[1].body).preferences.providers.glm.approval_choice_ids).toEqual([
+    LOGICAL_B.choice_id,
   ]);
   send();
   await screen.findByRole("heading", { name: "Approval required before running" });
@@ -731,7 +735,7 @@ it("retains the original human and recommender choices when continuing a newly l
     LOGICAL_B,
     { ...LOGICAL_B, choice_id: "choice-glm-medium", reasoning_effort: "medium" },
   ];
-  const original = { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" };
+  const original = { model: "gpt-6.1-sol", accessLane: "codex-direct", effort: "medium" };
   const launched = vi.fn();
   const view = mountSection({ humanPick: original, onLaunched: launched });
   await screen.findByRole("region", { name: "Model advisor settings" });
@@ -824,29 +828,29 @@ it("seeds declared defaults so enabling a never-configured advisor is valid imme
     preferences: null,
   };
   mountSection();
-  await screen.findByRole("button", { name: "Advisor off" });
+  await screen.findByRole("switch", { name: "Enable Advisor" });
   fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
   // No validation error becomes the normal post-toggle state.
   await waitFor(() => {
-    expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+    expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6.1 Sol");
   });
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
   expect(screen.queryByText(/Select at least one active model and reasoning level/)).toBeNull();
   expect(screen.queryByText(/Choose an available advisor model/)).toBeNull();
   // The seeded pool keeps both providers' defaults plus the composer pick.
-  expect(screen.getByRole("checkbox", { name: "GPT-5.5: Medium" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "GPT-6.1 Sol: Medium" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: "GLM-5.3: High" })).toBeChecked();
 });
 
 it("reconciles the advisor effort to the declared default when the new model lacks it", async () => {
   mountSection();
   await screen.findByRole("combobox", { name: "Recommender model" });
-  // Saved choice: GLM-5.3 at high. GPT-5.5 offers medium (its declared
+  // Saved choice: GLM-5.3 at high. GPT-6.1 Sol offers medium (its declared
   // default) but not high, so the switch must land on Medium — never a
   // "Default" placeholder and never the old arbitrary first row.
   fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
-  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-6\.1 Sol/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6.1 Sol");
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Medium");
 });
 
@@ -859,8 +863,8 @@ it("keeps the advisor effort across a model switch when it is still supported", 
   mountSection();
   await screen.findByRole("combobox", { name: "Recommender model" });
   fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
-  fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5/ }));
-  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-5.5");
+  fireEvent.click(await screen.findByRole("option", { name: /GPT-6\.1 Sol/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6.1 Sol");
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("High");
 });
 
@@ -868,6 +872,6 @@ it("renders each advisor model's routes with the shared lane vocabulary", async 
   mountSection();
   await screen.findByRole("combobox", { name: "Recommender model" });
   fireEvent.click(screen.getByRole("combobox", { name: "Recommender model" }));
-  const option = await screen.findByRole("option", { name: /GPT-5\.5/ });
+  const option = await screen.findByRole("option", { name: /GPT-6\.1 Sol/ });
   expect(option).toHaveTextContent("Codex Subscription — Direct · OmniRoute");
 });

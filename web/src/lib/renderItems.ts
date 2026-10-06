@@ -163,6 +163,7 @@ export type RenderItem =
 export type Bubble =
   | {
       kind: "user";
+      taskTags?: string[];
       itemId: string;
       /** Queued input that does not yet have a persisted transcript item. */
       pending?: boolean;
@@ -863,6 +864,7 @@ function walkBubbles(
         kind: "user",
         itemId: b.ctx.itemId ?? `user_${i}`,
         content: b.content,
+        taskTags: b.taskTags,
         ...(b.ctx.createdBy !== undefined ? { createdBy: b.ctx.createdBy } : {}),
         // Server stamp on cold load, client stamp while live — display
         // only, so either clock is correct here.

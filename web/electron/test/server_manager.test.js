@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const cli = require("../src/omnigent_cli");
 const serverManager = require("../src/server_manager");
+
 const { ensureServerAuth } = serverManager;
 const SERVER = "https://app.example.com";
 const CLI_PATH = "/bin/omnigent";

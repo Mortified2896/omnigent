@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MessagesSquareIcon, TriangleAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -96,8 +96,18 @@ export function SideChatPane({
   childId,
   onStart,
   readOnly: restoredReadOnly = false,
+  inheritedItemIds,
+  beforeTranscript,
+  renderAfterBubble,
+  transformBubble,
+  persistDraft = false,
 }: {
   childId: string;
+  inheritedItemIds?: readonly string[];
+  beforeTranscript?: ReactNode;
+  renderAfterBubble?: (bubble: Bubble) => ReactNode;
+  transformBubble?: (bubble: Bubble) => Bubble;
+  persistDraft?: boolean;
   onStart?: (text: string) => Promise<void>;
   /** A dead, restored Codex side chat: show the transcript but no composer, and
    *  stop its session. Defaults to false (a live, sendable side chat). */
@@ -181,7 +191,11 @@ export function SideChatPane({
     boundaryRef.current.ids = ids;
     writeInheritedBoundary(childId, ids);
   }
-  const inherited = boundaryRef.current.ids;
+  const fixedInherited = useMemo(
+    () => (inheritedItemIds ? new Set(inheritedItemIds) : null),
+    [inheritedItemIds],
+  );
+  const inherited = fixedInherited ?? boundaryRef.current.ids;
   const visibleBlocks = useMemo(
     () =>
       inherited === null
@@ -255,6 +269,7 @@ export function SideChatPane({
     <ConversationScopeContext.Provider value={childId}>
       <div className="side-chat-backdrop flex h-full min-h-0 flex-col">
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4">
+          {beforeTranscript}
           {loadFailed ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
               <TriangleAlertIcon className="size-6 text-muted-foreground" />
@@ -281,13 +296,15 @@ export function SideChatPane({
           ) : (
             <div className="flex flex-col gap-4">
               {bubbles.map((bubble, index) => (
-                <BubbleView
-                  key={bubbleKey(bubble)}
-                  bubble={bubble}
-                  isLastAssistant={index === lastAssistantIndex}
-                  showsWorking={showsWorking}
-                  recoveryDisabled={readOnly}
-                />
+                <div key={bubbleKey(bubble)}>
+                  <BubbleView
+                    bubble={transformBubble ? transformBubble(bubble) : bubble}
+                    isLastAssistant={index === lastAssistantIndex}
+                    showsWorking={showsWorking}
+                    recoveryDisabled={readOnly}
+                  />
+                  {renderAfterBubble?.(bubble)}
+                </div>
               ))}
               {shouldShowWorkingIndicator(showsWorking, bubbles) && <WorkingIndicator />}
               <div ref={bottomRef} />
@@ -302,6 +319,7 @@ export function SideChatPane({
           ) : (
             <SideChatComposer
               childId={childId}
+              persistDraft={persistDraft}
               agentId={boundAgentId}
               responseId={activeResponse?.responseId}
               interruptReady={interruptReady}
@@ -324,8 +342,11 @@ export function SideChatPane({
  * has just text + send: the first message creates the fork via `onStart`, and
  * the text is kept if creation fails so it isn't lost.
  */
+const retainedDrafts = new Map<string, { text: string; files: File[] }>();
+
 function SideChatComposer({
   childId,
+  persistDraft = false,
   agentId,
   responseId,
   interruptReady,
@@ -335,6 +356,7 @@ function SideChatComposer({
   onStart,
 }: {
   childId: string;
+  persistDraft?: boolean;
   agentId: string | null;
   responseId: string | undefined;
   interruptReady: boolean;
@@ -346,8 +368,15 @@ function SideChatComposer({
   const send = useChatStore((s) => s.send);
   const queryClient = useQueryClient();
   const clearSideChatDraft = useChatStore((s) => s.clearSideChatDraft);
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [text, setText] = useState(() =>
+    persistDraft ? (retainedDrafts.get(childId)?.text ?? "") : "",
+  );
+  const [files, setFiles] = useState<File[]>(() =>
+    persistDraft ? (retainedDrafts.get(childId)?.files ?? []) : [],
+  );
+  useEffect(() => {
+    if (persistDraft) retainedDrafts.set(childId, { text, files });
+  }, [childId, persistDraft, text, files]);
   const [autoSend, setAutoSend] = useState<string | null>(null);
   const [interrupting, setInterrupting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);

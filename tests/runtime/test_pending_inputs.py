@@ -602,3 +602,29 @@ def test_mark_uncertain_keeps_jumped_over_entries_out_of_the_undelivered_set() -
     assert matched.skipped == []
     assert [entry.pending_id for entry in matched.uncertain] == [second]
     assert pending_inputs.snapshot_for("conv_a") == []
+
+
+def test_task_tags_survive_snapshot_drain_and_failed_persist_restore():
+    from omnigent.entities import MessageData
+
+    tags = MessageData(role="user", content=[], task_tags=[" UI ", "Research", "UI"]).task_tags
+    pending_inputs.record("conv_tags", [_text_block("Review layout")], task_tags=tags)
+    tags.append("should not mutate the record")
+    snapshot = pending_inputs.snapshot_for("conv_tags")
+    assert snapshot[0]["task_tags"] == ["UI", "Research"]
+    snapshot[0]["task_tags"].append("should not mutate the snapshot")
+    drained = pending_inputs.resolve_oldest("conv_tags", hold=True)
+    assert drained is not None and drained.task_tags == ["UI", "Research"]
+    pending_inputs.restore("conv_tags", drained)
+    assert pending_inputs.snapshot_for("conv_tags")[0]["task_tags"] == ["UI", "Research"]
+    assert pending_inputs.snapshot_for("conv_tags")[0]["content"] == [_text_block("Review layout")]
+
+
+@pytest.mark.parametrize("tags", [[""], [" "], ["x" * 41], [str(n) for n in range(9)]])
+def test_task_tags_reject_unbounded_metadata(tags):
+    from pydantic import ValidationError
+
+    from omnigent.entities import MessageData
+
+    with pytest.raises(ValidationError):
+        MessageData(role="user", content=[], task_tags=tags)

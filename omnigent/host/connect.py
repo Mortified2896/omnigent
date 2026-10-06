@@ -3742,6 +3742,21 @@ class HostProcess:
         """
         harness = canonicalize_harness(frame.harness) or frame.harness
         with_source = functools.partial(_with_model_configuration_source, harness=harness)
+        if harness == "codex-account-limits":
+            from omnigent.harnesses.codex_native.account_limits import read_account_limits
+
+            try:
+                limits = await read_account_limits()
+                return HostModelOptionsResultFrame(
+                    request_id=frame.request_id, status="ok", rate_limits=limits
+                )
+            except Exception as exc:  # noqa: BLE001 — optional lookup must not stop host input
+                _logger.debug("Codex account usage lookup failed: %s", type(exc).__name__)
+                return HostModelOptionsResultFrame(
+                    request_id=frame.request_id,
+                    status="failed",
+                    error="Codex subscription usage is unavailable on this host",
+                )
         if harness == "codex-native":
             # Harness-truth lane: every launch shape is answered from the
             # shared catalog, probed from the configured Codex binary itself.

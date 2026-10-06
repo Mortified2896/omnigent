@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import {
   ResponseFeedbackActions,
   ResponseFeedbackProvider,
   canRateResponse,
+  type ReviewPerspectiveInput,
 } from "./ResponseFeedbackActions";
 import type { Bubble } from "@/lib/renderItems";
 
@@ -100,18 +102,194 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
-function mount(hostId: string | null = null, responseId = "answer") {
+function mount(
+  hostId: string | null = null,
+  responseId = "answer",
+  compact = false,
+  autoSave = false,
+  renderPerspective?: (review: ReviewPerspectiveInput) => ReactNode,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
       <ResponseFeedbackProvider sessionId="session" hostId={hostId}>
-        <ResponseFeedbackActions responseId={responseId} />
+        <ResponseFeedbackActions
+          responseId={responseId}
+          compact={compact}
+          autoSave={autoSave}
+          renderPerspective={renderPerspective}
+        />
       </ResponseFeedbackProvider>
     </QueryClientProvider>,
   );
 }
+it("lets the compact scoring switch exclude and restore an answer without changing its review", async () => {
+  outcomes = [
+    {
+      id: "review",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "success",
+      comment: "Keep this note",
+      tags: [],
+    },
+  ];
+  mount(null, "answer", true);
+  await screen.findByLabelText("Task review comment");
+  const toggle = await screen.findByRole("switch", { name: "Do not score" });
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+  expect(await screen.findByLabelText("Scoring exclusion reason")).toBeVisible();
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
+  expect(screen.queryByLabelText("Scoring exclusion reason")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Task review comment")).toHaveValue("Keep this note");
+  expect(outcomes).toHaveLength(1);
+});
+it("shows compact choices and marks the assigned option without repeating it in another row", async () => {
+  mount("host-test", "answer", true);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Partial" })).toBeEnabled());
+  expect(screen.queryByTestId("model-attribution")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("switch", { name: "Do not score" }));
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Do not score" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    ),
+  );
+  expect(screen.queryByTestId("model-attribution")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Partial" }));
+  const comment = await screen.findByLabelText("Task review comment");
+  expect(screen.getByText("Show model decision").closest("details")).not.toHaveAttribute("open");
+  fireEvent.change(comment, { target: { value: "Unbiased first impression" } });
+  fireEvent.click(screen.getByText("Show model decision"));
+  const selected = await screen.findByLabelText("Advisor’s choice · Selected");
+  expect(selected).toHaveAttribute("data-selected", "true");
+  expect(selected).toHaveTextContent("GPT-6 Sol");
+  expect(selected).toHaveTextContent("high reasoning");
+  expect(screen.getByLabelText("Your choice")).toHaveAttribute("data-selected", "false");
+  expect(screen.getByLabelText("Your choice")).toHaveTextContent("glm-5.3");
+  expect(screen.getByText(advisorRound.review.rationale)).toBeVisible();
+  expect(screen.queryByText("Execution details")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Response \/ trace key/)).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Task review comment")).toHaveValue("Unbiased first impression");
+});
+it("keeps the no-Advisor state clear and marks only a reported matching choice", async () => {
+  advisorRoundAttached = false;
+  mount("host-test", "answer", true);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Partial" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Partial" }));
+  fireEvent.click(await screen.findByText("Show model decision"));
+  await waitFor(() => expect(screen.getByLabelText("Your choice")).toHaveTextContent("GPT-6 Sol"));
+  expect(screen.getByLabelText("Advisor’s choice")).toHaveTextContent("Not used");
+  // A versioned reported model differs from the requested ID: do not claim a match.
+  expect(screen.queryByLabelText("Selected")).not.toBeInTheDocument();
+});
+it("hydrates saved reviews, autosaves tags and debounced comments without remounting the editor", async () => {
+  outcomes = [
+    {
+      id: "existing",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "Initial note",
+      tags: [],
+    },
+  ];
+  mount(null, "answer", true, true);
+  const comment = await screen.findByLabelText("Task review comment");
+  await waitFor(() => expect(comment).toHaveValue("Initial note"));
+  expect(screen.queryByRole("button", { name: "Save details" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Tests/verification" }));
+  await waitFor(() => expect(outcomes.at(-1)?.tags).toEqual(["Tests/verification"]));
+  fireEvent.change(comment, { target: { value: "First draft" } });
+  fireEvent.change(comment, { target: { value: "  Final note  " } });
+  await waitFor(() => expect(outcomes.at(-1)?.comment).toBe("Final note"));
+  expect(screen.getByLabelText("Task review comment")).toBe(comment);
+  expect(comment).toHaveValue("  Final note  ");
+  await waitFor(() =>
+    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
+  );
+  expect(outcomes).toHaveLength(3);
+});
+it("shows a failed autosave without losing the draft and supports an explicit retry", async () => {
+  outcomes = [
+    {
+      id: "existing",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "success",
+      comment: "Saved note",
+      tags: [],
+    },
+  ];
+  mount(null, "answer", true, true);
+  const comment = await screen.findByLabelText("Task review comment");
+  await waitFor(() => expect(comment).toHaveValue("Saved note"));
+  fail = true;
+  fireEvent.change(comment, { target: { value: "Keep this unsaved draft" } });
+  await screen.findByRole("button", { name: "Retry save" });
+  expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Not saved");
+  expect(comment).toHaveValue("Keep this unsaved draft");
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  await waitFor(() => expect(outcomes.at(-1)?.comment).toBe("Keep this unsaved draft"));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
+  );
+});
+it("retries the initially selected outcome when its first save fails", async () => {
+  mount(null, "answer", true, true);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Failed" })).toBeEnabled());
+  fail = true;
+  fireEvent.click(screen.getByRole("button", { name: "Failed" }));
+  const retry = await screen.findByRole("button", { name: "Retry save" });
+  fail = false;
+  fireEvent.click(retry);
+  await waitFor(() => expect(outcomes.at(-1)?.outcome).toBe("failed"));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
+  );
+});
+it("saves newer comment edits after an older autosave finishes", async () => {
+  outcomes = [
+    {
+      id: "existing",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "Initial note",
+      tags: [],
+    },
+  ];
+  const originalApi = api.getMockImplementation()!;
+  let release: (() => void) | undefined;
+  let holdFirstWrite = true;
+  api.mockImplementation(async (url: string, options?: RequestInit) => {
+    if (url.includes("/task-outcomes/") && options?.method === "PUT" && holdFirstWrite) {
+      holdFirstWrite = false;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }
+    return originalApi(url, options);
+  });
+  mount(null, "answer", true, true);
+  const comment = await screen.findByLabelText("Task review comment");
+  await waitFor(() => expect(comment).toHaveValue("Initial note"));
+  fireEvent.change(comment, { target: { value: "First draft" } });
+  await waitFor(() => expect(release).toBeDefined());
+  expect(comment).toBeEnabled();
+  fireEvent.change(comment, { target: { value: "Latest draft" } });
+  release!();
+  await waitFor(() => expect(outcomes.at(-1)?.comment).toBe("Latest draft"), { timeout: 2000 });
+  expect(comment).toHaveValue("Latest draft");
+  await waitFor(() =>
+    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
+  );
+});
 it("only offers feedback for durable completed visible answers", () => {
   const bubble: Bubble = {
     kind: "assistant",
@@ -318,4 +496,39 @@ it("keeps advisor attribution hidden until the response is rated", async () => {
   fireEvent.click(rate);
   const details = await screen.findByTestId("model-attribution");
   await waitFor(() => expect(details).toHaveTextContent("Advisor’s choice was selected"));
+});
+
+it("appends accepted AI text without replacing human feedback and autosaves it", async () => {
+  outcomes = [
+    {
+      id: "existing",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "My observation",
+      tags: ["Instructions"],
+    },
+  ];
+  mount(null, "answer", true, true, (review) => (
+    <button type="button" onClick={() => review.onAppendComment("Accepted explanation")}>
+      Accept AI comment
+    </button>
+  ));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Task review comment")).toHaveValue("My observation"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Accept AI comment" }));
+  await waitFor(() =>
+    expect(outcomes.at(-1)).toMatchObject({
+      outcome: "partial",
+      comment: "My observation\n\nAccepted explanation",
+      tags: ["Instructions"],
+    }),
+  );
+  const count = outcomes.length;
+  fireEvent.click(screen.getByRole("button", { name: "Accept AI comment" }));
+  expect(screen.getByLabelText("Task review comment")).toHaveValue(
+    "My observation\n\nAccepted explanation",
+  );
+  expect(outcomes).toHaveLength(count);
 });

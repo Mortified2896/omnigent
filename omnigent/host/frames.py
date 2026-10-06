@@ -1005,6 +1005,7 @@ class HostModelOptionsResultFrame:
     models: list[_JsonObject] = field(default_factory=list)
     error: str | None = None
     routable_models: list[str] = field(default_factory=list)
+    rate_limits: _JsonObject | None = None
 
 
 @dataclass

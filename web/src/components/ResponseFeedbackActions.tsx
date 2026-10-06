@@ -1,6 +1,13 @@
+import { FeedbackDiscussion } from "./FeedbackDiscussionTrigger";
+import {
+  FeedbackFormContext as FeedbackContext,
+  type ReviewPerspectiveInput,
+} from "./FeedbackContext";
 import { useQuery } from "@tanstack/react-query";
-import { createContext, useContext, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { CheckIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { Bubble } from "@/lib/renderItems";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
 import {
@@ -14,12 +21,7 @@ import { fetchRound, type RoundDto } from "@/lib/modelAdvisorApi";
 import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
 import { useSessionScoringPolicy } from "@/hooks/useScoringEligibility";
 
-const FeedbackContext = createContext<{
-  sessionId: string;
-  hostId: string | null;
-  human: Map<string, ExperimentEvent>;
-  ready: boolean;
-} | null>(null);
+export type { ReviewPerspectiveInput } from "./FeedbackContext";
 
 export function ResponseFeedbackProvider({
   sessionId,
@@ -57,18 +59,34 @@ export function canRateResponse(bubble: Bubble): boolean {
   );
 }
 
-export function ResponseFeedbackActions({ responseId }: { responseId: string }) {
+export function ResponseFeedbackActions({
+  responseId,
+  compact = true,
+  autoSave = true,
+  renderPerspective,
+}: {
+  responseId: string;
+  compact?: boolean;
+  autoSave?: boolean;
+  renderPerspective?: (review: ReviewPerspectiveInput) => ReactNode;
+}) {
   const context = useContext(FeedbackContext);
   if (!context) return null;
   const human = context.human.get(responseId);
   return (
     <OutcomeEditor
-      key={`${context.sessionId}:${responseId}:${human?.id ?? "new"}`}
+      key={`${context.sessionId}:${responseId}:${autoSave ? "autosave" : (human?.id ?? "new")}`}
       sessionId={context.sessionId}
       hostId={context.hostId}
       responseId={responseId}
       human={human}
       ready={context.ready}
+      compact={compact}
+      autoSave={autoSave}
+      renderPerspective={
+        renderPerspective ??
+        ((review) => <FeedbackDiscussion responseId={responseId} review={review} />)
+      }
     />
   );
 }
@@ -111,18 +129,30 @@ const REVIEW_TAGS = [
   "Tests/verification",
 ] as const;
 
+const COMPACT_TAG_LABELS: Record<string, string> = {
+  "AGENTS instructions": "Instructions",
+  "Task specification": "Task spec",
+  "Environment/dependency": "Environment",
+};
+
 function OutcomeEditor({
   sessionId,
   hostId,
   responseId,
   human,
   ready,
+  compact,
+  autoSave,
+  renderPerspective,
 }: {
   sessionId: string;
   hostId: string | null;
   responseId: string;
   human?: ExperimentEvent;
   ready: boolean;
+  compact: boolean;
+  autoSave: boolean;
+  renderPerspective?: (review: ReviewPerspectiveInput) => ReactNode;
 }) {
   const mutation = useSaveTaskOutcome(sessionId, responseId);
   const scoringPolicy = useSessionScoringPolicy(sessionId);
@@ -133,6 +163,14 @@ function OutcomeEditor({
   const [comment, setComment] = useState(human?.comment ?? "");
   const [tags, setTags] = useState<string[]>(human?.tags ?? []);
   const [customTag, setCustomTag] = useState("");
+  const [hydrated, setHydrated] = useState(!autoSave);
+  useEffect(() => {
+    if (autoSave && ready && !hydrated) {
+      setComment(human?.comment ?? "");
+      setTags(human?.tags ?? []);
+      setHydrated(true);
+    }
+  }, [autoSave, ready, hydrated, human]);
 
   function toggleTag(tag: string): void {
     setTags((current) =>
@@ -155,145 +193,247 @@ function OutcomeEditor({
 
   const detailsChanged =
     outcome !== undefined &&
-    (comment !== (human?.comment ?? "") ||
+    ((autoSave ? comment.trim() : comment) !== (human?.comment ?? "") ||
       JSON.stringify(tags) !== JSON.stringify(human?.tags ?? []));
+  const { mutate, isPending, isError } = mutation;
+  useEffect(() => {
+    if (!autoSave || !hydrated || !outcome || !detailsChanged || isPending || isError) return;
+    // Tags save immediately; wait briefly for a pause in typing comments.
+    const delay = comment.trim() !== (human?.comment ?? "") ? 500 : 0;
+    const timer = window.setTimeout(
+      () => mutate({ outcome, comment: comment.trim() || null, tags }),
+      delay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    autoSave,
+    hydrated,
+    outcome,
+    detailsChanged,
+    isPending,
+    isError,
+    comment,
+    tags,
+    human?.comment,
+    mutate,
+  ]);
 
   return (
     <div className="order-last flex w-full basis-full flex-col gap-2 py-1" aria-label="Task review">
-      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Task outcome">
-        <span className="mr-1 text-xs font-medium">Your outcome</span>
-        {OUTCOMES.map((option) => (
-          <Button
-            key={option.value}
-            type="button"
-            size="sm"
-            variant={outcome === option.value ? "secondary" : "ghost"}
-            className="min-h-10 text-xs md:min-h-7"
-            title={option.definition}
-            aria-pressed={outcome === option.value}
-            disabled={!ready || mutation.isPending}
-            onClick={() =>
-              mutation.mutate({
-                outcome: option.value,
-                comment: comment.trim() || null,
-                tags,
-              })
-            }
+      <div className={compact ? "-ml-2.5 flex flex-wrap items-center gap-2" : "contents"}>
+        <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Task outcome">
+          {!compact && <span className="mr-1 text-xs font-medium">Your outcome</span>}
+          {OUTCOMES.map((option) => (
+            <Button
+              key={option.value}
+              type="button"
+              size="sm"
+              variant={outcome === option.value ? "secondary" : "ghost"}
+              className="min-h-10 text-xs md:min-h-7"
+              title={option.definition}
+              aria-pressed={outcome === option.value}
+              disabled={!ready || mutation.isPending}
+              onClick={() =>
+                mutation.mutate({
+                  outcome: option.value,
+                  comment: comment.trim() || null,
+                  tags,
+                })
+              }
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+
+        <ResponseScoringActions sessionId={sessionId} responseId={responseId} compact={compact} />
+        {autoSave && (outcome || isPending || isError) && (
+          <div
+            className="ml-auto flex items-center gap-1 text-xs text-muted-foreground"
+            role="status"
+            aria-label="Feedback save status"
           >
-            {option.label}
-          </Button>
-        ))}
+            <span>{isError ? "Not saved" : isPending || detailsChanged ? "Saving…" : "Saved"}</span>
+            {isError && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  mutate({
+                    outcome: mutation.variables?.outcome ?? outcome!,
+                    comment: comment.trim() || null,
+                    tags,
+                  })
+                }
+              >
+                Retry save
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
-      <ResponseScoringActions sessionId={sessionId} responseId={responseId} />
-
-      {(outcome || excludedFromScoring) && (
-        <ModelAttributionDetails
-          responseId={responseId}
-          sessionId={sessionId}
-          hostId={hostId}
-          attribution={human?.model_attribution ?? null}
-        />
-      )}
-
-      {outcome && (
-        <div
-          className="space-y-2 rounded-md border border-border/70 p-2"
-          data-testid="human-review-details"
-        >
-          <p className="text-xs text-muted-foreground">
-            Tags and comments are for your review, not scoring-AI input.
-          </p>
-          <textarea
-            value={comment}
-            maxLength={4000}
-            rows={2}
-            disabled={mutation.isPending}
-            className="min-w-0 w-full rounded-md border bg-background p-2 text-sm"
-            placeholder="Optional comment — what worked or what needs correction?"
-            aria-label="Task review comment"
-            onChange={(event) => setComment(event.target.value)}
+      <div className={compact ? "space-y-2" : "contents"}>
+        {!compact && (outcome || excludedFromScoring) && (
+          <ModelAttributionDetails
+            compact={compact}
+            responseId={responseId}
+            sessionId={sessionId}
+            hostId={hostId}
+            attribution={human?.model_attribution ?? null}
           />
-          <div className="flex flex-wrap gap-1" aria-label="Task review tags">
-            {REVIEW_TAGS.map((tag) => {
-              const active = tags.some(
-                (value) => value.toLocaleLowerCase() === tag.toLocaleLowerCase(),
-              );
-              return (
-                <Button
-                  key={tag}
-                  type="button"
-                  size="sm"
-                  variant={active ? "secondary" : "outline"}
-                  className="h-7 px-2 text-[11px]"
-                  aria-pressed={active}
-                  disabled={mutation.isPending}
-                  onClick={() => toggleTag(tag)}
-                >
-                  {tag}
-                </Button>
-              );
-            })}
-            {tags
-              .filter(
-                (tag) =>
-                  !REVIEW_TAGS.some(
-                    (known) => known.toLocaleLowerCase() === tag.toLocaleLowerCase(),
-                  ),
-              )
-              .map((tag) => (
-                <Button
-                  key={tag}
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  className="h-7 px-2 text-[11px]"
-                  aria-pressed="true"
-                  disabled={mutation.isPending}
-                  onClick={() => toggleTag(tag)}
-                >
-                  {tag} ×
-                </Button>
-              ))}
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <input
-              value={customTag}
-              maxLength={64}
-              className="h-8 min-w-36 flex-1 rounded-md border bg-background px-2 text-xs"
-              placeholder="Custom tag"
-              aria-label="Custom task review tag"
-              onChange={(event) => setCustomTag(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  addCustomTag();
-                }
-              }}
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8"
-              disabled={!customTag.trim() || tags.length >= 8 || mutation.isPending}
-              onClick={addCustomTag}
-            >
-              Add tag
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              className="h-8"
-              disabled={!detailsChanged || mutation.isPending}
-              onClick={() => mutation.mutate({ outcome, comment: comment.trim() || null, tags })}
-            >
-              Save details
-            </Button>
-          </div>
-        </div>
-      )}
+        )}
 
+        {outcome && (
+          <div
+            className="space-y-2 rounded-md border border-border/70 p-2"
+            data-testid="human-review-details"
+          >
+            <p className="text-xs text-muted-foreground">
+              Tags and comments are for your review, not scoring-AI input.
+            </p>
+            <div className="flex flex-wrap gap-1" aria-label="Task review tags">
+              {REVIEW_TAGS.map((tag) => {
+                const active = tags.some(
+                  (value) => value.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+                );
+                return (
+                  <Button
+                    key={tag}
+                    type="button"
+                    size="sm"
+                    variant={active ? "secondary" : "outline"}
+                    className="h-7 px-2 text-[11px]"
+                    aria-pressed={active}
+                    aria-label={tag}
+                    title={tag}
+                    disabled={mutation.isPending}
+                    onClick={() => toggleTag(tag)}
+                  >
+                    {compact ? (COMPACT_TAG_LABELS[tag] ?? tag) : tag}
+                  </Button>
+                );
+              })}
+              {tags
+                .filter(
+                  (tag) =>
+                    !REVIEW_TAGS.some(
+                      (known) => known.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+                    ),
+                )
+                .map((tag) => (
+                  <Button
+                    key={tag}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="h-7 px-2 text-[11px]"
+                    aria-pressed="true"
+                    disabled={mutation.isPending}
+                    onClick={() => toggleTag(tag)}
+                  >
+                    {tag} ×
+                  </Button>
+                ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <input
+                value={customTag}
+                maxLength={64}
+                className="h-8 min-w-36 flex-1 rounded-md border bg-background px-2 text-xs"
+                placeholder="Custom tag"
+                aria-label="Custom task review tag"
+                onChange={(event) => setCustomTag(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addCustomTag();
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8"
+                disabled={!customTag.trim() || tags.length >= 8 || mutation.isPending}
+                onClick={addCustomTag}
+              >
+                Add tag
+              </Button>
+              {!autoSave && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-8"
+                  disabled={!detailsChanged || mutation.isPending}
+                  onClick={() =>
+                    mutation.mutate({ outcome, comment: comment.trim() || null, tags })
+                  }
+                >
+                  Save details
+                </Button>
+              )}
+            </div>
+            <textarea
+              value={comment}
+              maxLength={4000}
+              rows={2}
+              disabled={!autoSave && mutation.isPending}
+              className="min-w-0 w-full rounded-md border bg-background p-2 text-sm"
+              placeholder="Optional comment — what worked or what needs correction?"
+              aria-label="Task review comment"
+              onChange={(event) => setComment(event.target.value)}
+            />
+          </div>
+        )}
+
+        {outcome &&
+          renderPerspective?.({
+            outcome,
+            comment,
+            tags,
+            saved: !detailsChanged && !mutation.isPending && !mutation.isError,
+            onReplaceDetails: async (details) => {
+              const nextComment = details.comment.slice(0, 4000);
+              const nextTags = [...new Set(details.tags)].slice(0, 8);
+              setComment(nextComment);
+              setTags(nextTags);
+              await mutation.mutateAsync({
+                outcome,
+                comment: nextComment.trim() || null,
+                tags: nextTags,
+              });
+            },
+            onAppendComment: (text) =>
+              setComment((current) => {
+                const addition = text.trim();
+                if (!addition || current.includes(addition)) return current;
+                return [current.trim(), addition].filter(Boolean).join("\n\n").slice(0, 4000);
+              }),
+            onAddTag: (tag) =>
+              setTags((current) =>
+                current.length < 8 && !current.includes(tag) ? [...current, tag] : current,
+              ),
+          })}
+
+        {compact && outcome && (
+          <details className="rounded-lg border border-border/70">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
+              Show model decision
+            </summary>
+            <div className="px-2 pb-2">
+              <ModelAttributionDetails
+                compact
+                responseId={responseId}
+                sessionId={sessionId}
+                hostId={hostId}
+                attribution={human?.model_attribution ?? null}
+              />
+            </div>
+          </details>
+        )}
+      </div>
       {mutation.isError && (
         <span role="alert" className="text-xs text-destructive">
           Task review was not saved. Please try again.
@@ -319,11 +459,13 @@ function ModelAttributionDetails({
   sessionId,
   hostId,
   attribution,
+  compact = false,
 }: {
   responseId: string;
   sessionId: string;
   hostId: string | null;
   attribution: ExperimentEvent["model_attribution"];
+  compact?: boolean;
 }) {
   const attributionQuery = useQuery({
     queryKey: ["response-model-attribution", sessionId, responseId],
@@ -366,6 +508,109 @@ function ModelAttributionDetails({
   const assignedChoice = round
     ? choiceLabel(round, review?.assigned_choice_id ?? review?.assigned_candidate_id)
     : null;
+
+  if (compact) {
+    const pool = [
+      ...(round?.decision_context?.qualified_pool ?? []),
+      ...(round?.decision_context?.user_enabled_pool ?? []),
+      ...(round?.decision_context?.advisor_visible_pool ?? []),
+    ];
+    const humanId = review?.human_choice_id ?? review?.human_candidate_id;
+    const advisorId = review?.advisor_choice_id ?? review?.advisor_candidate_id;
+    const selectedId = review?.assigned_choice_id ?? review?.assigned_candidate_id;
+    const human = pool.find((choice) => choice.choice_id === humanId);
+    const advisor = pool.find((choice) => choice.choice_id === advisorId);
+    const modelName = (id: string) =>
+      id
+        .replace(/^gpt-/, "GPT-")
+        .replace(
+          /-(sol|astra|luna)$/i,
+          (_, family: string) => ` ${family[0].toUpperCase()}${family.slice(1)}`,
+        );
+    const options = [
+      {
+        title: "Your choice",
+        model: human?.model_id ?? responseAttribution?.requested_model,
+        effort: human?.reasoning_effort ?? responseAttribution?.reasoning_effort,
+        selected: Boolean(
+          review
+            ? humanId && selectedId === humanId
+            : !roundId &&
+                responseAttribution?.actual_model &&
+                responseAttribution.actual_model === responseAttribution.requested_model,
+        ),
+      },
+      {
+        title: "Advisor’s choice",
+        model: advisor?.model_id,
+        effort: advisor?.reasoning_effort,
+        selected: Boolean(advisorId && selectedId === advisorId),
+      },
+    ];
+    return (
+      <section
+        className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3"
+        aria-label="Model attribution"
+        data-testid="model-attribution"
+      >
+        <div className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-2">
+          {options.map((option) => (
+            <div
+              key={option.title}
+              data-selected={option.selected}
+              aria-label={`${option.title}${option.selected ? " · Selected" : ""}`}
+              className={cn(
+                "min-w-0 rounded-md border bg-background p-3",
+                option.selected ? "border-primary ring-1 ring-primary" : "border-border/60",
+              )}
+            >
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{option.title}</span>
+                {option.selected && (
+                  <CheckIcon className="size-4 shrink-0 text-primary" aria-label="Selected" />
+                )}
+              </div>
+              <p className="break-words text-sm font-semibold">
+                {option.model
+                  ? modelName(option.model)
+                  : option.title === "Advisor’s choice" && !roundId
+                    ? "Not used"
+                    : "Unavailable"}
+              </p>
+              {option.effort && (
+                <p className="mt-1 text-xs capitalize text-muted-foreground">
+                  {option.effort} reasoning
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+        {review?.rationale && (
+          <div className="text-sm">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">
+              Why the Advisor recommended it
+            </p>
+            <p>{review.rationale}</p>
+          </div>
+        )}
+        {review?.overridden && review.override_reason && (
+          <p className="text-xs text-muted-foreground">Override: {review.override_reason}</p>
+        )}
+        {roundQuery.isLoading && roundId && (
+          <p className="text-xs text-muted-foreground">Loading Advisor decision…</p>
+        )}
+        {roundId && (!hostId || roundQuery.isError) && (
+          <p className="text-xs text-muted-foreground">Advisor decision details are unavailable.</p>
+        )}
+        {attributionQuery.isLoading && (
+          <p className="text-xs text-muted-foreground">Loading execution details…</p>
+        )}
+        {attributionQuery.isError && (
+          <p className="text-xs text-muted-foreground">Execution details are unavailable.</p>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section

@@ -1,3 +1,5 @@
+import { currentModelChoices } from "@/lib/currentModelChoices";
+import { FeedbackDiscussionsProvider } from "@/components/FeedbackDiscussion";
 import { ResponseFeedbackProvider } from "@/components/ResponseFeedbackActions";
 import { useLoadedConversations } from "@/hooks/useSidebarData";
 import { useSkills } from "@/hooks/useSkills";
@@ -20,6 +22,7 @@ import {
 import {
   BotIcon,
   SettingsIcon,
+  SparklesIcon,
   CornerUpLeftIcon,
   FileTextIcon,
   Loader2Icon,
@@ -70,6 +73,10 @@ import {
 import { usePermissions, useSessionOwner } from "@/hooks/usePermissions";
 import type { NativeModelOption, Session, SessionStatus } from "@/lib/types";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
+import { ResponseTiming } from "@/components/composer/ResponseTiming";
+import { CodexSubscriptionUsage } from "@/components/composer/CodexSubscriptionUsage";
+import { TaskTagsControls } from "@/components/composer/TaskTagsPicker";
+import { useTaskTags } from "@/hooks/useTaskTags";
 import { useReplyDraft } from "@/hooks/useReplyDraft";
 import { useSessionModelLabel } from "@/hooks/useSessionModelLabel";
 import { useModelPickerHotkey } from "@/hooks/useModelPickerHotkey";
@@ -280,6 +287,8 @@ import { ConnectionIndicator } from "./ChatIndicators";
 import { Transcript } from "@/components/chat/Transcript";
 import {
   readSessionAdvisorEnabled,
+  readKeepChosenModel,
+  writeKeepChosenModel,
   writeSessionAdvisorEnabled,
 } from "@/model-advisor/sessionAdvisorPreference";
 import { NewChatAdvisorSection, type HumanModelPick } from "@/model-advisor/NewChatAdvisorSection";
@@ -927,7 +936,7 @@ export function ChatPage() {
   });
 
   const onSend = useCallback(
-    (text: string, files?: File[], replyDraft?: StoredReplyDraft) => {
+    (text: string, files?: File[], replyDraft?: StoredReplyDraft, taskTags?: string[]) => {
       if (!agentId) return;
       // No server session yet (still creating) — nothing to POST to.
       if (isTempConvId(urlConvId)) return;
@@ -967,11 +976,12 @@ export function ChatPage() {
           opensSideChat,
         )
       ) {
-        chat.enqueueMessage(text, files, replyDraft);
+        chat.enqueueMessage(text, files, replyDraft, taskTags);
         return;
       }
       void useChatStore.getState().send(text, agentId, files, {
         replyDraft,
+        taskTags,
         onConversationCreated: (newId) => {
           // Eager URL update: the moment the server tells us this
           // conversation's id, promote `/` → `/c/:newId`. Replace (not
@@ -1208,7 +1218,9 @@ export function ChatPage() {
         sessionId={urlConvId}
         hostId={activeConv?.host_id ?? activeSession?.hostId ?? null}
       >
-        <SessionLayout mainAgent={mainAgent} />
+        <FeedbackDiscussionsProvider sessionId={urlConvId}>
+          <SessionLayout mainAgent={mainAgent} />
+        </FeedbackDiscussionsProvider>
       </ResponseFeedbackProvider>
       <ReconnectSessionDialog
         open={dialogOpen}
@@ -1425,7 +1437,12 @@ interface MainAgentSurfaceProps {
   liveness: SessionLiveness;
   agentsError: unknown;
   disabled: boolean;
-  onSend: (text: string, files?: File[], replyDraft?: StoredReplyDraft) => void;
+  onSend: (
+    text: string,
+    files?: File[],
+    replyDraft?: StoredReplyDraft,
+    taskTags?: string[],
+  ) => void;
   /**
    * Invoke a skill via the `slash_command` event path. Gated off inside
    * `MainAgentSurface` for terminal-first (native) sessions, where `/skill`
@@ -2016,7 +2033,12 @@ interface ComposerProps {
   /** Local stream OR cross-client `session.status: running`. */
   isWorking: boolean;
   disabled: boolean;
-  onSend: (text: string, files?: File[], replyDraft?: StoredReplyDraft) => void;
+  onSend: (
+    text: string,
+    files?: File[],
+    replyDraft?: StoredReplyDraft,
+    taskTags?: string[],
+  ) => void;
   /**
    * Send a recognised skill as a `slash_command` event (the REPL's wire
    * shape) instead of plaintext. When present and the typed command names
@@ -2469,6 +2491,8 @@ function ComposerImpl(
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
   const [advisorSettingsOpen, setAdvisorSettingsOpen] = useState(false);
+  const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
+  const [keepChosenModel, setKeepChosenModel] = useState(true);
   const [advisorSettingsTarget, setAdvisorSettingsTarget] = useState<HTMLDivElement | null>(null);
   const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
@@ -2480,6 +2504,7 @@ function ComposerImpl(
     task: string;
     visibleText: string;
     files: File[];
+    taskTags: string[];
   } | null>(null);
   const [goalDialogOpen, setGoalDialogOpen] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
@@ -2606,6 +2631,7 @@ function ComposerImpl(
   // tabs and coming back restores the draft. The shared draft store also lets
   // the sidebar surface which sessions have unfinished composer content.
   const conversationId = useChatStore((s) => s.conversationId);
+  const [taskTags, setTaskTags] = useTaskTags(conversationId);
   const queuedMessages = useChatStore((s) => s.queuedMessages);
   const sessionStatus = useChatStore((s) => s.sessionStatus);
   const flushBoundAgentId = useChatStore((s) => s.boundAgentId);
@@ -2625,6 +2651,7 @@ function ComposerImpl(
 
   useEffect(() => {
     setAdvisorEnabled(readSessionAdvisorEnabled(advisorHostId, conversationId));
+    setKeepChosenModel(readKeepChosenModel(advisorHostId, conversationId));
     setAdvisorDialogOpen(false);
     setAdvisorSettingsOpen(false);
     setAdvisorFlowLocked(false);
@@ -3130,6 +3157,7 @@ function ComposerImpl(
     replaceText(failedSendDraft.text, failedSendDraft.replyDraft);
     textareaRef.current = tailTextareaRef.current;
     dirtyRef.current = true;
+    if (failedSendDraft.taskTags) setTaskTags(failedSendDraft.taskTags);
     if (failedSendDraft.files.length > 0)
       attachmentsRef.current.replaceFiles(failedSendDraft.files);
     // Remember what was restored: if the "failed" send proves delivered (its
@@ -3149,7 +3177,7 @@ function ComposerImpl(
       });
     }
     if (!isMobileRef.current) textareaRef.current?.focus();
-  }, [failedSendDraft, conversationId, settledConversationId, replaceText]);
+  }, [failedSendDraft, conversationId, settledConversationId, replaceText, setTaskTags]);
 
   // Retract a restored failed-send draft once its send proves delivered (its
   // committed item arrived over the stream or a reconnect snapshot). Edits win:
@@ -3606,6 +3634,7 @@ function ComposerImpl(
         task: mentionPreamble + serializeReplyDraft(draft),
         visibleText: trimmed,
         files: [...files],
+        taskTags: [...taskTags],
       });
       if (isWorking) {
         setCommandError(
@@ -3631,12 +3660,16 @@ function ComposerImpl(
           index === 0 ? { ...quote, before: mentionPreamble + quote.before } : quote,
         ),
       };
-      onSend(serializeReplyDraft(outgoing), sendFiles, snapshotReplyDraft(outgoing));
+      if (taskTags.length > 0)
+        onSend(serializeReplyDraft(outgoing), sendFiles, snapshotReplyDraft(outgoing), taskTags);
+      else onSend(serializeReplyDraft(outgoing), sendFiles, snapshotReplyDraft(outgoing));
     } else {
-      onSend(mentionPreamble + trimmed, sendFiles);
+      if (taskTags.length > 0) onSend(mentionPreamble + trimmed, sendFiles, undefined, taskTags);
+      else onSend(mentionPreamble + trimmed, sendFiles);
     }
     dirtyRef.current = true;
     clearComposerAfterSend(resetNativeInputSession);
+    setTaskTags([]);
     clearAttachments();
     setMentionedItems([]);
     setMention(null);
@@ -3657,7 +3690,10 @@ function ComposerImpl(
       void useChatStore.getState().refreshSessionState(sessionId);
       trackClick("chat.composer.send", "button");
       if (pending.visibleText) appendEntry(pending.visibleText);
-      onSend(pending.task, pending.files.length > 0 ? pending.files : undefined);
+      const sendFiles = pending.files.length > 0 ? pending.files : undefined;
+      if (pending.taskTags.length > 0) onSend(pending.task, sendFiles, undefined, pending.taskTags);
+      else onSend(pending.task, sendFiles);
+      setTaskTags([]);
       dirtyRef.current = true;
       setValue("");
       clearAttachments();
@@ -3677,6 +3713,7 @@ function ComposerImpl(
       setValue,
       onSend,
       pendingAdvisorSend,
+      setTaskTags,
       setMentionedItems,
       trackClick,
     ],
@@ -3909,6 +3946,7 @@ function ComposerImpl(
             prNumber={composerGit.prNumber}
             onOpen={openComposerGithubTab}
           />
+          <TaskTagsControls value={taskTags} onChange={setTaskTags} />
           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
             <div
               data-testid="composer-task-indicators"
@@ -3925,6 +3963,7 @@ function ComposerImpl(
           </div>
         </ComposerWorkspaceBar>
       </div>
+      <ResponseTiming sessionId={conversationId} />
       <ChatComposer
         keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
         ref={bindComposerCard}
@@ -4012,62 +4051,6 @@ function ComposerImpl(
             ) : undefined,
           beforeInput: (
             <>
-              {canUseModelAdvisor ? (
-                <div
-                  className="flex min-w-0 items-center justify-between gap-2 px-3 pt-2"
-                  data-testid="chat-advisor-toolbar"
-                >
-                  {canUseModelAdvisor && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={isReadOnly || unreachable || advisorFlowLocked}
-                      aria-pressed={advisorEnabled}
-                      aria-label={
-                        advisorEnabled
-                          ? "Turn Model Advisor off for follow-ups"
-                          : "Turn Model Advisor on for follow-ups"
-                      }
-                      data-testid="chat-model-advisor-toggle"
-                      onClick={() => {
-                        if (advisorHostId && conversationId)
-                          writeSessionAdvisorEnabled(
-                            advisorHostId,
-                            conversationId,
-                            !advisorEnabled,
-                          );
-                        setAdvisorEnabled(!advisorEnabled);
-                        if (advisorEnabled) {
-                          setPendingAdvisorSend(null);
-                          setAdvisorDialogOpen(false);
-                          setCommandError(null);
-                        }
-                      }}
-                    >
-                      Advisor {advisorEnabled ? "on" : "off"}
-                    </Button>
-                  )}
-                  {canUseModelAdvisor && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 md:size-7"
-                      disabled={isReadOnly || unreachable || advisorFlowLocked}
-                      aria-label="Recommender settings"
-                      title="Recommender settings"
-                      data-testid="chat-model-advisor-settings"
-                      onClick={() => {
-                        setAdvisorDialogOpen(false);
-                        setAdvisorSettingsOpen(true);
-                      }}
-                    >
-                      <SettingsIcon className="size-4" aria-hidden="true" />
-                    </Button>
-                  )}
-                </div>
-              ) : null}
               {/* Slash-command suggestions — floats above the composer box */}
               {slashCompletion.open && (
                 <SlashCommandMenu
@@ -4133,6 +4116,76 @@ function ComposerImpl(
             exactly. Only mounted while the draft is a command. */}
             </>
           ),
+          afterActions: canUseModelAdvisor ? (
+            <div
+              className="flex h-14 min-w-0 items-center gap-2 border-t border-border/60 px-3"
+              data-testid="chat-advisor-toolbar"
+            >
+              {canUseModelAdvisor && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={isReadOnly || unreachable || advisorFlowLocked}
+                  aria-pressed={advisorEnabled}
+                  aria-label={
+                    advisorEnabled
+                      ? "Turn Model Advisor off for follow-ups"
+                      : "Turn Model Advisor on for follow-ups"
+                  }
+                  data-testid="chat-model-advisor-toggle"
+                  onClick={() => {
+                    if (advisorHostId && conversationId)
+                      writeSessionAdvisorEnabled(advisorHostId, conversationId, !advisorEnabled);
+                    setAdvisorEnabled(!advisorEnabled);
+                    if (advisorEnabled) {
+                      setPendingAdvisorSend(null);
+                      setAdvisorDialogOpen(false);
+                      setCommandError(null);
+                    }
+                  }}
+                >
+                  <SparklesIcon className="size-4 text-muted-foreground" />
+                  Advisor
+                  <span
+                    aria-hidden="true"
+                    className={
+                      advisorEnabled
+                        ? "relative h-4 w-7 rounded-full bg-foreground"
+                        : "relative h-4 w-7 rounded-full bg-muted"
+                    }
+                  >
+                    <span
+                      className={
+                        advisorEnabled
+                          ? "absolute right-0.5 top-0.5 size-3 rounded-full bg-background"
+                          : "absolute left-0.5 top-0.5 size-3 rounded-full bg-background"
+                      }
+                    />
+                  </span>
+                </Button>
+              )}
+              <div ref={setAdvisorModelTarget} className="ml-auto flex min-w-0 items-center" />
+              {canUseModelAdvisor && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 md:size-7"
+                  disabled={isReadOnly || unreachable || advisorFlowLocked}
+                  aria-label="Recommender settings"
+                  title="Recommender settings"
+                  data-testid="chat-model-advisor-settings"
+                  onClick={() => {
+                    setAdvisorDialogOpen(false);
+                    setAdvisorSettingsOpen(true);
+                  }}
+                >
+                  <SettingsIcon className="size-4" aria-hidden="true" />
+                </Button>
+              )}
+            </div>
+          ) : null,
           inputBackdrop: composerIsCommand && (
             <div
               ref={backdropRef}
@@ -4217,6 +4270,15 @@ function ComposerImpl(
                     : undefined
                 }
               />
+              <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium">
+                <ComposerAgentIcon
+                  agent={{
+                    name: nativeCodingAgentForHarness(sessionHarness)?.agentName ?? "",
+                    harness: sessionHarness,
+                  }}
+                />
+                <span className="hidden sm:inline">{harnessLabel ?? "Agent"}</span>
+              </span>
               {!subAgentLabel && composerSessionId && (
                 <HostBadge
                   sessionId={composerSessionId}
@@ -4242,7 +4304,7 @@ function ComposerImpl(
           ),
           trailing: (
             <>
-              <div className="flex min-w-0 items-center rounded-lg">
+              <div className="flex min-w-0 flex-col items-end justify-center rounded-lg">
                 <SessionHarnessPicker
                   busy={configBusy}
                   busyRef={configBusyRef}
@@ -4273,6 +4335,9 @@ function ComposerImpl(
                   disabled={isReadOnly || unreachable}
                   openNonce={pickerOpenNonce}
                 />
+                {modelPickerKind === "codex" && (
+                  <CodexSubscriptionUsage hostId={composerSession?.hostId} />
+                )}
               </div>
               {showEffort && inlineComposerEfforts.length > 0 && !composerRoutingOn && (
                 <ComposerEffortPicker
@@ -4377,7 +4442,11 @@ function ComposerImpl(
           continueSessionId={conversationId}
           autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
           enabledOverride={advisorEnabled}
-          showComposerControls={false}
+          showComposerControls
+          selectorsOnly
+          advisorModelTarget={advisorModelTarget}
+          keepChosenModel={keepChosenModel}
+          taskTags={pendingAdvisorSend?.taskTags}
           settingsOpenOverride={advisorSettingsOpen}
           settingsPanelTarget={advisorSettingsTarget}
           feedbackTarget={advisorFeedbackTarget}
@@ -4395,6 +4464,23 @@ function ComposerImpl(
               Your execution model and reasoning level stay in the composer controls.
             </DialogDescription>
           </DialogHeader>
+          <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={keepChosenModel}
+              onChange={(event) => {
+                setKeepChosenModel(event.target.checked);
+                if (advisorHostId && conversationId)
+                  writeKeepChosenModel(advisorHostId, conversationId, event.target.checked);
+              }}
+            />
+            <span>
+              Keep the chosen model for this chat
+              <span className="mt-1 block text-xs text-muted-foreground">
+                The Advisor can adjust reasoning effort. Turn this off to allow model changes.
+              </span>
+            </span>
+          </label>
           <div ref={setAdvisorSettingsTarget} />
         </DialogContent>
       </Dialog>
@@ -4589,13 +4675,18 @@ export function shouldSendInitialPrompt(params: {
 export function dispatchInitialPrompt(
   prompt: PendingInitialPrompt,
   agentId: string,
-  send: (text: string, agentId: string, files: File[]) => Promise<void>,
+  send: (
+    text: string,
+    agentId: string,
+    files: File[],
+    opts?: { taskTags?: string[] },
+  ) => Promise<void>,
   sendSlashCommand: (name: string, args: string, agentId: string) => Promise<void>,
 ): void {
   if (prompt.skill) {
     void sendSlashCommand(prompt.skill.name, prompt.skill.args, agentId);
   } else {
-    void send(prompt.text, agentId, prompt.files ?? []);
+    void send(prompt.text, agentId, prompt.files ?? [], { taskTags: prompt.taskTags });
   }
 }
 
@@ -4966,7 +5057,6 @@ function SessionHarnessPicker({
   busy,
   busyRef,
   setBusy,
-  agentName,
   harnessLabel,
   showModels,
   showEffort,
@@ -5010,7 +5100,6 @@ function SessionHarnessPicker({
   const [error, setError] = useState<string | null>(null);
   const appliedOpenNonce = useRef(0);
   const sessionHarness = useChatStore((state) => state.sessionHarness);
-  const subAgentName = useChatStore((state) => state.subAgentName);
   const pendingModelChange = useChatStore((state) => state.pendingModelChange);
   const sessionModelSeeded = useChatStore((state) => state.sessionModelSeeded);
   const selectedEffort = useSessionEffort();
@@ -5034,13 +5123,7 @@ function SessionHarnessPicker({
     : modelLabelUnavailable
       ? "Model name unavailable"
       : modelLabel;
-  const nativeAgent =
-    nativeCodingAgentForHarness(sessionHarness) ??
-    (modelPickerKind ? nativeCodingAgentForHarness(modelPickerKind + "-native") : undefined);
-  const iconAgent = {
-    name: nativeAgent?.agentName ?? agentName ?? subAgentName ?? "",
-    harness: nativeAgent?.harness ?? sessionHarness,
-  };
+  const nativeAgent = nativeCodingAgentForHarness(sessionHarness);
   const summary = useSessionConfigSummary({
     harnessLabel,
     showModels,
@@ -5299,7 +5382,6 @@ function SessionHarnessPicker({
           label: "Configure session",
           model: label,
           effort: undefined,
-          icon: <ComposerAgentIcon agent={iconAgent} />,
           disabled: busy || !configurable,
           "aria-disabled": disabled || busy || !configurable,
           className: disabled ? "cursor-default opacity-50" : undefined,
@@ -5444,7 +5526,9 @@ function useResolvedComposerModel(
     modelPickerKind === "acp" ||
     modelPickerKind === "configured";
   const modelOptions: readonly NativeModelOption[] = usesServerModelOptions
-    ? codexModelOptions
+    ? modelPickerKind === "codex"
+      ? currentModelChoices(codexModelOptions, (row) => row.model ?? row.id)
+      : codexModelOptions
     : [];
   const isNativeModelPicker = modelPickerKind !== null;
 

@@ -1,6 +1,6 @@
 /** V3 presentation model. The server owns qualification, persistence and dispatch. */
 export type ProviderGroup = "openai" | "glm";
-export type TransportPreference = "omniroute_preferred" | "direct_only";
+export type TransportPreference = "omniroute_preferred" | "omniroute_only" | "direct_only";
 export const PROVIDER_GROUPS: readonly ProviderGroup[] = ["openai", "glm"];
 export const PROVIDER_LABELS: Record<ProviderGroup, string> = {
   openai: "OpenAI / ChatGPT plan",
@@ -23,6 +23,7 @@ export interface ProviderSelection {
   selected_choice_ids: string[];
   disabled_model_ids: string[];
   approval_model_ids?: string[];
+  approval_choice_ids?: string[];
   transport_preference: TransportPreference;
 }
 

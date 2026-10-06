@@ -2346,3 +2346,15 @@ main[data-shell-header="hidden"] .extension-view-host {
 main[data-shell-header="hidden"] .extension-view-status {
   top: 0;
 }
+
+/* Touch scrolling keeps the phone's narrow conversation area available. */
+@media (width < 48rem) {
+  .chat-scroll-fade,
+  [aria-label="Feedback discussion"] .overflow-y-auto {
+    scrollbar-width: none;
+  }
+  .chat-scroll-fade::-webkit-scrollbar,
+  [aria-label="Feedback discussion"] .overflow-y-auto::-webkit-scrollbar {
+    display: none;
+  }
+}

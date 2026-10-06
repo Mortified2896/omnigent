@@ -3125,6 +3125,51 @@ def register_core_routes(
                     f"Session not found: {source_id!r}",
                     code=ErrorCode.NOT_FOUND,
                 )
+        feedback_snapshot = None
+        if body.feedback_response_id is not None:
+            from omnigent.server.auth import RESERVED_USER_LOCAL
+            from omnigent.server.feedback_discussion import original_feedback
+            from omnigent.stores.conversation_store import InvalidFeedbackTargetError
+
+            await _require_access_and_level(
+                user_id, source_id, LEVEL_EDIT, permission_store, conversation_store
+            )
+            if (source.labels or {}).get("omnigent.feedback.kind"):
+                raise OmnigentError(
+                    "Feedback discussions cannot create recursive feedback",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            if (
+                body.agent_id
+                or body.model_override
+                or body.reasoning_effort
+                or body.codex_bypass_sandbox
+            ):
+                raise OmnigentError(
+                    "Feedback uses the responding model and its original reasoning",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            try:
+                feedback_snapshot = await asyncio.to_thread(
+                    original_feedback,
+                    conversation_store,
+                    source_id,
+                    body.feedback_response_id,
+                    user_id or RESERVED_USER_LOCAL,
+                )
+            except (ValueError, InvalidFeedbackTargetError) as exc:
+                raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+            body = body.model_copy(
+                update={
+                    "up_to_response_id": body.feedback_response_id,
+                    "side_chat": True,
+                    "title": "Feedback discussion",
+                    "model_override": feedback_snapshot["model"] or source.model_override,
+                    "reasoning_effort": feedback_snapshot["reasoning_effort"]
+                    or source.reasoning_effort,
+                }
+            )
+
         from omnigent.server.o3_routing_review.session_policy import require_new_review
 
         require_new_review(source.labels or {}, "forking")
@@ -3322,6 +3367,11 @@ def register_core_routes(
         # freshly chosen mode. Only on an explicit pick: an untouched picker
         # sends no launch args and the label carries over as before.
         dropped_label_keys_set: set[str] = set()
+        if feedback_snapshot is not None:
+            dropped_label_keys_set.update(
+                key for key in (source.labels or {}) if key.startswith("omnigent.advisor.")
+            )
+
         if launch_args_set:
             dropped_label_keys_set |= {
                 _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY,
@@ -3356,6 +3406,20 @@ def register_core_routes(
         # Workspace-rail tab). Stamp the label the sessions-list filter reads.
         if body.side_chat:
             extra_labels[SIDE_CHAT_LABEL_KEY] = "1"
+        if feedback_snapshot is not None:
+            from omnigent.server.feedback_discussion import PREFIX
+
+            extra_labels.update(
+                {
+                    PREFIX + "kind": "discussion",
+                    PREFIX + "source_session": source_id,
+                    PREFIX + "response_id": body.feedback_response_id or "",
+                    PREFIX + "original": json.dumps(feedback_snapshot, ensure_ascii=False),
+                    "omnigent.scoring.eligible": "false",
+                }
+            )
+            if feedback_snapshot["access_lane"]:
+                extra_labels["omnigent.access_lane"] = feedback_snapshot["access_lane"]
 
         # When the fork binds a NATIVE target, the native CLI won't replay
         # the copied Omnigent transcript on its own — mark the fork so the
@@ -3597,6 +3661,68 @@ def register_core_routes(
         if permission_store is not None and user_id is not None:
             await asyncio.to_thread(permission_store.ensure_user, user_id)
             await asyncio.to_thread(permission_store.grant, user_id, new_conv.id, LEVEL_OWNER)
+        if feedback_snapshot is not None:
+            from omnigent.entities.conversation import (
+                MessageData,
+                NewConversationItem,
+                ResourceEventData,
+            )
+            from omnigent.server.feedback_discussion import PREFIX, discussion_instructions
+
+            inherited_ids = []
+            cursor = None
+            while True:
+                page = await asyncio.to_thread(
+                    conversation_store.list_items, new_conv.id, limit=100, after=cursor
+                )
+                inherited_ids.extend(item.id for item in page.data)
+                if not page.has_more:
+                    break
+                cursor = page.data[-1].id
+            await asyncio.to_thread(
+                conversation_store.append,
+                new_conv.id,
+                [
+                    NewConversationItem(
+                        type="message",
+                        response_id=new_conv.id,
+                        created_by=user_id,
+                        data=MessageData(
+                            role="user",
+                            is_meta=True,
+                            content=[
+                                {
+                                    "type": "input_text",
+                                    "text": discussion_instructions(feedback_snapshot),
+                                }
+                            ],
+                        ),
+                    )
+                ],
+            )
+            await asyncio.to_thread(
+                conversation_store.append,
+                source_id,
+                [
+                    NewConversationItem(
+                        type="resource_event",
+                        response_id=body.feedback_response_id or new_conv.id,
+                        created_by=user_id,
+                        data=ResourceEventData(
+                            event_type="feedback.discussion.created",
+                            resource_type="feedback-discussion",
+                            resource_id=new_conv.id,
+                            resource={
+                                "source_session": source_id,
+                                "response_id": body.feedback_response_id,
+                                "session_id": new_conv.id,
+                                "inherited_ids": inherited_ids,
+                            },
+                        ),
+                    )
+                ],
+            )
+
         # Push the forked session to this user's other open tabs — but NOT a
         # side chat: it surfaces only as a Workspace-rail tab, never a sidebar
         # row, so announcing it would leak it into every open sidebar (the

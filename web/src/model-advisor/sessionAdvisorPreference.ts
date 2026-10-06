@@ -78,3 +78,21 @@ export function writeSessionAdvisorChoices(
     /* The current composer still retains its choices. */
   }
 }
+
+const modelKey = (host: string, session: string) =>
+  `omnigent:keep-chosen-model:${getCurrentAuthorId()}:${host}:${session}`;
+export function readKeepChosenModel(host: string | null, session: string | null): boolean {
+  if (!host || !session) return true;
+  try {
+    return localStorage.getItem(modelKey(host, session)) !== "false";
+  } catch {
+    return true;
+  }
+}
+export function writeKeepChosenModel(host: string, session: string, keep: boolean): void {
+  try {
+    localStorage.setItem(modelKey(host, session), String(keep));
+  } catch {
+    /* Keep current UI choice. */
+  }
+}

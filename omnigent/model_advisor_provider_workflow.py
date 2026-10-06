@@ -107,10 +107,26 @@ class LogicalFrozenRound:
     user_enabled_pool: tuple[LogicalChoice, ...] = ()
     excluded_choices: tuple[tuple[str, ExclusionReason], ...] = ()
     preferences_snapshot: ProviderPreferences | None = None
+    continuation_session_id: str | None = None
+    keep_chosen_model: bool = True
+    task_tags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for value in (self.owner_id, self.host_id, self.round_id, self.settings_revision):
             _id(value)
+        if self.continuation_session_id is not None:
+            _id(self.continuation_session_id)
+        if type(self.keep_chosen_model) is not bool:
+            raise LogicalAdvisorError("Invalid continuation policy")
+        if (
+            not isinstance(self.task_tags, tuple)
+            or len(self.task_tags) > 8
+            or any(
+                not isinstance(tag, str) or not tag.strip() or len(tag) > 40
+                for tag in self.task_tags
+            )
+        ):
+            raise LogicalAdvisorError("Invalid task tags")
         task_fingerprint(self.task)
         if not isinstance(self.pool, tuple) or not 1 <= len(self.pool) <= 128:
             raise LogicalAdvisorError("Logical pool must be nonempty and bounded")
@@ -137,6 +153,7 @@ class LogicalFrozenRound:
         for provider, preference in self.transport_preferences:
             if provider not in {"openai", "glm"} or preference not in {
                 "omniroute_preferred",
+                "omniroute_only",
                 "direct_only",
             }:
                 raise LogicalAdvisorError("Invalid frozen connection preference")
@@ -323,6 +340,13 @@ class LogicalFrozenRound:
                     else None,
                 }
             )
+        if self.continuation_session_id is not None:
+            payload["continuation"] = {
+                "session_id": self.continuation_session_id,
+                "keep_chosen_model": self.keep_chosen_model,
+            }
+        if self.task_tags:
+            payload["task_tags"] = list(self.task_tags)
         return payload
 
     @classmethod
@@ -355,7 +379,8 @@ class LogicalFrozenRound:
             if version == 3
             else set()
         )
-        if set(payload) != common_keys | extra_keys:
+        optional = {key for key in ("continuation", "task_tags") if key in payload}
+        if set(payload) != common_keys | extra_keys | optional:
             raise LogicalAdvisorError("Unexpected logical frozen round shape")
         raw_pool = payload.get("pool")
         if not isinstance(raw_pool, list):
@@ -407,7 +432,18 @@ class LogicalFrozenRound:
             if not isinstance(raw_preferences, dict) or raw_preferences.get("schema_version") != 3:
                 raise LogicalAdvisorError("Expected schema-v3 preferences snapshot")
             preferences_snapshot = ProviderPreferences.from_payload(raw_preferences)
+        continuation = payload.get("continuation", {})
+        if not isinstance(continuation, dict) or (
+            continuation and set(continuation) != {"session_id", "keep_chosen_model"}
+        ):
+            raise LogicalAdvisorError("Invalid continuation context")
+        raw_tags = payload.get("task_tags", [])
+        if not isinstance(raw_tags, list):
+            raise LogicalAdvisorError("Invalid task tags")
         return cls(
+            continuation_session_id=continuation.get("session_id"),
+            keep_chosen_model=continuation.get("keep_chosen_model", True),
+            task_tags=tuple(raw_tags),
             owner_id=payload["owner_id"],
             host_id=payload["host_id"],
             round_id=payload["round_id"],

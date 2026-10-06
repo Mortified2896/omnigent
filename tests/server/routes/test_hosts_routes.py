@@ -64,3 +64,49 @@ async def test_skills_proxy_cleans_up_unanswered_requests(
         assert isinstance(result, HTTPException)
         assert result.status_code == status
     assert conn.pending_skills == {}
+
+
+def test_codex_subscription_usage_is_host_owner_scoped(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+    from fastapi.testclient import TestClient
+
+    from omnigent.errors import OmnigentError
+    from omnigent.server.auth import AuthProvider
+    from omnigent.server.routes import hosts
+
+    class Owner(AuthProvider):
+        def get_user_id(self, request):
+            return request.headers.get("x-test-user")
+
+    class Hosts:
+        def get_host(self, host_id):
+            return SimpleNamespace(host_id=host_id, user_id="alice")
+
+    class Registry:
+        def get(self, host_id):
+            return SimpleNamespace(host_id=host_id)
+
+    async def public_limits(**kwargs):
+        assert kwargs["harness"] == "codex-account-limits"
+        return {"status": "ok", "rate_limits": {"remaining_percent": 72, "windows": []}}
+
+    monkeypatch.setattr(hosts, "_proxy_model_options", public_limits)
+    app = FastAPI()
+
+    @app.exception_handler(OmnigentError)
+    async def handle_error(request, error):
+        return JSONResponse(status_code=error.http_status, content={"detail": error.message})
+
+    app.include_router(
+        hosts.create_hosts_router(Registry(), Hosts(), None, auth_provider=Owner()), prefix="/v1"
+    )
+    with TestClient(app) as client:
+        path = "/v1/hosts/host_1/codex-rate-limits"
+        assert client.get(path).status_code == 401
+        assert client.get(path, headers={"x-test-user": "bob"}).status_code == 403
+        response = client.get(path, headers={"x-test-user": "alice"})
+        assert response.status_code == 200
+        assert response.json() == {"remaining_percent": 72, "windows": []}

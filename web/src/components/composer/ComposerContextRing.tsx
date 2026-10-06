@@ -41,7 +41,7 @@ export function ComposerContextRing({
           type="button"
           data-testid="composer-context-ring"
           className={cn(
-            "flex shrink-0 items-center rounded-full bg-transparent p-0 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+            "flex shrink-0 items-center gap-2 rounded-md bg-transparent px-1 py-0.5 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             className,
           )}
           aria-label={`${usedPct}% of context used`}
@@ -64,6 +64,12 @@ export function ComposerContextRing({
               />
             )}
           </svg>
+          <span className="flex flex-col items-start whitespace-nowrap text-[11px] leading-tight tabular-nums">
+            <span>{usedPct}% used</span>
+            <span>
+              {formatTokenCount(tokensUsed)} / {formatTokenCount(contextWindow)}
+            </span>
+          </span>
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" className="flex-col items-start gap-0 px-3 py-2 text-left text-sm">

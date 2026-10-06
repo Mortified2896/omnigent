@@ -898,6 +898,7 @@ async def _receive_loop(
                         "status": frame.status,
                         "models": frame.models,
                         "routable_models": frame.routable_models,
+                        "rate_limits": frame.rate_limits,
                         "error": frame.error,
                     }
                 )

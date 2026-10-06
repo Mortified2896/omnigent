@@ -1,3 +1,7 @@
+import { currentModelChoices } from "@/lib/currentModelChoices";
+import { CodexSubscriptionUsage } from "@/components/composer/CodexSubscriptionUsage";
+import { TaskTagsControls } from "@/components/composer/TaskTagsPicker";
+import { useTaskTags } from "@/hooks/useTaskTags";
 import { useLoadedConversations } from "@/hooks/useSidebarData";
 import { useComposerContext } from "@/hooks/useComposerContext";
 import { useSlashCompletion } from "@/hooks/useSlashCompletion";
@@ -2377,6 +2381,7 @@ export function NewChatLandingScreen() {
     () => restoredDraft?.pickedAgentId ?? (projectParam !== "" ? null : readLastAgentId()),
   );
   const agentExplicitlySelectedRef = useRef(false);
+  const [taskTags, setTaskTags] = useTaskTags(null);
   const [selectedHostId, setSelectedHostId] = useState<string | null>(
     () => restoredDraft?.selectedHostId ?? null,
   );
@@ -2676,9 +2681,10 @@ export function NewChatLandingScreen() {
         writeLandingDraft(draftRef.current);
       } else if (submittedDraftRevisionRef.current === landingDraftRevision) {
         writeLandingDraft(null);
+        setTaskTags([]);
       }
     };
-  }, []);
+  }, [setTaskTags]);
 
   const { recent, addRecent } = useRecentWorkspaces(selectedHostId);
   const { addRecentHarness } = useRecentHarnesses();
@@ -3221,7 +3227,11 @@ export function NewChatLandingScreen() {
     ],
   );
   const codexModelOptions = useMemo(
-    () => (sandboxSelected ? (sandboxCatalog ?? []) : (availableCodexModels ?? [])),
+    () =>
+      currentModelChoices(
+        sandboxSelected ? (sandboxCatalog ?? []) : (availableCodexModels ?? []),
+        (row) => row.model ?? row.id,
+      ),
     [availableCodexModels, sandboxSelected, sandboxCatalog],
   );
   // Devin model *families* (claude-opus-5, swe-2, …). Effort is a separate
@@ -3482,7 +3492,7 @@ export function NewChatLandingScreen() {
         : selectedNativeHarness === "pi-native"
           ? piModelOptions
           : selectedNativeHarness === "codex-native"
-            ? codexModelOptions
+            ? currentModelChoices(codexModelOptions, (row) => row.model ?? row.id)
             : [];
   const [pickerModelSearch, setPickerModelSearch] = useState("");
   const pickerModelsLoading =
@@ -4214,6 +4224,13 @@ export function NewChatLandingScreen() {
       // A remembered routing "on" outranks a remembered concrete model, and
       // also drops any model/effort left in the shared state (e.g. seeded for
       // Claude Code before the harness switch).
+      const filteredDefault =
+        !storedRoutingOn &&
+        selectedNativeHarness === "codex-native" &&
+        availableCodexModels?.some((row) => row.isDefault) &&
+        !codexModelOptions.some((row) => row.isDefault)
+          ? codexModelOptions[0]
+          : undefined;
       const seededCodexModel =
         (selectedNativeHarness === "codex-native" ? projectSeed(codexModelOptions) : null) ??
         (!storedRoutingOn &&
@@ -4221,7 +4238,7 @@ export function NewChatLandingScreen() {
         stored.model != null &&
         codexModelOptions.some((m) => m.id === stored.model)
           ? stored.model
-          : "");
+          : (filteredDefault?.id ?? ""));
       setPickedModel(seededCodexModel);
       setPickedCodexAccessLane(
         selectedNativeHarness === "codex-native" &&
@@ -4231,7 +4248,7 @@ export function NewChatLandingScreen() {
             (row) => row.id === seededCodexModel && row.accessLane === stored.accessLane,
           )
           ? stored.accessLane
-          : null,
+          : (filteredDefault?.accessLane ?? null),
       );
       // Reconcile the remembered Codex effort against the seeded model's
       // ladder (the catalog default's when no model is pinned): a remembered
@@ -5310,6 +5327,7 @@ export function NewChatLandingScreen() {
     if (sandboxRepoSelections.length > 0) {
       writeLastSandboxRepos(sandboxRepoSelections);
     }
+    const submittedTaskTags = [...taskTags];
     setCreating(true);
     setCreateError(null);
     let localConv: {
@@ -5532,28 +5550,35 @@ export function NewChatLandingScreen() {
         // Normal path: bind to an existing registered agent.
         const provisional = newTempConversation();
         try {
-          localConv = beginLocalConversation(initialPrompt, files, provisional, localProject, {
-            // Seed the temp session with the NORMALIZED create identity so the
-            // optimistic composer shows the model/effort/harness/routing being
-            // created, not state projected from the previously active session.
-            modelOverride: normalizedModelOverride,
-            llmModel: resolvedDefaultModel,
-            reasoningEffort: normalizedReasoningEffort,
-            // The RESOLVED native wrapper harness (e.g. "codex-native"), not the
-            // usually-null pickedHarness for a native agent — so the temp page
-            // adapter can re-derive the native model/effort/permission identity.
-            harness: smartRoutingHarnessSelected
-              ? null
-              : (selectedNativeHarness ?? pickedHarness ?? null),
-            costControlModeOverride: costControlOverride ?? null,
-            boundAgentId: effectiveAgentId,
-            // Name (not just id) so the in-session temp composer can evaluate
-            // routing eligibility (isCostRoutingSession needs a bound agent).
-            boundAgentName: agent?.display_name ?? agent?.name ?? null,
-            // Chosen host so temp routing's per-family gateway guard uses the
-            // real host (null for a sandbox create).
-            hostId: sandboxSelected ? null : selectedHostId,
-          });
+          localConv = beginLocalConversation(
+            initialPrompt,
+            files,
+            provisional,
+            localProject,
+            {
+              // Seed the temp session with the NORMALIZED create identity so the
+              // optimistic composer shows the model/effort/harness/routing being
+              // created, not state projected from the previously active session.
+              modelOverride: normalizedModelOverride,
+              llmModel: resolvedDefaultModel,
+              reasoningEffort: normalizedReasoningEffort,
+              // The RESOLVED native wrapper harness (e.g. "codex-native"), not the
+              // usually-null pickedHarness for a native agent — so the temp page
+              // adapter can re-derive the native model/effort/permission identity.
+              harness: smartRoutingHarnessSelected
+                ? null
+                : (selectedNativeHarness ?? pickedHarness ?? null),
+              costControlModeOverride: costControlOverride ?? null,
+              boundAgentId: effectiveAgentId,
+              // Name (not just id) so the in-session temp composer can evaluate
+              // routing eligibility (isCostRoutingSession needs a bound agent).
+              boundAgentName: agent?.display_name ?? agent?.name ?? null,
+              // Chosen host so temp routing's per-family gateway guard uses the
+              // real host (null for a sandbox create).
+              hostId: sandboxSelected ? null : selectedHostId,
+            },
+            submittedTaskTags,
+          );
           if (localConv !== null) navigate(`/c/${localConv.tempConvId}`);
         } catch {
           /* non-fatal: the response still opens the server session */
@@ -5821,6 +5846,7 @@ export function NewChatLandingScreen() {
           navigate,
           () => window.location.pathname.endsWith(tempRouteSuffix),
           localProject,
+          submittedTaskTags,
         );
         void queryClient.refetchQueries({ queryKey: ["conversations"] });
       } else {
@@ -5828,7 +5854,12 @@ export function NewChatLandingScreen() {
         // Label the row, stash the first message for ChatPage to send, navigate.
         recordOptimisticTitle(data.id, initialPrompt);
         void queryClient.refetchQueries({ queryKey: ["conversations"] });
-        setPendingInitialPrompt(data.id, { text: initialPrompt, skill, files });
+        setPendingInitialPrompt(data.id, {
+          text: initialPrompt,
+          skill,
+          files,
+          ...(submittedTaskTags.length > 0 ? { taskTags: submittedTaskTags } : {}),
+        });
         if (onScreenRef.current && window.location.href === createLocation) {
           navigate(`/c/${data.id}`);
         }
@@ -6192,6 +6223,7 @@ export function NewChatLandingScreen() {
                   </div>
                 </PopoverContent>
               </Popover>
+              <TaskTagsControls value={taskTags} onChange={setTaskTags} />
             </ComposerWorkspaceBar>
           )}
           {!sandboxSelected && (
@@ -6439,6 +6471,7 @@ export function NewChatLandingScreen() {
                     </PopoverContent>
                   </Popover>
                 )}
+              <TaskTagsControls value={taskTags} onChange={setTaskTags} />
             </ComposerWorkspaceBar>
           )}
           <form
@@ -6600,7 +6633,7 @@ export function NewChatLandingScreen() {
                 afterActions: (
                   <div
                     ref={setAdvisorSlotEl}
-                    className="mx-3 mb-1.5 border-t border-border/60 pt-1.5 empty:hidden"
+                    className="border-t border-border/60 px-3 empty:hidden"
                     data-testid="new-chat-landing-advisor-slot"
                   />
                 ),
@@ -6629,6 +6662,65 @@ export function NewChatLandingScreen() {
                           navigate(`/?${params.toString()}`);
                           requestAnimationFrame(() => textareaRef.current?.focus());
                         }}
+                      />
+                    </div>
+                    <div className="flex min-w-0 items-center rounded-lg">
+                      {/* Harness / agent identity chip. Model choice lives in the
+                    dedicated model control beside it — two controls, two concepts. */}
+                      <AgentHarnessPicker
+                        agentEntries={agentEntries}
+                        harnessEntries={harnessEntries}
+                        effectiveAgentId={effectiveAgentId}
+                        agentLabel={agentLabel}
+                        hasAgents={agentList.length > 0}
+                        loading={pickerLoading}
+                        interactiveWhileLoading={interactiveWhileLoading}
+                        disabledLabel={noExecutionTargetSelected ? "No host selected" : undefined}
+                        cacheKey={pickerCacheKey}
+                        host={harnessWarningHost}
+                        onSelectAgent={handleSelectAgent}
+                        pendingAgent={pendingAgentAllowedOnTarget ? pendingAgent : null}
+                        pendingAgentId={PENDING_AGENT_ID}
+                        onSelectPending={handleSelectPending}
+                        onCreateCustomAgent={() => setCreateAgentOpen(true)}
+                        sandboxSelected={sandboxSelected}
+                        triggerTooltip={
+                          smartRoutingHarnessSelected ? AUTO_HARNESS_DESCRIPTION : undefined
+                        }
+                        triggerTooltipRows={
+                          !smartRoutingHarnessSelected && harnessTriggerDetails.length > 0
+                            ? harnessTriggerTooltipRows.filter(
+                                (row) =>
+                                  row.label !== "Model" &&
+                                  row.label !== "Effort" &&
+                                  row.label !== "Thinking level",
+                              )
+                            : undefined
+                        }
+                        triggerDetails={harnessTriggerDetails}
+                        triggerHidesModelText
+                        triggerIcon={
+                          selectedAgent ? (
+                            <span
+                              className="flex size-4 shrink-0 items-center justify-center"
+                              data-testid="new-chat-landing-agent-icon"
+                            >
+                              {smartRoutingHarnessSelected ? (
+                                <WandSparklesIcon className="size-4" aria-hidden="true" />
+                              ) : (
+                                <ComposerAgentIcon agent={selectedAgent} />
+                              )}
+                            </span>
+                          ) : null
+                        }
+                        selectedConfigContent={selectedConfigContent}
+                        isEntryConfigurable={isEntryConfigurable}
+                        entrySummaries={pickerEntrySummaries}
+                        autoHarnessAvailable={smartRoutingHarnessAvailable}
+                        autoHarnessActive={smartRoutingHarnessSelected}
+                        onSelectAutoHarness={handleSelectSmartRoutingHarness}
+                        contentClassName={COMPOSER_HARNESS_MENU_SIZE}
+                        triggerClassName="text-[13px] leading-5"
                       />
                     </div>
                     {/* Host chip */}
@@ -6857,94 +6949,40 @@ export function NewChatLandingScreen() {
                 ),
                 trailing: (
                   <>
-                    <div className="flex min-w-0 items-center rounded-lg">
-                      {/* Harness / agent identity chip. Model choice lives in the
-                    dedicated model control beside it — two controls, two concepts. */}
-                      <AgentHarnessPicker
-                        agentEntries={agentEntries}
-                        harnessEntries={harnessEntries}
-                        effectiveAgentId={effectiveAgentId}
-                        agentLabel={agentLabel}
-                        hasAgents={agentList.length > 0}
-                        loading={pickerLoading}
-                        interactiveWhileLoading={interactiveWhileLoading}
-                        disabledLabel={noExecutionTargetSelected ? "No host selected" : undefined}
-                        cacheKey={pickerCacheKey}
-                        host={harnessWarningHost}
-                        onSelectAgent={handleSelectAgent}
-                        pendingAgent={pendingAgentAllowedOnTarget ? pendingAgent : null}
-                        pendingAgentId={PENDING_AGENT_ID}
-                        onSelectPending={handleSelectPending}
-                        onCreateCustomAgent={() => setCreateAgentOpen(true)}
-                        sandboxSelected={sandboxSelected}
-                        triggerTooltip={
-                          smartRoutingHarnessSelected ? AUTO_HARNESS_DESCRIPTION : undefined
-                        }
-                        triggerTooltipRows={
-                          !smartRoutingHarnessSelected && harnessTriggerDetails.length > 0
-                            ? harnessTriggerTooltipRows.filter(
-                                (row) =>
-                                  row.label !== "Model" &&
-                                  row.label !== "Effort" &&
-                                  row.label !== "Thinking level",
-                              )
-                            : undefined
-                        }
-                        triggerDetails={harnessTriggerDetails}
-                        triggerHidesModelText
-                        triggerIcon={
-                          selectedAgent ? (
-                            <span
-                              className="flex size-4 shrink-0 items-center justify-center"
-                              data-testid="new-chat-landing-agent-icon"
-                            >
-                              {smartRoutingHarnessSelected ? (
-                                <WandSparklesIcon className="size-4" aria-hidden="true" />
-                              ) : (
-                                <ComposerAgentIcon agent={selectedAgent} />
-                              )}
-                            </span>
-                          ) : null
-                        }
-                        selectedConfigContent={selectedConfigContent}
-                        isEntryConfigurable={isEntryConfigurable}
-                        entrySummaries={pickerEntrySummaries}
-                        autoHarnessAvailable={smartRoutingHarnessAvailable}
-                        autoHarnessActive={smartRoutingHarnessSelected}
-                        onSelectAutoHarness={handleSelectSmartRoutingHarness}
-                        contentClassName={COMPOSER_HARNESS_MENU_SIZE}
-                        triggerClassName="text-[13px] leading-5"
-                      />
-                    </div>
                     {showModelControl && (
-                      <HarnessPicker
-                        open={modelMenuOpen}
-                        onOpenChange={setModelMenuOpen}
-                        testId="new-chat-landing-model-menu"
-                        contentSide="bottom"
-                        contentSideOffset={6}
-                        onInitialSelectionFocus={() => {}}
-                        tooltip={
-                          <ComposerConfigTooltipRows
-                            rows={[
-                              { label: "Model", value: modelControlLabel },
-                              ...configSummary.filter(
-                                (row) => row.label === "Effort" || row.label === "Thinking level",
-                              ),
-                            ]}
-                          />
-                        }
-                        tooltipTestId="new-chat-landing-model-tooltip"
-                        trigger={{
-                          label: "Model",
-                          model: modelControlLabel,
-                          icon: modelControlIcon,
-                          testIdPrefix: "new-chat-landing-model",
-                          "data-testid": "new-chat-landing-model-select",
-                        }}
-                      >
-                        {modelMenuBody}
-                      </HarnessPicker>
+                      <div className="flex min-w-0 flex-col items-end justify-center">
+                        <HarnessPicker
+                          open={modelMenuOpen}
+                          onOpenChange={setModelMenuOpen}
+                          testId="new-chat-landing-model-menu"
+                          contentSide="bottom"
+                          contentSideOffset={6}
+                          onInitialSelectionFocus={() => {}}
+                          tooltip={
+                            <ComposerConfigTooltipRows
+                              rows={[
+                                { label: "Model", value: modelControlLabel },
+                                ...configSummary.filter(
+                                  (row) => row.label === "Effort" || row.label === "Thinking level",
+                                ),
+                              ]}
+                            />
+                          }
+                          tooltipTestId="new-chat-landing-model-tooltip"
+                          trigger={{
+                            label: "Model",
+                            model: modelControlLabel,
+                            icon: modelControlIcon,
+                            testIdPrefix: "new-chat-landing-model",
+                            "data-testid": "new-chat-landing-model-select",
+                          }}
+                        >
+                          {modelMenuBody}
+                        </HarnessPicker>
+                        {selectedNativeHarness === "codex-native" && (
+                          <CodexSubscriptionUsage hostId={selectedHostId} />
+                        )}
+                      </div>
                     )}
                     {pickerEffortOptions.length > 0 &&
                       !routingOn &&
@@ -7022,6 +7060,7 @@ export function NewChatLandingScreen() {
                   : null
               }
               advisorModelTarget={advisorSlotEl}
+              taskTags={taskTags}
               hostId={selectedHostId}
               task={
                 buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
@@ -7039,6 +7078,7 @@ export function NewChatLandingScreen() {
               launchAgentId={effectiveAgentId}
               launchWorkspace={workspace || null}
               onLaunched={(sessionId) => {
+                setTaskTags([]);
                 submittedRef.current = true;
                 if (submittedDraftRevisionRef.current === landingDraftRevision)
                   writeLandingDraft(null);

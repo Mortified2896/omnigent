@@ -1,3 +1,4 @@
+import { currentModelChoices } from "@/lib/currentModelChoices";
 /** Live Model Advisor controller for the new-chat composer. */
 import {
   useCallback,
@@ -10,6 +11,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { SettingsIcon, SparklesIcon } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
 import {
@@ -81,6 +89,9 @@ export interface NewChatAdvisorSectionProps {
   continueSessionId?: string | null;
   onFlowStateChange?: (busy: boolean, reviewVisible: boolean) => void;
   advisorModelTarget?: HTMLElement | null;
+  keepChosenModel?: boolean;
+  taskTags?: string[];
+  selectorsOnly?: boolean;
   feedbackTarget?: HTMLElement | null;
   enabledOverride?: boolean;
   autoSubmit?: boolean;
@@ -148,6 +159,9 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     continueSessionId = null,
     onFlowStateChange,
     advisorModelTarget,
+    keepChosenModel = true,
+    taskTags,
+    selectorsOnly = false,
     feedbackTarget,
     enabledOverride,
     autoSubmit = true,
@@ -161,7 +175,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   // The native composer is the execution-choice authority. Saved Advisor state is fallback only.
   const humanPick = suppliedHumanPick ?? sessionHumanPick;
   const scope = hostId ?? "";
-  const [advisorControlsOpen, setAdvisorControlsOpen] = useState(false);
   const [localSettingsOpen, setSettingsOpen] = useState(false);
   const settingsOpen = settingsOpenOverride ?? localSettingsOpen;
   const [editor, setEditor] = useState<EditorState>({
@@ -266,7 +279,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           fetchPreferences(hostId),
         ]);
         if (cancelled || !isCurrentScope(hostId, generation)) return;
-        setOptions(toLogicalOptions(catalog));
+        setOptions(currentModelChoices(toLogicalOptions(catalog), (row) => row.model_id));
         const saved = toSavedProviderPreferences(prefs);
         const sessionChoices = continueSessionId
           ? readSessionAdvisorChoices(hostId, continueSessionId)
@@ -543,6 +556,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           resolvedHumanChoiceId,
           editor.draft!,
           submissionKey.current!,
+          continueSessionId ? { sessionId: continueSessionId, keepChosenModel } : undefined,
+          taskTags,
         );
         if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({ round: dto, busy: true, error: null });
@@ -558,12 +573,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     })();
   }, [
     editor.draft,
+    continueSessionId,
+    keepChosenModel,
     hostId,
     isCurrentScope,
     pollRound,
     resolveHumanChoice,
     round.busy,
     task,
+    taskTags,
     submissionBlockReason,
     validation,
   ]);
@@ -660,9 +678,12 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const approvalRequired = Boolean(
     review?.assigned_arm === "advisor" &&
     assigned &&
-    approvalPreferences?.providers[assigned.provider].approval_model_ids?.includes(
-      assigned.model_id,
-    ),
+    (approvalPreferences?.providers[assigned.provider].approval_choice_ids?.includes(
+      assigned.choice_id,
+    ) ||
+      approvalPreferences?.providers[assigned.provider].approval_model_ids?.includes(
+        assigned.model_id,
+      )),
   );
   const launchNeedsApproval = requireConfirmation || approvalRequired;
   const awaitingLaunch =
@@ -754,21 +775,44 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       </p>
     );
   const controls = (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
-      {enabledOverride === undefined ? (
-        <Button
-          type="button"
-          size="sm"
-          variant={editor.draft?.enabled ? "secondary" : "ghost"}
-          disabled={!editor.draft || round.busy || disabled}
-          aria-expanded={advisorControlsOpen}
-          onClick={() => setAdvisorControlsOpen((open) => !open)}
-        >
-          <SparklesIcon />
-          Advisor {editor.draft?.enabled ? "on" : "off"}
-        </Button>
-      ) : null}
-    </div>
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="shrink-0 gap-2 px-1"
+      role="switch"
+      aria-label="Enable Advisor"
+      aria-checked={editor.draft?.enabled ?? false}
+      disabled={!editor.draft || round.busy || disabled}
+      onClick={() => {
+        if (!editor.draft) return;
+        const next = { ...editor.draft, enabled: !editor.draft.enabled };
+        handleChange(
+          next.enabled
+            ? (seedFreshAdvisorDraft(next, options, resolveHumanChoice()) ?? next)
+            : next,
+        );
+      }}
+    >
+      <SparklesIcon className="size-4 text-muted-foreground" />
+      Advisor
+      <span
+        aria-hidden="true"
+        className={
+          editor.draft?.enabled
+            ? "relative h-4 w-7 rounded-full bg-foreground"
+            : "relative h-4 w-7 rounded-full bg-muted"
+        }
+      >
+        <span
+          className={
+            editor.draft?.enabled
+              ? "absolute right-0.5 top-0.5 size-3 rounded-full bg-background"
+              : "absolute left-0.5 top-0.5 size-3 rounded-full bg-background"
+          }
+        />
+      </span>
+    </Button>
   );
   const settingsPanel = settingsOpen ? (
     <ProviderSettingsPanel
@@ -868,143 +912,119 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
     </div>
   );
-  const recommenderControls =
-    editor.draft && (advisorControlsOpen || settingsOpen || enabledOverride === true) ? (
-      <div
-        className="flex w-full min-w-0 flex-wrap items-center gap-1.5"
-        data-testid="model-advisor-composer-choice"
+  const recommenderControls = editor.draft ? (
+    <div
+      className="ml-auto flex min-w-0 items-center justify-end gap-1.5"
+      data-testid="model-advisor-composer-choice"
+    >
+      <label
+        hidden
+        htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+        className="min-w-0 shrink-0 text-xs text-muted-foreground"
       >
-        {enabledOverride === undefined ? (
-          <Button
-            type="button"
-            size="sm"
-            variant={editor.draft.enabled ? "secondary" : "ghost"}
-            role="switch"
-            aria-label="Enable Advisor"
-            aria-checked={editor.draft.enabled}
-            disabled={round.busy || disabled}
-            onClick={() => {
-              if (!editor.draft) return;
-              if (!editor.draft.enabled) {
-                // Seed synchronously so the very first enabled render is valid.
-                const seeded = seedFreshAdvisorDraft(
-                  { ...editor.draft, enabled: true },
-                  options,
-                  resolveHumanChoice(),
-                );
-                if (seeded) {
-                  handleChange(seeded);
-                  return;
-                }
-              }
-              handleChange({ ...editor.draft, enabled: !editor.draft.enabled });
-            }}
-          >
-            {editor.draft.enabled ? "On" : "Off"}
-          </Button>
-        ) : null}
-        <label
-          htmlFor={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-          className="min-w-0 shrink-0 text-xs text-muted-foreground"
-        >
-          Recommender
-        </label>
-        <div className="flex w-full min-w-0 items-center gap-1 md:w-auto md:shrink-0">
-          <SearchableModelPicker
-            id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
-            value={advisorModelValue}
-            options={advisorOptions}
-            loading={false}
-            composer
-            includeDefault={false}
-            placeholder="Choose model…"
-            ariaLabel="Recommender model"
-            testId="model-advisor-advisor-choice"
-            searchTestId="model-advisor-advisor-choice-search"
-            disabled={disabled || round.busy}
-            onValueChange={(modelKey) => {
-              const row = advisorRows.find((candidate) => candidate.key === modelKey);
-              // Switching models reconciles the effort: keep the current one
-              // when the new model offers it, else its declared default, else
-              // the deterministic supported fallback.
-              const choice = row
-                ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
-                : null;
-              if (editor.draft && choice)
-                handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-            }}
-          />
-          <ComposerEffortPicker
-            value={savedAdvisor?.reasoning_effort ?? null}
-            options={savedAdvisorEffortOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-            }))}
-            disabled={disabled || round.busy || !savedAdvisor}
-            label="Recommender reasoning effort"
-            testIdPrefix="model-advisor-advisor"
-            testId="model-advisor-advisor-effort"
-            onSelect={(effort) => {
-              if (!editor.draft || !savedAdvisorRow) return;
-              const choice = savedAdvisorRow.choices.find(
-                (option) => option.available && option.reasoning_effort === effort,
-              );
-              if (choice) handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-            }}
-          />
-        </div>
-        {savedAdvisorUnavailable ? (
-          <p role="alert" className="col-span-2 text-xs text-destructive">
-            The saved advisor model is unavailable from this host. Choose a valid model and
-            reasoning level to continue.
-          </p>
-        ) : null}
+        Recommender
+      </label>
+      <div className="flex min-w-0 items-center gap-1">
+        <SearchableModelPicker
+          id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
+          value={advisorModelValue}
+          options={advisorOptions}
+          loading={false}
+          composer
+          includeDefault={false}
+          placeholder="Choose model…"
+          ariaLabel="Recommender model"
+          testId="model-advisor-advisor-choice"
+          searchTestId="model-advisor-advisor-choice-search"
+          disabled={disabled || round.busy}
+          onValueChange={(modelKey) => {
+            const row = advisorRows.find((candidate) => candidate.key === modelKey);
+            // Switching models reconciles the effort: keep the current one
+            // when the new model offers it, else its declared default, else
+            // the deterministic supported fallback.
+            const choice = row
+              ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
+              : null;
+            if (editor.draft && choice)
+              handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+          }}
+        />
+        <ComposerEffortPicker
+          value={savedAdvisor?.reasoning_effort ?? null}
+          options={savedAdvisorEffortOptions.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+          disabled={disabled || round.busy || !savedAdvisor}
+          label="Recommender reasoning effort"
+          testIdPrefix="model-advisor-advisor"
+          testId="model-advisor-advisor-effort"
+          onSelect={(effort) => {
+            if (!editor.draft || !savedAdvisorRow) return;
+            const choice = savedAdvisorRow.choices.find(
+              (option) => option.available && option.reasoning_effort === effort,
+            );
+            if (choice) handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+          }}
+        />
       </div>
-    ) : null;
+      {savedAdvisorUnavailable ? (
+        <p role="alert" className="col-span-2 text-xs text-destructive">
+          The saved advisor model is unavailable from this host. Choose a valid model and reasoning
+          level to continue.
+        </p>
+      ) : null}
+    </div>
+  ) : null;
   // Expand the shared composer selectors directly beneath the Advisor button.
   const composerControls = (
-    <div className="flex w-full min-w-0 flex-col items-start gap-1">
-      <div className="flex w-full items-center justify-between gap-2">
-        {controls}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="ml-auto shrink-0"
-          disabled={round.busy || disabled}
-          onClick={() => setSettingsOpen((open) => !open)}
-          aria-expanded={settingsOpen}
-          aria-label="Recommender settings"
-        >
-          <SettingsIcon />
-          Recommender settings
-        </Button>
-      </div>
+    <div className="flex h-14 w-full min-w-0 items-center gap-2">
+      {controls}
       {recommenderControls}
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        className="shrink-0"
+        disabled={round.busy || disabled}
+        onClick={() => setSettingsOpen((open) => !open)}
+        aria-expanded={settingsOpen}
+        aria-label="Recommender settings"
+      >
+        <SettingsIcon className="size-4" />
+      </Button>
     </div>
   );
   return (
     <>
       {showComposerControls
         ? advisorModelTarget
-          ? createPortal(composerControls, advisorModelTarget)
+          ? createPortal(selectorsOnly ? recommenderControls : composerControls, advisorModelTarget)
           : composerControls
         : null}
-      {settingsPanelTarget
-        ? settingsPanel
-          ? createPortal(
-              <div className="space-y-3">
-                {!showComposerControls ? recommenderControls : null}
-                {settingsPanel}
-              </div>,
-              settingsPanelTarget,
-            )
-          : null
-        : settingsOpenOverride !== undefined
-          ? null
-          : feedbackTarget
-            ? null
-            : settingsPanel}
+      {settingsPanelTarget ? (
+        settingsPanel ? (
+          createPortal(
+            <div className="space-y-3">
+              {!showComposerControls ? recommenderControls : null}
+              {settingsPanel}
+            </div>,
+            settingsPanelTarget,
+          )
+        ) : null
+      ) : settingsOpenOverride !== undefined ? null : feedbackTarget ? null : (
+        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Recommender settings</DialogTitle>
+              <DialogDescription>
+                Choose the Advisor model, allowed models and approval rules.
+              </DialogDescription>
+            </DialogHeader>
+            {settingsPanel}
+          </DialogContent>
+        </Dialog>
+      )}
       {feedbackTarget ? createPortal(feedback, feedbackTarget) : feedback}
     </>
   );

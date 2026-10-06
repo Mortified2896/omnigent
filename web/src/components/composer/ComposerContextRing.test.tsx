@@ -25,9 +25,10 @@ describe("ComposerContextRing", () => {
     expect(renderRing(1000, null).container).toBeEmptyDOMElement();
   });
 
-  it("keeps usage text out of the bar while preserving an accessible percentage", () => {
+  it("always shows compact usage text and preserves an accessible percentage", () => {
     renderRing(1000, 123);
-    expect(screen.getByTestId("composer-context-ring")).not.toHaveTextContent("12%");
+    expect(screen.getByTestId("composer-context-ring")).toHaveTextContent("12% used");
+    expect(screen.getByTestId("composer-context-ring")).toHaveTextContent("123 / 1K");
     expect(screen.getByTestId("composer-context-ring")).toHaveClass("shrink-0");
     expect(screen.getByTestId("composer-context-ring")).not.toHaveClass("gap-1");
     expect(screen.getByLabelText("12% of context used")).toBeInTheDocument();
@@ -56,7 +57,7 @@ describe("ComposerContextRing", () => {
   it("clamps over-full usage to 100%", () => {
     renderRing(1000, 4000);
     expect(screen.getByLabelText("100% of context used")).toBeInTheDocument();
-    expect(screen.getByTestId("composer-context-ring")).not.toHaveTextContent("100%");
+    expect(screen.getByTestId("composer-context-ring")).toHaveTextContent("100% used");
   });
 
   it("stays grayscale — never warning/destructive — even at high usage", () => {

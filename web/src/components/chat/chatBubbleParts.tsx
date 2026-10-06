@@ -220,6 +220,7 @@ export function buildPendingBubbles(
       itemId: p.tempId,
       pending: true,
       content: p.content,
+      taskTags: p.taskTags,
       ...(author !== null ? { createdBy: author } : {}),
       // Stamped once at send time; absent for snapshot-replayed entries,
       // which show no timestamp rather than a re-stamped render time.
@@ -896,6 +897,21 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
             )}
           </MessageContent>
         </div>
+        {bubble.taskTags && bubble.taskTags.length > 0 && (
+          <div
+            className="mt-1 flex max-w-full flex-wrap justify-end gap-1"
+            aria-label="Message task tags"
+          >
+            {bubble.taskTags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded border border-primary/50 bg-primary/10 px-2 py-0.5 text-xs"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
         {/* 40%-visible on touch, hover/focus-reveal on desktop. */}
         <div className="flex items-center justify-end gap-3 py-1 opacity-40 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
           {ts && (
@@ -1107,6 +1123,16 @@ function AssistantBubble({
             <span>Interrupted</span>
           </p>
         )}
+        {canRateResponse(bubble) && (
+          <div className="mt-2 w-full">
+            {bubble.workedForS != null && (
+              <p className="mb-2 text-xs text-muted-foreground tabular-nums">
+                Answered in {bubble.workedForS.toFixed(1)}s
+              </p>
+            )}
+            <ResponseFeedbackActions responseId={bubble.responseId} />
+          </div>
+        )}
         {/* Skip fold-only and error-only bubbles. Order: actions, then timestamp. */}
         {!foldOnly && !errorOnly && (
           <div
@@ -1127,9 +1153,6 @@ function AssistantBubble({
                 >
                   {isCopied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
                 </MessageAction>
-              )}
-              {canRateResponse(bubble) && (
-                <ResponseFeedbackActions responseId={bubble.responseId} />
               )}
               {/* Fork from this response: clone the session with history
                     truncated after this turn. Hidden while streaming and when

@@ -1,3 +1,4 @@
+import { ResponseTiming } from "@/components/composer/ResponseTiming";
 import { filterSessionScope } from "@/lib/sessionVisibility";
 import { getCurrentUserId } from "@/lib/identity";
 import { PinCapacityContext, SidebarConfigContext } from "@/lib/sidebarConfig";
@@ -160,6 +161,7 @@ import { isFeatureEnabled, isSingleUserMode, sandboxOptionLabel } from "@/lib/ca
 import { useBranding } from "@/lib/branding";
 import { relativeTime } from "@/lib/relativeTime";
 import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
+import { copyText } from "@/lib/clipboard";
 import { showToast } from "@/components/ui/toast";
 import { showArchiveUndoToast } from "./archiveUndoToast";
 import { useArchiveWorktreePrompt } from "./ArchiveWorktreeDialog";
@@ -372,7 +374,11 @@ const SIDEBAR_FILTER_EMPTY: Record<SidebarTab, string> = {
 // checkboxes and where the bulk-action bar renders.
 type SelectionScope = "sessions" | "projects";
 
+// Optional trailing session metadata; omitted by the application until timing data is available.
+export const SidebarSessionMetadataContext = createContext<Readonly<Record<string, ReactNode>>>({});
+
 interface SidebarProps {
+  brandVersions?: { official: string; private: string };
   open: boolean;
   onClose: () => void;
   /**
@@ -592,6 +598,7 @@ export function useMigrateLocalPinsToServer(
 }
 
 function SidebarImpl({
+  brandVersions,
   open,
   onClose,
   onOpen,
@@ -1009,36 +1016,60 @@ function SidebarImpl({
           brand mark is dropped and the actions slide left to sit beside the
           window controls (see the [data-electron-mac] rules in index.css).
           Inert in a browser and on other platforms, which keep the row below. */}
-            {/* h-14 below md matches the mobile chat header height so the
-            Search bubble shares a centerline with the overflow bubble in the
-            chat strip beside the open drawer. */}
-            <div className="sidebar-header-row flex h-14 shrink-0 items-center justify-between pr-3 pl-4 md:h-12">
+            <div className="sidebar-header-row flex h-20 shrink-0 items-center justify-between pr-3 pl-4">
               {/* Brand mark doubles as the "home" affordance: clicking it
             returns to `/`, the new-session composer. Without this there
             is no way back to the landing composer once you're inside a
             session. Reuses onNavClick so a plain primary click closes
             the sidebar on mobile (where it's a full-screen overlay) but
             modifier/middle clicks still open `/` in a new tab. */}
-              <Link
-                to="/"
-                onClick={onNavClick}
+              <div
                 data-testid="sidebar-brand"
-                componentId="sidebar.home"
-                className="sidebar-brand rounded-none transition-opacity duration-200 ease-[var(--ease-otto)] hover:opacity-70"
+                className={`sidebar-brand ${brandVersions ? "flex min-w-0 flex-col items-start gap-1" : ""}`}
               >
-                {branding.app_name ? (
-                  <span className="text-[15px] font-semibold tracking-tight">
-                    {branding.app_name}
-                  </span>
-                ) : (
-                  <img
-                    src={omnigentWordmark}
-                    alt="Omnigent"
-                    data-testid="sidebar-wordmark"
-                    className="h-[15px] w-auto shrink-0 translate-y-px dark:invert"
-                  />
+                <Link
+                  to="/"
+                  onClick={onNavClick}
+                  componentId="sidebar.home"
+                  className="rounded-none transition-opacity duration-200 ease-[var(--ease-otto)] hover:opacity-70"
+                >
+                  {branding.app_name ? (
+                    <span className="text-[15px] font-semibold tracking-tight">
+                      {branding.app_name}
+                    </span>
+                  ) : (
+                    <img
+                      src={omnigentWordmark}
+                      alt="Omnigent"
+                      data-testid="sidebar-wordmark"
+                      className="h-[15px] w-auto shrink-0 translate-y-px dark:invert"
+                    />
+                  )}
+                </Link>
+                {brandVersions && (
+                  <button
+                    type="button"
+                    title="Copy official and private versions"
+                    onClick={async () => {
+                      try {
+                        await copyText(`Omnigent
+Official base v${brandVersions.official}
+Private ${brandVersions.private}`);
+                        showToast("Versions copied");
+                      } catch {
+                        showToast("Couldn’t copy versions. Please try again.");
+                      }
+                    }}
+                    className="flex cursor-pointer flex-col rounded-sm text-left text-[10px] leading-3 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                    aria-label="Copy application versions"
+                  >
+                    <span>Official base v{brandVersions.official}</span>
+                    <span title="Private customization Git revision · Storybook source snapshot">
+                      Private {brandVersions.private}
+                    </span>
+                  </button>
                 )}
-              </Link>
+              </div>
               {/* On the macOS shell this copy is hidden and an identical cluster
             renders in the title-bar strip instead (see AppShell), so the icons
             keep their place when the sidebar collapses or peeks. Everywhere
@@ -3872,6 +3903,13 @@ function ConversationRowImpl({
   }, [conversation.title, pendingTitle, rename.isSuccess, rename.isError]);
 
   const label = pendingTitle ?? conversationDisplayLabel(conversation);
+  const trailingMetadata = useContext(SidebarSessionMetadataContext)[conversation.id] ?? (
+    <ResponseTiming
+      sessionId={conversation.id}
+      compact
+      fallbackRunning={conversation.status === "running"}
+    />
+  );
   const hasRetainedTestEvidence =
     conversation.labels?.[TEST_RETENTION_LABEL] === TEST_RETENTION_HOLD;
   // Subscribed so the just-recorded optimistic label flips the row
@@ -4175,7 +4213,7 @@ function ConversationRowImpl({
     >
       {/* Row 1: the session name. Working, needs-approval, unseen, and draft
           markers render in the shared trailing indicator slot below. */}
-      <div className="flex w-full items-center">
+      <div className="flex w-full items-center gap-2">
         <span
           className={cn(
             "relative min-w-0 truncate",
@@ -4187,6 +4225,11 @@ function ConversationRowImpl({
           {label}
           {hasUnseenMessages && <span className="sr-only"> (unread)</span>}
         </span>
+        {trailingMetadata && (
+          <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+            {trailingMetadata}
+          </span>
+        )}
       </div>
       {hasRetainedTestEvidence && (
         <span

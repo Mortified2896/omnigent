@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   useSaveScoringEligibility,
   useSessionScoringPolicy,
@@ -16,9 +17,11 @@ const REASONS: { value: ExclusionReason; label: string }[] = [
 export function ResponseScoringActions({
   sessionId,
   responseId,
+  compact = false,
 }: {
   sessionId: string;
   responseId: string;
+  compact?: boolean;
 }) {
   const policy = useSessionScoringPolicy(sessionId);
   const mutation = useSaveScoringEligibility(sessionId, responseId);
@@ -43,18 +46,34 @@ export function ResponseScoringActions({
   return (
     <div className="flex flex-col gap-1" aria-label="Scoring eligibility">
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={excluded ? "secondary" : "ghost"}
-          className="min-h-10 text-xs md:min-h-7"
-          aria-pressed={excluded}
-          disabled={sessionExcluded || mutation.isPending}
-          title="Exclude this response from scoring without changing its outcome or notes"
-          onClick={() => mutation.mutate({ score_eligible: excluded, exclusion_reason: null })}
-        >
-          Do not score
-        </Button>
+        {compact ? (
+          <label className="flex min-h-10 cursor-pointer items-center gap-2 pl-[11px] text-xs text-muted-foreground md:min-h-7">
+            <Switch
+              className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-input [&_[data-slot=switch-thumb]]:data-[state=checked]:translate-x-[calc(100%-2px)] [&_[data-slot=switch-thumb]]:data-[state=unchecked]:translate-x-0"
+              aria-label="Do not score"
+              checked={excluded}
+              disabled={sessionExcluded || mutation.isPending}
+              title="Exclude this response from scoring without changing its outcome or notes"
+              onCheckedChange={(checked) =>
+                mutation.mutate({ score_eligible: !checked, exclusion_reason: null })
+              }
+            />
+            <span>Do not score</span>
+          </label>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant={excluded ? "secondary" : "ghost"}
+            className="min-h-10 text-xs md:min-h-7"
+            aria-pressed={excluded}
+            disabled={sessionExcluded || mutation.isPending}
+            title="Exclude this response from scoring without changing its outcome or notes"
+            onClick={() => mutation.mutate({ score_eligible: excluded, exclusion_reason: null })}
+          >
+            Do not score
+          </Button>
+        )}
         {excluded && !sessionExcluded && (
           <label className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
             Reason (optional)

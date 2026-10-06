@@ -1479,3 +1479,133 @@ def test_internal_launch_with_advisor_labels_reaches_real_creation_helper(monkey
     result, _store = asyncio.run(attempt())
     assert result[0].id == "conv_real_path"
     assert created[0]["agent_id"] == agent.id
+
+
+def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) -> None:
+    conversation = SimpleNamespace(
+        id="conv_existing",
+        host_id="host_1",
+        agent_id="ag_1",
+        workspace="/repo",
+        kind="default",
+        live_status="idle",
+        labels={"omnigent.access_lane": "codex-direct"},
+        model_override="gpt-5.5",
+        reasoning_effort="medium",
+        reported_model="previous-turn-model",
+    )
+    store = _FakeConversationStore(conversation)
+    launches: list[Any] = []
+
+    async def launcher(body: Any, *, user_id: str | None, request: Any = None) -> Any:
+        launches.append(body)
+        return _FakeSession()
+
+    client, _registry = client_for(
+        db_uri,
+        reply={
+            "status": "ok",
+            "raw_output": json.dumps(
+                {
+                    "candidate_id": PROVIDER_OPENAI.choice_id,
+                    "rationale": "This follow-up needs it.",
+                }
+            ),
+            "latency_ms": 100,
+        },
+        launcher=launcher,
+        randbelow=lambda _bound: 0,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+        conversation_store=store,
+        session_authorizer=lambda user_id, session_id: (
+            user_id == "alice@test" and session_id == "conv_existing"
+        ),
+    )
+    preferences = {
+        "schema_version": 2,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_GLM.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+        },
+        "advisor_choice_id": PROVIDER_OPENAI.choice_id,
+        "human_probability_percent": 50,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    with client:
+        saved = client.put(
+            "/v1/model-advisor/preferences",
+            json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+            headers=JSON_ALICE,
+        )
+        assert saved.status_code == 200
+        created = client.post(
+            "/v1/model-advisor/rounds",
+            json={
+                "host_id": "host_1",
+                "task": "Review this follow-up",
+                "human_choice_id": PROVIDER_OPENAI.choice_id,
+                "continue_session_id": "conv_existing",
+                "keep_chosen_model": True,
+                "task_tags": ["UI", "Research"],
+                "submission_key": "in-chat-followup",
+            },
+            headers=JSON_ALICE,
+        )
+        assert created.status_code == 200
+        payload = _settle(client, created.json()["round_id"])
+        assert {row["model_id"] for row in payload["decision_context"]["user_enabled_pool"]} == {
+            "gpt-5.5"
+        }
+        wrong_session = client.post(
+            f"/v1/model-advisor/rounds/{payload['round_id']}/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": payload["version"],
+                "launch": {
+                    "agent_id": "ag_1",
+                    "workspace": "/repo",
+                    "continue_session_id": "different",
+                },
+            },
+            headers=JSON_ALICE,
+        )
+        assert wrong_session.status_code == 409
+        confirmed = client.post(
+            f"/v1/model-advisor/rounds/{payload['round_id']}/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": payload["version"],
+                "launch": {
+                    "agent_id": "ag_1",
+                    "workspace": "/repo",
+                    "continue_session_id": "conv_existing",
+                },
+            },
+            headers=JSON_ALICE,
+        )
+
+    assert confirmed.status_code == 200
+    result = confirmed.json()
+    assert result["state"] == "dispatch_bound"
+    assert result["execution"]["session_id"] == "conv_existing"
+    assert launches == []
+    assert len(store.updates) == 1
+    session_id, updates = store.updates[0]
+    assert session_id == "conv_existing"
+    assert updates["require_idle"] is True
+    assert updates["_unset_reported_model"] is True
+    assert updates["labels"]["omnigent.advisor.round_id"] == payload["round_id"]
+    assert conversation.model_override == result["requested_execution"]["model"]
+    assert conversation.reported_model is None

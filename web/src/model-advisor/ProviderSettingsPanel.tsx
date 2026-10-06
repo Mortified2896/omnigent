@@ -27,6 +27,12 @@ export interface ProviderSettingsPanelProps {
   error?: string | null;
   onChange: (preferences: ProviderPreferences) => void;
   onSave: () => void;
+  /** Optional external control for Storybook; production persists per-effort approval. */
+  approvalChoices?: { ids: readonly string[]; onChange: (ids: string[]) => void };
+  omniRouteOnly?: {
+    providers: readonly ProviderGroup[];
+    onChange: (provider: ProviderGroup, only: boolean) => void;
+  };
 }
 
 export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
@@ -80,6 +86,8 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
             options={options}
             idPrefix={idPrefix}
             onChange={onChange}
+            approvalChoices={props.approvalChoices}
+            omniRouteOnly={props.omniRouteOnly}
           />
         ))}
         <label htmlFor={`${idPrefix}-balance`}>
@@ -140,6 +148,8 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
 }
 
 interface ProviderCardProps {
+  approvalChoices?: ProviderSettingsPanelProps["approvalChoices"];
+  omniRouteOnly?: ProviderSettingsPanelProps["omniRouteOnly"];
   provider: ProviderGroup;
   value: ProviderPreferences;
   options: readonly LogicalOption[];
@@ -147,8 +157,31 @@ interface ProviderCardProps {
   onChange: (preferences: ProviderPreferences) => void;
 }
 
-function ProviderCard({ provider, value, options, idPrefix, onChange }: ProviderCardProps) {
+function ProviderCard({
+  provider,
+  value,
+  options,
+  idPrefix,
+  onChange,
+  approvalChoices,
+  omniRouteOnly,
+}: ProviderCardProps) {
   const selected = value.providers[provider];
+  const onlyOmniRoute =
+    omniRouteOnly?.providers.includes(provider) ??
+    selected.transport_preference === "omniroute_only";
+  const guardedChoices = approvalChoices ?? {
+    ids: [
+      ...(selected.approval_choice_ids ?? []),
+      ...options
+        .filter((option) => (selected.approval_model_ids ?? []).includes(option.model_id))
+        .map((option) => option.choice_id),
+    ],
+    onChange: (ids: string[]) =>
+      onChange(
+        updateProvider(value, provider, { approval_choice_ids: ids, approval_model_ids: [] }),
+      ),
+  };
   const models = groupModels(options, provider);
   const qualified = models.flatMap((model) => model.options).filter((option) => option.available);
   const canUseOmniRoute = qualified.some((option) => option.access_lanes.includes("omniroute"));
@@ -204,10 +237,27 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
               <input
                 type="radio"
                 name={`${idPrefix}-${provider}-transport`}
-                checked={selected.transport_preference === "omniroute_preferred"}
-                onChange={() => onChange(selectTransport(value, provider, "omniroute_preferred"))}
+                checked={!onlyOmniRoute && selected.transport_preference === "omniroute_preferred"}
+                onChange={() => {
+                  omniRouteOnly?.onChange(provider, false);
+                  onChange(selectTransport(value, provider, "omniroute_preferred"));
+                }}
               />
               OmniRoute preferred · Direct fallback
+            </label>
+          ) : null}
+          {canUseOmniRoute ? (
+            <label>
+              <input
+                type="radio"
+                name={`${idPrefix}-${provider}-transport`}
+                checked={onlyOmniRoute}
+                onChange={() => {
+                  omniRouteOnly?.onChange(provider, true);
+                  onChange(selectTransport(value, provider, "omniroute_only"));
+                }}
+              />
+              OmniRoute only
             </label>
           ) : null}
           {canUseDirect ? (
@@ -215,8 +265,14 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
               <input
                 type="radio"
                 name={`${idPrefix}-${provider}-transport`}
-                checked={selected.transport_preference === "direct_only" || !canUseOmniRoute}
-                onChange={() => onChange(selectTransport(value, provider, "direct_only"))}
+                checked={
+                  !onlyOmniRoute &&
+                  (selected.transport_preference === "direct_only" || !canUseOmniRoute)
+                }
+                onChange={() => {
+                  omniRouteOnly?.onChange(provider, false);
+                  onChange(selectTransport(value, provider, "direct_only"));
+                }}
               />
               Direct only
             </label>
@@ -225,8 +281,9 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
             <p role="status">No qualified connection is currently available.</p>
           ) : null}
           <p>
-            The advisor chooses the model, not the connection. Fallback keeps the same model,
-            reasoning and plan.
+            {onlyOmniRoute
+              ? "Use OmniRoute without direct fallback."
+              : "The advisor chooses the model, not the connection. Fallback keeps the same model, reasoning and plan."}
           </p>
           {value.route_review_required.includes(provider) ? (
             <div>
@@ -268,22 +325,32 @@ function ProviderCard({ provider, value, options, idPrefix, onChange }: Provider
                 <span>{selected.disabled_model_ids.includes(model.model_id) ? "Off" : "On"}</span>
               </label>
             </legend>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                aria-label={`Ask before running ${model.display_name}`}
-                checked={(selected.approval_model_ids ?? []).includes(model.model_id)}
-                onChange={(event) => {
-                  const approvalModels = new Set(selected.approval_model_ids ?? []);
-                  if (event.currentTarget.checked) approvalModels.add(model.model_id);
-                  else approvalModels.delete(model.model_id);
-                  onChange(
-                    updateProvider(value, provider, { approval_model_ids: [...approvalModels] }),
-                  );
-                }}
-              />
-              Ask for approval when the advisor chooses this model
-            </label>
+            {guardedChoices ? (
+              <div className="mb-3">
+                <p>Ask for approval by reasoning level</p>
+                <div className="advisor-efforts">
+                  {model.options.map((option) => (
+                    <label
+                      key={option.choice_id}
+                      className={`advisor-effort advisor-approval-effort${guardedChoices.ids.includes(option.choice_id) ? " is-selected" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Ask before running ${model.display_name} at ${effortLabel(option.reasoning_effort)}`}
+                        checked={guardedChoices.ids.includes(option.choice_id)}
+                        onChange={(event) => {
+                          const ids = new Set(guardedChoices.ids);
+                          if (event.currentTarget.checked) ids.add(option.choice_id);
+                          else ids.delete(option.choice_id);
+                          guardedChoices.onChange([...ids]);
+                        }}
+                      />
+                      {effortLabel(option.reasoning_effort)}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="advisor-efforts">
               {model.options.map((option) => {
                 const checked = selected.selected_choice_ids.includes(option.choice_id);

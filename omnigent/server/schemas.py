@@ -1305,6 +1305,15 @@ class SessionEventInput(BaseModel):
         reject_authored_framework_notices(data)
         return data
 
+    @model_validator(mode="after")
+    def validate_task_tags(self) -> SessionEventInput:
+        if self.type == "message" and "task_tags" in self.data:
+            from omnigent.entities.conversation import MessageData
+
+            tags = MessageData(role="user", content=[], task_tags=self.data["task_tags"]).task_tags
+            self.data = {**self.data, "task_tags": tags}
+        return self
+
 
 class SessionGitOptions(BaseModel):
     """
@@ -2617,6 +2626,7 @@ class SessionForkRequest(BaseModel):
     # it is hidden from the left sidebar (it surfaces only as a Workspace-rail
     # side-chat tab). The fork otherwise behaves normally (its own runner).
     side_chat: bool = False
+    feedback_response_id: str | None = Field(default=None, min_length=1, max_length=256)
 
     model_config = ConfigDict(extra="forbid")
 

@@ -36,6 +36,11 @@ import { COMPOSER_SEND_SHORTCUT_STORAGE_KEY } from "@/lib/composerSendShortcutPr
 import { composerContextToLabels } from "@/lib/composerContextAdapters";
 import { CHAT_COLUMN_WIDTH } from "./chatLayout";
 
+// Subscription network behavior is covered separately from composer controls.
+vi.mock("@/components/composer/CodexSubscriptionUsage", () => ({
+  CodexSubscriptionUsage: () => null,
+}));
+
 const advisorFetch = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/identity", async (importOriginal) => ({
   ...(await importOriginal<typeof identity>()),
@@ -2063,7 +2068,7 @@ describe("Composer model/effort label", () => {
         })}
       />,
     );
-    expect(screen.getByTestId("composer-agent-config-value")).toHaveTextContent("Claude Code");
+    expect(screen.getByTestId("composer-agent-config-value")).toHaveTextContent("Claude");
     // The gear is still present so the user can open the config modal.
     expect(screen.getByTestId("composer-config-gear")).toBeTruthy();
   });
@@ -2119,7 +2124,7 @@ describe("Composer model/effort label", () => {
         })}
       />,
     );
-    expect(label()).toHaveTextContent("Claude Code");
+    expect(label()).toHaveTextContent("Claude");
     expect(label()).not.toHaveTextContent("General-purpose");
   });
 
@@ -2144,7 +2149,7 @@ describe("Composer model/effort label", () => {
         })}
       />,
     );
-    expect(screen.getByTestId("composer-agent-config-value")).toHaveTextContent("Claude Code");
+    expect(screen.getByTestId("composer-agent-config-value")).toHaveTextContent("Claude");
   });
 
   it("surfaces a cursor-native session's model from the override", () => {
@@ -2197,7 +2202,7 @@ describe("Composer model/effort label", () => {
       />,
     );
     expect(label()).toHaveTextContent("claude-opus-4-8");
-    expect(label()).not.toHaveTextContent("gpt-5.5");
+    expect(label()).not.toHaveTextContent("gpt-6.1-sol");
   });
 
   it("keeps the model label empty when an SDK/bundle session has no applied model", () => {
@@ -2215,7 +2220,7 @@ describe("Composer model/effort label", () => {
         })}
       />,
     );
-    expect(label()).not.toHaveTextContent("gpt-5.5");
+    expect(label()).not.toHaveTextContent("gpt-6.1-sol");
     // The real effort still renders in the independent selector; the model
     // trigger itself must remain free of effort text.
     expect(label()).not.toHaveTextContent("High");
@@ -2242,7 +2247,7 @@ describe("Composer model/effort label", () => {
         })}
       />,
     );
-    expect(label()).not.toHaveTextContent("gpt-5.5");
+    expect(label()).not.toHaveTextContent("gpt-6.1-sol");
     // The real effort still renders in the independent selector; only the
     // model trigger waits for a session-backed model.
     expect(label()).not.toHaveTextContent("High");
@@ -2374,14 +2379,14 @@ describe("Composer shared visible controls", () => {
     expect(screen.queryByTestId("composer-settings")).toBeNull();
     expect(trailing.firstElementChild).toContainElement(harnessPicker);
     expect(actions.children).toHaveLength(3);
-    expect(workspace).toHaveClass("mx-3", "h-[37px]", "rounded-t-2xl");
+    expect(workspace).toHaveClass("mx-3", "min-h-[37px]", "rounded-t-2xl");
     expect(textarea().closest("form")).toHaveClass("pb-[max(20px,env(safe-area-inset-bottom))]");
     // A normal working directory has no empty worktree affordance.
     expect(within(workspace).queryByTestId("composer-git-branch")).toBeNull();
     expect(screen.getByTestId("composer-host-select")).toHaveClass("w-11", "md:h-7");
     expect(screen.getByTestId("composer-permission-chip")).toHaveTextContent("Ask for approval");
     const trigger = screen.getByTestId("composer-config-gear");
-    expect(trigger.querySelector("img")).toBeTruthy();
+    expect(leading.querySelector("img")).toBeTruthy();
     expect(trigger.querySelector(".lucide-settings")).toBeNull();
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(screen.getByTestId("composer-agent-menu")).toBeInTheDocument();
@@ -5329,7 +5334,7 @@ describe("Composer config gear", () => {
 
   it.each([
     ["claude", "sonnet[1m]", "Sonnet 5 (1M context)"],
-    ["codex", "gpt-5.5", "Codex Pretty 5.5"],
+    ["codex", "gpt-6.1-sol", "Codex Pretty 6.1"],
     ["cursor", "composer-2.5", "Composer 2.5"],
     ["kiro", "claude-haiku-4-5", "Claude Haiku 4.5"],
     ["opencode", "anthropic/claude-sonnet-4", "anthropic/claude-sonnet-4"],
@@ -5368,7 +5373,7 @@ describe("Composer config gear", () => {
           showEffort: false,
           showModels: true,
           modelPickerKind: "codex",
-          codexModelOptions: [{ id: "gpt-5.5", displayName: "Codex Pretty 5.5" }],
+          codexModelOptions: [{ id: "gpt-6.1-sol", displayName: "Codex Pretty 6.1" }],
         })}
       />,
     );
@@ -5377,7 +5382,7 @@ describe("Composer config gear", () => {
     expect(
       screen.getByRole("menuitemcheckbox", { name: "gpt-unlisted (current)" }),
     ).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("menuitemcheckbox", { name: "Codex Pretty 5.5" })).toHaveAttribute(
+    expect(screen.getByRole("menuitemcheckbox", { name: "Codex Pretty 6.1" })).toHaveAttribute(
       "aria-checked",
       "false",
     );
@@ -5385,8 +5390,8 @@ describe("Composer config gear", () => {
 
   it("names the model Codex's Default resolves to, like the new-session gear", async () => {
     const options = [
-      { id: "gpt-5.6-sol", displayName: "GPT-5.6-Sol" },
-      { id: "gpt-5.6-luna", displayName: "GPT-5.6-Luna", isDefault: true },
+      { id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol" },
+      { id: "gpt-6-luna", displayName: "GPT-6-Luna", isDefault: true },
     ];
     renderWithTooltips(
       <Composer
@@ -5404,7 +5409,7 @@ describe("Composer config gear", () => {
     // A bare "Default" was the bug: this gear and the new-session gear named
     // the same unpinned session's model differently, so neither told the user
     // which model Codex would actually run.
-    expect(screen.getByRole("menuitemcheckbox", { name: "GPT-5.6-Luna" })).toBeTruthy();
+    expect(screen.getByRole("menuitemcheckbox", { name: "GPT-6-Luna" })).toBeTruthy();
   });
 
   it("names the model Claude's Default resolves to, like Codex", async () => {
@@ -5629,9 +5634,9 @@ describe("Composer config gear", () => {
     // to Luna, and the dropdown would show a rung Luna rejects.
     const codexOptions = [
       {
-        id: "gpt-5.6-sol",
-        model: "gpt-5.6-sol",
-        displayName: "GPT-5.6-Sol",
+        id: "gpt-6.1-sol",
+        model: "gpt-6.1-sol",
+        displayName: "GPT-6.1-Sol",
         isDefault: true,
         supportedReasoningEfforts: [
           { reasoningEffort: "low" },
@@ -5643,9 +5648,9 @@ describe("Composer config gear", () => {
         ],
       },
       {
-        id: "gpt-5.6-luna",
-        model: "gpt-5.6-luna",
-        displayName: "GPT-5.6-Luna",
+        id: "gpt-6-luna",
+        model: "gpt-6-luna",
+        displayName: "GPT-6-Luna",
         supportedReasoningEfforts: [
           { reasoningEffort: "low" },
           { reasoningEffort: "medium" },
@@ -5659,7 +5664,7 @@ describe("Composer config gear", () => {
       setModel: vi.fn().mockResolvedValue(undefined),
       setEffort: vi.fn().mockResolvedValue(undefined),
       sessionReasoningEffort: "ultra",
-      llmModel: "gpt-5.6-sol",
+      llmModel: "gpt-6.1-sol",
       codexModelOptions: codexOptions,
       refreshSessionOverrides: vi.fn().mockResolvedValue(undefined),
     });
@@ -5687,14 +5692,14 @@ describe("Composer config gear", () => {
     // Switch to Luna, whose ceiling is "max".
     await openSessionModels();
     fireEvent.click(
-      document.querySelector('[data-testid="composer-agent-model-gpt-5.6-luna"]') as Element,
+      document.querySelector('[data-testid="composer-agent-model-gpt-6-luna"]') as Element,
     );
 
     // The picked ultra is replaced by a concrete supported rung — Luna offers
     // no declared default, so the ladder's deterministic middle ("high") — and
     // ultra is no longer offered while Luna's own max stays.
     await waitFor(() => expect(useChatStore.getState().setEffort).toHaveBeenCalledWith("high"));
-    act(() => useChatStore.setState({ llmModel: "gpt-5.6-luna", sessionReasoningEffort: "high" }));
+    act(() => useChatStore.setState({ llmModel: "gpt-6-luna", sessionReasoningEffort: "high" }));
     await openSessionEfforts();
     expect(screen.queryByTestId("composer-agent-effort-default")).toBeNull();
     expect(document.querySelector('[data-testid="composer-agent-effort-ultra"]')).toBeNull();
@@ -5964,10 +5969,10 @@ describe("Model Advisor in an existing chat", () => {
     const choice = {
       choice_id: "choice-openai",
       provider: "openai",
-      model_id: "gpt-5.5",
-      display_name: "GPT-5.5",
+      model_id: "gpt-6.1-sol",
+      display_name: "GPT-6.1-Sol",
       reasoning_effort: "medium",
-      model_ids: ["gpt-5.5"],
+      model_ids: ["gpt-6.1-sol"],
       access_lanes: ["codex-direct"],
       available: true,
     };
@@ -6038,7 +6043,7 @@ describe("Model Advisor in an existing chat", () => {
           advisorHostId: "host_1",
           advisorAgentId: "ag_1",
           advisorWorkspace: "/repo",
-          advisorHumanPick: { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" },
+          advisorHumanPick: { model: "gpt-6.1-sol", accessLane: "codex-direct", effort: "medium" },
         })}
       />,
     );
@@ -6059,10 +6064,10 @@ describe("Model Advisor in an existing chat", () => {
     const choice = {
       choice_id: "choice-openai",
       provider: "openai",
-      model_id: "gpt-5.5",
-      display_name: "GPT-5.5",
+      model_id: "gpt-6.1-sol",
+      display_name: "GPT-6.1-Sol",
       reasoning_effort: "medium",
-      model_ids: ["gpt-5.5"],
+      model_ids: ["gpt-6.1-sol"],
       access_lanes: ["codex-direct"],
       available: true,
     };
@@ -6108,7 +6113,7 @@ describe("Model Advisor in an existing chat", () => {
           advisorHostId: "host_1",
           advisorAgentId: "ag_1",
           advisorWorkspace: "/repo",
-          advisorHumanPick: { model: "gpt-5.5", accessLane: "codex-direct", effort: "medium" },
+          advisorHumanPick: { model: "gpt-6.1-sol", accessLane: "codex-direct", effort: "medium" },
         })}
       />,
     );
@@ -6122,10 +6127,7 @@ describe("Model Advisor in an existing chat", () => {
       await screen.findByRole("region", { name: "Model advisor settings" }),
     ).toBeInTheDocument();
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByRole("combobox", { name: "Recommender model" })).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Recommender reasoning effort" }),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("checkbox", { name: /Keep the chosen model/ })).toBeChecked();
     expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
   });
 
@@ -6183,7 +6185,7 @@ describe("Model Advisor in an existing chat", () => {
           advisorAgentId: "ag_1",
           advisorWorkspace: "/repo",
           advisorHumanPick: {
-            model: "gpt-5.5",
+            model: "gpt-6.1-sol",
             accessLane: "codex-direct",
             effort: "medium",
           },

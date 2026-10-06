@@ -2491,3 +2491,61 @@ async def test_fork_switch_clones_session_scoped_target_without_aliasing() -> No
         "a98bb825ebd41391c19637c58fe3c0b7/hash"
     )
     assert conv_store.get_conversation(conv.id).agent_id == conv.agent_id
+
+
+@pytest.mark.asyncio
+async def test_feedback_fork_pins_model_snapshot_and_records_reopen_marker(monkeypatch):
+    from omnigent.entities import NewConversationItem
+    from omnigent.server import feedback_discussion
+
+    snapshot = {
+        "outcome": "partial",
+        "comment": "Instructions problem",
+        "tags": ["Instructions"],
+        "revision_id": "original",
+        "model": "gpt-6-astra",
+        "reasoning_effort": "high",
+        "access_lane": "codex-direct",
+    }
+    monkeypatch.setattr(feedback_discussion, "original_feedback", lambda *args: snapshot)
+    conv = _make_conversation(labels={"omnigent.advisor.round_id": "old-round"})
+
+    class FeedbackStore(_ConversationStore):
+        def append(self, conversation_id, items):
+            added = []
+            for item in items:
+                assert isinstance(item, NewConversationItem)
+                payload = item.model_dump()
+                added.append(
+                    ConversationItem(
+                        id=f"meta-{len(self._items.get(conversation_id, []))}",
+                        status="completed",
+                        conversation_id=conversation_id,
+                        position=0,
+                        created_at=100,
+                        **payload,
+                    )
+                )
+                self._items.setdefault(conversation_id, []).append(added[-1])
+            return added
+
+    store = FeedbackStore(
+        conversations={conv.id: conv}, items_by_conv={conv.id: [_make_item("answer", "Done")]}
+    )
+    with TestClient(_build_app(store)) as client:
+        result = client.post(
+            f"/v1/sessions/{conv.id}/fork", json={"feedback_response_id": "resp_001"}
+        )
+    assert result.status_code == 201, result.text
+    call = store.fork_calls[0]
+    assert call["override_model_override"] == "gpt-6-astra"
+    assert call["override_reasoning_effort"] == "high"
+    assert call["up_to_response_id"] == "resp_001"
+    assert "omnigent.advisor.round_id" in call["dropped_label_keys"]
+    labels = result.json()["labels"]
+    assert labels["omnigent.scoring.eligible"] == "false"
+    assert labels["omnigent.feedback.kind"] == "discussion"
+    marker = store._items[conv.id][-1]
+    assert marker.type == "resource_event"
+    assert marker.data.resource["response_id"] == "resp_001"
+    assert snapshot["comment"] not in str(marker.data.resource)

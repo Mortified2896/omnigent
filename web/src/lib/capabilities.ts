@@ -57,7 +57,13 @@ export interface Branding {
 }
 
 /** Release features understood by this frontend build. */
-export type FeatureKey = "usage_page" | "harness_install" | "canvas" | "customize" | "model_advisor" | "harness_settings_ui";
+export type FeatureKey =
+  | "usage_page"
+  | "harness_install"
+  | "canvas"
+  | "customize"
+  | "model_advisor"
+  | "harness_settings_ui";
 
 /** Deployment-wide release-feature values advertised by the server. */
 export type FeatureValues = Record<string, boolean>;
@@ -151,6 +157,7 @@ export interface ServerInfo {
    * live server always reports it.
    */
   server_version: string | null;
+  build_sha?: string | null;
   /**
    * True when the server has a routing client configured — a server ``llm:``
    * block, or a ``routing.provider=external`` block.
@@ -357,6 +364,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           // Fail open: only an explicit false disables the public toggle.
           public_sharing_enabled: data.public_sharing_enabled !== false,
           server_version: typeof data.server_version === "string" ? data.server_version : null,
+          build_sha: typeof data.build_sha === "string" ? data.build_sha : null,
           smart_routing_enabled: smartRoutingEnabled,
           smart_routing_sources: parseSmartRoutingSources(
             data.smart_routing_sources,

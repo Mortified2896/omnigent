@@ -206,7 +206,13 @@ function resolveTerminalViewKey(stored: string | null, agentKey: string): string
   return stored !== null && stored !== CHAT_VIEW_STORAGE_VALUE ? stored : agentKey;
 }
 
-export function AppShell() {
+export function AppShell({
+  followViewportSidebar = false,
+  brandVersions,
+}: {
+  followViewportSidebar?: boolean;
+  brandVersions?: { official: string; private: string };
+} = {}) {
   // Cmd/Ctrl+Enter accepts the pending harness approval prompt. Bound once
   // here so it works on every chat route, regardless of where focus sits.
   useApproveHotkey();
@@ -279,6 +285,17 @@ export function AppShell() {
   // let the page use the full height (ExtensionViewHost drops its inset).
   const extensionOwnsHeader = extensionId !== undefined && sidebarOpen;
   const [sidebarPeek, setSidebarPeek] = useState(false);
+  // Opt-in for a resizable design canvas; preserve normal application drawer state.
+  useEffect(() => {
+    if (!followViewportSidebar) return;
+    const query = window.matchMedia("(min-width: 768px)");
+    const update = () => {
+      setSidebarOpen(query.matches);
+      setSidebarPeek(false);
+    };
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [followViewportSidebar]);
 
   // The settings nav lives INSIDE the sidebar, and its "Back" row is the only
   // way off the settings page. A collapsed sidebar therefore strands the user
@@ -2236,7 +2253,10 @@ export function AppShell() {
         "hiddenInset"), so the web layer drops the sidebar below the
         traffic lights and supplies a drag strip in the freed space. */}
           <div
-            className="app-shell relative flex h-dvh bg-sidebar text-foreground"
+            className={cn(
+              "app-shell relative flex h-dvh bg-sidebar text-foreground",
+              followViewportSidebar && "[&_.conversations-sidebar]:transition-none",
+            )}
             // Reflect the docked sidebar's open state so CSS can drop the
             // traffic-light clearance on surfaces the sidebar covers (see the
             // maximized workspace rail's tab strip in index.css): with the
@@ -2305,6 +2325,15 @@ export function AppShell() {
           "<thread> — <host>" label here collided with the header's action
           cluster on a narrow window. The strip stays pure drag surface. */}
             <Sidebar
+              brandVersions={
+                brandVersions ??
+                (serverInfo !== "loading" && serverInfo.server_version
+                  ? {
+                      official: `v${serverInfo.server_version}`,
+                      private: serverInfo.build_sha?.slice(0, 8) ?? "Local build",
+                    }
+                  : undefined)
+              }
               open={sidebarOpen}
               onOpen={handleSidebarOpen}
               peek={sidebarPeek}

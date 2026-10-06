@@ -15,7 +15,7 @@ from typing import Literal
 
 Provider = Literal["openai", "glm"]
 Transport = Literal["omniroute", "direct"]
-Preference = Literal["omniroute_preferred", "direct_only"]
+Preference = Literal["omniroute_preferred", "omniroute_only", "direct_only"]
 ExclusionReason = Literal[
     "provider_disabled",
     "model_disabled",
@@ -82,6 +82,7 @@ class ProviderSelection:
     transport_preference: Preference = "omniroute_preferred"
     disabled_model_ids: tuple[str, ...] = ()
     approval_model_ids: tuple[str, ...] = ()
+    approval_choice_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool or type(self.collapsed) is not bool:
@@ -89,7 +90,12 @@ class ProviderSelection:
         _ids(self.selected_choice_ids)
         _ids(self.disabled_model_ids)
         _ids(self.approval_model_ids)
-        if self.transport_preference not in ("omniroute_preferred", "direct_only"):
+        _ids(self.approval_choice_ids)
+        if self.transport_preference not in (
+            "omniroute_preferred",
+            "omniroute_only",
+            "direct_only",
+        ):
             raise ProviderPolicyError("Unsupported transport preference")
 
 
@@ -149,6 +155,11 @@ class ProviderPreferences:
                     if value.approval_model_ids
                     else {}
                 ),
+                **(
+                    {"approval_choice_ids": list(value.approval_choice_ids)}
+                    if value.approval_choice_ids
+                    else {}
+                ),
                 "transport_preference": value.transport_preference,
             }
 
@@ -194,10 +205,15 @@ class ProviderPreferences:
                 expected_group_keys.add("disabled_model_ids")
             if (
                 not isinstance(value, dict)
-                or set(value) - {"approval_model_ids"} != expected_group_keys
+                or set(value) - {"approval_model_ids", "approval_choice_ids"}
+                != expected_group_keys
                 or (
                     "approval_model_ids" in value
                     and not isinstance(value["approval_model_ids"], list)
+                )
+                or (
+                    "approval_choice_ids" in value
+                    and not isinstance(value["approval_choice_ids"], list)
                 )
                 or not isinstance(value["selected_choice_ids"], list)
                 or (version == 3 and not isinstance(value["disabled_model_ids"], list))
@@ -210,6 +226,7 @@ class ProviderPreferences:
                 transport_preference=value["transport_preference"],
                 disabled_model_ids=tuple(value.get("disabled_model_ids", ())),
                 approval_model_ids=tuple(value.get("approval_model_ids", ())),
+                approval_choice_ids=tuple(value.get("approval_choice_ids", ())),
             )
         if not all(
             isinstance(payload[key], list)
@@ -434,7 +451,7 @@ class TransportPlan:
     reason: str
 
     def __post_init__(self) -> None:
-        if self.preference not in ("omniroute_preferred", "direct_only"):
+        if self.preference not in ("omniroute_preferred", "omniroute_only", "direct_only"):
             raise ProviderPolicyError("Invalid route preference")
         if not isinstance(self.primary, QualifiedRoute) or self.primary.choice != self.choice:
             raise ProviderPolicyError("Primary route does not match the logical choice")
@@ -499,7 +516,7 @@ class TransportPlan:
 def plan_transport(
     choice: LogicalChoice, preference: Preference, routes: tuple[QualifiedRoute, ...]
 ) -> TransportPlan:
-    if preference not in ("omniroute_preferred", "direct_only"):
+    if preference not in ("omniroute_preferred", "omniroute_only", "direct_only"):
         raise ProviderPolicyError("Invalid route preference")
     matching = [route for route in routes if route.choice == choice]
     by_transport = {}
@@ -511,6 +528,10 @@ def plan_transport(
         by_transport[route.transport] = route
     gateway = by_transport.get("omniroute")
     direct = by_transport.get("direct")
+    if preference == "omniroute_only":
+        if gateway is None or not gateway.ready:
+            raise ProviderPolicyError("Selected OmniRoute route unavailable")
+        return TransportPlan(choice, preference, gateway, None, "omniroute_only_selected")
     if preference == "direct_only":
         if direct is None or not direct.ready:
             raise ProviderPolicyError("Selected Direct route unavailable")

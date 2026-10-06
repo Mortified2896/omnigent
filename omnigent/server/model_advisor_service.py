@@ -791,6 +791,9 @@ class ModelAdvisorService:
         human_choice_id: str,
         submission_key: str | None,
         preferences: ProviderPreferences | None,
+        continue_session_id: str | None = None,
+        keep_chosen_model: bool = True,
+        task_tags: list[str] | None = None,
     ) -> dict[str, Any]:
         owner = self.owner_id(user_id)
         prefs_record, frozen_preferences = await self._provider_preferences_for_round(
@@ -799,6 +802,55 @@ class ModelAdvisorService:
         if not isinstance(task, str) or not task.strip() or len(task) > 200_000:
             raise HTTPException(status_code=422, detail="A nonempty initial task is required")
         catalog = await self.load_catalog(user_id, host_id)
+        if continue_session_id is not None:
+            if self._session_authorizer is None or not await asyncio.to_thread(
+                self._session_authorizer, user_id, continue_session_id
+            ):
+                raise HTTPException(403, "session edit access is required")
+            source = await asyncio.to_thread(
+                self._conversation_store.get_conversation, continue_session_id
+            )
+            if source is None or source.host_id != host_id:
+                raise HTTPException(409, "Continuation must use the same host")
+            if keep_chosen_model:
+                source_model = source.model_override or source.reported_model
+                current = next(
+                    (
+                        option.choice
+                        for option in catalog.logical_options
+                        if source_model in option.model_ids
+                        or source_model == option.choice.model_id
+                    ),
+                    None,
+                )
+                if current is None:
+                    raise HTTPException(
+                        422, "The current model cannot be verified in the live catalog"
+                    )
+                allowed = {
+                    option.choice_id
+                    for option in catalog.logical_choices
+                    if option.provider == current.provider and option.model_id == current.model_id
+                }
+                frozen_preferences = replace(
+                    frozen_preferences,
+                    openai=replace(
+                        frozen_preferences.openai,
+                        selected_choice_ids=tuple(
+                            id
+                            for id in frozen_preferences.openai.selected_choice_ids
+                            if id in allowed
+                        ),
+                    ),
+                    glm=replace(
+                        frozen_preferences.glm,
+                        selected_choice_ids=tuple(
+                            id
+                            for id in frozen_preferences.glm.selected_choice_ids
+                            if id in allowed
+                        ),
+                    ),
+                )
         settings_revision = (
             f"prefs-v{prefs_record.version}-{prefs_record.etag}"
             if prefs_record is not None
@@ -815,6 +867,15 @@ class ModelAdvisorService:
                 "human_choice_id": human_choice_id,
                 "preferences": frozen_preferences.to_payload(),
                 "submission_key": identity_key,
+                **({"task_tags": task_tags} if task_tags else {}),
+                **(
+                    {
+                        "continue_session_id": continue_session_id,
+                        "keep_chosen_model": keep_chosen_model,
+                    }
+                    if continue_session_id is not None
+                    else {}
+                ),
             }
         )
         round_id = "adviseround-" + submission_identity
@@ -839,6 +900,12 @@ class ModelAdvisorService:
                 status_code=422,
                 detail=f"Provider settings no longer match the live catalog: {exc}",
             ) from exc
+        frozen = replace(
+            frozen,
+            continuation_session_id=continue_session_id,
+            keep_chosen_model=keep_chosen_model,
+            task_tags=tuple(task_tags or ()),
+        )
         try:
             claim = await asyncio.to_thread(
                 self.repository.reserve_provider_round, frozen, submission_key=submission_key
@@ -961,6 +1028,9 @@ class ModelAdvisorService:
         human_candidate_id: str | None = None,
         human_choice_id: str | None = None,
         submission_key: str | None = None,
+        continue_session_id: str | None = None,
+        keep_chosen_model: bool = True,
+        task_tags: list[str] | None = None,
         preferences: AdvisorPreferences | ProviderPreferences | None = None,
     ) -> dict[str, Any]:
         if isinstance(preferences, ProviderPreferences) or human_choice_id is not None:
@@ -973,6 +1043,9 @@ class ModelAdvisorService:
                 task=task,
                 human_choice_id=human_choice_id,
                 submission_key=submission_key,
+                continue_session_id=continue_session_id,
+                keep_chosen_model=keep_chosen_model,
+                task_tags=task_tags,
                 preferences=(
                     preferences if isinstance(preferences, ProviderPreferences) else None
                 ),
@@ -1354,6 +1427,13 @@ class ModelAdvisorService:
             raise HTTPException(
                 status_code=422, detail=f"Logical round is invalid: {exc}"
             ) from exc
+        if (
+            frozen.continuation_session_id is not None
+            and launch.get("continue_session_id") != frozen.continuation_session_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="The recommendation belongs to a different chat"
+            )
         catalog = await self.load_catalog(user_id, host_id)
         execution_choice_id = override_choice_id or review.execution_choice_id
         choice_by_id = {choice.choice_id: choice for choice in frozen.pool}
@@ -1512,6 +1592,7 @@ class ModelAdvisorService:
                         data={
                             "role": "user",
                             "content": [{"type": "input_text", "text": frozen.task}],
+                            **({"task_tags": list(frozen.task_tags)} if frozen.task_tags else {}),
                         },
                     )
                 ],

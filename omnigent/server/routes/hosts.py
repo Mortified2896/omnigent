@@ -713,6 +713,25 @@ def create_hosts_router(
             "runners": [],
         }
 
+    @router.get("/hosts/{host_id}/codex-rate-limits")
+    async def get_codex_rate_limits(request: Request, host_id: str) -> dict[str, Any]:
+        user_id = require_user(request, auth_provider)
+        host = await asyncio.to_thread(host_store.get_host, host_id)
+        if host is None:
+            raise HTTPException(status_code=404, detail="host not found")
+        if user_id is not None and host.user_id != user_id:
+            raise HTTPException(status_code=403, detail="not your host")
+        conn = host_registry.get(host.host_id)
+        if conn is None:
+            raise _host_absent_error(host)
+        result = await _proxy_model_options(
+            host_registry=host_registry, host_conn=conn, harness="codex-account-limits"
+        )
+        limits = result.get("rate_limits")
+        if result.get("status") != "ok" or not isinstance(limits, dict):
+            raise HTTPException(status_code=502, detail="Codex subscription usage is unavailable")
+        return limits
+
     @router.get("/hosts/{host_id}/harnesses/{harness}/model-options")
     async def get_host_model_options(
         request: Request,

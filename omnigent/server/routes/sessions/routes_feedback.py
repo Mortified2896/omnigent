@@ -67,6 +67,35 @@ def register_feedback_routes(
             raise session_not_found()
         return user_id or RESERVED_USER_LOCAL
 
+    @router.get("/sessions/{session_id}/feedback-discussions")
+    async def get_feedback_discussions(request: Request, session_id: str) -> list[dict]:
+        from omnigent.entities.conversation import ResourceEventData
+
+        user = await caller(request, session_id, LEVEL_READ)
+        result = []
+        after = None
+        while True:
+            page = await asyncio.to_thread(
+                conversation_store.list_items,
+                session_id,
+                type="resource_event",
+                limit=100,
+                after=after,
+            )
+            for item in page.data:
+                data = item.data
+                if (
+                    isinstance(data, ResourceEventData)
+                    and data.resource_type == "feedback-discussion"
+                    and item.created_by in (user, None if user == RESERVED_USER_LOCAL else user)
+                ):
+                    payload = data.resource or {}
+                    if payload.get("source_session") == session_id:
+                        result.append(payload)
+            if not page.has_more:
+                return result
+            after = page.data[-1].id
+
     @router.get("/sessions/{session_id}/response-feedback")
     async def list_feedback(request: Request, session_id: str) -> list[dict]:
         user = await caller(request, session_id, LEVEL_READ)

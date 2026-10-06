@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from omnigent.model_advisor_core import AdvisorContractError
 from omnigent.model_advisor_provider_policy import ProviderPolicyError, ProviderPreferences
@@ -48,7 +48,9 @@ class ProviderSelectionBody(BaseModel):
     # Present only in v3. V2 payloads keep their exact prior meaning and are
     # upgraded by the strict policy parser with an empty disabled-model list.
     disabled_model_ids: list[str] | None = Field(default=None, max_length=128)
-    transport_preference: Literal["omniroute_preferred", "direct_only"]
+    approval_model_ids: list[str] | None = Field(default=None, max_length=128)
+    approval_choice_ids: list[str] | None = Field(default=None, max_length=128)
+    transport_preference: Literal["omniroute_preferred", "omniroute_only", "direct_only"]
 
 
 class ProviderPreferencesBody(BaseModel):
@@ -99,6 +101,17 @@ class CreateRoundRequest(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
+    continue_session_id: str | None = Field(default=None, min_length=1, max_length=256)
+    keep_chosen_model: bool = True
+    task_tags: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("task_tags")
+    @classmethod
+    def validate_task_tags(cls, value: list[str]) -> list[str]:
+        from omnigent.entities.conversation import MessageData
+
+        return MessageData(role="user", content=[], task_tags=value).task_tags
+
     # Draft settings are explicitly frozen for this round. Saved defaults are
     # still the fallback for older clients that omit this field.
     preferences: ProviderPreferencesBody | AdvisorPreferencesBody | None = None
@@ -254,6 +267,9 @@ def create_model_advisor_router(
             human_candidate_id=body.human_candidate_id,
             human_choice_id=body.human_choice_id,
             submission_key=body.submission_key,
+            continue_session_id=body.continue_session_id,
+            keep_chosen_model=body.keep_chosen_model,
+            task_tags=body.task_tags,
             preferences=(
                 _preferences_from_body(body.preferences) if body.preferences is not None else None
             ),
