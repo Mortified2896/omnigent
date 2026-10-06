@@ -25,6 +25,7 @@ def test_features_default_off() -> None:
         "canvas": False,
         "model_advisor": False,
         "customize": False,
+        "harness_settings_ui": False,
     }
 
 

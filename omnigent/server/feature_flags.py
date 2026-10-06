@@ -25,6 +25,7 @@ class Feature(StrEnum):
     CANVAS = "canvas"
     MODEL_ADVISOR = "model_advisor"
     CUSTOMIZE = "customize"
+    HARNESS_SETTINGS_UI = "harness_settings_ui"
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,12 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
     FeatureDefinition(
         feature=Feature.CUSTOMIZE,
         description="Web Customize settings section (Harnesses & Skills)",
+        owner="web",
+        review_by_release="0.15.0",
+    ),
+    FeatureDefinition(
+        feature=Feature.HARNESS_SETTINGS_UI,
+        description="Web Harnesses settings page with per-harness MCPs, skills, and plugins",
         owner="web",
         review_by_release="0.15.0",
     ),

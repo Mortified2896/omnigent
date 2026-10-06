@@ -40,7 +40,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from omnigent.db.enum_codecs import SESSION_LIVE_STATUS
@@ -114,7 +114,7 @@ def conversation_store() -> ConversationStore | None:
     return _store
 
 
-def submit(description: str, fn, *args, on_failure=None) -> None:  # type: ignore[no-untyped-def]
+def submit(description: str, fn, *args, on_failure=None) -> Future[Any]:  # type: ignore[no-untyped-def]
     """
     Run one store-backed task on the ordered background worker.
 
@@ -135,6 +135,7 @@ def submit(description: str, fn, *args, on_failure=None) -> None:  # type: ignor
         thread) when the write raises. Used to evict a dedupe entry so a
         dropped write's value can be re-attempted by the next identical
         publish instead of being swallowed.
+    :returns: Future containing the result, or ``None`` after a logged write failure.
     """
     global _executor
     if _executor is None:
@@ -142,15 +143,15 @@ def submit(description: str, fn, *args, on_failure=None) -> None:  # type: ignor
 
     ctx = contextvars.copy_context()
 
-    def _run() -> None:
+    def _run() -> Any:
         try:
-            fn(*args)
+            return fn(*args)
         except Exception:  # noqa: BLE001 — best-effort display state
             _logger.warning("session live-state write failed (%s)", description, exc_info=True)
             if on_failure is not None:
                 on_failure()
 
-    _executor.submit(ctx.run, _run)
+    return _executor.submit(ctx.run, _run)
 
 
 def persist_live_status(session_id: str, status: str) -> None:
