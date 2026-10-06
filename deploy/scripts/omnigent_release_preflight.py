@@ -23,7 +23,8 @@ from email.parser import Parser
 from pathlib import Path, PurePosixPath
 
 SHA_RE = re.compile(r"[0-9a-f]{40}")
-_REQUIRED_SPA_FILES = ("index.html", "version.json", "manifest.webmanifest")
+_REQUIRED_SPA_FILES = ("index.html",)
+_OPTIONAL_SPA_METADATA = ("version.json", "manifest.webmanifest")
 
 
 class PreflightError(RuntimeError):
@@ -79,8 +80,12 @@ def _validate_spa(
         raise PreflightError(f"SPA bundle is incomplete; missing: {', '.join(missing)}")
     try:
         index = read_text(f"{prefix}index.html")
-        json.loads(read_text(f"{prefix}version.json"))
-        json.loads(read_text(f"{prefix}manifest.webmanifest"))
+        # Upstream 0.17 no longer ships these legacy metadata files. Validate
+        # them when present; build identity is proven by the wheel's embedded
+        # SHA and the installed runtime, and every HTML asset is checked below.
+        for filename in _OPTIONAL_SPA_METADATA:
+            if f"{prefix}{filename}" in names:
+                json.loads(read_text(f"{prefix}{filename}"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PreflightError(f"SPA metadata is invalid: {exc}") from exc
     if "<title>Omnigent</title>" not in index:
@@ -97,7 +102,7 @@ def _validate_spa(
     if missing_refs:
         raise PreflightError(f"SPA index references missing files: {', '.join(missing_refs)}")
     if not any(name.startswith(f"{prefix}assets/") and name.endswith(".js") for name in names):
-        raise PreflightError("SPA bundle has no JavaScript asset")
+        raise PreflightError("SPA bundle is incomplete; no JavaScript asset")
 
 
 def inspect_wheel(wheel: Path, expected_sha: str) -> dict[str, str]:

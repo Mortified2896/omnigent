@@ -19,7 +19,9 @@ _SPEC.loader.exec_module(preflight)
 _SHA = "a" * 40
 
 
-def _write_test_wheel(tmp_path: Path, *, embedded_sha: str = _SHA) -> Path:
+def _write_test_wheel(
+    tmp_path: Path, *, embedded_sha: str = _SHA, legacy_metadata: bool = True
+) -> Path:
     wheel = tmp_path / "omnigent-0.9.0.dev0-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(
@@ -37,8 +39,9 @@ def _write_test_wheel(tmp_path: Path, *, embedded_sha: str = _SHA) -> Path:
             '<link href="/assets/app.css" rel="stylesheet"></head>'
             '<body><script src="/assets/app.js"></script></body></html>',
         )
-        archive.writestr(f"{prefix}version.json", "{}")
-        archive.writestr(f"{prefix}manifest.webmanifest", "{}")
+        if legacy_metadata:
+            archive.writestr(f"{prefix}version.json", "{}")
+            archive.writestr(f"{prefix}manifest.webmanifest", "{}")
         archive.writestr(f"{prefix}assets/app.js", "console.log('ok')")
         archive.writestr(f"{prefix}assets/app.css", "body{}")
     return wheel
@@ -66,6 +69,19 @@ def test_inspect_wheel_rejects_wrong_embedded_commit(tmp_path: Path) -> None:
     wheel = _write_test_wheel(tmp_path, embedded_sha="b" * 40)
 
     with pytest.raises(preflight.PreflightError, match="does not match requested SHA"):
+        preflight.inspect_wheel(wheel, _SHA)
+
+
+def test_inspect_wheel_accepts_upstream_017_spa_without_legacy_metadata(tmp_path: Path) -> None:
+    wheel = _write_test_wheel(tmp_path, legacy_metadata=False)
+    assert preflight.inspect_wheel(wheel, _SHA)["sha"] == _SHA
+
+
+def test_inspect_wheel_still_validates_optional_metadata(tmp_path: Path) -> None:
+    wheel = _write_test_wheel(tmp_path, legacy_metadata=False)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("omnigent/server/static/web-ui/manifest.webmanifest", "invalid JSON")
+    with pytest.raises(preflight.PreflightError, match="SPA metadata is invalid"):
         preflight.inspect_wheel(wheel, _SHA)
 
 
