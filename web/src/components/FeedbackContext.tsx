@@ -26,6 +26,7 @@ export interface Thread {
   session_id: string;
   response_id: string;
   inherited_ids: string[];
+  original_feedback?: Original | null;
 }
 export interface Original {
   outcome: string;
@@ -48,7 +49,8 @@ export const FeedbackDiscussionContext = createContext<{
   renderTranscript: (active: Active) => ReactNode;
 } | null>(null);
 
-export function readOriginal(session: Session | undefined): Original | null {
+export function readOriginal(session: Session | undefined, thread?: Thread): Original | null {
+  if (thread?.original_feedback) return thread.original_feedback;
   try {
     const raw = session?.labels?.["omnigent.feedback.original"];
     return raw ? (JSON.parse(raw) as Original) : null;

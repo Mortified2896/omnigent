@@ -89,7 +89,7 @@ export function FeedbackDiscussion({
       // Also check server-pending input so reconnecting during a native paste
       // waits for the original message rather than starting a second turn.
       if (fork.agentId && !hasQuestion && !fork.pendingInputs?.length) {
-        const original = readOriginal(fork);
+        const original = readOriginal(fork, linked);
         if (!original) throw new Error("Original feedback is unavailable");
         const digest = await crypto.subtle.digest(
           "SHA-256",

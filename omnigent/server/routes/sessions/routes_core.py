@@ -3414,7 +3414,6 @@ def register_core_routes(
                     PREFIX + "kind": "discussion",
                     PREFIX + "source_session": source_id,
                     PREFIX + "response_id": body.feedback_response_id or "",
-                    PREFIX + "original": json.dumps(feedback_snapshot, ensure_ascii=False),
                     "omnigent.scoring.eligible": "false",
                 }
             )
@@ -3667,7 +3666,10 @@ def register_core_routes(
                 NewConversationItem,
                 ResourceEventData,
             )
-            from omnigent.server.feedback_discussion import PREFIX, discussion_instructions
+            from omnigent.server.feedback_discussion import (
+                CONTEXT_RESOURCE_TYPE,
+                discussion_instructions,
+            )
 
             inherited_ids = []
             cursor = None
@@ -3684,6 +3686,17 @@ def register_core_routes(
                 new_conv.id,
                 [
                     NewConversationItem(
+                        type="resource_event",
+                        response_id=new_conv.id,
+                        created_by=user_id,
+                        data=ResourceEventData(
+                            event_type="feedback.discussion.context",
+                            resource_type=CONTEXT_RESOURCE_TYPE,
+                            resource_id=new_conv.id,
+                            resource=feedback_snapshot,
+                        ),
+                    ),
+                    NewConversationItem(
                         type="message",
                         response_id=new_conv.id,
                         created_by=user_id,
@@ -3697,7 +3710,7 @@ def register_core_routes(
                                 }
                             ],
                         ),
-                    )
+                    ),
                 ],
             )
             await asyncio.to_thread(

@@ -5,11 +5,27 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from omnigent.entities.conversation import ResourceEventData
 from omnigent.server.response_attribution import list_response_attributions
 from omnigent.server.task_experiment import list_experiment_events, require_completed_answer
 from omnigent.stores.conversation_store import ConversationStore
 
 PREFIX = "omnigent.feedback."
+CONTEXT_RESOURCE_TYPE = "feedback-discussion-context"
+
+
+def discussion_snapshot(store: ConversationStore, session_id: str) -> dict[str, Any] | None:
+    """Read the immutable original from the discussion, outside bounded labels."""
+    after = None
+    while True:
+        page = store.list_items(session_id, type="resource_event", limit=100, after=after)
+        for item in page.data:
+            data = item.data
+            if isinstance(data, ResourceEventData) and data.resource_type == CONTEXT_RESOURCE_TYPE:
+                return data.resource
+        if not page.has_more:
+            return None
+        after = page.data[-1].id
 
 
 def original_feedback(

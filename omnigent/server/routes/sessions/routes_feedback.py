@@ -70,6 +70,7 @@ def register_feedback_routes(
     @router.get("/sessions/{session_id}/feedback-discussions")
     async def get_feedback_discussions(request: Request, session_id: str) -> list[dict]:
         from omnigent.entities.conversation import ResourceEventData
+        from omnigent.server.feedback_discussion import discussion_snapshot
 
         user = await caller(request, session_id, LEVEL_READ)
         result = []
@@ -91,6 +92,13 @@ def register_feedback_routes(
                 ):
                     payload = data.resource or {}
                     if payload.get("source_session") == session_id:
+                        payload = dict(payload)
+                        branch_id = payload.get("session_id")
+                        if isinstance(branch_id, str):
+                            await caller(request, branch_id, LEVEL_READ)
+                            payload["original_feedback"] = await asyncio.to_thread(
+                                discussion_snapshot, conversation_store, branch_id
+                            )
                         result.append(payload)
             if not page.has_more:
                 return result

@@ -1721,6 +1721,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "models": frame.models,
                 "error": frame.error,
                 "routable_models": frame.routable_models,
+                "rate_limits": frame.rate_limits,
             }
         )
     if isinstance(frame, HostAdvisorCallFrame):
@@ -2831,12 +2832,16 @@ def _decode_model_options_result(msg: _JsonObject) -> HostModelOptionsResultFram
     routable = msg.get("routable_models", [])
     if not isinstance(routable, list) or not all(isinstance(model, str) for model in routable):
         raise ValueError("frame field must be a list of strings: 'routable_models'")
+    rate_limits = msg.get("rate_limits")
+    if rate_limits is not None and not isinstance(rate_limits, dict):
+        raise ValueError("frame field must be a JSON object: 'rate_limits'")
     return HostModelOptionsResultFrame(
         request_id=_required_str(msg, "request_id"),
         status=_required_str(msg, "status"),
         models=models,
         error=_optional_nullable_str(msg, "error"),
         routable_models=routable,
+        rate_limits=rate_limits,
     )
 
 

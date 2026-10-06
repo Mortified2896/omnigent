@@ -115,8 +115,8 @@ function FeedbackTranscript({ active }: { active: Active }) {
       (row) => row.kind === "outcome" && row.response_id === active.responseId && row.outcome,
     )
     .at(-1);
-  const original = readOriginal(branch.data);
   const thread = context.threads.find((t) => t.session_id === active.branchId);
+  const original = readOriginal(branch.data, thread);
   if (!original || !thread)
     return (
       <p role="status" className="p-3 text-sm text-muted-foreground">

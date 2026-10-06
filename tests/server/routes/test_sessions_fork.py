@@ -2500,7 +2500,7 @@ async def test_feedback_fork_pins_model_snapshot_and_records_reopen_marker(monke
 
     snapshot = {
         "outcome": "partial",
-        "comment": "Instructions problem",
+        "comment": "Instructions problem " * 150,
         "tags": ["Instructions"],
         "revision_id": "original",
         "model": "gpt-6-astra",
@@ -2536,6 +2536,7 @@ async def test_feedback_fork_pins_model_snapshot_and_records_reopen_marker(monke
         result = client.post(
             f"/v1/sessions/{conv.id}/fork", json={"feedback_response_id": "resp_001"}
         )
+        discussions = client.get(f"/v1/sessions/{conv.id}/feedback-discussions")
     assert result.status_code == 201, result.text
     call = store.fork_calls[0]
     assert call["override_model_override"] == "gpt-6-astra"
@@ -2545,7 +2546,11 @@ async def test_feedback_fork_pins_model_snapshot_and_records_reopen_marker(monke
     labels = result.json()["labels"]
     assert labels["omnigent.scoring.eligible"] == "false"
     assert labels["omnigent.feedback.kind"] == "discussion"
+    assert "omnigent.feedback.original" not in labels
     marker = store._items[conv.id][-1]
     assert marker.type == "resource_event"
     assert marker.data.resource["response_id"] == "resp_001"
     assert snapshot["comment"] not in str(marker.data.resource)
+    assert discussions.status_code == 200, discussions.text
+    assert discussions.json()[0]["original_feedback"] == snapshot
+    assert store._items[result.json()["id"]][-2].data.resource == snapshot

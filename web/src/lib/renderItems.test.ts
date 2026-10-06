@@ -3572,6 +3572,21 @@ describe("buildBubbles — workedForS turn duration", () => {
     expect(bubble.workedForS).toBe(106);
   });
 
+  it("measures a single native answer from its matching saved prompt", () => {
+    const blocks: AnyBlock[] = [
+      {
+        type: "user_message",
+        ctx: ctx({ itemId: "user", createdAtS: 1_753_900_000 }),
+        content: [{ type: "input_text", text: "Confirm receipt" }],
+      },
+      textDone("answer", "Received", { createdAtS: 1_753_900_002 }),
+    ];
+    const bubble = buildBubbles(blocks, null)[1] as Extract<Bubble, { kind: "assistant" }>;
+    expect(bubble.workedForS).toBe(2);
+    blocks[0]!.ctx.responseId = "another-turn";
+    expect((buildBubbles(blocks, null)[1] as typeof bubble).workedForS).toBeUndefined();
+  });
+
   it("is undefined when stamps are missing or span different clocks", () => {
     // No stamps at all (pre-plumb history).
     expect(assistantBubble([textDone("a1", "a"), textDone("a2", "b")]).workedForS).toBeUndefined();

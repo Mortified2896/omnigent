@@ -2329,7 +2329,7 @@ export function AppShell({
                 brandVersions ??
                 (serverInfo !== "loading" && serverInfo.server_version
                   ? {
-                      official: `v${serverInfo.server_version}`,
+                      official: serverInfo.server_version,
                       private: serverInfo.build_sha?.slice(0, 8) ?? "Local build",
                     }
                   : undefined)

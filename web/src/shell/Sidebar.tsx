@@ -1064,7 +1064,7 @@ Private ${brandVersions.private}`);
                     aria-label="Copy application versions"
                   >
                     <span>Official base v{brandVersions.official}</span>
-                    <span title="Private customization Git revision · Storybook source snapshot">
+                    <span title="Private customization Git revision">
                       Private {brandVersions.private}
                     </span>
                   </button>

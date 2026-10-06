@@ -614,6 +614,21 @@ def test_model_options_frames_round_trip() -> None:
     ]
 
 
+def test_subscription_windows_survive_host_frame_round_trip() -> None:
+    limits = {"remaining_percent": 64, "windows": [{"name": "primary", "remaining_percent": 64}]}
+    result = decode_host_frame(
+        encode_host_frame(
+            HostModelOptionsResultFrame(request_id="quota", status="ok", rate_limits=limits)
+        )
+    )
+    assert isinstance(result, HostModelOptionsResultFrame)
+    assert result.rate_limits == limits
+    payload = json.loads(encode_host_frame(result))
+    payload["rate_limits"] = "invalid"
+    with pytest.raises(ValueError, match="rate_limits"):
+        decode_host_frame(json.dumps(payload))
+
+
 def test_encode_injects_traceparent_under_active_span() -> None:
     """
     Encoding a host frame inside an active span stamps a W3C

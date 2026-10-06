@@ -20,6 +20,7 @@
 
 import type {
   AnyBlock,
+  BlockContext,
   ErrorBlock,
   MessageContentBlock,
   NativeToolBlock,
@@ -789,6 +790,11 @@ function walkBubbles(
   liveTurnId: string | null = null,
 ): { bubbles: Bubble[]; lastBubbleStart: number; lastBubbleCount: number } {
   const bubbles: Bubble[] = [...seedBubbles];
+  const userStarts = new Map<string, BlockContext>();
+  for (const block of blocks) {
+    if (block.type === "user_message" && !userStarts.has(block.ctx.responseId))
+      userStarts.set(block.ctx.responseId, block.ctx);
+  }
   // One cross-bubble result index per walk: the relay backdates a
   // delayed function_call_output to its ORIGINAL turn's response id, so
   // a result can sit outside its call's bubble; pairing is keyed
@@ -1059,7 +1065,7 @@ function walkBubbles(
 
     lastBubbleStart = groupStart;
     lastBubbleCount = 1;
-    const workedForS = turnWorkedForS(groupBlocks);
+    const workedForS = turnWorkedForS(groupBlocks, userStarts.get(groupResponseId));
     const lastActivityAtS = turnLastActivityAtS(groupBlocks);
     // Freshest stamp in the group — server stamp on cold load, client
     // stamp while live, either clock display-only. The max tracks latest
@@ -1400,14 +1406,18 @@ function turnLastActivityAtS(groupBlocks: AnyBlock[]): number | undefined {
  * with a live-stamped last, an epoch-stamped first only with an
  * epoch-stamped last, and either mixed direction fails both guards.
  */
-function turnWorkedForS(groupBlocks: AnyBlock[]): number | undefined {
+function turnWorkedForS(groupBlocks: AnyBlock[], userStart?: BlockContext): number | undefined {
   const first = groupBlocks[0];
   const last = groupBlocks[groupBlocks.length - 1];
-  if (first === undefined || last === undefined || first === last) return undefined;
-  if (first.ctx.timestamp > 0 && last.ctx.timestamp >= first.ctx.timestamp) {
-    return last.ctx.timestamp - first.ctx.timestamp;
+  if (first === undefined || last === undefined) return undefined;
+  // A short native answer can be a single text item with no thinking/tool
+  // blocks. Its matching prompt still supplies a real, persisted start time.
+  const start = first === last ? userStart : first.ctx;
+  if (!start) return undefined;
+  if (start.timestamp > 0 && last.ctx.timestamp >= start.timestamp) {
+    return last.ctx.timestamp - start.timestamp;
   }
-  const firstCreated = first.ctx.createdAtS;
+  const firstCreated = start.createdAtS;
   const lastCreated = last.ctx.createdAtS;
   if (firstCreated !== undefined && lastCreated !== undefined && lastCreated >= firstCreated) {
     return lastCreated - firstCreated;
