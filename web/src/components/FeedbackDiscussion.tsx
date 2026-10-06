@@ -69,7 +69,7 @@ export function FeedbackDiscussionsProvider({
         {children}
         {wide && active && (
           <aside
-            className="flex w-[380px] min-h-0 shrink-0 flex-col border-l bg-background"
+            className="flex w-[380px] min-h-0 shrink-0 flex-col border-l bg-background pt-12"
             aria-label="Feedback discussion side chat"
           >
             <FeedbackTranscript key={active.branchId} active={active} />

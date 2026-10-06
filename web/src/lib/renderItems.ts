@@ -1065,7 +1065,23 @@ function walkBubbles(
 
     lastBubbleStart = groupStart;
     lastBubbleCount = 1;
-    const workedForS = turnWorkedForS(groupBlocks, userStarts.get(groupResponseId));
+    let userStart = userStarts.get(groupResponseId);
+    if (!userStart) {
+      // Native live input is promoted before its response id is known. Only
+      // borrow the immediately preceding prompt, never an earlier turn.
+      for (let previous = groupStart - 1; previous >= 0; previous -= 1) {
+        const prompt = blocks[previous]!;
+        if (isNonRenderingBlock(prompt) || prompt.type === "routing_decision") continue;
+        if (
+          prompt.type === "user_message" &&
+          isAnonymousRid(prompt.ctx.responseId) &&
+          !isSystemUserContent(prompt.content)
+        )
+          userStart = prompt.ctx;
+        break;
+      }
+    }
+    const workedForS = turnWorkedForS(groupBlocks, userStart);
     const lastActivityAtS = turnLastActivityAtS(groupBlocks);
     // Freshest stamp in the group — server stamp on cold load, client
     // stamp while live, either clock display-only. The max tracks latest
@@ -1404,7 +1420,8 @@ function turnLastActivityAtS(groupBlocks: AnyBlock[]): number | undefined {
  * rather than a cross-clock span — the FIRST block's clock decides
  * which branch is tried: a live-stamped first block only ever pairs
  * with a live-stamped last, an epoch-stamped first only with an
- * epoch-stamped last, and either mixed direction fails both guards.
+ * epoch-stamped last, and either mixed direction fails both guards. A single
+ * native answer can also pair its live prompt and answer's client epoch clock.
  */
 function turnWorkedForS(groupBlocks: AnyBlock[], userStart?: BlockContext): number | undefined {
   const first = groupBlocks[0];
@@ -1416,6 +1433,14 @@ function turnWorkedForS(groupBlocks: AnyBlock[], userStart?: BlockContext): numb
   if (!start) return undefined;
   if (start.timestamp > 0 && last.ctx.timestamp >= start.timestamp) {
     return last.ctx.timestamp - start.timestamp;
+  }
+  if (
+    first === last &&
+    start.clientCreatedAtS !== undefined &&
+    last.ctx.clientCreatedAtS !== undefined &&
+    last.ctx.clientCreatedAtS >= start.clientCreatedAtS
+  ) {
+    return last.ctx.clientCreatedAtS - start.clientCreatedAtS;
   }
   const firstCreated = start.createdAtS;
   const lastCreated = last.ctx.createdAtS;

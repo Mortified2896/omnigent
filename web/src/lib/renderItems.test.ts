@@ -3629,6 +3629,32 @@ describe("buildBubbles — workedForS turn duration", () => {
     ).toBeUndefined();
   });
 
+  it("measures a live native answer before its prompt receives a response id", () => {
+    const prompt: AnyBlock = {
+      type: "user_message",
+      ctx: ctx({ itemId: "user", responseId: "", clientCreatedAtS: 1_753_900_000 }),
+      content: [{ type: "input_text", text: "Confirm receipt" }],
+    };
+    const answer = textDone("answer", "Received", {
+      timestamp: 42,
+      clientCreatedAtS: 1_753_900_004,
+    });
+    const bubble = buildBubbles([prompt, answer], null)[1] as Extract<Bubble, { kind: "assistant" }>;
+    expect(bubble.workedForS).toBe(4);
+
+    // A saved prompt and a live answer cannot mix server and client clocks.
+    prompt.ctx = ctx({ itemId: "user", responseId: "", createdAtS: 1_753_900_000 });
+    expect((buildBubbles([prompt, answer], null)[1] as typeof bubble).workedForS).toBeUndefined();
+
+    // Nor may a later answer reuse an anonymous prompt across another reply.
+    prompt.ctx = ctx({ itemId: "user", responseId: "", clientCreatedAtS: 1_753_900_000 });
+    const blocks = [prompt, textDone("previous", "Previous reply"), {
+      type: "response_end" as const,
+      ctx: ctx({ responseId: "resp_1" }),
+    }, { ...answer, ctx: { ...answer.ctx, responseId: "resp_2" } }];
+    expect((buildBubbles(blocks, null).at(-1) as typeof bubble).workedForS).toBeUndefined();
+  });
+
   it("spans live blocks that also carry client-epoch stamps via the page clock", () => {
     // Pure-live turn post-timestamp-feature: every block has a
     // clientCreatedAtS, but the page-relative branch still decides.
