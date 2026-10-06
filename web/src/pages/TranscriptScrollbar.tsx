@@ -168,7 +168,7 @@ export function TranscriptScrollbar({
       aria-hidden
       data-testid="transcript-scrollbar"
       data-transcript-scrollbar=""
-      className="pointer-events-none absolute right-1 z-10 w-3"
+      className="pointer-events-none absolute right-1 z-10 w-3 max-md:hidden"
       style={{ top: topInset, bottom: TRACK_BOTTOM_PX }}
     >
       <div
