@@ -8487,6 +8487,58 @@ async def test_model_advisor_picker_uses_both_openai_lanes(monkeypatch) -> None:
     )
 
 
+async def test_model_advisor_catalog_wins_over_stale_o3_flag(monkeypatch) -> None:
+    """A stale O3 flag cannot reclassify GLM rows as Codex Subscription."""
+
+    from omnigent.harnesses.codex_native import app_server
+    from omnigent.host.connect import _is_glm_model_id
+
+    # This is the migration state that reproduced on Preview: candidates
+    # inherited both the current Model Advisor feature and the legacy O3 flag.
+    monkeypatch.setenv("OMNIGENT_FEATURES", "model_advisor")
+    monkeypatch.setattr(
+        "omnigent.server.o3_routing_review.o3_routing_review_enabled", lambda: True
+    )
+
+    monkeypatch.setattr(
+        app_server,
+        "resolve_native_codex_catalog_launch",
+        lambda *, spec=None, access_lane: app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model=None,
+            profile=None,
+            summary=access_lane,
+        ),
+    )
+
+    async def catalog(*, launch):
+        del launch
+        # A copied/custom Codex config can make these rows visible through
+        # model/list. Visibility through Codex is not subscription entitlement.
+        return [
+            {"id": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True},
+            {"id": "glm-5.3", "displayName": "GLM 5.3"},
+            {"id": "glm-5.3-flash", "displayName": "GLM 5.3 Flash"},
+        ]
+
+    monkeypatch.setattr(app_server, "codex_launch_catalog", catalog)
+    monkeypatch.setattr(app_server, "zai_direct_glm_catalog_rows", lambda: ())
+    monkeypatch.setattr(app_server, "omniroute_glm_catalog_rows", lambda: ())
+
+    result = await _make_host_process()._probed_codex_model_options()
+
+    assert result is not None
+    assert [(row["id"], row["accessLane"]) for row in result.models] == [
+        ("gpt-5.5", "omniroute"),
+        ("gpt-5.5", "codex-direct"),
+    ]
+    assert not any(
+        _is_glm_model_id(row.get("model") or row.get("id"))
+        and row.get("accessLane") == "codex-direct"
+        for row in result.models
+    )
+
+
 async def test_o3_lane_catalog_failure_does_not_hide_the_other_lane(monkeypatch) -> None:
     """Each O3 lane's rows are aggregated independently of the other's health."""
     from omnigent.harnesses.codex_native import app_server
