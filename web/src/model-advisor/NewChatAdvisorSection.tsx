@@ -26,6 +26,7 @@ import {
   confirmRound,
   createProviderRound,
   fetchCatalog,
+  previewAdvisorPrompt,
   fetchPreferences,
   fetchRound,
   saveProviderPreferences,
@@ -189,7 +190,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     continueSessionId = null,
     onFlowStateChange,
     advisorModelTarget,
-    keepChosenModel = true,
+    keepChosenModel = false,
     taskTags,
     selectorsOnly = false,
     feedbackTarget,
@@ -213,6 +214,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     dirty: false,
     error: null,
   });
+  const [promptTemplate, setPromptTemplate] = useState<string | null>(null);
   const [options, setOptions] = useState<readonly LogicalOption[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [submittedAt, setSubmittedAt] = useState<number | null>(null);
@@ -300,6 +302,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     setRound(IDLE_ROUND);
     setSessionHumanPick(null);
     setOptions([]);
+    setPromptTemplate(null);
     setCatalogError(null);
     if (hostId === null) return;
     let cancelled = false;
@@ -310,6 +313,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           fetchPreferences(hostId),
         ]);
         if (cancelled || !isCurrentScope(hostId, generation)) return;
+        setPromptTemplate(catalog.prompt_template ?? null);
         setOptions(currentModelChoices(toLogicalOptions(catalog), (row) => row.model_id));
         const saved = toSavedProviderPreferences(prefs);
         const sessionChoices = continueSessionId
@@ -421,6 +425,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       task,
       humanChoiceId: resolveHumanChoice(),
       preferences: editor.draft,
+      continueSessionId,
+      keepChosenModel,
     });
     if (submissionIdentity.current !== null && submissionIdentity.current !== identity) {
       inputGeneration.current += 1;
@@ -429,7 +435,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     }
     if (submissionIdentity.current !== identity) submissionKey.current = newSubmissionKey();
     submissionIdentity.current = identity;
-  }, [editor.draft, resolveHumanChoice, scope, stopPolling, task]);
+  }, [
+    editor.draft,
+    resolveHumanChoice,
+    scope,
+    stopPolling,
+    task,
+    continueSessionId,
+    keepChosenModel,
+  ]);
 
   const pollRound = useCallback(
     (
@@ -851,6 +865,28 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}
       value={editor.draft}
       options={options}
+      promptTemplate={promptTemplate}
+      promptIdentity={JSON.stringify([
+        hostId,
+        task,
+        editor.draft,
+        continueSessionId,
+        keepChosenModel,
+        humanPick,
+      ])}
+      onPreviewPrompt={async () => {
+        const humanChoiceId = resolveHumanChoice();
+        if (!hostId || !editor.draft || !humanChoiceId)
+          throw new Error("Choose allowed models before previewing the prompt.");
+        const result = await previewAdvisorPrompt(
+          hostId,
+          task.trim() ? task : "[Your next message]",
+          humanChoiceId,
+          editor.draft,
+          continueSessionId ? { sessionId: continueSessionId, keepChosenModel } : undefined,
+        );
+        return result.prompt;
+      }}
       dirty={editor.dirty}
       busy={disabled || round.busy}
       enabledLocked={Boolean(continueSessionId)}

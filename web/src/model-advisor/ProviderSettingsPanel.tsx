@@ -2,6 +2,7 @@
  * Parent owns authenticated preference loading/saving and a scope-stable idPrefix.
  * Deliberately no logos, no "manage models" gate and no transport in model choice.
  */
+import { AdvisorPromptPreview } from "./AdvisorPromptPreview";
 import type { LogicalOption, ProviderPreferences, ProviderGroup } from "./providerPreferences";
 import {
   PROVIDER_GROUPS,
@@ -18,6 +19,9 @@ import {
 import "./provider-settings.css";
 
 export interface ProviderSettingsPanelProps {
+  promptTemplate?: string | null;
+  promptIdentity?: string;
+  onPreviewPrompt?: () => Promise<string>;
   idPrefix: string;
   value: ProviderPreferences | null;
   options: readonly LogicalOption[];
@@ -38,6 +42,14 @@ export interface ProviderSettingsPanelProps {
 export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
   const { value, options, busy = false, idPrefix, onChange } = props;
   if (!value) return <p role="status">Loading saved advisor settings…</p>;
+  const prompt = props.promptTemplate ? (
+    <AdvisorPromptPreview
+      template={props.promptTemplate}
+      identity={props.promptIdentity ?? ""}
+      onPreview={value.enabled ? props.onPreviewPrompt : undefined}
+      disabled={busy}
+    />
+  ) : null;
   const switchControl = (
     <label className="advisor-switch">
       <input
@@ -61,6 +73,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
           </div>
           {switchControl}
         </div>
+        {prompt}
         {props.error ? <p role="alert">{props.error}</p> : null}
       </section>
     );
@@ -76,6 +89,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
           {switchControl}
         </div>
       </header>
+      {prompt}
       <fieldset disabled={busy}>
         <p>Allowed answers — shared by you and the advisor</p>
         {PROVIDER_GROUPS.map((provider) => (

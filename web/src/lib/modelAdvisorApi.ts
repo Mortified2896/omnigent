@@ -67,6 +67,7 @@ export interface CatalogOptionDto {
 
 export interface CatalogDto {
   object: "model_advisor.catalog";
+  prompt_template?: string;
   catalog_revision: string;
   options: CatalogOptionDto[];
   logical_options?: LogicalOptionDto[];
@@ -313,6 +314,31 @@ export async function createProviderRound(
       submission_key: submissionKey,
       preferences,
       ...(taskTags?.length ? { task_tags: taskTags } : {}),
+      ...(continuation
+        ? {
+            continue_session_id: continuation.sessionId,
+            keep_chosen_model: continuation.keepChosenModel,
+          }
+        : {}),
+    }),
+  });
+}
+
+export async function previewAdvisorPrompt(
+  hostId: string,
+  task: string,
+  humanChoiceId: string,
+  preferences: ProviderPreferences,
+  continuation?: { sessionId: string; keepChosenModel: boolean },
+): Promise<{ prompt: string }> {
+  return advisorFetch("/v1/model-advisor/prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      host_id: hostId,
+      task,
+      human_choice_id: humanChoiceId,
+      preferences,
       ...(continuation
         ? {
             continue_session_id: continuation.sessionId,

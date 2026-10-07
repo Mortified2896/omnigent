@@ -1481,7 +1481,9 @@ def test_internal_launch_with_advisor_labels_reaches_real_creation_helper(monkey
     assert created[0]["agent_id"] == agent.id
 
 
-def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) -> None:
+@pytest.mark.parametrize("keep_model", [True, False])
+def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri, keep_model) -> None:
+    selected = PROVIDER_OPENAI if keep_model else PROVIDER_GLM
     conversation = SimpleNamespace(
         id="conv_existing",
         host_id="host_1",
@@ -1501,13 +1503,13 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
         launches.append(body)
         return _FakeSession()
 
-    client, _registry = client_for(
+    client, registry = client_for(
         db_uri,
         reply={
             "status": "ok",
             "raw_output": json.dumps(
                 {
-                    "candidate_id": PROVIDER_OPENAI.choice_id,
+                    "candidate_id": selected.choice_id,
                     "rationale": "This follow-up needs it.",
                 }
             ),
@@ -1539,7 +1541,7 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
             },
         },
         "advisor_choice_id": PROVIDER_OPENAI.choice_id,
-        "human_probability_percent": 50,
+        "human_probability_percent": 0,
         "unresolved_legacy_ids": [],
         "route_review_required": [],
     }
@@ -1550,6 +1552,23 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
             headers=JSON_ALICE,
         )
         assert saved.status_code == 200
+        request_body = {
+            "host_id": "host_1",
+            "task": "Review this follow-up",
+            "human_choice_id": PROVIDER_OPENAI.choice_id,
+            "continue_session_id": "conv_existing",
+            "keep_chosen_model": keep_model,
+        }
+        preview = client.post("/v1/model-advisor/prompt", json=request_body, headers=JSON_ALICE)
+        assert preview.status_code == 200
+        assert registry.advisor_requests == []
+        assert "KV/prompt cache" in preview.json()["prompt"]
+        forbidden = client.post(
+            "/v1/model-advisor/prompt",
+            json={**request_body, "continue_session_id": "different"},
+            headers=JSON_ALICE,
+        )
+        assert forbidden.status_code == 403
         created = client.post(
             "/v1/model-advisor/rounds",
             json={
@@ -1557,7 +1576,7 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
                 "task": "Review this follow-up",
                 "human_choice_id": PROVIDER_OPENAI.choice_id,
                 "continue_session_id": "conv_existing",
-                "keep_chosen_model": True,
+                "keep_chosen_model": keep_model,
                 "task_tags": ["UI", "Research"],
                 "submission_key": "in-chat-followup",
             },
@@ -1565,9 +1584,16 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
         )
         assert created.status_code == 200
         payload = _settle(client, created.json()["round_id"])
-        assert {row["model_id"] for row in payload["decision_context"]["user_enabled_pool"]} == {
-            "gpt-5.5"
+        from omnigent.host.advisor_call import build_advisor_prompt
+
+        assert preview.json()["prompt"] == build_advisor_prompt(registry.advisor_requests[0])
+        assert registry.advisor_requests[0]["current_execution"] == {
+            "model_id": "gpt-5.5",
+            "reasoning_effort": "medium",
         }
+        assert {row["model_id"] for row in payload["decision_context"]["user_enabled_pool"]} == (
+            {"gpt-5.5"} if keep_model else {"gpt-5.5", PROVIDER_GLM.model_id}
+        )
         wrong_session = client.post(
             f"/v1/model-advisor/rounds/{payload['round_id']}/confirm",
             json={
@@ -1608,6 +1634,10 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
     assert updates["_unset_reported_model"] is True
     assert updates["labels"]["omnigent.advisor.round_id"] == payload["round_id"]
     assert conversation.model_override == result["requested_execution"]["model"]
+    assert conversation.reasoning_effort == result["requested_execution"]["reasoning_effort"]
+    if not keep_model:
+        assert conversation.model_override != "gpt-5.5"
+        assert conversation.reasoning_effort != "medium"
     assert conversation.reported_model is None
 
 

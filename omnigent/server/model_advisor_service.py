@@ -792,8 +792,9 @@ class ModelAdvisorService:
         submission_key: str | None,
         preferences: ProviderPreferences | None,
         continue_session_id: str | None = None,
-        keep_chosen_model: bool = True,
+        keep_chosen_model: bool = False,
         task_tags: list[str] | None = None,
+        preview_only: bool = False,
     ) -> dict[str, Any]:
         owner = self.owner_id(user_id)
         prefs_record, frozen_preferences = await self._provider_preferences_for_round(
@@ -802,6 +803,7 @@ class ModelAdvisorService:
         if not isinstance(task, str) or not task.strip() or len(task) > 200_000:
             raise HTTPException(status_code=422, detail="A nonempty initial task is required")
         catalog = await self.load_catalog(user_id, host_id)
+        current_execution = None
         if continue_session_id is not None:
             if self._session_authorizer is None or not await asyncio.to_thread(
                 self._session_authorizer, user_id, continue_session_id
@@ -812,17 +814,20 @@ class ModelAdvisorService:
             )
             if source is None or source.host_id != host_id:
                 raise HTTPException(409, "Continuation must use the same host")
+            source_model = source.model_override or source.reported_model
+            current = next(
+                (
+                    option.choice
+                    for option in catalog.logical_options
+                    if source_model in option.model_ids or source_model == option.choice.model_id
+                ),
+                None,
+            )
+            current_execution = {
+                "model_id": current.model_id if current else None,
+                "reasoning_effort": source.reasoning_effort,
+            }
             if keep_chosen_model:
-                source_model = source.model_override or source.reported_model
-                current = next(
-                    (
-                        option.choice
-                        for option in catalog.logical_options
-                        if source_model in option.model_ids
-                        or source_model == option.choice.model_id
-                    ),
-                    None,
-                )
                 if current is None:
                     raise HTTPException(
                         422, "The current model cannot be verified in the live catalog"
@@ -880,7 +885,7 @@ class ModelAdvisorService:
         )
         round_id = "adviseround-" + submission_identity
         existing = await asyncio.to_thread(self.repository.load_round, owner, host_id, round_id)
-        if existing is not None:
+        if existing is not None and not preview_only:
             return await self.load_round(user_id, host_id, round_id)
         try:
             frozen = freeze_logical_round(
@@ -902,10 +907,18 @@ class ModelAdvisorService:
             ) from exc
         frozen = replace(
             frozen,
+            current_execution=current_execution,
             continuation_session_id=continue_session_id,
             keep_chosen_model=keep_chosen_model,
             task_tags=tuple(task_tags or ()),
         )
+        if preview_only:
+            from omnigent.host.advisor_call import build_advisor_prompt
+
+            return {
+                "object": "model_advisor.prompt",
+                "prompt": build_advisor_prompt(frozen.advisor_input()),
+            }
         try:
             claim = await asyncio.to_thread(
                 self.repository.reserve_provider_round, frozen, submission_key=submission_key
@@ -1029,7 +1042,7 @@ class ModelAdvisorService:
         human_choice_id: str | None = None,
         submission_key: str | None = None,
         continue_session_id: str | None = None,
-        keep_chosen_model: bool = True,
+        keep_chosen_model: bool = False,
         task_tags: list[str] | None = None,
         preferences: AdvisorPreferences | ProviderPreferences | None = None,
     ) -> dict[str, Any]:

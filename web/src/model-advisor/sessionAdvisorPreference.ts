@@ -82,11 +82,11 @@ export function writeSessionAdvisorChoices(
 const modelKey = (host: string, session: string) =>
   `omnigent:keep-chosen-model:${getCurrentAuthorId()}:${host}:${session}`;
 export function readKeepChosenModel(host: string | null, session: string | null): boolean {
-  if (!host || !session) return true;
+  if (!host || !session) return false;
   try {
-    return localStorage.getItem(modelKey(host, session)) !== "false";
+    return localStorage.getItem(modelKey(host, session)) === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 export function writeKeepChosenModel(host: string, session: string, keep: boolean): void {

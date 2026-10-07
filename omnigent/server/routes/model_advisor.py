@@ -102,7 +102,7 @@ class CreateRoundRequest(BaseModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
     continue_session_id: str | None = Field(default=None, min_length=1, max_length=256)
-    keep_chosen_model: bool = True
+    keep_chosen_model: bool = False
     task_tags: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("task_tags")
@@ -180,8 +180,22 @@ def create_model_advisor_router(
         """Project the live qualified choice set for one host."""
         user = require_user(request, auth_provider)
         catalog = await service.load_catalog(user, host_id)
+        from omnigent.host.advisor_call import build_advisor_prompt
+        from omnigent.model_advisor_provider_policy import ADVISOR_INSTRUCTIONS
+
         return {
             "object": "model_advisor.catalog",
+            "prompt_template": build_advisor_prompt(
+                {
+                    "instructions": ADVISOR_INSTRUCTIONS,
+                    "task": "[Your message]",
+                    "candidates": [{"candidate_id": "[Allowed model and reasoning combinations]"}],
+                    "current_execution": {
+                        "model_id": "[Current model for ongoing chats]",
+                        "reasoning_effort": "[Current reasoning level]",
+                    },
+                }
+            ),
             "catalog_revision": catalog.catalog_revision,
             "options": [
                 {
@@ -273,6 +287,30 @@ def create_model_advisor_router(
             preferences=(
                 _preferences_from_body(body.preferences) if body.preferences is not None else None
             ),
+        )
+
+    @router.post("/model-advisor/prompt", dependencies=_JSON_MUTATION_GUARDS)
+    async def preview_prompt(request: Request, body: CreateRoundRequest) -> dict[str, Any]:
+        """Render a qualified prompt without reserving a round or calling a model."""
+        user = require_user(request, auth_provider)
+        preferences = (
+            _preferences_from_body(body.preferences) if body.preferences is not None else None
+        )
+        if preferences is not None and not isinstance(preferences, ProviderPreferences):
+            raise HTTPException(422, "Prompt preview requires provider settings")
+        if body.human_choice_id is None:
+            raise HTTPException(422, "Choose an allowed model before previewing")
+        return await service._create_provider_round(
+            user,
+            body.host_id,
+            body.profile,
+            task=body.task,
+            human_choice_id=body.human_choice_id,
+            submission_key=None,
+            preferences=preferences,
+            continue_session_id=body.continue_session_id,
+            keep_chosen_model=body.keep_chosen_model,
+            preview_only=True,
         )
 
     @router.get("/model-advisor/rounds/{round_id}")

@@ -2492,7 +2492,7 @@ function ComposerImpl(
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
   const [advisorSettingsOpen, setAdvisorSettingsOpen] = useState(false);
   const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
-  const [keepChosenModel, setKeepChosenModel] = useState(true);
+  const [keepChosenModel, setKeepChosenModel] = useState(false);
   const [advisorSettingsTarget, setAdvisorSettingsTarget] = useState<HTMLDivElement | null>(null);
   const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
@@ -4436,7 +4436,7 @@ function ComposerImpl(
         <NewChatAdvisorSection
           key={`${advisorHostId}:${conversationId}`}
           hostId={advisorHostId}
-          task={pendingAdvisorSend?.task ?? ""}
+          task={pendingAdvisorSend?.task ?? value}
           humanPick={advisorHumanPick}
           launchAgentId={advisorAgentId}
           launchWorkspace={advisorWorkspace}
@@ -4479,6 +4479,7 @@ function ComposerImpl(
               Keep the chosen model for this chat
               <span className="mt-1 block text-xs text-muted-foreground">
                 The Advisor can adjust reasoning effort. Turn this off to allow model changes.
+                Switching models can lose prompt cache reuse and increase uncached token usage.
               </span>
             </span>
           </label>

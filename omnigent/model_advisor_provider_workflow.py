@@ -107,6 +107,7 @@ class LogicalFrozenRound:
     user_enabled_pool: tuple[LogicalChoice, ...] = ()
     excluded_choices: tuple[tuple[str, ExclusionReason], ...] = ()
     preferences_snapshot: ProviderPreferences | None = None
+    current_execution: dict[str, str | None] | None = None
     continuation_session_id: str | None = None
     keep_chosen_model: bool = True
     task_tags: tuple[str, ...] = ()
@@ -277,7 +278,10 @@ class LogicalFrozenRound:
     def advisor_input(self) -> dict[str, object]:
         # Routes, account keys, preferences and the human proposal are absent
         # by construction.  Transport is resolved after the logical proposal.
-        return advisor_input(self.task, self.pool)
+        request = advisor_input(self.task, self.pool)
+        if self.current_execution is not None:
+            request["current_execution"] = self.current_execution
+        return request
 
     def preference_for(self, provider: str) -> Preference:
         for name, preference in self.transport_preferences:
@@ -345,6 +349,8 @@ class LogicalFrozenRound:
                 "session_id": self.continuation_session_id,
                 "keep_chosen_model": self.keep_chosen_model,
             }
+        if self.current_execution is not None:
+            payload["current_execution"] = self.current_execution
         if self.task_tags:
             payload["task_tags"] = list(self.task_tags)
         return payload
@@ -379,7 +385,9 @@ class LogicalFrozenRound:
             if version == 3
             else set()
         )
-        optional = {key for key in ("continuation", "task_tags") if key in payload}
+        optional = {
+            key for key in ("continuation", "task_tags", "current_execution") if key in payload
+        }
         if set(payload) != common_keys | extra_keys | optional:
             raise LogicalAdvisorError("Unexpected logical frozen round shape")
         raw_pool = payload.get("pool")
@@ -437,10 +445,21 @@ class LogicalFrozenRound:
             continuation and set(continuation) != {"session_id", "keep_chosen_model"}
         ):
             raise LogicalAdvisorError("Invalid continuation context")
+        current_execution = payload.get("current_execution")
+        if current_execution is not None and (
+            not isinstance(current_execution, dict)
+            or set(current_execution) != {"model_id", "reasoning_effort"}
+            or any(
+                value is not None and not isinstance(value, str)
+                for value in current_execution.values()
+            )
+        ):
+            raise LogicalAdvisorError("Invalid current execution context")
         raw_tags = payload.get("task_tags", [])
         if not isinstance(raw_tags, list):
             raise LogicalAdvisorError("Invalid task tags")
         return cls(
+            current_execution=current_execution,
             continuation_session_id=continuation.get("session_id"),
             keep_chosen_model=continuation.get("keep_chosen_model", True),
             task_tags=tuple(raw_tags),
