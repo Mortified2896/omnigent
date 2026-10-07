@@ -29,7 +29,7 @@ describe("shared composer controls", () => {
     expect(screen.getByTestId("workspace-bar")).toHaveClass(
       "items-center",
       "py-1.5",
-      "h-[37px]",
+      "min-h-[37px]",
       "gap-0.5",
       "md:gap-2",
     );
