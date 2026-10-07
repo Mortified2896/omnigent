@@ -189,6 +189,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const [promptTemplate, setPromptTemplate] = useState<string | null>(null);
   const [options, setOptions] = useState<readonly LogicalOption[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [promptTiming, setPromptTiming] = useState<PromptTiming | null>(null);
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -270,6 +272,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     stopPolling();
     submissionIdentity.current = null;
     submissionKey.current = null;
+    savingRef.current = false;
+    setSaving(false);
     setEditor({ saved: null, draft: null, dirty: false, error: null });
     setRound(IDLE_ROUND);
     setSessionHumanPick(null);
@@ -358,7 +362,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     if (enabledOverride === undefined) return;
     setEditor((current) =>
       current.draft && current.draft.enabled !== enabledOverride
-        ? { ...current, draft: { ...current.draft, enabled: enabledOverride } }
+        ? {
+            ...current,
+            draft: { ...current.draft, enabled: enabledOverride },
+            dirty:
+              !current.saved ||
+              !samePreferences(current.saved.preferences, {
+                ...current.draft,
+                enabled: enabledOverride,
+              }),
+          }
         : current,
     );
   }, [enabledOverride, editor.draft?.enabled]);
@@ -510,7 +523,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   }, [editor.draft, options, catalogError, resolveHumanChoice, handleChange]);
 
   const handleSave = useCallback(() => {
-    if (hostId === null || !editor.draft) return;
+    if (hostId === null || !editor.draft || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setEditor((current) => ({ ...current, error: null }));
     const host = hostId;
     const generation = scopeToken.current.generation;
     const submitted = editor.draft;
@@ -523,12 +539,16 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           editor.saved?.version ?? 0,
         );
         const saved = toSavedProviderPreferences(dto);
-        if (saved && isCurrentScope(host, generation))
-          setEditor({
-            saved,
-            draft: continueSessionId ? { ...saved.preferences, enabled: true } : saved.preferences,
-            dirty: false,
-            error: null,
+        if (!saved) throw new Error("The server did not confirm saved defaults. Please try again.");
+        if (isCurrentScope(host, generation))
+          setEditor((current) => {
+            const draft =
+              current.draft && !samePreferences(current.draft, submitted)
+                ? current.draft
+                : continueSessionId
+                  ? { ...saved.preferences, enabled: true }
+                  : saved.preferences;
+            return { saved, draft, dirty: !samePreferences(saved.preferences, draft), error: null };
           });
       } catch (cause) {
         if (!isCurrentScope(host, generation)) return;
@@ -556,6 +576,11 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           ...current,
           error: cause instanceof Error ? cause.message : "Couldn't save settings.",
         }));
+      } finally {
+        if (isCurrentScope(host, generation)) {
+          savingRef.current = false;
+          setSaving(false);
+        }
       }
     })();
   }, [continueSessionId, editor.draft, editor.saved?.version, hostId, isCurrentScope]);
@@ -822,7 +847,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       role="switch"
       aria-label="Enable Advisor"
       aria-checked={editor.draft?.enabled ?? false}
-      disabled={!editor.draft || round.busy || disabled}
+      disabled={!editor.draft || round.busy || saving || disabled}
       onClick={() => {
         if (!editor.draft) return;
         const next = { ...editor.draft, enabled: !editor.draft.enabled };
@@ -897,7 +922,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         return result.prompt;
       }}
       dirty={editor.dirty}
-      busy={disabled || round.busy}
+      busy={disabled || round.busy || saving}
+      saving={saving}
       enabledLocked={Boolean(continueSessionId)}
       error={editor.error}
       onChange={handleChange}
@@ -1023,7 +1049,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           ariaLabel="Recommender model"
           testId="model-advisor-advisor-choice"
           searchTestId="model-advisor-advisor-choice-search"
-          disabled={disabled || round.busy || !editor.draft.enabled}
+          disabled={disabled || round.busy || saving || !editor.draft.enabled}
           onValueChange={(modelKey) => {
             const row = advisorRows.find((candidate) => candidate.key === modelKey);
             // Switching models reconciles the effort: keep the current one
@@ -1042,7 +1068,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             value: option.value,
             label: option.label,
           }))}
-          disabled={disabled || round.busy || !savedAdvisor || !editor.draft.enabled}
+          disabled={disabled || round.busy || saving || !savedAdvisor || !editor.draft.enabled}
           label="Recommender reasoning effort"
           testIdPrefix="model-advisor-advisor"
           testId="model-advisor-advisor-effort"

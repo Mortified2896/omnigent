@@ -329,7 +329,7 @@ it("keeps provider and model switches from erasing remembered reasoning", async 
   expect(
     (screen.getByRole("checkbox", { name: "GPT-6.1 Sol: Medium" }) as HTMLInputElement).checked,
   ).toBe(true);
-  expect(screen.getByRole("status")).toHaveTextContent("1 active combinations");
+  expect(screen.getByText("1 active combinations")).toBeInTheDocument();
 
   const openai = screen.getByRole("switch", { name: "Enable OpenAI answers" }) as HTMLInputElement;
   fireEvent.click(openai);
@@ -1008,4 +1008,71 @@ it("preserves a saved Off choice instead of applying the fresh default", async (
   await screen.findByTestId("model-advisor-advisor-choice");
   expect(screen.getByRole("switch", { name: "Enable Advisor" })).not.toBeChecked();
   expect(screen.getByTestId("model-advisor-advisor-effort")).toBeDisabled();
+});
+
+it("confirms a single save and restores the choices when the settings reopen", async () => {
+  const view = mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("switch", { name: "Enable GLM answers" }));
+  const previous = api.getMockImplementation()!;
+  let finishSave!: () => void;
+  api.mockImplementation((url, init) => {
+    if (url.endsWith("/model-advisor/preferences") && init?.method === "PUT")
+      return new Promise<Response>((resolve) => {
+        finishSave = () => resolve(previous(url, init));
+      });
+    return previous(url, init);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  const savingButton = screen.getByRole("button", { name: "Saving defaults…" });
+  expect(savingButton).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Enable GLM answers" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Recommender model" })).toBeDisabled();
+  fireEvent.click(savingButton);
+  expect(api.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+  await act(async () => finishSave());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save defaults" })).toBeDisabled());
+  expect(screen.getByText("Defaults are saved for new chats.")).toBeInTheDocument();
+  view.unmount();
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  expect(screen.getByRole("switch", { name: "Enable GLM answers" })).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "Save defaults" })).toBeDisabled();
+});
+
+it("keeps unsaved choices and reports a save that the server did not confirm", async () => {
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("switch", { name: "Enable GLM answers" }));
+  const previous = api.getMockImplementation()!;
+  api.mockImplementation((url, init) =>
+    url.endsWith("/model-advisor/preferences") && init?.method === "PUT"
+      ? Promise.resolve(Response.json({ ...prefsDto, logical_preferences: null }))
+      : previous(url, init),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The server did not confirm saved defaults",
+  );
+  expect(screen.getByRole("button", { name: "Save defaults" })).not.toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Enable GLM answers" })).not.toBeChecked();
+});
+
+it("can save Advisor-off defaults without losing the remembered model choices", async () => {
+  const view = mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  fireEvent.click(screen.getByRole("switch", { name: "Compare my choice with the advisor" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save defaults" })).toBeDisabled());
+  view.unmount();
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  expect(
+    screen.getByRole("switch", { name: "Compare my choice with the advisor" }),
+  ).not.toBeChecked();
+  expect(prefsDto.logical_preferences).toMatchObject({
+    enabled: false,
+    advisor_choice_id: LOGICAL_B.choice_id,
+    providers: { openai: { selected_choice_ids: [LOGICAL_A.choice_id] } },
+  });
 });

@@ -3844,6 +3844,7 @@ function ComposerImpl(
   };
 
   const handleTextChange = (id: string | null, e: ChangeEvent<HTMLTextAreaElement>) => {
+    if (advisorFlowLocked || pendingAdvisorSend !== null) return;
     slashCompletion.onSelectionChange(e.target);
     editText(id, e.target.value);
     dirtyRef.current = true;
@@ -3975,6 +3976,7 @@ function ComposerImpl(
         input={{
           ref: bindTailTextarea,
           value: draft.text,
+          readOnly: advisorFlowLocked || pendingAdvisorSend !== null,
           onChange: (e) => handleTextChange(null, e),
           onSelect: (e) => slashCompletion.onSelectionChange(e.currentTarget),
           onFocus: (e) => {
@@ -4040,6 +4042,7 @@ function ComposerImpl(
                   dismissMention();
                 }}
                 inputFor={(quote) => ({
+                  readOnly: advisorFlowLocked || pendingAdvisorSend !== null,
                   onChange: (e) => handleTextChange(quote.id, e),
                   onFocus: (e) => handleTextFocus(quote.id, e.currentTarget),
                   onBlur: dismissMention,

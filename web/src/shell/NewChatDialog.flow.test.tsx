@@ -998,6 +998,10 @@ describe("NewChatLandingScreen create flow", () => {
     expect(submit).toHaveAttribute("aria-busy", "true");
     expect(submit).toHaveAttribute("aria-label", "Starting session");
     expect(submit.querySelector(".animate-spin")).not.toBeNull();
+    const prompt = screen.getByTestId("new-chat-landing-input");
+    expect(prompt).toHaveAttribute("readonly");
+    fireEvent.change(prompt, { target: { value: "edited after Send" } });
+    expect(prompt).toHaveValue("inspect the repo");
     // Navigation hasn't happened yet — we're still in the "frozen" window.
     expect(navigateMock).not.toHaveBeenCalled();
 

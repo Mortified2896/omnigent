@@ -6496,8 +6496,11 @@ export function NewChatLandingScreen() {
               input={{
                 ref: textareaRef,
                 value: message,
+                readOnly: creating || advisorSubmitting,
+                "aria-busy": creating || advisorSubmitting,
                 onSelect: (e) => slashCompletion.onSelectionChange(e.currentTarget),
                 onChange: (e) => {
+                  if (creating || advisorSubmitting) return;
                   slashCompletion.onSelectionChange(e.target);
                   setMessage(e.target.value);
                   // A rejected attachment is never added, so there's no chip to
@@ -7013,7 +7016,7 @@ export function NewChatLandingScreen() {
                       reserveSpace
                       className="size-8 md:size-7"
                       enableHotkey
-                      disabled={creating}
+                      disabled={creating || advisorSubmitting}
                       onVoiceStart={() => {
                         voiceSnapshotRef.current = message;
                       }}

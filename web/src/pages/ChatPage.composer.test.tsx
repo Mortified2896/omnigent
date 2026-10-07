@@ -6205,10 +6205,14 @@ describe("Model Advisor in an existing chat", () => {
       screen.getByRole("heading", { name: "Choose a model for this follow-up" }),
     ).toBeDefined();
     expect(screen.getByLabelText("Message the agent")).toHaveValue("Continue the analysis");
+    expect(textarea()).toHaveAttribute("readonly");
+    fireEvent.change(textarea(), { target: { value: "Changed after sending" } });
+    expect(textarea()).toHaveValue("Continue the analysis");
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.getByTestId("model-advisor-section")).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(textarea()).not.toHaveAttribute("readonly");
     act(() => useChatStore.setState({ conversationId: "another_chat" }));
     expect(screen.getByTestId("chat-model-advisor-toggle")).toHaveAttribute(
       "aria-pressed",

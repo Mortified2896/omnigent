@@ -27,6 +27,7 @@ export interface ProviderSettingsPanelProps {
   options: readonly LogicalOption[];
   dirty: boolean;
   busy?: boolean;
+  saving?: boolean;
   enabledLocked?: boolean;
   error?: string | null;
   onChange: (preferences: ProviderPreferences) => void;
@@ -50,6 +51,20 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
       disabled={busy}
     />
   ) : null;
+  const saveControls = (
+    <>
+      <button type="button" disabled={busy || !props.dirty || props.saving} onClick={props.onSave}>
+        {props.saving ? "Saving defaults…" : "Save defaults"}
+      </button>
+      <p role="status">
+        {props.saving
+          ? "Saving your choices…"
+          : props.dirty
+            ? "Changes apply to this chat. Save defaults to use them for new chats."
+            : "Defaults are saved for new chats."}
+      </p>
+    </>
+  );
   const switchControl = (
     <label className="advisor-switch">
       <input
@@ -74,6 +89,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
           {switchControl}
         </div>
         {prompt}
+        <footer>{saveControls}</footer>
         {props.error ? <p role="alert">{props.error}</p> : null}
       </section>
     );
@@ -146,14 +162,7 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
         ) : null}
         <footer>
           <span role="status">{activeChoiceIds(value, options).length} active combinations</span>
-          <button type="button" disabled={!props.dirty} onClick={props.onSave}>
-            Save defaults
-          </button>
-          <p>
-            {props.dirty
-              ? "Changes apply to this chat. Save defaults to use them for new chats."
-              : "Defaults are saved for new chats."}
-          </p>
+          {saveControls}
         </footer>
       </fieldset>
       {props.error ? <p role="alert">{props.error}</p> : null}
