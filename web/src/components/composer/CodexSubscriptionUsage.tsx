@@ -34,7 +34,7 @@ function HostSubscriptionUsage({ hostId }: { hostId: string }) {
       <TooltipTrigger asChild>
         <span
           tabIndex={0}
-          className="block text-right text-[10px] leading-3 text-muted-foreground tabular-nums"
+          className="block text-center text-[10px] leading-3 text-muted-foreground tabular-nums"
           aria-label="Codex subscription remaining"
         >
           {query.data?.remaining_percent != null
