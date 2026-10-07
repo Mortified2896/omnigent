@@ -2196,7 +2196,7 @@ describe("NewChatLandingScreen create flow", () => {
 
     // The dedicated model chip carries the current model…
     const chip = screen.getByTestId("new-chat-landing-model-select");
-    expect(chip).toHaveTextContent("GPT-6-Astra");
+    expect(chip).toHaveTextContent("GPT-6.1-Sol");
     // …and ONE interaction opens the list: no Harnesses menu, no Edit row.
     fireEvent.pointerDown(chip, { button: 0 });
     const models = await screen.findByTestId("new-chat-landing-agent-models");

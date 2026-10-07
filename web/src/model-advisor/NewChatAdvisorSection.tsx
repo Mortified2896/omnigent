@@ -10,7 +10,7 @@ import {
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
-import { SettingsIcon, SparklesIcon } from "lucide-react";
+import { Clock3Icon, SettingsIcon, SparklesIcon } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -56,6 +56,36 @@ import { ComposerEffortPicker } from "@/components/composer/ComposerControls";
 import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
 import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./sessionAdvisorPreference";
+
+function AdvisorProgress({ startedAt, launching }: { startedAt: number; launching: boolean }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
+  return (
+    <div
+      role="status"
+      aria-label="Advisor progress"
+      className="flex items-center gap-3 rounded-lg border border-brand-accent/25 bg-brand-accent/5 px-3 py-3 text-brand-accent"
+    >
+      <Clock3Icon className="size-5 shrink-0 animate-pulse" />
+      <div>
+        <p className="text-base font-semibold tabular-nums">
+          {elapsed}s elapsed · {launching ? "Starting your chat" : "Advisor choosing a model"}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {launching
+            ? "The model is chosen. Connecting to start your answer."
+            : elapsed >= 30
+              ? "Still waiting for the Advisor. No task has been sent to the answer model yet."
+              : "Your message is submitted. The answer starts after the model is chosen."}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
@@ -185,6 +215,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   });
   const [options, setOptions] = useState<readonly LogicalOption[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [submittedAt, setSubmittedAt] = useState<number | null>(null);
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mounted = useRef(true);
@@ -546,6 +577,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     const host = hostId;
     const generation = scopeToken.current.generation;
     const inputVersion = inputGeneration.current;
+    setSubmittedAt(Date.now());
     setRound({ round: null, busy: true, error: null });
     void (async () => {
       try {
@@ -847,7 +879,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
       {editor.draft?.enabled && (!continueSessionId || autoSubmit) ? (
         <div className="space-y-2" ref={submissionFeedbackRef}>
-          {round.busy ? <p role="status">Preparing recommendation…</p> : null}
+          {round.busy && submittedAt !== null ? (
+            <AdvisorProgress
+              startedAt={submittedAt}
+              launching={
+                round.round?.state === "awaiting_confirmation" || round.round?.state === "assigning"
+              }
+            />
+          ) : null}
           {validation ? (
             <p role="status" className="text-sm text-muted-foreground">
               {validation}
@@ -914,7 +953,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   );
   const recommenderControls = editor.draft ? (
     <div
-      className="ml-auto flex min-w-0 items-center justify-end gap-1.5"
+      className="ml-auto flex min-w-0 items-center justify-end gap-1"
       data-testid="model-advisor-composer-choice"
     >
       <label
@@ -924,7 +963,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       >
         Recommender
       </label>
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="flex min-w-0 items-center gap-1 [&>button:first-child]:w-[clamp(5rem,18vw,7rem)] [&>button:first-child]:shrink-0">
         <SearchableModelPicker
           id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
           value={advisorModelValue}
@@ -978,14 +1017,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   ) : null;
   // Expand the shared composer selectors directly beneath the Advisor button.
   const composerControls = (
-    <div className="flex h-14 w-full min-w-0 items-center gap-2">
+    <div className="flex h-14 w-full min-w-0 items-center gap-1">
       {controls}
       {recommenderControls}
+      <span aria-hidden="true" className="size-8 shrink-0 md:size-7" />
       <Button
         type="button"
         size="icon-sm"
         variant="ghost"
-        className="shrink-0"
+        className="size-8 shrink-0 md:size-7"
         disabled={round.busy || disabled}
         onClick={() => setSettingsOpen((open) => !open)}
         aria-expanded={settingsOpen}

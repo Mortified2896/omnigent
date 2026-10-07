@@ -2617,6 +2617,7 @@ export function NewChatLandingScreen() {
   // Controlled so selecting an existing worktree can close the popover.
   const [worktreePopoverOpen, setWorktreePopoverOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [advisorSubmitting, setAdvisorSubmitting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   // "Connect a host" instructions modal, opened from the host dropdown.
   const [connectOpen, setConnectOpen] = useState(false);
@@ -4238,7 +4239,11 @@ export function NewChatLandingScreen() {
         stored.model != null &&
         codexModelOptions.some((m) => m.id === stored.model)
           ? stored.model
-          : (filteredDefault?.id ?? ""));
+          : ((!storedRoutingOn
+              ? codexModelOptions.find((row) => /^(?:codex\/)?gpt-6\.1-sol$/.test(row.id))?.id
+              : undefined) ??
+            filteredDefault?.id ??
+            ""));
       setPickedModel(seededCodexModel);
       setPickedCodexAccessLane(
         selectedNativeHarness === "codex-native" &&
@@ -4263,7 +4268,7 @@ export function NewChatLandingScreen() {
                 ? codexModelOptions.filter((row) => row.accessLane === stored.accessLane)
                 : codexModelOptions,
               seededCodexModel || (codexModelOptions.find((m) => m.isDefault)?.id ?? null),
-              stored.effort,
+              stored.effort || "low",
             )
           : "",
       );
@@ -4968,7 +4973,8 @@ export function NewChatLandingScreen() {
     sandboxCatalogError === null &&
     selectedAgent != null &&
     (sandboxSelected ? sandboxRepoValid : selectedHost?.status === "online" && workspaceValid) &&
-    !creating;
+    !creating &&
+    !advisorSubmitting;
 
   // Why submit is disabled, surfaced as the button's tooltip. Checked in the
   // order a user fills the form — location first, then message — so the
@@ -6950,7 +6956,7 @@ export function NewChatLandingScreen() {
                 trailing: (
                   <>
                     {showModelControl && (
-                      <div className="flex min-w-0 flex-col items-end justify-center">
+                      <div className="flex w-[clamp(5rem,18vw,7rem)] shrink-0 min-w-0 flex-col items-end justify-center [&>button]:w-full">
                         <HarnessPicker
                           open={modelMenuOpen}
                           onOpenChange={setModelMenuOpen}
@@ -7019,7 +7025,7 @@ export function NewChatLandingScreen() {
                             <ComposerSendButton
                               disabled={!canSubmit}
                               label={creating ? "Starting session" : "Start session"}
-                              busy={creating}
+                              busy={creating || advisorSubmitting}
                               data-testid="new-chat-landing-submit"
                             />
                           </span>
@@ -7054,6 +7060,9 @@ export function NewChatLandingScreen() {
           {modelAdvisorEnabled && (
             <NewChatAdvisorSection
               submitRef={advisorSubmitRef}
+              onFlowStateChange={(busy, reviewVisible) =>
+                setAdvisorSubmitting(busy || reviewVisible)
+              }
               submissionBlockReason={
                 files.length > 0
                   ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."

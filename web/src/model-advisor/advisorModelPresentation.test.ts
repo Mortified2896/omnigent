@@ -28,7 +28,11 @@ function logical(overrides: Partial<LogicalOption> & { choice_id: string }): Log
 describe("advisorModelRows", () => {
   it("collapses efforts into one row per provider/checkpoint and shows every lane as the route line", () => {
     const rows = advisorModelRows([
-      logical({ choice_id: "a-low", reasoning_effort: "low", default_access_lanes: ["codex-direct"] }),
+      logical({
+        choice_id: "a-low",
+        reasoning_effort: "low",
+        default_access_lanes: ["codex-direct"],
+      }),
       logical({ choice_id: "a-high", reasoning_effort: "high" }),
       logical({
         choice_id: "g-max",
@@ -97,7 +101,11 @@ describe("advisorGroupHeading / advisorEffortOptions", () => {
 describe("reconcileAdvisorChoice", () => {
   const choices = [
     logical({ choice_id: "low", reasoning_effort: "low" }),
-    logical({ choice_id: "high", reasoning_effort: "high", default_access_lanes: ["codex-direct"] }),
+    logical({
+      choice_id: "high",
+      reasoning_effort: "high",
+      default_access_lanes: ["codex-direct"],
+    }),
     logical({ choice_id: "max", reasoning_effort: "max" }),
   ];
 
@@ -112,7 +120,10 @@ describe("reconcileAdvisorChoice", () => {
   it("falls back to the deterministic lowest supported effort", () => {
     expect(
       reconcileAdvisorChoice(
-        [logical({ choice_id: "b", reasoning_effort: "max" }), logical({ choice_id: "a", reasoning_effort: "high" })],
+        [
+          logical({ choice_id: "b", reasoning_effort: "max" }),
+          logical({ choice_id: "a", reasoning_effort: "high" }),
+        ],
         null,
       )?.choice_id,
     ).toBe("a");
@@ -201,7 +212,11 @@ describe("seedFreshAdvisorDraft", () => {
       advisor_choice_id: "remembered",
     };
     const options = [
-      logical({ choice_id: "fresh-default", reasoning_effort: "low", default_access_lanes: ["codex-direct"] }),
+      logical({
+        choice_id: "fresh-default",
+        reasoning_effort: "low",
+        default_access_lanes: ["codex-direct"],
+      }),
     ];
     expect(seedFreshAdvisorDraft(draft, options, null)).toBe(draft);
   });
@@ -219,7 +234,14 @@ describe("seedFreshAdvisorDraft", () => {
       },
     };
     const options = [
-      logical({ choice_id: "glm-saved", provider: "glm", model_id: "glm-5.3", display_name: "GLM 5.3", reasoning_effort: "high", access_lanes: ["glm-direct"] }),
+      logical({
+        choice_id: "glm-saved",
+        provider: "glm",
+        model_id: "glm-5.3",
+        display_name: "GLM 5.3",
+        reasoning_effort: "high",
+        access_lanes: ["glm-direct"],
+      }),
     ];
     const seeded = seedFreshAdvisorDraft(draft, options, null);
     expect(seeded?.providers.glm.selected_choice_ids).toEqual(["glm-saved"]);
@@ -234,4 +256,29 @@ describe("seedFreshAdvisorDraft", () => {
     };
     expect(seedFreshAdvisorDraft(draft, [logical({ choice_id: "a" })], null)).toBe(draft);
   });
+});
+
+it("uses Luna Max for an unconfigured Advisor without changing saved choices", () => {
+  const luna = logical({ choice_id: "luna-max", model_id: "gpt-6-luna", reasoning_effort: "max" });
+  const sol = logical({
+    choice_id: "sol-low",
+    model_id: "gpt-6.1-sol",
+    reasoning_effort: "low",
+    default_access_lanes: ["codex-direct"],
+  });
+  const empty = emptyProviderPreferences();
+  const seeded = seedFreshAdvisorDraft(empty, [sol, luna], sol.choice_id);
+  expect(seeded?.advisor_choice_id).toBe(luna.choice_id);
+  expect(seeded?.providers.openai.selected_choice_ids).toContain(sol.choice_id);
+  expect(
+    seedFreshAdvisorDraft(
+      { ...seeded!, advisor_choice_id: sol.choice_id },
+      [sol, luna],
+      sol.choice_id,
+    )?.advisor_choice_id,
+  ).toBe(sol.choice_id);
+  expect(
+    seedFreshAdvisorDraft(empty, [sol, { ...luna, available: false }], sol.choice_id)
+      ?.advisor_choice_id,
+  ).toBe(sol.choice_id);
 });

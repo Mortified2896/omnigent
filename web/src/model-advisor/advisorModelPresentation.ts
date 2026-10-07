@@ -206,12 +206,19 @@ export function seedFreshAdvisorDraft(
       pool.add(humanChoiceId);
     }
   }
+  const preferredAdvisor = available.find(
+    (option) =>
+      /^(?:(?:openai|codex)\/)?gpt-6-luna$/.test(option.model_id) &&
+      option.reasoning_effort === "max",
+  );
   const advisorChoice = draft.advisor_choice_id
     ? null
-    : reconcileAdvisorChoice(
+    : (preferredAdvisor ??
+      reconcileAdvisorChoice(
         available.filter((option) => pool.has(option.choice_id)),
         null,
-      ) ?? reconcileAdvisorChoice(available, null);
+      ) ??
+      reconcileAdvisorChoice(available, null));
   if (!draft.advisor_choice_id && !advisorChoice) return neverConfigured ? null : draft;
   // A remembered pool is preserved verbatim — only a truly empty pool is
   // seeded, and nothing the user saved is silently dropped here.

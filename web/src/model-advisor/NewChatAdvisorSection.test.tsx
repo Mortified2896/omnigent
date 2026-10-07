@@ -875,3 +875,28 @@ it("renders each advisor model's routes with the shared lane vocabulary", async 
   const option = await screen.findByRole("option", { name: /GPT-6\.1 Sol/ });
   expect(option).toHaveTextContent("Codex Subscription — Direct · OmniRoute");
 });
+
+it("starts a visible elapsed timer immediately while the Advisor request is pending", async () => {
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  const previous = api.getMockImplementation()!;
+  api.mockImplementation((url, init) =>
+    url === "/v1/model-advisor/rounds" && init?.method === "POST"
+      ? new Promise(() => {})
+      : previous(url, init),
+  );
+  send();
+  expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent("0s elapsed");
+  expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent(
+    "Advisor choosing a model",
+  );
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3000);
+  await waitFor(
+    () =>
+      expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent(
+        "3s elapsed",
+      ),
+    { timeout: 2000 },
+  );
+  clock.mockRestore();
+});

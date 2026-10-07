@@ -4118,7 +4118,7 @@ function ComposerImpl(
           ),
           afterActions: canUseModelAdvisor ? (
             <div
-              className="flex h-14 min-w-0 items-center gap-2 border-t border-border/60 px-3"
+              className="flex h-14 min-w-0 items-center gap-1 border-t border-border/60 px-3"
               data-testid="chat-advisor-toolbar"
             >
               {canUseModelAdvisor && (
@@ -4166,6 +4166,7 @@ function ComposerImpl(
                 </Button>
               )}
               <div ref={setAdvisorModelTarget} className="ml-auto flex min-w-0 items-center" />
+              <span aria-hidden="true" className="size-8 shrink-0 md:size-7" />
               {canUseModelAdvisor && (
                 <Button
                   type="button"
@@ -4304,7 +4305,7 @@ function ComposerImpl(
           ),
           trailing: (
             <>
-              <div className="flex min-w-0 flex-col items-end justify-center rounded-lg">
+              <div className="flex w-[clamp(5rem,18vw,7rem)] shrink-0 min-w-0 flex-col items-end justify-center rounded-lg [&>button]:w-full">
                 <SessionHarnessPicker
                   busy={configBusy}
                   busyRef={configBusyRef}
