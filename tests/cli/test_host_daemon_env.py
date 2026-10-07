@@ -22,6 +22,21 @@ from omnigent.runner.identity import (
 )
 
 _REMOTE_SERVER_URL: Final = "https://example.databricksapps.com"
+
+
+@pytest.mark.parametrize("server_url", [None, _REMOTE_SERVER_URL])
+def test_host_daemon_preserves_release_features(
+    monkeypatch: pytest.MonkeyPatch, server_url: str | None
+) -> None:
+    """Background hosts must retain Advisor's explicit catalog feature gate."""
+    monkeypatch.setenv("OMNIGENT_FEATURES", "model_advisor")
+    monkeypatch.setenv("OMNIGENT_UNRELATED_SECRET", "synthetic-secret")
+    env = _build_host_daemon_env(server_url=server_url)
+    assert env["OMNIGENT_FEATURES"] == "model_advisor"
+    if server_url:
+        assert "OMNIGENT_UNRELATED_SECRET" not in env
+
+
 _PROXY_ENV: Final = {
     "HTTP_PROXY": "http://upper-http-proxy.example.com:3128",
     "HTTPS_PROXY": "http://upper-https-proxy.example.com:3128",
