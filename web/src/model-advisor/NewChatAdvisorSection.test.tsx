@@ -427,6 +427,58 @@ it("surfaces a catalog failure as a visible reason", async () => {
   expect(await screen.findByTestId("model-advisor-catalog-error")).toBeDefined();
 });
 
+it("lets an explicitly disabled Advisor send when its catalog is unavailable", async () => {
+  prefsDto = { ...prefsDto, logical_preferences: { ...V2_PREFERENCES, enabled: false } };
+  api.mockImplementation(async (url: string) => {
+    if (url.includes("/catalog"))
+      return Response.json({ detail: "No qualified models" }, { status: 422 });
+    if (url.includes("/preferences")) return Response.json(prefsDto);
+    throw new Error(`Unexpected API call: ${url}`);
+  });
+  mountSection();
+  await screen.findByTestId("model-advisor-catalog-error");
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  expect(composerSubmitRef.current!.submit()).toBe(false);
+});
+
+it("keeps an unavailable enabled Advisor blocking until the user turns it off", async () => {
+  api.mockImplementation(async (url: string) => {
+    if (url.includes("/catalog"))
+      return Response.json({ detail: "No qualified models" }, { status: 422 });
+    if (url.includes("/preferences")) return Response.json(prefsDto);
+    throw new Error(`Unexpected API call: ${url}`);
+  });
+  mountSection();
+  await screen.findByTestId("model-advisor-catalog-error");
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  act(() => expect(composerSubmitRef.current!.submit()).toBe(true));
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
+  expect(composerSubmitRef.current!.submit()).toBe(false);
+  expect(api.mock.calls.some(([url]) => url === "/v1/model-advisor/rounds")).toBe(false);
+});
+
+it("allows local opt-out even when advisor preferences fail to load", async () => {
+  api.mockImplementation(async () => Response.json({ detail: "Unavailable" }, { status: 502 }));
+  mountSection();
+  await screen.findByTestId("model-advisor-catalog-error");
+  const toggle = screen.getByRole("switch", { name: "Enable Advisor" });
+  expect(toggle).toBeEnabled();
+  fireEvent.click(toggle);
+  expect(composerSubmitRef.current!.submit()).toBe(false);
+});
+
+it("does not wait for catalog discovery when the parent explicitly disables Advisor", () => {
+  api.mockImplementation(() => new Promise(() => {}));
+  mountSection({ enabledOverride: false });
+  expect(composerSubmitRef.current!.submit()).toBe(false);
+});
+
 it("reserves a logical round on Get recommendation and shows the review", async () => {
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });
@@ -941,7 +993,6 @@ it("defaults a fresh Advisor to on with Luna Max and allows turning it off", asy
   fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
   expect(screen.getByTestId("model-advisor-advisor-effort")).toBeDisabled();
 });
-
 
 it("preserves a saved Off choice instead of applying the fresh default", async () => {
   const saved = prefsDto.preferences as Record<string, unknown>;

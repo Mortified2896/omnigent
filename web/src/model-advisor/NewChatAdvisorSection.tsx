@@ -308,13 +308,39 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     let cancelled = false;
     void (async () => {
       try {
-        const [catalog, prefs] = await Promise.all([
+        const [catalogResult, prefsResult] = await Promise.allSettled([
           fetchCatalog(hostId),
           fetchPreferences(hostId),
         ]);
         if (cancelled || !isCurrentScope(hostId, generation)) return;
-        setPromptTemplate(catalog.prompt_template ?? null);
-        setOptions(currentModelChoices(toLogicalOptions(catalog), (row) => row.model_id));
+        // Preferences remain usable when model discovery fails: an explicit
+        // Advisor-off choice must still allow ordinary composer submission.
+        if (catalogResult.status === "fulfilled") {
+          const catalog = catalogResult.value;
+          setPromptTemplate(catalog.prompt_template ?? null);
+          setOptions(currentModelChoices(toLogicalOptions(catalog), (row) => row.model_id));
+        } else {
+          setCatalogError(
+            catalogResult.reason instanceof Error
+              ? catalogResult.reason.message
+              : "Couldn't load advisor models.",
+          );
+        }
+        if (prefsResult.status === "rejected") {
+          setCatalogError(
+            prefsResult.reason instanceof Error
+              ? prefsResult.reason.message
+              : "Couldn't load advisor settings.",
+          );
+          setEditor({
+            saved: null,
+            draft: { ...emptyProviderPreferences(), enabled: true },
+            dirty: false,
+            error: null,
+          });
+          return;
+        }
+        const prefs = prefsResult.value;
         const saved = toSavedProviderPreferences(prefs);
         const sessionChoices = continueSessionId
           ? readSessionAdvisorChoices(hostId, continueSessionId)
@@ -770,6 +796,9 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     submitRef,
     () => ({
       submit: () => {
+        // Off is independent of catalog readiness. Never silently bypass an
+        // enabled Advisor, but let users opt out even after a discovery error.
+        if (enabledOverride === false || editor.draft?.enabled === false) return false;
         if (!editor.draft || catalogError !== null) {
           setRound({
             round: null,
@@ -783,7 +812,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         return true;
       },
     }),
-    [catalogError, editor.draft, handlePropose, awaitingLaunch, round.busy],
+    [catalogError, editor.draft, enabledOverride, handlePropose, awaitingLaunch, round.busy],
   );
   // Follow-up Send has already requested review. Start it once after its
   // saved settings load; there is no second submission button in the dialog.
@@ -810,16 +839,6 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     handlePropose();
   }, [autoSubmit, continueSessionId, editor.draft, validation, catalogError, handlePropose]);
   if (hostId === null) return null;
-  if (catalogError !== null)
-    return (
-      <p
-        className="text-sm text-muted-foreground"
-        role="status"
-        data-testid="model-advisor-catalog-error"
-      >
-        Model advisor unavailable: {catalogError}
-      </p>
-    );
   const controls = (
     <Button
       type="button"
@@ -860,6 +879,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       </span>
     </Button>
   );
+  if (catalogError !== null)
+    return (
+      <div className="flex flex-wrap items-center gap-2 py-2">
+        {showComposerControls ? controls : null}
+        <p
+          className="text-sm text-muted-foreground"
+          role="status"
+          data-testid="model-advisor-catalog-error"
+        >
+          Model advisor unavailable: {catalogError}.{" "}
+          {editor.draft?.enabled
+            ? "Turn Advisor off to send with your selected model."
+            : "Messages will use your selected model."}
+        </p>
+      </div>
+    );
   const settingsPanel = settingsOpen ? (
     <ProviderSettingsPanel
       idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}
