@@ -1,3 +1,5 @@
+import { PromptTimingStatus } from "@/components/composer/PromptTimingStatus";
+import { startPromptTiming, handoffPromptTiming, type PromptTiming } from "@/lib/promptTiming";
 import { currentModelChoices } from "@/lib/currentModelChoices";
 /** Live Model Advisor controller for the new-chat composer. */
 import {
@@ -10,7 +12,7 @@ import {
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
-import { Clock3Icon, SettingsIcon, SparklesIcon } from "lucide-react";
+import { SettingsIcon, SparklesIcon } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -57,36 +59,6 @@ import { ComposerEffortPicker } from "@/components/composer/ComposerControls";
 import { ProviderSettingsPanel } from "@/model-advisor/ProviderSettingsPanel";
 
 import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./sessionAdvisorPreference";
-
-function AdvisorProgress({ startedAt, launching }: { startedAt: number; launching: boolean }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
-  return (
-    <div
-      role="status"
-      aria-label="Advisor progress"
-      className="flex items-center gap-3 rounded-lg border border-brand-accent/25 bg-brand-accent/5 px-3 py-3 text-brand-accent"
-    >
-      <Clock3Icon className="size-5 shrink-0 animate-pulse" />
-      <div>
-        <p className="text-base font-semibold tabular-nums">
-          {elapsed}s elapsed · {launching ? "Starting your chat" : "Advisor choosing a model"}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {launching
-            ? "The model is chosen. Connecting to start your answer."
-            : elapsed >= 30
-              ? "Still waiting for the Advisor. No task has been sent to the answer model yet."
-              : "Your message is submitted. The answer starts after the model is chosen."}
-        </p>
-      </div>
-    </div>
-  );
-}
 
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
@@ -217,7 +189,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const [promptTemplate, setPromptTemplate] = useState<string | null>(null);
   const [options, setOptions] = useState<readonly LogicalOption[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [submittedAt, setSubmittedAt] = useState<number | null>(null);
+  const [promptTiming, setPromptTiming] = useState<PromptTiming | null>(null);
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mounted = useRef(true);
@@ -617,7 +589,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     const host = hostId;
     const generation = scopeToken.current.generation;
     const inputVersion = inputGeneration.current;
-    setSubmittedAt(Date.now());
+    setPromptTiming(startPromptTiming());
     setRound({ round: null, busy: true, error: null });
     void (async () => {
       try {
@@ -696,6 +668,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                 preferences: editor.draft,
                 humanPick,
               });
+            if (promptTiming) handoffPromptTiming(dto.execution.session_id, promptTiming);
             onLaunched(dto.execution.session_id);
           }
         } catch (cause) {
@@ -717,6 +690,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       launchAgentId,
       launchWorkspace,
       onLaunched,
+      promptTiming,
       round.busy,
       round.round,
     ],
@@ -950,11 +924,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       ) : null}
       {editor.draft?.enabled && (!continueSessionId || autoSubmit) ? (
         <div className="space-y-2" ref={submissionFeedbackRef}>
-          {round.busy && submittedAt !== null ? (
-            <AdvisorProgress
-              startedAt={submittedAt}
-              launching={
+          {round.busy && promptTiming !== null ? (
+            <PromptTimingStatus
+              timing={promptTiming}
+              label="Advisor progress"
+              stage={
                 round.round?.state === "awaiting_confirmation" || round.round?.state === "assigning"
+                  ? "Starting your chat"
+                  : "Advisor choosing a model"
               }
             />
           ) : null}

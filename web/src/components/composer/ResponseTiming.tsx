@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { Clock3Icon } from "lucide-react";
+import { PromptTimingStatus } from "./PromptTimingStatus";
+import {
+  readPromptTiming,
+  clearPromptTiming,
+  recordPromptDuration,
+  startPromptTiming,
+  type PromptTiming,
+} from "@/lib/promptTiming";
 import { getCurrentUserId } from "@/lib/identity";
 import { useConversationEntryState } from "@/hooks/useConversationEntryState";
 import { buildBubbles, type Bubble } from "@/lib/renderItems";
@@ -8,6 +15,7 @@ interface Run {
   start: number;
   profile: string;
   responseId: string | null;
+  timing: PromptTiming;
 }
 const runs = new Map<string, Run>();
 function storageKey(profile: string) {
@@ -27,14 +35,6 @@ function observations(profile: string): number[] {
     return [];
   }
 }
-export function estimateDuration(samples: readonly number[]): number {
-  if (!samples.length) return 60;
-  const sorted = [...samples].sort((a, b) => a - b);
-  return Math.max(1, sorted[Math.floor((sorted.length - 1) * 0.75)]!);
-}
-export function shortDuration(seconds: number): string {
-  return seconds < 60 ? `${Math.max(0, Math.ceil(seconds))}s` : `${Math.ceil(seconds / 60)}m`;
-}
 export function ResponseTiming({
   sessionId,
   compact = false,
@@ -49,6 +49,10 @@ export function ResponseTiming({
     state.status === "streaming" ||
     state.sessionStatus === "running" ||
     state.sessionStatus === "waiting";
+  const handedOff = sessionId ? readPromptTiming(sessionId) : null;
+  const starting = Boolean(
+    handedOff && !running && state.sessionStatus !== "failed" && !runs.has(sessionId!),
+  );
   const [now, setNow] = useState(Date.now);
   const profile = JSON.stringify([
     state.sessionHarness,
@@ -57,9 +61,14 @@ export function ResponseTiming({
   ]);
   useEffect(() => {
     if (!sessionId) return;
-    if (running && !runs.has(sessionId))
+    if (state.sessionStatus === "failed") clearPromptTiming(sessionId);
+    if (running && !runs.has(sessionId)) {
+      const timing =
+        readPromptTiming(sessionId) ??
+        startPromptTiming(state.sendLatchedAt ?? Date.now(), observations(profile));
       runs.set(sessionId, {
-        start: state.sendLatchedAt ?? Date.now(),
+        start: timing.startedAt,
+        timing,
         profile,
         responseId:
           buildBubbles(state.blocks, state.activeResponse)
@@ -69,6 +78,7 @@ export function ResponseTiming({
             )
             .at(-1)?.responseId ?? null,
       });
+    }
     if (!running) {
       const run = runs.get(sessionId);
       if (run) {
@@ -82,7 +92,9 @@ export function ResponseTiming({
           completed.responseId !== run.responseId &&
           completed.workedForS != null
         ) {
-          const samples = [...observations(run.profile), completed.workedForS].slice(-20);
+          const duration = Math.max(1, (Date.now() - run.start) / 1000);
+          const samples = [...observations(run.profile), duration].slice(-20);
+          recordPromptDuration(duration);
           try {
             localStorage.setItem(storageKey(run.profile), JSON.stringify(samples));
           } catch {
@@ -90,54 +102,34 @@ export function ResponseTiming({
           }
         }
         runs.delete(sessionId);
+        clearPromptTiming(sessionId);
       }
       return;
     }
-  }, [sessionId, running, profile, state.sendLatchedAt, state.blocks, state.activeResponse]);
+  }, [
+    sessionId,
+    running,
+    profile,
+    state.sendLatchedAt,
+    state.blocks,
+    state.activeResponse,
+    state.sessionStatus,
+  ]);
   useEffect(() => {
-    if (!running) return;
+    if (!running && !starting) return;
+    setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [running]);
-  if (!running)
+  }, [running, starting]);
+  if (!running && !starting)
     return compact && fallbackRunning ? (
       <span className="whitespace-nowrap text-brand-accent">Running</span>
     ) : null;
   const run = sessionId ? runs.get(sessionId) : null;
   const start = run?.start ?? state.sendLatchedAt ?? now;
-  const elapsed = Math.max(0, (now - start) / 1000);
-  const samples = observations(run?.profile ?? profile);
-  const remaining = estimateDuration(samples) - elapsed;
-  const estimate = remaining > 0 ? `~${shortDuration(remaining)} left` : "Taking longer";
-  if (compact)
-    return (
-      <span
-        className="whitespace-nowrap font-medium tabular-nums text-brand-accent"
-        title={`${estimate} · ${shortDuration(elapsed)} elapsed`}
-      >
-        {estimate}
-      </span>
-    );
-  return (
-    <div
-      role="status"
-      aria-label="Response timing"
-      className="mb-3 flex items-center gap-3 rounded-lg border border-brand-accent/25 bg-brand-accent/5 px-3 py-3 text-brand-accent"
-    >
-      <Clock3Icon className="size-5 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="text-base font-semibold tabular-nums">
-          {remaining > 0
-            ? `About ${shortDuration(remaining)} left`
-            : "Taking longer than estimated"}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {shortDuration(elapsed)} elapsed
-          {samples.length
-            ? ` · Based on ${samples.length} completed ${samples.length === 1 ? "reply" : "replies"}`
-            : " · Learning response times"}
-        </p>
-      </div>
-    </div>
-  );
+  const timing =
+    run?.timing ??
+    (sessionId ? readPromptTiming(sessionId) : null) ??
+    startPromptTiming(start, observations(profile));
+  return <PromptTimingStatus timing={timing} now={now} compact={compact} />;
 }

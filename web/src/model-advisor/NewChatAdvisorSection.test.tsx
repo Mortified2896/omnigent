@@ -1,3 +1,4 @@
+import { readPromptTiming } from "@/lib/promptTiming";
 import { createRef } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -828,9 +829,12 @@ it("normal Send automatically runs the assignment once without revealing it", as
   const onLaunched = vi.fn();
   const view = mountSection({ requireConfirmation: false, onLaunched });
   await screen.findByRole("region", { name: "Model advisor settings" });
+  const sentAt = Date.now();
   send();
   send();
   await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
+  expect(readPromptTiming("conv_new")).toMatchObject({ estimatedSeconds: 60, sampleCount: 0 });
+  expect(readPromptTiming("conv_new")!.startedAt).toBeGreaterThanOrEqual(sentAt);
   expect(screen.queryByLabelText("Review model assignment")).not.toBeInTheDocument();
   expect(screen.queryByText(/Hard task, use/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Requested:/)).not.toBeInTheDocument();
@@ -928,7 +932,7 @@ it("renders each advisor model's routes with the shared lane vocabulary", async 
   expect(option).toHaveTextContent("Codex Subscription — Direct · OmniRoute");
 });
 
-it("starts a visible elapsed timer immediately while the Advisor request is pending", async () => {
+it("starts the full prompt countdown immediately while the Advisor request is pending", async () => {
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });
   const previous = api.getMockImplementation()!;
@@ -938,7 +942,9 @@ it("starts a visible elapsed timer immediately while the Advisor request is pend
       : previous(url, init),
   );
   send();
-  expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent("0s elapsed");
+  expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent(
+    "About 1m left",
+  );
   expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent(
     "Advisor choosing a model",
   );
@@ -946,7 +952,7 @@ it("starts a visible elapsed timer immediately while the Advisor request is pend
   await waitFor(
     () =>
       expect(screen.getByRole("status", { name: "Advisor progress" })).toHaveTextContent(
-        "3s elapsed",
+        "About 57s left",
       ),
     { timeout: 2000 },
   );
