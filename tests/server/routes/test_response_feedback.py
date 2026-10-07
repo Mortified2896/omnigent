@@ -60,6 +60,20 @@ def test_api_permissions_and_round_trip(db_uri):
         assert client.get(url).status_code == 401
         assert client.get(url, headers={"x-test-user": "stranger"}).status_code == 404
         assert client.get(url, headers={"x-test-user": "reader"}).status_code == 200
+        from omnigent.server.response_attribution import bind_response_advisor_round
+
+        store.update_conversation(conv.id, labels={"omnigent.access_lane": "omniroute"})
+        bind_response_advisor_round(store, conv.id, "answer", None)
+        route_url = f"/v1/sessions/{conv.id}/response-route/answer"
+        assert client.get(route_url).status_code == 401
+        assert client.get(route_url, headers={"x-test-user": "stranger"}).status_code == 404
+        assert client.get(route_url, headers={"x-test-user": "reader"}).json() == {
+            "route": "omniroute"
+        }
+        assert client.get(
+            f"/v1/sessions/{other.id}/response-route/answer", headers=alice
+        ).json() == {"route": None}
+
         assert (
             client.put(
                 url + "/answer", headers={"x-test-user": "reader"}, json={"rating": 1}

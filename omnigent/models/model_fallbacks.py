@@ -30,6 +30,12 @@ class StaticModelFallback:
 _ADVISOR_OPENAI_ROUTE_ALIASES: dict[str, StaticModelFallback] = {
     "omniroute": StaticModelFallback(
         model_ids=(
+            "codex/gpt-6.1-sol",
+            "gpt-6.1-sol",
+            "codex/gpt-6-sol",
+            "gpt-6-sol",
+            "codex/gpt-6-luna",
+            "gpt-6-luna",
             "codex/gpt-6-astra",
             "gpt-6-astra",
             "codex/gpt-5.6-sol",
@@ -73,7 +79,12 @@ def advisor_openai_route_aliases(transport: str) -> dict[str, str]:
     if record is None:
         raise ValueError(f"unknown Advisor OpenAI transport: {transport}")
     pairs = zip(record.model_ids[::2], record.model_ids[1::2], strict=True)
-    return dict(pairs)
+    aliases = dict(pairs)
+    if transport == "omniroute":
+        # The authenticated host normalizes gateway listings to bare slugs.
+        # Identity aliases still require explicit subscription-lane evidence.
+        aliases.update({canonical: canonical for canonical in aliases.values()})
+    return aliases
 
 
 #: Curated preference ORDER for codex's current arms — a ranking hint only

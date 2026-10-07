@@ -1609,3 +1609,28 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri) ->
     assert updates["labels"]["omnigent.advisor.round_id"] == payload["round_id"]
     assert conversation.model_override == result["requested_execution"]["model"]
     assert conversation.reported_model is None
+
+
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])
+@pytest.mark.parametrize("wire_prefix", ["", "codex/"])
+def test_authenticated_gateway_aliases_match_direct_choices(model, wire_prefix):
+    from omnigent.server.model_advisor_service import build_host_catalog
+
+    direct = {"id": model, "accessLane": "codex-direct", "defaultReasoningEffort": "low"}
+    gateway = {
+        "id": wire_prefix + model,
+        "accessLane": "omniroute",
+        "defaultReasoningEffort": "low",
+        "advisorProvider": "openai",
+        "advisorAccessClass": "chatgpt_plan",
+        "advisorConnectionId": "omniroute-codex-oauth",
+    }
+    catalog = build_host_catalog([direct, gateway])
+    choice = LogicalChoice("openai", model, "low")
+    assert {r.transport for r in catalog.routes_by_choice[choice.choice_id]} == {
+        "direct",
+        "omniroute",
+    }
+    gateway.pop("advisorConnectionId")
+    unqualified = build_host_catalog([direct, gateway])
+    assert {r.transport for r in unqualified.routes_by_choice[choice.choice_id]} == {"direct"}

@@ -1,3 +1,4 @@
+import { ResponseRouteBadge } from "./ResponseRouteBadge";
 import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
 import { GeneratedResponseAudioPlayer } from "@/components/chat/GeneratedResponseAudioPlayer";
 // Bubble rendering, scroll helpers, and the working-indicator cluster for the
@@ -1081,6 +1082,13 @@ function AssistantBubble({
           spansFullColumn ? "max-w-full" : "max-w-3xl min-[2561px]:max-w-[clamp(56rem,30vw,64rem)]"
         }
       >
+        {!foldOnly && conversationId && bubble.responseId && (
+          <ResponseRouteBadge
+            sessionId={conversationId}
+            responseId={bubble.responseId}
+            running={showsWorking}
+          />
+        )}
         {/* A fold-only bubble takes w-full at the ordinary max-w-3xl cap rather
             than shrink-wrapping to the summary row's ~110px. */}
         <MessageContent

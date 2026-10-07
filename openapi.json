@@ -16489,6 +16489,59 @@
         ]
       }
     },
+    "/v1/sessions/{session_id}/response-route/{response_id}": {
+      "get": {
+        "operationId": "get_response_route_v1_sessions__session_id__response_route__response_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "response_id",
+            "required": true,
+            "schema": {
+              "title": "Response Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Response Route V1 Sessions  Session Id  Response Route  Response Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Response Route",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
     "/v1/sessions/{session_id}/scored-outcomes": {
       "get": {
         "operationId": "get_scored_outcomes_v1_sessions__session_id__scored_outcomes_get",

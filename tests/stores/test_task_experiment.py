@@ -179,3 +179,52 @@ def test_existing_response_attribution_consumes_legacy_advisor_round(conversatio
     )
     assert bind_response_advisor_round(store, conv.id, "new_off_turn", "old_round") is None
     assert bind_response_advisor_round(store, conv.id, "old_turn", "old_round") == "old_round"
+
+
+@pytest.mark.parametrize(
+    "lane,expected",
+    [
+        ("omniroute", "omniroute"),
+        ("codex-direct", "direct"),
+        ("glm-direct", "direct"),
+        ("unknown", None),
+    ],
+)
+def test_route_snapshot_does_not_follow_later_session_changes(conversation_store, lane, expected):
+    from omnigent.server.response_attribution import (
+        bind_response_advisor_round,
+        list_response_routes,
+    )
+
+    store = conversation_store
+    conv = store.create_conversation(labels={"omnigent.access_lane": lane})
+    bind_response_advisor_round(store, conv.id, "answer", None)
+    store.update_conversation(conv.id, labels={"omnigent.access_lane": "omniroute"})
+    bind_response_advisor_round(store, conv.id, "answer", None)
+    assert list_response_routes(store, conv.id) == {"answer": expected}
+
+
+def test_direct_fallback_requires_concrete_fallback_binding():
+    import json
+
+    from omnigent.model_advisor_binding import encode_transport_binding_label
+    from omnigent.server.response_attribution import response_route_from_labels
+    from omnigent.stores.conversation_store import (
+        ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
+        ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
+    )
+
+    direct = {"transport": "direct", "route_id": "codex-direct"}
+    labels = {
+        "omnigent.access_lane": "codex-direct",
+        **encode_transport_binding_label(
+            ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
+            json.dumps({"primary": {"transport": "omniroute"}, "fallback": direct}),
+        ),
+        **encode_transport_binding_label(ADVISOR_DISPATCH_ROUTE_LABEL_KEY, json.dumps(direct)),
+    }
+    assert response_route_from_labels(labels) == "direct_fallback"
+    labels[ADVISOR_DISPATCH_ROUTE_LABEL_KEY] = json.dumps(
+        {"transport": "direct", "route_id": "another-route"}
+    )
+    assert response_route_from_labels(labels) == "direct"
