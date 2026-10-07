@@ -6956,7 +6956,7 @@ export function NewChatLandingScreen() {
                 trailing: (
                   <>
                     {showModelControl && (
-                      <div className="relative flex w-[clamp(5rem,22vw,8rem)] shrink-0 min-w-0 flex-col items-end justify-center [&>span]:w-full [&_button]:w-full">
+                      <div className="relative flex w-20 min-[480px]:w-32 shrink-0 min-w-0 flex-col items-end justify-center [&>span]:w-full [&_button]:w-full">
                         <HarnessPicker
                           open={modelMenuOpen}
                           onOpenChange={setModelMenuOpen}

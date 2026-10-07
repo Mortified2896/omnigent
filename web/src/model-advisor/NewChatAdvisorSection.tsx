@@ -963,7 +963,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       >
         Recommender
       </label>
-      <div className="flex min-w-0 items-center gap-1 [&>button:first-child]:w-[clamp(5rem,22vw,8rem)] [&>button:first-child]:shrink-0">
+      <div className="flex min-w-0 items-center gap-1 [&>button:first-child]:w-20 min-[480px]:[&>button:first-child]:w-32 [&>button:first-child]:shrink-0">
         <SearchableModelPicker
           id={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}-advisor-model`}
           value={advisorModelValue}
