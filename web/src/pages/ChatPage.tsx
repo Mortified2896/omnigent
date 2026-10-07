@@ -4305,7 +4305,7 @@ function ComposerImpl(
           ),
           trailing: (
             <>
-              <div className="relative flex w-[clamp(5rem,18vw,7rem)] shrink-0 min-w-0 flex-col items-end justify-center rounded-lg [&>span]:w-full [&_button]:w-full">
+              <div className="relative flex w-[clamp(5rem,22vw,8rem)] shrink-0 min-w-0 flex-col items-end justify-center rounded-lg [&>span]:w-full [&_button]:w-full">
                 <SessionHarnessPicker
                   busy={configBusy}
                   busyRef={configBusyRef}
