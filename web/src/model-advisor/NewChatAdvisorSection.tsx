@@ -331,7 +331,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             error: null,
           });
         } else {
-          const empty = { ...emptyProviderPreferences(), enabled: Boolean(continueSessionId) };
+          const empty = { ...emptyProviderPreferences(), enabled: true };
           setEditor({
             saved: { version: prefs.version, etag: prefs.etag ?? "", preferences: empty },
             draft: empty,

@@ -829,7 +829,7 @@ it("seeds declared defaults so enabling a never-configured advisor is valid imme
   };
   mountSection();
   await screen.findByRole("switch", { name: "Enable Advisor" });
-  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).toBeChecked();
   // No validation error becomes the normal post-toggle state.
   await waitFor(() => {
     expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6.1 Sol");
@@ -911,7 +911,7 @@ it("keeps the configured Advisor reasoning visible and disabled while off", asyn
   expect(effort).toBeDisabled();
 });
 
-it("shows Luna Max even before a fresh Advisor is enabled", async () => {
+it("defaults a fresh Advisor to on with Luna Max and allows turning it off", async () => {
   prefsDto = {
     object: "model_advisor.preferences",
     version: 0,
@@ -936,7 +936,19 @@ it("shows Luna Max even before a fresh Advisor is enabled", async () => {
     expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6 Luna"),
   );
   expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Max");
-  expect(screen.getByTestId("model-advisor-advisor-effort")).toBeDisabled();
-  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
   expect(screen.getByTestId("model-advisor-advisor-effort")).toBeEnabled();
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).toBeChecked();
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toBeDisabled();
+});
+
+
+it("preserves a saved Off choice instead of applying the fresh default", async () => {
+  const saved = prefsDto.preferences as Record<string, unknown>;
+  prefsDto.preferences = { ...saved, enabled: false };
+  prefsDto.logical_preferences = { ...saved, enabled: false };
+  mountSection();
+  await screen.findByTestId("model-advisor-advisor-choice");
+  expect(screen.getByRole("switch", { name: "Enable Advisor" })).not.toBeChecked();
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toBeDisabled();
 });
