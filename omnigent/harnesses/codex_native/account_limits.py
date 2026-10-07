@@ -61,7 +61,14 @@ async def read_account_limits() -> dict[str, Any]:
         # A private config avoids starting the user's MCP servers or applying a
         # gateway provider override. Only the account credential is copied; no
         # credential fields cross the host tunnel or enter a response.
-        account_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        # Deployments with isolated runner homes can explicitly select the
+        # signed-in host account for this read-only probe. Never guess another
+        # user's home or change the runner's CODEX_HOME.
+        account_home = Path(
+            os.environ.get("OMNIGENT_CODEX_ACCOUNT_HOME")
+            or os.environ.get("CODEX_HOME")
+            or str(Path.home() / ".codex")
+        )
         with tempfile.TemporaryDirectory(prefix="omnigent-codex-quota-") as raw:
             root = Path(raw)
             auth = account_home / "auth.json"

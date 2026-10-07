@@ -465,3 +465,14 @@ the process and reader states with its tail. With the flag unset or `0`, confirm
 `stderr_reader_state = 'failed'` and `stderr_reader_error_type = 'ValueError'`
 distinguishes a failed drain from a live reader with an otherwise stalled
 startup. Use the return code and adjacent lifecycle events to interpret it.
+
+### Codex usage with an isolated runner home
+
+The subscription usage probe normally reads the signed-in account from
+`CODEX_HOME` (or `~/.codex`). A deployment that isolates the runner's home can
+set `OMNIGENT_CODEX_ACCOUNT_HOME` to the operator-approved Codex account
+folder for the read-only usage probe. This does not change the runner's
+`CODEX_HOME`, model routing, or chat state. The probe copies only `auth.json`
+into a temporary private directory and returns subscription windows, never
+credentials. Configure the intended account explicitly; a missing account
+must remain unavailable rather than silently selecting another user's login.

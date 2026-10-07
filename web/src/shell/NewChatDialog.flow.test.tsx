@@ -2153,6 +2153,34 @@ describe("NewChatLandingScreen create flow", () => {
     expect(screen.queryByTestId("cost-toggle-trigger")).toBeNull();
   });
 
+  it("reconciles remembered reasoning after the saved connection disappears", async () => {
+    localStorage.setItem(
+      "omnigent:last-mode-by-harness",
+      JSON.stringify({
+        "codex-native": { model: "gpt-6-luna", effort: "max", accessLane: "codex-direct" },
+      }),
+    );
+    vi.mocked(useHostModelOptions).mockReturnValue({
+      data: [
+        {
+          id: "gpt-6-luna",
+          model: "gpt-6-luna",
+          displayName: "GPT-6-Luna",
+          accessLane: "omniroute",
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium" }, { reasoningEffort: "max" }],
+        },
+      ],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useHostModelOptions>);
+    setAgents([agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" })]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max"),
+    );
+  });
+
   it("opens the model list in one click from the model chip, grouped by lane", async () => {
     // Host catalog rows as the per-lane probe stamps them: lane metadata on
     // the row, provider family in groupLabel, no display-name suffix needed.

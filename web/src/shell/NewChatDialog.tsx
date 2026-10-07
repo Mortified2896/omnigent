@@ -4245,16 +4245,18 @@ export function NewChatLandingScreen() {
             filteredDefault?.id ??
             ""));
       setPickedModel(seededCodexModel);
-      setPickedCodexAccessLane(
+      // Use the same resolved lane for both model and effort. A remembered
+      // connection can disappear between candidates/hosts while the model remains.
+      const seededCodexAccessLane =
         selectedNativeHarness === "codex-native" &&
-          seededCodexModel &&
-          stored.accessLane &&
-          codexModelOptions.some(
-            (row) => row.id === seededCodexModel && row.accessLane === stored.accessLane,
-          )
+        seededCodexModel &&
+        stored.accessLane &&
+        codexModelOptions.some(
+          (row) => row.id === seededCodexModel && row.accessLane === stored.accessLane,
+        )
           ? stored.accessLane
-          : (filteredDefault?.accessLane ?? null),
-      );
+          : (filteredDefault?.accessLane ?? null);
+      setPickedCodexAccessLane(seededCodexAccessLane);
       // Reconcile the remembered Codex effort against the seeded model's
       // ladder (the catalog default's when no model is pinned): a remembered
       // level the ladder still offers is kept, anything else resolves to the
@@ -4264,8 +4266,8 @@ export function NewChatLandingScreen() {
       setPickedEffort(
         !storedRoutingOn && selectedNativeHarness === "codex-native"
           ? reconcileCodexEffortForModel(
-              stored.accessLane
-                ? codexModelOptions.filter((row) => row.accessLane === stored.accessLane)
+              seededCodexAccessLane
+                ? codexModelOptions.filter((row) => row.accessLane === seededCodexAccessLane)
                 : codexModelOptions,
               seededCodexModel || (codexModelOptions.find((m) => m.isDefault)?.id ?? null),
               stored.effort || "low",
@@ -7008,6 +7010,7 @@ export function NewChatLandingScreen() {
                         />
                       )}
                     <ComposerMicButton
+                      reserveSpace
                       className="size-8 md:size-7"
                       enableHotkey
                       disabled={creating}

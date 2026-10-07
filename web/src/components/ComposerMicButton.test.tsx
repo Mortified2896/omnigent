@@ -145,6 +145,17 @@ describe("ComposerMicButton", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("reserves the requested slot when dictation is unavailable", () => {
+    vi.stubGlobal("SpeechRecognition", undefined);
+    vi.stubGlobal("webkitSpeechRecognition", undefined);
+    const { container } = render(
+      <ComposerMicButton reserveSpace className="size-8 md:size-7" onTranscript={vi.fn()} />,
+    );
+    expect(container.firstChild).toHaveAttribute("aria-hidden", "true");
+    expect(container.firstChild).toHaveClass("size-8", "md:size-7", "shrink-0");
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("renders an idle, un-pressed dictation button when supported", () => {
     render(<ComposerMicButton onTranscript={vi.fn()} />);
     const button = screen.getByRole("button", { name: "Voice dictation" });

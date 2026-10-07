@@ -4357,6 +4357,7 @@ function ComposerImpl(
                 />
               )}
               <ComposerMicButton
+                reserveSpace
                 className="size-8 md:size-7"
                 enableHotkey
                 disabled={disabled || isReadOnly || hasPendingElicitation || composerLockedByBtw}

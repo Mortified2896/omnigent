@@ -70,6 +70,8 @@ const BAR_BASELINE = 0.2;
 export interface ComposerMicButtonProps {
   onTranscript: (text: string) => void;
   className?: string;
+  /** Keep paired composer rows aligned when dictation is unavailable. */
+  reserveSpace?: boolean;
   /**
    * Streaming partial transcripts (server dictation only): called with the
    * revisable in-progress utterance as it forms, and with "" when the take
@@ -100,6 +102,7 @@ const isPermissionError = (error: unknown): boolean =>
 export const ComposerMicButton = ({
   onTranscript,
   className,
+  reserveSpace = false,
   onInterim,
   disabled,
   lang = getDefaultDictationLang(),
@@ -510,7 +513,8 @@ export const ComposerMicButton = ({
     return () => window.removeEventListener("keydown", handler, true);
   }, [isListening, toggle]);
 
-  if (!Ctor && !serverAvailable) return null;
+  if (!Ctor && !serverAvailable)
+    return reserveSpace ? <span aria-hidden="true" className={cn("shrink-0", className)} /> : null;
 
   // Stable accessible name with aria-pressed signals toggle state to
   // screen readers. Error text takes over the tooltip when set.
