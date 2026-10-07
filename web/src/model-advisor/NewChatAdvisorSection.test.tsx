@@ -900,3 +900,43 @@ it("starts a visible elapsed timer immediately while the Advisor request is pend
   );
   clock.mockRestore();
 });
+
+it("keeps the configured Advisor reasoning visible and disabled while off", async () => {
+  mountSection({ enabledOverride: false });
+  const model = await screen.findByTestId("model-advisor-advisor-choice");
+  const effort = screen.getByTestId("model-advisor-advisor-effort");
+  expect(model).toHaveTextContent("GLM-5.3");
+  expect(model).toBeDisabled();
+  expect(effort).toHaveTextContent("High");
+  expect(effort).toBeDisabled();
+});
+
+it("shows Luna Max even before a fresh Advisor is enabled", async () => {
+  prefsDto = {
+    object: "model_advisor.preferences",
+    version: 0,
+    etag: null,
+    state: "unsaved",
+    preferences: null,
+  };
+  catalog.logical_options = [
+    LOGICAL_A,
+    LOGICAL_B,
+    {
+      ...LOGICAL_A,
+      choice_id: "luna-max",
+      model_id: "gpt-6-luna",
+      display_name: "GPT-6 Luna",
+      model_ids: ["gpt-6-luna"],
+      reasoning_effort: "max",
+    },
+  ];
+  mountSection();
+  await waitFor(() =>
+    expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("GPT-6 Luna"),
+  );
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toHaveTextContent("Max");
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toBeDisabled();
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
+  expect(screen.getByTestId("model-advisor-advisor-effort")).toBeEnabled();
+});

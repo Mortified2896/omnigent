@@ -373,7 +373,7 @@ export const ComposerActionGroup = forwardRef<
       className={cn(
         "flex min-w-0 items-center gap-1",
         side === "left"
-          ? "flex-none overflow-visible"
+          ? "flex-none overflow-visible group-data-[labels=collapsed]/composer-actions:gap-0.5 group-data-[labels=collapsed]/composer-actions:[&_button]:px-1 group-data-[labels=collapsed]/composer-actions:[&_button]:min-w-7 group-data-[labels=collapsed]/composer-actions:[&_.lucide-chevron-down]:hidden"
           : "ml-auto max-w-full shrink-0 flex-wrap justify-end",
         className,
       )}

@@ -491,7 +491,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   // pass through unchanged.
   useEffect(() => {
     const draft = editor.draft;
-    if (!draft?.enabled || catalogError !== null || options.length === 0) return;
+    if (!draft || catalogError !== null || options.length === 0) return;
     const seeded = seedFreshAdvisorDraft(draft, options, resolveHumanChoice());
     if (seeded === null || seeded === draft || samePreferences(seeded, draft)) return;
     handleChange(seeded);
@@ -975,7 +975,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           ariaLabel="Recommender model"
           testId="model-advisor-advisor-choice"
           searchTestId="model-advisor-advisor-choice-search"
-          disabled={disabled || round.busy}
+          disabled={disabled || round.busy || !editor.draft.enabled}
           onValueChange={(modelKey) => {
             const row = advisorRows.find((candidate) => candidate.key === modelKey);
             // Switching models reconciles the effort: keep the current one
@@ -994,7 +994,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             value: option.value,
             label: option.label,
           }))}
-          disabled={disabled || round.busy || !savedAdvisor}
+          disabled={disabled || round.busy || !savedAdvisor || !editor.draft.enabled}
           label="Recommender reasoning effort"
           testIdPrefix="model-advisor-advisor"
           testId="model-advisor-advisor-effort"
