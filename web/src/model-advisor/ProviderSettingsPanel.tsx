@@ -232,12 +232,17 @@ function ProviderCard({
       <div id={panelId} hidden={selected.collapsed}>
         <fieldset className="advisor-transport">
           <legend>Connection preference</legend>
-          {canUseOmniRoute ? (
+          {models.length > 0 ? (
             <label>
               <input
                 type="radio"
                 name={`${idPrefix}-${provider}-transport`}
-                checked={!onlyOmniRoute && selected.transport_preference === "omniroute_preferred"}
+                disabled={!canUseOmniRoute}
+                checked={
+                  canUseOmniRoute &&
+                  !onlyOmniRoute &&
+                  selected.transport_preference === "omniroute_preferred"
+                }
                 onChange={() => {
                   omniRouteOnly?.onChange(provider, false);
                   onChange(selectTransport(value, provider, "omniroute_preferred"));
@@ -246,11 +251,12 @@ function ProviderCard({
               OmniRoute preferred · Direct fallback
             </label>
           ) : null}
-          {canUseOmniRoute ? (
+          {models.length > 0 ? (
             <label>
               <input
                 type="radio"
                 name={`${idPrefix}-${provider}-transport`}
+                disabled={!canUseOmniRoute}
                 checked={onlyOmniRoute}
                 onChange={() => {
                   omniRouteOnly?.onChange(provider, true);
@@ -260,12 +266,14 @@ function ProviderCard({
               OmniRoute only
             </label>
           ) : null}
-          {canUseDirect ? (
+          {models.length > 0 ? (
             <label>
               <input
                 type="radio"
                 name={`${idPrefix}-${provider}-transport`}
+                disabled={!canUseDirect}
                 checked={
+                  canUseDirect &&
                   !onlyOmniRoute &&
                   (selected.transport_preference === "direct_only" || !canUseOmniRoute)
                 }
@@ -276,6 +284,12 @@ function ProviderCard({
               />
               Direct only
             </label>
+          ) : null}
+          {models.length > 0 && !canUseOmniRoute ? (
+            <p>OmniRoute is not currently qualified for this provider on this host.</p>
+          ) : null}
+          {models.length > 0 && !canUseDirect ? (
+            <p>Direct is not currently qualified for this provider on this host.</p>
           ) : null}
           {!canUseOmniRoute && !canUseDirect ? (
             <p role="status">No qualified connection is currently available.</p>

@@ -140,6 +140,9 @@
   min-height: 44px;
   font-size: 0.875rem;
 }
+.advisor-transport label:has(input:disabled) {
+  opacity: 0.5;
+}
 .advisor-transport input {
   flex-shrink: 0;
 }

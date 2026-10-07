@@ -86,3 +86,26 @@ describe("ProviderSettingsPanel per-choice approval preview", () => {
     expect(fallback).not.toBeChecked();
   });
 });
+
+it("shows disabled OmniRoute choices for a Codex host with only a direct connection", () => {
+  const value = emptyProviderPreferences();
+  render(
+    <ProviderSettingsPanel
+      idPrefix="direct-test"
+      value={{ ...value, enabled: true }}
+      options={options.map((option) => ({ ...option, access_lanes: ["codex-direct"] }))}
+      dirty={false}
+      onChange={() => {}}
+      onSave={() => {}}
+    />,
+  );
+  expect(
+    screen.getByRole("radio", { name: "OmniRoute preferred · Direct fallback" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("radio", { name: "OmniRoute only" })).toBeDisabled();
+  expect(screen.getByRole("radio", { name: "Direct only" })).toBeEnabled();
+  expect(screen.getByRole("radio", { name: "Direct only" })).toBeChecked();
+  expect(
+    screen.getByText("OmniRoute is not currently qualified for this provider on this host."),
+  ).toBeVisible();
+});
