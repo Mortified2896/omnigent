@@ -6,7 +6,7 @@ infrastructure. Covers the four canonical integration points:
 1. **Databricks Apps** as the managed runtime for the omnigent server
 2. **Mosaic AI Foundation Model APIs** as the LLM provider
 3. **Mosaic AI Gateway** as the governance and audit layer over LLM calls
-4. **MLflow Tracing in Unity Catalog** as the long-term trace store
+4. **OpenTelemetry** export to an operator-managed collector
 
 omnigent's fine standalone with any OTLP backend and any LLM
 provider. This guide's for the production deployment story where
@@ -16,7 +16,7 @@ governance, audit, cost tracking, and managed scale matter.
 > [Omnigent on Databricks](https://docs.databricks.com/aws/en/omnigent/)
 > (Beta) is a fully managed service: Databricks operates the omnigent
 > server for you, already wired to workspace identity, Foundation
-> Models, AI Gateway, and MLflow Tracing. You enable the **Omnigent**
+> Models and AI Gateway. You enable the **Omnigent**
 > preview in your workspace settings and follow the quickstart there.
 > No deploy tooling, no Lakebase bootstrap, no bundle to maintain. That
 > is the recommended path for most Databricks users.
@@ -40,10 +40,10 @@ When omnigent runs on Databricks with the four integration points
 wired:
 
 - **Single trace per agent turn.** Every span the agent emits lands
-  in MLflow Tracing in Unity Catalog with the standard OpenTelemetry
+  in the configured OTLP collector with the standard OpenTelemetry
   GenAI semantic-convention attributes (`gen_ai.operation.name`,
   `gen_ai.agent.name`, `gen_ai.provider.name`, `gen_ai.request.model`,
-  `tool.name`). Searchable, filterable, retained per UC governance.
+  `tool.name`). Storage and retention are configured by the operator.
 - **Per-key LLM cost and audit.** Every LLM call (whether to
   Mosaic AI Foundation Models, OpenAI, Anthropic, or a custom
   endpoint) flows through Mosaic AI Gateway. Per-key cost tracking,
@@ -70,13 +70,10 @@ wired:
 ## Architecture
 
 The integration is layered. The omnigent server runs on Databricks
-Apps. It exports OpenTelemetry traces (via the work landed in [PR
-#1050](https://github.com/omnigent-ai/omnigent/pull/1050)) to MLflow
-Tracing's OTLP receiver. Agent runs make LLM calls through Mosaic AI
+Apps. It can export OpenTelemetry traces to an operator-managed OTLP collector. Agent runs make LLM calls through Mosaic AI
 Gateway, which proxies to either Mosaic AI Foundation Models or an
 external provider (OpenAI, Anthropic) configured as an External Model.
 
-![omnigent on Databricks architecture](images/databricks/architecture.png)
 
 The boundary stays sharp. omnigent itself remains a standalone Apache
 2.0 Python package. Each integration point is an env var or a config
@@ -90,7 +87,6 @@ file, not a fork.
    - Databricks Apps
    - Unity Catalog
    - Mosaic AI Model Serving
-   - MLflow Tracing in Unity Catalog (Public Preview as of 2026 H1)
 2. **The [Databricks CLI](https://docs.databricks.com/aws/en/dev-tools/cli/install)**
    installed and authenticated against your workspace. Either a CLI
    profile (`DATABRICKS_CONFIG_PROFILE=<profile>`) or env-based auth
@@ -132,11 +128,13 @@ export DATABRICKS_TOKEN=<personal-access-token>
 export OPENAI_BASE_URL=$DATABRICKS_HOST/serving-endpoints
 export OPENAI_API_KEY=$DATABRICKS_TOKEN
 
-# Point omnigent's OTel exporter at the MLflow OTLP receiver in UC
-export MLFLOW_TRACKING_URI=databricks
+# Opt in to tracing through an independently configured local OTLP collector
+export OMNIGENT_TELEMETRY_ENABLED=true
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_ENDPOINT=$DATABRICKS_HOST
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $DATABRICKS_TOKEN"
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
+export OTEL_METRICS_EXPORTER=none
+export OTEL_LOGS_EXPORTER=none
+export OMNIGENT_OTEL_CAPTURE_CONTENT=false
 
 # Sanity check the model endpoint works
 python -c "
@@ -163,8 +161,8 @@ HELLO
 input=15 output=2
 ```
 
-Open the MLflow Traces UI in your workspace and you should see one
-trace per agent turn with the GenAI semconv attributes set.
+Inspect the configured collector archive for a trace from the marked test turn.
+A successful model call alone does not verify trace collection.
 
 The rest of this guide walks each piece in depth.
 
@@ -478,126 +476,11 @@ subscriptions but is out of band for compliance.
 
 ---
 
-## 4. MLflow Tracing in Unity Catalog
+## 4. OpenTelemetry tracing
 
-![Trace flow into MLflow Tracing in UC](images/databricks/trace-flow.png)
-
-### Context
-
-omnigent emits OpenTelemetry spans for every agent turn, LLM call, and
-tool invocation. The spans follow the OpenTelemetry GenAI semantic
-conventions (`gen_ai.operation.name`, `gen_ai.agent.name`,
-`gen_ai.provider.name`, `gen_ai.request.model`, `tool.name`) shipped
-in [PR #1050](https://github.com/omnigent-ai/omnigent/pull/1050). Any
-OTLP-compatible backend (Jaeger, Tempo, Datadog) can receive them.
-
-MLflow Tracing exposes an OTLP/HTTP receiver at the MLflow tracking
-server. On Databricks, that receiver writes traces into a Unity
-Catalog table, governed per workspace UC policies. Operators get a
-search UI, retention policies, lineage, and the standard UC RBAC for
-free.
-
-### Setup
-
-Three env vars on the omnigent server:
-
-```bash
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_ENDPOINT=$DATABRICKS_HOST
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $DATABRICKS_TOKEN"
-```
-
-omnigent's `telemetry.init()` auto-detects the OTLP endpoint and wires
-up the MLflow OTel exporter. No code changes in the agent.
-
-### What the trace looks like
-
-For a single agent turn that calls one tool and one LLM:
-
-```
-[agent:debby]                         (root span)
-  gen_ai.operation.name = invoke_agent
-  gen_ai.agent.name     = debby
-  gen_ai.provider.name  = databricks
-  gen_ai.request.model  = databricks-claude-sonnet-4
-  session.id            = conv_e4f5a6b7c8d9e0f1
-  task.id               = resp_d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3
-
-[llm_call]                            (child span)
-  gen_ai.operation.name              = chat
-  gen_ai.provider.name               = databricks
-  gen_ai.request.model               = databricks-claude-sonnet-4
-  gen_ai.usage.input_tokens          = 1523
-  gen_ai.usage.output_tokens         = 847
-
-[tool:calculator]                     (child span)
-  gen_ai.operation.name = execute_tool
-  tool.name             = calculator
-  tool.call_id          = call_abc123
-```
-
-The trace ID is the hex suffix of the response ID, so you can search
-for a specific request in MLflow by stripping the `resp_` prefix.
-
-### Verified end-to-end
-
-Emitted a synthetic trace from a local Python script (using the same
-`mlflow.start_span` API omnigent's `TracingContext` wraps) against the
-e2-dogfood Databricks workspace's MLflow OTLP receiver. Verified the
-trace landed in UC and the spans carry the expected attributes:
-
-```
-Tracking URI: databricks
-Experiment:   id=3163592711242134 path=/Users/.../omnigent-databricks-docs-verification
-Trace ID:     tr-f13c03f61e44a0442c8865ab2c79e5a4
-Total traces found: 1
-  trace_id: tr-f13c03f61e44a0442c8865ab2c79e5a4
-  spans: 3
-    'agent:debby' attrs: ['gen_ai.agent.name', 'gen_ai.operation.name',
-                          'gen_ai.provider.name', 'gen_ai.request.model']
-    'llm_call' attrs: ['gen_ai.operation.name', 'gen_ai.provider.name',
-                       'gen_ai.request.model']
-    'tool:calculator' attrs: ['gen_ai.operation.name', 'tool.name']
-```
-
-The trace is queryable via `mlflow.search_traces()` and shows up in
-the workspace MLflow Traces UI at
-`/ml/experiments/<experiment_id>/traces/<trace_id>` per UC RBAC.
-
-Workspace MLflow Traces UI (e2-dogfood) showing the verification trace
-in the experiment table:
-
-![MLflow Traces list](images/databricks/mlflow-trace-list.png)
-
-Trace detail view with the `llm_call` and `tool:calculator` child spans
-expanded:
-
-![MLflow Trace detail](images/databricks/mlflow-trace-detail.png)
-
-### Content capture and privacy
-
-omnigent does not capture message bodies into traces by default. Set:
-
-```bash
-export OMNIGENT_OTEL_CAPTURE_CONTENT=true
-```
-
-to include user messages and tool arguments in `mlflow.spanInputs` /
-`mlflow.spanOutputs`. Leave unset for production unless you have
-explicit consent and PII handling in place.
-
-### What you get on Databricks vs DIY OTel collector
-
-| Capability | DIY OTLP backend | MLflow Tracing in UC |
-|---|---|---|
-| Persistent storage | You provision | Managed, UC-governed |
-| Search UI | You install Jaeger / Tempo / Grafana | MLflow Traces UI in workspace |
-| Retention policy | You configure | Per UC table policy |
-| RBAC | Backend-specific | UC, same as your tables |
-| Cross-trace correlation | Backend-specific | Built into MLflow eval |
-| Cost attribution | Build separately | Aligns with workspace cost reporting |
-
----
+Tracing is opt-in and uses the standard OTLP exporter. Configure a local or
+operator-managed collector using the [direct OpenTelemetry guide](../deploy/docs/opentelemetry-tracing.md).
+The model-serving workspace URL is not an OTLP collector endpoint.
 
 ## Reference: env var summary
 
@@ -607,10 +490,11 @@ explicit consent and PII handling in place.
 | `DATABRICKS_TOKEN` | Personal access token or service principal token | Apps env (Workspace Secret) or local shell |
 | `OPENAI_BASE_URL` | LLM provider endpoint, points at Foundation Models or AI Gateway | Apps env or harness spawn-env |
 | `OPENAI_API_KEY` | Auth for the above endpoint | Apps env or harness spawn-env |
-| `MLFLOW_TRACKING_URI` | Set to `databricks` for workspace-hosted MLflow | Apps env |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | Set to `http/protobuf` for the MLflow OTLP receiver | Apps env |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Workspace URL (same as `DATABRICKS_HOST`) | Apps env |
-| `OTEL_EXPORTER_OTLP_HEADERS` | `Authorization=Bearer $DATABRICKS_TOKEN` | Apps env |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Set to `http/protobuf` for an OTLP HTTP collector | Apps env |
+| `OMNIGENT_TELEMETRY_ENABLED` | `true` to enable instrumentation | Server and host env |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Actual collector trace URL, including `/v1/traces` | Server and host env |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Collector-specific authentication, only when required | Server and host env |
+| `OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER` | `none` for a traces-only pipeline | Server and host env |
 | `OMNIGENT_OTEL_CAPTURE_CONTENT` | `true` to include message bodies in traces | Apps env (default off) |
 
 ---
@@ -652,14 +536,11 @@ explicitly:
 client = OpenAI(base_url=os.environ['OPENAI_BASE_URL'], api_key=os.environ['DATABRICKS_TOKEN'])
 ```
 
-### Traces not appearing in MLflow UI
+### Traces not reaching the collector
 
-1. Confirm `OTEL_EXPORTER_OTLP_ENDPOINT` matches your workspace URL
-   exactly (no trailing slash).
-2. Confirm `OTEL_EXPORTER_OTLP_HEADERS` includes the Bearer token.
-3. Check `mlflow tracking get-uri` returns `databricks`.
-4. Run a small synthetic trace and watch for OTLP export errors in
-   the omnigent server logs.
+Confirm the telemetry opt-in, protocol, and trace-specific endpoint in every
+server, host, runner, and harness process. Send a marked test turn and inspect
+the collector archive for its session ID; see the direct tracing guide.
 
 ### Apps deployment fails with "permission denied for table agents"
 
@@ -679,7 +560,7 @@ the endpoint config via `databricks serving-endpoints update`.
 
 This guide was authored by [Debu Sinha](https://github.com/debu-sinha)
 (Lead Applied AI/ML Engineer, Databricks Solutions Architecture).
-The MLflow Tracing integration section depends on the OTel
+The OpenTelemetry integration originated in the OTel
 observability series shipped in PRs [#1050](https://github.com/omnigent-ai/omnigent/pull/1050),
 [#1068](https://github.com/omnigent-ai/omnigent/pull/1068),
 [#1070](https://github.com/omnigent-ai/omnigent/pull/1070),
@@ -702,11 +583,6 @@ Verified end-to-end against the e2-dogfood Databricks workspace
   resolved to `global.anthropic.claude-sonnet-4-20250514-v1:0`.
   Endpoint and the supporting workspace secret were deleted after
   verification.
-- MLflow OTLP receiver pattern via a real synthetic-trace round-trip:
-  experiment id `3163592711242134`, trace id
-  `tr-f13c03f61e44a0442c8865ab2c79e5a4`, 3 spans with the expected
-  `gen_ai.*` and `tool.*` attributes, fetched back via
-  `mlflow.search_traces()`
 
 The Apps deployment section links to `deploy/databricks/README.md`
 which is the canonical, already-merged recipe.

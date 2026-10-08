@@ -371,7 +371,7 @@ Databricks profile aliasing reuses same-host profiles to avoid redundant OAuth (
 **Caching:**
 | What | Where | TTL | Invalidation |
 |---|---|---|---|
-| MLflow model catalog (per provider) | `onboarding/providers/__init__.py` | **1 h** | TTL expiry |
+| Provider model catalog (per provider) | `onboarding/providers/__init__.py` | **1 h** | TTL expiry |
 | Provider model listing | `model_catalog.py:61` | **5 min** | TTL expiry |
 | Provider resolution (auth/base-url/profile) | — | **none** | resolved fresh per call |
 | Agent bundle (spec + extracted dir) | `runtime/agent_cache.py` | **none** | explicit evict on delete; warm-swap on update |

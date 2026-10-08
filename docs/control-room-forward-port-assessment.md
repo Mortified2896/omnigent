@@ -36,7 +36,7 @@ Stable v0.13.0 is the trial base to avoid combining the migration with the newer
 | Standing O2 assumption in runtime prompt | Drop obsolete behavior | Single-primary releases require external control. Explicitly prohibit reviving retired O2 for a legacy runbook. |
 | Pi direct subscription + gateway selection | Custom still required, adapted | Preserve explicit direct lane and qualified model selection; adopt upstream launch result and effort metadata. |
 | O3 landing controller / dedicated Mac startup | Adaptation required | Retain the O3 landing controller; combine upstream Electron lifecycle, updater, partition hardening and startup logging with canonical local recovery. 413 Electron tests pass; visual acceptance remains required. |
-| MLflow / OTel custom metadata | Retain pending evidence | Upstream tracing improvements do not prove OmniRoute attempt identity. Live cross-system correlation remains unproven. |
+| OTel custom metadata | Retain pending evidence | Upstream tracing improvements do not prove OmniRoute attempt identity. Live cross-system correlation remains unproven. |
 | Legacy peer deployer | Preserve inactive source | No peer deployment mechanism selected; no O2 activation. |
 
 ## Source validation evidence so far

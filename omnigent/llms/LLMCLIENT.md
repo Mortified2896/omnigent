@@ -4,7 +4,8 @@
 
 The `llms/` module is a client-side multi-provider LLM SDK that replaces litellm. It presents the **OpenAI Responses API** as its public interface and routes requests to any supported LLM provider. Internally, it uses **Chat Completions as a lingua franca** — each provider adapter translates between Chat Completions format and the provider's native API.
 
-Translation logic is ported from MLflow AI Gateway adapters (master + TomeHirata's provider PRs #21990–#21999).
+Provider adapters translate each vendor protocol; implementation attribution is
+retained in the source files.
 
 ## Public API
 
@@ -221,7 +222,7 @@ HTTP via sync `httpx` (already a project dependency).
 
 ### Anthropic — `adapters/anthropic.py`
 
-Ported from `mlflow/gateway/providers/anthropic.py`. Key translations:
+Provider-specific translations. Key translations:
 
 **Request (Chat Completions -> Anthropic Messages API):**
 - System messages extracted -> top-level `system` field
@@ -244,7 +245,7 @@ Endpoint: `https://api.anthropic.com/v1/messages`
 
 ### Gemini — `adapters/gemini.py`
 
-Ported from `mlflow/gateway/providers/gemini.py`. Key translations:
+Provider-specific translations. Key translations:
 
 **Request (Chat Completions -> Gemini):**
 - Messages -> `contents` with role remapping (`assistant` -> `model`)
@@ -265,7 +266,7 @@ Streaming: `:streamGenerateContent?alt=sse`
 
 ### Bedrock — `adapters/bedrock.py`
 
-Ported from `mlflow/gateway/providers/bedrock.py` (Converse API).
+Bedrock Converse API translations.
 
 **Request (Chat Completions -> Bedrock Converse):**
 - System messages -> `system` prompts

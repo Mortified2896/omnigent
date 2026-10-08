@@ -16,7 +16,7 @@ unreliable; we want to incorporate signal from **real usage** by tracing every R
 message, and cross-process call.
 
 Today there is a partial telemetry layer (`omnigent/runtime/telemetry.py`) built on
-MLflow Tracing + OpenTelemetry, but:
+OpenTelemetry, but:
 
 - Trace context is **never propagated over the wire**. Instead each layer on the
   agent-turn path independently derives the same W3C trace ID from a shared
@@ -96,7 +96,7 @@ OTLP-compatible vendor. Because we standardize on OTLP, **no application code ch
 when swapping backends — only `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 > Backends considered and why not, for the local case: Grafana Tempo + Grafana
-> (more moving parts than needed for a laptop), Arize Phoenix / Langfuse / MLflow
+> (more moving parts than needed for a laptop), Arize Phoenix / Langfuse
 > (LLM-eval-oriented, not general distributed-systems tracing), SaaS (Datadog/Honeycomb;
 > not local). Jaeger all-in-one is the simplest thing that gives a real waterfall UI.
 
@@ -254,16 +254,15 @@ Server, Policy Server, Server database.** Choke points below are from the codeba
 ## 7. SDK / provider setup
 
 Build on the existing `omnigent/runtime/telemetry.py` `init()`; it already establishes a
-**unified global `TracerProvider`** shared between MLflow and raw OTel
-(`MLFLOW_USE_DEFAULT_TRACER_PROVIDER=false`) and flips OTLP export on when
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set. Changes:
+**global `TracerProvider`** for OpenTelemetry. Instrumentation is opt-in through
+`OMNIGENT_TELEMETRY_ENABLED`; configure the OTLP trace endpoint separately. Changes:
 
 1. **Wire the missing instrumentors** in `init()` (idempotent, guarded):
    - `HTTPXClientInstrumentor().instrument()`
    - `SQLAlchemyInstrumentor().instrument(engine=...)` at each engine build site.
 2. **Default `FastAPIInstrumentor` on** for both the server and runner apps (currently
-   gated behind `OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION`; the remote-parent span patch in
-   `telemetry.py:135` already handles MLflow's raw-span edge case).
+   gated behind `OMNIGENT_OTEL_FASTAPI_INSTRUMENTATION`). Verify remote-parent
+   context propagation before changing that default.
 3. **`service.name` per component** via `OTEL_SERVICE_NAME` (or a resource attribute set
    in `init()`) so Jaeger shows distinct services: `omni-host`, `omni-server`,
    `omni-runner`, `omni-harness`, `omni-tui`. This is what makes the
@@ -428,9 +427,8 @@ replay/diff tooling for transcript reconstruction, fork, and resume.
 
 ## 12. Risks & open questions
 
-- **MLflow raw-span handling.** The `_patch_mlflow_otel_remote_parent_spans` patch
-  (`telemetry.py:135`) is required for auto-instrumented server spans with remote
-  parents. Phase 1 must verify it holds when FastAPI instrumentation is on by default.
+- **Remote-parent spans.** Verify parent context propagation and trace completion
+  before enabling additional automatic instrumentation.
 - **Runner app instrumentation.** Confirm the runner's ASGI app is FastAPI-instrumented,
   not only the server's (`app.py:1254`); the verbatim-header propagation across the
   tunnel depends on it.

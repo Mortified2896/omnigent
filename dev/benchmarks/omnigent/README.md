@@ -1,8 +1,7 @@
 # Omnigent performance benchmark
 
 Baseline, repeatable latency/throughput numbers for key Omnigent user
-journeys, so we can track them over time and catch regressions. Modeled on
-MLflow's `dev/benchmarks/gateway/` workflow.
+journeys, so we can track them over time and catch regressions.
 
 The harness boots a real `omnigent server`, drives the selected journeys under
 load, prints latency/throughput tables, and writes a versioned JSON report.
@@ -273,7 +272,7 @@ run.py --output bench.json   →   GitHub Actions artifact   →   Databricks no
 ```
 
 The repo's contract is the **JSON schema** below. A workspace notebook (owned
-outside this repo, modeled on MLflow's gateway ETL) pulls the CI artifacts via
+outside this repo) pulls the CI artifacts via
 the GitHub API, flattens each run's `summary` + `runs` + metadata, and
 `saveAsTable`s into a Delta table the dashboard reads. `sample_output.json` is a
 committed, faithful example so the notebook can be written against a real
@@ -324,7 +323,7 @@ The `http_requests*` / `route_requests` / `network_routes` fields are the
 server-side request count and its per-endpoint breakdown (see *Network* above);
 `network_delay_ms` records the simulated client↔server latency the run used.
 
-The per-journey `summary` + `runs` shape mirrors MLflow's gateway benchmark, so
+The per-journey `summary` + `runs` shape supports reusable dashboards, so
 the same ETL flatten works — keyed by `journey` and `backend`. Bump
 `SCHEMA_VERSION` on any breaking shape change so the notebook can branch on it.
 

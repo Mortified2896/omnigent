@@ -96,7 +96,7 @@ smart routing and remaining policy decisions without coupling them to catalog I/
 
 ## Runtime Default Migration
 
-The first runtime slice adapts the MLflow provider catalog into normalized
+The first runtime slice adapts the provider catalog into normalized
 resolver candidates and moves unresolved executor/native defaults behind that
 boundary:
 
@@ -130,7 +130,7 @@ unknown instead of inferring protocol support from model names.
 
 ## Context Window Migration
 
-Context sizing and pricing now share the onboarding/model-resolver MLflow
+Context sizing and pricing now share the onboarding/model-resolver provider
 catalog cache. Stable family patterns locate a bounded provider catalog, while
 provider-qualified and vendor-namespaced ids route directly to their catalog
 source. Exact catalog metadata wins; family-prefix matches are accepted only
@@ -152,7 +152,7 @@ Responses rather than a release-specific completions allowlist.
 ## Pi Picker Migration
 
 Inner Pi sessions populate their model registry from live Unity Catalog model
-services instead of a release-specific Databricks list. MLflow metadata adds
+services instead of a release-specific Databricks list. Provider metadata adds
 context and output limits when available. If discovery is unavailable, the
 resolved run model is still registered so launch does not depend on picker
 enumeration; no stale alternatives are offered.
@@ -202,7 +202,7 @@ runtime discovery fails with configuration guidance when no catalog is available
 
 ## Persistent Catalog Resilience
 
-The shared MLflow catalog boundary persists one validated last-known-good file
+The shared provider catalog boundary persists one validated last-known-good file
 per provider in the platform user-cache directory. A cache is fresh for one
 hour; if live retrieval fails, a validated entry remains usable for up to seven
 days and logs its source and age. Atomic replacement prevents concurrent

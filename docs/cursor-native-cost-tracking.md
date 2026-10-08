@@ -107,7 +107,7 @@ server splits the cache-read portion out and prices it at the cache-read rate.
 `external_session_usage` prices tokens server-side via
 `fetch_model_pricing(model)`. The `model` from the hook is **cursor's id**
 (e.g. `claude-4-sonnet`, `composer-2.5`), which often does **not** match the
-MLflow catalog:
+provider catalog:
 
 | cursor model id | catalog resolves? | result |
 |---|---|---|

@@ -108,16 +108,16 @@ resolution, model-family filtering, and live OpenAI-compatible `/v1/models`
 discovery wherever possible. Add only the adapter semantics Control Room needs
 for pre-launch Pi support, pinned/default handling, and fail-loud behavior.
 
-### 4. MLflow-compatible, privacy-preserving OpenTelemetry
+### 4. Privacy-preserving OpenTelemetry
 
-Keep OpenTelemetry as the integration surface. MLflow is a receiver, not an
-Omnigent runtime dependency.
+Keep OpenTelemetry and OTLP as the integration surface. Use a collector with
+a file exporter for local trace storage.
 
 Required behavior:
 
 - support trace-specific `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, falling back to
   `OTEL_EXPORTER_OTLP_ENDPOINT`;
-- support OTLP HTTP/protobuf for MLflow;
+- support OTLP HTTP/protobuf;
 - traces may be enabled without implicitly enabling metrics or logs;
 - metrics default to `none` unless explicitly enabled;
 - logs default to `none` unless explicitly enabled;
@@ -127,7 +127,7 @@ Required behavior:
   other user/secret-bearing content must not be exported;
 - metadata-only errors retain a useful `error.type` and ERROR status;
 - low-noise scope filtering must not leave exported traces permanently
-  rootless/IN_PROGRESS in MLflow;
+  rootless or incomplete in the collector archive;
 - adapt to current upstream tracing topology rather than copying old private
   `_parent` manipulation without re-validation.
 
@@ -161,7 +161,7 @@ runtime/deployment migration.
 1. Establish this upstream-based branch with no production deployment.
 2. Port/adapt duplicate live-host protection with focused tests.
 3. Restore the inline pre-launch picker on top of upstream model discovery.
-4. Apply the minimal MLflow/privacy telemetry adaptation.
+4. Apply the minimal OpenTelemetry privacy adaptation.
 5. Rebuild the O1/O2 exact-SHA deployment/promotion tooling for the new paths and
    source-lineage model.
 6. Run unit/integration/UI tests before any live deployment.
@@ -187,8 +187,8 @@ A candidate must not be promoted unless all applicable gates pass:
 - explicit model override reaches the launched session; Default produces no
   override;
 - catalog/provider failures are visible and do not silently fall back;
-- MLflow receives useful completed traces when tracing is enabled;
-- metrics/logs are not implicitly exported to MLflow;
+- the collector receives useful completed traces when tracing is enabled;
+- metrics/logs are not implicitly exported;
 - metadata-only mode contains no prompt, message, tool payload, credential,
   exception message, or stack-trace leakage;
 - an agent can perform a disposable Git edit, commit and push using the intended

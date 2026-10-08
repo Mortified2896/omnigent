@@ -36,7 +36,7 @@ Tracks pending work and known limitations for the Qwen Code harness
   numerator (per-turn context consumed) comes from `_meta.usage.totalTokens`
   via cost/token tracking above; the denominator (the model's context-window
   *limit*) comes from a curated Qwen lookup in `get_model_context_window`
-  (`_QWEN_CONTEXT_WINDOWS`) — qwen models are absent from litellm and the MLflow
+  (`_QWEN_CONTEXT_WINDOWS`) — qwen models are absent from litellm and the provider
   catalog, so without it they fell back to the wrong 128K default
   (qwen3-coder-plus is 1M). A spec's `executor.context_window` still overrides;
   unrecognized qwen models keep the 128K fallback.

@@ -189,7 +189,7 @@ tool MUST run a strict preflight that verifies:
 - supervisor service unit is known to systemd
 - supervisor host unit is known to systemd
 - supervisor is healthy (server active, host active, `/health` OK)
-- `mlflow-storage-guard.timer` is active and its critical latch is absent
+- the current OTEL archive storage guard passes its documented health checks
 - the immutable acceptance record and embedded digest are valid
 - for peer-copy, supervisor runs the exact accepted SHA/version and has it at
   the supervisor release root
