@@ -6833,16 +6833,11 @@ def _fake_provider_for(*configured: str):
     return _fn
 
 
-def test_pick_first_run_prefers_claude_with_polly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Claude configured → claude-sdk + the bundled polly agent.
-
-    Claude wins the priority order and is the only family that gets a default
-    *example* agent (polly). A regression that dropped polly or picked the
-    wrong harness fails here.
-    """
+def test_pick_first_run_claude_only_uses_polly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude remains usable when Codex is not configured."""
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.default_provider_for_harness",
-        _fake_provider_for("claude-sdk", "codex"),  # both configured → Claude wins
+        _fake_provider_for("claude-sdk"),
     )
     plan = _pick_first_run_harness()
     assert plan is not None
@@ -6851,10 +6846,10 @@ def test_pick_first_run_prefers_claude_with_polly(monkeypatch: pytest.MonkeyPatc
 
 
 def test_pick_first_run_harness_codex_then_pi_no_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No Claude → Codex (then Pi) with NO default example agent (bare REPL)."""
+    """Codex wins over Claude and Pi without requiring an orchestrator."""
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.default_provider_for_harness",
-        _fake_provider_for("codex"),
+        _fake_provider_for("codex", "claude-sdk", "pi"),
     )
     plan = _pick_first_run_harness()
     assert plan is not None and plan.harness == "codex" and plan.agent is None
@@ -6886,13 +6881,7 @@ def test_pick_first_run_harness_none_when_unconfigured(monkeypatch: pytest.Monke
 def test_resolve_first_run_plan_does_not_persist_derived_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The derived first-run pick is returned but NOT persisted as a default.
-
-    Persisting it would pin a Codex-only user to Codex even after they add
-    Claude. Keeping it ephemeral lets the next bare ``run`` re-derive from the
-    current creds (and promote them to polly). Asserts the resolved plan is
-    Claude→polly yet no global ``harness`` / ``default_agent`` was written.
-    """
+    """Derived defaults do not overwrite an explicit global configuration."""
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr("omnigent.cli_config._promote_global_auth_to_provider", Mock())
     monkeypatch.setattr("omnigent.cli_config._adopt_detected_providers", Mock(return_value=[]))
@@ -6917,34 +6906,25 @@ def test_resolve_first_run_plan_does_not_persist_derived_default(
 def test_resolve_first_run_plan_re_derives_when_creds_change(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Adding Claude promotes a Codex-only user to polly on the next bare run.
-
-    Because the pick is never persisted, the second resolution reflects the
-    *current* creds: Codex-only → a bare codex REPL; after Claude is added →
-    claude-sdk + polly (our primary). A regression that re-persisted the first
-    pick would pin the user to codex and fail the second half.
-    """
+    """Adding Codex changes the next implicit run to the standard harness."""
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr("omnigent.cli_config._promote_global_auth_to_provider", Mock())
     monkeypatch.setattr("omnigent.cli_config._adopt_detected_providers", Mock(return_value=[]))
 
-    # 1) Only Codex configured → codex REPL, no example agent.
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.default_provider_for_harness",
-        _fake_provider_for("codex"),
+        _fake_provider_for("claude-sdk"),
     )
     first = _resolve_first_run_plan()
-    assert first is not None and first.harness == "codex" and first.agent is None
+    assert first is not None and first.harness == "claude-sdk"
+    assert first.agent is not None and first.agent.endswith("polly")
 
-    # 2) Claude added (now both configured) → promoted to claude-sdk + polly,
-    #    NOT pinned to the earlier codex pick.
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.default_provider_for_harness",
         _fake_provider_for("claude-sdk", "codex"),
     )
     second = _resolve_first_run_plan()
-    assert second is not None and second.harness == "claude-sdk"
-    assert second.agent is not None and second.agent.endswith("polly")
+    assert second is not None and second.harness == "codex" and second.agent is None
 
 
 def test_resolve_first_run_plan_drops_into_configure_when_empty(

@@ -19,6 +19,20 @@ function agent(overrides: Partial<AvailableAgent> & Pick<AvailableAgent, "name">
 }
 
 describe("selectableSessionAgents", () => {
+  it("defaults to Codex regardless of the server catalog order", () => {
+    const claude = agent({ name: "claude-native-ui", harness: "claude-native" });
+    const codex = agent({ name: "codex-native-ui", harness: "codex-native" });
+    for (const catalog of [
+      [claude, codex],
+      [codex, claude],
+    ]) {
+      expect(selectableSessionAgents(catalog).map((row) => row.name)).toEqual([
+        "codex-native-ui",
+        "claude-native-ui",
+      ]);
+    }
+  });
+
   it("drops the hidden agents every session-creation surface must exclude", () => {
     // Shared by the composer picker AND project settings — filter parity is
     // what stops a project from pinning a default the composer can't show.

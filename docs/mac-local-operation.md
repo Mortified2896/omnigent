@@ -44,6 +44,13 @@ beyond the machine, configure authentication and the network boundary first.
 Existing Codex CLI credentials can support native Codex turns; other harnesses
 may require their own installation and sign-in.
 
+Codex is the standard implicit harness when available; explicit user and project
+harness selections are retained. The model picker uses the installed CLI's live
+catalog. If it omits newer models, compare the executable on `PATH` with the
+Codex app's bundled CLI and set `OMNIGENT_CODEX_PATH` to the intended executable
+in the server/host environment. Restart the host to refresh discovery, then
+verify a real turn; a catalog entry alone does not prove account entitlement.
+
 ## Local tracing and outcomes
 
 Follow [direct OpenTelemetry tracing](../deploy/docs/opentelemetry-tracing.md).

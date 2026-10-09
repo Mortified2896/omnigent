@@ -3076,10 +3076,12 @@ export function NewChatLandingScreen() {
         ? pickedAgentId
         : configuredAgentUnavailable || pickUnresolvedOnPlaceholder
           ? null
-          : (agentsLoading || prefillConfig === undefined) &&
-              agentList.some((agent) => agent.id === cachedPickerOptions?.agent.id)
-            ? cachedPickerOptions!.agent.id
-            : (agentList[0]?.id ?? null);
+          : agentList.some((agent) => agent.id === prefillConfig?.agentId)
+            ? prefillConfig!.agentId!
+            : (agentsLoading || prefillConfig === undefined) &&
+                agentList.some((agent) => agent.id === cachedPickerOptions?.agent.id)
+              ? cachedPickerOptions!.agent.id
+              : (agentList[0]?.id ?? null);
   const effectiveAgentId = automaticHarnessFallback?.candidate?.value.id ?? defaultEffectiveAgentId;
   const selectedAgent = useMemo(
     () =>

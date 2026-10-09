@@ -921,7 +921,7 @@ def _bundled_example_path(name: str) -> str:
 def _pick_first_run_harness() -> _FirstRunPlan | None:
     """Pick the harness a bare first ``run`` should launch, by configured creds.
 
-    Priority Claude → Codex → Pi over the ambient-merged config (a detected env
+    Priority Codex → Claude → Pi over the ambient-merged config (a detected env
     key / CLI login counts as configured). Claude gets the bundled polly
     orchestrator as its default agent; Codex / Pi launch a bare harness REPL.
     Shared with ``configure harnesses`` via
@@ -938,10 +938,10 @@ def _pick_first_run_harness() -> _FirstRunPlan | None:
     )
 
     config = effective_config_with_detected(load_config())
-    if default_provider_for_harness(config, "claude-sdk") is not None:
-        return _FirstRunPlan(harness="claude-sdk", agent=_bundled_example_path("polly"))
     if default_provider_for_harness(config, "codex") is not None:
         return _FirstRunPlan(harness="codex", agent=None)
+    if default_provider_for_harness(config, "claude-sdk") is not None:
+        return _FirstRunPlan(harness="claude-sdk", agent=_bundled_example_path("polly"))
     if default_provider_for_harness(config, "pi") is not None:
         return _FirstRunPlan(harness="pi", agent=None)
     # Kimi authenticates against its own backend (``kimi login`` OAuth or a
@@ -960,16 +960,15 @@ def _resolve_first_run_plan() -> _FirstRunPlan | None:
     """Resolve the harness + default agent for a bare ``omnigent run``.
 
     Adopts ambient-detected credentials, then picks a harness from what's
-    configured (Claude→polly / Codex / Pi). When nothing is configured,
+    configured (Codex / Claude→polly / Pi). When nothing is configured,
     prints a notice, drops the user into ``configure harnesses``, then
     re-checks once.
 
     The pick is **deliberately not persisted** as a global default: it is
     derived state, recomputed on every bare ``run`` from the *current*
-    credentials. So a user who starts with only Codex (→ a codex REPL) and
-    later adds Claude is promoted to polly on their next bare ``run`` —
-    keeping polly as the primary experience — rather than being pinned to
-    the earlier fallback. An *explicit* default (a user-set global
+    credentials. So a user who starts with only Claude and later adds Codex
+    gets a bare Codex REPL on their next bare ``run`` rather than remaining
+    pinned to the earlier fallback. An *explicit* default (a user-set global
     ``harness`` / ``default_agent``, or ``run <agent>`` / ``--harness``)
     still short-circuits this path upstream and is always honored.
 
@@ -8670,9 +8669,9 @@ def run(
 
     # First-run smart defaults: a bare `run` with no AGENT, no --harness, and no
     # explicit persisted default → derive a harness from the *current* creds
-    # (Claude→polly, else Codex, else Pi); or drop into `configure harnesses`
+    # (Codex, else Claude→polly, else Pi); or drop into `configure harnesses`
     # when nothing is set up. The derived pick is NOT persisted, so it tracks
-    # the credentials — adding Claude later promotes a Codex-only user to polly.
+    # the credentials while preserving explicit user defaults.
     if target is None and harness is None and not direct_server_cli:
         plan = _resolve_first_run_plan()
         if plan is None:

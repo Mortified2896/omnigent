@@ -1149,7 +1149,7 @@ function mockModelQueries(
 }
 
 // Shared mock setup for the landing-screen tests: one online host (host_1,
-// auto-selected), two agents (Claude Code default + Codex), inert
+// auto-selected), two agents (remembered Claude Code selection + Codex), inert
 // directory-session / runner-health / filesystem stubs, and a persisted
 // recent workspace so the working-directory field seeds to a known path.
 function setupLandingMocks() {
@@ -1208,6 +1208,8 @@ function setupLandingMocks() {
   resetLandingDraft();
   clearSessionDrafts();
   localStorage.clear();
+  // Existing Claude-focused tests model an explicit remembered selection.
+  localStorage.setItem("omnigent:last-agent-id", "a1");
   // host_1's most-recent workspace seeds the field (so submit can enable
   // without manual picks). Tests that exercise the home fallback clear this.
   localStorage.setItem(RECENT_KEY, JSON.stringify({ host_1: ["/Users/corey/repo"] }));
@@ -3133,6 +3135,21 @@ describe("NewChatLandingScreen", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("selects Codex for a fresh user with no remembered harness", async () => {
+    localStorage.removeItem("omnigent:last-agent-id");
+    renderLanding();
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveTextContent("Codex"),
+    );
+  });
+
+  it("preserves an explicitly remembered Claude selection", async () => {
+    renderLanding();
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveTextContent("Claude Code"),
+    );
   });
 
   it("renders the inline composer with the prompt headline", () => {
@@ -9323,7 +9340,10 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
     expect(screen.queryByTestId(SMART_ROUTING_ROW)).toBeNull();
     const heading = screen.getByText("Harnesses");
     expect(heading.closest('[role="menu"]')?.firstElementChild).toBe(heading);
-    expect(screen.getByTestId("new-chat-landing-agent-a1")).toBeVisible();
+    expect(
+      screen.queryByTestId("new-chat-landing-agent-a1") ??
+        screen.getByTestId("new-chat-landing-agent-a2"),
+    ).toBeVisible();
   }
 
   function openPicker(): void {

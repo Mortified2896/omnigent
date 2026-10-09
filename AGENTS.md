@@ -2,7 +2,9 @@
 
 `Mortified2896/omnigent` is the development and publication target. Ordinary
 work uses the selected coding harness directly; Polly or another orchestrator
-is not required. This file defines the fork's default repository workflow.
+is not required. Codex is Omnigent's standard implicit harness for new chats
+and CLI runs when configured; explicit user and project harness choices remain
+honored. This file defines the fork's default repository workflow.
 
 ## Ordinary source work
 
