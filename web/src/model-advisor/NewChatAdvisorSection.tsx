@@ -564,7 +564,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                 ...current,
                 saved: fresh,
                 dirty: current.draft !== null && !samePreferences(fresh.preferences, current.draft),
-                error: "Saved settings changed elsewhere. Reload the panel and reapply.",
+                error:
+                  "Saved settings changed elsewhere. Your choices are kept. Save defaults again to apply them.",
               }));
             }
           } catch {

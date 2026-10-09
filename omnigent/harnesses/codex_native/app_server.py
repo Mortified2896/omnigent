@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -1818,6 +1818,70 @@ def _launch_bearer_token(launch: NativeCodexLaunch) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.removeprefix("Bearer ").strip()
     return None
+
+
+def omniroute_codex_model_options(
+    launch: NativeCodexLaunch, native_rows: Iterable[_JsonObject]
+) -> list[_JsonObject]:
+    """Keep only Codex models confirmed by the configured gateway.
+
+    Codex's ``model/list`` is a client catalogue even with a custom provider.
+    It does not prove that OmniRoute has an active Codex connection, and its
+    bare slugs are not necessarily the gateway's wire model names. Query the
+    provider-specific API, intersect with the native catalogue for reasoning
+    support, and qualify the gateway ids. An unavailable/expired gateway
+    contributes no routes, leaving a separately discovered direct lane usable.
+    """
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    from omnigent.models.codex_model_vocabulary import comparable_model_id, native_codex_model_slug
+
+    base_url = native_codex_launch_base_url(launch)
+    token = _launch_bearer_token(launch)
+    if not base_url or not token:
+        return []
+    root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        request = Request(
+            root + "/api/v1/providers/codex/models",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        )
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        _logger.debug("omniroute: Codex route discovery failed", exc_info=True)
+        return []
+    entries = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(entries, list):
+        return []
+    native_by_model = {
+        comparable_model_id(native_codex_model_slug(model)): row
+        for row in native_rows
+        if isinstance(model := row.get("model") or row.get("id"), str)
+    }
+    rows: list[_JsonObject] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        model = entry.get("id")
+        if not isinstance(model, str) or not model:
+            continue
+        # This endpoint is provider-scoped. Do not relabel a foreign route.
+        if "/" in model and not model.startswith("codex/"):
+            continue
+        native = native_by_model.get(comparable_model_id(native_codex_model_slug(model)))
+        if native is None:
+            continue
+        # Provider-scoped listings may use bare slugs; the shared Responses
+        # endpoint needs the Codex qualifier to select that provider reliably.
+        wire_model = model if model.startswith("codex/") else f"codex/{model}"
+        if wire_model in seen:
+            continue
+        rows.append({**native, "id": wire_model, "model": wire_model})
+        seen.add(wire_model)
+    return rows
 
 
 def _omniroute_glm_rows_uncached(base_url: str, token: str) -> tuple[_JsonObject, ...]:

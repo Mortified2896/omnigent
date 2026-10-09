@@ -100,6 +100,18 @@ _REAL_PREWARM_MODEL_OPTIONS = HostProcess._prewarm_model_options
 
 
 @pytest.fixture(autouse=True)
+def _stub_gateway_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catalogue shaping tests use a confirmed fake gateway, never local credentials.
+
+    The real API boundary is covered by test_codex_gateway_catalog.py.
+    """
+    monkeypatch.setattr(
+        "omnigent.harnesses.codex_native.app_server.omniroute_codex_model_options",
+        lambda _launch, rows: list(rows),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolated_model_catalog_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

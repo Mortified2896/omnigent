@@ -30,22 +30,25 @@ def subscription_windows(result: dict[str, Any]) -> dict[str, Any]:
     bucket = buckets.get("codex") if isinstance(buckets, dict) else None
     bucket = bucket or result.get("rateLimits") or {}
     windows = []
+    remaining_percentages: list[int] = []
     for name in ("primary", "secondary"):
         row = bucket.get(name) if isinstance(bucket, dict) else None
         if not isinstance(row, dict):
             continue
         used = row.get("usedPercent")
         if isinstance(used, (float, int)) and not isinstance(used, bool) and 0 <= used <= 100:
+            remaining = round(100 - used)
+            remaining_percentages.append(remaining)
             windows.append(
                 {
                     "name": name,
-                    "remaining_percent": round(100 - used),
+                    "remaining_percent": remaining,
                     "window_minutes": row.get("windowDurationMins"),
                     "resets_at": row.get("resetsAt"),
                 }
             )
     return {
-        "remaining_percent": min((row["remaining_percent"] for row in windows), default=None),
+        "remaining_percent": min(remaining_percentages, default=None),
         "windows": windows,
     }
 

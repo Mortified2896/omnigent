@@ -157,13 +157,13 @@ beforeEach(() => {
     }
     if (url.endsWith("/model-advisor/preferences") && options?.method === "PUT") {
       const body = JSON.parse(options.body as string);
-      if (body.expected_version !== 2) {
+      if (body.expected_version !== prefsDto.version) {
         return Response.json({ detail: "Preferences changed in another tab" }, { status: 409 });
       }
       prefsDto = {
         ...prefsDto,
-        version: 3,
-        etag: '"advisor-3-y"',
+        version: Number(prefsDto.version) + 1,
+        etag: `"advisor-${Number(prefsDto.version) + 1}-y"`,
         preferences: body.preferences,
         logical_preferences: body.preferences,
       };
@@ -655,6 +655,25 @@ it("surfaces a save conflict without overwriting the draft", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
   await waitFor(() => expect(screen.getByRole("alert")).toBeDefined());
   expect(screen.getByText(/changed elsewhere/i)).toBeDefined();
+});
+
+it("keeps edits after a conflict and saves against the refreshed version", async () => {
+  mountSection();
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  const balance = screen.getByLabelText(/Decision balance/);
+  fireEvent.change(balance, { target: { value: "80" } });
+  prefsDto = { ...prefsDto, version: 4, etag: '"advisor-4-external"' };
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await screen.findByText(/Your choices are kept. Save defaults again/i);
+  expect(balance).toHaveValue("80");
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save defaults" })).toBeDisabled());
+  const saves = api.mock.calls.filter(([, init]) => init?.method === "PUT");
+  expect(saves.map(([, init]) => JSON.parse(init.body).expected_version)).toEqual([2, 4]);
+  expect(prefsDto.version).toBe(5);
+  expect((prefsDto.logical_preferences as typeof V2_PREFERENCES).human_probability_percent).toBe(
+    80,
+  );
 });
 
 it("normal Send is owned by Advisor and cannot bypass a pending review", async () => {

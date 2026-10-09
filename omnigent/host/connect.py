@@ -3621,6 +3621,7 @@ class HostProcess:
         """
         from omnigent.harnesses.codex_native.app_server import (
             codex_launch_catalog,
+            omniroute_codex_model_options,
             resolve_native_codex_catalog_launch,
         )
 
@@ -3639,6 +3640,10 @@ class HostProcess:
                             resolve_native_codex_catalog_launch, access_lane=lane
                         )
                         lane_rows = await codex_launch_catalog(launch=launch)
+                        if lane == "omniroute":
+                            lane_rows = await asyncio.to_thread(
+                                omniroute_codex_model_options, launch, lane_rows or ()
+                            )
                     except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
                         _logger.warning("Codex %s catalog unavailable", lane, exc_info=True)
                         continue
@@ -3666,6 +3671,10 @@ class HostProcess:
                             resolve_native_codex_catalog_launch, access_lane=lane
                         )
                         lane_rows = await codex_launch_catalog(launch=launch)
+                        if lane == "omniroute":
+                            lane_rows = await asyncio.to_thread(
+                                omniroute_codex_model_options, launch, lane_rows or ()
+                            )
                     except Exception:  # noqa: BLE001 — one unavailable lane must not hide the other
                         _logger.warning(
                             "Codex %s catalog unavailable for Model Advisor",

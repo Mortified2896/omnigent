@@ -150,8 +150,9 @@ def list_response_routes(store: ConversationStore, conversation_id: str) -> dict
                 result[response_id] = payload["route"]
             elif data.resource_type == RESOURCE_TYPE and response_id not in result:
                 # Legacy records establish the lane, but not whether Direct was a fallback.
+                lane = payload.get("access_lane")
                 result[response_id] = response_route_from_labels(
-                    {"omnigent.access_lane": payload.get("access_lane")}
+                    {"omnigent.access_lane": lane} if isinstance(lane, str) else {}
                 )
         if not page.has_more:
             return result
