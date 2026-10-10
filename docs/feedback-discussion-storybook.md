@@ -25,8 +25,10 @@ nested cards. Saved comments are readable text with **Edit**; selected tags stay
 visible while **Edit tags** opens the full picker. A proposal initially shows its
 rating, tags, and comment as text, followed by **Accept changes**, **Edit**, and
 **Reject** in one action row. **Edit** opens the shared shadcn fields and **Done**
-returns to the readable view without applying anything. Original comments are
-available through a disclosure. Reply voting and review controls share the actual
+returns to the readable view without applying anything. The default **Changes** view uses Word-style marks: additions are underlined and
+removals are struck through, including changed ratings and tags. **Final text**
+shows exactly the values acceptance will save, without change marks. Original
+comments are also available through a disclosure while editing or reading Final text. Reply voting and review controls share the actual
 message action toolbar with copy actions. Desktop retains the application's wider
 column and composer surface.
 
@@ -141,7 +143,7 @@ feedback and produced no proposal or outbound API request. The dark theme and a 
 asset load were also inspected. These are browser viewport checks; they do not
 establish physical iPhone keyboard behavior or live production inference.
 
-The revised proposal's readable view measured 366 px wide and 279 px high on the
+Before the tracked-change update, the revised proposal's readable view measured 366 px wide and 279 px high on the
 390 px viewport; the previous proposal's editable comment had only 308 px of
 usable width. Editing now uses the full 366 px. On the 320 px viewport the proposal
 measured 296 px wide. The mobile dark composer also uses only a top border: the
@@ -168,3 +170,18 @@ independent thumbs voting, acceptance into the original form, Undo of the rating
 and rejection without changing saved feedback. Updated phone screenshots include
 `feedback-countdown-mobile.png`, `feedback-edited-draft-mobile.png`, and
 `feedback-review-mobile.png` under `output/playwright/`.
+
+The tracked-change update passed 76 focused tests across eight files, including
+Unicode and whitespace preservation, bounded work for long unrelated comments,
+literal handling of HTML-like text, switching to Final text, and explicit
+acceptance of the displayed rating, tags, and comment. Change marks never apply
+feedback automatically.
+
+Rendered tracked changes were checked at 320 by 568 and 390 by 844 in light
+and dark themes, and 1440 by 900, without horizontal overflow. Browser interaction
+verified changes to all three fields, the clean Final text view, acceptance into
+the original form, Undo restoring all previous values, and rejection preserving
+the saved feedback. The gallery includes actual captures of a manually edited
+proposal changing Partial to Failed, replacing its tag, and extending its comment;
+the interactive starting fixture still proposes Partial. TypeScript, lint,
+formatting, applicable pre-commit checks, and the compiled Storybook build passed.

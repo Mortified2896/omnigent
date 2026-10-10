@@ -18,6 +18,10 @@ it("shows proposed changes immediately and saves only on acceptance", async () =
   );
   expect(screen.getByLabelText("Suggested feedback")).toBeInTheDocument();
   expect(screen.queryByLabelText("Suggested feedback comment")).not.toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Final text" }), {
+    button: 0,
+    ctrlKey: false,
+  });
   expect(screen.getByLabelText("Suggested feedback comment preview")).toHaveTextContent(
     proposed.comment,
   );
@@ -118,6 +122,10 @@ it("previews adjusted feedback after Done and waits for explicit acceptance", as
   });
   fireEvent.click(screen.getByRole("button", { name: "Done editing suggestion" }));
   expect(screen.queryByLabelText("Suggested feedback comment")).not.toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Final text" }), {
+    button: 0,
+    ctrlKey: false,
+  });
   expect(screen.getByLabelText("Suggested feedback comment preview")).toHaveTextContent(
     "Adjusted explanation",
   );
@@ -130,4 +138,55 @@ it("previews adjusted feedback after Done and waits for explicit acceptance", as
       tags: proposed.tags,
     }),
   );
+});
+
+it("shows tracked rating, tag, and word changes and switches to the exact final text", async () => {
+  const apply = vi.fn().mockResolvedValue(undefined);
+  const before = { outcome: "partial", comment: "Local checks passed.", tags: ["Environment"] };
+  const after = {
+    outcome: "failed" as const,
+    comment: "Live checks passed.",
+    tags: ["Tests/verification"],
+  };
+  render(<SuggestedFeedback original={before} proposed={after} onApply={apply} />);
+  const rating = screen.getByLabelText("Proposed feedback rating");
+  expect(rating.querySelector("del")).toHaveTextContent("Partial");
+  expect(rating.querySelector("ins")).toHaveTextContent("Failed");
+  const tags = screen.getByLabelText("Proposed feedback tags");
+  expect(tags.querySelector("del")).toHaveTextContent("Environment");
+  expect(tags.querySelector("ins")).toHaveTextContent("Tests/verification");
+  const comment = screen.getByLabelText("Suggested feedback comment preview");
+  expect(comment.querySelector("del")).toHaveTextContent("Local");
+  expect(comment.querySelector("ins")).toHaveTextContent("Live");
+  expect(comment).toHaveTextContent("checks passed.");
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Final text" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  const final = screen.getByLabelText("Suggested feedback comment preview");
+  expect(final).toHaveTextContent(after.comment);
+  expect(final.querySelector("del, ins")).toBeNull();
+  expect(screen.getByLabelText("Proposed feedback tags")).not.toHaveTextContent("Environment");
+  expect(apply).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Accept changes" }));
+  await waitFor(() => expect(apply).toHaveBeenCalledWith(after));
+});
+
+it("renders proposed markup as literal text in both review views", () => {
+  const view = render(
+    <SuggestedFeedback
+      original={original}
+      proposed={{ ...proposed, comment: '<script>unsafe()</script><img src="x">' }}
+      onApply={vi.fn()}
+    />,
+  );
+  expect(view.container.querySelector("script, img")).toBeNull();
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Final text" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  expect(screen.getByLabelText("Suggested feedback comment preview")).toHaveTextContent(
+    '<script>unsafe()</script><img src="x">',
+  );
+  expect(view.container.querySelector("script, img")).toBeNull();
 });

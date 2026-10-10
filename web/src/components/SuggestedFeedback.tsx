@@ -1,7 +1,9 @@
 import { useEffect, useId, useState } from "react";
 import type { TaskOutcome } from "@/hooks/useTaskExperiment";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SuggestedFeedbackPreview } from "./SuggestedFeedbackPreview";
+import { feedbackOutcomeLabel as outcomeLabel } from "@/lib/feedbackChanges";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
@@ -20,14 +22,7 @@ import {
   SelectGroup,
   SelectItem,
 } from "@/components/ui/select";
-import {
-  ArrowRightIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  PencilIcon,
-  PlusIcon,
-  XIcon,
-} from "lucide-react";
+import { CheckIcon, ChevronDownIcon, PencilIcon, PlusIcon, XIcon } from "lucide-react";
 
 interface FeedbackDetails {
   outcome?: TaskOutcome;
@@ -81,6 +76,7 @@ export function SuggestedFeedback({
   const ratingId = useId();
   const commentId = useId();
   const [editing, setEditing] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"changes" | "final">("changes");
   useEffect(() => {
     try {
       if (key)
@@ -123,9 +119,6 @@ export function SuggestedFeedback({
       setBusy(false);
     }
   };
-  const outcomeLabel = (value: string) =>
-    ({ success: "Success", partial: "Partial", failed: "Failed", not_sure: "Not sure" })[value] ??
-    value;
   function addTag() {
     const tag = newTag.trim();
     if (!tag || proposedTags.length >= 8) return;
@@ -139,124 +132,129 @@ export function SuggestedFeedback({
       className="mt-3 flex flex-col gap-3 md:rounded-lg md:border md:p-4"
     >
       <Separator className="md:hidden" />
-      <h3 className="text-sm font-medium">Suggested feedback</h3>
-      {editing && state === "pending" ? (
-        <FieldGroup className="gap-3">
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor={ratingId}>Rating</FieldLabel>
-            <Select
-              value={outcome}
-              disabled={busy}
-              onValueChange={(value) => setOutcome(value as TaskOutcome)}
+      <Tabs
+        value={previewMode}
+        onValueChange={(value) => setPreviewMode(value === "final" ? "final" : "changes")}
+        className="gap-3"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">Suggested feedback</h3>
+          {!editing && (
+            <TabsList
+              variant="line"
+              aria-label="Suggestion display"
+              className="shrink-0 group-data-horizontal/tabs:h-10 md:group-data-horizontal/tabs:h-8"
             >
-              <SelectTrigger
-                id={ratingId}
-                aria-label="Suggested feedback rating"
-                className="ml-auto min-h-10 md:min-h-0"
+              <TabsTrigger value="changes">Changes</TabsTrigger>
+              <TabsTrigger value="final">Final text</TabsTrigger>
+            </TabsList>
+          )}
+        </div>
+        {editing && state === "pending" ? (
+          <FieldGroup className="gap-3">
+            <Field orientation="horizontal">
+              <FieldLabel htmlFor={ratingId}>Rating</FieldLabel>
+              <Select
+                value={outcome}
+                disabled={busy}
+                onValueChange={(value) => setOutcome(value as TaskOutcome)}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {(["success", "partial", "failed", "not_sure"] as const).map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {outcomeLabel(value)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel>Tags</FieldLabel>
-            <div className="flex flex-wrap gap-1.5" aria-label="Proposed feedback tags">
-              {proposedTags.map((tag) => (
-                <Button
-                  key={tag}
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  className="min-h-10 md:min-h-0"
-                  disabled={busy}
-                  aria-label={`Remove suggested tag ${tag}`}
-                  onClick={() => setProposedTags((tags) => tags.filter((value) => value !== tag))}
+                <SelectTrigger
+                  id={ratingId}
+                  aria-label="Suggested feedback rating"
+                  className="ml-auto min-h-10 md:min-h-0"
                 >
-                  {tag}
-                  <XIcon data-icon="inline-end" />
-                </Button>
-              ))}
-            </div>
-            <InputGroup className="min-h-10">
-              <InputGroupInput
-                aria-label="Suggested feedback tag"
-                value={newTag}
-                maxLength={64}
-                placeholder="Add a tag…"
-                disabled={busy || proposedTags.length >= 8}
-                onChange={(event) => setNewTag(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addTag();
-                  }
-                }}
-              />
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton
-                  aria-label="Add proposed tag"
-                  disabled={busy || proposedTags.length >= 8 || !newTag.trim()}
-                  onClick={addTag}
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  Add
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={commentId}>Comment</FieldLabel>
-            <Textarea
-              id={commentId}
-              aria-label="Suggested feedback comment"
-              rows={3}
-              maxLength={4000}
-              value={comment}
-              disabled={busy}
-              onChange={(event) => setComment(event.target.value)}
-            />
-          </Field>
-        </FieldGroup>
-      ) : (
-        <div className="flex flex-col gap-2.5">
-          <div className="flex items-center gap-3">
-            <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
-            {outcome !== original.outcome && (
-              <>
-                <span className="text-sm text-muted-foreground line-through">
-                  {outcomeLabel(original.outcome)}
-                </span>
-                <ArrowRightIcon className="size-3.5 text-muted-foreground" />
-              </>
-            )}
-            <Badge variant="secondary">{outcomeLabel(outcome)}</Badge>
-          </div>
-          {proposedTags.length > 0 && (
-            <div className="flex items-start gap-3">
-              <span className="w-10 shrink-0 pt-1 text-xs text-muted-foreground">Tags</span>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {(["success", "partial", "failed", "not_sure"] as const).map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {outcomeLabel(value)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel>Tags</FieldLabel>
               <div className="flex flex-wrap gap-1.5" aria-label="Proposed feedback tags">
                 {proposedTags.map((tag) => (
-                  <Badge key={tag} variant="outline">
+                  <Button
+                    key={tag}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="min-h-10 md:min-h-0"
+                    disabled={busy}
+                    aria-label={`Remove suggested tag ${tag}`}
+                    onClick={() => setProposedTags((tags) => tags.filter((value) => value !== tag))}
+                  >
                     {tag}
-                  </Badge>
+                    <XIcon data-icon="inline-end" />
+                  </Button>
                 ))}
               </div>
-            </div>
-          )}
-          <p className="text-ui leading-relaxed" aria-label="Suggested feedback comment preview">
-            {comment || "No comment"}
-          </p>
-        </div>
-      )}
+              <InputGroup className="min-h-10">
+                <InputGroupInput
+                  aria-label="Suggested feedback tag"
+                  value={newTag}
+                  maxLength={64}
+                  placeholder="Add a tag…"
+                  disabled={busy || proposedTags.length >= 8}
+                  onChange={(event) => setNewTag(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addTag();
+                    }
+                  }}
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    aria-label="Add proposed tag"
+                    disabled={busy || proposedTags.length >= 8 || !newTag.trim()}
+                    onClick={addTag}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    Add
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={commentId}>Comment</FieldLabel>
+              <Textarea
+                id={commentId}
+                aria-label="Suggested feedback comment"
+                rows={3}
+                maxLength={4000}
+                value={comment}
+                disabled={busy}
+                onChange={(event) => setComment(event.target.value)}
+              />
+            </Field>
+          </FieldGroup>
+        ) : (
+          <>
+            <TabsContent value="changes">
+              <SuggestedFeedbackPreview
+                original={original}
+                current={{ outcome, comment, tags: proposedTags }}
+                trackChanges={state === "pending"}
+              />
+            </TabsContent>
+            <TabsContent value="final">
+              <SuggestedFeedbackPreview
+                original={original}
+                current={{ outcome, comment, tags: proposedTags }}
+                trackChanges={false}
+              />
+            </TabsContent>
+          </>
+        )}
+      </Tabs>
       <div className="flex flex-wrap items-center gap-2">
         {state === "pending" ? (
           <>
@@ -307,7 +305,7 @@ export function SuggestedFeedback({
           </Button>
         )}
       </div>
-      {state === "pending" && original.comment && (
+      {state === "pending" && original.comment && (editing || previewMode === "final") && (
         <div className="flex flex-col gap-2">
           <Button
             type="button"
