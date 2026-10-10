@@ -219,3 +219,5 @@ individual decision toolbar. Compact tag labels are shared as well. The
 suggestion-ready fixture now includes Environment/dependency → Tests/verification
 alongside Failed → Partial. The original editor, proposal and Storybook flow
 passed 47 focused tests after this shared-component change.
+
+The suggested rating row now uses the same shared options and order as the answer review: Success, Partial, Failed, Not sure. All four remain visible before and after individual acceptance or rejection; only the original and proposed ratings receive pending change marks. The focused component and Storybook tests cover the stable order and selected rating after both decisions.

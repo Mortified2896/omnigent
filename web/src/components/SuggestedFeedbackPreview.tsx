@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { FeedbackChoiceButton, feedbackTagLabel } from "./FeedbackChoiceButton";
+import { FeedbackChoiceButton, feedbackTagLabel, FEEDBACK_OUTCOMES } from "./FeedbackChoiceButton";
 import { feedbackOutcomeLabel } from "@/lib/feedbackChanges";
 
 import {
@@ -116,41 +116,51 @@ export function SuggestedFeedbackPreview({
   const ratingChanged = trackChanges && current.outcome !== original.outcome;
   const ratingKey = ratingChangeKey(original.outcome, current.outcome);
   const ratingDecision = decisions[ratingKey];
-  const ratingContent = ratingDecision ? (
-    feedbackOutcomeLabel(resolved.outcome)
-  ) : (
-    <MarkedText kind="added" text={feedbackOutcomeLabel(current.outcome)} />
-  );
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-3" aria-label="Proposed feedback rating">
         <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
         <div className="flex flex-wrap gap-1">
-          {ratingChanged && !ratingDecision && (
-            <FeedbackChoiceButton
-              kind="outcome"
-              selected
-              aria-disabled="true"
-              tabIndex={-1}
-              aria-label={`Original rating ${feedbackOutcomeLabel(original.outcome)}`}
-            >
-              <MarkedText kind="removed" text={feedbackOutcomeLabel(original.outcome)} />
-            </FeedbackChoiceButton>
-          )}
-          {ratingChanged && onDecide ? (
-            <FeedbackChangeControl
-              label="rating change"
-              decision={ratingDecision}
-              onDecide={(value) => onDecide(ratingKey, value)}
-              choice={{ kind: "outcome", selected: !!ratingDecision }}
-            >
-              {ratingContent}
-            </FeedbackChangeControl>
-          ) : (
-            <FeedbackChoiceButton kind="outcome" selected aria-disabled="true" tabIndex={-1}>
-              {ratingChanged ? ratingContent : feedbackOutcomeLabel(resolved.outcome)}
-            </FeedbackChoiceButton>
-          )}
+          {FEEDBACK_OUTCOMES.map((option) => {
+            const isOriginal = option.value === original.outcome;
+            const isProposed = option.value === current.outcome;
+            const selected =
+              option.value ===
+              (ratingChanged && !ratingDecision ? original.outcome : resolved.outcome);
+            const content =
+              ratingChanged && !ratingDecision && (isOriginal || isProposed) ? (
+                <MarkedText kind={isProposed ? "added" : "removed"} text={option.label} />
+              ) : (
+                option.label
+              );
+            return ratingChanged && isProposed && onDecide ? (
+              <FeedbackChangeControl
+                key={option.value}
+                label="rating change"
+                decision={ratingDecision}
+                onDecide={(value) => onDecide(ratingKey, value)}
+                choice={{ kind: "outcome", selected }}
+              >
+                {content}
+              </FeedbackChangeControl>
+            ) : (
+              <FeedbackChoiceButton
+                key={option.value}
+                kind="outcome"
+                selected={selected}
+                title={option.definition}
+                aria-disabled="true"
+                tabIndex={-1}
+                aria-label={
+                  ratingChanged && isOriginal
+                    ? `Original rating ${feedbackOutcomeLabel(original.outcome)}`
+                    : undefined
+                }
+              >
+                {content}
+              </FeedbackChoiceButton>
+            );
+          })}
         </div>
       </div>
       {tags.length > 0 && (

@@ -242,6 +242,14 @@ it("uses answer-style buttons for marked rating and tag corrections", () => {
       onApply={vi.fn()}
     />,
   );
+  const ratingButtons = () =>
+    Array.from(screen.getByLabelText("Proposed feedback rating").querySelectorAll("button"));
+  expect(ratingButtons().map((button) => button.textContent)).toEqual([
+    "Success",
+    "Partial",
+    "Failed",
+    "Not sure",
+  ]);
   const oldRating = screen.getByRole("button", { name: "Original rating Failed" });
   const newRating = screen.getByRole("button", { name: "Review rating change" });
   const oldTag = screen.getByRole("button", { name: "Review remove tag Environment/dependency" });
@@ -254,6 +262,34 @@ it("uses answer-style buttons for marked rating and tag corrections", () => {
   expect(oldTag).not.toHaveTextContent("/dependency");
   expect(oldTag.querySelector("del")).toBeTruthy();
   expect(newTag.querySelector("ins")).toBeTruthy();
+  fireEvent.click(newRating);
+  fireEvent.click(screen.getByRole("button", { name: "Reject rating change" }));
+  expect(ratingButtons().map((button) => button.textContent)).toEqual([
+    "Success",
+    "Partial",
+    "Failed",
+    "Not sure",
+  ]);
+  expect(ratingButtons().map((button) => button.getAttribute("aria-pressed"))).toEqual([
+    "false",
+    "false",
+    "true",
+    "false",
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "Review rating change · rejected" }));
+  fireEvent.click(screen.getByRole("button", { name: "Accept rating change" }));
+  expect(ratingButtons().map((button) => button.textContent)).toEqual([
+    "Success",
+    "Partial",
+    "Failed",
+    "Not sure",
+  ]);
+  expect(ratingButtons().map((button) => button.getAttribute("aria-pressed"))).toEqual([
+    "false",
+    "true",
+    "false",
+    "false",
+  ]);
   fireEvent.click(newTag);
   fireEvent.click(screen.getByRole("button", { name: "Reject add tag Tests/verification" }));
   expect(

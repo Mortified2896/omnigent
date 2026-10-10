@@ -1,4 +1,4 @@
-import { FeedbackChoiceButton, feedbackTagLabel } from "./FeedbackChoiceButton";
+import { FeedbackChoiceButton, feedbackTagLabel, FEEDBACK_OUTCOMES } from "./FeedbackChoiceButton";
 import { FeedbackDiscussion } from "./FeedbackDiscussionTrigger";
 import {
   FeedbackFormContext as FeedbackContext,
@@ -15,7 +15,6 @@ import {
   useTaskExperiment,
   useSaveTaskOutcome,
   type ExperimentEvent,
-  type TaskOutcome,
 } from "@/hooks/useTaskExperiment";
 import { ResponseScoringActions } from "./ResponseScoringActions";
 import { fetchRound, type RoundDto } from "@/lib/modelAdvisorApi";
@@ -100,33 +99,6 @@ export function ResponseFeedbackActions({
     />
   );
 }
-
-const OUTCOMES: { value: TaskOutcome; label: string; definition: string }[] = [
-  {
-    value: "success",
-    label: "Success",
-    definition:
-      "The requested task was accomplished on this attempt without a material correction or retry.",
-  },
-  {
-    value: "partial",
-    label: "Partial",
-    definition:
-      "Meaningful correct progress was made, but a material follow-up, correction, or additional implementation is required.",
-  },
-  {
-    value: "failed",
-    label: "Failed",
-    definition:
-      "The attempt did not accomplish the task or make sufficient correct progress to count as partial.",
-  },
-  {
-    value: "not_sure",
-    label: "Not sure",
-    definition:
-      "The outcome cannot yet be judged reliably. You can revise this after verification.",
-  },
-];
 
 const REVIEW_TAGS = [
   "AGENTS instructions",
@@ -230,7 +202,7 @@ function OutcomeEditor({
       <div className={compact ? "-ml-2.5 flex flex-wrap items-center gap-2" : "contents"}>
         <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Task outcome">
           {!compact && <span className="mr-1 text-xs font-medium">Your outcome</span>}
-          {OUTCOMES.map((option) => (
+          {FEEDBACK_OUTCOMES.map((option) => (
             <FeedbackChoiceButton
               key={option.value}
               kind="outcome"

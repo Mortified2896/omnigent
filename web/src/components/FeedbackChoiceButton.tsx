@@ -1,3 +1,4 @@
+import type { TaskOutcome } from "@/hooks/useTaskExperiment";
 import type { ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -34,3 +35,30 @@ const COMPACT_TAG_LABELS: Record<string, string> = {
 export function feedbackTagLabel(tag: string) {
   return COMPACT_TAG_LABELS[tag] ?? tag;
 }
+
+export const FEEDBACK_OUTCOMES: { value: TaskOutcome; label: string; definition: string }[] = [
+  {
+    value: "success",
+    label: "Success",
+    definition:
+      "The requested task was accomplished on this attempt without a material correction or retry.",
+  },
+  {
+    value: "partial",
+    label: "Partial",
+    definition:
+      "Meaningful correct progress was made, but a material follow-up, correction, or additional implementation is required.",
+  },
+  {
+    value: "failed",
+    label: "Failed",
+    definition:
+      "The attempt did not accomplish the task or make sufficient correct progress to count as partial.",
+  },
+  {
+    value: "not_sure",
+    label: "Not sure",
+    definition:
+      "The outcome cannot yet be judged reliably. You can revise this after verification.",
+  },
+];
