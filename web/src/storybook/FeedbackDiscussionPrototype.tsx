@@ -219,7 +219,13 @@ function PrototypeConversation({
     createFeedbackDiscussionFixture(sessionId, startingPoint !== "before-feedback"),
   );
   const [input, setInput] = useState("");
-  const [composerContext, setComposerContext] = useState<FeedbackDiscussionIntent | null>(null);
+  const [composerContext, setComposerContext] = useState<FeedbackDiscussionIntent | null>(
+    startingPoint === "inspection-ready"
+      ? "inspect"
+      : startingPoint === "discussion-ready" || startingPoint === "suggestion-ready"
+        ? "discuss"
+        : null,
+  );
   const [busy, setBusy] = useState(false);
   const [sendNonce, setSendNonce] = useState(0);
   const [permission, setPermission] = useState("on-request");

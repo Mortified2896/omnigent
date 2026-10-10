@@ -243,3 +243,21 @@ it("shows unavailable cache usage without guessing zero and can preview reported
   expect(screen.getByText("Cache reuse: 90% · 72,000 / 80,000 input tokens")).toBeInTheDocument();
   expect(screen.getByText("Cache reuse: 88% · 88,000 / 100,000 input tokens")).toBeInTheDocument();
 });
+it.each([
+  ["discussion-ready", "discuss", "Feedback discussion"],
+  ["inspection-ready", "inspect", "Self Inspection"],
+  ["suggestion-ready", "discuss", "Feedback discussion"],
+] as const)(
+  "preserves the ongoing composer context at %s",
+  async (startingPoint, intent, label) => {
+    mount("footer", startingPoint);
+    expect(screen.getByText(`${label} · original answer`)).toBeInTheDocument();
+    const proposalsBefore = screen.queryAllByLabelText("Suggested feedback").length;
+    fireEvent.change(screen.getByRole("textbox", { name: "Message the agent" }), {
+      target: { value: "Explain that in more detail." },
+    });
+    await sendPreparedPrompt();
+    expect(screen.getAllByTestId("discussion-turn").at(-1)).toHaveAttribute("data-intent", intent);
+    expect(screen.queryAllByLabelText("Suggested feedback")).toHaveLength(proposalsBefore);
+  },
+);

@@ -98,7 +98,8 @@ story without the manager sidebar. The focused tests cover the real feedback
 auto-save, draft preservation, ongoing-chat turns, the distinct discussion and
 inspection intents in every variant, explicitly requesting a proposal, accepting
 and undoing suggestions, rejection, missing cache telemetry, blocked outbound
-calls, and transport restoration and restarting the demo. All 39 focused
+calls, transport restoration, restarting the demo, and ongoing context at each
+ready starting point. All 42 focused
 Storybook, feedback editor, and composer
 tests passed, as did the applicable pre-commit checks and static build.
 
