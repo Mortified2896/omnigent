@@ -221,8 +221,16 @@ function PrototypeConversation({
   cacheTelemetry = "unreported",
 }: PrototypeProps) {
   const sessionId = `storybook-feedback-${variant}`;
+  const initialFeedback: Feedback = {
+    ...SEED_FEEDBACK,
+    outcome: startingPoint === "suggestion-ready" ? "failed" : SEED_FEEDBACK.outcome,
+  };
   const [fixture] = useState(() =>
-    createFeedbackDiscussionFixture(sessionId, startingPoint !== "before-feedback"),
+    createFeedbackDiscussionFixture(
+      sessionId,
+      startingPoint !== "before-feedback",
+      initialFeedback,
+    ),
   );
   const [input, setInput] = useState("");
   const [composerContext, setComposerContext] = useState<FeedbackDiscussionIntent | null>(
@@ -256,7 +264,7 @@ function PrototypeConversation({
             snapshot:
               startingPoint === "inspection-ready"
                 ? null
-                : { ...SEED_FEEDBACK, tags: [...SEED_FEEDBACK.tags] },
+                : { ...initialFeedback, tags: [...initialFeedback.tags] },
             complete: true,
           },
         ]

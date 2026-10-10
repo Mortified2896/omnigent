@@ -183,7 +183,7 @@ verified changes to all three fields, the clean Final text view, acceptance into
 the original form, Undo restoring all previous values, and rejection preserving
 the saved feedback. The gallery includes actual captures of a manually edited
 proposal changing Partial to Failed, replacing its tag, and extending its comment;
-the interactive starting fixture still proposes Partial. TypeScript, lint,
+the ready-suggestion fixture starts with Failed feedback and proposes Partial, so its rating can be reviewed immediately. TypeScript, lint,
 formatting, applicable pre-commit checks, and the compiled Storybook build passed.
 
 Individual review: select a marked comment edit, a changed rating, or a tag
@@ -206,3 +206,7 @@ restoring the original rating and comment.
 
 The individual-review update passed 80 focused tests across nine files and all
 applicable pre-commit checks, including TypeScript, lint and formatting.
+
+The suggestion-ready starting point seeds Failed feedback and proposes Partial
+in all three variants. Its original form and discussion snapshot use the same
+seed; other starting points keep their existing Partial feedback.

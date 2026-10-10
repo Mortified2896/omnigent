@@ -287,26 +287,36 @@ it("rates a feedback reply independently from applying its proposal", () => {
     screen.getByText("Select a marked change to accept or reject it · Not saved"),
   ).toBeInTheDocument();
 });
-it("accepts a changed rating into the original form and undo restores it", async () => {
-  mount("footer", "suggestion-ready");
-  fireEvent.click(screen.getByRole("button", { name: "Edit feedback suggestion" }));
-  fireEvent.click(screen.getByLabelText("Suggested feedback rating"));
-  fireEvent.click(screen.getByRole("option", { name: "Failed" }));
-  fireEvent.click(screen.getByRole("button", { name: "Accept changes" }));
-  await waitFor(() =>
+it.each(["Accept", "Reject"] as const)(
+  "%s the ready example's rating change without editing",
+  async (decision) => {
+    mount("footer", "suggestion-ready");
     expect(original().getByRole("button", { name: "Failed" })).toHaveAttribute(
       "aria-pressed",
       "true",
-    ),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-  await waitFor(() =>
-    expect(original().getByRole("button", { name: "Partial" })).toHaveAttribute(
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review rating change" }));
+    fireEvent.click(screen.getByRole("button", { name: `${decision} rating change` }));
+    // Individual decisions are staged until explicit save.
+    expect(original().getByRole("button", { name: "Failed" })).toHaveAttribute(
       "aria-pressed",
       "true",
-    ),
-  );
-});
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Accept remaining & save" }));
+    await waitFor(() =>
+      expect(
+        original().getByRole("button", { name: decision === "Accept" ? "Partial" : "Failed" }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(original().getByRole("button", { name: "Failed" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+  },
+);
 it("opens compact tag editing without losing saved details or the ongoing draft", async () => {
   mount("footer", "feedback-saved");
   const input = screen.getByRole("textbox", { name: "Message the agent" });

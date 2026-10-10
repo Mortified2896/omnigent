@@ -20,7 +20,11 @@ const ATTRIBUTION: NonNullable<ExperimentEvent["model_attribution"]> = {
 };
 
 /** Implements the real feedback API contract in memory. Never forwards a request. */
-export function createFeedbackDiscussionFixture(sessionId: string, withSavedFeedback: boolean) {
+export function createFeedbackDiscussionFixture(
+  sessionId: string,
+  withSavedFeedback: boolean,
+  seedFeedback: TaskOutcomeInput = SEED_FEEDBACK,
+) {
   const rows = new Map<string, ExperimentEvent>();
   const requests: { path: string; method: string }[] = [];
   const policy: SessionScoringPolicy = {
@@ -46,7 +50,7 @@ export function createFeedbackDiscussionFixture(sessionId: string, withSavedFeed
     rows.set(responseId, row);
     return row;
   }
-  if (withSavedFeedback) save(ORIGINAL_RESPONSE_ID, SEED_FEEDBACK);
+  if (withSavedFeedback) save(ORIGINAL_RESPONSE_ID, seedFeedback);
   const prefix = `/v1/sessions/${encodeURIComponent(sessionId)}/`;
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), {
