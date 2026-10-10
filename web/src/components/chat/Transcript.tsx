@@ -42,7 +42,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
 import { useUserMessageNav } from "@/hooks/useUserMessageNav";
 import { ChatPlanAccordion } from "@/shell/ChatPlanAccordion";
 import { RunnerStartingIndicator, McpStartupIndicator } from "@/pages/ChatIndicators";
-import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
+import { CHAT_COLUMN_WIDTH, CHAT_CONVERSATION_CONTENT_CLASS } from "@/pages/chatLayout";
 import {
   type ConversationScroller,
   BubbleView,
@@ -341,7 +341,7 @@ function TranscriptImpl({
           <ConversationContent
             scrollClassName="transcript-hide-native-scrollbar"
             className={cn(
-              "chat-conversation-content mx-auto w-full gap-4 px-[clamp(0px,calc((var(--chat-column-width)+3.5rem-100cqi)*0.5),1.75rem)] pb-6",
+              CHAT_CONVERSATION_CONTENT_CLASS,
               display.hasTasks ? "pt-4" : "pt-20",
               CHAT_COLUMN_WIDTH,
             )}

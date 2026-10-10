@@ -7,6 +7,7 @@ export const FeedbackFormContext = createContext<{
   hostId: string | null;
   human: Map<string, ExperimentEvent>;
   ready: boolean;
+  renderPerspective?: (responseId: string, review: ReviewPerspectiveInput) => ReactNode;
 } | null>(null);
 
 export function FeedbackDisabled({ children }: { children: ReactNode }) {

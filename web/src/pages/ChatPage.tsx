@@ -41,6 +41,7 @@ import {
   ChatComposer,
   type ComposerKeyIntent,
   COMPOSER_COLUMN_WIDTH,
+  CHAT_COMPOSER_FORM_CLASS,
   ComposerFeedbackRow,
   ComposerSendButton,
 } from "@/components/composer/ChatComposer";
@@ -3866,10 +3867,7 @@ function ComposerImpl(
   };
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="chat-composer-form relative px-4 pb-[max(20px,env(safe-area-inset-bottom))] md:px-6"
-    >
+    <form onSubmit={handleSubmit} className={CHAT_COMPOSER_FORM_CLASS}>
       {/* Hidden file input for the attach button */}
       <input
         ref={fileInputRef}

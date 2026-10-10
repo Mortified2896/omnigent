@@ -28,12 +28,16 @@ storybookChannel.on(STORY_FINISHED, ({ storyId, status }: StoryFinishedPayload) 
 
 const preview: Preview = {
   decorators: [
-    (Story) => (
+    (Story, context) => (
       <ThemeProvider>
         <TooltipProvider>
-          <div className="min-w-80 max-w-3xl p-6">
+          {context.parameters.omnigentSurface === "chat" ? (
             <Story />
-          </div>
+          ) : (
+            <div className="min-w-80 max-w-3xl p-6">
+              <Story />
+            </div>
+          )}
         </TooltipProvider>
       </ThemeProvider>
     ),

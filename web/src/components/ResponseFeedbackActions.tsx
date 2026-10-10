@@ -26,10 +26,12 @@ export type { ReviewPerspectiveInput } from "./FeedbackContext";
 export function ResponseFeedbackProvider({
   sessionId,
   hostId = null,
+  renderPerspective,
   children,
 }: {
   sessionId: string;
   hostId?: string | null;
+  renderPerspective?: (responseId: string, review: ReviewPerspectiveInput) => ReactNode;
   children: React.ReactNode;
 }) {
   const experiment = useTaskExperiment(sessionId);
@@ -38,8 +40,8 @@ export function ResponseFeedbackProvider({
     for (const row of experiment.data ?? []) {
       if (row.kind === "outcome" && row.outcome) human.set(row.response_id, row);
     }
-    return { sessionId, hostId, human, ready: experiment.isSuccess };
-  }, [sessionId, hostId, experiment.data, experiment.isSuccess]);
+    return { sessionId, hostId, human, ready: experiment.isSuccess, renderPerspective };
+  }, [sessionId, hostId, experiment.data, experiment.isSuccess, renderPerspective]);
   return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;
 }
 
@@ -87,9 +89,12 @@ export function ResponseFeedbackActions({
       autoSave={autoSave}
       renderPerspective={
         renderPerspective ??
-        ((review) => (
-          <FeedbackDiscussion responseId={responseId} review={review} answerText={answerText} />
-        ))
+        ((review) =>
+          context.renderPerspective ? (
+            context.renderPerspective(responseId, review)
+          ) : (
+            <FeedbackDiscussion responseId={responseId} review={review} answerText={answerText} />
+          ))
       }
     />
   );

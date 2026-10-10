@@ -16,6 +16,8 @@ import { isComposerSendKey, isComposerSteerAllKey } from "@/lib/composerSendShor
 import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
 
 export const COMPOSER_COLUMN_WIDTH = `w-full ${CHAT_COLUMN_WIDTH}`;
+export const CHAT_COMPOSER_FORM_CLASS =
+  "chat-composer-form relative px-4 pb-[max(20px,env(safe-area-inset-bottom))] md:px-6";
 
 /**
  * The composer layout contract: one 12px inset, two roles.
