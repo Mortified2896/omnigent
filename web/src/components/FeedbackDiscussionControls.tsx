@@ -1,19 +1,31 @@
 import { useId, useState } from "react";
-import { ChevronDownIcon, MessageSquareIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, MessageSquareIcon, ScanSearchIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 export type DiscussionVariant = "footer" | "quick-prompts" | "inline";
+export type FeedbackDiscussionIntent = "discuss" | "suggest" | "inspect";
 
-export function FeedbackDiscussionComposerContext({ onDismiss }: { onDismiss: () => void }) {
+export function FeedbackDiscussionComposerContext({
+  intent,
+  onDismiss,
+}: {
+  intent: FeedbackDiscussionIntent;
+  onDismiss: () => void;
+}) {
+  const label = {
+    discuss: "Feedback discussion",
+    suggest: "Suggest feedback changes",
+    inspect: "Self Inspection",
+  }[intent];
   return (
     <div className="flex items-center justify-between px-3 pt-2 text-xs text-muted-foreground">
-      <span>Feedback discussion · original answer</span>
+      <span>{label} · original answer</span>
       <Button
         type="button"
         size="icon-xs"
         variant="ghost"
-        aria-label="Continue without feedback context"
+        aria-label="Continue without answer context"
         onClick={onDismiss}
       >
         <XIcon className="size-3" />
@@ -25,43 +37,57 @@ export function FeedbackDiscussionComposerContext({ onDismiss }: { onDismiss: ()
 /** Proposed ongoing-chat controls, shared by the inspection stories and future integration. */
 export function FeedbackDiscussionControls({
   variant,
-  disabled,
+  busy,
   saving,
   onPrepare,
   onSubmitInline,
 }: {
   variant: DiscussionVariant;
-  disabled: boolean;
+  busy: boolean;
   saving: boolean;
-  onPrepare: (intent: "discuss" | "suggest") => void;
+  onPrepare: (intent: FeedbackDiscussionIntent) => void;
   onSubmitInline: (text: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [text, setText] = useState("");
   const panelId = useId();
   const inputId = useId();
-  function prepare(intent: "discuss" | "suggest") {
+  const disabled = busy || saving;
+  function prepare(intent: FeedbackDiscussionIntent) {
     onPrepare(intent);
     setExpanded(false);
   }
   return (
     <div className="space-y-2">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="px-0 text-muted-foreground"
-        disabled={disabled}
-        aria-expanded={variant === "footer" ? undefined : expanded}
-        aria-controls={variant === "footer" ? undefined : panelId}
-        onClick={() =>
-          variant === "footer" ? prepare("suggest") : setExpanded((current) => !current)
-        }
-      >
-        <MessageSquareIcon className="size-3.5" />
-        Feedback discussion
-        {variant === "quick-prompts" && <ChevronDownIcon className="size-3.5" />}
-      </Button>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="px-0 text-muted-foreground"
+          disabled={disabled}
+          aria-expanded={variant === "footer" ? undefined : expanded}
+          aria-controls={variant === "footer" ? undefined : panelId}
+          onClick={() =>
+            variant === "footer" ? prepare("discuss") : setExpanded((current) => !current)
+          }
+        >
+          <MessageSquareIcon className="size-3.5" />
+          Feedback discussion
+          {variant === "quick-prompts" && <ChevronDownIcon className="size-3.5" />}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="px-0 text-muted-foreground"
+          disabled={busy}
+          onClick={() => prepare("inspect")}
+        >
+          <ScanSearchIcon className="size-3.5" />
+          Self Inspection
+        </Button>
+      </div>
       {expanded && variant === "quick-prompts" && (
         <div id={panelId} className="flex flex-wrap gap-2">
           <Button
@@ -80,7 +106,7 @@ export function FeedbackDiscussionControls({
             disabled={disabled}
             onClick={() => prepare("suggest")}
           >
-            Suggest changes
+            Suggest feedback changes
           </Button>
         </div>
       )}
@@ -97,7 +123,7 @@ export function FeedbackDiscussionControls({
           }}
         >
           <label htmlFor={inputId} className="text-xs text-muted-foreground">
-            What would you like to change?
+            What would you like to discuss?
           </label>
           <Textarea
             id={inputId}
@@ -106,11 +132,11 @@ export function FeedbackDiscussionControls({
             value={text}
             disabled={disabled}
             onChange={(event) => setText(event.target.value)}
-            placeholder="My comment should mention that local checks passed…"
+            placeholder="Does my feedback explain what still needs verification?"
           />
           <div className="flex flex-wrap gap-2">
             <Button size="sm" type="submit" disabled={disabled || !text.trim()}>
-              Discuss change
+              Send to chat
             </Button>
             <Button
               size="sm"
@@ -119,7 +145,7 @@ export function FeedbackDiscussionControls({
               disabled={disabled}
               onClick={() => prepare("suggest")}
             >
-              Suggest changes
+              Suggest feedback changes
             </Button>
           </div>
         </form>

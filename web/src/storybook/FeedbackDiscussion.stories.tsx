@@ -14,7 +14,13 @@ const meta = {
     variant: { control: false },
     startingPoint: {
       control: "select",
-      options: ["before-feedback", "feedback-saved", "suggestion-ready"],
+      options: [
+        "before-feedback",
+        "feedback-saved",
+        "discussion-ready",
+        "inspection-ready",
+        "suggestion-ready",
+      ],
       description: "Start at a different step of the same conversation.",
     },
     responseDelayMs: {
@@ -40,4 +46,4 @@ type Story = StoryObj<typeof meta>;
 
 export const FooterAction: Story = { name: "Footer action", args: { variant: "footer" } };
 export const QuickPrompts: Story = { name: "Quick prompts", args: { variant: "quick-prompts" } };
-export const InlineProposal: Story = { name: "Inline proposal", args: { variant: "inline" } };
+export const InlineProposal: Story = { name: "Inline discussion", args: { variant: "inline" } };

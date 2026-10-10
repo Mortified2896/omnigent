@@ -1,12 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { FeedbackDiscussionPrototype, type DiscussionVariant } from "./FeedbackDiscussionPrototype";
+import {
+  FeedbackDiscussionPrototype,
+  type DiscussionVariant,
+  type StartingPoint,
+} from "./FeedbackDiscussionPrototype";
 
 afterEach(cleanup);
 function mount(
   variant: DiscussionVariant = "footer",
-  startingPoint: "before-feedback" | "feedback-saved" | "suggestion-ready" = "before-feedback",
+  startingPoint: StartingPoint = "before-feedback",
   cacheTelemetry: "reported" | "unreported" = "unreported",
 ) {
   return render(
@@ -37,22 +41,32 @@ async function saveFeedback() {
 }
 async function sendPreparedPrompt() {
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(screen.getByLabelText("Suggested feedback")).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getAllByTestId("discussion-turn").at(-1)).toHaveAttribute(
+      "data-complete",
+      "true",
+    ),
+  );
 }
-it("uses production auto-save and accepts and undoes suggested edits without changing the outcome", async () => {
+it("discusses saved feedback first, then accepts and undoes explicitly requested edits", async () => {
   mount();
   expect(original().queryByRole("button", { name: "Feedback discussion" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Save feedback" })).not.toBeInTheDocument();
   await saveFeedback();
   fireEvent.click(original().getByRole("button", { name: "Feedback discussion" }));
   expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue(
-    "Suggest clearer wording and tags for my feedback on this answer. Keep my outcome unchanged.",
+    "Discuss my feedback on this answer. Do you agree with my assessment?",
   );
   expect(screen.queryByTestId("discussion-turn")).not.toBeInTheDocument();
   await sendPreparedPrompt();
+  expect(screen.queryByLabelText("Suggested feedback")).not.toBeInTheDocument();
+  expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-intent", "discuss");
   expect(original().getByRole("textbox", { name: "Task review comment" })).toHaveValue(
     "Needs live verification.",
   );
+  fireEvent.click(screen.getByRole("button", { name: "Suggest feedback changes" }));
+  await sendPreparedPrompt();
+  expect(screen.getByLabelText("Suggested feedback")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Accept changes" }));
   await waitFor(() =>
     expect(original().getByRole("textbox", { name: "Task review comment" })).toHaveValue(
@@ -80,26 +94,32 @@ it("expands quick prompts and preserves an existing draft in the actual composer
   fireEvent.change(input, { target: { value: "Keep this existing draft." } });
   fireEvent.click(original().getByRole("button", { name: "Feedback discussion" }));
   expect(screen.getByRole("button", { name: "Discuss my feedback" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Suggest changes" }));
+  fireEvent.click(screen.getByRole("button", { name: "Suggest feedback changes" }));
   expect(input).toHaveValue(
     "Keep this existing draft.\n\nSuggest clearer wording and tags for my feedback on this answer. Keep my outcome unchanged.",
   );
   await sendPreparedPrompt();
   expect(screen.getAllByTestId("discussion-turn")).toHaveLength(1);
+  expect(screen.getByLabelText("Suggested feedback")).toBeInTheDocument();
 });
-it("sends an inline change in the same conversation and leaves a rejected edit unapplied", async () => {
+it("sends inline discussion in the same conversation and leaves a later rejected edit unapplied", async () => {
   mount("inline", "feedback-saved");
   fireEvent.click(original().getByRole("button", { name: "Feedback discussion" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "What would you like to change?" }), {
-    target: { value: "Mention the local checks." },
+  fireEvent.change(screen.getByRole("textbox", { name: "What would you like to discuss?" }), {
+    target: { value: "Does my comment explain the missing verification?" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Discuss change" }));
-  await waitFor(() => expect(screen.getByLabelText("Suggested feedback")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "Send to chat" }));
+  await waitFor(() =>
+    expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-complete", "true"),
+  );
+  expect(screen.queryByLabelText("Suggested feedback")).not.toBeInTheDocument();
   expect(
     within(screen.getByRole("region", { name: "Ongoing conversation" })).getByText(
-      "I would like to change my feedback: Mention the local checks.",
+      "Discuss my feedback on this answer: Does my comment explain the missing verification?",
     ),
   ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Suggest feedback changes" }));
+  await sendPreparedPrompt();
   fireEvent.click(screen.getByRole("button", { name: "Reject" }));
   expect(original().getByRole("textbox", { name: "Task review comment" })).toHaveValue(
     "Needs live verification.",
@@ -123,10 +143,17 @@ it("keeps follow-ups in one conversation, never sends network requests, and rest
     fireEvent.click(original().getByRole("button", { name: "Feedback discussion" }));
     await sendPreparedPrompt();
     fireEvent.change(screen.getByRole("textbox", { name: "Message the agent" }), {
-      target: { value: "Explain that suggested comment." },
+      target: { value: "Explain why you agree with my assessment." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(screen.getAllByLabelText("Suggested feedback")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId("discussion-turn")).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("discussion-turn").at(-1)).toHaveAttribute(
+        "data-complete",
+        "true",
+      ),
+    );
+    expect(screen.queryByLabelText("Suggested feedback")).not.toBeInTheDocument();
     expect(screen.getAllByRole("region", { name: "Ongoing conversation" })).toHaveLength(1);
     const blocked = await globalThis.fetch("/v1/sessions/a-real-session/task-outcomes/answer", {
       method: "PUT",
@@ -139,6 +166,44 @@ it("keeps follow-ups in one conversation, never sends network requests, and rest
   } finally {
     fetch.mockRestore();
   }
+});
+it.each<DiscussionVariant>(["footer", "quick-prompts", "inline"])(
+  "keeps inspecting actions separate from discussing or editing feedback in %s",
+  async (variant) => {
+    mount(variant, "feedback-saved");
+    fireEvent.click(original().getByRole("button", { name: "Self Inspection" }));
+    expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue(
+      "Inspect your actions and tool results for this answer. What was verified, and what is still unverified?",
+    );
+    expect(screen.getByText("Self Inspection · original answer")).toBeInTheDocument();
+    await sendPreparedPrompt();
+    expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-intent", "inspect");
+    expect(screen.getByText(/The action record supports/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Suggested feedback")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Suggest feedback changes" }),
+    ).not.toBeInTheDocument();
+    expect(original().getByRole("textbox", { name: "Task review comment" })).toHaveValue(
+      "Needs live verification.",
+    );
+    expect(original().getByRole("button", { name: "Partial" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getAllByRole("region", { name: "Ongoing conversation" })).toHaveLength(1);
+  },
+);
+it("lets the independent inspection start while a feedback comment is still saving", async () => {
+  mount("footer", "feedback-saved");
+  fireEvent.change(original().getByRole("textbox", { name: "Task review comment" }), {
+    target: { value: "A comment that has not saved yet." },
+  });
+  expect(original().getByRole("button", { name: "Feedback discussion" })).toBeDisabled();
+  expect(original().getByRole("button", { name: "Self Inspection" })).not.toBeDisabled();
+  fireEvent.click(original().getByRole("button", { name: "Self Inspection" }));
+  await sendPreparedPrompt();
+  expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-intent", "inspect");
+  expect(screen.queryByLabelText("Suggested feedback")).not.toBeInTheDocument();
 });
 it("resets the demo while keeping subsequent auto-saves inside the fixture", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
