@@ -1,4 +1,12 @@
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { XIcon } from "lucide-react";
 import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
@@ -27,6 +35,8 @@ export function FeedbackDiscussionsProvider({
   children: ReactNode;
 }) {
   const [active, setActive] = useState<Active | null>(null);
+  const [currentChatSendNonce, setCurrentChatSendNonce] = useState(0);
+  const onCurrentChatSend = useCallback(() => setCurrentChatSendNonce((nonce) => nonce + 1), []);
   const [wide, setWide] = useState(() => window.matchMedia("(min-width: 1280px)").matches);
   const reviews = useRef(new Map<string, ReviewPerspectiveInput>());
   const threads = useQuery({
@@ -41,6 +51,7 @@ export function FeedbackDiscussionsProvider({
   });
   useEffect(() => {
     setActive(null);
+    setCurrentChatSendNonce(0);
     reviews.current.clear();
   }, [sessionId]);
   useEffect(() => {
@@ -56,12 +67,14 @@ export function FeedbackDiscussionsProvider({
       active,
       setActive,
       wide,
+      currentChatSendNonce,
+      onCurrentChatSend,
       reviews,
       renderTranscript: (current: Active) => (
         <FeedbackTranscript key={current.branchId} active={current} />
       ),
     }),
-    [sessionId, threads.data, active, wide],
+    [sessionId, threads.data, active, wide, currentChatSendNonce, onCurrentChatSend],
   );
   return (
     <Context.Provider value={value}>

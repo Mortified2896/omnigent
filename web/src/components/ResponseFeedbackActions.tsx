@@ -61,11 +61,13 @@ export function canRateResponse(bubble: Bubble): boolean {
 
 export function ResponseFeedbackActions({
   responseId,
+  answerText,
   compact = true,
   autoSave = true,
   renderPerspective,
 }: {
   responseId: string;
+  answerText?: string;
   compact?: boolean;
   autoSave?: boolean;
   renderPerspective?: (review: ReviewPerspectiveInput) => ReactNode;
@@ -85,7 +87,9 @@ export function ResponseFeedbackActions({
       autoSave={autoSave}
       renderPerspective={
         renderPerspective ??
-        ((review) => <FeedbackDiscussion responseId={responseId} review={review} />)
+        ((review) => (
+          <FeedbackDiscussion responseId={responseId} review={review} answerText={answerText} />
+        ))
       }
     />
   );

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { SparklesIcon } from "lucide-react";
 import { getCurrentUserId } from "@/lib/identity";
@@ -38,23 +38,86 @@ function initialQuestion(original: Original): string {
 export function FeedbackDiscussion({
   responseId,
   review,
+  answerText,
 }: {
   responseId: string;
   review: ReviewPerspectiveInput;
+  answerText?: string;
 }) {
   const context = useContext(Context);
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [branchId, setBranchId] = useState<string | null>(null);
+  const sending = useRef(false);
+  const retry = useRef<{ text: string; stableId: string } | null>(null);
+  const streaming = useChatStore(
+    (state) => state.conversationId === context?.sessionId && state.status === "streaming",
+  );
   const thread = context?.threads.filter((t) => t.response_id === responseId).at(-1);
   const existingId = branchId ?? thread?.session_id;
   useEffect(() => {
-    context?.reviews.current.set(responseId, review);
+    const reviews = context?.reviews.current;
+    reviews?.set(responseId, review);
+    return () => {
+      if (reviews?.get(responseId) === review) reviews.delete(responseId);
+    };
   }, [context, responseId, review]);
   if (!context) return null;
+  const discussHere = async () => {
+    if (!review.saved || busy || sending.current || streaming) return;
+    sending.current = true;
+    setBusy(true);
+    setError(null);
+    const sessionId = context.sessionId;
+    const text =
+      INITIAL_QUESTION +
+      CONTEXT_MARKER +
+      "Discuss the selected answer and my feedback without tools or project changes. " +
+      "Use the excerpt to locate the full answer in this conversation. " +
+      "My outcome is authoritative. Suggest improvements in prose; do not change saved feedback.\n" +
+      JSON.stringify({
+        response_id: responseId,
+        selected_answer_excerpt: answerText?.slice(0, 2000),
+        outcome: review.outcome,
+        comment: review.comment,
+        tags: review.tags,
+      });
+    try {
+      const source = await getSession(sessionId);
+      const live = useChatStore.getState();
+      if (
+        ["running", "launching", "waiting"].includes(source.status) ||
+        source.pendingInputs?.length ||
+        (live.conversationId === sessionId && live.status === "streaming")
+      )
+        throw new Error("Wait for the current response to finish before discussing feedback here.");
+      if (!source.agentId) throw new Error("Reconnect this chat to discuss feedback.");
+      if (retry.current?.text !== text)
+        retry.current = { text, stableId: crypto.randomUUID().replaceAll("-", "") };
+      let failed = false;
+      await useChatStore.getState().send(text, source.agentId, undefined, {
+        pinnedConversationId: sessionId,
+        stableId: retry.current.stableId,
+        onError: (message) => {
+          failed = true;
+          setError(message);
+        },
+      });
+      if (!failed) {
+        retry.current = null;
+        if (useChatStore.getState().conversationId === sessionId) context.onCurrentChatSend();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not start feedback discussion");
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
+  };
   const start = async () => {
-    if (!review.saved || busy) return;
+    if (!review.saved || busy || sending.current) return;
+    sending.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -108,6 +171,7 @@ export function FeedbackDiscussion({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not start feedback discussion");
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   };
@@ -120,21 +184,41 @@ export function FeedbackDiscussion({
             <SparklesIcon className="size-4" />
             AI perspective
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">Your feedback stays authoritative.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Continue here with this chat’s context. Your feedback stays authoritative.
+          </p>
         </div>
         <Button
           type="button"
           size="sm"
           variant="outline"
-          disabled={!review.saved || busy}
-          onClick={() => void start()}
+          disabled={!review.saved || busy || streaming}
+          onClick={() => void discussHere()}
         >
-          {busy
-            ? "Opening…"
-            : existingId
-              ? "Reopen feedback discussion"
-              : "Ask for AI perspective on feedback"}
+          {busy ? "Opening…" : "Discuss in this chat"}
         </Button>
+        {streaming && (
+          <p className="w-full text-xs text-muted-foreground">
+            Available when the current response finishes.
+          </p>
+        )}
+        <details className="w-full">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            Advanced options
+          </summary>
+          <p className="my-2 text-xs text-muted-foreground">
+            Use a separate discussion to keep this chat focused.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!review.saved || busy}
+            onClick={() => void start()}
+          >
+            {existingId ? "Reopen side chat" : "Open side chat"}
+          </Button>
+        </details>
         {error && (
           <p role="alert" className="w-full text-sm text-destructive">
             {error}

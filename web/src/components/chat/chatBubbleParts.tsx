@@ -1138,7 +1138,7 @@ function AssistantBubble({
                 Answered in {bubble.workedForS.toFixed(1)}s
               </p>
             )}
-            <ResponseFeedbackActions responseId={bubble.responseId} />
+            <ResponseFeedbackActions responseId={bubble.responseId} answerText={markdownText} />
           </div>
         )}
         {/* Skip fold-only and error-only bubbles. Order: actions, then timestamp. */}

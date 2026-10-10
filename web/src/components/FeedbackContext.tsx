@@ -45,6 +45,8 @@ export const FeedbackDiscussionContext = createContext<{
   active: Active | null;
   setActive: (active: Active | null) => void;
   wide: boolean;
+  currentChatSendNonce: number;
+  onCurrentChatSend: () => void;
   reviews: RefObject<Map<string, ReviewPerspectiveInput>>;
   renderTranscript: (active: Active) => ReactNode;
 } | null>(null);

@@ -1,5 +1,15 @@
 import { O3SessionReview } from "@/components/O3SessionReview";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
 import { flushSync } from "react-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { useStickToBottomContext } from "use-stick-to-bottom";
@@ -94,6 +104,11 @@ export function isNativeFindShortcut(
     event.key.toLowerCase() === "f" &&
     (event.metaKey || event.ctrlKey)
   );
+}
+
+function FeedbackSendScroll({ nonce }: { nonce: number }) {
+  const feedback = useContext(FeedbackDiscussionContext);
+  return <ScrollToBottomOnSend nonce={nonce + (feedback?.currentChatSendNonce ?? 0)} />;
 }
 
 /**
@@ -332,7 +347,7 @@ function TranscriptImpl({
             )}
           >
             {/* Scroll helpers — must live inside StickToBottom to access context. */}
-            <ScrollToBottomOnSend nonce={sendScrollNonce} />
+            <FeedbackSendScroll nonce={sendScrollNonce} />
             <KeepBottomOnViewportResize />
             <ConversationScrollRefBridge onScroller={setScroller} />
             <HistoryAutoLoader

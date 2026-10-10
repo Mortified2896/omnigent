@@ -51,6 +51,26 @@ evidence needs a reviewed, typed allowlist extension, not generic context passth
 Text explicitly included by the user in the original task is still task text;
 this boundary isolates stored review metadata, not arbitrary semantic content.
 
+## Discussing human feedback
+
+The default AI-perspective action is **Discuss in this chat**. It appends a normal
+user turn to the ongoing session with the selected response ID, a bounded answer
+excerpt, and the caller's saved outcome, comment, and tags. It keeps the session's
+current model and reasoning configuration. Unsaved feedback and an in-flight
+response must finish before this action can send. The discussion suggests edits
+in prose and does not overwrite saved feedback.
+
+**Advanced options** exposes **Open side chat** or **Reopen side chat**. This keeps
+the existing saved feedback fork and explicit acceptance of suggested edits.
+Continuing in the original session avoids a new fork and preserves more of the
+existing request prefix, but provider cache availability and cache hits are not
+guaranteed or measured by this UI.
+
+Both discussion modes intentionally share human feedback with the conversational
+model. Their replies are not independent blind scoring evidence. Keep the
+automated-review safety gate disabled and the separate scoring-input allowlist
+boundary above intact.
+
 ## Test-session lifecycle
 
 Prefer isolated `omnidev` or test-fixture databases. For an explicitly authorized
