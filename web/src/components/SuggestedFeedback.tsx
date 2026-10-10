@@ -24,6 +24,8 @@ import {
 } from "@/components/ui/select";
 import { CheckIcon, ChevronDownIcon, PencilIcon, PlusIcon, XIcon } from "lucide-react";
 
+import { reviewedFeedback, reviewChangeKeys, type ChangeDecisions } from "@/lib/feedbackReview";
+
 interface FeedbackDetails {
   outcome?: TaskOutcome;
   comment: string;
@@ -46,6 +48,7 @@ export function SuggestedFeedback({
     try {
       return key
         ? (JSON.parse(localStorage.getItem(key) ?? "null") as {
+            decisions?: ChangeDecisions;
             state?: string;
             previous?: FeedbackDetails;
             comment?: string;
@@ -63,6 +66,7 @@ export function SuggestedFeedback({
   const [state, setState] = useState<"pending" | "accepted" | "rejected">(
     stored?.state === "accepted" || stored?.state === "rejected" ? stored.state : "pending",
   );
+  const [decisions, setDecisions] = useState<ChangeDecisions>(stored?.decisions ?? {});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [comment, setComment] = useState(stored?.comment ?? proposed.comment);
@@ -82,12 +86,12 @@ export function SuggestedFeedback({
       if (key)
         localStorage.setItem(
           key,
-          JSON.stringify({ state, previous, comment, tags: proposedTags, outcome }),
+          JSON.stringify({ state, previous, comment, tags: proposedTags, outcome, decisions }),
         );
     } catch {
       /* Keep edits in memory when storage is unavailable. */
     }
-  }, [key, state, previous, comment, proposedTags, outcome]);
+  }, [key, state, previous, comment, proposedTags, outcome, decisions]);
   const changeState = (next: "pending" | "accepted" | "rejected", before = previous) => {
     setState(next);
     setEditing(false);
@@ -95,7 +99,14 @@ export function SuggestedFeedback({
       if (key)
         localStorage.setItem(
           key,
-          JSON.stringify({ state: next, previous: before, comment, tags: proposedTags, outcome }),
+          JSON.stringify({
+            state: next,
+            previous: before,
+            comment,
+            tags: proposedTags,
+            outcome,
+            decisions,
+          }),
         );
     } catch {
       /* Keep the current review state in memory. */
@@ -112,6 +123,7 @@ export function SuggestedFeedback({
     try {
       await onApply(details);
       if (next === "accepted") setPrevious(before);
+      else setDecisions({});
       changeState(next, next === "accepted" ? before : previous);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Changes were not saved");
@@ -119,6 +131,12 @@ export function SuggestedFeedback({
       setBusy(false);
     }
   };
+  const reviewBase = { ...previous, outcome: previous.outcome ?? original.outcome };
+  const draft = { outcome, comment, tags: proposedTags };
+  const resolved = reviewedFeedback(reviewBase, draft, decisions);
+  const changeKeys = reviewChangeKeys(reviewBase, draft);
+  const decidedCount = changeKeys.filter((changeKey) => decisions[changeKey]).length;
+  const pendingCount = changeKeys.length - decidedCount;
   function addTag() {
     const tag = newTag.trim();
     if (!tag || proposedTags.length >= 8) return;
@@ -240,16 +258,24 @@ export function SuggestedFeedback({
           <>
             <TabsContent value="changes">
               <SuggestedFeedbackPreview
-                original={original}
-                current={{ outcome, comment, tags: proposedTags }}
+                original={reviewBase}
+                current={state === "pending" ? draft : resolved}
                 trackChanges={state === "pending"}
+                decisions={decisions}
+                onDecide={
+                  state === "pending" && !busy
+                    ? (changeKey, decision) =>
+                        setDecisions((values) => ({ ...values, [changeKey]: decision }))
+                    : undefined
+                }
               />
             </TabsContent>
             <TabsContent value="final">
               <SuggestedFeedbackPreview
-                original={original}
-                current={{ outcome, comment, tags: proposedTags }}
+                original={reviewBase}
+                current={state === "pending" ? draft : resolved}
                 trackChanges={false}
+                decisions={decisions}
               />
             </TabsContent>
           </>
@@ -263,18 +289,25 @@ export function SuggestedFeedback({
               className="min-h-10 md:min-h-0"
               disabled={busy}
               onClick={() =>
-                void apply({ outcome, comment: comment.trim(), tags: proposedTags }, "accepted")
+                void apply({ ...resolved, outcome: resolved.outcome as TaskOutcome }, "accepted")
               }
             >
               <CheckIcon data-icon="inline-start" />
-              Accept changes
+              {decidedCount
+                ? pendingCount
+                  ? "Accept remaining & save"
+                  : "Save reviewed feedback"
+                : "Accept changes"}
             </Button>
             <Button
               size="sm"
               variant="ghost"
               className="min-h-10 md:min-h-0"
               disabled={busy}
-              onClick={() => setEditing((value) => !value)}
+              onClick={() => {
+                if (!editing) setDecisions({});
+                setEditing((value) => !value);
+              }}
               aria-label={editing ? "Done editing suggestion" : "Edit feedback suggestion"}
             >
               <PencilIcon data-icon="inline-start" />
@@ -297,8 +330,9 @@ export function SuggestedFeedback({
             className="min-h-10 md:min-h-0"
             disabled={busy}
             onClick={() => {
-              if (state === "accepted") void apply(previous, "pending");
-              else changeState("pending");
+              if (state === "accepted") {
+                void apply(previous, "pending");
+              } else changeState("pending");
             }}
           >
             {state === "accepted" ? "Undo" : "Review again"}
@@ -342,7 +376,9 @@ export function SuggestedFeedback({
             ? "Changes saved to your feedback form."
             : state === "rejected"
               ? "Suggestion rejected. Your saved feedback is unchanged."
-              : "Suggested changes · Not applied"}
+              : decidedCount
+                ? `${decidedCount} of ${changeKeys.length} changes reviewed · Not saved`
+                : "Select a marked change to accept or reject it · Not saved"}
       </p>
     </section>
   );

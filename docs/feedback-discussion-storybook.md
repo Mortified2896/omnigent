@@ -185,3 +185,24 @@ the saved feedback. The gallery includes actual captures of a manually edited
 proposal changing Partial to Failed, replacing its tag, and extending its comment;
 the interactive starting fixture still proposes Partial. TypeScript, lint,
 formatting, applicable pre-commit checks, and the compiled Storybook build passed.
+
+Individual review: select a marked comment edit, a changed rating, or a tag
+addition/removal to open its compact Accept/Reject popover. Adjacent removed and
+added text is one replacement decision. Accepted edits show their replacement;
+rejected edits retain the original. Selecting a resolved edit lets the owner
+reverse that decision. Decisions persist with the existing proposal ID and do
+not write feedback until explicit save. Final text previews the mixed result.
+If changes remain unresolved, **Accept remaining & save** explicitly accepts
+those remaining suggestions; otherwise **Save reviewed feedback** saves the
+reviewed result. Editing the proposal starts a fresh individual review. Reject
+dismisses the proposal without saving; Undo restores the previous complete
+feedback and clears the decisions. A failed save keeps decisions available.
+
+Individual rating changes use the same struck-through old value, underlined
+replacement and independent popover controls as text. An unchanged rating has
+no unnecessary Accept/Reject controls. Browser interaction checked rejecting
+a rating while accepting comment edits, saving the mixed final result, and Undo
+restoring the original rating and comment.
+
+The individual-review update passed 80 focused tests across nine files and all
+applicable pre-commit checks, including TypeScript, lint and formatting.

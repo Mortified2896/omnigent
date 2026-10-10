@@ -283,7 +283,9 @@ it("rates a feedback reply independently from applying its proposal", () => {
   expect(down).toHaveAttribute("aria-pressed", "true");
   fireEvent.click(down);
   expect(down).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByText("Suggested changes · Not applied")).toBeInTheDocument();
+  expect(
+    screen.getByText("Select a marked change to accept or reject it · Not saved"),
+  ).toBeInTheDocument();
 });
 it("accepts a changed rating into the original form and undo restores it", async () => {
   mount("footer", "suggestion-ready");

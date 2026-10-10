@@ -1,12 +1,24 @@
 import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
-import { diffFeedbackText, feedbackOutcomeLabel } from "@/lib/feedbackChanges";
+import { feedbackOutcomeLabel } from "@/lib/feedbackChanges";
+
+import {
+  commentEdits,
+  ratingChangeKey,
+  tagChangeKey,
+  reviewedFeedback,
+  type ChangeDecisions,
+  type ChangeDecision,
+} from "@/lib/feedbackReview";
+import { FeedbackChangeControl } from "./FeedbackChangeControl";
 
 interface PreviewDetails {
   outcome: string;
   comment: string;
   tags: string[];
 }
+
+const NO_DECISIONS: ChangeDecisions = {};
 
 const ADDED =
   "bg-success/10 text-foreground underline decoration-success decoration-2 underline-offset-2";
@@ -34,19 +46,49 @@ export function SuggestedFeedbackPreview({
   original,
   current,
   trackChanges,
+  decisions = NO_DECISIONS,
+  onDecide,
 }: {
   original: PreviewDetails;
   current: PreviewDetails;
   trackChanges: boolean;
+  decisions?: ChangeDecisions;
+  onDecide?: (key: string, decision: ChangeDecision) => void;
 }) {
-  const commentChanges = useMemo(() => {
-    let offset = 0;
-    return diffFeedbackText(original.comment, current.comment).map((change) => {
-      const key = `${change.kind}:${offset}`;
-      offset += change.text.length;
-      return { ...change, key };
-    });
-  }, [original.comment, current.comment]);
+  const commentChanges = useMemo(
+    () => commentEdits(original.comment, current.comment),
+    [original.comment, current.comment],
+  );
+  const resolved = reviewedFeedback(original, current, decisions);
+  const review = (key: string, label: string, before: string, after: string) => {
+    const decision = decisions[key];
+    const content =
+      decision === "accepted" ? (
+        after
+      ) : decision === "rejected" ? (
+        before
+      ) : (
+        <>
+          {before && <MarkedText kind="removed" text={String(before)} />}
+          {after && <MarkedText kind="added" text={String(after)} />}
+        </>
+      );
+    return onDecide ? (
+      <FeedbackChangeControl
+        label={label}
+        decision={decision}
+        onDecide={(value) => onDecide(key, value)}
+      >
+        {content || (
+          <span className="text-xs text-muted-foreground">
+            {decision === "accepted" ? "Removed" : "Addition rejected"}
+          </span>
+        )}
+      </FeedbackChangeControl>
+    ) : (
+      content
+    );
+  };
   const tags = trackChanges
     ? [
         ...original.tags.map((tag) => ({
@@ -60,19 +102,21 @@ export function SuggestedFeedbackPreview({
             kind: "added" as const,
           })),
       ]
-    : current.tags.map((tag) => ({ tag, kind: "unchanged" as const }));
+    : resolved.tags.map((tag) => ({ tag, kind: "unchanged" as const }));
   const ratingChanged = trackChanges && current.outcome !== original.outcome;
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-3" aria-label="Proposed feedback rating">
         <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
-        {ratingChanged && (
-          <MarkedText kind="removed" text={feedbackOutcomeLabel(original.outcome)} />
-        )}
         {ratingChanged ? (
-          <MarkedText kind="added" text={feedbackOutcomeLabel(current.outcome)} />
+          review(
+            ratingChangeKey(original.outcome, current.outcome),
+            "rating change",
+            feedbackOutcomeLabel(original.outcome),
+            feedbackOutcomeLabel(current.outcome),
+          )
         ) : (
-          <Badge variant="secondary">{feedbackOutcomeLabel(current.outcome)}</Badge>
+          <Badge variant="secondary">{feedbackOutcomeLabel(resolved.outcome)}</Badge>
         )}
       </div>
       {tags.length > 0 && (
@@ -93,7 +137,12 @@ export function SuggestedFeedbackPreview({
                 </Badge>
               ) : (
                 <span key={`${kind}:${tag}`} className="min-w-0 max-w-full break-words text-sm">
-                  <MarkedText kind={kind} text={tag} />
+                  {review(
+                    tagChangeKey(tag, kind === "added"),
+                    `${kind === "added" ? "add" : "remove"} tag ${tag}`,
+                    kind === "removed" ? tag : "",
+                    kind === "added" ? tag : "",
+                  )}
                 </span>
               ),
             )}
@@ -106,9 +155,15 @@ export function SuggestedFeedbackPreview({
       >
         {trackChanges
           ? commentChanges.length
-            ? commentChanges.map(({ key, ...change }) => <MarkedText key={key} {...change} />)
+            ? commentChanges.map((change, index) => (
+                <span key={change.key}>
+                  {change.changed
+                    ? review(change.key, `comment change ${index + 1}`, change.before, change.after)
+                    : change.after}
+                </span>
+              ))
             : "No comment"
-          : current.comment || "No comment"}
+          : resolved.comment || "No comment"}
       </p>
     </div>
   );

@@ -190,3 +190,46 @@ it("renders proposed markup as literal text in both review views", () => {
   );
   expect(view.container.querySelector("script, img")).toBeNull();
 });
+
+it("reviews rating, comment edits and tags independently, persists decisions, then saves the mixed result", async () => {
+  const before = { outcome: "partial", comment: "Needs live verification.", tags: ["Tests"] };
+  const after = {
+    outcome: "failed" as const,
+    comment: "Local live verification and deployment.",
+    tags: ["Mobile"],
+  };
+  const apply = vi.fn().mockResolvedValue(undefined);
+  const props = { id: "individual-review", original: before, proposed: after, onApply: apply };
+  render(<SuggestedFeedback {...props} />);
+  const decide = (label: string, decision: "Accept" | "Reject") => {
+    fireEvent.click(screen.getByRole("button", { name: `Review ${label}` }));
+    fireEvent.click(screen.getByRole("button", { name: `${decision} ${label}` }));
+  };
+  decide("rating change", "Reject");
+  decide("comment change 1", "Reject");
+  decide("remove tag Tests", "Reject");
+  decide("add tag Mobile", "Accept");
+  expect(apply).not.toHaveBeenCalled();
+  cleanup();
+  render(<SuggestedFeedback {...props} />);
+  expect(
+    screen.getByRole("button", { name: "Review rating change · rejected" }),
+  ).toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Final text" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  expect(screen.getByLabelText("Suggested feedback comment preview")).toHaveTextContent(
+    "Needs live verification and deployment.",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Accept remaining & save" }));
+  await waitFor(() =>
+    expect(apply).toHaveBeenCalledWith({
+      outcome: "partial",
+      comment: "Needs live verification and deployment.",
+      tags: ["Tests", "Mobile"],
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(apply).toHaveBeenLastCalledWith(before));
+});
