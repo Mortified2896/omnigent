@@ -238,3 +238,9 @@ and review replies use the same tracked-change component with explicit saves and
 independent reply votes. The ongoing chat keeps its model configuration during
 feedback discussion; the advanced side-chat action remains available. Storybook
 responses and cache indicators remain simulated.
+
+For inspection through an existing private Tailscale proxy, set
+`OMNIGENT_STORYBOOK_ALLOWED_HOSTS` to that device's exact Tailscale hostname when
+starting Storybook. Both the Storybook manager and Vite preview use this bounded
+allowlist. Keep the server on loopback and the existing proxy private; the
+default permits localhost and IP addresses without allowing arbitrary hosts.
