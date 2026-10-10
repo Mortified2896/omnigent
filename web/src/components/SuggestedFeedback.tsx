@@ -1,6 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { TaskOutcome } from "@/hooks/useTaskExperiment";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupInput,
+  InputGroupAddon,
+  InputGroupButton,
+} from "@/components/ui/input-group";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+} from "@/components/ui/select";
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  PencilIcon,
+  PlusIcon,
+  XIcon,
+} from "lucide-react";
 
 interface FeedbackDetails {
   outcome?: TaskOutcome;
@@ -49,6 +76,11 @@ export function SuggestedFeedback({
     stored?.outcome ?? proposed.outcome ?? (original.outcome as TaskOutcome),
   );
   const [newTag, setNewTag] = useState("");
+  const [showOriginal, setShowOriginal] = useState(false);
+  const originalCommentId = useId();
+  const ratingId = useId();
+  const commentId = useId();
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     try {
       if (key)
@@ -62,6 +94,7 @@ export function SuggestedFeedback({
   }, [key, state, previous, comment, proposedTags, outcome]);
   const changeState = (next: "pending" | "accepted" | "rejected", before = previous) => {
     setState(next);
+    setEditing(false);
     try {
       if (key)
         localStorage.setItem(
@@ -90,133 +123,169 @@ export function SuggestedFeedback({
       setBusy(false);
     }
   };
+  const outcomeLabel = (value: string) =>
+    ({ success: "Success", partial: "Partial", failed: "Failed", not_sure: "Not sure" })[value] ??
+    value;
+  function addTag() {
+    const tag = newTag.trim();
+    if (!tag || proposedTags.length >= 8) return;
+    if (!proposedTags.some((value) => value.toLowerCase() === tag.toLowerCase()))
+      setProposedTags((tags) => [...tags, tag]);
+    setNewTag("");
+  }
   return (
-    <details
-      open
+    <section
       aria-label="Suggested feedback"
-      className="mt-3 space-y-3 rounded-lg border bg-muted/20 p-3"
+      className="mt-3 flex flex-col gap-3 md:rounded-lg md:border md:p-4"
     >
-      <summary className="cursor-pointer text-sm font-medium">Review suggested changes</summary>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium">Review feedback changes</p>
-        <span className="text-xs text-muted-foreground">
-          Outcome: {original.outcome.replaceAll("_", " ")}
-        </span>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Accepting saves the proposed rating, tags, and comment. You can edit all three first.
-      </p>
-      <label className="block space-y-1 text-xs">
-        <span>Proposed rating · Edit before accepting</span>
-        <select
-          aria-label="Suggested feedback rating"
-          className="block rounded-md border bg-background p-2 text-sm"
-          value={outcome}
-          disabled={state !== "pending" || busy}
-          onChange={(event) => setOutcome(event.target.value as TaskOutcome)}
-        >
-          <option value="success">Success</option>
-          <option value="partial">Partial</option>
-          <option value="failed">Failed</option>
-          <option value="not_sure">Not sure</option>
-        </select>
-      </label>
-      <div className="flex flex-wrap gap-1" aria-label="Proposed feedback tags">
-        {original.tags
-          .filter((tag) => !proposedTags.includes(tag))
-          .map((tag) => (
-            <del
-              key={tag}
-              className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs"
+      <Separator className="md:hidden" />
+      <h3 className="text-sm font-medium">Suggested feedback</h3>
+      {editing && state === "pending" ? (
+        <FieldGroup className="gap-3">
+          <Field orientation="horizontal">
+            <FieldLabel htmlFor={ratingId}>Rating</FieldLabel>
+            <Select
+              value={outcome}
+              disabled={busy}
+              onValueChange={(value) => setOutcome(value as TaskOutcome)}
             >
-              {tag}
-            </del>
-          ))}
-        {proposedTags.map((tag) => (
-          <span
-            key={tag}
-            className={`rounded border px-2 py-1 text-xs ${original.tags.includes(tag) ? "" : "border-brand-accent/40 bg-brand-accent/10 text-brand-accent"}`}
-            title={original.tags.includes(tag) ? "Unchanged tag" : "Added tag"}
-          >
-            {tag}
-            {state === "pending" && (
-              <button
-                type="button"
-                disabled={busy}
-                className="ml-2"
-                aria-label={`Remove suggested tag ${tag}`}
-                onClick={() => setProposedTags((tags) => tags.filter((value) => value !== tag))}
+              <SelectTrigger
+                id={ratingId}
+                aria-label="Suggested feedback rating"
+                className="ml-auto min-h-10 md:min-h-0"
               >
-                ×
-              </button>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {(["success", "partial", "failed", "not_sure"] as const).map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {outcomeLabel(value)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field>
+            <FieldLabel>Tags</FieldLabel>
+            <div className="flex flex-wrap gap-1.5" aria-label="Proposed feedback tags">
+              {proposedTags.map((tag) => (
+                <Button
+                  key={tag}
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="min-h-10 md:min-h-0"
+                  disabled={busy}
+                  aria-label={`Remove suggested tag ${tag}`}
+                  onClick={() => setProposedTags((tags) => tags.filter((value) => value !== tag))}
+                >
+                  {tag}
+                  <XIcon data-icon="inline-end" />
+                </Button>
+              ))}
+            </div>
+            <InputGroup className="min-h-10">
+              <InputGroupInput
+                aria-label="Suggested feedback tag"
+                value={newTag}
+                maxLength={64}
+                placeholder="Add a tag…"
+                disabled={busy || proposedTags.length >= 8}
+                onChange={(event) => setNewTag(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addTag();
+                  }
+                }}
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  aria-label="Add proposed tag"
+                  disabled={busy || proposedTags.length >= 8 || !newTag.trim()}
+                  onClick={addTag}
+                >
+                  <PlusIcon data-icon="inline-start" />
+                  Add
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={commentId}>Comment</FieldLabel>
+            <Textarea
+              id={commentId}
+              aria-label="Suggested feedback comment"
+              rows={3}
+              maxLength={4000}
+              value={comment}
+              disabled={busy}
+              onChange={(event) => setComment(event.target.value)}
+            />
+          </Field>
+        </FieldGroup>
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          <div className="flex items-center gap-3">
+            <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
+            {outcome !== original.outcome && (
+              <>
+                <span className="text-sm text-muted-foreground line-through">
+                  {outcomeLabel(original.outcome)}
+                </span>
+                <ArrowRightIcon className="size-3.5 text-muted-foreground" />
+              </>
             )}
-          </span>
-        ))}
-      </div>
-      {state === "pending" && (
-        <div className="flex gap-2">
-          <input
-            aria-label="Suggested feedback tag"
-            className="min-w-0 flex-1 rounded-md border bg-background p-2 text-sm"
-            maxLength={64}
-            placeholder="Add a tag…"
-            value={newTag}
-            disabled={busy || proposedTags.length >= 8}
-            onChange={(event) => setNewTag(event.target.value)}
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy || proposedTags.length >= 8 || !newTag.trim()}
-            onClick={() => {
-              const tag = newTag.trim();
-              if (!proposedTags.some((value) => value.toLowerCase() === tag.toLowerCase()))
-                setProposedTags((tags) => [...tags, tag]);
-              setNewTag("");
-            }}
-          >
-            Add proposed tag
-          </Button>
+            <Badge variant="secondary">{outcomeLabel(outcome)}</Badge>
+          </div>
+          {proposedTags.length > 0 && (
+            <div className="flex items-start gap-3">
+              <span className="w-10 shrink-0 pt-1 text-xs text-muted-foreground">Tags</span>
+              <div className="flex flex-wrap gap-1.5" aria-label="Proposed feedback tags">
+                {proposedTags.map((tag) => (
+                  <Badge key={tag} variant="outline">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="text-ui leading-relaxed" aria-label="Suggested feedback comment preview">
+            {comment || "No comment"}
+          </p>
         </div>
       )}
-      {state === "pending" && original.comment && (
-        <del
-          className="block rounded-md bg-red-500/10 p-2 text-sm"
-          aria-label="Original feedback comment"
-        >
-          {original.comment}
-        </del>
-      )}
-      <label className="block space-y-1 text-xs">
-        <span>
-          {state === "pending" ? "Proposed comment · Edit before accepting" : "Suggested comment"}
-        </span>
-        <textarea
-          aria-label="Suggested feedback comment"
-          className="w-full rounded-md border border-brand-accent/40 bg-brand-accent/10 p-2 text-sm"
-          rows={4}
-          maxLength={4000}
-          value={comment}
-          disabled={state !== "pending" || busy}
-          onChange={(event) => setComment(event.target.value)}
-        />
-      </label>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {state === "pending" ? (
           <>
             <Button
               size="sm"
+              className="min-h-10 md:min-h-0"
               disabled={busy}
               onClick={() =>
                 void apply({ outcome, comment: comment.trim(), tags: proposedTags }, "accepted")
               }
             >
+              <CheckIcon data-icon="inline-start" />
               Accept changes
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
+              className="min-h-10 md:min-h-0"
+              disabled={busy}
+              onClick={() => setEditing((value) => !value)}
+              aria-label={editing ? "Done editing suggestion" : "Edit feedback suggestion"}
+            >
+              <PencilIcon data-icon="inline-start" />
+              {editing ? "Done" : "Edit"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-10 md:min-h-0"
               disabled={busy}
               onClick={() => changeState("rejected")}
             >
@@ -227,6 +296,7 @@ export function SuggestedFeedback({
           <Button
             size="sm"
             variant="outline"
+            className="min-h-10 md:min-h-0"
             disabled={busy}
             onClick={() => {
               if (state === "accepted") void apply(previous, "pending");
@@ -237,10 +307,35 @@ export function SuggestedFeedback({
           </Button>
         )}
       </div>
+      {state === "pending" && original.comment && (
+        <div className="flex flex-col gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="self-start"
+            aria-expanded={showOriginal}
+            aria-controls={originalCommentId}
+            onClick={() => setShowOriginal((value) => !value)}
+          >
+            <ChevronDownIcon data-icon="inline-end" />
+            {showOriginal ? "Hide original comment" : "Show original comment"}
+          </Button>
+          {showOriginal && (
+            <p
+              id={originalCommentId}
+              className="text-sm text-muted-foreground"
+              aria-label="Original feedback comment"
+            >
+              {original.comment}
+            </p>
+          )}
+        </div>
+      )}
       {error && (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
       <p className="text-xs text-muted-foreground" role="status">
         {busy
@@ -251,6 +346,6 @@ export function SuggestedFeedback({
               ? "Suggestion rejected. Your saved feedback is unchanged."
               : "Suggested changes · Not applied"}
       </p>
-    </details>
+    </section>
   );
 }

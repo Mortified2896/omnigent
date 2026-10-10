@@ -17,7 +17,7 @@ import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
 
 export const COMPOSER_COLUMN_WIDTH = `w-full ${CHAT_COLUMN_WIDTH}`;
 export const CHAT_COMPOSER_FORM_CLASS =
-  "chat-composer-form relative px-4 pb-[max(20px,env(safe-area-inset-bottom))] md:px-6";
+  "chat-composer-form relative px-0 pb-[max(8px,env(safe-area-inset-bottom))] md:px-6 md:pb-[max(20px,env(safe-area-inset-bottom))]";
 
 /**
  * The composer layout contract: one 12px inset, two roles.
@@ -108,7 +108,7 @@ export const ChatComposer = forwardRef<HTMLDivElement, ChatComposerProps>(functi
       ref={ref}
       data-composer-card
       className={cn(
-        "composer-reference-surface relative flex w-full flex-col rounded-2xl border transition-shadow duration-150 has-[textarea:focus]:shadow-[var(--composer-shadow-focus)] md:min-h-[105px]",
+        "composer-reference-surface relative flex w-full flex-col border-t transition-shadow duration-150 md:min-h-[105px] md:rounded-2xl md:border md:has-[textarea:focus]:shadow-[var(--composer-shadow-focus)]",
         className,
       )}
       {...props}

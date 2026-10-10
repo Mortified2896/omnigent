@@ -14,6 +14,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import {
   ArrowUpIcon,
@@ -560,6 +561,7 @@ export const BubbleView = memo(
     showsWorking = false,
     actionsPersistent = false,
     recoveryDisabled = false,
+    actionExtras,
   }: {
     bubble: Bubble;
     isLastAssistant?: boolean;
@@ -567,6 +569,8 @@ export const BubbleView = memo(
     actionsPersistent?: boolean;
     /** Hide retry/recovery controls when the surrounding session is sealed. */
     recoveryDisabled?: boolean;
+    /** Contextual controls that share the assistant message's action row. */
+    actionExtras?: ReactNode;
   }) {
     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
     if (bubble.kind === "compaction_loading") {
@@ -594,6 +598,7 @@ export const BubbleView = memo(
         showsWorking={showsWorking}
         actionsPersistent={actionsPersistent}
         recoveryDisabled={recoveryDisabled}
+        actionExtras={actionExtras}
       />
     );
   },
@@ -602,6 +607,7 @@ export const BubbleView = memo(
     (prev.showsWorking ?? false) === (next.showsWorking ?? false) &&
     (prev.actionsPersistent ?? false) === (next.actionsPersistent ?? false) &&
     (prev.recoveryDisabled ?? false) === (next.recoveryDisabled ?? false) &&
+    prev.actionExtras === next.actionExtras &&
     bubblesEqual(prev.bubble, next.bubble),
 );
 
@@ -956,12 +962,14 @@ function AssistantBubble({
   showsWorking = false,
   actionsPersistent = false,
   recoveryDisabled = false,
+  actionExtras,
 }: {
   bubble: Extract<Bubble, { kind: "assistant" }>;
   isLastAssistant?: boolean;
   showsWorking?: boolean;
   actionsPersistent?: boolean;
   recoveryDisabled?: boolean;
+  actionExtras?: ReactNode;
 }) {
   // The walker only emits an assistant bubble when at least one assistant-side
   // block exists. The "Working…" shimmer for the empty-items / streaming gap
@@ -1145,7 +1153,7 @@ function AssistantBubble({
         {!foldOnly && !errorOnly && (
           <div
             className={cn(
-              "flex items-center gap-3 py-1",
+              "flex flex-wrap items-center gap-x-3 gap-y-1 py-1",
               actionsPersistent
                 ? "opacity-100"
                 : "opacity-40 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100",
@@ -1185,6 +1193,11 @@ function AssistantBubble({
                 {isLinkCopied ? <CheckIcon size={14} /> : <Link2Icon size={14} />}
               </MessageAction>
             </MessageActions>
+            {actionExtras && (
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                {actionExtras}
+              </div>
+            )}
             {ts && (
               <span
                 className="select-none whitespace-nowrap text-[11px] leading-4 text-foreground/56"

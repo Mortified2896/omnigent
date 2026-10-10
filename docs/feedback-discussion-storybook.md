@@ -19,6 +19,17 @@ The screenshot comparison page at
 <https://macbook-pro.taile0361b.ts.net:8443/inspection/> links to the interactive
 variants. Each image is an actual browser capture of the story at 390 by 844.
 
+The revised mobile layout uses one 12 px conversation gutter. Feedback comments
+and proposed changes sit directly in the transcript, with separators instead of
+nested cards. Saved comments are readable text with **Edit**; selected tags stay
+visible while **Edit tags** opens the full picker. A proposal initially shows its
+rating, tags, and comment as text, followed by **Accept changes**, **Edit**, and
+**Reject** in one action row. **Edit** opens the shared shadcn fields and **Done**
+returns to the readable view without applying anything. Original comments are
+available through a disclosure. Reply voting and review controls share the actual
+message action toolbar with copy actions. Desktop retains the application's wider
+column and composer surface.
+
 Under **Prototypes / Feedback discussion**, compare:
 
 | Story | Interaction after saving feedback |
@@ -43,7 +54,8 @@ component for eventual integration. The composer also uses the production
 `useAutoGrowTextarea` hook. The inspection toolbar sits outside the product
 surface. There is no separate imitation feedback form.
 
-Choose **Partial** under the answer, enter a comment, and choose a tag. The real
+Choose **Partial** under the answer, open **Add comment**, and choose a tag through
+**Edit tags** on mobile. The real
 feedback editor auto-saves: outcome clicks save immediately, tags save
 immediately, and comments save after a 500 ms pause. Wait for **Saved**, open
 **Feedback discussion**, then inspect the prepared message in the ongoing composer. It sends after five
@@ -52,7 +64,7 @@ Editing leaves the draft for manual sending. Existing drafts are preserved and
 never auto-sent. Switching an untouched prepared action restarts the countdown.
 Hiding the page or resetting the demo cancels the countdown.
 Read the discussion reply, choose **Review feedback**, and send that
-request if you want an edit proposal. Edit the proposed rating (Success, Partial, Failed, or Not sure), tags, and
+request if you want an edit proposal. Choose **Edit** to adjust the proposed rating (Success, Partial, Failed, or Not sure), tags, and
 comment, then accept; or reject the entire proposal without changing your feedback.
 Each AI feedback reply also has independent thumbs up/down controls for usefulness.
 Voting never accepts a proposal. Story votes are fixture state and reset on reload. Acceptance updates the same
@@ -105,13 +117,19 @@ auto-save, draft preservation, ongoing-chat turns, the distinct discussion and
 inspection intents in every variant, explicitly requesting a proposal, accepting
 and undoing suggestions, rejection, missing cache telemetry, blocked outbound
 calls, transport restoration, restarting the demo, and ongoing context at each
-ready starting point. All 60 focused tests passed, together with TypeScript, lint, formatting, and the
+ready starting point. All 64 focused tests passed, together with TypeScript, lint, formatting, and the
 applicable pre-commit checks. The compiled Storybook build passed.
 The latest checks include countdown timing and cancellation, editing all proposed
 fields, restoring drafts with a stable proposal ID, rating changes and Undo, and
-reply votes that cannot apply proposals.
+reply votes that cannot apply proposals. The mobile redesign passed 64 focused
+feedback/composer tests and five message rendering tests, including contextual
+controls updating when the answer itself is unchanged. The broader message test
+file has 18 existing failures caused by `ResponseRouteBadge` rendering without a
+query provider; running an unmodified HEAD copy of that source and test reproduced
+the same 18 failures. Baseline evidence is retained in
+`output/feedback-message-baseline-tests.log`.
 
-Browser inspection covered all three stories at 390 by 844 and 1440 by 900 on
+Browser inspection covered all three stories at 320 by 568, 390 by 844, and 1440 by 900 on
 the compiled private preview. Each fit without horizontal overflow and kept the
 composer at the viewport bottom; the desktop chat column measured the shared
 768 px width. The footer flow was checked from an outcome click and comment
@@ -123,12 +141,22 @@ feedback and produced no proposal or outbound API request. The dark theme and a 
 asset load were also inspected. These are browser viewport checks; they do not
 establish physical iPhone keyboard behavior or live production inference.
 
+The revised proposal's readable view measured 366 px wide and 279 px high on the
+390 px viewport; the previous proposal's editable comment had only 308 px of
+usable width. Editing now uses the full 366 px. On the 320 px viewport the proposal
+measured 296 px wide. The mobile dark composer also uses only a top border: the
+previous side borders reduced its inner width by two pixels and wrapped the
+controls into a second row at 390 px. Rendered verification confirmed that both
+action groups now share one row in light and dark themes. Saved comment editing,
+returning to its readable view, and auto-save were checked in the browser.
+
 Rendered screenshots are retained under `output/playwright/` and copied into
 the compiled preview's `inspection/` directory for phone access. A subsequent
 Storybook build replaces the compiled directory; retain the originals in
 `output/playwright/` and copy them again if needed. The gallery source is retained
 at `output/feedback-storybook-inspection.html`; copy it to `inspection/index.html`
-after a rebuild. Its comparison screenshot is `inspection/comparison.png`.
+after a rebuild. The gallery includes a disclosure comparing the actual previous
+proposal screenshot with the redesigned review.
 
 To remove this task's private proxy, use `tailscale serve --https=8443 off`;
 do not reset the whole Tailscale Serve configuration. Verify the PID file against

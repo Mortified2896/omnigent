@@ -174,13 +174,16 @@ export function FeedbackDiscussionPrototype(props: PrototypeProps) {
   const [run, setRun] = useState(0);
   const { setTheme } = useTheme();
   return (
-    <div className="flex h-dvh min-h-[480px] w-full min-w-0 flex-col bg-background">
+    <div className="flex h-dvh min-h-0 w-full min-w-0 flex-col bg-background">
       <aside
         aria-label="Prototype inspection controls"
         className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs"
       >
         <div className="min-w-0 flex-1">
-          <p className="font-medium">{VARIANT_NAMES[props.variant]}</p>
+          <p className="truncate font-medium md:whitespace-normal">
+            {VARIANT_NAMES[props.variant]}
+            <span className="ml-2 font-normal text-muted-foreground md:hidden">· Simulated</span>
+          </p>
         </div>
         <Button
           size="icon-xs"
@@ -202,7 +205,7 @@ export function FeedbackDiscussionPrototype(props: PrototypeProps) {
           <RotateCcwIcon className="size-3.5" />
           Start again
         </Button>
-        <p className="w-full text-muted-foreground">
+        <p className="hidden w-full text-muted-foreground md:block">
           Preview · Simulated AI, saved data, and cache counters.
         </p>
       </aside>
@@ -411,27 +414,37 @@ function PrototypeConversation({
                                   replyFor(turn),
                                 )}
                                 isLastAssistant={turn.id === turns.at(-1)?.id}
+                                actionsPersistent
+                                actionExtras={
+                                  <>
+                                    <FeedbackReplyRating
+                                      value={replyVotes[turn.id] ?? null}
+                                      onChange={(value) =>
+                                        setReplyVotes((votes) => ({ ...votes, [turn.id]: value }))
+                                      }
+                                    />
+                                    {turn.intent === "discuss" && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        className="min-h-10 px-0 text-muted-foreground md:min-h-0"
+                                        disabled={busy}
+                                        onClick={() => prepare("suggest")}
+                                      >
+                                        Review feedback
+                                      </Button>
+                                    )}
+                                    <div className="ml-auto">
+                                      <CacheIndicator
+                                        reported={cacheTelemetry === "reported"}
+                                        compact
+                                      />
+                                    </div>
+                                  </>
+                                }
                               />
                             </FeedbackDisabled>
-                            <FeedbackReplyRating
-                              value={replyVotes[turn.id] ?? null}
-                              onChange={(value) =>
-                                setReplyVotes((votes) => ({ ...votes, [turn.id]: value }))
-                              }
-                            />
-                            <CacheIndicator reported={cacheTelemetry === "reported"} />
-                            {turn.intent === "discuss" && (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="px-0 text-muted-foreground"
-                                disabled={busy}
-                                onClick={() => prepare("suggest")}
-                              >
-                                Review feedback
-                              </Button>
-                            )}
                             {turn.intent === "suggest" && turn.snapshot && (
                               <SuggestedFeedback
                                 original={fixture.savedFeedback() ?? turn.snapshot}
@@ -593,9 +606,17 @@ function replyFor(turn: DiscussionTurn): string {
   return "We can continue with the remaining live verification next.";
 }
 
-function CacheIndicator({ reported, original = false }: { reported: boolean; original?: boolean }) {
+function CacheIndicator({
+  reported,
+  original = false,
+  compact = false,
+}: {
+  reported: boolean;
+  original?: boolean;
+  compact?: boolean;
+}) {
   return (
-    <p className="mt-1 text-xs text-muted-foreground">
+    <p className={cn("text-xs text-muted-foreground", !compact && "mt-1")}>
       {reported
         ? original
           ? "Cache reuse: 90% · 72,000 / 80,000 input tokens"

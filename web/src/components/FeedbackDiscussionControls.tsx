@@ -23,14 +23,27 @@ export function FeedbackDiscussionComposerContext({
     inspect: "Self Reflection",
   }[intent];
   return (
-    <div className="flex items-center justify-between px-3 pt-2 text-xs text-muted-foreground">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span>{label} · original answer</span>
+    <div className="flex min-w-0 items-center justify-between gap-2 px-3 pt-1 text-xs text-muted-foreground md:pt-2">
+      <div className="flex min-w-0 items-center gap-x-2 md:flex-wrap md:gap-y-1">
+        <span className="truncate" aria-label={`${label} · original answer`}>
+          {label}
+          <span className="hidden md:inline"> · original answer</span>
+        </span>
         {seconds != null && (
           <>
-            <span role="status">Sending in {seconds}s · Edit to stop</span>
-            <Button type="button" size="sm" variant="ghost" onClick={onStop}>
-              Stop auto-send
+            <span role="status" className="shrink-0">
+              Sending in {seconds}s<span className="hidden md:inline"> · Edit to stop</span>
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="min-h-10 px-2 md:min-h-0"
+              aria-label="Stop auto-send"
+              onClick={onStop}
+            >
+              <span className="md:hidden">Stop</span>
+              <span className="hidden md:inline">Stop auto-send</span>
             </Button>
           </>
         )}
@@ -38,6 +51,7 @@ export function FeedbackDiscussionComposerContext({
       <Button
         type="button"
         size="icon-xs"
+        className="min-h-10 min-w-8 md:min-h-0 md:min-w-0"
         variant="ghost"
         aria-label="Continue without answer context"
         onClick={onDismiss}
@@ -73,12 +87,12 @@ export function FeedbackDiscussionControls({
   }
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 md:gap-x-4">
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="px-0 text-muted-foreground"
+          className="min-h-10 px-0 text-muted-foreground md:min-h-0"
           disabled={disabled}
           onClick={() => prepare("discuss")}
         >
@@ -89,7 +103,7 @@ export function FeedbackDiscussionControls({
           type="button"
           variant="ghost"
           size="sm"
-          className="px-0 text-muted-foreground"
+          className="min-h-10 px-0 text-muted-foreground md:min-h-0"
           disabled={busy}
           onClick={() => prepare("inspect")}
         >
@@ -136,7 +150,7 @@ export function FeedbackDiscussionControls({
       {expanded && variant === "inline" && (
         <form
           id={panelId}
-          className="space-y-2 rounded-lg border p-3"
+          className="space-y-2 border-t pt-2 md:rounded-lg md:border md:p-3"
           onSubmit={(event) => {
             event.preventDefault();
             if (disabled || !text.trim()) return;

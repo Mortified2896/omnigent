@@ -290,6 +290,41 @@ it("saves newer comment edits after an older autosave finishes", async () => {
     expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
   );
 });
+
+it("keeps a mobile comment edit when returning to the readable feedback view", async () => {
+  outcomes = [
+    {
+      id: "existing",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "Saved note",
+      tags: ["Instructions"],
+    },
+  ];
+  mount(null, "answer", true, true);
+  const edit = await screen.findByRole("button", { name: "Edit feedback comment" });
+  expect(edit).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(edit);
+  const done = screen.getByRole("button", { name: "Done editing feedback comment" });
+  expect(done).toHaveAttribute("aria-expanded", "true");
+  fireEvent.change(screen.getByLabelText("Task review comment"), {
+    target: { value: "My adjusted note" },
+  });
+  fireEvent.click(done);
+  expect(screen.getByRole("button", { name: "Edit feedback comment" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  expect(screen.getByText("My adjusted note", { selector: "p" })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(outcomes.at(-1)).toMatchObject({
+      outcome: "partial",
+      comment: "My adjusted note",
+      tags: ["Instructions"],
+    }),
+  );
+});
 it("only offers feedback for durable completed visible answers", () => {
   const bubble: Bubble = {
     kind: "assistant",

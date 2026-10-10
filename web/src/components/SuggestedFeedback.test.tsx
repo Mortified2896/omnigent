@@ -16,7 +16,11 @@ it("shows proposed changes immediately and saves only on acceptance", async () =
       onApply={apply}
     />,
   );
-  expect(screen.getByLabelText("Suggested feedback")).toHaveAttribute("open");
+  expect(screen.getByLabelText("Suggested feedback")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Suggested feedback comment")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Suggested feedback comment preview")).toHaveTextContent(
+    proposed.comment,
+  );
   expect(apply).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Accept changes"));
   await waitFor(() => expect(screen.getByText("Undo")).toBeInTheDocument());
@@ -63,19 +67,20 @@ it("persists edited rating, tags, and comment; acceptance and undo apply all thr
     onApply: apply,
   };
   render(<SuggestedFeedback {...props} />);
-  fireEvent.change(screen.getByLabelText("Suggested feedback rating"), {
-    target: { value: "failed" },
-  });
+  fireEvent.click(screen.getByRole("button", { name: "Edit feedback suggestion" }));
+  fireEvent.click(screen.getByLabelText("Suggested feedback rating"));
+  fireEvent.click(screen.getByRole("option", { name: "Failed" }));
   fireEvent.change(screen.getByLabelText("Suggested feedback comment"), {
     target: { value: "Still blocked" },
   });
   fireEvent.click(screen.getByLabelText("Remove suggested tag Environment"));
   fireEvent.change(screen.getByLabelText("Suggested feedback tag"), { target: { value: "Tools" } });
-  fireEvent.click(screen.getByText("Add proposed tag"));
+  fireEvent.click(screen.getByRole("button", { name: "Add proposed tag" }));
   expect(apply).not.toHaveBeenCalled();
   cleanup();
   render(<SuggestedFeedback {...props} />);
-  expect(screen.getByLabelText("Suggested feedback rating")).toHaveValue("failed");
+  fireEvent.click(screen.getByRole("button", { name: "Edit feedback suggestion" }));
+  expect(screen.getByLabelText("Suggested feedback rating")).toHaveTextContent("Failed");
   expect(screen.getByLabelText("Suggested feedback comment")).toHaveValue("Still blocked");
   fireEvent.click(screen.getByText("Accept changes"));
   await waitFor(() => expect(screen.getByText("Undo")).toBeInTheDocument());
@@ -86,4 +91,43 @@ it("persists edited rating, tags, and comment; acceptance and undo apply all thr
   });
   fireEvent.click(screen.getByText("Undo"));
   await waitFor(() => expect(apply).toHaveBeenLastCalledWith(original));
+});
+it("reveals original comment without changing the edited proposal", () => {
+  const apply = vi.fn();
+  render(<SuggestedFeedback original={original} proposed={proposed} onApply={apply} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit feedback suggestion" }));
+  fireEvent.change(screen.getByLabelText("Suggested feedback comment"), {
+    target: { value: "My adjusted proposal" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show original comment" }));
+  expect(screen.getByRole("button", { name: "Hide original comment" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  expect(screen.getByLabelText("Original feedback comment")).toHaveTextContent(original.comment);
+  expect(screen.getByLabelText("Suggested feedback comment")).toHaveValue("My adjusted proposal");
+  expect(apply).not.toHaveBeenCalled();
+});
+
+it("previews adjusted feedback after Done and waits for explicit acceptance", async () => {
+  const apply = vi.fn().mockResolvedValue(undefined);
+  render(<SuggestedFeedback original={original} proposed={proposed} onApply={apply} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit feedback suggestion" }));
+  fireEvent.change(screen.getByLabelText("Suggested feedback comment"), {
+    target: { value: "Adjusted explanation" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Done editing suggestion" }));
+  expect(screen.queryByLabelText("Suggested feedback comment")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Suggested feedback comment preview")).toHaveTextContent(
+    "Adjusted explanation",
+  );
+  expect(apply).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Accept changes" }));
+  await waitFor(() =>
+    expect(apply).toHaveBeenCalledWith({
+      outcome: original.outcome,
+      comment: "Adjusted explanation",
+      tags: proposed.tags,
+    }),
+  );
 });

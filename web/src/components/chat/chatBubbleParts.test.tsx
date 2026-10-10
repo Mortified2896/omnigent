@@ -90,6 +90,45 @@ describe("Mermaid diagram width", () => {
   });
 });
 
+it("updates contextual reply controls when the answer itself has not changed", () => {
+  const bubble: Extract<Bubble, { kind: "assistant" }> = {
+    kind: "assistant",
+    responseId: "reply-actions",
+    stableId: "reply-actions",
+    lifecycle: "completed",
+    error: null,
+    items: [{ kind: "text", itemId: "reply-text", text: "Feedback discussion reply", final: true }],
+  };
+  const client = new QueryClient();
+  const view = render(
+    <QueryClientProvider client={client}>
+      <BubbleView
+        bubble={bubble}
+        actionExtras={
+          <button type="button" aria-pressed={false}>
+            Helpful
+          </button>
+        }
+      />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute("aria-pressed", "false");
+  view.rerender(
+    <QueryClientProvider client={client}>
+      <BubbleView
+        bubble={bubble}
+        actionExtras={
+          <button type="button" aria-pressed>
+            Helpful
+          </button>
+        }
+      />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("Feedback discussion reply")).toBeInTheDocument();
+});
+
 describe("message navigation highlight", () => {
   const text = "Highlight only this message content";
   const messageId = "highlight_target";

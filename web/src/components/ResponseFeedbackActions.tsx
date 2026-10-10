@@ -4,9 +4,9 @@ import {
   type ReviewPerspectiveInput,
 } from "./FeedbackContext";
 import { useQuery } from "@tanstack/react-query";
-import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, PencilIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Bubble } from "@/lib/renderItems";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
@@ -172,6 +172,9 @@ function OutcomeEditor({
   const [comment, setComment] = useState(human?.comment ?? "");
   const [tags, setTags] = useState<string[]>(human?.tags ?? []);
   const [customTag, setCustomTag] = useState("");
+  const [editingTags, setEditingTags] = useState(false);
+  const [editingComment, setEditingComment] = useState(false);
+  const commentId = useId();
   const [hydrated, setHydrated] = useState(!autoSave);
   useEffect(() => {
     if (autoSave && ready && !hydrated) {
@@ -295,10 +298,10 @@ function OutcomeEditor({
 
         {outcome && (
           <div
-            className="space-y-2 rounded-md border border-border/70 p-2"
+            className="space-y-2 md:rounded-md md:border md:border-border/70 md:p-2"
             data-testid="human-review-details"
           >
-            <p className="text-xs text-muted-foreground">
+            <p className="hidden text-xs text-muted-foreground md:block">
               Tags and comments are for your review, not scoring-AI input.
             </p>
             <div className="flex flex-wrap gap-1" aria-label="Task review tags">
@@ -312,7 +315,10 @@ function OutcomeEditor({
                     type="button"
                     size="sm"
                     variant={active ? "secondary" : "outline"}
-                    className="h-7 px-2 text-[11px]"
+                    className={cn(
+                      "min-h-10 px-2 text-xs md:h-7 md:min-h-7 md:text-[11px]",
+                      !active && !editingTags && "hidden md:inline-flex",
+                    )}
                     aria-pressed={active}
                     aria-label={tag}
                     title={tag}
@@ -336,7 +342,7 @@ function OutcomeEditor({
                     type="button"
                     size="sm"
                     variant="secondary"
-                    className="h-7 px-2 text-[11px]"
+                    className="min-h-10 px-2 text-xs md:h-7 md:min-h-7 md:text-[11px]"
                     aria-pressed="true"
                     disabled={mutation.isPending}
                     onClick={() => toggleTag(tag)}
@@ -344,12 +350,29 @@ function OutcomeEditor({
                     {tag} ×
                   </Button>
                 ))}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-10 px-2 text-xs md:hidden"
+                aria-expanded={editingTags}
+                aria-controls={`feedback-tags-${responseId}`}
+                onClick={() => setEditingTags((value) => !value)}
+              >
+                {editingTags ? "Done editing tags" : "Edit tags"}
+              </Button>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div
+              id={`feedback-tags-${responseId}`}
+              className={cn(
+                "flex-wrap items-center gap-1.5 md:flex",
+                editingTags || !autoSave ? "flex" : "hidden",
+              )}
+            >
               <input
                 value={customTag}
                 maxLength={64}
-                className="h-8 min-w-36 flex-1 rounded-md border bg-background px-2 text-xs"
+                className="h-10 min-w-0 flex-1 rounded-md border bg-background px-2 text-base md:h-8 md:min-w-36 md:text-xs"
                 placeholder="Custom tag"
                 aria-label="Custom task review tag"
                 onChange={(event) => setCustomTag(event.target.value)}
@@ -364,7 +387,7 @@ function OutcomeEditor({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8"
+                className="h-10 md:h-8"
                 disabled={!customTag.trim() || tags.length >= 8 || mutation.isPending}
                 onClick={addCustomTag}
               >
@@ -384,12 +407,38 @@ function OutcomeEditor({
                 </Button>
               )}
             </div>
+            <div className="flex items-start gap-2 md:hidden">
+              {!editingComment && comment && (
+                <p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                  {comment}
+                </p>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-10 shrink-0"
+                aria-label={
+                  editingComment ? "Done editing feedback comment" : "Edit feedback comment"
+                }
+                aria-expanded={editingComment}
+                aria-controls={commentId}
+                onClick={() => setEditingComment((value) => !value)}
+              >
+                <PencilIcon data-icon="inline-start" />
+                {editingComment ? "Done" : comment ? "Edit" : "Add comment"}
+              </Button>
+            </div>
             <textarea
+              id={commentId}
               value={comment}
               maxLength={4000}
               rows={2}
               disabled={!autoSave && mutation.isPending}
-              className="min-w-0 w-full rounded-md border bg-background p-2 text-sm"
+              className={cn(
+                "min-w-0 w-full rounded-md border bg-background p-2 text-base md:block md:text-sm",
+                !editingComment && "hidden",
+              )}
               placeholder="Optional comment — what worked or what needs correction?"
               aria-label="Task review comment"
               onChange={(event) => setComment(event.target.value)}
@@ -427,8 +476,8 @@ function OutcomeEditor({
           })}
 
         {compact && outcome && (
-          <details className="rounded-lg border border-border/70">
-            <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
+          <details className="border-t border-border/70 md:rounded-lg md:border">
+            <summary className="cursor-pointer py-2 text-xs font-medium text-muted-foreground md:px-3">
               Show model decision
             </summary>
             <div className="px-2 pb-2">

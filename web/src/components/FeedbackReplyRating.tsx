@@ -14,23 +14,23 @@ export function FeedbackReplyRating({
     <div className="flex items-center gap-1" aria-label="Rate feedback reply">
       <Button
         type="button"
-        size="icon-sm"
+        size="icon"
         variant="ghost"
         aria-label="Thumbs up feedback reply"
         aria-pressed={value === "up"}
         onClick={() => onChange(value === "up" ? null : "up")}
       >
-        <ThumbsUpIcon className="size-3.5" />
+        <ThumbsUpIcon />
       </Button>
       <Button
         type="button"
-        size="icon-sm"
+        size="icon"
         variant="ghost"
         aria-label="Thumbs down feedback reply"
         aria-pressed={value === "down"}
         onClick={() => onChange(value === "down" ? null : "down")}
       >
-        <ThumbsDownIcon className="size-3.5" />
+        <ThumbsDownIcon />
       </Button>
       {value && (
         <span className="text-xs text-muted-foreground" role="status">

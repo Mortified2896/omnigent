@@ -175,7 +175,7 @@ it.each<DiscussionVariant>(["footer", "quick-prompts", "inline"])(
     expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue(
       "Inspect your actions and tool results for this answer. What was verified, and what is still unverified?",
     );
-    expect(screen.getByText("Self Reflection · original answer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Self Reflection · original answer")).toBeInTheDocument();
     await sendPreparedPrompt();
     expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-intent", "inspect");
     expect(screen.getByText(/The action record supports/)).toBeInTheDocument();
@@ -249,7 +249,7 @@ it.each([
   "preserves the ongoing composer context at %s",
   async (startingPoint, intent, label) => {
     mount("footer", startingPoint);
-    expect(screen.getByText(`${label} · original answer`)).toBeInTheDocument();
+    expect(screen.getByLabelText(`${label} · original answer`)).toBeInTheDocument();
     const proposalsBefore = screen.queryAllByLabelText("Suggested feedback").length;
     fireEvent.change(screen.getByRole("textbox", { name: "Message the agent" }), {
       target: { value: "Explain that in more detail." },
@@ -262,7 +262,7 @@ it.each([
 it("starts auto-send, cancels on editing, and manually sends the adjusted prompt", async () => {
   mount("footer", "feedback-saved");
   fireEvent.click(original().getByRole("button", { name: "Self Reflection" }));
-  expect(screen.getByText("Sending in 5s · Edit to stop")).toBeInTheDocument();
+  expect(screen.getByText("Sending in 5s")).toBeInTheDocument();
   fireEvent.change(screen.getByRole("textbox", { name: "Message the agent" }), {
     target: { value: "Reflect on the tool evidence only" },
   });
@@ -287,9 +287,9 @@ it("rates a feedback reply independently from applying its proposal", () => {
 });
 it("accepts a changed rating into the original form and undo restores it", async () => {
   mount("footer", "suggestion-ready");
-  fireEvent.change(screen.getByLabelText("Suggested feedback rating"), {
-    target: { value: "failed" },
-  });
+  fireEvent.click(screen.getByRole("button", { name: "Edit feedback suggestion" }));
+  fireEvent.click(screen.getByLabelText("Suggested feedback rating"));
+  fireEvent.click(screen.getByRole("option", { name: "Failed" }));
   fireEvent.click(screen.getByRole("button", { name: "Accept changes" }));
   await waitFor(() =>
     expect(original().getByRole("button", { name: "Failed" })).toHaveAttribute(
@@ -304,4 +304,29 @@ it("accepts a changed rating into the original form and undo restores it", async
       "true",
     ),
   );
+});
+it("opens compact tag editing without losing saved details or the ongoing draft", async () => {
+  mount("footer", "feedback-saved");
+  const input = screen.getByRole("textbox", { name: "Message the agent" });
+  fireEvent.change(input, { target: { value: "Keep my ongoing draft" } });
+  const edit = original().getByRole("button", { name: "Edit tags" });
+  expect(edit).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(edit);
+  expect(original().getByRole("button", { name: "Done editing tags" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  fireEvent.click(original().getByRole("button", { name: "Documentation" }));
+  await waitFor(() =>
+    expect(original().getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
+  );
+  fireEvent.click(original().getByRole("button", { name: "Done editing tags" }));
+  expect(original().getByRole("button", { name: "Documentation" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(original().getByRole("textbox", { name: "Task review comment" })).toHaveValue(
+    "Needs live verification.",
+  );
+  expect(input).toHaveValue("Keep my ongoing draft");
 });

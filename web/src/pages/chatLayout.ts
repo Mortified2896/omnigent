@@ -3,4 +3,4 @@ export const CHAT_COLUMN_WIDTH =
 
 /** Shared transcript geometry for the app and full conversation inspection stories. */
 export const CHAT_CONVERSATION_CONTENT_CLASS =
-  "chat-conversation-content mx-auto w-full gap-4 px-[clamp(0px,calc((var(--chat-column-width)+3.5rem-100cqi)*0.5),1.75rem)] pb-6";
+  "chat-conversation-content mx-auto w-full gap-4 px-3 md:px-[clamp(0px,calc((var(--chat-column-width)+3.5rem-100cqi)*0.5),1.75rem)] pb-6";
