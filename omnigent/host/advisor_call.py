@@ -290,7 +290,21 @@ async def generate_advisor_selection(
         # variable name in the provider table; no credential is exposed in
         # argv, and the isolated home still contains no inherited tools/rules.
         output_schema_path = temp_root / "advisor-output-schema.json"
-        output_schema_path.write_text(json.dumps(_OUTPUT_SCHEMA))
+        output_schema = _OUTPUT_SCHEMA
+        if request.get("suggest_task_tags") is True:
+            output_schema = {
+                **_OUTPUT_SCHEMA,
+                "properties": {
+                    **_OUTPUT_SCHEMA["properties"],
+                    "suggested_task_tags": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 40},
+                    },
+                },
+                "required": ["candidate_id", "rationale", "suggested_task_tags"],
+            }
+        output_schema_path.write_text(json.dumps(output_schema))
         output_path = temp_root / "selection.json"
         args = [
             "exec",

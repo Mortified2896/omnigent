@@ -1,17 +1,16 @@
 import type { TaskOutcome } from "@/hooks/useTaskExperiment";
-import type { ComponentProps } from "react";
+import { forwardRef, type ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /** Shared rating/tag buttons for the answer editor and suggested corrections. */
-export function FeedbackChoiceButton({
-  kind,
-  selected,
-  className,
-  ...props
-}: ComponentProps<typeof Button> & { kind: "outcome" | "tag"; selected: boolean }) {
+export const FeedbackChoiceButton = forwardRef<
+  HTMLButtonElement,
+  ComponentProps<typeof Button> & { kind: "outcome" | "tag"; selected: boolean }
+>(function FeedbackChoiceButton({ kind, selected, className, ...props }, ref) {
   return (
     <Button
+      ref={ref}
       type="button"
       size="sm"
       variant={selected ? "secondary" : kind === "tag" ? "outline" : "ghost"}
@@ -25,7 +24,7 @@ export function FeedbackChoiceButton({
       {...props}
     />
   );
-}
+});
 
 const COMPACT_TAG_LABELS: Record<string, string> = {
   "AGENTS instructions": "Instructions",

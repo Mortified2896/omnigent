@@ -3583,6 +3583,14 @@
             "description": "Native task id of an explicitly completed child.",
             "title": "Subagent Return Id"
           },
+          "task_tag_suggestions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Task Tag Suggestions",
+            "type": "array"
+          },
           "task_tags": {
             "items": {
               "type": "string"
@@ -8639,6 +8647,33 @@
           "kind"
         ],
         "title": "StoreHarnessCredentialRequest",
+        "type": "object"
+      },
+      "TaskTagsReviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Expected Tags",
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_tags",
+          "tags"
+        ],
+        "title": "TaskTagsReviewRequest",
         "type": "object"
       },
       "TerminalCommandData": {
@@ -13887,6 +13922,65 @@
           }
         },
         "summary": "List Session Items",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/items/{item_id}/task-tags": {
+      "put": {
+        "operationId": "review_task_tags_v1_sessions__session_id__items__item_id__task_tags_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskTagsReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Task Tags",
         "tags": [
           "sessions"
         ]

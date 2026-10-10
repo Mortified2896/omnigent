@@ -53,12 +53,24 @@ this boundary isolates stored review metadata, not arbitrary semantic content.
 
 ## Discussing human feedback
 
-The default AI-perspective action is **Discuss in this chat**. It appends a normal
-user turn to the ongoing session with the selected response ID, a bounded answer
+The **Feedback discussion** and **Self Reflection** footer actions prepare text
+in the ongoing session's composer. Untouched text sends after five seconds;
+clicking into the input, pressing a key, or editing cancels the countdown for
+manual sending. An existing draft is preserved and never scheduled. The sent
+user turn includes the selected response ID, a bounded answer
 excerpt, and the caller's saved outcome, comment, and tags. It keeps the session's
 current model and reasoning configuration. Unsaved feedback and an in-flight
-response must finish before this action can send. The discussion suggests edits
-in prose and does not overwrite saved feedback.
+response must finish before this action can send. Suggested outcome, comment,
+and tag edits use tracked changes with individual accept/reject decisions,
+editing, and explicit application. Feedback replies also have thumbs up/down.
+Suggestions never overwrite saved feedback without acceptance.
+
+For an initial prompt reviewed by Model Advisor, the same advisor call can
+propose up to eight task tags. These are stored separately from accepted tags
+on the user message. The user can review each addition, edit the set, apply it,
+or reject the proposal. Saving only updates tag metadata; the prompt text and
+the frozen model-selection decision are preserved. Concurrent tag changes
+require a reload rather than overwriting a newer set.
 
 **Advanced options** exposes **Open side chat** or **Reopen side chat**. This keeps
 the existing saved feedback fork and explicit acceptance of suggested edits.

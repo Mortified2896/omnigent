@@ -217,6 +217,7 @@ interface SessionResponseWire {
    */
   pending_inputs?: {
     task_tags?: string[];
+    task_tag_suggestions?: string[];
     pending_id: string;
     content: MessageContentBlock[];
     created_by?: string;
@@ -358,6 +359,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
       pendingId: p.pending_id,
       content: p.content,
       ...(p.task_tags?.length ? { taskTags: p.task_tags } : {}),
+      ...(p.task_tag_suggestions?.length ? { taskTagSuggestions: p.task_tag_suggestions } : {}),
       ...(p.created_by !== undefined ? { createdBy: p.created_by } : {}),
     })),
     permissionLevel: wire.permission_level ?? null,

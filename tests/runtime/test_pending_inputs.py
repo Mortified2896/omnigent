@@ -608,15 +608,26 @@ def test_task_tags_survive_snapshot_drain_and_failed_persist_restore():
     from omnigent.entities import MessageData
 
     tags = MessageData(role="user", content=[], task_tags=[" UI ", "Research", "UI"]).task_tags
-    pending_inputs.record("conv_tags", [_text_block("Review layout")], task_tags=tags)
+    suggestions = ["Testing"]
+    pending_inputs.record(
+        "conv_tags",
+        [_text_block("Review layout")],
+        task_tags=tags,
+        task_tag_suggestions=suggestions,
+    )
     tags.append("should not mutate the record")
+    suggestions.append("should not mutate suggestions")
     snapshot = pending_inputs.snapshot_for("conv_tags")
     assert snapshot[0]["task_tags"] == ["UI", "Research"]
+    assert snapshot[0]["task_tag_suggestions"] == ["Testing"]
     snapshot[0]["task_tags"].append("should not mutate the snapshot")
+    snapshot[0]["task_tag_suggestions"].append("should not mutate suggestions")
     drained = pending_inputs.resolve_oldest("conv_tags", hold=True)
     assert drained is not None and drained.task_tags == ["UI", "Research"]
+    assert drained.task_tag_suggestions == ["Testing"]
     pending_inputs.restore("conv_tags", drained)
     assert pending_inputs.snapshot_for("conv_tags")[0]["task_tags"] == ["UI", "Research"]
+    assert pending_inputs.snapshot_for("conv_tags")[0]["task_tag_suggestions"] == ["Testing"]
     assert pending_inputs.snapshot_for("conv_tags")[0]["content"] == [_text_block("Review layout")]
 
 

@@ -1280,6 +1280,7 @@ class ModelAdvisorService:
                     decision_context["execution_choice_id"] = decision.execution_choice_id
                 projection["review"] = {
                     "schema_version": 2,
+                    "suggested_task_tags": list(decision.suggested_task_tags),
                     "round_fingerprint": decision.round_fingerprint,
                     "human_choice_id": decision.human_choice_id,
                     "advisor_choice_id": decision.advisor_choice_id,
@@ -1606,6 +1607,11 @@ class ModelAdvisorService:
                             "role": "user",
                             "content": [{"type": "input_text", "text": frozen.task}],
                             **({"task_tags": list(frozen.task_tags)} if frozen.task_tags else {}),
+                            **(
+                                {"task_tag_suggestions": list(review.suggested_task_tags)}
+                                if review.suggested_task_tags
+                                else {}
+                            ),
                         },
                     )
                 ],

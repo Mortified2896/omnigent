@@ -692,6 +692,12 @@ class ConversationStore(ABC):
         """
         ...
 
+    def review_task_tags(
+        self, conversation_id: str, item_id: str, *, expected_tags: list[str], tags: list[str]
+    ) -> ConversationItem:
+        """Review a user message's tags with a compare-and-set guard."""
+        raise NotImplementedError
+
     @abstractmethod
     def list_items(
         self,

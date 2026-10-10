@@ -7457,6 +7457,32 @@ describe("chatStore — handleSessionEvent (session.* events)", () => {
   });
 
   describe("session.input.consumed", () => {
+    it("keeps Advisor tag suggestions when a native prompt is mirrored", () => {
+      useChatStore.setState({
+        blocks: [],
+        pendingUserMessages: [
+          {
+            tempId: "pending-tags",
+            content: [{ type: "input_text", text: "Review UI" }],
+            taskTags: ["Research"],
+          },
+        ],
+      });
+      handleSessionEvent({
+        type: "session_input_consumed",
+        itemId: "native-prompt",
+        itemType: "message",
+        data: {
+          role: "user",
+          content: [{ type: "input_text", text: "Review UI" }],
+          task_tag_suggestions: ["UI", "Testing"],
+        },
+      });
+      expect(useChatStore.getState().blocks[0]).toMatchObject({
+        taskTags: ["Research"],
+        taskTagSuggestions: ["UI", "Testing"],
+      });
+    });
     it.each([false, true])(
       "does not consume an unsent model-switch draft (already mirrored=%s)",
       (alreadyMirrored) => {

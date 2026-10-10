@@ -264,3 +264,44 @@ def test_route_plan_roundtrip_rejects_another_logical_choice() -> None:
     payload["advisor_transport"] = plan.to_payload()
     with pytest.raises(LogicalAdvisorError):
         LogicalFrozenRound.from_payload(payload)
+
+
+def test_initial_prompt_tags_are_optional_reviewed_advice():
+    frozen = frozen_round()
+    advice = json.dumps(
+        {
+            "candidate_id": OPENAI_LOW.choice_id,
+            "rationale": "fits",
+            "suggested_task_tags": ["Research", " Testing ", "Research"],
+        }
+    )
+    decision = prepare_logical_review(frozen, advice, randbelow=lambda n: 0)
+    assert decision.suggested_task_tags == ("Research", "Testing")
+    assert type(decision).from_payload(decision.to_payload()) == decision
+    assert frozen.task_tags == ()
+    assert frozen.advisor_input()["suggest_task_tags"] is True
+    continuation = replace(
+        frozen,
+        continuation_session_id="session",
+        current_execution={"model": "test-openai", "reasoning_effort": "low"},
+    )
+    assert "suggest_task_tags" not in continuation.advisor_input()
+    old = decision.to_payload()
+    old.pop("suggested_task_tags")
+    assert type(decision).from_payload(old).suggested_task_tags == ()
+
+
+@pytest.mark.parametrize("tags", [[""], ["x" * 41], ["tag"] * 9, [1], "Research", ["bad\nlabel"]])
+def test_reject_invalid_suggested_tags(tags):
+    with pytest.raises(LogicalAdvisorError):
+        prepare_logical_review(
+            frozen_round(),
+            json.dumps(
+                {
+                    "candidate_id": OPENAI_LOW.choice_id,
+                    "rationale": "fits",
+                    "suggested_task_tags": tags,
+                }
+            ),
+            randbelow=lambda n: 0,
+        )

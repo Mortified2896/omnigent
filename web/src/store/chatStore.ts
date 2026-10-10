@@ -519,6 +519,7 @@ export function removeLocalConversation(tempConvId: string): boolean {
  */
 export interface PendingUserMessage {
   taskTags?: string[];
+  taskTagSuggestions?: string[];
   tempId: string;
   content: MessageContentBlock[];
   /** Unsent draft awaiting session/model readiness, including unuploaded files. */
@@ -4294,6 +4295,7 @@ async function bindStream(
         tempId: p.pendingId,
         content: p.content,
         ...(p.taskTags?.length ? { taskTags: p.taskTags } : {}),
+        ...(p.taskTagSuggestions?.length ? { taskTagSuggestions: p.taskTagSuggestions } : {}),
         ...(p.createdBy !== undefined ? { author: p.createdBy } : {}),
       });
       let candidatePending: PendingUserMessage[];
@@ -6608,6 +6610,7 @@ function committedUserBlock(
   createdBy?: string,
   createdAtS?: number,
   taskTags?: string[],
+  taskTagSuggestions?: string[],
 ): UserMessageBlock {
   return {
     type: "user_message",
@@ -6629,6 +6632,7 @@ function committedUserBlock(
     content,
     stableKey,
     taskTags,
+    taskTagSuggestions,
   };
 }
 
@@ -7444,6 +7448,11 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
                   event.createdBy ?? matched.author,
                   matched.createdAtS,
                   matched.taskTags,
+                  Array.isArray(event.data.task_tag_suggestions)
+                    ? event.data.task_tag_suggestions.filter(
+                        (tag): tag is string => typeof tag === "string",
+                      )
+                    : matched.taskTagSuggestions,
                 ),
               ],
             };
@@ -7480,6 +7489,11 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
                 event.createdBy ?? head.author,
                 head.createdAtS,
                 head.taskTags,
+                Array.isArray(event.data.task_tag_suggestions)
+                  ? event.data.task_tag_suggestions.filter(
+                      (tag): tag is string => typeof tag === "string",
+                    )
+                  : head.taskTagSuggestions,
               ),
             ],
           };
@@ -7499,6 +7513,11 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
               undefined,
               Array.isArray(event.data.task_tags)
                 ? event.data.task_tags.filter((tag): tag is string => typeof tag === "string")
+                : undefined,
+              Array.isArray(event.data.task_tag_suggestions)
+                ? event.data.task_tag_suggestions.filter(
+                    (tag): tag is string => typeof tag === "string",
+                  )
                 : undefined,
             ),
           ],

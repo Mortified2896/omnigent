@@ -1,3 +1,6 @@
+import { parseFeedbackProposal } from "@/lib/feedbackProposal";
+import { feedbackReplyTargets, type PreparedFeedback } from "@/lib/feedbackPrompts";
+import { useChatStore } from "@/store/chatStore";
 import {
   useCallback,
   useContext,
@@ -11,7 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { XIcon } from "lucide-react";
 import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
 import { getSession } from "@/lib/sessionsApi";
-import { useTaskExperiment, type TaskOutcome } from "@/hooks/useTaskExperiment";
+import { useTaskExperiment } from "@/hooks/useTaskExperiment";
 import type { Bubble } from "@/lib/renderItems";
 import { Button } from "@/components/ui/button";
 import { SideChatPane } from "./chat/SideChatPane";
@@ -34,6 +37,13 @@ export function FeedbackDiscussionsProvider({
   sessionId: string;
   children: ReactNode;
 }) {
+  const [prepared, prepare] = useState<PreparedFeedback | null>(null);
+  const blocks = useChatStore((state) => state.blocks);
+  const activeSessionId = useChatStore((state) => state.conversationId);
+  const replyTargets = useMemo(
+    () => feedbackReplyTargets(activeSessionId === sessionId ? blocks : []),
+    [activeSessionId, sessionId, blocks],
+  );
   const [active, setActive] = useState<Active | null>(null);
   const [currentChatSendNonce, setCurrentChatSendNonce] = useState(0);
   const onCurrentChatSend = useCallback(() => setCurrentChatSendNonce((nonce) => nonce + 1), []);
@@ -51,6 +61,7 @@ export function FeedbackDiscussionsProvider({
   });
   useEffect(() => {
     setActive(null);
+    prepare(null);
     setCurrentChatSendNonce(0);
     reviews.current.clear();
   }, [sessionId]);
@@ -63,6 +74,9 @@ export function FeedbackDiscussionsProvider({
   const value = useMemo(
     () => ({
       sessionId,
+      prepared,
+      prepare,
+      replyTargets,
       threads: threads.data ?? [],
       active,
       setActive,
@@ -74,7 +88,16 @@ export function FeedbackDiscussionsProvider({
         <FeedbackTranscript key={current.branchId} active={current} />
       ),
     }),
-    [sessionId, threads.data, active, wide, currentChatSendNonce, onCurrentChatSend],
+    [
+      sessionId,
+      prepared,
+      replyTargets,
+      threads.data,
+      active,
+      wide,
+      currentChatSendNonce,
+      onCurrentChatSend,
+    ],
   );
   return (
     <Context.Provider value={value}>
@@ -93,33 +116,7 @@ export function FeedbackDiscussionsProvider({
   );
 }
 
-export function parseFeedbackProposal(
-  text: string,
-): { comment: string; tags: string[]; outcome?: TaskOutcome } | null {
-  const match = text.match(/```feedback-json\s*([\s\S]*?)```/);
-  if (!match) return null;
-  try {
-    const value = JSON.parse(match[1]);
-    if (
-      !value ||
-      (value.outcome !== undefined &&
-        !["success", "partial", "failed", "not_sure"].includes(value.outcome)) ||
-      typeof value.comment !== "string" ||
-      value.comment.length > 4000 ||
-      !Array.isArray(value.tags) ||
-      value.tags.length > 8 ||
-      value.tags.some((tag: unknown) => typeof tag !== "string" || !tag.trim() || tag.length > 64)
-    )
-      return null;
-    return {
-      ...(value.outcome === undefined ? {} : { outcome: value.outcome as TaskOutcome }),
-      comment: value.comment,
-      tags: [...new Set<string>(value.tags.map((tag: string) => tag.trim()))],
-    };
-  } catch {
-    return null;
-  }
-}
+export { parseFeedbackProposal } from "@/lib/feedbackProposal";
 
 function FeedbackTranscript({ active }: { active: Active }) {
   const context = useContext(Context)!;

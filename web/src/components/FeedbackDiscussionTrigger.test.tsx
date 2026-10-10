@@ -30,6 +30,7 @@ const review: ReviewPerspectiveInput = {
   onReplaceDetails: vi.fn(),
 };
 const scroll = vi.fn();
+const prepare = vi.fn();
 const activate = vi.fn();
 function discussionContext(
   threads: { session_id: string; response_id: string; inherited_ids: string[] }[],
@@ -44,6 +45,7 @@ function discussionContext(
     renderTranscript: () => null,
     currentChatSendNonce: 0,
     onCurrentChatSend: scroll,
+    prepare,
   };
 }
 function mount(options: { saved?: boolean; existing?: boolean } = {}) {
@@ -77,24 +79,26 @@ beforeEach(() => {
   mocks.send.mockResolvedValue(undefined);
 });
 afterEach(cleanup);
-it("defaults to the ongoing chat and appends selected feedback without creating a branch", async () => {
+it("prepares a composer review without sending or creating a branch", () => {
   mount();
-  expect(screen.getByText("Advanced options").parentElement).not.toHaveAttribute("open");
-  fireEvent.click(screen.getByRole("button", { name: "Discuss in this chat" }));
-  await waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
-  const [text, agent, files, options] = mocks.send.mock.calls[0];
-  expect(text).toContain('"selected_answer_excerpt":"The selected older answer"');
-  expect(text).toContain('"response_id":"answer"');
-  expect(text).toContain('"outcome":"partial"');
-  expect(text).toContain("do not change saved feedback");
-  expect(agent).toBe("agent");
-  expect(files).toBeUndefined();
-  expect(options).toMatchObject({ pinnedConversationId: "parent", stableId: expect.any(String) });
+  fireEvent.click(screen.getByRole("button", { name: "Feedback discussion" }));
+  expect(prepare).toHaveBeenCalledWith(
+    expect.objectContaining({
+      responseId: "answer",
+      intent: "discuss",
+      answerExcerpt: "The selected older answer",
+      original: expect.objectContaining({ outcome: "partial" }),
+    }),
+  );
+  expect(mocks.send).not.toHaveBeenCalled();
   expect(mocks.forkSession).not.toHaveBeenCalled();
-  expect(mocks.launchRunner).not.toHaveBeenCalled();
-  expect(mocks.updateSession).not.toHaveBeenCalled();
   expect(review.onReplaceDetails).not.toHaveBeenCalled();
-  expect(scroll).toHaveBeenCalledOnce();
+});
+it("prepares Self Reflection as a separate intent", () => {
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Self Reflection" }));
+  expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ intent: "inspect" }));
+  expect(mocks.send).not.toHaveBeenCalled();
 });
 it("reopens an existing side chat through Advanced options without duplicating its question", async () => {
   mocks.getSession.mockImplementation(async (id: string) => ({
@@ -117,37 +121,13 @@ it("reopens an existing side chat through Advanced options without duplicating i
 });
 it("keeps unsaved feedback and a running response from starting an ongoing discussion", () => {
   mount({ saved: false });
-  expect(screen.getByRole("button", { name: "Discuss in this chat" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Feedback discussion" })).toBeDisabled();
   cleanup();
   mocks.state.status = "streaming";
   mount();
-  expect(screen.getByRole("button", { name: "Discuss in this chat" })).toBeDisabled();
-  expect(screen.getByText("Available when the current response finishes.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Feedback discussion" })).toBeDisabled();
+
   expect(screen.getByRole("button", { name: "Open side chat" })).not.toBeDisabled();
-});
-it("checks fresh server state to avoid injecting feedback into an in-flight response", async () => {
-  mocks.getSession.mockResolvedValue({ id: "parent", agentId: "agent", status: "running" });
-  mount();
-  fireEvent.click(screen.getByRole("button", { name: "Discuss in this chat" }));
-  await waitFor(() =>
-    expect(screen.getByRole("alert")).toHaveTextContent("Wait for the current response"),
-  );
-  expect(mocks.send).not.toHaveBeenCalled();
-});
-it("retains an idempotent request for a failed retry and ignores rapid double clicks", async () => {
-  mocks.send.mockImplementationOnce(async (_text, _agent, _files, options) =>
-    options.onError("Connection lost"),
-  );
-  mount();
-  const button = screen.getByRole("button", { name: "Discuss in this chat" });
-  fireEvent.click(button);
-  fireEvent.click(button);
-  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Connection lost"));
-  expect(mocks.send).toHaveBeenCalledOnce();
-  expect(scroll).not.toHaveBeenCalled();
-  fireEvent.click(button);
-  await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2));
-  expect(mocks.send.mock.calls[1][3].stableId).toBe(mocks.send.mock.calls[0][3].stableId);
 });
 it("creates a saved side discussion only when the advanced action is selected", async () => {
   mocks.forkSession.mockResolvedValue({
@@ -171,16 +151,5 @@ it("creates a saved side discussion only when the advanced action is selected", 
   expect(mocks.forkSession).toHaveBeenCalledWith("parent", { feedbackResponseId: "answer" });
   expect(mocks.send.mock.calls[0][3]).toMatchObject({ pinnedConversationId: "new-branch" });
   expect(mocks.send.mock.calls[0][0]).toContain("feedback-json");
-  expect(scroll).not.toHaveBeenCalled();
-});
-it("pins the ongoing request to its original chat if navigation happens during the session lookup", async () => {
-  mocks.getSession.mockImplementation(async () => {
-    mocks.state.conversationId = "another-chat";
-    return { id: "parent", agentId: "agent", status: "idle" };
-  });
-  mount();
-  fireEvent.click(screen.getByRole("button", { name: "Discuss in this chat" }));
-  await waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
-  expect(mocks.send.mock.calls[0][3].pinnedConversationId).toBe("parent");
   expect(scroll).not.toHaveBeenCalled();
 });

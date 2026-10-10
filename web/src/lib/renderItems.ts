@@ -165,6 +165,7 @@ export type Bubble =
   | {
       kind: "user";
       taskTags?: string[];
+      taskTagSuggestions?: string[];
       itemId: string;
       /** Queued input that does not yet have a persisted transcript item. */
       pending?: boolean;
@@ -871,6 +872,7 @@ function walkBubbles(
         itemId: b.ctx.itemId ?? `user_${i}`,
         content: b.content,
         taskTags: b.taskTags,
+        taskTagSuggestions: b.taskTagSuggestions,
         ...(b.ctx.createdBy !== undefined ? { createdBy: b.ctx.createdBy } : {}),
         // Server stamp on cold load, client stamp while live — display
         // only, so either clock is correct here.
@@ -1891,6 +1893,8 @@ export function bubblesEqual(a: Bubble, b: Bubble): boolean {
       a.createdBy !== b.createdBy ||
       a.createdAtS !== b.createdAtS ||
       a.stableKey !== b.stableKey ||
+      JSON.stringify(a.taskTags ?? []) !== JSON.stringify(b.taskTags ?? []) ||
+      JSON.stringify(a.taskTagSuggestions ?? []) !== JSON.stringify(b.taskTagSuggestions ?? []) ||
       a.content.length !== b.content.length
     )
       return false;

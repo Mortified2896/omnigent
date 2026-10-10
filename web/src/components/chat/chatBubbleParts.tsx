@@ -1,3 +1,7 @@
+import { MessageTaskTags } from "@/components/PromptTagSuggestions";
+import { OngoingFeedbackReply, OngoingFeedbackActions } from "@/components/OngoingFeedbackReply";
+import { feedbackVisibleText } from "@/lib/feedbackPrompts";
+import { FeedbackDiscussionContext, FeedbackFormContext } from "@/components/FeedbackContext";
 import { ResponseRouteBadge } from "./ResponseRouteBadge";
 import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
 import { GeneratedResponseAudioPlayer } from "@/components/chat/GeneratedResponseAudioPlayer";
@@ -223,6 +227,7 @@ export function buildPendingBubbles(
       pending: true,
       content: p.content,
       taskTags: p.taskTags,
+      taskTagSuggestions: p.taskTagSuggestions,
       ...(author !== null ? { createdBy: author } : {}),
       // Stamped once at send time; absent for snapshot-replayed entries,
       // which show no timestamp rather than a re-stamped render time.
@@ -715,6 +720,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
   // Scoped so a side-chat bubble builds attachment URLs against the CHILD, not
   // the main conversation the root store projects.
   const sessionId = useScopedConversationId();
+  const feedbackForm = useContext(FeedbackFormContext);
   // Author labels only matter once the session is shared with someone else.
   const isSessionShared = useContext(SessionSharedContext);
   // - input_image: `imagePreview` picks the variant — an uploaded file, an
@@ -722,7 +728,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
   //   for a block carrying neither.
   // - input_file: always render as a chip (non-image files can't be
   //   previewed inline).
-  const text = extractUserText(bubble.content);
+  const text = feedbackVisibleText(extractUserText(bubble.content));
   const images = bubble.content.filter((c): c is ImageContentBlock => c.type === "input_image");
   const fileChips = bubble.content.filter(
     (c): c is Extract<MessageContentBlock, { type: "input_file" }> => c.type === "input_file",
@@ -904,21 +910,12 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
             )}
           </MessageContent>
         </div>
-        {bubble.taskTags && bubble.taskTags.length > 0 && (
-          <div
-            className="mt-1 flex max-w-full flex-wrap justify-end gap-1"
-            aria-label="Message task tags"
-          >
-            {bubble.taskTags.map((tag) => (
-              <span
-                key={tag}
-                className="rounded border border-primary/50 bg-primary/10 px-2 py-0.5 text-xs"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
+        <MessageTaskTags
+          sessionId={bubble.pending ? null : (sessionId ?? feedbackForm?.sessionId ?? null)}
+          itemId={bubble.itemId}
+          tags={bubble.taskTags}
+          suggestions={bubble.taskTagSuggestions}
+        />
         {/* 40%-visible on touch, hover/focus-reveal on desktop. */}
         <div className="flex items-center justify-end gap-3 py-1 opacity-40 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
           {ts && (
@@ -957,7 +954,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
 }
 
 function AssistantBubble({
-  bubble,
+  bubble: sourceBubble,
   isLastAssistant = false,
   showsWorking = false,
   actionsPersistent = false,
@@ -979,6 +976,23 @@ function AssistantBubble({
   // for retry — not whatever the root store currently projects. Unscoped (the
   // main transcript) reads the root store exactly as before; `useConversationEntryState(null)`
   // is inert (no subscription, stable empty snapshot).
+  const feedbackDiscussion = useContext(FeedbackDiscussionContext);
+  const conversationIdForFeedback = useScopedConversationId();
+  const feedbackTarget =
+    feedbackDiscussion?.sessionId === conversationIdForFeedback
+      ? feedbackDiscussion.replyTargets?.get(sourceBubble.responseId)
+      : undefined;
+  const feedbackText = feedbackTarget ? collectBubbleMarkdown(sourceBubble.items) : "";
+  const bubble = feedbackTarget
+    ? {
+        ...sourceBubble,
+        items: sourceBubble.items.map((item) =>
+          item.kind === "text"
+            ? { ...item, text: item.text.replace(/```feedback-json[\s\S]*?```/g, "").trim() }
+            : item,
+        ),
+      }
+    : sourceBubble;
   const scopedConversationId = useContext(ConversationScopeContext);
   const scopedState = useConversationEntryState(scopedConversationId);
   const activeConversationId = useChatStore((s) => s.conversationId);
@@ -1146,7 +1160,9 @@ function AssistantBubble({
                 Answered in {bubble.workedForS.toFixed(1)}s
               </p>
             )}
-            <ResponseFeedbackActions responseId={bubble.responseId} answerText={markdownText} />
+            {!feedbackTarget && (
+              <ResponseFeedbackActions responseId={bubble.responseId} answerText={markdownText} />
+            )}
           </div>
         )}
         {/* Skip fold-only and error-only bubbles. Order: actions, then timestamp. */}
@@ -1193,9 +1209,17 @@ function AssistantBubble({
                 {isLinkCopied ? <CheckIcon size={14} /> : <Link2Icon size={14} />}
               </MessageAction>
             </MessageActions>
-            {actionExtras && (
+            {(actionExtras ||
+              (feedbackTarget && conversationId && bubble.lifecycle === "completed")) && (
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
                 {actionExtras}
+                {feedbackTarget && conversationId && bubble.lifecycle === "completed" && (
+                  <OngoingFeedbackActions
+                    sessionId={conversationId}
+                    responseId={bubble.responseId}
+                    target={feedbackTarget}
+                  />
+                )}
               </div>
             )}
             {ts && (
@@ -1209,6 +1233,16 @@ function AssistantBubble({
           </div>
         )}
       </Message>
+
+      {feedbackTarget && conversationId && bubble.lifecycle === "completed" && (
+        <OngoingFeedbackReply
+          sessionId={conversationId}
+          responseId={bubble.responseId}
+          target={feedbackTarget}
+          text={feedbackText}
+          showActions={false}
+        />
+      )}
 
       {/* Surface a turn-level failure as the same destructive pill an error
           block renders — never raw red text. */}

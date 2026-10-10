@@ -47,3 +47,8 @@ type Story = StoryObj<typeof meta>;
 export const FooterAction: Story = { name: "Footer action", args: { variant: "footer" } };
 export const QuickPrompts: Story = { name: "Quick prompts", args: { variant: "quick-prompts" } };
 export const InlineProposal: Story = { name: "Inline discussion", args: { variant: "inline" } };
+
+export const PromptTags: Story = {
+  name: "Advisor prompt tags",
+  args: { variant: "footer", startingPoint: "suggestion-ready", showPromptTagSuggestions: true },
+};

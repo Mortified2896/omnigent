@@ -66,8 +66,9 @@ def test_no_tools_block_covers_every_bundled_tool_surface() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("suggest_tags", [False, True])
 async def test_advisor_exec_argv_enforces_the_no_tools_stance(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, suggest_tags: bool
 ) -> None:
     """The captured codex exec invocation carries zero tools end to end."""
     captured: dict[str, Any] = {}
@@ -139,6 +140,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
         "instructions": "Select exactly one allowed candidate.",
         "task": "Do the thing",
         "candidates": [{"candidate_id": "choice-a"}],
+        **({"suggest_task_tags": True} if suggest_tags else {}),
     }
     result = await generate_advisor_selection(
         request=request,
@@ -155,7 +157,12 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     sandbox_at = argv.index("--sandbox")
     assert argv[sandbox_at + 1] == "read-only"
     output_schema = json.loads(captured["output_schema"])
-    assert output_schema["required"] == ["candidate_id", "rationale"]
+    assert output_schema["required"] == ["candidate_id", "rationale"] + (
+        ["suggested_task_tags"] if suggest_tags else []
+    )
+    if suggest_tags:
+        assert output_schema["properties"]["suggested_task_tags"]["maxItems"] == 8
+        assert output_schema["properties"]["suggested_task_tags"]["items"]["maxLength"] == 40
     assert "--output-last-message" in argv
     assert "--json" in argv
     assert f"model_max_output_tokens={ADVISOR_MAX_OUTPUT_TOKENS}" in argv

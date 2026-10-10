@@ -12,6 +12,7 @@ function mount(
   variant: DiscussionVariant = "footer",
   startingPoint: StartingPoint = "before-feedback",
   cacheTelemetry: "reported" | "unreported" = "unreported",
+  showPromptTagSuggestions = false,
 ) {
   return render(
     <TooltipProvider>
@@ -19,11 +20,25 @@ function mount(
         variant={variant}
         startingPoint={startingPoint}
         cacheTelemetry={cacheTelemetry}
+        showPromptTagSuggestions={showPromptTagSuggestions}
         responseDelayMs={0}
       />
     </TooltipProvider>,
   );
 }
+it("reviews Advisor prompt tags in the actual user-message component", async () => {
+  mount("footer", "suggestion-ready", "unreported", true);
+  const tags = within(screen.getByRole("region", { name: "Suggested prompt tags" }));
+  fireEvent.click(tags.getByRole("button", { name: "Review add tag Testing" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reject add tag Testing" }));
+  expect(screen.queryByLabelText("Message task tags")).not.toBeInTheDocument();
+  fireEvent.click(tags.getByRole("button", { name: "Accept remaining & apply" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Suggested prompt tags" })).not.toBeInTheDocument(),
+  );
+  expect(screen.getByLabelText("Message task tags")).toHaveTextContent("UI");
+  expect(screen.getByLabelText("Message task tags")).not.toHaveTextContent("Testing");
+});
 function original() {
   return within(screen.getByLabelText("Feedback on the original answer"));
 }

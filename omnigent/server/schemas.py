@@ -1307,11 +1307,22 @@ class SessionEventInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_tags(self) -> SessionEventInput:
-        if self.type == "message" and "task_tags" in self.data:
+        if self.type == "message" and (
+            "task_tags" in self.data or "task_tag_suggestions" in self.data
+        ):
             from omnigent.entities.conversation import MessageData
 
-            tags = MessageData(role="user", content=[], task_tags=self.data["task_tags"]).task_tags
-            self.data = {**self.data, "task_tags": tags}
+            metadata = MessageData(
+                role="user",
+                content=[],
+                task_tags=self.data.get("task_tags", []),
+                task_tag_suggestions=self.data.get("task_tag_suggestions", []),
+            )
+            self.data = {
+                **self.data,
+                "task_tags": metadata.task_tags,
+                "task_tag_suggestions": metadata.task_tag_suggestions,
+            }
         return self
 
 

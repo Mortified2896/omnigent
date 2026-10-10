@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { SparklesIcon } from "lucide-react";
+import { FeedbackDiscussionControls } from "./FeedbackDiscussionControls";
 import { getCurrentUserId } from "@/lib/identity";
 import {
   fetchSessionItemsPage,
@@ -50,7 +50,6 @@ export function FeedbackDiscussion({
   const [error, setError] = useState<string | null>(null);
   const [branchId, setBranchId] = useState<string | null>(null);
   const sending = useRef(false);
-  const retry = useRef<{ text: string; stableId: string } | null>(null);
   const streaming = useChatStore(
     (state) => state.conversationId === context?.sessionId && state.status === "streaming",
   );
@@ -64,57 +63,6 @@ export function FeedbackDiscussion({
     };
   }, [context, responseId, review]);
   if (!context) return null;
-  const discussHere = async () => {
-    if (!review.saved || busy || sending.current || streaming) return;
-    sending.current = true;
-    setBusy(true);
-    setError(null);
-    const sessionId = context.sessionId;
-    const text =
-      INITIAL_QUESTION +
-      CONTEXT_MARKER +
-      "Discuss the selected answer and my feedback without tools or project changes. " +
-      "Use the excerpt to locate the full answer in this conversation. " +
-      "My outcome is authoritative. Suggest improvements in prose; do not change saved feedback.\n" +
-      JSON.stringify({
-        response_id: responseId,
-        selected_answer_excerpt: answerText?.slice(0, 2000),
-        outcome: review.outcome,
-        comment: review.comment,
-        tags: review.tags,
-      });
-    try {
-      const source = await getSession(sessionId);
-      const live = useChatStore.getState();
-      if (
-        ["running", "launching", "waiting"].includes(source.status) ||
-        source.pendingInputs?.length ||
-        (live.conversationId === sessionId && live.status === "streaming")
-      )
-        throw new Error("Wait for the current response to finish before discussing feedback here.");
-      if (!source.agentId) throw new Error("Reconnect this chat to discuss feedback.");
-      if (retry.current?.text !== text)
-        retry.current = { text, stableId: crypto.randomUUID().replaceAll("-", "") };
-      let failed = false;
-      await useChatStore.getState().send(text, source.agentId, undefined, {
-        pinnedConversationId: sessionId,
-        stableId: retry.current.stableId,
-        onError: (message) => {
-          failed = true;
-          setError(message);
-        },
-      });
-      if (!failed) {
-        retry.current = null;
-        if (useChatStore.getState().conversationId === sessionId) context.onCurrentChatSend();
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not start feedback discussion");
-    } finally {
-      sending.current = false;
-      setBusy(false);
-    }
-  };
   const start = async () => {
     if (!review.saved || busy || sending.current) return;
     sending.current = true;
@@ -178,30 +126,26 @@ export function FeedbackDiscussion({
   const open = context.active?.responseId === responseId;
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 p-3">
-        <div>
-          <p className="flex items-center gap-2 text-sm font-medium">
-            <SparklesIcon className="size-4" />
-            AI perspective
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Continue here with this chat’s context. Your feedback stays authoritative.
-          </p>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={!review.saved || busy || streaming}
-          onClick={() => void discussHere()}
-        >
-          {busy ? "Opening…" : "Discuss in this chat"}
-        </Button>
-        {streaming && (
-          <p className="w-full text-xs text-muted-foreground">
-            Available when the current response finishes.
-          </p>
-        )}
+      <div className="space-y-2">
+        <FeedbackDiscussionControls
+          variant="footer"
+          busy={busy || streaming}
+          saving={!review.saved}
+          onPrepare={(intent) =>
+            context.prepare?.({
+              id: crypto.randomUUID(),
+              responseId,
+              intent,
+              original: {
+                outcome: review.outcome,
+                comment: review.comment,
+                tags: [...review.tags],
+              },
+              answerExcerpt: answerText?.slice(0, 2000),
+            })
+          }
+          onSubmitInline={() => {}}
+        />
         <details className="w-full">
           <summary className="cursor-pointer text-xs text-muted-foreground">
             Advanced options

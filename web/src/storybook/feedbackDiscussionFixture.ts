@@ -61,6 +61,10 @@ export function createFeedbackDiscussionFixture(
     const method = init?.method ?? "GET";
     requests.push({ path, method });
     const route = path.startsWith(prefix) ? path.slice(prefix.length) : null;
+    if (method === "PUT" && route?.startsWith("items/") && route.endsWith("/task-tags")) {
+      const input = JSON.parse(String(init?.body)) as { tags: string[] };
+      return json({ task_tags: input.tags });
+    }
     if (method === "GET" && route === "task-experiment") return json([...rows.values()]);
     if (method === "GET" && route === "scoring-policy") return json(policy);
     if (method === "GET" && route?.startsWith("response-attribution/")) return json(ATTRIBUTION);

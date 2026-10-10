@@ -35,6 +35,8 @@ import { serializeReplyDraft, type StoredReplyDraft } from "@/lib/replyDraft";
 import { COMPOSER_SEND_SHORTCUT_STORAGE_KEY } from "@/lib/composerSendShortcutPreferences";
 import { composerContextToLabels } from "@/lib/composerContextAdapters";
 import { CHAT_COLUMN_WIDTH } from "./chatLayout";
+import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
+import { FEEDBACK_PROMPTS, readFeedbackTarget } from "@/lib/feedbackPrompts";
 
 // Subscription network behavior is covered separately from composer controls.
 vi.mock("@/components/composer/CodexSubscriptionUsage", () => ({
@@ -213,6 +215,91 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) 
     ...overrides,
   };
 }
+
+const feedbackComposerContext = {
+  sessionId: "conv_feedback_composer",
+  prepared: null,
+  threads: [],
+  active: null,
+  setActive: vi.fn(),
+  wide: true,
+  currentChatSendNonce: 0,
+  onCurrentChatSend: vi.fn(),
+  reviews: { current: new Map() },
+  renderTranscript: () => null,
+};
+const prepared = {
+  id: "prepared-1",
+  responseId: "original-response",
+  intent: "discuss" as const,
+  original: { outcome: "partial", comment: "Needs verification", tags: ["Testing"] },
+};
+const preparedContext = { ...feedbackComposerContext, prepared };
+
+describe("ongoing feedback composer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clearSessionDrafts();
+    useChatStore.setState({
+      conversationId: "conv_feedback_composer",
+      blocks: [],
+      status: "idle",
+      sessionStatus: "idle",
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    clearSessionDrafts();
+    vi.useRealTimers();
+  });
+  function harness() {
+    const onSend = vi.fn();
+    const view = render(
+      <FeedbackDiscussionContext.Provider value={feedbackComposerContext}>
+        <Composer {...composerProps({ onSend })} />
+      </FeedbackDiscussionContext.Provider>,
+    );
+    return {
+      onSend,
+      prepare: () =>
+        view.rerender(
+          <FeedbackDiscussionContext.Provider value={preparedContext}>
+            <Composer {...composerProps({ onSend })} />
+          </FeedbackDiscussionContext.Provider>,
+        ),
+    };
+  }
+  it("prepares the visible draft then sends once in the same session after five seconds", () => {
+    const h = harness();
+    h.prepare();
+    expect(textarea()).toHaveValue(FEEDBACK_PROMPTS.discuss);
+    act(() => vi.advanceTimersByTime(4900));
+    expect(h.onSend).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(100));
+    expect(h.onSend).toHaveBeenCalledOnce();
+    expect(readFeedbackTarget(h.onSend.mock.calls[0][0])?.responseId).toBe("original-response");
+    expect(useChatStore.getState().conversationId).toBe("conv_feedback_composer");
+    expect(textarea()).toHaveValue("");
+  });
+  it("stops auto-send when editing starts and sends the adjusted text manually", () => {
+    const h = harness();
+    h.prepare();
+    fireEvent.pointerDown(textarea());
+    act(() => vi.advanceTimersByTime(6000));
+    expect(h.onSend).not.toHaveBeenCalled();
+    fireEvent.change(textarea(), { target: { value: "Explain the rating first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(h.onSend.mock.calls[0][0]).toMatch(/^Explain the rating first/);
+  });
+  it("preserves an existing composer draft without scheduling it", () => {
+    const h = harness();
+    fireEvent.change(textarea(), { target: { value: "My existing draft" } });
+    h.prepare();
+    expect(textarea()).toHaveValue("My existing draft");
+    act(() => vi.advanceTimersByTime(6000));
+    expect(h.onSend).not.toHaveBeenCalled();
+  });
+});
 
 async function openSessionModels() {
   if (!screen.queryByTestId("composer-agent-menu")) openSessionConfig();
@@ -2379,8 +2466,11 @@ describe("Composer shared visible controls", () => {
     expect(screen.queryByTestId("composer-settings")).toBeNull();
     expect(trailing.firstElementChild).toContainElement(harnessPicker);
     expect(actions.children).toHaveLength(3);
-    expect(workspace).toHaveClass("mx-3", "min-h-[37px]", "rounded-t-2xl");
-    expect(textarea().closest("form")).toHaveClass("pb-[max(20px,env(safe-area-inset-bottom))]");
+    expect(workspace).toHaveClass("mx-3", "min-h-[32px]", "md:min-h-[37px]", "md:rounded-t-2xl");
+    expect(textarea().closest("form")).toHaveClass(
+      "pb-[max(8px,env(safe-area-inset-bottom))]",
+      "md:pb-[max(20px,env(safe-area-inset-bottom))]",
+    );
     // A normal working directory has no empty worktree affordance.
     expect(within(workspace).queryByTestId("composer-git-branch")).toBeNull();
     expect(screen.getByTestId("composer-host-select")).toHaveClass("w-11", "md:h-7");
@@ -6127,7 +6217,9 @@ describe("Model Advisor in an existing chat", () => {
       await screen.findByRole("region", { name: "Model advisor settings" }),
     ).toBeInTheDocument();
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByRole("checkbox", { name: /Keep the chosen model/ })).toBeChecked();
+    expect(
+      within(dialog).getByRole("checkbox", { name: /Keep the chosen model/ }),
+    ).not.toBeChecked();
     expect(screen.queryByRole("combobox", { name: "Your model" })).toBeNull();
   });
 

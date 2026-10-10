@@ -232,6 +232,7 @@ export interface ResponseStartBlock {
  */
 export interface UserMessageBlock {
   taskTags?: string[];
+  taskTagSuggestions?: string[];
   type: "user_message";
   ctx: BlockContext;
   /** Same shape as `MessageItem.content` from the items API. */

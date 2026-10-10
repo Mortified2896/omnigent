@@ -325,7 +325,11 @@ class MessageData(BaseModel):
         default_factory=list, max_length=8, exclude_if=lambda value: not value
     )
 
-    @field_validator("task_tags")
+    task_tag_suggestions: list[str] = Field(
+        default_factory=list, max_length=8, exclude_if=lambda value: not value
+    )
+
+    @field_validator("task_tags", "task_tag_suggestions")
     @classmethod
     def validate_task_tags(cls, tags: list[str]) -> list[str]:
         if any(not tag.strip() or len(tag) > 40 for tag in tags):

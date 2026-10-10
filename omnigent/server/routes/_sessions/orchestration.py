@@ -2925,9 +2925,16 @@ async def _persist_external_conversation_item_unlocked(
         if drained is not None:
             cleared_pending_id = drained.pending_id
             item = _merge_pending_file_blocks(item, drained.content)
-            if drained.task_tags:
+            if drained.task_tags or drained.task_tag_suggestions:
                 item = item.model_copy(
-                    update={"data": item.data.model_copy(update={"task_tags": drained.task_tags})}
+                    update={
+                        "data": item.data.model_copy(
+                            update={
+                                "task_tags": drained.task_tags,
+                                "task_tag_suggestions": drained.task_tag_suggestions,
+                            }
+                        )
+                    }
                 )
             # Apply the original sender's identity recorded at POST time.
             # The transcript forwarder is the single writer here and has no
@@ -3178,7 +3185,11 @@ async def _settle_undelivered_native_input(
         type="message",
         response_id=response_id or generate_task_id(),
         data=MessageData(
-            role="user", content=drained.content, user_authored=True, task_tags=drained.task_tags
+            role="user",
+            content=drained.content,
+            user_authored=True,
+            task_tags=drained.task_tags,
+            task_tag_suggestions=drained.task_tag_suggestions,
         ),
         created_by=drained.created_by,
         stable_id=drained.stable_id,
@@ -3285,6 +3296,7 @@ def _build_skipped_native_items(
                     content=skipped.content,
                     user_authored=True,
                     task_tags=skipped.task_tags,
+                    task_tag_suggestions=skipped.task_tag_suggestions,
                 ),
                 created_by=skipped.created_by,
                 stable_id=uuid.uuid5(
@@ -7217,6 +7229,11 @@ async def _dispatch_session_event_to_runner_impl(
                 task_tags=MessageData(
                     role="user", content=content, task_tags=body.data.get("task_tags", [])
                 ).task_tags,
+                task_tag_suggestions=MessageData(
+                    role="user",
+                    content=[],
+                    task_tag_suggestions=body.data.get("task_tag_suggestions", []),
+                ).task_tag_suggestions,
                 created_by=created_by,
                 stable_id=web_stable_id,
                 background_titles_enabled=background_titles_enabled,

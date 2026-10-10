@@ -1,3 +1,4 @@
+import type { PreparedFeedback, FeedbackTarget } from "@/lib/feedbackPrompts";
 import { createContext, type ReactNode, type RefObject } from "react";
 import type { ExperimentEvent, TaskOutcome } from "@/hooks/useTaskExperiment";
 import type { Session } from "@/lib/types";
@@ -46,6 +47,9 @@ export interface Active {
 }
 export const FeedbackDiscussionContext = createContext<{
   sessionId: string;
+  prepared?: PreparedFeedback | null;
+  prepare?: (request: PreparedFeedback | null) => void;
+  replyTargets?: Map<string, FeedbackTarget>;
   threads: Thread[];
   active: Active | null;
   setActive: (active: Active | null) => void;

@@ -35,6 +35,7 @@ export interface MessageItem extends BaseItem {
   /** Human submission confirmed by the server, including anonymous input. */
   user_authored?: boolean;
   task_tags?: string[];
+  task_tag_suggestions?: string[];
   /** Hidden durable context such as injected skill instructions. */
   is_meta?: boolean;
   /** Assistant-only marker for durable partial text from an interrupted turn. */

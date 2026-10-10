@@ -40,6 +40,7 @@ import { SuggestedFeedback } from "@/components/SuggestedFeedback";
 import { Button } from "@/components/ui/button";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
 import { useComposerAutoSend } from "@/hooks/useComposerAutoSend";
+import { FEEDBACK_PROMPTS } from "@/lib/feedbackPrompts";
 import type { TaskOutcome } from "@/hooks/useTaskExperiment";
 import type { Bubble } from "@/lib/renderItems";
 import { cn } from "@/lib/utils";
@@ -72,6 +73,7 @@ interface DiscussionTurn {
   complete: boolean;
 }
 interface PrototypeProps {
+  showPromptTagSuggestions?: boolean;
   variant: DiscussionVariant;
   startingPoint?: StartingPoint;
   responseDelayMs?: number;
@@ -79,11 +81,9 @@ interface PrototypeProps {
 }
 const PROPOSED_COMMENT =
   "Local checks pass; live deployment and authenticated behavior still need verification.";
-const DISCUSS_PROMPT = "Discuss my feedback on this answer. Do you agree with my assessment?";
-const SUGGEST_PROMPT =
-  "Review my feedback on this answer. Suggest a rating, clearer wording, and tags, with reasons for any changes.";
-const INSPECT_PROMPT =
-  "Inspect your actions and tool results for this answer. What was verified, and what is still unverified?";
+const DISCUSS_PROMPT = FEEDBACK_PROMPTS.discuss;
+const SUGGEST_PROMPT = FEEDBACK_PROMPTS.suggest;
+const INSPECT_PROMPT = FEEDBACK_PROMPTS.inspect;
 const ANSWER =
   "I’ve added the feedback controls. Local checks pass; deployment has not been verified yet.";
 const VARIANT_NAMES = {
@@ -126,7 +126,7 @@ const STORE_SEED = {
   backgroundTaskCount: 0,
   blockedOn: null,
 };
-function userBubble(id: string, text: string): Bubble {
+function userBubble(id: string, text: string): Extract<Bubble, { kind: "user" }> {
   return { kind: "user", itemId: id, content: [{ type: "input_text", text }] };
 }
 function assistantBubble(id: string, text: string): Bubble {
@@ -219,6 +219,7 @@ function PrototypeConversation({
   startingPoint = "before-feedback",
   responseDelayMs = 650,
   cacheTelemetry = "unreported",
+  showPromptTagSuggestions = false,
 }: PrototypeProps) {
   const sessionId = `storybook-feedback-${variant}`;
   const initialFeedback: Feedback = {
@@ -390,10 +391,15 @@ function PrototypeConversation({
                     <ScrollToBottomOnSend nonce={sendNonce} />
                     <KeepBottomOnViewportResize />
                     <BubbleView
-                      bubble={userBubble(
-                        "storybook-request",
-                        "Make feedback discussion available in the ongoing chat, keeping the controls minimal.",
-                      )}
+                      bubble={{
+                        ...userBubble(
+                          "storybook-request",
+                          "Make feedback discussion available in the ongoing chat, keeping the controls minimal.",
+                        ),
+                        taskTagSuggestions: showPromptTagSuggestions
+                          ? ["UI", "Testing"]
+                          : undefined,
+                      }}
                     />
                     <div aria-label="Feedback on the original answer">
                       <BubbleView

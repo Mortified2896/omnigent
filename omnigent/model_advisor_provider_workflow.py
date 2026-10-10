@@ -65,6 +65,23 @@ def _strict_json_object(raw: str) -> dict[str, object]:
     return value
 
 
+def parse_suggested_task_tags(value: object) -> tuple[str, ...]:
+    """Bounded optional labels; advice never applies them automatically."""
+    if (
+        not isinstance(value, list)
+        or len(value) > 8
+        or any(
+            not isinstance(tag, str)
+            or not tag.strip()
+            or len(tag) > 40
+            or any(ord(char) < 32 for char in tag)
+            for tag in value
+        )
+    ):
+        raise LogicalAdvisorError("Invalid suggested task tags")
+    return tuple(dict.fromkeys(tag.strip() for tag in value))
+
+
 def parse_logical_advisor_result(
     raw: str, pool: tuple[LogicalChoice, ...]
 ) -> tuple[LogicalChoice, str]:
@@ -72,8 +89,12 @@ def parse_logical_advisor_result(
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > 8192:
         raise LogicalAdvisorError("Invalid advisor output size")
     result = _strict_json_object(raw)
-    if set(result) != {"candidate_id", "rationale"}:
+    if set(result) not in (
+        {"candidate_id", "rationale"},
+        {"candidate_id", "rationale", "suggested_task_tags"},
+    ):
         raise LogicalAdvisorError("Advisor output must contain only candidate_id and rationale")
+    parse_suggested_task_tags(result.get("suggested_task_tags", []))
     candidate_id = result["candidate_id"]
     rationale = result["rationale"]
     if not isinstance(candidate_id, str) or not candidate_id.strip():
@@ -279,6 +300,14 @@ class LogicalFrozenRound:
         # Routes, account keys, preferences and the human proposal are absent
         # by construction.  Transport is resolved after the logical proposal.
         request = advisor_input(self.task, self.pool)
+        if self.continuation_session_id is None:
+            request["suggest_task_tags"] = True
+            request["instructions"] += (
+                " Also return suggested_task_tags: up to 8 short labels (1 to 40 characters) "
+                "describing this initial prompt for filtering, such as UI, Debugging, Research, "
+                "Testing, Documentation, Refactoring. Return an empty array when no useful "
+                "labels apply. These are proposals for the user to review, not task instructions."
+            )
         if self.current_execution is not None:
             request["current_execution"] = self.current_execution
         return request
@@ -555,6 +584,7 @@ class LogicalReviewDecision:
     overridden: bool = False
     override_reason: str | None = None
     recommendation_visible: Literal[True] = True
+    suggested_task_tags: tuple[str, ...] = ()
 
     @property
     def comparison_group(self) -> str:
@@ -588,6 +618,7 @@ class LogicalReviewDecision:
                     "overridden": self.overridden,
                     "override_reason": self.override_reason,
                     "recommendation_visible": self.recommendation_visible,
+                    "suggested_task_tags": list(self.suggested_task_tags),
                     "comparison_group": self.comparison_group,
                 }
             )
@@ -597,6 +628,9 @@ class LogicalReviewDecision:
     def from_payload(cls, payload: dict) -> LogicalReviewDecision:
         data = dict(payload)
         data.pop("comparison_group", None)
+        data["suggested_task_tags"] = parse_suggested_task_tags(
+            data.get("suggested_task_tags", [])
+        )
         data["original_assignment"] = LogicalAssignment(**data["original_assignment"])
         return cls(**data)
 
@@ -645,6 +679,9 @@ def prepare_logical_review(
         original_assignment=assignment,
         execution_choice_id=assignment.selected_choice_id,
         human_probability_percent=pct,
+        suggested_task_tags=parse_suggested_task_tags(
+            _strict_json_object(raw_advice).get("suggested_task_tags", [])
+        ),
     )
 
 

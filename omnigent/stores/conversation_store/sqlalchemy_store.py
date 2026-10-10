@@ -2325,6 +2325,41 @@ class SqlAlchemyConversationStore(ConversationStore):
             [data] = self._decode_item_data_batch([row.data])
             return _to_item(row, data)
 
+    def review_task_tags(
+        self, conversation_id: str, item_id: str, *, expected_tags: list[str], tags: list[str]
+    ) -> ConversationItem:
+        validated = MessageData(role="user", content=[], task_tags=tags).task_tags
+        with self._conv_session_immediate("review_task_tags") as session:
+            self._lock_conversation(session, conversation_id)
+            row = session.execute(
+                select(SqlConversationItem).where(
+                    SqlConversationItem.workspace_id == current_workspace_id(),
+                    SqlConversationItem.conversation_id == conversation_id,
+                    SqlConversationItem.id == item_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise LookupError("Message not found")
+            [raw] = self._decode_item_data_batch([row.data])
+            item = _to_item(row, raw)
+            if (
+                not isinstance(item.data, MessageData)
+                or item.data.role != "user"
+                or item.data.is_meta
+            ):
+                raise ValueError("Only user prompt tags can be reviewed")
+            if item.data.task_tags != expected_tags:
+                raise ValueError("Task tags changed; reload before reviewing again")
+            data = item.data.model_copy(
+                update={"task_tags": validated, "task_tag_suggestions": []}
+            )
+            row.data = self._encode_item_data(json.dumps(data.model_dump(exclude_none=True)))
+            conv = session.get(SqlConversation, (current_workspace_id(), conversation_id))
+            if conv is not None:
+                conv.updated_at = max(now_epoch(), conv.updated_at + 1)
+            session.flush()
+            return _to_item(row, json.dumps(data.model_dump(exclude_none=True)))
+
     def list_items(
         self,
         conversation_id: str,

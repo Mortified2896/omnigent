@@ -173,6 +173,7 @@ class DrainedInput:
     stable_id: str | None = None
     background_titles_enabled: bool = True
     task_tags: list[str] = field(default_factory=list)
+    task_tag_suggestions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -230,6 +231,7 @@ class _Entry:
     stable_id: str | None = None
     background_titles_enabled: bool = True
     task_tags: list[str] = field(default_factory=list)
+    task_tag_suggestions: list[str] = field(default_factory=list)
     # Lambda (not ``_now`` directly) so a monkeypatched ``_now`` is
     # resolved at construction time rather than bound at class def.
     created_at: float = field(default_factory=lambda: _now())
@@ -275,6 +277,7 @@ def record(
     *,
     background_titles_enabled: bool = True,
     task_tags: list[str] | None = None,
+    task_tag_suggestions: list[str] | None = None,
 ) -> str:
     """
     Record an un-consumed web-composer user message.
@@ -322,6 +325,7 @@ def record(
             stable_id=stable_id,
             background_titles_enabled=background_titles_enabled,
             task_tags=list(task_tags or []),
+            task_tag_suggestions=list(task_tag_suggestions or []),
         )
         entries = _pending.setdefault(conversation_id, {})
         entries[pending_id] = entry
@@ -485,6 +489,7 @@ def restore(conversation_id: str, drained: DrainedInput) -> None:
         stable_id=drained.stable_id,
         background_titles_enabled=drained.background_titles_enabled,
         task_tags=list(drained.task_tags),
+        task_tag_suggestions=list(drained.task_tag_suggestions),
     )
     with _lock:
         entries = _pending.get(conversation_id, {})
@@ -644,6 +649,11 @@ def snapshot_for(conversation_id: str) -> list[dict[str, Any]]:
         return [
             {
                 **({"task_tags": list(entry.task_tags)} if entry.task_tags else {}),
+                **(
+                    {"task_tag_suggestions": list(entry.task_tag_suggestions)}
+                    if entry.task_tag_suggestions
+                    else {}
+                ),
                 "pending_id": entry.pending_id,
                 "content": copy.deepcopy(entry.content),
                 **({"created_by": entry.created_by} if entry.created_by is not None else {}),
@@ -661,6 +671,7 @@ def _drained_input(entry: _Entry) -> DrainedInput:
         stable_id=entry.stable_id,
         background_titles_enabled=entry.background_titles_enabled,
         task_tags=list(entry.task_tags),
+        task_tag_suggestions=list(entry.task_tag_suggestions),
     )
 
 

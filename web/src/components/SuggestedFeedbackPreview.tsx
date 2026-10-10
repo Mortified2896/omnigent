@@ -48,10 +48,12 @@ export function SuggestedFeedbackPreview({
   trackChanges,
   decisions = NO_DECISIONS,
   onDecide,
+  tagsOnly = false,
 }: {
   original: PreviewDetails;
   current: PreviewDetails;
   trackChanges: boolean;
+  tagsOnly?: boolean;
   decisions?: ChangeDecisions;
   onDecide?: (key: string, decision: ChangeDecision) => void;
 }) {
@@ -118,51 +120,53 @@ export function SuggestedFeedbackPreview({
   const ratingDecision = decisions[ratingKey];
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
-      <div className="flex flex-wrap items-center gap-3" aria-label="Proposed feedback rating">
-        <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
-        <div className="flex flex-wrap gap-1">
-          {FEEDBACK_OUTCOMES.map((option) => {
-            const isOriginal = option.value === original.outcome;
-            const isProposed = option.value === current.outcome;
-            const selected =
-              option.value ===
-              (ratingChanged && !ratingDecision ? original.outcome : resolved.outcome);
-            const content =
-              ratingChanged && !ratingDecision && (isOriginal || isProposed) ? (
-                <MarkedText kind={isProposed ? "added" : "removed"} text={option.label} />
+      {!tagsOnly && (
+        <div className="flex flex-wrap items-center gap-3" aria-label="Proposed feedback rating">
+          <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
+          <div className="flex flex-wrap gap-1">
+            {FEEDBACK_OUTCOMES.map((option) => {
+              const isOriginal = option.value === original.outcome;
+              const isProposed = option.value === current.outcome;
+              const selected =
+                option.value ===
+                (ratingChanged && !ratingDecision ? original.outcome : resolved.outcome);
+              const content =
+                ratingChanged && !ratingDecision && (isOriginal || isProposed) ? (
+                  <MarkedText kind={isProposed ? "added" : "removed"} text={option.label} />
+                ) : (
+                  option.label
+                );
+              return ratingChanged && isProposed && onDecide ? (
+                <FeedbackChangeControl
+                  key={option.value}
+                  label="rating change"
+                  decision={ratingDecision}
+                  onDecide={(value) => onDecide(ratingKey, value)}
+                  choice={{ kind: "outcome", selected }}
+                >
+                  {content}
+                </FeedbackChangeControl>
               ) : (
-                option.label
+                <FeedbackChoiceButton
+                  key={option.value}
+                  kind="outcome"
+                  selected={selected}
+                  title={option.definition}
+                  aria-disabled="true"
+                  tabIndex={-1}
+                  aria-label={
+                    ratingChanged && isOriginal
+                      ? `Original rating ${feedbackOutcomeLabel(original.outcome)}`
+                      : undefined
+                  }
+                >
+                  {content}
+                </FeedbackChoiceButton>
               );
-            return ratingChanged && isProposed && onDecide ? (
-              <FeedbackChangeControl
-                key={option.value}
-                label="rating change"
-                decision={ratingDecision}
-                onDecide={(value) => onDecide(ratingKey, value)}
-                choice={{ kind: "outcome", selected }}
-              >
-                {content}
-              </FeedbackChangeControl>
-            ) : (
-              <FeedbackChoiceButton
-                key={option.value}
-                kind="outcome"
-                selected={selected}
-                title={option.definition}
-                aria-disabled="true"
-                tabIndex={-1}
-                aria-label={
-                  ratingChanged && isOriginal
-                    ? `Original rating ${feedbackOutcomeLabel(original.outcome)}`
-                    : undefined
-                }
-              >
-                {content}
-              </FeedbackChoiceButton>
-            );
-          })}
+            })}
+          </div>
         </div>
-      </div>
+      )}
       {tags.length > 0 && (
         <div className="flex items-start gap-3">
           <span className="w-10 shrink-0 pt-1 text-xs text-muted-foreground">Tags</span>
@@ -202,22 +206,29 @@ export function SuggestedFeedbackPreview({
           </div>
         </div>
       )}
-      <p
-        className="whitespace-pre-wrap break-words text-ui leading-relaxed [&>del+ins]:ms-1 [&>ins+del]:ms-1"
-        aria-label="Suggested feedback comment preview"
-      >
-        {trackChanges
-          ? commentChanges.length
-            ? commentChanges.map((change, index) => (
-                <span key={change.key}>
-                  {change.changed
-                    ? review(change.key, `comment change ${index + 1}`, change.before, change.after)
-                    : change.after}
-                </span>
-              ))
-            : "No comment"
-          : resolved.comment || "No comment"}
-      </p>
+      {!tagsOnly && (
+        <p
+          className="whitespace-pre-wrap break-words text-ui leading-relaxed [&>del+ins]:ms-1 [&>ins+del]:ms-1"
+          aria-label="Suggested feedback comment preview"
+        >
+          {trackChanges
+            ? commentChanges.length
+              ? commentChanges.map((change, index) => (
+                  <span key={change.key}>
+                    {change.changed
+                      ? review(
+                          change.key,
+                          `comment change ${index + 1}`,
+                          change.before,
+                          change.after,
+                        )
+                      : change.after}
+                  </span>
+                ))
+              : "No comment"
+            : resolved.comment || "No comment"}
+        </p>
+      )}
     </div>
   );
 }

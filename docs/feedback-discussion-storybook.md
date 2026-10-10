@@ -221,3 +221,20 @@ alongside Failed → Partial. The original editor, proposal and Storybook flow
 passed 47 focused tests after this shared-component change.
 
 The suggested rating row now uses the same shared options and order as the answer review: Success, Partial, Failed, Not sure. All four remain visible before and after individual acceptance or rejection; only the original and proposed ratings receive pending change marks. The focused component and Storybook tests cover the stable order and selected rating after both decisions.
+
+The **Advisor prompt tags** story (`prototypes-feedback-discussion--prompt-tags`)
+adds a proposal below the initial user message. Try rejecting Testing and applying
+the remaining UI tag, or edit the set using the regular Task tags picker. These
+are the application's `MessageTaskTags` and `PromptTagSuggestions` components;
+the story supplies a simulated authenticated tag-save response. Accepted tags
+replace the proposal on the prompt. Rejecting the whole proposal retains existing
+tags. Neither action changes the prompt text.
+
+In the application, initial-prompt tag proposals come from the existing logical
+Model Advisor call and remain separate from accepted prompt tags. Native pending
+inputs, transcript mirroring, and persisted history carry the proposal metadata.
+The ongoing-chat footer actions prepare a five-second draft in the real composer,
+and review replies use the same tracked-change component with explicit saves and
+independent reply votes. The ongoing chat keeps its model configuration during
+feedback discussion; the advanced side-chat action remains available. Storybook
+responses and cache indicators remain simulated.

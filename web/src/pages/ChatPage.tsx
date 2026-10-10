@@ -1,3 +1,7 @@
+import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
+import { FeedbackDiscussionComposerContext } from "@/components/FeedbackDiscussionControls";
+import { feedbackRequest, FEEDBACK_PROMPTS, type PreparedFeedback } from "@/lib/feedbackPrompts";
+import { useComposerAutoSend } from "@/hooks/useComposerAutoSend";
 import { currentModelChoices } from "@/lib/currentModelChoices";
 import { FeedbackDiscussionsProvider } from "@/components/FeedbackDiscussion";
 import { ResponseFeedbackProvider } from "@/components/ResponseFeedbackActions";
@@ -12,6 +16,7 @@ import {
   forwardRef,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -2874,6 +2879,60 @@ function ComposerImpl(
   });
   const filesRef = useRef(files);
   filesRef.current = files;
+  const feedbackDiscussion = useContext(FeedbackDiscussionContext);
+  const [feedbackDraft, setFeedbackDraft] = useState<PreparedFeedback | null>(null);
+  const handledFeedback = useRef<string | null>(null);
+  const {
+    seconds: feedbackSeconds,
+    start: startFeedbackCountdown,
+    stop: stopFeedbackCountdown,
+  } = useComposerAutoSend(() => submit());
+  useEffect(() => {
+    const prepared = feedbackDiscussion?.prepared;
+    if (!prepared || prepared.id === handledFeedback.current) return;
+    handledFeedback.current = prepared.id;
+    const hasDraft = fullText.trim().length > 0 || files.length > 0 || draft.quotes.length > 0;
+    stopFeedbackCountdown();
+    setFeedbackDraft(prepared);
+    if (!hasDraft) {
+      replaceText(FEEDBACK_PROMPTS[prepared.intent]);
+      startFeedbackCountdown();
+    }
+    tailTextareaRef.current?.focus();
+  }, [
+    feedbackDiscussion?.prepared,
+    fullText,
+    files.length,
+    draft.quotes.length,
+    replaceText,
+    startFeedbackCountdown,
+    stopFeedbackCountdown,
+  ]);
+  useEffect(() => {
+    stopFeedbackCountdown();
+    setFeedbackDraft(null);
+    handledFeedback.current = null;
+  }, [conversationId, stopFeedbackCountdown]);
+  useEffect(() => {
+    if (
+      feedbackSeconds !== null &&
+      feedbackDraft &&
+      (fullText !== FEEDBACK_PROMPTS[feedbackDraft.intent] || files.length || draft.quotes.length)
+    )
+      stopFeedbackCountdown();
+  }, [
+    fullText,
+    files.length,
+    draft.quotes.length,
+    feedbackDraft,
+    feedbackSeconds,
+    stopFeedbackCountdown,
+  ]);
+  useEffect(() => {
+    if (isWorking || disabled || unreachable || isReadOnly || sendDisabledReason !== null)
+      stopFeedbackCountdown();
+  }, [isWorking, disabled, unreachable, isReadOnly, sendDisabledReason, stopFeedbackCountdown]);
+
   // The restore effects below key off conversation state and reach the
   // attachment actions through a ref rather than widening their dependency
   // lists.
@@ -3513,6 +3572,42 @@ function ComposerImpl(
     // A send is actually happening: report it for both pointer clicks (which
     // reach here via the form submit) and Enter-key sends. Placed after the
     // guard so guarded no-ops don't emit, matching the disabled Send button.
+    stopFeedbackCountdown();
+    if (feedbackDraft) {
+      if (isWorking || isReadOnly || unreachable) return;
+      const currentReview = feedbackDiscussion?.reviews.current.get(feedbackDraft.responseId);
+      if (feedbackDraft.intent !== "inspect" && currentReview && !currentReview.saved) return;
+      const target = currentReview
+        ? {
+            ...feedbackDraft,
+            original: {
+              outcome: currentReview.outcome,
+              comment: currentReview.comment,
+              tags: [...currentReview.tags],
+            },
+          }
+        : feedbackDraft;
+      const request = feedbackRequest(
+        buildMentionPreamble(mentionedItems, sessionHarness) + serializeReplyDraft(draft),
+        target,
+        feedbackDraft.answerExcerpt,
+      );
+      appendEntry(fullText);
+      onSend(
+        request,
+        files.length ? files : undefined,
+        undefined,
+        taskTags.length ? taskTags : undefined,
+      );
+      feedbackDiscussion?.onCurrentChatSend();
+      dirtyRef.current = true;
+      clearComposerAfterSend(resetNativeInputSession);
+      clearAttachments();
+      setTaskTags([]);
+      setMentionedItems([]);
+      setMention(null);
+      return;
+    }
     trackClick("chat.composer.send", "button");
 
     // A generic (non-Codex) side chat forks the conversation and runs it on the
@@ -3751,6 +3846,7 @@ function ComposerImpl(
       shouldSteerAllFromKeyboard,
     }: ComposerKeyIntent,
   ) => {
+    stopFeedbackCountdown();
     // Mod+Enter (Mod+Shift+Enter when Mod+Enter is already the send chord)
     // steers everything: the draft, if any, is submitted first so it joins the
     // queue tail (or sends directly when idle), then every queued message is
@@ -3845,6 +3941,7 @@ function ComposerImpl(
   };
 
   const handleTextChange = (id: string | null, e: ChangeEvent<HTMLTextAreaElement>) => {
+    stopFeedbackCountdown();
     if (advisorFlowLocked || pendingAdvisorSend !== null) return;
     slashCompletion.onSelectionChange(e.target);
     editText(id, e.target.value);
@@ -3993,6 +4090,7 @@ function ComposerImpl(
             if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop;
           },
           "aria-label": "Message the agent",
+          onPointerDown: stopFeedbackCountdown,
           placeholder: composerLockedByBtw
             ? "Side chat open — press Esc to close"
             : readOnlyReason !== null
@@ -4052,6 +4150,18 @@ function ComposerImpl(
             ) : undefined,
           beforeInput: (
             <>
+              {feedbackDraft && (
+                <FeedbackDiscussionComposerContext
+                  intent={feedbackDraft.intent}
+                  seconds={feedbackSeconds}
+                  onStop={stopFeedbackCountdown}
+                  onDismiss={() => {
+                    stopFeedbackCountdown();
+                    setFeedbackDraft(null);
+                    feedbackDiscussion?.prepare?.(null);
+                  }}
+                />
+              )}
               {/* Slash-command suggestions — floats above the composer box */}
               {slashCompletion.open && (
                 <SlashCommandMenu

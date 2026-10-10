@@ -6,10 +6,13 @@ import asyncio
 
 from fastapi import (
     APIRouter,
+    HTTPException,
     Query,
     Request,
 )
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from omnigent.entities import MessageData
 from omnigent.runtime.policies.approval import _ELICITATION_MODE
 from omnigent.server._elicitation_registry import (
     _harness_elicitation_owners,
@@ -20,6 +23,7 @@ from omnigent.server._elicitation_registry import (
     _PreResolvedHarnessElicitation,
 )
 from omnigent.server.auth import (
+    LEVEL_EDIT,
     LEVEL_READ,
     AuthProvider,
 )
@@ -46,6 +50,17 @@ from omnigent.server.schemas import (
 )
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.permission_store import PermissionStore
+
+
+class TaskTagsReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_tags: list[str] = Field(max_length=8)
+    tags: list[str] = Field(max_length=8)
+
+    @field_validator("tags", "expected_tags")
+    @classmethod
+    def validate_tags(cls, value: list[str]) -> list[str]:
+        return MessageData(role="user", content=[], task_tags=value).task_tags
 
 
 def register_items_routes(
@@ -113,6 +128,28 @@ def register_items_routes(
             last_id=page.last_id,
             has_more=page.has_more,
         )
+
+    @router.put("/sessions/{session_id}/items/{item_id}/task-tags", response_model=None)
+    async def review_task_tags(
+        request: Request, session_id: str, item_id: str, body: TaskTagsReviewRequest
+    ) -> dict:
+        user_id = _get_user_id(request, auth_provider)
+        await _require_access_and_level(
+            user_id, session_id, LEVEL_EDIT, permission_store, conversation_store
+        )
+        try:
+            item = await asyncio.to_thread(
+                conversation_store.review_task_tags,
+                session_id,
+                item_id,
+                expected_tags=body.expected_tags,
+                tags=body.tags,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return item.to_api_dict()
 
     # ── GET /sessions/{session_id}/child_sessions ────────────────
 

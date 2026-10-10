@@ -62,7 +62,7 @@ export function FeedbackDiscussionComposerContext({
   );
 }
 
-/** Proposed ongoing-chat controls, shared by the inspection stories and future integration. */
+/** Ongoing-chat controls shared by the application and inspection stories. */
 export function FeedbackDiscussionControls({
   variant,
   busy,
