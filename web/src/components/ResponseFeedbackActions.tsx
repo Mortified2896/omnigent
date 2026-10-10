@@ -1,3 +1,4 @@
+import { FeedbackChoiceButton, feedbackTagLabel } from "./FeedbackChoiceButton";
 import { FeedbackDiscussion } from "./FeedbackDiscussionTrigger";
 import {
   FeedbackFormContext as FeedbackContext,
@@ -138,12 +139,6 @@ const REVIEW_TAGS = [
   "Tests/verification",
 ] as const;
 
-const COMPACT_TAG_LABELS: Record<string, string> = {
-  "AGENTS instructions": "Instructions",
-  "Task specification": "Task spec",
-  "Environment/dependency": "Environment",
-};
-
 function OutcomeEditor({
   sessionId,
   hostId,
@@ -236,12 +231,10 @@ function OutcomeEditor({
         <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Task outcome">
           {!compact && <span className="mr-1 text-xs font-medium">Your outcome</span>}
           {OUTCOMES.map((option) => (
-            <Button
+            <FeedbackChoiceButton
               key={option.value}
-              type="button"
-              size="sm"
-              variant={outcome === option.value ? "secondary" : "ghost"}
-              className="min-h-10 text-xs md:min-h-7"
+              kind="outcome"
+              selected={outcome === option.value}
               title={option.definition}
               aria-pressed={outcome === option.value}
               disabled={!ready || mutation.isPending}
@@ -254,7 +247,7 @@ function OutcomeEditor({
               }
             >
               {option.label}
-            </Button>
+            </FeedbackChoiceButton>
           ))}
         </div>
 
@@ -310,23 +303,19 @@ function OutcomeEditor({
                   (value) => value.toLocaleLowerCase() === tag.toLocaleLowerCase(),
                 );
                 return (
-                  <Button
+                  <FeedbackChoiceButton
                     key={tag}
-                    type="button"
-                    size="sm"
-                    variant={active ? "secondary" : "outline"}
-                    className={cn(
-                      "min-h-10 px-2 text-xs md:h-7 md:min-h-7 md:text-[11px]",
-                      !active && !editingTags && "hidden md:inline-flex",
-                    )}
+                    kind="tag"
+                    selected={active}
+                    className={cn(!active && !editingTags && "hidden md:inline-flex")}
                     aria-pressed={active}
                     aria-label={tag}
                     title={tag}
                     disabled={mutation.isPending}
                     onClick={() => toggleTag(tag)}
                   >
-                    {compact ? (COMPACT_TAG_LABELS[tag] ?? tag) : tag}
-                  </Button>
+                    {compact ? feedbackTagLabel(tag) : tag}
+                  </FeedbackChoiceButton>
                 );
               })}
               {tags
@@ -337,18 +326,16 @@ function OutcomeEditor({
                     ),
                 )
                 .map((tag) => (
-                  <Button
+                  <FeedbackChoiceButton
                     key={tag}
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="min-h-10 px-2 text-xs md:h-7 md:min-h-7 md:text-[11px]"
+                    kind="tag"
+                    selected={true}
                     aria-pressed="true"
                     disabled={mutation.isPending}
                     onClick={() => toggleTag(tag)}
                   >
                     {tag} ×
-                  </Button>
+                  </FeedbackChoiceButton>
                 ))}
               <Button
                 type="button"

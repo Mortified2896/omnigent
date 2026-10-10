@@ -210,3 +210,12 @@ applicable pre-commit checks, including TypeScript, lint and formatting.
 The suggestion-ready starting point seeds Failed feedback and proposes Partial
 in all three variants. Its original form and discussion snapshot use the same
 seed; other starting points keep their existing Partial feedback.
+
+Rating and tag corrections reuse `FeedbackChoiceButton`, also used by the
+original answer's feedback editor. Pending corrections keep the original choice
+filled and mark its removed text; proposed choices use the answer's unselected
+button treatment with underlined added text. Changed tags open the same compact
+individual decision toolbar. Compact tag labels are shared as well. The
+suggestion-ready fixture now includes Environment/dependency → Tests/verification
+alongside Failed → Partial. The original editor, proposal and Storybook flow
+passed 47 focused tests after this shared-component change.

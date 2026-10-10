@@ -224,6 +224,8 @@ function PrototypeConversation({
   const initialFeedback: Feedback = {
     ...SEED_FEEDBACK,
     outcome: startingPoint === "suggestion-ready" ? "failed" : SEED_FEEDBACK.outcome,
+    tags:
+      startingPoint === "suggestion-ready" ? ["Environment/dependency"] : [...SEED_FEEDBACK.tags],
   };
   const [fixture] = useState(() =>
     createFeedbackDiscussionFixture(

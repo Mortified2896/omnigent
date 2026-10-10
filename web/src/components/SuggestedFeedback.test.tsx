@@ -233,3 +233,30 @@ it("reviews rating, comment edits and tags independently, persists decisions, th
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => expect(apply).toHaveBeenLastCalledWith(before));
 });
+
+it("uses answer-style buttons for marked rating and tag corrections", () => {
+  render(
+    <SuggestedFeedback
+      original={{ outcome: "failed", comment: "Same", tags: ["Environment/dependency"] }}
+      proposed={{ outcome: "partial", comment: "Same", tags: ["Tests/verification"] }}
+      onApply={vi.fn()}
+    />,
+  );
+  const oldRating = screen.getByRole("button", { name: "Original rating Failed" });
+  const newRating = screen.getByRole("button", { name: "Review rating change" });
+  const oldTag = screen.getByRole("button", { name: "Review remove tag Environment/dependency" });
+  const newTag = screen.getByRole("button", { name: "Review add tag Tests/verification" });
+  expect(oldRating).toHaveAttribute("data-variant", "secondary");
+  expect(newRating).toHaveAttribute("data-variant", "ghost");
+  expect(oldTag).toHaveAttribute("data-variant", "secondary");
+  expect(newTag).toHaveAttribute("data-variant", "outline");
+  expect(oldTag).toHaveTextContent("Environment");
+  expect(oldTag).not.toHaveTextContent("/dependency");
+  expect(oldTag.querySelector("del")).toBeTruthy();
+  expect(newTag.querySelector("ins")).toBeTruthy();
+  fireEvent.click(newTag);
+  fireEvent.click(screen.getByRole("button", { name: "Reject add tag Tests/verification" }));
+  expect(
+    screen.getByRole("button", { name: "Review add tag Tests/verification · rejected" }),
+  ).toHaveAttribute("aria-pressed", "false");
+});

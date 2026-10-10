@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Badge } from "@/components/ui/badge";
+import { FeedbackChoiceButton, feedbackTagLabel } from "./FeedbackChoiceButton";
 import { feedbackOutcomeLabel } from "@/lib/feedbackChanges";
 
 import {
@@ -60,7 +60,13 @@ export function SuggestedFeedbackPreview({
     [original.comment, current.comment],
   );
   const resolved = reviewedFeedback(original, current, decisions);
-  const review = (key: string, label: string, before: string, after: string) => {
+  const review = (
+    key: string,
+    label: string,
+    before: string,
+    after: string,
+    choice?: { kind: "outcome" | "tag"; selected: boolean },
+  ) => {
     const decision = decisions[key];
     const content =
       decision === "accepted" ? (
@@ -78,12 +84,16 @@ export function SuggestedFeedbackPreview({
         label={label}
         decision={decision}
         onDecide={(value) => onDecide(key, value)}
+        choice={choice}
       >
-        {content || (
-          <span className="text-xs text-muted-foreground">
-            {decision === "accepted" ? "Removed" : "Addition rejected"}
-          </span>
-        )}
+        {content ||
+          (choice ? (
+            before || after
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {decision === "accepted" ? "Removed" : "Addition rejected"}
+            </span>
+          ))}
       </FeedbackChangeControl>
     ) : (
       content
@@ -104,20 +114,44 @@ export function SuggestedFeedbackPreview({
       ]
     : resolved.tags.map((tag) => ({ tag, kind: "unchanged" as const }));
   const ratingChanged = trackChanges && current.outcome !== original.outcome;
+  const ratingKey = ratingChangeKey(original.outcome, current.outcome);
+  const ratingDecision = decisions[ratingKey];
+  const ratingContent = ratingDecision ? (
+    feedbackOutcomeLabel(resolved.outcome)
+  ) : (
+    <MarkedText kind="added" text={feedbackOutcomeLabel(current.outcome)} />
+  );
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-3" aria-label="Proposed feedback rating">
         <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
-        {ratingChanged ? (
-          review(
-            ratingChangeKey(original.outcome, current.outcome),
-            "rating change",
-            feedbackOutcomeLabel(original.outcome),
-            feedbackOutcomeLabel(current.outcome),
-          )
-        ) : (
-          <Badge variant="secondary">{feedbackOutcomeLabel(resolved.outcome)}</Badge>
-        )}
+        <div className="flex flex-wrap gap-1">
+          {ratingChanged && !ratingDecision && (
+            <FeedbackChoiceButton
+              kind="outcome"
+              selected
+              aria-disabled="true"
+              tabIndex={-1}
+              aria-label={`Original rating ${feedbackOutcomeLabel(original.outcome)}`}
+            >
+              <MarkedText kind="removed" text={feedbackOutcomeLabel(original.outcome)} />
+            </FeedbackChoiceButton>
+          )}
+          {ratingChanged && onDecide ? (
+            <FeedbackChangeControl
+              label="rating change"
+              decision={ratingDecision}
+              onDecide={(value) => onDecide(ratingKey, value)}
+              choice={{ kind: "outcome", selected: !!ratingDecision }}
+            >
+              {ratingContent}
+            </FeedbackChangeControl>
+          ) : (
+            <FeedbackChoiceButton kind="outcome" selected aria-disabled="true" tabIndex={-1}>
+              {ratingChanged ? ratingContent : feedbackOutcomeLabel(resolved.outcome)}
+            </FeedbackChoiceButton>
+          )}
+        </div>
       </div>
       {tags.length > 0 && (
         <div className="flex items-start gap-3">
@@ -128,20 +162,29 @@ export function SuggestedFeedbackPreview({
           >
             {tags.map(({ tag, kind }) =>
               kind === "unchanged" ? (
-                <Badge
+                <FeedbackChoiceButton
                   key={tag}
-                  variant="outline"
+                  kind="tag"
+                  selected
+                  aria-disabled="true"
+                  tabIndex={-1}
                   className="h-auto max-w-full whitespace-normal break-words"
                 >
-                  {tag}
-                </Badge>
+                  {feedbackTagLabel(tag)}
+                </FeedbackChoiceButton>
               ) : (
                 <span key={`${kind}:${tag}`} className="min-w-0 max-w-full break-words text-sm">
                   {review(
                     tagChangeKey(tag, kind === "added"),
                     `${kind === "added" ? "add" : "remove"} tag ${tag}`,
-                    kind === "removed" ? tag : "",
-                    kind === "added" ? tag : "",
+                    kind === "removed" ? feedbackTagLabel(tag) : "",
+                    kind === "added" ? feedbackTagLabel(tag) : "",
+                    {
+                      kind: "tag",
+                      selected: decisions[tagChangeKey(tag, kind === "added")]
+                        ? resolved.tags.includes(tag)
+                        : original.tags.includes(tag),
+                    },
                   )}
                 </span>
               ),
