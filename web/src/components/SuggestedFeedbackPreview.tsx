@@ -64,12 +64,6 @@ export function SuggestedFeedbackPreview({
   const ratingChanged = trackChanges && current.outcome !== original.outcome;
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
-      {trackChanges && (
-        <p className="flex flex-wrap gap-3 text-xs text-muted-foreground" aria-label="Change marks">
-          <MarkedText kind="added" text="Added" />
-          <MarkedText kind="removed" text="Removed" />
-        </p>
-      )}
       <div className="flex flex-wrap items-center gap-3" aria-label="Proposed feedback rating">
         <span className="w-10 shrink-0 text-xs text-muted-foreground">Rating</span>
         {ratingChanged && (
@@ -107,7 +101,7 @@ export function SuggestedFeedbackPreview({
         </div>
       )}
       <p
-        className="whitespace-pre-wrap break-words text-ui leading-relaxed"
+        className="whitespace-pre-wrap break-words text-ui leading-relaxed [&>del+ins]:ms-1 [&>ins+del]:ms-1"
         aria-label="Suggested feedback comment preview"
       >
         {trackChanges
