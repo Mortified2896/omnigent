@@ -20,7 +20,7 @@ it("shows proposed changes immediately and saves only on acceptance", async () =
   expect(apply).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Accept changes"));
   await waitFor(() => expect(screen.getByText("Undo")).toBeInTheDocument());
-  expect(apply).toHaveBeenCalledWith(proposed);
+  expect(apply).toHaveBeenCalledWith({ ...proposed, outcome: original.outcome });
   cleanup();
   render(
     <SuggestedFeedback
@@ -32,7 +32,11 @@ it("shows proposed changes immediately and saves only on acceptance", async () =
   );
   fireEvent.click(screen.getByText("Undo"));
   await waitFor(() =>
-    expect(apply).toHaveBeenLastCalledWith({ comment: original.comment, tags: original.tags }),
+    expect(apply).toHaveBeenLastCalledWith({
+      outcome: original.outcome,
+      comment: original.comment,
+      tags: original.tags,
+    }),
   );
 });
 it("rejecting a suggestion does not change saved feedback", () => {
@@ -49,4 +53,37 @@ it("keeps a failed save pending and shows the error", async () => {
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Connection lost"));
   expect(screen.getByText("Accept changes")).toBeInTheDocument();
   expect(screen.queryByText("Undo")).not.toBeInTheDocument();
+});
+it("persists edited rating, tags, and comment; acceptance and undo apply all three", async () => {
+  const apply = vi.fn().mockResolvedValue(undefined);
+  const props = {
+    id: "editable",
+    original,
+    proposed: { ...proposed, outcome: "success" as const },
+    onApply: apply,
+  };
+  render(<SuggestedFeedback {...props} />);
+  fireEvent.change(screen.getByLabelText("Suggested feedback rating"), {
+    target: { value: "failed" },
+  });
+  fireEvent.change(screen.getByLabelText("Suggested feedback comment"), {
+    target: { value: "Still blocked" },
+  });
+  fireEvent.click(screen.getByLabelText("Remove suggested tag Environment"));
+  fireEvent.change(screen.getByLabelText("Suggested feedback tag"), { target: { value: "Tools" } });
+  fireEvent.click(screen.getByText("Add proposed tag"));
+  expect(apply).not.toHaveBeenCalled();
+  cleanup();
+  render(<SuggestedFeedback {...props} />);
+  expect(screen.getByLabelText("Suggested feedback rating")).toHaveValue("failed");
+  expect(screen.getByLabelText("Suggested feedback comment")).toHaveValue("Still blocked");
+  fireEvent.click(screen.getByText("Accept changes"));
+  await waitFor(() => expect(screen.getByText("Undo")).toBeInTheDocument());
+  expect(apply).toHaveBeenLastCalledWith({
+    outcome: "failed",
+    tags: ["Tools"],
+    comment: "Still blocked",
+  });
+  fireEvent.click(screen.getByText("Undo"));
+  await waitFor(() => expect(apply).toHaveBeenLastCalledWith(original));
 });

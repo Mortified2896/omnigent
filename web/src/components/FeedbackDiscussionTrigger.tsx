@@ -30,8 +30,8 @@ function initialQuestion(original: Original): string {
     INITIAL_QUESTION +
     CONTEXT_MARKER +
     "My outcome is authoritative. Discuss your perspective without tools or project changes. " +
-    'If suggesting edits, include a fenced feedback-json block containing {"comment": "...", "tags": ["..."]}. ' +
-    "Keep my outcome unchanged; edits need my explicit acceptance. Limit comment to 4000 characters and tags to 8 of at most 64 characters.\n" +
+    'If suggesting edits, include a fenced feedback-json block containing {"outcome": "partial", "comment": "...", "tags": ["..."]}. ' +
+    "You may suggest success, partial, failed, or not_sure with reasons; every edit needs my explicit acceptance. Limit comment to 4000 characters and tags to 8 of at most 64 characters.\n" +
     JSON.stringify(original)
   );
 }

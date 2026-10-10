@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { TaskOutcome } from "@/hooks/useTaskExperiment";
 import { Button } from "@/components/ui/button";
 
 interface FeedbackDetails {
+  outcome?: TaskOutcome;
   comment: string;
   tags: string[];
 }
@@ -13,7 +15,7 @@ export function SuggestedFeedback({
   onApply,
 }: {
   id?: string;
-  original: FeedbackDetails & { outcome: string };
+  original: Omit<FeedbackDetails, "outcome"> & { outcome: string };
   proposed: FeedbackDetails;
   onApply: (details: FeedbackDetails) => void | Promise<void>;
 }) {
@@ -25,24 +27,47 @@ export function SuggestedFeedback({
             state?: string;
             previous?: FeedbackDetails;
             comment?: string;
+            tags?: string[];
+            outcome?: TaskOutcome;
           } | null)
         : null;
     } catch {
       return null;
     }
   });
-  const [previous, setPrevious] = useState<FeedbackDetails>(stored?.previous ?? original);
+  const [previous, setPrevious] = useState<FeedbackDetails>(
+    stored?.previous ?? { ...original, outcome: original.outcome as TaskOutcome },
+  );
   const [state, setState] = useState<"pending" | "accepted" | "rejected">(
     stored?.state === "accepted" || stored?.state === "rejected" ? stored.state : "pending",
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [comment, setComment] = useState(stored?.comment ?? proposed.comment);
+  const [proposedTags, setProposedTags] = useState(stored?.tags ?? proposed.tags);
+  const [outcome, setOutcome] = useState<TaskOutcome>(
+    stored?.outcome ?? proposed.outcome ?? (original.outcome as TaskOutcome),
+  );
+  const [newTag, setNewTag] = useState("");
+  useEffect(() => {
+    try {
+      if (key)
+        localStorage.setItem(
+          key,
+          JSON.stringify({ state, previous, comment, tags: proposedTags, outcome }),
+        );
+    } catch {
+      /* Keep edits in memory when storage is unavailable. */
+    }
+  }, [key, state, previous, comment, proposedTags, outcome]);
   const changeState = (next: "pending" | "accepted" | "rejected", before = previous) => {
     setState(next);
     try {
       if (key)
-        localStorage.setItem(key, JSON.stringify({ state: next, previous: before, comment }));
+        localStorage.setItem(
+          key,
+          JSON.stringify({ state: next, previous: before, comment, tags: proposedTags, outcome }),
+        );
     } catch {
       /* Keep the current review state in memory. */
     }
@@ -50,7 +75,11 @@ export function SuggestedFeedback({
   const apply = async (details: FeedbackDetails, next: "pending" | "accepted") => {
     setBusy(true);
     setError(null);
-    const before = { comment: original.comment, tags: [...original.tags] };
+    const before = {
+      outcome: original.outcome as TaskOutcome,
+      comment: original.comment,
+      tags: [...original.tags],
+    };
     try {
       await onApply(details);
       if (next === "accepted") setPrevious(before);
@@ -61,7 +90,6 @@ export function SuggestedFeedback({
       setBusy(false);
     }
   };
-  const proposedTags = proposed.tags;
   return (
     <details
       open
@@ -76,8 +104,23 @@ export function SuggestedFeedback({
         </span>
       </div>
       <p className="text-xs text-muted-foreground">
-        Your outcome stays unchanged. Accepting replaces the tags and comment in the saved feedback.
+        Accepting saves the proposed rating, tags, and comment. You can edit all three first.
       </p>
+      <label className="block space-y-1 text-xs">
+        <span>Proposed rating · Edit before accepting</span>
+        <select
+          aria-label="Suggested feedback rating"
+          className="block rounded-md border bg-background p-2 text-sm"
+          value={outcome}
+          disabled={state !== "pending" || busy}
+          onChange={(event) => setOutcome(event.target.value as TaskOutcome)}
+        >
+          <option value="success">Success</option>
+          <option value="partial">Partial</option>
+          <option value="failed">Failed</option>
+          <option value="not_sure">Not sure</option>
+        </select>
+      </label>
       <div className="flex flex-wrap gap-1" aria-label="Proposed feedback tags">
         {original.tags
           .filter((tag) => !proposedTags.includes(tag))
@@ -96,9 +139,47 @@ export function SuggestedFeedback({
             title={original.tags.includes(tag) ? "Unchanged tag" : "Added tag"}
           >
             {tag}
+            {state === "pending" && (
+              <button
+                type="button"
+                disabled={busy}
+                className="ml-2"
+                aria-label={`Remove suggested tag ${tag}`}
+                onClick={() => setProposedTags((tags) => tags.filter((value) => value !== tag))}
+              >
+                ×
+              </button>
+            )}
           </span>
         ))}
       </div>
+      {state === "pending" && (
+        <div className="flex gap-2">
+          <input
+            aria-label="Suggested feedback tag"
+            className="min-w-0 flex-1 rounded-md border bg-background p-2 text-sm"
+            maxLength={64}
+            placeholder="Add a tag…"
+            value={newTag}
+            disabled={busy || proposedTags.length >= 8}
+            onChange={(event) => setNewTag(event.target.value)}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || proposedTags.length >= 8 || !newTag.trim()}
+            onClick={() => {
+              const tag = newTag.trim();
+              if (!proposedTags.some((value) => value.toLowerCase() === tag.toLowerCase()))
+                setProposedTags((tags) => [...tags, tag]);
+              setNewTag("");
+            }}
+          >
+            Add proposed tag
+          </Button>
+        </div>
+      )}
       {state === "pending" && original.comment && (
         <del
           className="block rounded-md bg-red-500/10 p-2 text-sm"
@@ -128,7 +209,7 @@ export function SuggestedFeedback({
               size="sm"
               disabled={busy}
               onClick={() =>
-                void apply({ comment: comment.trim(), tags: proposedTags }, "accepted")
+                void apply({ outcome, comment: comment.trim(), tags: proposedTags }, "accepted")
               }
             >
               Accept changes

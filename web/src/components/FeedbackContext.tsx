@@ -21,7 +21,11 @@ export interface ReviewPerspectiveInput {
   saved: boolean;
   onAddTag: (tag: string) => void;
   onAppendComment: (text: string) => void;
-  onReplaceDetails: (details: { comment: string; tags: string[] }) => void | Promise<void>;
+  onReplaceDetails: (details: {
+    comment: string;
+    tags: string[];
+    outcome?: TaskOutcome;
+  }) => void | Promise<void>;
 }
 export interface Thread {
   session_id: string;

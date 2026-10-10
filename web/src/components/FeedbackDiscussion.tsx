@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { XIcon } from "lucide-react";
 import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
 import { getSession } from "@/lib/sessionsApi";
-import { useTaskExperiment } from "@/hooks/useTaskExperiment";
+import { useTaskExperiment, type TaskOutcome } from "@/hooks/useTaskExperiment";
 import type { Bubble } from "@/lib/renderItems";
 import { Button } from "@/components/ui/button";
 import { SideChatPane } from "./chat/SideChatPane";
@@ -93,13 +93,17 @@ export function FeedbackDiscussionsProvider({
   );
 }
 
-export function parseFeedbackProposal(text: string): { comment: string; tags: string[] } | null {
+export function parseFeedbackProposal(
+  text: string,
+): { comment: string; tags: string[]; outcome?: TaskOutcome } | null {
   const match = text.match(/```feedback-json\s*([\s\S]*?)```/);
   if (!match) return null;
   try {
     const value = JSON.parse(match[1]);
     if (
       !value ||
+      (value.outcome !== undefined &&
+        !["success", "partial", "failed", "not_sure"].includes(value.outcome)) ||
       typeof value.comment !== "string" ||
       value.comment.length > 4000 ||
       !Array.isArray(value.tags) ||
@@ -108,6 +112,7 @@ export function parseFeedbackProposal(text: string): { comment: string; tags: st
     )
       return null;
     return {
+      ...(value.outcome === undefined ? {} : { outcome: value.outcome as TaskOutcome }),
       comment: value.comment,
       tags: [...new Set<string>(value.tags.map((tag: string) => tag.trim()))],
     };
@@ -150,6 +155,7 @@ function FeedbackTranscript({ active }: { active: Active }) {
         id={`${active.branchId}:${bubble.responseId}`}
         original={{
           ...original,
+          outcome: current?.outcome ?? original.outcome,
           comment: current?.comment ?? original.comment,
           tags: current?.tags ?? original.tags,
         }}

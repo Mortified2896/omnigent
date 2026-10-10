@@ -32,11 +32,14 @@ import {
   type DiscussionVariant,
   type FeedbackDiscussionIntent,
 } from "@/components/FeedbackDiscussionControls";
+import { FeedbackReplyRating, type FeedbackReplyVote } from "@/components/FeedbackReplyRating";
+import { FeedbackDisabled } from "@/components/FeedbackContext";
 import type { ReviewPerspectiveInput } from "@/components/FeedbackContext";
 import { ResponseFeedbackProvider } from "@/components/ResponseFeedbackActions";
 import { SuggestedFeedback } from "@/components/SuggestedFeedback";
 import { Button } from "@/components/ui/button";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+import { useComposerAutoSend } from "@/hooks/useComposerAutoSend";
 import type { TaskOutcome } from "@/hooks/useTaskExperiment";
 import type { Bubble } from "@/lib/renderItems";
 import { cn } from "@/lib/utils";
@@ -78,7 +81,7 @@ const PROPOSED_COMMENT =
   "Local checks pass; live deployment and authenticated behavior still need verification.";
 const DISCUSS_PROMPT = "Discuss my feedback on this answer. Do you agree with my assessment?";
 const SUGGEST_PROMPT =
-  "Suggest clearer wording and tags for my feedback on this answer. Keep my outcome unchanged.";
+  "Review my feedback on this answer. Suggest a rating, clearer wording, and tags, with reasons for any changes.";
 const INSPECT_PROMPT =
   "Inspect your actions and tool results for this answer. What was verified, and what is still unverified?";
 const ANSWER =
@@ -256,6 +259,7 @@ function PrototypeConversation({
         ]
       : [],
   );
+  const [replyVotes, setReplyVotes] = useState<Record<number, FeedbackReplyVote>>({});
   const reviewRef = useRef<ReviewPerspectiveInput | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef(false);
@@ -268,6 +272,7 @@ function PrototypeConversation({
     },
     [],
   );
+  const autoSend = useComposerAutoSend(() => send(input));
   function prepare(intent: FeedbackDiscussionIntent) {
     if (busy || (intent !== "inspect" && !reviewRef.current?.saved)) return;
     const text =
@@ -276,13 +281,17 @@ function PrototypeConversation({
         : intent === "discuss"
           ? DISCUSS_PROMPT
           : SUGGEST_PROMPT;
-    setInput((current) => (current.trim() ? `${current}\n\n${text}` : text));
+    const hasDraft = input.trim() && autoSend.seconds === null;
+    setInput(hasDraft ? `${input}\n\n${text}` : text);
+    if (hasDraft) autoSend.stop();
+    else autoSend.start();
     setComposerContext(intent);
     inputRef.current?.focus();
   }
   function send(text: string, intent = composerContext) {
     const usesFeedback = intent === "discuss" || intent === "suggest";
     if (pending.current || !text.trim() || (usesFeedback && !reviewRef.current?.saved)) return;
+    autoSend.stop();
     pending.current = true;
     setBusy(true);
     const id = nextId.current++;
@@ -303,7 +312,7 @@ function PrototypeConversation({
       timer.current = null;
     }, responseDelayMs);
   }
-  async function apply(details: { comment: string; tags: string[] }) {
+  async function apply(details: { comment: string; tags: string[]; outcome?: TaskOutcome }) {
     const review = reviewRef.current;
     if (!review?.saved)
       throw new Error("Wait for your current feedback to save before applying changes.");
@@ -395,9 +404,20 @@ function PrototypeConversation({
                           <WorkingIndicator />
                         ) : (
                           <>
-                            <BubbleView
-                              bubble={assistantBubble(`storybook-reply-${turn.id}`, replyFor(turn))}
-                              isLastAssistant={turn.id === turns.at(-1)?.id}
+                            <FeedbackDisabled>
+                              <BubbleView
+                                bubble={assistantBubble(
+                                  `storybook-reply-${turn.id}`,
+                                  replyFor(turn),
+                                )}
+                                isLastAssistant={turn.id === turns.at(-1)?.id}
+                              />
+                            </FeedbackDisabled>
+                            <FeedbackReplyRating
+                              value={replyVotes[turn.id] ?? null}
+                              onChange={(value) =>
+                                setReplyVotes((votes) => ({ ...votes, [turn.id]: value }))
+                              }
                             />
                             <CacheIndicator reported={cacheTelemetry === "reported"} />
                             {turn.intent === "discuss" && (
@@ -409,13 +429,14 @@ function PrototypeConversation({
                                 disabled={busy}
                                 onClick={() => prepare("suggest")}
                               >
-                                Suggest feedback changes
+                                Review feedback
                               </Button>
                             )}
                             {turn.intent === "suggest" && turn.snapshot && (
                               <SuggestedFeedback
                                 original={fixture.savedFeedback() ?? turn.snapshot}
                                 proposed={{
+                                  outcome: "partial",
                                   comment: PROPOSED_COMMENT,
                                   tags: ["Tests/verification"],
                                 }}
@@ -461,8 +482,16 @@ function PrototypeConversation({
                     placeholder: "Send a message…",
                     rows: 1,
                     value: input,
-                    onChange: (event) => setInput(event.target.value),
+                    onChange: (event) => {
+                      autoSend.stop();
+                      setInput(event.target.value);
+                    },
+                    onPointerDown: autoSend.stop,
+                    onPaste: autoSend.stop,
+                    onCut: autoSend.stop,
+                    onCompositionStart: autoSend.stop,
                     onKeyDown: (event, intent) => {
+                      autoSend.stop();
                       if (intent.shouldSubmitFromKeyboard) {
                         event.preventDefault();
                         send(input);
@@ -473,7 +502,12 @@ function PrototypeConversation({
                     beforeInput: composerContext ? (
                       <FeedbackDiscussionComposerContext
                         intent={composerContext}
-                        onDismiss={() => setComposerContext(null)}
+                        seconds={autoSend.seconds}
+                        onStop={autoSend.stop}
+                        onDismiss={() => {
+                          autoSend.stop();
+                          setComposerContext(null);
+                        }}
                       />
                     ) : undefined,
                   }}
@@ -551,7 +585,7 @@ function replyFor(turn: DiscussionTurn): string {
     return "The action record supports **local validation**:\n\n- Changed the feedback controls and added coverage for saved feedback.\n- Ran the focused UI tests successfully.\n- Built the local web bundle successfully.\n\nThere is **no live deployment or authenticated session check** in the record. The answer should be clearer about the scope of its verification.";
   }
   if (turn.intent === "suggest" && turn.snapshot) {
-    return `Your **${turn.snapshot.outcome.replaceAll("_", " ")}** outcome remains unchanged. Here is a more specific comment and tag for your review. You can edit the suggestion before accepting it.`;
+    return `I suggest **Partial**: local checks passed, while live deployment is still unverified. Review the proposed rating, comment, and tags below. You can edit any of them, accept the changes, or reject the entire proposal.`;
   }
   if (turn.intent === "discuss" && turn.snapshot) {
     return `Your **${turn.snapshot.outcome.replaceAll("_", " ")}** assessment makes sense: your comment asks for live verification before you consider the task complete. Does that outcome refer to the UI being unfinished, or to verification still being missing? Clarifying that would make your feedback easier to understand.`;

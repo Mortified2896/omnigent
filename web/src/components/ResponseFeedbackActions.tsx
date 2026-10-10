@@ -409,7 +409,7 @@ function OutcomeEditor({
               setComment(nextComment);
               setTags(nextTags);
               await mutation.mutateAsync({
-                outcome,
+                outcome: details.outcome ?? outcome,
                 comment: nextComment.trim() || null,
                 tags: nextTags,
               });
