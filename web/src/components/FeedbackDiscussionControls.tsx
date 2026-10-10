@@ -16,7 +16,7 @@ export function FeedbackDiscussionComposerContext({
   const label = {
     discuss: "Feedback discussion",
     suggest: "Suggest feedback changes",
-    inspect: "Self Inspection",
+    inspect: "Self Reflection",
   }[intent];
   return (
     <div className="flex items-center justify-between px-3 pt-2 text-xs text-muted-foreground">
@@ -85,7 +85,7 @@ export function FeedbackDiscussionControls({
           onClick={() => prepare("inspect")}
         >
           <ScanSearchIcon className="size-3.5" />
-          Self Inspection
+          Self Reflection
         </Button>
       </div>
       {expanded && variant === "quick-prompts" && (

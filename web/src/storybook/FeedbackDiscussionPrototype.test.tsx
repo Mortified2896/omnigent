@@ -171,11 +171,11 @@ it.each<DiscussionVariant>(["footer", "quick-prompts", "inline"])(
   "keeps inspecting actions separate from discussing or editing feedback in %s",
   async (variant) => {
     mount(variant, "feedback-saved");
-    fireEvent.click(original().getByRole("button", { name: "Self Inspection" }));
+    fireEvent.click(original().getByRole("button", { name: "Self Reflection" }));
     expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue(
       "Inspect your actions and tool results for this answer. What was verified, and what is still unverified?",
     );
-    expect(screen.getByText("Self Inspection · original answer")).toBeInTheDocument();
+    expect(screen.getByText("Self Reflection · original answer")).toBeInTheDocument();
     await sendPreparedPrompt();
     expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-intent", "inspect");
     expect(screen.getByText(/The action record supports/)).toBeInTheDocument();
@@ -199,8 +199,8 @@ it("lets the independent inspection start while a feedback comment is still savi
     target: { value: "A comment that has not saved yet." },
   });
   expect(original().getByRole("button", { name: "Feedback discussion" })).toBeDisabled();
-  expect(original().getByRole("button", { name: "Self Inspection" })).not.toBeDisabled();
-  fireEvent.click(original().getByRole("button", { name: "Self Inspection" }));
+  expect(original().getByRole("button", { name: "Self Reflection" })).not.toBeDisabled();
+  fireEvent.click(original().getByRole("button", { name: "Self Reflection" }));
   await sendPreparedPrompt();
   expect(screen.getByTestId("discussion-turn")).toHaveAttribute("data-intent", "inspect");
   expect(screen.queryByLabelText("Suggested feedback")).not.toBeInTheDocument();
@@ -245,7 +245,7 @@ it("shows unavailable cache usage without guessing zero and can preview reported
 });
 it.each([
   ["discussion-ready", "discuss", "Feedback discussion"],
-  ["inspection-ready", "inspect", "Self Inspection"],
+  ["inspection-ready", "inspect", "Self Reflection"],
   ["suggestion-ready", "discuss", "Feedback discussion"],
 ] as const)(
   "preserves the ongoing composer context at %s",

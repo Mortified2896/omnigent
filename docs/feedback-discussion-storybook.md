@@ -27,7 +27,7 @@ Under **Prototypes / Feedback discussion**, compare:
 | Quick prompts | **Feedback discussion** reveals **Discuss my feedback** and **Suggest feedback changes**, which prepare an editable request in the same composer. |
 | Inline discussion | **Feedback discussion** opens a small field below the answer. **Send to chat** sends your question as a normal turn in the ongoing chat. |
 
-All three keep **Self Inspection** as a separate action: it prepares a request to
+All three keep **Self Reflection** as a separate action: it prepares a request to
 review the agent's actions and tool results, independently of the feedback's save
 status. The simulated inspection reply reviews the action record and does not
 propose feedback edits. Discussion instead addresses the user's assessment. It
