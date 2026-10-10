@@ -27,35 +27,36 @@ export function FeedbackChangeControl({
           {children}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto max-w-[calc(100vw-24px)]" align="start">
-        <p className="text-xs text-muted-foreground">
-          {label}
-          {decision ? ` · ${decision}` : ""}
-        </p>
-        <div className="flex gap-2">
+      <PopoverContent
+        className="w-auto max-w-[calc(100vw-24px)] gap-0 p-1"
+        align="start"
+        aria-label={`Review ${label}${decision ? ` · ${decision}` : ""}`}
+      >
+        <div className="flex gap-0">
           <Button
-            size="sm"
-            className="min-h-10"
+            size="xs"
+            variant="ghost"
+            className="[@media(pointer:coarse)]:min-h-10"
             onClick={() => {
               onDecide("accepted");
               setOpen(false);
             }}
             aria-label={`Accept ${label}`}
           >
-            <CheckIcon />
+            <CheckIcon data-icon="inline-start" />
             Accept
           </Button>
           <Button
-            size="sm"
-            variant="outline"
-            className="min-h-10"
+            size="xs"
+            variant="ghost"
+            className="[@media(pointer:coarse)]:min-h-10"
             onClick={() => {
               onDecide("rejected");
               setOpen(false);
             }}
             aria-label={`Reject ${label}`}
           >
-            <XIcon />
+            <XIcon data-icon="inline-start" />
             Reject
           </Button>
         </div>
