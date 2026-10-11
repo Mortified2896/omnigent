@@ -26,6 +26,8 @@ async def request_host_advisor_call(
     access_lane: str | None,
     reasoning_effort: str | None,
     timeout_s: float,
+    context_session_id: str | None = None,
+    context_bridge_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Send a ``host.advisor_call`` frame and await the host's result.
@@ -55,6 +57,8 @@ async def request_host_advisor_call(
             model=model,
             access_lane=access_lane,
             reasoning_effort=reasoning_effort,
+            context_session_id=context_session_id,
+            context_bridge_id=context_bridge_id,
         )
     )
     try:

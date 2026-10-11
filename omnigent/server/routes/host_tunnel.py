@@ -914,6 +914,7 @@ async def _receive_loop(
                         "input_tokens": frame.input_tokens,
                         "output_tokens": frame.output_tokens,
                         "cached_input_tokens": frame.cached_input_tokens,
+                        "context_session_id": frame.context_session_id,
                         "response_id": frame.response_id,
                         "error": frame.error,
                     }

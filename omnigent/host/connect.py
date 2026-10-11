@@ -3914,12 +3914,25 @@ class HostProcess:
         from omnigent.host.advisor_call import AdvisorCallError, generate_advisor_selection
 
         try:
-            result = await generate_advisor_selection(
-                request=frame.request,
-                model=frame.model,
-                access_lane=frame.access_lane,
-                reasoning_effort=frame.reasoning_effort,
-            )
+            if frame.context_session_id is not None or frame.context_bridge_id is not None:
+                from omnigent.harnesses.codex_native.advisor import (
+                    generate_context_advisor_selection,
+                )
+
+                result = await generate_context_advisor_selection(
+                    request=frame.request,
+                    model=frame.model,
+                    reasoning_effort=frame.reasoning_effort,
+                    session_id=frame.context_session_id,
+                    bridge_id=frame.context_bridge_id,
+                )
+            else:
+                result = await generate_advisor_selection(
+                    request=frame.request,
+                    model=frame.model,
+                    access_lane=frame.access_lane,
+                    reasoning_effort=frame.reasoning_effort,
+                )
         except AdvisorCallError as exc:
             return HostAdvisorCallResultFrame(
                 request_id=frame.request_id,
@@ -3935,6 +3948,7 @@ class HostProcess:
             output_tokens=result.output_tokens,
             cached_input_tokens=result.cached_input_tokens,
             response_id=result.response_id,
+            context_session_id=frame.context_session_id,
         )
 
     @staticmethod

@@ -661,7 +661,8 @@ class ModelAdvisorService:
                         detail=f"Saved logical choice {choice_id!r} is not currently qualified",
                     )
         if (
-            preferences.advisor_choice_id is not None
+            preferences.advisor_model_mode != "current"
+            and preferences.advisor_choice_id is not None
             and preferences.advisor_choice_id not in by_id
         ):
             raise HTTPException(
@@ -805,6 +806,12 @@ class ModelAdvisorService:
             raise HTTPException(status_code=422, detail="A nonempty initial task is required")
         catalog = await self.load_catalog(user_id, host_id)
         current_execution = None
+        current = next(
+            (choice for choice in catalog.logical_choices if choice.choice_id == human_choice_id),
+            None,
+        )
+        advisor_context = None
+        source_lane = None
         if continue_session_id is not None:
             if self._session_authorizer is None or not await asyncio.to_thread(
                 self._session_authorizer, user_id, continue_session_id
@@ -815,7 +822,11 @@ class ModelAdvisorService:
             )
             if source is None or source.host_id != host_id:
                 raise HTTPException(409, "Continuation must use the same host")
-            source_model = source.model_override or source.reported_model
+            source_model = (
+                source.reported_model or source.model_override
+                if frozen_preferences.advisor_model_mode == "current"
+                else source.model_override or source.reported_model
+            )
             current = next(
                 (
                     option.choice
@@ -828,6 +839,19 @@ class ModelAdvisorService:
                 "model_id": current.model_id if current else None,
                 "reasoning_effort": source.reasoning_effort,
             }
+            if frozen_preferences.advisor_model_mode == "current":
+                if current is None or not source_model:
+                    raise HTTPException(
+                        422, "The current model cannot be verified in the live catalog"
+                    )
+                from omnigent.harnesses.codex_native.bridge import CODEX_NATIVE_BRIDGE_ID_LABEL_KEY
+
+                advisor_context = {
+                    "session_id": source.id,
+                    "bridge_id": source.labels.get(CODEX_NATIVE_BRIDGE_ID_LABEL_KEY) or source.id,
+                    "model": source_model,
+                }
+                source_lane = source.labels.get("omnigent.access_lane") or "codex-direct"
             if keep_chosen_model:
                 if current is None:
                     raise HTTPException(
@@ -873,6 +897,7 @@ class ModelAdvisorService:
                 "human_choice_id": human_choice_id,
                 "preferences": frozen_preferences.to_payload(),
                 "submission_key": identity_key,
+                **({"advisor_context": advisor_context} if advisor_context else {}),
                 **({"task_tags": task_tags} if task_tags else {}),
                 **(
                     {
@@ -900,7 +925,22 @@ class ModelAdvisorService:
                 catalog=catalog.logical_choices,
                 routes_by_choice=catalog.routes_by_choice,
                 human_choice_id=human_choice_id,
+                current_choice=current,
             )
+            if advisor_context is not None:
+                # Context advice runs on the parent's existing connection/account,
+                # independently of the answer-pool connection preferences.
+                advisor_plan = plan_transport(
+                    frozen.advisor,
+                    "omniroute_only" if source_lane == "omniroute" else "direct_only",
+                    tuple(
+                        route
+                        for route in catalog.routes_by_choice.get(frozen.advisor.choice_id, ())
+                        if route.route_id == source_lane
+                        or (source_lane == "omniroute" and route.transport == "omniroute")
+                    ),
+                )
+                frozen = replace(frozen, advisor_transport=advisor_plan)
         except (LogicalAdvisorError, ProviderPolicyError) as exc:
             raise HTTPException(
                 status_code=422,
@@ -908,6 +948,7 @@ class ModelAdvisorService:
             ) from exc
         frozen = replace(
             frozen,
+            advisor_context=advisor_context,
             current_execution=current_execution,
             continuation_session_id=continue_session_id,
             keep_chosen_model=keep_chosen_model,
@@ -984,12 +1025,22 @@ class ModelAdvisorService:
                     host_registry=self._host_registry,
                     host_conn=conn,
                     request=frozen.advisor_input(),
-                    model=route.wire_model,
+                    model=frozen.advisor_context["model"]
+                    if frozen.advisor_context
+                    else route.wire_model,
                     access_lane=route.route_id,
                     reasoning_effort=(
                         None if route.wire_effort == "not_applicable" else route.wire_effort
                     ),
                     timeout_s=ADVISOR_FRAME_TIMEOUT_S,
+                    **(
+                        {
+                            "context_session_id": frozen.advisor_context["session_id"],
+                            "context_bridge_id": frozen.advisor_context["bridge_id"],
+                        }
+                        if frozen.advisor_context
+                        else {}
+                    ),
                 )
             except (HTTPException, ConnectionError, asyncio.TimeoutError) as exc:
                 reason = f"advisor transport: {type(exc).__name__}"
@@ -998,6 +1049,14 @@ class ModelAdvisorService:
                 return
             if result.get("status") != "ok" or not isinstance(result.get("raw_output"), str):
                 reason = str(result.get("error") or "advisor call failed on the host")
+                await record_attempt("failed", reason=reason)
+                self._finish_advisor_failure(owner, host_id, round_id, reason)
+                return
+            if (
+                frozen.advisor_context is not None
+                and result.get("context_session_id") != frozen.advisor_context["session_id"]
+            ):
+                reason = "Update the connected host to support current-model context advice"
                 await record_attempt("failed", reason=reason)
                 self._finish_advisor_failure(owner, host_id, round_id, reason)
                 return
@@ -1454,6 +1513,23 @@ class ModelAdvisorService:
             raise HTTPException(
                 status_code=409, detail="The recommendation belongs to a different chat"
             )
+        if frozen.continuation_session_id is not None:
+            if self._session_authorizer is None or not await asyncio.to_thread(
+                self._session_authorizer, user_id, frozen.continuation_session_id
+            ):
+                raise HTTPException(status_code=403, detail="session edit access is required")
+            source = await asyncio.to_thread(
+                self._conversation_store.get_conversation, frozen.continuation_session_id
+            )
+            if source is None or source.host_id != host_id:
+                raise HTTPException(status_code=409, detail="Continuation must use the same host")
+            # Reject before claiming dispatch so a recommendation remains
+            # confirmable once the active response finishes. The apply path
+            # rechecks idle state immediately before updating the session.
+            if source.live_status in {"running", "waiting"}:
+                raise HTTPException(
+                    status_code=409, detail="Wait for the current response to finish"
+                )
         catalog = await self.load_catalog(user_id, host_id)
         execution_choice_id = override_choice_id or review.execution_choice_id
         choice_by_id = {choice.choice_id: choice for choice in frozen.pool}

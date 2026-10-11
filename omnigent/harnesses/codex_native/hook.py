@@ -121,6 +121,25 @@ def _main_evaluate_policy(argv: list[str]) -> int:
         return 0
 
     bridge_dir = Path(args.bridge_dir)
+    from omnigent.harnesses.codex_native.advisor import is_advisor_context_hook
+
+    if is_advisor_context_hook(bridge_dir, payload):
+        if payload.get("hook_event_name") == "PreToolUse":
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": (
+                                "The Model Advisor may only return a recommendation; "
+                                "tools are disabled."
+                            ),
+                        }
+                    }
+                )
+            )
+        return 0
     if os.environ.get("OMNIGENT_BENCHMARK_CAPTURE") == "1":
         from omnigent.benchmark_capture_native import begin_native
 
@@ -284,6 +303,10 @@ def _main_route_turn(argv: list[str]) -> int:
         return 0
     if not isinstance(payload, dict):
         trace_turn_routing(bridge_dir, "fail-open", "hook payload is not an object")
+        return 0
+    from omnigent.harnesses.codex_native.advisor import is_advisor_context_hook
+
+    if is_advisor_context_hook(bridge_dir, payload):
         return 0
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():

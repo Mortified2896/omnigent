@@ -32,6 +32,8 @@ export interface ProviderPreferences {
   enabled: boolean;
   providers: Record<ProviderGroup, ProviderSelection>;
   advisor_choice_id: string | null;
+  advisor_model_mode?: "selected" | "current";
+  advisor_reasoning_effort?: string | null;
   human_probability_percent: number;
   unresolved_legacy_ids: string[];
   route_review_required: ProviderGroup[];

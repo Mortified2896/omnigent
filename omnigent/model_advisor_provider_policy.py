@@ -108,6 +108,8 @@ class ProviderPreferences:
     human_probability_percent: int = 50
     unresolved_legacy_ids: tuple[str, ...] = ()
     route_review_required: tuple[Provider, ...] = ()
+    advisor_model_mode: Literal["selected", "current"] = "selected"
+    advisor_reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
@@ -118,6 +120,12 @@ class ProviderPreferences:
             raise ProviderPolicyError("Expected per-provider selections")
         if self.advisor_choice_id is not None:
             _text(self.advisor_choice_id)
+        if self.advisor_model_mode not in ("selected", "current"):
+            raise ProviderPolicyError("Unsupported advisor model mode")
+        if self.advisor_reasoning_effort is not None:
+            _text(self.advisor_reasoning_effort)
+        if self.advisor_model_mode == "current" and self.advisor_reasoning_effort is None:
+            raise ProviderPolicyError("Choose an explicit current-model advisor effort")
         if (
             type(self.human_probability_percent) is not int
             or not 0 <= self.human_probability_percent <= 100
@@ -171,6 +179,16 @@ class ProviderPreferences:
             "human_probability_percent": self.human_probability_percent,
             "unresolved_legacy_ids": list(self.unresolved_legacy_ids),
             "route_review_required": list(self.route_review_required),
+            # Preserve historical preference/round fingerprints for the default mode.
+            **(
+                {
+                    "advisor_model_mode": self.advisor_model_mode,
+                    "advisor_reasoning_effort": self.advisor_reasoning_effort,
+                }
+                if self.advisor_model_mode != "selected"
+                or self.advisor_reasoning_effort is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -184,7 +202,10 @@ class ProviderPreferences:
             "unresolved_legacy_ids",
             "route_review_required",
         }
-        if not isinstance(payload, dict) or set(payload) != keys:
+        if (
+            not isinstance(payload, dict)
+            or set(payload) - {"advisor_model_mode", "advisor_reasoning_effort"} != keys
+        ):
             raise ProviderPolicyError("Unexpected preferences shape")
         version = payload["schema_version"]
         if type(version) is not int or version not in (2, 3):
@@ -241,6 +262,8 @@ class ProviderPreferences:
             payload["human_probability_percent"],
             tuple(payload["unresolved_legacy_ids"]),
             tuple(payload["route_review_required"]),
+            payload.get("advisor_model_mode", "selected"),
+            payload.get("advisor_reasoning_effort"),
         )
 
 
@@ -603,9 +626,27 @@ def permitted_fallback(
 
 
 def resolve_advisor(
-    preferences: ProviderPreferences, catalog: tuple[LogicalChoice, ...]
+    preferences: ProviderPreferences,
+    catalog: tuple[LogicalChoice, ...],
+    *,
+    current_choice: LogicalChoice | None = None,
 ) -> LogicalChoice:
     """Answer-provider switches do not disable or replace the chosen advisor."""
+    if preferences.advisor_model_mode == "current":
+        if current_choice is None:
+            raise ProviderPolicyError("The current execution model is unavailable")
+        matches = [
+            row
+            for row in catalog
+            if row.provider == current_choice.provider
+            and row.model_id == current_choice.model_id
+            and row.reasoning_effort == preferences.advisor_reasoning_effort
+        ]
+        if len(matches) != 1:
+            raise ProviderPolicyError(
+                "The selected advisor effort is unavailable for the current model"
+            )
+        return matches[0]
     matches = [row for row in catalog if row.choice_id == preferences.advisor_choice_id]
     if len(matches) != 1:
         raise ProviderPolicyError("Saved advisor is unavailable or ambiguous")

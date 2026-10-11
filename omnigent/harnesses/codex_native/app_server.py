@@ -3015,6 +3015,11 @@ def _write_codex_policy_hooks_file(
             )
         )
     _ = write_codex_hooks_file(codex_home, payloads, user_hooks_source=user_hooks_source)
+    from omnigent.harnesses.codex_native.advisor import write_advisor_context_capability
+
+    write_advisor_context_capability(
+        bridge_dir, _codex_policy_hook_command(bridge_dir, python_executable)
+    )
 
 
 def _our_hooks_from_list(listed: _JsonObject, cwd: str, module: str | None) -> list[_JsonObject]:

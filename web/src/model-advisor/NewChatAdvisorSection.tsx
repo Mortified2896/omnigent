@@ -62,6 +62,7 @@ import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./session
 
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
+const CURRENT_MODEL_KEY = "__current_model__";
 
 function newSubmissionKey(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -93,6 +94,8 @@ export interface NewChatAdvisorSectionProps {
   launchLabels?: Record<string, string>;
   continueSessionId?: string | null;
   onFlowStateChange?: (busy: boolean, reviewVisible: boolean) => void;
+  onCurrentModelAdvisorChange?: (current: boolean) => void;
+  confirmationBlockReason?: string | null;
   advisorModelTarget?: HTMLElement | null;
   keepChosenModel?: boolean;
   taskTags?: string[];
@@ -165,6 +168,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     launchLabels,
     continueSessionId = null,
     onFlowStateChange,
+    onCurrentModelAdvisorChange,
+    confirmationBlockReason,
     advisorModelTarget,
     keepChosenModel = false,
     taskTags,
@@ -205,15 +210,28 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const submissionIdentity = useRef<string | null>(null);
   const submissionKey = useRef<string | null>(null);
 
-  const savedAdvisor = options.find(
+  const usesCurrentModel = editor.draft?.advisor_model_mode === "current";
+  const currentAdvisorChoices = useMemo(
+    () => options.filter((option) => humanPick && option.model_ids.includes(humanPick.model)),
+    [options, humanPick],
+  );
+  const selectedAdvisor = options.find(
     (option) => option.choice_id === editor.draft?.advisor_choice_id,
   );
+  const savedAdvisor = usesCurrentModel
+    ? currentAdvisorChoices.find(
+        (option) => option.reasoning_effort === editor.draft?.advisor_reasoning_effort,
+      )
+    : selectedAdvisor;
   const savedAdvisorUnavailable = Boolean(
-    editor.draft?.advisor_choice_id && (!savedAdvisor || !savedAdvisor.available),
+    (usesCurrentModel || editor.draft?.advisor_choice_id) &&
+    (!savedAdvisor || !savedAdvisor.available),
   );
-  const advisorModelValue = savedAdvisor
-    ? advisorModelKey(savedAdvisor)
-    : (editor.draft?.advisor_choice_id ?? "");
+  const advisorModelValue = usesCurrentModel
+    ? CURRENT_MODEL_KEY
+    : savedAdvisor
+      ? advisorModelKey(savedAdvisor)
+      : (editor.draft?.advisor_choice_id ?? "");
   // Shared model presentation: the same row/group/route vocabulary the primary
   // picker renders, adapted to the advisor's logical (one row per checkpoint,
   // routes shown per row) persistence model.
@@ -230,7 +248,20 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       description: row.available ? row.routeSummary : undefined,
       keywords: row.keywords,
     }));
-    if (!savedAdvisor && editor.draft?.advisor_choice_id) {
+    result.unshift({
+      id: CURRENT_MODEL_KEY,
+      selectionId: CURRENT_MODEL_KEY,
+      displayName: "Current model",
+      groupLabel: "This chat",
+      description: currentAdvisorChoices[0]
+        ? `${currentAdvisorChoices[0].display_name} · use existing chat context`
+        : "Select an execution model first",
+      disabledReason: currentAdvisorChoices.some((choice) => choice.available)
+        ? undefined
+        : "Select an available execution model first",
+      keywords: ["current", "context", "cache"],
+    });
+    if (!usesCurrentModel && !savedAdvisor && editor.draft?.advisor_choice_id) {
       result.unshift({
         id: editor.draft.advisor_choice_id,
         selectionId: editor.draft.advisor_choice_id,
@@ -240,14 +271,26 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       });
     }
     return result;
-  }, [advisorRows, editor.draft?.advisor_choice_id, savedAdvisor]);
+  }, [
+    advisorRows,
+    editor.draft?.advisor_choice_id,
+    savedAdvisor,
+    usesCurrentModel,
+    currentAdvisorChoices,
+  ]);
   const savedAdvisorRow = savedAdvisor
     ? (advisorRows.find((row) => row.key === advisorModelKey(savedAdvisor)) ?? null)
     : null;
   const savedAdvisorEffortOptions = useMemo(
-    () => (savedAdvisorRow ? advisorEffortOptions(savedAdvisorRow.choices) : []),
-    [savedAdvisorRow],
+    () =>
+      advisorEffortOptions(
+        usesCurrentModel ? currentAdvisorChoices : (savedAdvisorRow?.choices ?? []),
+      ),
+    [savedAdvisorRow, usesCurrentModel, currentAdvisorChoices],
   );
+  useEffect(() => {
+    onCurrentModelAdvisorChange?.(usesCurrentModel);
+  }, [onCurrentModelAdvisorChange, usesCurrentModel]);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) clearInterval(pollTimer.current);
@@ -419,10 +462,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     } catch (cause) {
       return cause instanceof Error ? cause.message : "Select at least one active answer.";
     }
-    if (
-      !draft.advisor_choice_id ||
-      !options.some((option) => option.choice_id === draft.advisor_choice_id && option.available)
-    ) {
+    if (savedAdvisorUnavailable || !savedAdvisor) {
       return "Choose an available advisor model and reasoning level.";
     }
     const resolvedHumanChoiceId = resolveHumanChoice();
@@ -433,7 +473,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       return "Choose an allowed model and reasoning level in the composer.";
     }
     return null;
-  }, [editor.draft, options, resolveHumanChoice]);
+  }, [editor.draft, options, resolveHumanChoice, savedAdvisor, savedAdvisorUnavailable]);
 
   useEffect(() => {
     const identity = JSON.stringify({
@@ -714,7 +754,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     (overrideId: string | null, reason: string | null) => {
       const host = hostId;
       let current = round.round;
-      if (host === null || current === null || round.busy) return;
+      if (host === null || current === null || round.busy || confirmationBlockReason) return;
       if (launchAgentId === null || launchWorkspace === null) {
         setRound({
           round: current,
@@ -806,6 +846,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       })();
     },
     [
+      confirmationBlockReason,
       continueSessionId,
       hostId,
       isCurrentScope,
@@ -860,12 +901,13 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const awaitingLaunch =
     round.round !== null &&
     (round.round.state === "awaiting_confirmation" || round.round.state === "dispatch_claimed");
-  const reviewVisible = launchNeedsApproval && awaitingLaunch;
+  const reviewVisible = (launchNeedsApproval || Boolean(confirmationBlockReason)) && awaitingLaunch;
   const autoLaunchAttempts = useRef(new Set<string>());
   useEffect(() => {
     const current = round.round;
     if (
       launchNeedsApproval ||
+      confirmationBlockReason ||
       round.busy ||
       round.error ||
       current?.state !== "awaiting_confirmation" ||
@@ -877,7 +919,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     if (autoLaunchAttempts.current.has(identity)) return;
     autoLaunchAttempts.current.add(identity);
     handleConfirm(null, null);
-  }, [launchNeedsApproval, round, hostId, launchAgentId, launchWorkspace, handleConfirm]);
+  }, [
+    launchNeedsApproval,
+    confirmationBlockReason,
+    round,
+    hostId,
+    launchAgentId,
+    launchWorkspace,
+    handleConfirm,
+  ]);
   useEffect(() => {
     onFlowStateChange?.(
       round.busy || (!launchNeedsApproval && awaitingLaunch && !round.error),
@@ -1076,6 +1126,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           approvalRequired={approvalRequired}
           options={options}
           busy={round.busy}
+          confirmationBlockReason={confirmationBlockReason}
           error={round.round?.launch_error ?? round.error}
           onConfirm={handleConfirm}
           onCancel={handleCancel}
@@ -1153,6 +1204,21 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           searchTestId="model-advisor-advisor-choice-search"
           disabled={disabled || round.busy || saving || !editor.draft.enabled}
           onValueChange={(modelKey) => {
+            if (modelKey === CURRENT_MODEL_KEY && editor.draft) {
+              const choice = reconcileAdvisorChoice(
+                currentAdvisorChoices,
+                editor.draft.advisor_reasoning_effort ??
+                  savedAdvisor?.reasoning_effort ??
+                  humanPick?.effort,
+              );
+              if (choice)
+                handleChange({
+                  ...editor.draft,
+                  advisor_model_mode: "current",
+                  advisor_reasoning_effort: choice.reasoning_effort,
+                });
+              return;
+            }
             const row = advisorRows.find((candidate) => candidate.key === modelKey);
             // Switching models reconciles the effort: keep the current one
             // when the new model offers it, else its declared default, else
@@ -1161,20 +1227,43 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               ? reconcileAdvisorChoice(row.choices, savedAdvisor?.reasoning_effort ?? null)
               : null;
             if (editor.draft && choice)
-              handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+              handleChange({
+                ...editor.draft,
+                advisor_model_mode: "selected",
+                advisor_choice_id: choice.choice_id,
+              });
           }}
         />
         <ComposerEffortPicker
-          value={savedAdvisor?.reasoning_effort ?? null}
+          value={
+            usesCurrentModel
+              ? (editor.draft.advisor_reasoning_effort ?? null)
+              : (savedAdvisor?.reasoning_effort ?? null)
+          }
           options={savedAdvisorEffortOptions.map((option) => ({
             value: option.value,
             label: option.label,
           }))}
-          disabled={disabled || round.busy || saving || !savedAdvisor || !editor.draft.enabled}
+          disabled={
+            disabled ||
+            round.busy ||
+            saving ||
+            savedAdvisorEffortOptions.length === 0 ||
+            !editor.draft.enabled
+          }
           label="Recommender reasoning effort"
           testIdPrefix="model-advisor-advisor"
           testId="model-advisor-advisor-effort"
           onSelect={(effort) => {
+            if (editor.draft && usesCurrentModel) {
+              if (
+                currentAdvisorChoices.some(
+                  (option) => option.available && option.reasoning_effort === effort,
+                )
+              )
+                handleChange({ ...editor.draft, advisor_reasoning_effort: effort });
+              return;
+            }
             if (!editor.draft || !savedAdvisorRow) return;
             const choice = savedAdvisorRow.choices.find(
               (option) => option.available && option.reasoning_effort === effort,
@@ -1211,6 +1300,13 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       </Button>
     </div>
   );
+  const currentModelContextNote = usesCurrentModel ? (
+    <p className="text-sm text-muted-foreground" data-testid="model-advisor-current-context">
+      {continueSessionId
+        ? "The Advisor uses this chat’s current model and existing context. Its reasoning level is separate from the execution reasoning level. Changing reasoning can reduce cache reuse."
+        : "The Advisor uses the selected execution model at the reasoning level chosen here. Existing chat context is available after the chat starts."}
+    </p>
+  ) : null;
   return (
     <>
       {showComposerControls
@@ -1223,6 +1319,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           createPortal(
             <div className="space-y-3">
               {!showComposerControls ? recommenderControls : null}
+              {currentModelContextNote}
               {settingsPanel}
             </div>,
             settingsPanelTarget,
@@ -1237,6 +1334,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                 Choose the Advisor model, allowed models and approval rules.
               </DialogDescription>
             </DialogHeader>
+            {currentModelContextNote}
             {settingsPanel}
           </DialogContent>
         </Dialog>

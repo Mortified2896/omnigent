@@ -265,6 +265,8 @@ def is_omnigent_side_fork(event: _JsonObject) -> bool:
     thread = params.get("thread")
     if not isinstance(thread, dict):
         return False
+    if thread.get("source") == "omnigent-model-advisor":
+        return False
     forked_from = thread.get("forkedFromId")
     return thread.get("ephemeral") is True and isinstance(forked_from, str) and bool(forked_from)
 

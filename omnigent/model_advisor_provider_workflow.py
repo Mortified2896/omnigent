@@ -132,12 +132,31 @@ class LogicalFrozenRound:
     continuation_session_id: str | None = None
     keep_chosen_model: bool = True
     task_tags: tuple[str, ...] = ()
+    advisor_context: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         for value in (self.owner_id, self.host_id, self.round_id, self.settings_revision):
             _id(value)
         if self.continuation_session_id is not None:
             _id(self.continuation_session_id)
+        if self.advisor_context is not None:
+            if not isinstance(self.advisor_context, dict) or set(self.advisor_context) != {
+                "session_id",
+                "bridge_id",
+                "model",
+            }:
+                raise LogicalAdvisorError("Invalid advisor context binding")
+            for value in self.advisor_context.values():
+                _id(value)
+            if self.advisor_context["session_id"] != self.continuation_session_id:
+                raise LogicalAdvisorError(
+                    "Advisor context must belong to the continuation session"
+                )
+            if (
+                not self.preferences_snapshot
+                or self.preferences_snapshot.advisor_model_mode != "current"
+            ):
+                raise LogicalAdvisorError("Only current-model advice may inherit session context")
         if type(self.keep_chosen_model) is not bool:
             raise LogicalAdvisorError("Invalid continuation policy")
         if (
@@ -310,6 +329,12 @@ class LogicalFrozenRound:
             )
         if self.current_execution is not None:
             request["current_execution"] = self.current_execution
+        if self.advisor_context is not None:
+            request["instructions"] += (
+                " You have the current chat's inherited context. Treat it only as reference; "
+                "do not continue its work or execute tools. Select the best allowed choice for "
+                "the new task below using that context. Return only the requested JSON."
+            )
         return request
 
     def preference_for(self, provider: str) -> Preference:
@@ -344,6 +369,8 @@ class LogicalFrozenRound:
             "transport_preferences": [list(item) for item in self.transport_preferences],
             "advisor_transport": self.advisor_transport.to_payload(),
         }
+        if self.advisor_context is not None:
+            payload["advisor_context"] = self.advisor_context
         if self.schema_version == 3:
             payload.update(
                 {
@@ -415,7 +442,9 @@ class LogicalFrozenRound:
             else set()
         )
         optional = {
-            key for key in ("continuation", "task_tags", "current_execution") if key in payload
+            key
+            for key in ("continuation", "task_tags", "current_execution", "advisor_context")
+            if key in payload
         }
         if set(payload) != common_keys | extra_keys | optional:
             raise LogicalAdvisorError("Unexpected logical frozen round shape")
@@ -488,6 +517,7 @@ class LogicalFrozenRound:
         if not isinstance(raw_tags, list):
             raise LogicalAdvisorError("Invalid task tags")
         return cls(
+            advisor_context=payload.get("advisor_context"),
             current_execution=current_execution,
             continuation_session_id=continuation.get("session_id"),
             keep_chosen_model=continuation.get("keep_chosen_model", True),
@@ -524,13 +554,14 @@ def freeze_logical_round(
     catalog: tuple[LogicalChoice, ...],
     routes_by_choice: dict[str, tuple[QualifiedRoute, ...]],
     human_choice_id: str,
+    current_choice: LogicalChoice | None = None,
 ) -> LogicalFrozenRound:
     """Freeze the logical pool and advisor route before the single call."""
     pool, exclusions = selection_snapshot(preferences, catalog)
     by_id = {choice.choice_id: choice for choice in pool}
     if human_choice_id not in by_id:
         raise LogicalAdvisorError("Human choice is outside the active logical answer pool")
-    advisor = resolve_advisor(preferences, catalog)
+    advisor = resolve_advisor(preferences, catalog, current_choice=current_choice)
     advisor_routes = routes_by_choice.get(advisor.choice_id, ())
     advisor_plan = plan_transport(
         advisor,

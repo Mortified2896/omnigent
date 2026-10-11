@@ -42,7 +42,10 @@ export function readSessionAdvisorChoices(
       typeof prefs.enabled !== "boolean" ||
       !isStringList(prefs.unresolved_legacy_ids) ||
       !isStringList(prefs.route_review_required) ||
-      typeof prefs.human_probability_percent !== "number"
+      typeof prefs.human_probability_percent !== "number" ||
+      (prefs.advisor_model_mode !== undefined &&
+        !["selected", "current"].includes(prefs.advisor_model_mode)) ||
+      (prefs.advisor_reasoning_effort != null && typeof prefs.advisor_reasoning_effort !== "string")
     )
       return null;
     for (const group of [prefs.providers.openai, prefs.providers.glm]) {

@@ -65,6 +65,8 @@ class ProviderPreferencesBody(BaseModel):
     human_probability_percent: int = Field(ge=0, le=100, default=50)
     unresolved_legacy_ids: list[str] = Field(max_length=128, default_factory=list)
     route_review_required: list[Literal["openai", "glm"]] = Field(default_factory=list)
+    advisor_model_mode: Literal["selected", "current"] = "selected"
+    advisor_reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
 
     @model_validator(mode="after")
     def validate_versioned_model_switches(self) -> ProviderPreferencesBody:
@@ -164,7 +166,9 @@ def create_model_advisor_router(
     ) -> AdvisorPreferences | ProviderPreferences:
         if isinstance(body, ProviderPreferencesBody):
             try:
-                return ProviderPreferences.from_payload(body.model_dump(exclude_none=True))
+                payload = body.model_dump(exclude_none=True)
+                payload["advisor_choice_id"] = body.advisor_choice_id
+                return ProviderPreferences.from_payload(payload)
             except ProviderPolicyError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         try:

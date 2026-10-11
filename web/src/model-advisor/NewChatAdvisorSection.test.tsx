@@ -310,6 +310,57 @@ it("selects recommender reasoning independently and persists the logical choice"
   });
 });
 
+it("offers Current model with independent effort and preserves the separately selected advisor", async () => {
+  catalog.logical_options = [
+    LOGICAL_A,
+    LOGICAL_B,
+    { ...LOGICAL_A, choice_id: "sol-low", reasoning_effort: "low" },
+  ];
+  mountSection({
+    humanPick: { model: LOGICAL_A.model_id, accessLane: "codex-direct", effort: "medium" },
+    continueSessionId: "current-chat",
+  });
+  fireEvent.click(await screen.findByRole("combobox", { name: "Recommender model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /Current model/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("Current model");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("combobox", { name: "Recommender reasoning effort" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Low" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await waitFor(() => {
+    const saved = api.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(saved).toBeDefined();
+    const prefs = JSON.parse(saved![1].body).preferences;
+    expect(prefs.advisor_model_mode).toBe("current");
+    expect(prefs.advisor_reasoning_effort).toBe("low");
+    expect(prefs.advisor_choice_id).toBe(LOGICAL_B.choice_id);
+    expect(prefs.providers.openai.selected_choice_ids).toEqual([LOGICAL_A.choice_id]);
+  });
+});
+
+it("does not confirm a running-chat recommendation until the current response finishes", async () => {
+  const props = {
+    hostId: "host_1",
+    task: "Next task",
+    humanPick: GLM_PICK,
+    launchAgentId: "ag_1",
+    launchWorkspace: "/repo",
+    advisorModelTarget,
+    continueSessionId: "current-chat",
+    requireConfirmation: false,
+    confirmationBlockReason: "Wait for the current response to finish",
+    onLaunched: vi.fn(),
+  };
+  const view = mountSection(props);
+  await screen.findByRole("combobox", { name: "Recommender model" });
+  send();
+  expect(await screen.findByText("Wait for the current response to finish")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run selected model" })).toBeDisabled();
+  expect(api.mock.calls.some(([url]) => url.endsWith("/confirm"))).toBe(false);
+  view.rerender(<NewChatAdvisorSection {...props} confirmationBlockReason={null} />);
+  await waitFor(() => expect(api.mock.calls.some(([url]) => url.endsWith("/confirm"))).toBe(true));
+});
+
 it("keeps provider and model switches from erasing remembered reasoning", async () => {
   mountSection();
   await screen.findByRole("region", { name: "Model advisor settings" });

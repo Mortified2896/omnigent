@@ -1015,7 +1015,8 @@ class HostAdvisorCallFrame:
     :param request: The allowlisted advisor request built by
         ``model_advisor_core.build_advisor_request`` (instructions, task,
         candidate rows, output schema). The host transport must not add
-        tools, history or credentials to it.
+        credentials to it. History is inherited only when the server supplies
+        an authorized current-model context binding.
     :param model: The advisor model id, e.g. ``"gpt-5.3-codex"``.
     :param access_lane: The authorized lane binding the advisor's
         provider/account, e.g. ``"codex-direct"`` or ``"glm-direct"``.
@@ -1027,6 +1028,8 @@ class HostAdvisorCallFrame:
     model: str
     access_lane: str | None = None
     reasoning_effort: str | None = None
+    context_session_id: str | None = None
+    context_bridge_id: str | None = None
 
 
 @dataclass
@@ -1046,6 +1049,7 @@ class HostAdvisorCallResultFrame:
     cached_input_tokens: int | None = None
     response_id: str | None = None
     error: str | None = None
+    context_session_id: str | None = None
 
 
 @dataclass
@@ -1733,6 +1737,8 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "model": frame.model,
                 "access_lane": frame.access_lane,
                 "reasoning_effort": frame.reasoning_effort,
+                "context_session_id": frame.context_session_id,
+                "context_bridge_id": frame.context_bridge_id,
             }
         )
     if isinstance(frame, HostAdvisorCallResultFrame):
@@ -1748,6 +1754,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "cached_input_tokens": frame.cached_input_tokens,
                 "response_id": frame.response_id,
                 "error": frame.error,
+                "context_session_id": frame.context_session_id,
             }
         )
     if isinstance(frame, HostSkillsFrame):
@@ -2856,6 +2863,8 @@ def _decode_advisor_call(msg: _JsonObject) -> HostAdvisorCallFrame:
         model=_required_str(msg, "model"),
         access_lane=_optional_nullable_str(msg, "access_lane"),
         reasoning_effort=_optional_nullable_str(msg, "reasoning_effort"),
+        context_session_id=_optional_nullable_str(msg, "context_session_id"),
+        context_bridge_id=_optional_nullable_str(msg, "context_bridge_id"),
     )
 
 
@@ -2880,6 +2889,7 @@ def _decode_advisor_call_result(msg: _JsonObject) -> HostAdvisorCallResultFrame:
         cached_input_tokens=_optional_int("cached_input_tokens"),
         response_id=_optional_nullable_str(msg, "response_id"),
         error=_optional_nullable_str(msg, "error"),
+        context_session_id=_optional_nullable_str(msg, "context_session_id"),
     )
 
 

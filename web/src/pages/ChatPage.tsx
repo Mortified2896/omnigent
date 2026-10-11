@@ -2655,6 +2655,7 @@ function ComposerImpl(
     advisorWorkspace !== null &&
     conversationId !== null &&
     !isTempConvId(conversationId);
+  const [advisorUsesCurrentModel, setAdvisorUsesCurrentModel] = useState(false);
   const advisorWaitingForResponse = pendingAdvisorSend !== null && !advisorDialogOpen;
 
   useEffect(() => {
@@ -2667,11 +2668,15 @@ function ComposerImpl(
   }, [advisorHostId, conversationId]);
 
   useEffect(() => {
-    if (pendingAdvisorSend && pendingAdvisorSend.sessionId === conversationId && !isWorking) {
+    if (
+      pendingAdvisorSend &&
+      pendingAdvisorSend.sessionId === conversationId &&
+      (!isWorking || advisorUsesCurrentModel)
+    ) {
       setAdvisorSettingsOpen(false);
       setAdvisorDialogOpen(true);
     }
-  }, [conversationId, isWorking, pendingAdvisorSend]);
+  }, [conversationId, isWorking, pendingAdvisorSend, advisorUsesCurrentModel]);
 
   // Drain the queue whenever idle with a waiting head — level-triggered so a
   // message queued right after the turn ended (or after an SSE reconnect that
@@ -3736,8 +3741,11 @@ function ComposerImpl(
       });
       if (isWorking) {
         setCommandError(
-          "Model Advisor will review this follow-up when the current response finishes.",
+          advisorUsesCurrentModel
+            ? "Model Advisor is reviewing this follow-up. Changes apply when the current response finishes."
+            : "Model Advisor will review this follow-up when the current response finishes.",
         );
+        if (advisorUsesCurrentModel) setAdvisorDialogOpen(true);
       } else {
         setAdvisorDialogOpen(true);
       }
@@ -4555,6 +4563,10 @@ function ComposerImpl(
           launchAgentId={advisorAgentId}
           launchWorkspace={advisorWorkspace}
           continueSessionId={conversationId}
+          onCurrentModelAdvisorChange={setAdvisorUsesCurrentModel}
+          confirmationBlockReason={
+            isWorking ? "The recommendation can apply when the current response finishes." : null
+          }
           autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
           enabledOverride={advisorEnabled}
           showComposerControls

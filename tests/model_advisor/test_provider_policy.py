@@ -119,6 +119,27 @@ def test_model_efforts_independent_and_shared_pool():
     assert resolve_advisor(reduced, CATALOG) == OPENAI_HIGH
 
 
+@pytest.mark.parametrize("current,expected", [(OPENAI_LOW, OPENAI_HIGH), (GLM_HIGH, GLM_HIGH)])
+def test_current_model_advisor_resolves_model_dynamically_and_keeps_its_own_effort(
+    current, expected
+):
+    prefs = replace(PREFS, advisor_model_mode="current", advisor_reasoning_effort="high")
+    assert resolve_advisor(prefs, CATALOG, current_choice=current) == expected
+    assert prefs.advisor_choice_id == OPENAI_HIGH.choice_id
+    assert effective_pool(prefs, CATALOG) == effective_pool(PREFS, CATALOG)
+    assert ProviderPreferences.from_payload(prefs.to_payload()) == prefs
+
+
+def test_current_model_advisor_does_not_fall_back_to_a_different_model_or_effort():
+    prefs = replace(PREFS, advisor_model_mode="current", advisor_reasoning_effort="low")
+    with pytest.raises(ProviderPolicyError, match="effort is unavailable"):
+        resolve_advisor(prefs, CATALOG, current_choice=GLM_HIGH)
+    with pytest.raises(ProviderPolicyError, match="execution model is unavailable"):
+        resolve_advisor(prefs, CATALOG)
+    with pytest.raises(ProviderPolicyError, match="explicit"):
+        replace(PREFS, advisor_model_mode="current")
+
+
 def test_transport_does_not_change_advisor_payload_or_candidate_ids():
     changed = PREFS.choose_transport("openai", "direct_only")
     assert advisor_input("Task", effective_pool(PREFS, CATALOG)) == advisor_input(

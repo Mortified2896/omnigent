@@ -20,6 +20,7 @@ interface Props {
   options: readonly LogicalOption[];
   busy?: boolean;
   approvalRequired?: boolean;
+  confirmationBlockReason?: string | null;
   error?: string | null;
   onConfirm: (overrideId: string | null, reason: string | null) => void;
   onCancel: () => void;
@@ -30,6 +31,7 @@ export function ProviderAdvisorReview({
   options,
   busy = false,
   approvalRequired,
+  confirmationBlockReason,
   error,
   onConfirm,
   onCancel,
@@ -37,7 +39,16 @@ export function ProviderAdvisorReview({
   return (
     <ReviewForRound
       key={review.round_fingerprint}
-      {...{ review, options, busy, approvalRequired, error, onConfirm, onCancel }}
+      {...{
+        review,
+        options,
+        busy,
+        approvalRequired,
+        confirmationBlockReason,
+        error,
+        onConfirm,
+        onCancel,
+      }}
     />
   );
 }
@@ -47,6 +58,7 @@ function ReviewForRound({
   options,
   busy,
   approvalRequired,
+  confirmationBlockReason,
   error,
   onConfirm,
   onCancel,
@@ -136,7 +148,9 @@ function ReviewForRound({
           <button
             type="button"
             className={controlClass}
-            disabled={!available || (override && !reason.trim())}
+            disabled={
+              !available || Boolean(confirmationBlockReason) || (override && !reason.trim())
+            }
             onClick={() => onConfirm(override ? choice : null, override ? reason.trim() : null)}
           >
             {busy ? "Starting…" : "Run selected model"}
@@ -152,6 +166,7 @@ function ReviewForRound({
         </p>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
+      {confirmationBlockReason ? <p role="status">{confirmationBlockReason}</p> : null}
     </section>
   );
 }
