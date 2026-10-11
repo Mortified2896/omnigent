@@ -82,6 +82,7 @@ import {
   useScopedConversationId,
 } from "@/components/chat/conversationScope";
 import { useStickToBottomContext } from "use-stick-to-bottom";
+import { isFeedbackReviewFocused } from "@/components/ai-elements/conversation";
 import { UserMessageNav } from "@/components/UserMessageNav";
 import { isSessionScopedDecision, showsRoutingDecisionChip } from "@/lib/routingDecision";
 import { useWorkingLabelTick } from "@/hooks/useWorkingLabelTick";
@@ -1320,7 +1321,13 @@ export function KeepBottomOnViewportResize() {
       const nextHeight = el.clientHeight;
       if (nextHeight === clientHeight) return;
       clientHeight = nextHeight;
-      if (!wasBottomLocked) return;
+      if (
+        !wasBottomLocked ||
+        !state.isAtBottom ||
+        state.escapedFromLock ||
+        isFeedbackReviewFocused(el)
+      )
+        return;
       // Gecko delivers this callback before the frame paints, but the
       // library's scrollToBottom always lands a frame later (it defers
       // through a rAF promise), so the shrink paints with the transcript
@@ -1335,6 +1342,7 @@ export function KeepBottomOnViewportResize() {
       if (frame !== null) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         frame = null;
+        if (!state.isAtBottom || state.escapedFromLock || isFeedbackReviewFocused(el)) return;
         el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - 1);
         scrollToBottom("instant");
       });

@@ -18,6 +18,7 @@ import {
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
+  isFeedbackReviewFocused,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent } from "@/components/ai-elements/message";
 import { ElicitationCard } from "@/components/blocks/ApprovalCard";
@@ -936,7 +937,8 @@ export function VirtualBubbleList({
       prependCommitRef.current ||
       restoringRef.current ||
       !c.state.isAtBottom ||
-      c.state.escapedFromLock
+      c.state.escapedFromLock ||
+      isFeedbackReviewFocused(scrollEl)
     ) {
       return;
     }

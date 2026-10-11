@@ -94,6 +94,7 @@ export function FeedbackDiscussionControls({
           size="sm"
           className="min-h-10 px-0 text-muted-foreground md:min-h-0"
           disabled={disabled}
+          title={saving ? "Waiting for your feedback to save" : undefined}
           onClick={() => prepare("discuss")}
         >
           <MessageSquareIcon className="size-3.5" />
@@ -186,9 +187,6 @@ export function FeedbackDiscussionControls({
             </Button>
           </div>
         </form>
-      )}
-      {saving && (
-        <p className="text-xs text-muted-foreground">Waiting for your feedback to save…</p>
       )}
     </div>
   );

@@ -1,5 +1,6 @@
 import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
 import { FeedbackDiscussionComposerContext } from "@/components/FeedbackDiscussionControls";
+import { isFeedbackReviewFocused } from "@/components/ai-elements/conversation";
 import { feedbackRequest, FEEDBACK_PROMPTS, type PreparedFeedback } from "@/lib/feedbackPrompts";
 import { useComposerAutoSend } from "@/hooks/useComposerAutoSend";
 import { currentModelChoices } from "@/lib/currentModelChoices";
@@ -1820,7 +1821,8 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
     const scrollEl = scroller?.el;
     if (!scrollEl) return;
     const lockState = scroller?.state;
-    if (!lockState?.isAtBottom || lockState.escapedFromLock) return;
+    if (!lockState?.isAtBottom || lockState.escapedFromLock || isFeedbackReviewFocused(scrollEl))
+      return;
     // A reader who escaped the bottom (or never arrived) keeps their
     // position: growth must not yank it down.
     if (!pinnedToBottomRef.current) return;

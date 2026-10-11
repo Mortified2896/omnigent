@@ -9,8 +9,12 @@ import {
   type ReviewPerspectiveInput,
 } from "./ResponseFeedbackActions";
 import type { Bubble } from "@/lib/renderItems";
+import { ConversationScrollLockContext } from "./ai-elements/conversation";
 
 const api = vi.hoisted(() => vi.fn());
+const feedbackScrollState = { isAtBottom: true, escapedFromLock: false };
+const stopFeedbackScroll = vi.fn();
+const feedbackScrollLock = { stopScroll: stopFeedbackScroll, state: feedbackScrollState };
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: api, getCurrentUserId: () => "local" }));
 let fail: boolean;
 let outcomes: Record<string, unknown>[];
@@ -67,6 +71,9 @@ beforeEach(() => {
   advisorRoundAttached = true;
   scoringPolicy = { score_eligible: true, is_test: false, retention: null, responses: {} };
   api.mockReset();
+  stopFeedbackScroll.mockClear();
+  feedbackScrollState.isAtBottom = true;
+  feedbackScrollState.escapedFromLock = false;
   api.mockImplementation(async (_url: string, options?: RequestInit) => {
     if (options?.method && fail) return new Response(null, { status: 500 });
     if (_url.endsWith("/task-experiment")) return Response.json(outcomes);
@@ -108,20 +115,23 @@ function mount(
   compact = false,
   autoSave = false,
   renderPerspective?: (review: ReviewPerspectiveInput) => ReactNode,
+  withScrollLock = false,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
-      <ResponseFeedbackProvider sessionId="session" hostId={hostId}>
-        <ResponseFeedbackActions
-          responseId={responseId}
-          compact={compact}
-          autoSave={autoSave}
-          renderPerspective={renderPerspective}
-        />
-      </ResponseFeedbackProvider>
+      <ConversationScrollLockContext.Provider value={withScrollLock ? feedbackScrollLock : null}>
+        <ResponseFeedbackProvider sessionId="session" hostId={hostId}>
+          <ResponseFeedbackActions
+            responseId={responseId}
+            compact={compact}
+            autoSave={autoSave}
+            renderPerspective={renderPerspective}
+          />
+        </ResponseFeedbackProvider>
+      </ConversationScrollLockContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -162,9 +172,8 @@ it("shows compact choices and marks the assigned option without repeating it in 
   expect(screen.queryByTestId("model-attribution")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Partial" }));
   const comment = await screen.findByLabelText("Task review comment");
-  expect(screen.getByText("Show model decision").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("Show model decision").closest("details")).toHaveAttribute("open");
   fireEvent.change(comment, { target: { value: "Unbiased first impression" } });
-  fireEvent.click(screen.getByText("Show model decision"));
   const selected = await screen.findByLabelText("Advisor’s choice · Selected");
   expect(selected).toHaveAttribute("data-selected", "true");
   expect(selected).toHaveTextContent("GPT-6 Sol");
@@ -181,7 +190,9 @@ it("keeps the no-Advisor state clear and marks only a reported matching choice",
   mount("host-test", "answer", true);
   await waitFor(() => expect(screen.getByRole("button", { name: "Partial" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Partial" }));
-  fireEvent.click(await screen.findByText("Show model decision"));
+  expect((await screen.findByText("Show model decision")).closest("details")).toHaveAttribute(
+    "open",
+  );
   await waitFor(() => expect(screen.getByLabelText("Your choice")).toHaveTextContent("GPT-6 Sol"));
   expect(screen.getByLabelText("Advisor’s choice")).toHaveTextContent("Not used");
   // A versioned reported model differs from the requested ID: do not claim a match.
@@ -291,7 +302,7 @@ it("saves newer comment edits after an older autosave finishes", async () => {
   );
 });
 
-it("keeps a mobile comment edit when returning to the readable feedback view", async () => {
+it("keeps the mobile feedback field directly editable while saving", async () => {
   outcomes = [
     {
       id: "existing",
@@ -303,20 +314,15 @@ it("keeps a mobile comment edit when returning to the readable feedback view", a
     },
   ];
   mount(null, "answer", true, true);
-  const edit = await screen.findByRole("button", { name: "Edit feedback comment" });
-  expect(edit).toHaveAttribute("aria-expanded", "false");
-  fireEvent.click(edit);
-  const done = screen.getByRole("button", { name: "Done editing feedback comment" });
-  expect(done).toHaveAttribute("aria-expanded", "true");
-  fireEvent.change(screen.getByLabelText("Task review comment"), {
+  const comment = await screen.findByRole("textbox", { name: "Task review comment" });
+  expect(comment).toHaveClass("block");
+  expect(comment).not.toHaveClass("hidden");
+  expect(screen.queryByRole("button", { name: "Edit feedback comment" })).toBeNull();
+  fireEvent.focus(comment);
+  fireEvent.change(comment, {
     target: { value: "My adjusted note" },
   });
-  fireEvent.click(done);
-  expect(screen.getByRole("button", { name: "Edit feedback comment" })).toHaveAttribute(
-    "aria-expanded",
-    "false",
-  );
-  expect(screen.getByText("My adjusted note", { selector: "p" })).toBeInTheDocument();
+  expect(comment).toHaveValue("My adjusted note");
   await waitFor(() =>
     expect(outcomes.at(-1)).toMatchObject({
       outcome: "partial",
@@ -324,6 +330,43 @@ it("keeps a mobile comment edit when returning to the readable feedback view", a
       tags: ["Instructions"],
     }),
   );
+  expect(screen.getByRole("textbox", { name: "Task review comment" })).toBe(comment);
+});
+
+it("releases bottom follow before an outcome expands and when feedback receives keyboard focus", async () => {
+  mount(null, "answer", true, true, undefined, true);
+  const partial = await screen.findByRole("button", { name: "Partial" });
+  await waitFor(() => expect(partial).toBeEnabled());
+  fireEvent.pointerDown(partial);
+  expect(stopFeedbackScroll).toHaveBeenCalledOnce();
+  expect(feedbackScrollState).toEqual({ isAtBottom: false, escapedFromLock: true });
+  fireEvent.click(partial);
+  const comment = await screen.findByRole("textbox", { name: "Task review comment" });
+
+  feedbackScrollState.isAtBottom = true;
+  feedbackScrollState.escapedFromLock = false;
+  fireEvent.focus(comment);
+  expect(stopFeedbackScroll).toHaveBeenCalledTimes(2);
+  expect(feedbackScrollState).toEqual({ isAtBottom: false, escapedFromLock: true });
+});
+
+it("does not reopen the model decision during comment saves after the reader collapses it", async () => {
+  mount("host-test", "answer", true, true);
+  const partial = await screen.findByRole("button", { name: "Partial" });
+  await waitFor(() => expect(partial).toBeEnabled());
+  fireEvent.click(partial);
+  const decision = (await screen.findByText("Show model decision")).closest("details")!;
+  await waitFor(() => expect(decision).toHaveAttribute("open"));
+  decision.open = false;
+  fireEvent(decision, new Event("toggle"));
+  fireEvent.change(screen.getByLabelText("Task review comment"), {
+    target: { value: "Still needs verification" },
+  });
+  await waitFor(() => expect(outcomes.at(-1)?.comment).toBe("Still needs verification"));
+  expect(decision).not.toHaveAttribute("open");
+
+  fireEvent.click(screen.getByRole("button", { name: "Partial" }));
+  await waitFor(() => expect(decision).toHaveAttribute("open"));
 });
 it("only offers feedback for durable completed visible answers", () => {
   const bubble: Bubble = {

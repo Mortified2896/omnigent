@@ -6,7 +6,11 @@ import type { UIMessage } from "ai";
 import { ArrowDownIcon, DownloadIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { createContext, useCallback, useLayoutEffect, useMemo } from "react";
-import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import {
+  StickToBottom,
+  useStickToBottomContext,
+  type GetTargetScrollTop,
+} from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
@@ -17,6 +21,19 @@ export interface ConversationScrollLock {
 }
 
 export const ConversationScrollLockContext = createContext<ConversationScrollLock | null>(null);
+
+export function isFeedbackReviewFocused(scrollElement: HTMLElement): boolean {
+  const focused = scrollElement.ownerDocument.activeElement;
+  return Boolean(
+    focused && scrollElement.contains(focused) && focused.closest("[data-feedback-review]"),
+  );
+}
+
+// Focusing a field can scroll it into view and make the library consider the
+// pane near-bottom again. While reviewing, resize and streaming follow must
+// keep that field's position instead of reclaiming the bottom lock.
+const feedbackAwareScrollTarget: GetTargetScrollTop = (target, { scrollElement }) =>
+  isFeedbackReviewFocused(scrollElement) ? scrollElement.scrollTop : target;
 
 // Module handle so non-React scroll helpers (deep links, activity rail,
 // Cmd+Alt nav) can release the bottom-lock without Conversation context.
@@ -70,6 +87,7 @@ export const Conversation = ({ className, children, ...props }: ConversationProp
     className={cn("relative flex-1 overflow-y-hidden", className)}
     initial="instant"
     resize="instant"
+    targetScrollTop={feedbackAwareScrollTarget}
     role="log"
     {...props}
   >
@@ -122,14 +140,18 @@ export const ConversationScrollButton = ({
   className,
   ...props
 }: ConversationScrollButtonProps) => {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  const { isAtBottom, scrollToBottom, state } = useStickToBottomContext();
 
   const handleScrollToBottom = useCallback(() => {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused.closest("[data-feedback-review]")) {
+      focused.blur();
+    }
     scrollToBottom("instant");
   }, [scrollToBottom]);
 
   return (
-    !isAtBottom && (
+    (!isAtBottom || state.escapedFromLock) && (
       <Button
         className={cn(
           "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full",

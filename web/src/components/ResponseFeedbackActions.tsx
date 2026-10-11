@@ -7,7 +7,8 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { CheckIcon, PencilIcon } from "lucide-react";
+import { ConversationScrollLockContext } from "./ai-elements/conversation";
+import { CheckIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Bubble } from "@/lib/renderItems";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
@@ -140,9 +141,13 @@ function OutcomeEditor({
   const [tags, setTags] = useState<string[]>(human?.tags ?? []);
   const [customTag, setCustomTag] = useState("");
   const [editingTags, setEditingTags] = useState(false);
-  const [editingComment, setEditingComment] = useState(false);
+  const [modelDecisionOpen, setModelDecisionOpen] = useState(Boolean(outcome));
+  const scrollLock = useContext(ConversationScrollLockContext);
   const commentId = useId();
   const [hydrated, setHydrated] = useState(!autoSave);
+  useEffect(() => {
+    if (outcome) setModelDecisionOpen(true);
+  }, [outcome]);
   useEffect(() => {
     if (autoSave && ready && !hydrated) {
       setComment(human?.comment ?? "");
@@ -150,6 +155,13 @@ function OutcomeEditor({
       setHydrated(true);
     }
   }, [autoSave, ready, hydrated, human]);
+
+  function holdFeedbackPosition(): void {
+    if (!scrollLock) return;
+    scrollLock.stopScroll();
+    scrollLock.state.isAtBottom = false;
+    scrollLock.state.escapedFromLock = true;
+  }
 
   function toggleTag(tag: string): void {
     setTags((current) =>
@@ -198,7 +210,13 @@ function OutcomeEditor({
   ]);
 
   return (
-    <div className="order-last flex w-full basis-full flex-col gap-2 py-1" aria-label="Task review">
+    <div
+      className="order-last flex w-full basis-full flex-col gap-2 py-1"
+      aria-label="Task review"
+      data-feedback-review=""
+      onPointerDownCapture={holdFeedbackPosition}
+      onFocusCapture={holdFeedbackPosition}
+    >
       <div className={compact ? "-ml-2.5 flex flex-wrap items-center gap-2" : "contents"}>
         <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Task outcome">
           {!compact && <span className="mr-1 text-xs font-medium">Your outcome</span>}
@@ -210,13 +228,14 @@ function OutcomeEditor({
               title={option.definition}
               aria-pressed={outcome === option.value}
               disabled={!ready || mutation.isPending}
-              onClick={() =>
+              onClick={() => {
+                setModelDecisionOpen(true);
                 mutation.mutate({
                   outcome: option.value,
                   comment: comment.trim() || null,
                   tags,
-                })
-              }
+                });
+              }}
             >
               {option.label}
             </FeedbackChoiceButton>
@@ -226,7 +245,7 @@ function OutcomeEditor({
         <ResponseScoringActions sessionId={sessionId} responseId={responseId} compact={compact} />
         {autoSave && (outcome || isPending || isError) && (
           <div
-            className="ml-auto flex items-center gap-1 text-xs text-muted-foreground"
+            className="ml-auto flex min-h-5 min-w-16 items-center justify-end gap-1 text-xs text-muted-foreground"
             role="status"
             aria-label="Feedback save status"
           >
@@ -366,38 +385,13 @@ function OutcomeEditor({
                 </Button>
               )}
             </div>
-            <div className="flex items-start gap-2 md:hidden">
-              {!editingComment && comment && (
-                <p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                  {comment}
-                </p>
-              )}
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="min-h-10 shrink-0"
-                aria-label={
-                  editingComment ? "Done editing feedback comment" : "Edit feedback comment"
-                }
-                aria-expanded={editingComment}
-                aria-controls={commentId}
-                onClick={() => setEditingComment((value) => !value)}
-              >
-                <PencilIcon data-icon="inline-start" />
-                {editingComment ? "Done" : comment ? "Edit" : "Add comment"}
-              </Button>
-            </div>
             <textarea
               id={commentId}
               value={comment}
               maxLength={4000}
               rows={2}
               disabled={!autoSave && mutation.isPending}
-              className={cn(
-                "min-w-0 w-full rounded-md border bg-background p-2 text-base md:block md:text-sm",
-                !editingComment && "hidden",
-              )}
+              className="block min-w-0 w-full rounded-md border bg-background p-2 text-base md:text-sm"
               placeholder="Optional comment — what worked or what needs correction?"
               aria-label="Task review comment"
               onChange={(event) => setComment(event.target.value)}
@@ -435,7 +429,11 @@ function OutcomeEditor({
           })}
 
         {compact && outcome && (
-          <details className="border-t border-border/70 md:rounded-lg md:border">
+          <details
+            open={modelDecisionOpen}
+            onToggle={(event) => setModelDecisionOpen(event.currentTarget.open)}
+            className="border-t border-border/70 md:rounded-lg md:border"
+          >
             <summary className="cursor-pointer py-2 text-xs font-medium text-muted-foreground md:px-3">
               Show model decision
             </summary>
