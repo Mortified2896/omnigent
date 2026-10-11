@@ -998,6 +998,7 @@ function AssistantBubble({
   const activeConversationId = useChatStore((s) => s.conversationId);
   const conversationId = scopedConversationId ?? activeConversationId;
   const rootSessionStatus = useChatStore((s) => s.sessionStatus);
+  const rootLocalSending = useChatStore((s) => s.status === "streaming");
   const rootHasPendingElicitation = useChatStore((s) =>
     s.blocks.some((b) => b.type === "elicitation" && b.status === "pending"),
   );
@@ -1007,6 +1008,17 @@ function AssistantBubble({
   const hasPendingElicitation = scopedConversationId
     ? scopedState.blocks.some((b) => b.type === "elicitation" && b.status === "pending")
     : rootHasPendingElicitation;
+  // Native harnesses can finish a message/step while the turn still runs.
+  // Completion timing and outcome review belong to the settled turn, not
+  // that intermediate message. `isLastAssistant` excludes a previous answer
+  // once a newer human prompt has arrived.
+  const responseInProgress =
+    isLastAssistant &&
+    (computeIsTurnActive(
+      sessionStatus,
+      scopedConversationId ? scopedState.status === "streaming" : rootLocalSending,
+    ) ||
+      hasPendingElicitation);
   // Getter computes the markdown lazily at click time.
   const { isCopied, handleCopy } = useCopyMessage(() => collectBubbleMarkdown(bubble.items));
   const { isLinkCopied, handleCopyLink } = useCopyMessageLink(bubble.responseId);
@@ -1153,7 +1165,7 @@ function AssistantBubble({
             <span>Interrupted</span>
           </p>
         )}
-        {canRateResponse(bubble) && (
+        {canRateResponse(bubble) && !responseInProgress && (
           <div className="mt-2 w-full">
             {bubble.workedForS != null && (
               <p className="mb-2 text-xs text-muted-foreground tabular-nums">

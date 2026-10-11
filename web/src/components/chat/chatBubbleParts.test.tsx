@@ -1,14 +1,27 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConversationScopeContext } from "@/components/chat/conversationScope";
+import { FeedbackFormContext } from "@/components/FeedbackContext";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bubble } from "@/lib/renderItems";
 import { useChatStore, type ChatState } from "@/store/chatStore";
+import { conversationRegistry } from "@/store/conversationRegistry";
 import { BubbleView, containsMermaidDiagram } from "./chatBubbleParts";
+
+// Route metadata has its own query lifecycle; these bubble tests exercise
+// completion controls and retry requests without unrelated badge polling.
+vi.mock("./ResponseRouteBadge", () => ({ ResponseRouteBadge: () => null }));
 
 const fetchMock = vi.fn();
 const initialStoreState = useChatStore.getState();
 const continuation = "Please continue from where you left off.";
+const mainCompletionFeedback = {
+  sessionId: "conv_retry",
+  hostId: null,
+  human: new Map(),
+  ready: true,
+};
+const childCompletionFeedback = { ...mainCompletionFeedback, sessionId: "completion-child" };
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -54,6 +67,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  conversationRegistry.release("completion-child");
   useChatStore.setState(initialStoreState);
 });
 
@@ -88,6 +102,108 @@ describe("Mermaid diagram width", () => {
       ]),
     ).toBe(false);
   });
+});
+
+describe("assistant completion controls", () => {
+  const bubble: Extract<Bubble, { kind: "assistant" }> = {
+    kind: "assistant",
+    responseId: "step-complete",
+    stableId: "step-complete",
+    lifecycle: "completed",
+    error: null,
+    workedForS: 61,
+    items: [
+      { kind: "text", itemId: "step-text", text: "I will deploy the prototype.", final: true },
+    ],
+  };
+
+  function renderResponse(isLastAssistant = true, scope: string | null = null) {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ score_eligible: true, is_test: false, responses: {} }),
+    );
+    return render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <FeedbackFormContext.Provider
+          value={scope ? childCompletionFeedback : mainCompletionFeedback}
+        >
+          <ConversationScopeContext.Provider value={scope}>
+            <BubbleView bubble={bubble} isLastAssistant={isLastAssistant} />
+          </ConversationScopeContext.Provider>
+        </FeedbackFormContext.Provider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it.each(["running", "waiting"] as const)(
+    "waits for a native %s turn to settle before showing timing and ratings",
+    async (sessionStatus) => {
+      useChatStore.setState({ sessionStatus, status: "idle" });
+      renderResponse();
+
+      expect(screen.getByText("I will deploy the prototype.")).toBeInTheDocument();
+      expect(screen.queryByText(/Answered in/)).toBeNull();
+      expect(screen.queryByRole("group", { name: "Task outcome" })).toBeNull();
+
+      act(() => useChatStore.setState({ sessionStatus: "idle" }));
+
+      expect(await screen.findByText("Answered in 61.0s")).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Task outcome" })).toBeInTheDocument();
+    },
+  );
+
+  it("waits while the local stream is active before the running status arrives", () => {
+    useChatStore.setState({ sessionStatus: "idle", status: "streaming" });
+    renderResponse();
+
+    expect(screen.queryByText(/Answered in/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "Task outcome" })).toBeNull();
+  });
+
+  it("keeps a previous completed answer reviewable while a newer turn runs", () => {
+    useChatStore.setState({ sessionStatus: "running", status: "streaming" });
+    renderResponse(false);
+
+    expect(screen.getByText("Answered in 61.0s")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Task outcome" })).toBeInTheDocument();
+  });
+
+  it("keeps review hidden while a pending elicitation owns the turn", () => {
+    useChatStore.setState({
+      sessionStatus: "idle",
+      blocks: [
+        {
+          type: "elicitation",
+          status: "pending",
+        } as ChatState["blocks"][number],
+      ],
+    });
+    renderResponse();
+
+    expect(screen.queryByText(/Answered in/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "Task outcome" })).toBeNull();
+  });
+
+  it.each([
+    { mainStatus: "running", childStatus: "idle", reviewVisible: true },
+    { mainStatus: "idle", childStatus: "running", reviewVisible: false },
+  ] as const)(
+    "uses the side chat's own $childStatus turn status",
+    ({ mainStatus, childStatus, reviewVisible }) => {
+      useChatStore.setState({ sessionStatus: mainStatus, status: "idle" });
+      const child = conversationRegistry.acquire("completion-child");
+      child.setState({ sessionStatus: childStatus, status: "idle" });
+      renderResponse(true, child.id);
+
+      expect(screen.queryByText(/Answered in/) !== null).toBe(reviewVisible);
+      expect(screen.queryByRole("group", { name: "Task outcome" }) !== null).toBe(reviewVisible);
+
+      act(() => child.setState({ sessionStatus: "idle" }));
+      expect(screen.getByText("Answered in 61.0s")).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Task outcome" })).toBeInTheDocument();
+    },
+  );
 });
 
 it("updates contextual reply controls when the answer itself has not changed", () => {
