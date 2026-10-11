@@ -68,6 +68,7 @@ from omnigent.stores.conversation_store import (
     ADVISOR_CONNECTION_LABEL_KEY,
     ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
     ADVISOR_LOGICAL_CHOICE_LABEL_KEY,
+    ADVISOR_MANUAL_CHOICE_LABEL_KEY,
     ADVISOR_ROUND_LABEL_KEY,
     ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
     ConversationBusyError,
@@ -1842,7 +1843,7 @@ class ModelAdvisorService:
                 ),
                 _unset_reasoning_effort=route.wire_effort == "not_applicable",
                 _unset_reported_model=True,
-                labels=labels,
+                labels={**labels, ADVISOR_MANUAL_CHOICE_LABEL_KEY: "0"},
                 require_idle=True,
             )
         except ConversationBusyError as exc:

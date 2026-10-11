@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import httpx
 import pytest
@@ -7721,7 +7721,7 @@ async def test_model_advisor_session_rejects_follow_up_route_changes(
     client: httpx.AsyncClient,
     db_uri: str,
 ) -> None:
-    """A confirmed advisor route cannot be changed by a later turn control."""
+    """A confirmed advisor route cannot be changed before its native launch."""
     agent = await create_test_agent(client)
     session = await _create_session(client, agent["id"])
     sid = session["id"]
@@ -7751,6 +7751,124 @@ async def test_model_advisor_session_rejects_follow_up_route_changes(
     assert unchanged is not None
     assert unchanged.model_override == "gpt-5.3-codex"
     assert unchanged.reasoning_effort == "medium"
+
+
+@pytest.mark.parametrize("live_status", ["running", "idle"])
+async def test_started_advisor_chat_accepts_manual_max_without_rewriting_decision(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+    live_status: str,
+) -> None:
+    """Advisor history must not lock later composer choices, including during a run."""
+    from omnigent.model_advisor_binding import encode_transport_binding_label
+    from omnigent.server.response_attribution import bind_response_advisor_round
+
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+    store = SqlAlchemyConversationStore(db_uri)
+    route = (
+        '{"choice":{"model_id":"gpt-6.1-sol","reasoning_effort":"high"},"proof":"'
+        + "x" * 400
+        + '"}'
+    )
+    original_labels = {
+        ADVISOR_ROUND_LABEL_KEY: "round-original-high",
+        "omnigent.advisor.logical_choice_id": "choice-original-high",
+        "omnigent.advisor.connection_id": "codex-login",
+        **encode_transport_binding_label("omnigent.advisor.transport_plan", route),
+        **encode_transport_binding_label("omnigent.advisor.dispatch_route", route),
+        CODEX_ACCESS_LANE_LABEL_KEY: CODEX_ACCESS_LANE_DIRECT,
+        "omnigent.wrapper": "codex-native-ui",
+        "omni_project": "project-kept",
+    }
+    store.update_conversation(
+        sid, model_override="gpt-6.1-sol", reasoning_effort="high", labels=original_labels
+    )
+    store.set_external_session_id(sid, "native-thread-kept")
+    store.set_session_live_status(sid, live_status)
+    assert (
+        bind_response_advisor_round(store, sid, "answer-original", "round-original-high")
+        == "round-original-high"
+    )
+    forward = AsyncMock(return_value=_RunnerForwardResult(status_code=204, body=""))
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions._forward_session_change_to_runner", forward
+    )
+
+    response = await client.patch(f"/v1/sessions/{sid}", json={"reasoning_effort": "max"})
+
+    assert response.status_code == 200, response.text
+    reloaded = (await client.get(f"/v1/sessions/{sid}")).json()
+    assert reloaded["reasoning_effort"] == "max"
+    assert reloaded["model_override"] == "gpt-6.1-sol"
+    assert reloaded["external_session_id"] == "native-thread-kept"
+    assert reloaded["labels"][CODEX_ACCESS_LANE_LABEL_KEY] == CODEX_ACCESS_LANE_DIRECT
+    assert reloaded["labels"]["omni_project"] == "project-kept"
+    for key, value in original_labels.items():
+        if key.startswith("omnigent.advisor."):
+            if key != ADVISOR_ROUND_LABEL_KEY:
+                assert key not in reloaded["labels"]
+            assert (
+                reloaded["labels"][
+                    key.replace("omnigent.advisor.", "omnigent.advisor.previous.", 1)
+                ]
+                == value
+            )
+    assert reloaded["labels"]["omnigent.advisor.manual_choice"] == "1"
+    forward.assert_awaited_once_with(
+        sid, ANY, {"type": "effort_change", "effort": "max"}, timeout_s=20.0
+    )
+    # Replay the old response's binding; later ordinary answers are manual.
+    assert (
+        bind_response_advisor_round(store, sid, "answer-original", None) == "round-original-high"
+    )
+    assert (
+        bind_response_advisor_round(
+            store, sid, "answer-next", reloaded["labels"].get(ADVISOR_ROUND_LABEL_KEY)
+        )
+        is None
+    )
+    mirrored = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={"type": "external_reasoning_effort_change", "data": {"reasoning_effort": "max"}},
+    )
+    assert mirrored.status_code == 202, mirrored.text
+    assert (await client.get(f"/v1/sessions/{sid}")).json()["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"reasoning_effort": "high"},
+        {"reasoning_effort": "max", "silent": True},
+        {"reasoning_effort": "bogus"},
+    ],
+)
+async def test_started_advisor_chat_keeps_binding_for_noop_or_rejected_changes(
+    client: httpx.AsyncClient, db_uri: str, patch: dict[str, Any]
+) -> None:
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+    store = SqlAlchemyConversationStore(db_uri)
+    labels = {
+        ADVISOR_ROUND_LABEL_KEY: "round-original",
+        CODEX_ACCESS_LANE_LABEL_KEY: CODEX_ACCESS_LANE_DIRECT,
+    }
+    store.update_conversation(sid, reasoning_effort="high", labels=labels)
+    store.set_external_session_id(sid, "native-thread-kept")
+
+    response = await client.patch(f"/v1/sessions/{sid}", json=patch)
+
+    assert response.status_code == (
+        409 if patch.get("silent") else 400 if patch["reasoning_effort"] == "bogus" else 200
+    ), response.text
+    unchanged = store.get_conversation(sid)
+    assert unchanged is not None
+    assert unchanged.reasoning_effort == "high"
+    assert unchanged.labels == labels
 
 
 async def test_model_advisor_accepts_native_codex_model_report_for_assigned_slug(

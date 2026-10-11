@@ -100,6 +100,7 @@ ADVISOR_LOGICAL_CHOICE_LABEL_KEY = "omnigent.advisor.logical_choice_id"
 ADVISOR_TRANSPORT_PLAN_LABEL_KEY = "omnigent.advisor.transport_plan"
 ADVISOR_CONNECTION_LABEL_KEY = "omnigent.advisor.connection_id"
 ADVISOR_DISPATCH_ROUTE_LABEL_KEY = "omnigent.advisor.dispatch_route"
+ADVISOR_MANUAL_CHOICE_LABEL_KEY = "omnigent.advisor.manual_choice"
 
 # Reserved label key that stores a session's sidebar "project" membership
 # (implicit collections — a project exists while ≥1 session carries this key).
@@ -978,6 +979,7 @@ class ConversationStore(ABC):
         _unset_reported_model: bool = False,
         labels: dict[str, str] | None = None,
         require_idle: bool = False,
+        label_keys_to_remove: list[str] | None = None,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
@@ -994,6 +996,8 @@ class ConversationStore(ABC):
 
         :param require_idle: Reject running or waiting sessions while holding
             the conversation lock.
+        :param label_keys_to_remove: Remove these exact labels in the same
+            transaction as the fields and label upserts.
 
         :param conversation_id: Unique conversation identifier,
             e.g. ``"conv_abc123"``.

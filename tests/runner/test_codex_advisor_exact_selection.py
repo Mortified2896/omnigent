@@ -9,6 +9,8 @@ is scoped, not global.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from tests.runner.test_codex_model_pick_fallback import (
@@ -65,6 +67,62 @@ async def test_advisor_round_with_available_pick_launches_unchanged(advisor_harn
 
     assert resource.id == "terminal_codex_main"
     assert harness.builds[0]["model"] == pick
+    assert harness.resets == []
+
+
+@pytest.mark.asyncio
+async def test_manual_max_resumes_without_original_binding_or_effort_alias(
+    advisor_harness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Existing runners resume a manual Max pick on the original access lane."""
+    from omnigent.model_advisor_binding import archive_advisor_binding_labels
+
+    harness = advisor_harness
+    harness.event_client.request = AsyncMock(
+        return_value={"thread": {"id": "019e96aa-0be2-7343-8d3b-6f914d60936b"}}
+    )
+    monkeypatch.setattr(
+        "omnigent.harnesses.codex_native.main._ensure_local_codex_resume_rollout",
+        AsyncMock(return_value=tmp_path / "fixture-rollout.jsonl"),
+    )
+    original = {
+        _ADVISOR_LABEL: "round-original-high",
+        "omnigent.advisor.logical_choice_id": "choice-original-high",
+        "omnigent.advisor.connection_id": "codex-login",
+        "omnigent.advisor.transport_plan": '{"choice":{"reasoning_effort":"high"}}',
+        "omnigent.advisor.dispatch_route": '{"choice":{"reasoning_effort":"high"}}',
+        "omnigent.access_lane": "codex-direct",
+    }
+    archived, removed = archive_advisor_binding_labels(original)
+    harness.snapshot.update(
+        model_override="gpt-6.1-sol",
+        reasoning_effort="max",
+        external_session_id="019e96aa-0be2-7343-8d3b-6f914d60936b",
+        labels={
+            **{key: value for key, value in original.items() if key not in removed},
+            **archived,
+        },
+    )
+    harness.seed_catalog(
+        [
+            {
+                "id": "gpt-6.1-sol",
+                "isDefault": True,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "high"},
+                    {"reasoningEffort": "max"},
+                ],
+            }
+        ],
+        access_lane="codex-direct",
+    )
+
+    await harness.launch()
+
+    assert harness.builds[0]["reasoning_effort"] == "max"
+    assert harness.snapshot["reasoning_effort"] == "max"
     assert harness.resets == []
 
 

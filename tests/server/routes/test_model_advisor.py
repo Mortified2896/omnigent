@@ -1521,7 +1521,10 @@ def test_internal_launch_with_advisor_labels_reaches_real_creation_helper(monkey
 
 
 @pytest.mark.parametrize("keep_model", [True, False])
-def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri, keep_model) -> None:
+@pytest.mark.parametrize("manual_choice", ["0", "1"])
+def test_continuation_freezes_selected_model_tags_and_session_binding(
+    db_uri, keep_model, manual_choice
+) -> None:
     selected = PROVIDER_OPENAI if keep_model else PROVIDER_GLM
     conversation = SimpleNamespace(
         id="conv_existing",
@@ -1530,7 +1533,11 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri, ke
         workspace="/repo",
         kind="default",
         live_status="idle",
-        labels={"omnigent.access_lane": "codex-direct"},
+        labels={
+            "omnigent.access_lane": "codex-direct",
+            "omnigent.advisor.manual_choice": manual_choice,
+            "omnigent.advisor.previous.round_id": "previous-round-kept",
+        },
         model_override="gpt-5.5",
         reasoning_effort="medium",
         reported_model="previous-turn-model",
@@ -1672,6 +1679,8 @@ def test_continuation_freezes_selected_model_tags_and_session_binding(db_uri, ke
     assert updates["require_idle"] is True
     assert updates["_unset_reported_model"] is True
     assert updates["labels"]["omnigent.advisor.round_id"] == payload["round_id"]
+    assert conversation.labels["omnigent.advisor.manual_choice"] == "0"
+    assert conversation.labels["omnigent.advisor.previous.round_id"] == "previous-round-kept"
     assert conversation.model_override == result["requested_execution"]["model"]
     assert conversation.reasoning_effort == result["requested_execution"]["reasoning_effort"]
     if not keep_model:

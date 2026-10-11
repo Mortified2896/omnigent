@@ -72,6 +72,13 @@ or reject the proposal. Saving only updates tag metadata; the prompt text and
 the frozen model-selection decision are preserved. Concurrent tag changes
 require a reload rather than overwriting a newer set.
 
+After an Advisor-created native chat starts, the ordinary model and reasoning
+controls remain available for manual choices. A changed choice archives the
+previous server-owned transport binding atomically with the new configuration;
+the confirmed round and existing response attribution stay unchanged. Later
+ordinary turns do not inherit an Advisor review of the initial prompt. Advisor
+pool settings constrain Advisor recommendations, not the user's manual controls.
+
 **Advanced options** exposes **Open side chat** or **Reopen side chat**. This keeps
 the existing saved feedback fork and explicit acceptance of suggested edits.
 Continuing in the original session avoids a new fork and preserves more of the

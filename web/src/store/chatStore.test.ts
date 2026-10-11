@@ -9571,6 +9571,7 @@ describe("chatStore — session configuration scope", () => {
 
   interface SnapshotOverrides {
     labels?: Record<string, string>;
+    external_session_id?: string | null;
     reasoning_effort?: string | null;
     model_override?: string | null;
     cost_control_mode_override?: "on" | "off" | null;
@@ -9591,6 +9592,7 @@ describe("chatStore — session configuration scope", () => {
           created_at: 0,
           items: [],
           labels: overrides.labels ?? {},
+          external_session_id: overrides.external_session_id ?? null,
           reasoning_effort: overrides.reasoning_effort ?? null,
           model_override: overrides.model_override ?? null,
           cost_control_mode_override: overrides.cost_control_mode_override ?? null,
@@ -10203,6 +10205,27 @@ describe("chatStore — session configuration scope", () => {
 
     expect(patchCallsFor("conv_codex_supported")).toEqual([{ reasoning_effort: "high" }]);
     expect(useChatStore.getState().sessionReasoningEffort).toBe("high");
+  });
+
+  it("honors manual Max on a chat previously launched by Advisor", async () => {
+    seedSession("conv_advisor_manual", []);
+    withSnapshot("conv_advisor_manual", {
+      labels: {
+        "omnigent.wrapper": "codex-native-ui",
+        "omnigent.advisor.round_id": "round-original-high",
+      },
+      reasoning_effort: "high",
+      model_override: "gpt-6.1-sol",
+      external_session_id: "native-thread-kept",
+    });
+    await useChatStore.getState().switchTo("conv_advisor_manual");
+    fetchMock.mockClear();
+
+    await useChatStore.getState().setEffort("max");
+
+    expect(patchCallsFor("conv_advisor_manual")).toEqual([{ reasoning_effort: "max" }]);
+    expect(useChatStore.getState().sessionReasoningEffort).toBe("max");
+    expect(useChatStore.getState().sessionModelOverride).toBe("gpt-6.1-sol");
   });
 
   it("hydrates Codex Plan mode from the session label", async () => {

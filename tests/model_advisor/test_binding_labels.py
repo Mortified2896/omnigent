@@ -3,9 +3,34 @@ from __future__ import annotations
 import pytest
 
 from omnigent.model_advisor_binding import (
+    archive_advisor_binding_labels,
     decode_transport_binding_label,
     encode_transport_binding_label,
 )
+
+
+def test_archiving_binding_preserves_chunks_and_unrelated_labels() -> None:
+    key = "omnigent.advisor.transport_plan"
+    payload = '{"primary":{"route":"' + ("route-data-" * 40) + '"}}'
+    binding = encode_transport_binding_label(key, payload)
+    labels = {
+        **binding,
+        "omnigent.advisor.round_id": "round-original",
+        "omnigent.advisor.previous.round_id": "round-older",
+        "omnigent.access_lane": "codex-direct",
+        "omni_project": "project-original",
+    }
+
+    archived, removed = archive_advisor_binding_labels(labels)
+
+    assert (
+        decode_transport_binding_label(archived, "omnigent.advisor.previous.transport_plan")
+        == payload
+    )
+    assert archived["omnigent.advisor.previous.round_id"] == "round-original"
+    assert set(removed) == set(binding)
+    assert archived["omnigent.advisor.manual_choice"] == "1"
+    assert labels["omnigent.advisor.round_id"] == "round-original"
 
 
 def test_transport_binding_json_is_chunked_below_the_session_label_limit() -> None:

@@ -203,6 +203,7 @@ from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.comment_store import CommentStore
 from omnigent.stores.conversation_store import (
+    ADVISOR_MANUAL_CHOICE_LABEL_KEY,
     ADVISOR_ROUND_LABEL_KEY,
     PINNED_LABEL_KEY,
     PROJECT_LABEL_KEY,
@@ -339,17 +340,27 @@ def register_core_routes(
     def _reject_advisor_route_change(
         session: Conversation | None,
         fields: set[str] | frozenset[str],
+        *,
+        manual_choice: bool = False,
     ) -> None:
-        """Keep an advisor-created conversation on its confirmed route."""
+        """Protect the confirmed launch, while permitting later manual choices."""
         if session is None or ADVISOR_ROUND_LABEL_KEY not in (session.labels or {}):
             return
-        if fields & {
+        protected_fields = {
             "model_override",
             "reasoning_effort",
             "harness_override",
             "terminal_launch_args",
             "runner_id",
-        }:
+        }
+        # The frozen decision governs its launch. Once the native chat exists,
+        # an explicit composer choice takes over; Advisor being used earlier
+        # must not permanently disable the ordinary model/effort controls.
+        if session.external_session_id and (
+            manual_choice or (session.labels or {}).get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) == "1"
+        ):
+            protected_fields -= {"model_override", "reasoning_effort"}
+        if fields & protected_fields:
             raise OmnigentError(
                 "Model Advisor sessions are pinned to their confirmed model, lane and reasoning "
                 "level; start a new advisor round to choose another route.",
@@ -2343,7 +2354,9 @@ def register_core_routes(
 
         policy_session = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         if policy_session is not None:
-            _reject_advisor_route_change(policy_session, body.model_fields_set)
+            _reject_advisor_route_change(
+                policy_session, body.model_fields_set, manual_choice=not body.silent
+            )
             protect_recorded_policy(
                 policy_session.labels or {},
                 {key: getattr(policy_session, key, None) for key in body.model_fields_set},
@@ -2740,6 +2753,31 @@ def register_core_routes(
                 request, conv, conversation_store, runner_router
             )
 
+        advisor_history: dict[str, str] | None = None
+        advisor_keys_to_remove: list[str] | None = None
+        if (
+            not body.silent
+            and conv is not None
+            and conv.external_session_id
+            and ADVISOR_ROUND_LABEL_KEY in (conv.labels or {})
+            and (conv.labels or {}).get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) != "1"
+            and (
+                (
+                    (effort is not None or clear_effort)
+                    and (None if clear_effort else effort) != conv.reasoning_effort
+                )
+                or (
+                    live_model_change
+                    and (None if clear_model else model_override) != conv.model_override
+                )
+            )
+        ):
+            from omnigent.model_advisor_binding import archive_advisor_binding_labels
+
+            advisor_history, advisor_keys_to_remove = archive_advisor_binding_labels(
+                conv.labels or {}
+            )
+
         updated = await asyncio.to_thread(
             conversation_store.update_conversation,
             session_id,
@@ -2759,6 +2797,8 @@ def register_core_routes(
             share_workspace_files=(body.share_workspace_files if set_share_workspace else None),
             terminal_launch_args=terminal_launch_args,
             archived=body.archived,
+            labels=advisor_history,
+            label_keys_to_remove=advisor_keys_to_remove,
         )
         if updated is None:
             raise _session_not_found()

@@ -3542,6 +3542,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         _unset_reported_model: bool = False,
         labels: dict[str, str] | None = None,
         require_idle: bool = False,
+        label_keys_to_remove: list[str] | None = None,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
@@ -3564,6 +3565,8 @@ class SqlAlchemyConversationStore(ConversationStore):
             of a confirmed route change.
         :param labels: Labels to upsert atomically with the conversation
             fields. ``None`` leaves labels unchanged.
+        :param label_keys_to_remove: Exact label keys to remove atomically
+            before upserting labels; unrelated labels are preserved.
         :param require_idle: Reject a live or waiting session while holding
             its conversation lock.
         :param cost_control_mode_override: Per-session cost-control
@@ -3709,6 +3712,15 @@ class SqlAlchemyConversationStore(ConversationStore):
                         )
                     )
                 row.archived = archived
+                ap_changed = True
+            if label_keys_to_remove:
+                ap_sess.execute(
+                    delete(SqlConversationLabel).where(
+                        SqlConversationLabel.workspace_id == current_workspace_id(),
+                        SqlConversationLabel.conversation_id == conversation_id,
+                        SqlConversationLabel.key.in_(label_keys_to_remove),
+                    )
+                )
                 ap_changed = True
             if labels:
                 _upsert_labels(ap_sess, conversation_id, labels, now)

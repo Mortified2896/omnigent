@@ -16,6 +16,38 @@ _MAX_BINDING_LENGTH = 12_800
 _MAX_CHUNKS = 64
 _MARKER_PREFIX = "__omnigent_json_chunks_v1__:"
 _CHUNK_SUFFIX = ".__chunk__."
+_ADVISOR_PREFIX = "omnigent.advisor."
+_PREVIOUS_ADVISOR_PREFIX = "omnigent.advisor.previous."
+
+
+def archive_advisor_binding_labels(labels: Mapping[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Retain the previous decision while releasing its active launch binding.
+
+    A manual choice in an already-started chat is a new execution configuration,
+    not a rewrite of the confirmed advisor round. Move the server-owned labels,
+    including any JSON chunks, together with the session-field update. Native
+    runners then resume using the manual choice on the same access lane.
+    Response-scoped round bindings and the immutable round record stay intact.
+    Retain the round identity so existing native runners keep exact catalog
+    validation for the manual pick, including Max, instead of applying SDK
+    effort aliases or silently falling back to a different model.
+    """
+    from omnigent.stores.conversation_store import (
+        ADVISOR_MANUAL_CHOICE_LABEL_KEY,
+        ADVISOR_ROUND_LABEL_KEY,
+    )
+
+    active = {
+        key: value
+        for key, value in labels.items()
+        if key.startswith(_ADVISOR_PREFIX) and not key.startswith(_PREVIOUS_ADVISOR_PREFIX)
+    }
+    archived = {
+        _PREVIOUS_ADVISOR_PREFIX + key.removeprefix(_ADVISOR_PREFIX): value
+        for key, value in active.items()
+    }
+    archived[ADVISOR_MANUAL_CHOICE_LABEL_KEY] = "1"
+    return archived, [key for key in active if key != ADVISOR_ROUND_LABEL_KEY]
 
 
 def encode_transport_binding_label(label_key: str, payload: str) -> dict[str, str]:

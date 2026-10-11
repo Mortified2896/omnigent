@@ -273,6 +273,7 @@ from omnigent.session_event_batch import (
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.conversation_store import (
+    ADVISOR_MANUAL_CHOICE_LABEL_KEY,
     ADVISOR_ROUND_LABEL_KEY,
     CODEX_ACCESS_LANE_DIRECT,
     CODEX_ACCESS_LANE_LABEL_KEY,
@@ -2143,6 +2144,7 @@ def register_events_routes(
             advisor_labels = conv.labels or {}
             if (
                 ADVISOR_ROUND_LABEL_KEY in advisor_labels
+                and advisor_labels.get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) != "1"
                 and not _reported_model_matches_advisor_assignment(
                     advisor_labels,
                     conv.model_override,
@@ -2190,6 +2192,7 @@ def register_events_routes(
 
             if (
                 ADVISOR_ROUND_LABEL_KEY in (conv.labels or {})
+                and (conv.labels or {}).get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) != "1"
                 and body.data.get("reasoning_effort") != conv.reasoning_effort
             ):
                 raise OmnigentError(

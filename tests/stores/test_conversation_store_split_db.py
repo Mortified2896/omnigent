@@ -250,6 +250,25 @@ def test_delete_label(store: SqlAlchemyConversationStore) -> None:
     assert "k" not in fetched.labels
 
 
+def test_update_removes_labels_with_fields_in_conversation_db(
+    store: SqlAlchemyConversationStore,
+) -> None:
+    conv = store.create_conversation()
+    store.update_conversation(
+        conv.id, reasoning_effort="high", labels={"binding": "original", "kept": "yes"}
+    )
+    updated = store.update_conversation(
+        conv.id,
+        reasoning_effort="max",
+        labels={"history": "original"},
+        label_keys_to_remove=["binding"],
+    )
+    assert updated is not None
+    assert updated.reasoning_effort == "max"
+    assert updated.labels == {"history": "original", "kept": "yes"}
+    assert store.get_conversation(conv.id).labels == updated.labels
+
+
 # ── metadata writes ────────────────────────────────────
 
 

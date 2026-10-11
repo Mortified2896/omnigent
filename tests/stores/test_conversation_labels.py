@@ -105,6 +105,56 @@ def test_set_labels_empty_dict_is_noop(
     assert got.labels == {"x": "1"}
 
 
+def test_update_removes_binding_and_preserves_unrelated_labels(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    conversation_store.update_conversation(
+        conv.id, reasoning_effort="high", labels={"binding": "round", "project": "kept"}
+    )
+
+    updated = conversation_store.update_conversation(
+        conv.id,
+        reasoning_effort="max",
+        labels={"previous_binding": "round"},
+        label_keys_to_remove=["binding"],
+    )
+
+    assert updated is not None
+    assert updated.reasoning_effort == "max"
+    assert updated.labels == {"previous_binding": "round", "project": "kept"}
+    assert conversation_store.get_conversation(conv.id) == updated
+
+
+def test_update_binding_removal_rolls_back_with_failed_upsert(
+    conversation_store: SqlAlchemyConversationStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = conversation_store.create_conversation()
+    conversation_store.update_conversation(
+        conv.id, reasoning_effort="high", labels={"binding": "round"}
+    )
+
+    def fail_upsert(*_args: object) -> None:
+        raise ValueError("failed history write")
+
+    monkeypatch.setattr(
+        "omnigent.stores.conversation_store.sqlalchemy_store._upsert_labels", fail_upsert
+    )
+    with pytest.raises(ValueError, match="failed history write"):
+        conversation_store.update_conversation(
+            conv.id,
+            reasoning_effort="max",
+            labels={"previous_binding": "round"},
+            label_keys_to_remove=["binding"],
+        )
+
+    unchanged = conversation_store.get_conversation(conv.id)
+    assert unchanged is not None
+    assert unchanged.reasoning_effort == "high"
+    assert unchanged.labels == {"binding": "round"}
+
+
 def test_set_labels_clamps_overlong_value_to_column_width(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:
