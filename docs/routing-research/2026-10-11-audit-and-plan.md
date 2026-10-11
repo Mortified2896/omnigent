@@ -4,6 +4,10 @@ Objective: maximize task completion; latency, paid API spending, subscription qu
 router overhead and override behavior are secondary measured tradeoffs. The goal
 remains active. This is the first research milestone, not a proven routing improvement.
 
+The completed retrospective checkpoint review and the more specific benchmark-fit
+findings are in [the follow-up report](2026-10-11-benchmark-fit-and-retrospective-review.md).
+The completion-key row below includes the subsequent terminal-event correction.
+
 ## Sources actually inspected
 
 Source checkout: fork `Mortified2896/omnigent`, current fetched main at
@@ -15,7 +19,7 @@ HomeLab owns hosts, GPU resources, service configuration and deployment.
 | --- | --- | --- |
 | Mac Omnigent `~/.local/share/omnigent-mac/data/chat.db` | 12 sessions; seven explicitly marked test sessions | Answer reviews, response execution and advisor decisions |
 | Latest Omnigent human reviews | 203 raw revisions reduce to eight latest caller/response outcomes, three eligible known outcomes | Two failed and one partial; five latest successes are excluded with test sessions |
-| Mac completed answer keys | 19 response keys, seven eligible; four eligible responses have no known outcome | Response-level review queue, not independent task count |
+| Mac confirmed completed answer keys | 18 terminal-confirmed response keys, six eligible; three eligible responses have no known outcome | Response-level review queue, not independent task count; one additional message-complete key is an unfinished response |
 | Codex `~/.codex/state_5.sqlite` and referenced JSONL rollouts | 1,011 indexed chats; 737 root chats after excluding 274 subagent/guardian rows; all 737 rollout files exist | Multi-project requests, transcripts and tool evidence; 3.54 GB of root rollouts, not all semantically reviewed |
 | Root Codex index attribution | Two missing model and two missing effort entries | Current/last model metadata; per-turn contexts and request records are stronger and still require full audit |
 | ZCode `~/.zcode/cli/db/db.sqlite` | 23 sessions, 1,525 messages, 6,241 parts, 1,339 model requests, 71 turns, 1,520 tool usage records | Structured joins, tokens, latency, retry and tool evidence |
@@ -37,6 +41,13 @@ lane; two join to stored advisor rounds. Model provenance is `session_reported`
 for all three, not direct `response_usage`. They cover GPT-6.1-Sol (two) and
 GPT-6-Luna (one), high effort (two) and medium (one), direct Codex (two) and
 OmniRoute (one). The sample cannot establish comparative model quality.
+
+The original audit counted 19 keys because an interim assistant chunk can already
+have message status `completed`. The corrected audit also requires a persisted
+response-execution completion event. This reduces confirmed response keys from
+19 to 18 and eligible keys from seven to six; the three eligible human outcomes
+are unchanged. A message-complete flag is insufficient evidence of a completed
+task response.
 
 Nine stored advisor rounds report latency/input/output/cache tokens. Observed
 latency ranges from 10.30 to 29.835 seconds; median 14.485 seconds. These mix test

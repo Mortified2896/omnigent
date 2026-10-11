@@ -97,6 +97,17 @@ class AuditTest(unittest.TestCase):
                     },
                 },
             )
+            for session, response in ((test, "answer"), (sid, "uncertain"), (sid, "excluded")):
+                item(
+                    session,
+                    response,
+                    {
+                        "event_type": "response.execution.completed",
+                        "resource_type": "response-execution",
+                        "resource": {"conversation_id": session.hex, "response_id": response},
+                    },
+                )
+            item(sid, "still-running", {"role": "assistant", "content": []})
             connection.commit()
             connection.close()
             result = module.audit(path)
@@ -107,6 +118,9 @@ class AuditTest(unittest.TestCase):
             self.assertEqual(result["joined_known_outcomes"], 1)
             self.assertEqual(result["joined_models"], {"fixture-model": 1})
             self.assertEqual(result["eligible_responses_without_known_outcome"], 2)
+            self.assertEqual(result["completed_response_keys"], 4)
+            self.assertEqual(result["message_complete_response_keys"], 5)
+            self.assertEqual(result["completion_unconfirmed_response_keys"], 1)
 
 
 if __name__ == "__main__":

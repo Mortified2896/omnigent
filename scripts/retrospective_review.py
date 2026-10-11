@@ -119,7 +119,26 @@ def zcode_trace(database: Path, session: str) -> list[dict]:
             }
             for part in parts:
                 if part.get("type") == "text" and part.get("text"):
-                    items.append({**base, "kind": role, "text": part["text"]})
+                    # Runtime reminders/notifications are stored as user
+                    # messages. Preserve their positions as inspection evidence,
+                    # but don't mistake them for the owner's task requests.
+                    part_metadata = part.get("metadata") or {}
+                    notice = role == "user" and (
+                        message.get("synthetic") is True
+                        or message.get("visibility") == "model-only"
+                        or part.get("synthetic") is True
+                        or (
+                            isinstance(part_metadata, dict)
+                            and part_metadata.get("visibility") == "model-only"
+                        )
+                    )
+                    items.append(
+                        {
+                            **base,
+                            "kind": "runtime notice" if notice else role,
+                            "text": part["text"],
+                        }
+                    )
                 elif part.get("type") == "tool":
                     state = part.get("state") or {}
                     items.append(
@@ -242,9 +261,12 @@ def codex_trace(path: Path) -> list[dict]:
                     ):
                         continue
                     if text:
+                        runtime_notice = role == "user" and text.lstrip().startswith(
+                            ("<recommended_plugins>", "<skills_instructions>")
+                        )
                         items.append(
                             {
-                                "kind": role,
+                                "kind": "runtime notice" if runtime_notice else role,
                                 "channel": "final" if phase == "final_answer" else phase,
                                 "text": text,
                                 "model": model,
@@ -275,6 +297,56 @@ def codex_trace(path: Path) -> list[dict]:
     return items
 
 
+def checkpoint_indices(source: str, session: str, trace: list[dict], database: Path) -> set[int]:
+    """Select terminal answers without changing frozen transcript item hashes."""
+    if source == "codex":
+        return {
+            i
+            for i, item in enumerate(trace)
+            if item["kind"] == "assistant" and item.get("channel") != "commentary"
+        }
+    if source == "zcode":
+        with sqlite_read(database) as connection:
+            completed = set()
+            for row in connection.execute(
+                "SELECT id,data FROM message WHERE session_id=?", (session,)
+            ):
+                data = json.loads(row["data"])
+                if (
+                    data.get("role") == "assistant"
+                    and data.get("finish") == "stop"
+                    and (data.get("time") or {}).get("completed") is not None
+                    and not data.get("error")
+                ):
+                    completed.add(row["id"])
+        last = {
+            item.get("message_id"): i
+            for i, item in enumerate(trace)
+            if item["kind"] == "assistant" and item.get("message_id") in completed
+        }
+    else:
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+            completed = set()
+            for response, raw in connection.execute(
+                "SELECT response_id,data FROM conversation_items WHERE conversation_id=? "
+                "AND json_extract(data,'$.resource_type')='response-execution' "
+                "AND json_extract(data,'$.event_type')='response.execution.completed'",
+                (bytes.fromhex(session),),
+            ):
+                payload = json.loads(raw).get("resource") or {}
+                if (
+                    str(payload.get("conversation_id", "")).replace("-", "") == session
+                    and payload.get("response_id") == response
+                ):
+                    completed.add(response)
+        last = {
+            item.get("turn_id"): i
+            for i, item in enumerate(trace)
+            if item["kind"] == "assistant" and item.get("turn_id") in completed
+        }
+    return set(last.values())
+
+
 HTML = Path(__file__).with_suffix(".html").read_text()
 
 
@@ -295,9 +367,33 @@ def serve(database: Path, output: Path, port: int) -> None:
             return omnigent_trace(omnigent_database, row["origin_id"])
         return codex_trace(Path(row["rollout_path"]))
 
+    def checkpoints_for(row, trace):
+        source = row["source"]
+        path = zcode_database if source == "zcode" else omnigent_database
+        return checkpoint_indices(source, row["origin_id"], trace, path)
+
     token = secrets.token_urlsafe(32)
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(output.parent, 0o700)
+
+    def review_statuses():
+        proposals, human = {}, set()
+        for path, is_human in (
+            (output, True),
+            (output.parent / "assistant-assessments.jsonl", False),
+        ):
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    identity = record.get("source_id")
+                    if is_human:
+                        human.add(identity)
+                    elif record.get("checkpoint") is not None:
+                        proposals[identity] = record.get("outcome")
+        return proposals, human
 
     class Handler(BaseHTTPRequestHandler):
         def valid_host(self):
@@ -329,6 +425,7 @@ def serve(database: Path, output: Path, port: int) -> None:
             if parsed.path == "/":
                 return self.reply(200, HTML.replace("__CSRF__", token), "text/html; charset=utf-8")
             if parsed.path == "/api/chats":
+                proposals, human = review_statuses()
                 return self.reply(
                     200,
                     [
@@ -346,20 +443,32 @@ def serve(database: Path, output: Path, port: int) -> None:
                             },
                             "project": Path(r["cwd"]).name,
                             "is_test": r.get("is_test", False),
+                            "proposed_outcome": proposals.get(r["id"]),
+                            "has_human_review": r["id"] in human,
                         }
                         for r in rows
                     ],
                 )
+            if parsed.path == "/api/coverage":
+                path = output.parent / "corpus-review-summary.json"
+                if path.exists():
+                    try:
+                        return self.reply(200, json.loads(path.read_text()))
+                    except ValueError:
+                        return self.reply(503, {"error": "Coverage summary unavailable"})
+                return self.reply(200, None)
             if parsed.path == "/api/trace":
                 identity = parse_qs(parsed.query).get("id", [None])[0]
                 row = indexed.get(identity)
                 if row:
                     try:
                         trace = trace_for(row)
-                        for item in trace:
+                        checkpoints = checkpoints_for(row, trace)
+                        for index, item in enumerate(trace):
                             item["checkpoint_digest"] = hashlib.sha256(
                                 json.dumps(item, sort_keys=True).encode()
                             ).hexdigest()
+                            item["is_checkpoint"] = index in checkpoints
                         return self.reply(200, trace)
                     except (OSError, ValueError):
                         return self.reply(503, {"error": "Trace unavailable"})
@@ -424,6 +533,7 @@ def serve(database: Path, output: Path, port: int) -> None:
                     or checkpoint < 0
                     or checkpoint >= len(trace)
                     or trace[checkpoint]["kind"] != "assistant"
+                    or checkpoint not in checkpoints_for(indexed[identity], trace)
                 ):
                     raise ValueError
                 expected = hashlib.sha256(

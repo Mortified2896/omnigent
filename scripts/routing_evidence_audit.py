@@ -47,6 +47,7 @@ def audit(path: Path) -> dict:
         or labels[sid].get("omnigent.scoring.eligible", "true") != "true"
     }
     events, messages, attributions, bindings = [], [], {}, {}
+    terminal_responses = set()
     item_types, resource_types = Counter(), Counter()
     malformed = copied = 0
     first_prompts: dict[str, str] = {}
@@ -98,6 +99,8 @@ def audit(path: Path) -> dict:
             malformed += 1
         elif data["resource_type"] == "response-execution":
             attributions[sid, rid] = payload
+            if data.get("event_type") == "response.execution.completed":
+                terminal_responses.add((sid, rid))
         else:
             bindings[sid, rid] = payload
     latest, eligibility = {}, {}
@@ -107,7 +110,7 @@ def audit(path: Path) -> dict:
             latest[key] = event
         elif event.get("kind") == "scoring_eligibility":
             eligibility[key] = event.get("score_eligible") is True
-    completed = {
+    message_complete = {
         (m["conversation_id"], m["response_id"])
         for m in messages
         if m["parsed"]["role"] == "assistant"
@@ -115,6 +118,10 @@ def audit(path: Path) -> dict:
         and not m["parsed"].get("is_meta", False)
         and not m["parsed"].get("interrupted", False)
     }
+    # Native interim text chunks also have completed message status. The
+    # response execution event is persisted on the terminal idle edge. Missing
+    # attribution/terminal records leave completion unconfirmed, not failed.
+    completed = message_complete & terminal_responses
     included = {
         key: event
         for key, event in latest.items()
@@ -190,6 +197,8 @@ def audit(path: Path) -> dict:
         "resource_events": dict(resource_types),
         "message_roles": dict(Counter(m["parsed"]["role"] for m in messages)),
         "completed_response_keys": len(completed),
+        "message_complete_response_keys": len(message_complete),
+        "completion_unconfirmed_response_keys": len(message_complete - completed),
         "eligible_completed_response_keys": sum(sid not in excluded for sid, _ in completed),
         "raw_human_outcome_events": sum(
             e.get("kind") == "outcome" and e.get("review_source", "human") == "human"
