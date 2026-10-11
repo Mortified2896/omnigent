@@ -359,6 +359,8 @@ export async function fetchRound(hostId: string, roundId: string): Promise<Round
 export interface RoundLaunchParams {
   agent_id: string;
   workspace: string;
+  project_id?: string;
+  labels?: Record<string, string>;
   terminal_launch_args?: string[] | null;
   /** Apply this confirmed round to an existing editable chat, preserving its history. */
   continue_session_id?: string;

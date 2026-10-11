@@ -865,6 +865,26 @@ it("normal Send automatically runs the assignment once without revealing it", as
   view.unmount();
 });
 
+it("files automatic Advisor launches into the selected project with creation labels", async () => {
+  const onLaunched = vi.fn();
+  mountSection({
+    requireConfirmation: false,
+    launchProjectId: "project-blocknations",
+    launchLabels: { omni_project: "BlockNations" },
+    onLaunched,
+  });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
+  const confirm = api.mock.calls.find(([url]) => String(url).endsWith("/confirm"))!;
+  expect(JSON.parse(confirm[1].body).launch).toEqual({
+    agent_id: "ag_1",
+    workspace: "/repo",
+    project_id: "project-blocknations",
+    labels: { omni_project: "BlockNations" },
+  });
+});
+
 it("automatically runs follow-ups against their existing session", async () => {
   const onLaunched = vi.fn();
   mountSection({ requireConfirmation: false, continueSessionId: "existing", onLaunched });

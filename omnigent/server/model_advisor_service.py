@@ -1362,6 +1362,11 @@ class ModelAdvisorService:
         launch: dict[str, Any],
         request: Any = None,
     ) -> dict[str, Any]:
+        from omnigent.server.routes._sessions.helpers import _reject_server_reserved_label_seed
+
+        # Public launch metadata follows ordinary create permissions. Only the
+        # server may seed the Advisor audit/binding namespace below.
+        _reject_server_reserved_label_seed(launch.get("labels"))
         owner = self.owner_id(user_id)
         self._authorized_host(user_id, host_id)
         existing = await asyncio.to_thread(self.repository.load_round, owner, host_id, round_id)
@@ -1543,6 +1548,7 @@ class ModelAdvisorService:
 
         def labels_for(route: QualifiedRoute) -> dict[str, str]:
             labels = {
+                **launch.get("labels", {}),
                 ADVISOR_ROUND_LABEL_KEY: frozen.round_id,
                 ADVISOR_ROUND_FINGERPRINT_LABEL_KEY: frozen.fingerprint,
                 ADVISOR_ROUND_GROUP_LABEL_KEY: review.comparison_group,
@@ -1615,7 +1621,7 @@ class ModelAdvisorService:
                         },
                     )
                 ],
-                title=review.comparison_group,
+                project_id=launch.get("project_id"),
                 labels=labels,
                 host_id=host_id,
                 workspace=workspace,
@@ -1871,6 +1877,7 @@ class ModelAdvisorService:
         if not isinstance(workspace, str) or not workspace:
             raise RuntimeError("A workspace is required to launch the round")
         labels = {
+            **launch.get("labels", {}),
             ADVISOR_ROUND_LABEL_KEY: frozen.round_id,
             ADVISOR_ROUND_FINGERPRINT_LABEL_KEY: frozen.fingerprint,
             ADVISOR_ROUND_GROUP_LABEL_KEY: review.comparison_group,
@@ -1888,7 +1895,7 @@ class ModelAdvisorService:
                     },
                 )
             ],
-            title=review.comparison_group,
+            project_id=launch.get("project_id"),
             labels=labels,
             host_id=host_id,
             workspace=workspace,

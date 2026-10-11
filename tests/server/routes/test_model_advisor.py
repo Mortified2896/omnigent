@@ -615,7 +615,12 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
             json={
                 "host_id": "host_1",
                 "expected_version": payload["version"],
-                "launch": {"agent_id": "ag_1", "workspace": "/repo"},
+                "launch": {
+                    "agent_id": "ag_1",
+                    "workspace": "/repo",
+                    "project_id": "project_1",
+                    "labels": {"omni_project": "App"},
+                },
             },
             headers=JSON_ALICE,
         )
@@ -626,6 +631,10 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
         assert len(launched) == 1
 
         body = launched[0][0]
+        assert body.project_id == "project_1"
+        assert body.labels["omni_project"] == "App"
+        assert body.title is None  # Normal first-message title generation owns the name.
+        assert body.initial_items[0].data["content"][0]["text"] == "Write the acceptance suite"
         assert body.model_override == "gpt-5.3-codex"
         assert body.reasoning_effort == "medium"
         assert body.labels["omnigent.access_lane"] == "codex-direct"
@@ -725,7 +734,12 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
             json={
                 "host_id": "host_1",
                 "expected_version": payload["version"],
-                "launch": {"agent_id": "ag_1", "workspace": "/repo"},
+                "launch": {
+                    "agent_id": "ag_1",
+                    "workspace": "/repo",
+                    "project_id": "project_1",
+                    "labels": {"omnigent.test.run_id": "filing-regression"},
+                },
             },
             headers=JSON_ALICE,
         )
@@ -733,6 +747,10 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
         assert confirm.json()["state"] == "dispatch_bound"
         assert len(launched) == 1
         body = launched[0][0]
+        assert body.project_id == "project_1"
+        assert body.labels["omnigent.test.run_id"] == "filing-regression"
+        assert body.title is None
+        assert body.initial_items[0].data["content"][0]["text"] == "Compare these provider plans"
         assert body.model_override == "glm/glm-5.3"
         assert body.reasoning_effort == "high"
         assert body.labels["omnigent.advisor.logical_choice_id"] == PROVIDER_GLM.choice_id
@@ -1359,6 +1377,27 @@ def test_advisor_label_namespace_is_server_only() -> None:
     _reject_server_reserved_label_seed({"team": "ml"})
     with _pytest.raises(OmnigentError, match="server-internal"):
         _reject_server_reserved_label_seed({"omnigent.advisor.round_id": "forged"})
+
+
+def test_advisor_confirmation_rejects_client_reserved_labels(db_uri) -> None:
+    client, registry = client_for(db_uri)
+    with client:
+        response = client.post(
+            "/v1/model-advisor/rounds/missing-round/confirm",
+            json={
+                "host_id": "host_1",
+                "expected_version": 0,
+                "launch": {
+                    "agent_id": "ag_1",
+                    "workspace": "/repo",
+                    "labels": {"omnigent.advisor.dispatch_route": "forged"},
+                },
+            },
+            headers=JSON_ALICE,
+        )
+    assert response.status_code == 400
+    assert "server-internal" in response.text
+    assert registry.advisor_calls == 0
 
 
 def test_internal_launch_skips_client_label_guard(monkeypatch) -> None:

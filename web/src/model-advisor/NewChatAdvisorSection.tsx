@@ -89,6 +89,8 @@ export interface NewChatAdvisorSectionProps {
   humanPick: HumanModelPick | null;
   launchAgentId: string | null;
   launchWorkspace: string | null;
+  launchProjectId?: string | null;
+  launchLabels?: Record<string, string>;
   continueSessionId?: string | null;
   onFlowStateChange?: (busy: boolean, reviewVisible: boolean) => void;
   advisorModelTarget?: HTMLElement | null;
@@ -159,6 +161,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     humanPick: suppliedHumanPick,
     launchAgentId,
     launchWorkspace,
+    launchProjectId,
+    launchLabels,
     continueSessionId = null,
     onFlowStateChange,
     advisorModelTarget,
@@ -438,6 +442,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       preferences: editor.draft,
       continueSessionId,
       keepChosenModel,
+      launchAgentId,
+      launchWorkspace,
+      launchProjectId,
+      launchLabels,
     });
     if (submissionIdentity.current !== null && submissionIdentity.current !== identity) {
       inputGeneration.current += 1;
@@ -454,6 +462,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     task,
     continueSessionId,
     keepChosenModel,
+    launchAgentId,
+    launchWorkspace,
+    launchProjectId,
+    launchLabels,
   ]);
 
   const pollRound = useCallback(
@@ -681,7 +693,12 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
             {
               agent_id: launchAgentId,
               workspace: launchWorkspace,
-              ...(continueSessionId ? { continue_session_id: continueSessionId } : {}),
+              ...(continueSessionId
+                ? { continue_session_id: continueSessionId }
+                : {
+                    ...(launchProjectId ? { project_id: launchProjectId } : {}),
+                    ...(launchLabels ? { labels: launchLabels } : {}),
+                  }),
             },
             overrideId,
             reason,
@@ -715,6 +732,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       isCurrentScope,
       launchAgentId,
       launchWorkspace,
+      launchProjectId,
+      launchLabels,
       onLaunched,
       promptTiming,
       round.busy,

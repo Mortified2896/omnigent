@@ -7094,7 +7094,16 @@ export function NewChatLandingScreen() {
               }
               launchAgentId={effectiveAgentId}
               launchWorkspace={workspace || null}
+              launchProjectId={selectedProject ? configProjectId : null}
+              launchLabels={{
+                ...composerContextToLabels(composerContextState),
+                ...(selectedProject && configProjectId === null
+                  ? { [PROJECT_LABEL_KEY]: selectedProject }
+                  : {}),
+              }}
               onLaunched={(sessionId) => {
+                queryClient.invalidateQueries({ queryKey: ["projects"] });
+                queryClient.invalidateQueries({ queryKey: ["project-sessions"] });
                 setTaskTags([]);
                 submittedRef.current = true;
                 if (submittedDraftRevisionRef.current === landingDraftRevision)
