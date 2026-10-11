@@ -6,6 +6,12 @@ editorial goals. They do not yet establish which public benchmark predicts this
 owner's task completion, a calibrated benchmark mixture, or comparative model
 quality. Completion remains the primary objective, ahead of speed and cost.
 
+The current experiment is documented in
+[the fixed-evaluator and public-score update](2026-10-12-fixed-evaluator-and-benchmark-predictors.md).
+It tests Terminal-Bench 4 first, followed by Artificial Analysis's Coding Agent
+and Intelligence indices. Published-score predictivity comes before executing
+a public benchmark suite.
+
 ## Completed review coverage
 
 Three Codex subagents produced bounded offline assessments from original owner
@@ -74,7 +80,7 @@ performed for them.
 
 ## Public benchmarks to test against this evidence
 
-**SWE-bench Pro V2 is the first repository-work candidate.** Its public release
+**SWE-bench Pro V2 supplies a repository-work comparison.** Its public release
 has 642 tasks across 11 repositories, with reference solutions, verifiers and
 fresh-sandbox patch regrading. The locked agent phase is offline and has a
 50-minute task budget. This method is relevant to the recorded code changes and
@@ -89,13 +95,14 @@ Teleport 68, Open Library 82, Navidrome 52, Proton web clients 55, qutebrowser 7
 and Tutanota 4. These are catalog facts, not measured overlap or success rates
 for the owner's repositories. [Pinned task tree](https://github.com/scaleapi/SWE-bench_Pro-os/tree/66f92766bba642462d4bbe5479e83f91f9211862/v2/tasks).
 
-**Terminal-Bench 4.0 is the second candidate**, motivated by actual service,
-environment, network and recovery work in the traces. The current official run
-instructions pin `terminal-bench/terminal-bench@4.0.0` through Harbor and require
-GPU access for the full suite. Its current task-level manifest was not audited
-here, and no 4.0 score was measured on this Mac or the unreachable RTX host.
-Its role remains a terminal-capability hypothesis awaiting task-level inspection.
-[Official run instructions](https://www.tbench.ai/run).
+**Terminal-Bench 4.0 is the first predictor to test**, motivated by actual
+service, environment, network and recovery work in the traces and the owner's
+explicit priority. Subsequent source inspection audited its 66-task manifest
+and published configurations. The official leaderboard supplies documented
+model/effort score matches for 133 selected checkpoints; harness and backend
+equivalence remain unqualified. No full-suite 4.0 execution score was measured on
+this Mac or RTX. The next test is difficulty-adjusted predictive value of the
+published scores. [Official leaderboard](https://www.tbench.ai/?version=4).
 
 **WebArena-Verified is a conditional browser component.** It supplies 812
 verified tasks, a 258-task hard subset and deterministic evaluation from answers
