@@ -263,6 +263,11 @@ it("uses answer-style buttons for marked rating and tag corrections", () => {
   expect(oldTag.querySelector("del")).toBeTruthy();
   expect(newTag.querySelector("ins")).toBeTruthy();
   fireEvent.click(newRating);
+  // Review controls stay in document flow beside the change, never in an overlay.
+  const inlineActions = screen.getByRole("group", { name: "Actions for rating change" });
+  expect(screen.getByLabelText("Proposed feedback rating")).toContainElement(inlineActions);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(newRating).toHaveAttribute("aria-expanded", "true");
   fireEvent.click(screen.getByRole("button", { name: "Reject rating change" }));
   expect(ratingButtons().map((button) => button.textContent)).toEqual([
     "Success",
